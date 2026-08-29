@@ -41,3 +41,48 @@ def create_worktree(
         text=True,
     )
     return path.resolve(strict=True), branch
+
+
+def cleanup_worktree(
+    project: Project,
+    lane_id: str,
+    *,
+    recorded_path: Path,
+    run: Run = subprocess.run,
+) -> None:
+    expected_path = lane_path(project, lane_id).absolute()
+    recorded_absolute = recorded_path.expanduser().absolute()
+    if recorded_absolute != expected_path:
+        raise WorktreeError("recorded worktree path does not match the derived lane path")
+    if recorded_absolute.is_symlink():
+        raise WorktreeError("refusing to clean up a symlinked worktree path")
+    expected = expected_path.resolve(strict=True)
+    actual = recorded_path.expanduser().resolve(strict=True)
+    if actual != expected:
+        raise WorktreeError("recorded worktree path does not match the derived lane path")
+    root = project.root.expanduser().resolve(strict=True)
+    listed = run(
+        ("git", "-C", str(root), "worktree", "list", "--porcelain"),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    registered = {
+        Path(line.removeprefix("worktree ")).absolute()
+        for line in listed.stdout.splitlines()
+        if line.startswith("worktree ")
+    }
+    if expected_path not in registered:
+        raise WorktreeError("derived lane path is not a registered Git worktree")
+    run(
+        ("git", "-C", str(root), "worktree", "remove", str(actual)),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    run(
+        ("git", "-C", str(root), "worktree", "prune"),
+        check=True,
+        capture_output=True,
+        text=True,
+    )

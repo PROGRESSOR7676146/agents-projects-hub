@@ -494,6 +494,38 @@ class HubState:
                 (component[:64], level, code[:64], detail[:1000], _now()),
             )
 
+    def claim_alert_delivery(self, alert_key: str, *, cooldown_seconds: int) -> bool:
+        if not alert_key.strip() or cooldown_seconds < 0:
+            raise StateError("invalid alert delivery claim")
+        now = datetime.now(timezone.utc)
+        existing = self._connection.execute(
+            "SELECT last_sent_at FROM alert_deliveries WHERE alert_key = ?",
+            (alert_key,),
+        ).fetchone()
+        if existing is not None:
+            try:
+                last_sent = datetime.fromisoformat(str(existing["last_sent_at"]))
+            except ValueError:
+                last_sent = datetime.min.replace(tzinfo=timezone.utc)
+            if last_sent.tzinfo is None:
+                last_sent = last_sent.replace(tzinfo=timezone.utc)
+            if (now - last_sent).total_seconds() < cooldown_seconds:
+                return False
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO alert_deliveries(alert_key, last_sent_at) VALUES (?, ?)
+                   ON CONFLICT(alert_key) DO UPDATE SET last_sent_at = excluded.last_sent_at""",
+                (alert_key[:256], now.isoformat()),
+            )
+        return True
+
+    def release_alert_delivery(self, alert_key: str) -> None:
+        with self._connection:
+            self._connection.execute(
+                "DELETE FROM alert_deliveries WHERE alert_key = ?",
+                (alert_key[:256],),
+            )
+
     def register_lane(
         self,
         *,
@@ -529,6 +561,56 @@ class HubState:
             )
         if cursor.rowcount != 1:
             raise StateError(f"unknown lane_id: {lane_id}")
+
+    def mark_lane_cleaned(self, lane_id: str) -> None:
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE worktree_lanes SET cleaned_at = ?, updated_at = ?
+                   WHERE lane_id = ? AND status = 'archived' AND cleaned_at IS NULL""",
+                (_now(), _now(), lane_id),
+            )
+        if cursor.rowcount != 1:
+            raise StateError(f"lane is unknown, active, or already cleaned: {lane_id}")
+
+    def bind_lane(self, lane_id: str, topic_id: int) -> dict[str, object]:
+        lane = self._connection.execute(
+            "SELECT * FROM worktree_lanes WHERE lane_id = ?", (lane_id,)
+        ).fetchone()
+        if lane is None or lane["status"] != "active":
+            raise StateError(f"unknown or inactive lane_id: {lane_id}")
+        topic = self._connection.execute(
+            "SELECT * FROM topics WHERE topic_id = ?", (topic_id,)
+        ).fetchone()
+        if topic is None:
+            raise StateError(f"unknown topic_id: {topic_id}")
+        if lane["project_id"] != topic["project_id"]:
+            raise StateError("lane and Telegram topic belong to different projects")
+        conflict = self._connection.execute(
+            """SELECT lane_id FROM worktree_lanes
+               WHERE topic_id = ? AND lane_id != ? AND status = 'active'""",
+            (topic_id, lane_id),
+        ).fetchone()
+        if conflict is not None:
+            raise StateError("Telegram topic is already bound to another active lane")
+        with self._connection:
+            self._connection.execute(
+                "UPDATE worktree_lanes SET topic_id = ?, updated_at = ? WHERE lane_id = ?",
+                (topic_id, _now(), lane_id),
+            )
+        bound = self._connection.execute(
+            "SELECT * FROM worktree_lanes WHERE lane_id = ?", (lane_id,)
+        ).fetchone()
+        if bound is None:
+            raise StateError(f"unknown lane_id: {lane_id}")
+        return dict(bound)
+
+    def get_lane(self, lane_id: str) -> dict[str, object]:
+        row = self._connection.execute(
+            "SELECT * FROM worktree_lanes WHERE lane_id = ?", (lane_id,)
+        ).fetchone()
+        if row is None:
+            raise StateError(f"unknown lane_id: {lane_id}")
+        return dict(row)
 
     def list_lanes(self) -> list[dict[str, object]]:
         rows = self._connection.execute(

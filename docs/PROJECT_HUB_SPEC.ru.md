@@ -1,7 +1,7 @@
 # Hermes Project Hub — спецификация и план
 
 Дата актуализации: 2026-08-29. Pythia acceptance пройден, operational hardening
-v0.3 реализован.
+v0.4 реализован.
 
 ## Целевая модель
 
@@ -63,34 +63,36 @@ per-topic либо использовать подтверждённый multipl
 | `/status` | реализовано | active agent/session/writer/schema без hidden данных |
 
 Локальный CLI дополнен командами `doctor`, `status`, `backup`, `migrate`,
-`project add/list/enable/disable` и `lane create/list/archive`. Telegram по-прежнему
-не принимает локальные пути и не создаёт worktree самостоятельно.
+`project add/list/enable/disable`, `lane create/list/bind/archive/cleanup` и
+`monitor`. Telegram по-прежнему не принимает локальные пути и не создаёт
+worktree самостоятельно. Binding требует локального подтверждения точной пары
+`chat_id:thread_id`; cleanup — архивной lane и подтверждения её точного ID.
 
 ## Следующая очередь
 
 1. Провести живую приёмку второй приватной project group без переиспользования
    Pythia topic/session IDs.
-2. Проверить Gemini/OpenCode adapters с реальными provider accounts и отдельными
-   Telegram bot tokens; auto/yolo flags запрещены, неизвестные лимиты показываются
-   как `unavailable`.
-3. Подключить единый metadata footer к Hermes через стабильный публичный hook,
-   не разбирая terminal output или hidden reasoning.
-4. Добавить явное локальное подтверждение binding worktree lane → Telegram topic
-   и отдельный безопасный cleanup workflow.
-5. Настроить GitHub ruleset и private vulnerability reporting после
+2. Проверить Gemini с реальным provider account и отдельным Telegram bot token;
+   CLI и credentials на этой машине пока отсутствуют. OpenCode и Antigravity
+   прошли живые provider-проверки, включая двухходовый resume OpenCode, но для
+   Telegram E2E им также нужны отдельные bot tokens.
+3. Настроить GitHub ruleset и private vulnerability reporting после
    восстановления административной GitHub CLI-сессии.
 
-## Operational hardening v0.3
+## Operational hardening v0.4
 
 - CI на Python 3.11–3.13, Ruff, Pyright, unit/integration tests и CodeQL;
 - Dependabot для pip и GitHub Actions;
 - MIT license, security policy, changelog и acknowledgments upstream-проектам;
-- versioned SQLite schema v3, automatic pre-migration backup и integrity check;
+- versioned SQLite schema v5, automatic pre-migration backup и integrity check;
 - dispatch status для queued/running/completed/failed и диагностический snapshot;
 - fail-closed `doctor`, systemd user templates и installer без auto-enable;
 - configurable WSL/Linux/macOS/tmux-only terminal launchers;
-- локальные project administration и worktree-lane foundation;
+- локальные project administration, подтверждённый lane binding и безопасный
+  cleanup с сохранением branch;
 - Gemini/OpenCode CLI adapters через structured output без auto-approval.
+- cooldown-alerts о deployment health, Codex quota/account и зависших dispatch;
+- Hermes native runtime footer и публичный `agent:end` visible-turn hook.
 
 ## Acceptance Pythia
 

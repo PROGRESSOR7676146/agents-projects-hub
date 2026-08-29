@@ -136,7 +136,9 @@ class ProjectHubService:
             tab_name = terminal_session_name(
                 project.display_name, topic.title, self.agent.display_name, topic.thread_id
             )
-            session = self.state.bind_provider_session(session.session_id, thread.thread_id, tab_name)
+            session = self.state.bind_provider_session(
+                session.session_id, thread.thread_id, tab_name
+            )
         turn_id = client.start_turn(
             thread_id=thread.thread_id,
             cwd=project.root,

@@ -5,6 +5,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-29
+
+### Added
+
 - Add per-agent private runtime homes for isolated Gemini credentials.
 - Add a sandboxed, plan-mode Antigravity headless adapter with persistent
   conversations.
@@ -12,6 +16,18 @@ and releases use semantic versioning while the public API is still evolving.
 - Add observable Codex account rotation through the MIT-licensed `codex-multi-auth`
   runtime proxy while preserving provider thread IDs; retain its stdio wrapper as
   a diagnostic fallback.
+- Add cooldown-deduplicated deployment, account/quota, and stuck-dispatch alerts
+  with a five-minute systemd timer template.
+- Add explicitly confirmed worktree-lane topic binding and branch-retaining safe
+  cleanup with persistent cleanup audit state.
+- Add contract coverage for the Hermes public turn-export hook.
+
+### Changed
+
+- Document local Codex model-catalog startup configuration for custom account
+  proxies whose `/models` response is incompatible.
+- Advance the state database to schema v5 for alert delivery cooldowns and lane
+  cleanup audit timestamps.
 
 ## [0.3.0] - 2026-08-29
 
