@@ -281,21 +281,24 @@ or response metadata when the provider exposes it.
   generic PTY wrapper MUST NOT be described as semantic OpenCode or Antigravity
   integration.
 
-### Planned minimal native transfer
+### Implemented minimal native transfer
 
-- **REQ-WRITER-006 (Planned):** `/local` will validate an idle completed turn,
-  change `writer_owner` from `telegram` to `local`, and return a reviewed
+- **REQ-WRITER-006 (Implemented):** `/local` validates that no Hub dispatch is
+  running and that a completed provider session exists, changes `writer_mode`
+  from `telegram` to `local`, and returns a reviewed
   provider-specific resume command for the canonical root and session ID.
-- **REQ-WRITER-007 (Planned):** `/return` will explicitly restore Telegram
-  ownership only after the local CLI is closed and provider idle is checked.
-- **REQ-WRITER-008 (Planned):** Messages arriving while `local` owns the writer
-  will not call a provider and will explain how to return safely.
+- **REQ-WRITER-007 (Implemented with explicit owner assertion):** `/return`
+  restores Telegram ownership after instructing the owner to close the local
+  CLI and confirming that no Hub dispatch is running. V1 deliberately does not
+  infer OS process state.
+- **REQ-WRITER-008 (Implemented):** Messages arriving while `local` owns the
+  writer do not call a provider and explain how to return safely.
 - **REQ-WRITER-009 (Planned):** `/publish` will publish a bounded safe summary of
   the local interval to Telegram; it will not promise full transcript import.
 
 Initial reviewed resume shapes are `codex resume SESSION_ID -C ROOT`,
 `opencode ROOT --session SESSION_ID`, and
-`agy --conversation SESSION_ID --sandbox --mode plan`. They are version-sensitive
+`cd -- ROOT && agy --conversation SESSION_ID --sandbox --mode plan`. They are version-sensitive
 adapter capabilities, not permanent user-input templates. Hermes requires a
 separate native capability check.
 
@@ -436,7 +439,7 @@ necessary but not sufficient for items marked live.
 | Codex tmux takeover/release | Implemented | Fallback frontend, not preferred long-term UX. |
 | Optional Codex account pool/fallback | Implemented | Natural exhaustion E2E remains an acceptance item. |
 | Hub General Telegram E2E baseline | Implemented/live accepted | Passed ordinary, satellite, Reply, context, no-idle-spend, identity, and restart cases on 2026-08-29. |
-| `/local` and `/return` | Planned | Minimal explicit native writer transfer. |
+| `/local` and `/return` | Implemented | Codex, OpenCode, and Antigravity; Hermes fails closed pending a native resume contract. |
 | Bounded `/publish` | Planned | Summary only, no full transcript mirroring. |
 | Encrypted disaster-recovery bundle | Planned | Includes a restore drill and off-machine key custody. |
 | Automatic Antigravity account rotation | Deferred | Await stable supported headless account-pool capability. |

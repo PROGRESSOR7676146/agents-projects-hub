@@ -92,12 +92,26 @@ class HubStateTests(unittest.TestCase):
         self.state.set_bot_offset("codex", 514951014)
         self.assertEqual(self.state.get_bot_offset("codex"), 514951014)
 
-    def test_writer_mode_persists_terminal_takeover(self) -> None:
+    def test_writer_mode_persists_terminal_and_local_takeover(self) -> None:
         session = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
         terminal = self.state.set_writer_mode(session.session_id, "terminal")
         self.assertEqual(terminal.writer_mode, "terminal")
+        local = self.state.set_writer_mode(session.session_id, "local")
+        self.assertEqual(local.writer_mode, "local")
         telegram = self.state.set_writer_mode(session.session_id, "telegram")
         self.assertEqual(telegram.writer_mode, "telegram")
+
+    def test_topic_running_dispatch_is_detected(self) -> None:
+        session = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
+        dispatch_id = self.state.start_dispatch(
+            chat_id=self.topic.chat_id,
+            message_id=701,
+            topic_id=self.topic.topic_id,
+            agent_id=session.agent_id,
+        )
+        self.assertTrue(self.state.topic_has_running_dispatch(self.topic.topic_id))
+        self.state.finish_dispatch(dispatch_id, success=True)
+        self.assertFalse(self.state.topic_has_running_dispatch(self.topic.topic_id))
 
     def test_active_agent_lookup_uses_numeric_topic_identity(self) -> None:
         self.assertIsNone(

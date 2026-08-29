@@ -8,6 +8,7 @@ from .codex_accounts import format_codex_pool_status, read_codex_pool_status
 from .codex_appserver import CodexAppServerClient
 from .external_service import ExternalAgentService
 from .hub_config import HubConfig
+from .local_transfer import LocalTransferError, local_resume_command
 from .metadata import format_telegram_response
 from .model_selection import ModelSelectionError, available_models, require_model_effort
 from .registry import Project, load_registry
@@ -216,8 +217,9 @@ class ProjectHubService:
         if previous.agent_id == target.agent_id:
             self._send_text(message, f"{target.display_name} is already active in this topic.")
             return
-        if previous.writer_mode == "terminal":
-            self._send_text(message, "Use /release before changing the active agent.")
+        if previous.writer_mode != "telegram":
+            command = "/release" if previous.writer_mode == "terminal" else "/return"
+            self._send_text(message, f"Use {command} before changing the active agent.")
             return
         if previous.agent_id != self.agent.agent_id:
             context = self.state.recent_external_context(topic.topic_id, previous.agent_id)
@@ -421,8 +423,9 @@ class ProjectHubService:
                 self.telegram.answer_callback(callback.callback_id, str(exc))
                 return True
             previous = self._ensure_codex_session(topic)
-            if previous.writer_mode == "terminal":
-                self.telegram.answer_callback(callback.callback_id, "Use /release first")
+            if previous.writer_mode != "telegram":
+                command = "/release" if previous.writer_mode == "terminal" else "/return"
+                self.telegram.answer_callback(callback.callback_id, f"Use {command} first")
                 return True
             self.telegram.answer_callback(callback.callback_id, "Switching model…")
             self._switch_model(
@@ -531,7 +534,17 @@ class ProjectHubService:
             return False
         topic = self._topic(message, binding.project_id)
         command = parse_command(message.text)
-        control_commands = {"pilot", "status", "new", "terminal", "release", "model", "agent"}
+        control_commands = {
+            "pilot",
+            "status",
+            "new",
+            "terminal",
+            "release",
+            "local",
+            "return",
+            "model",
+            "agent",
+        }
         if command and command.name in control_commands:
             if not self.state.claim_message(
                 message.chat_id,
@@ -579,8 +592,9 @@ class ProjectHubService:
             active = self.state.active_session(topic.topic_id)
             if active is None or active.agent_id != self.agent.agent_id:
                 return False
-            if active.writer_mode == "terminal":
-                self._send_text(message, "Use /release before resetting the session.")
+            if active.writer_mode != "telegram":
+                release = "/release" if active.writer_mode == "terminal" else "/return"
+                self._send_text(message, f"Use {release} before resetting the session.")
                 return True
             replacement = (
                 self.state.new_all_sessions(topic.topic_id)
@@ -594,6 +608,9 @@ class ProjectHubService:
             return True
         if command and command.name == "terminal":
             session = self._ensure_codex_session(topic)
+            if session.writer_mode == "local":
+                self._send_text(message, "Use /return before starting a managed terminal.")
+                return True
             project = self.registry.require_project(binding.project_id)
             session = self._ensure_provider_thread(project=project, topic=topic, session=session)
             if not session.provider_session_id or not session.terminal_name:
@@ -624,6 +641,61 @@ class ProjectHubService:
             self.state.set_writer_mode(session.session_id, "telegram")
             self._send_text(message, "Codex writer returned to Telegram.")
             return True
+        if command and command.name == "local":
+            session = self.state.active_session(topic.topic_id)
+            if session is None:
+                self._send_text(message, "No active provider session exists yet.")
+                return True
+            if session.writer_mode == "terminal":
+                self._send_text(message, "Use /release before taking the session local.")
+                return True
+            if self.state.topic_has_running_dispatch(topic.topic_id):
+                self._send_text(
+                    message, "A provider turn is still running; try /local again later."
+                )
+                return True
+            if not session.provider_session_id:
+                self._send_text(
+                    message,
+                    "No completed provider session exists yet; send one productive turn first.",
+                )
+                return True
+            project = self.registry.require_project(binding.project_id)
+            agent = self.config.require_agent(session.agent_id)
+            try:
+                resume = local_resume_command(
+                    agent.runtime, agent.executable, session.provider_session_id, project.root
+                )
+            except LocalTransferError as exc:
+                self._send_text(message, str(exc))
+                return True
+            self.state.set_writer_mode(session.session_id, "local")
+            self._send_text(
+                message,
+                "Local CLI now owns this provider session. Telegram turns are paused. "
+                "Close the local CLI before returning ownership with /return.\n\n"
+                f"Resume command:\n{resume.display}",
+            )
+            return True
+        if command and command.name == "return":
+            session = self.state.active_session(topic.topic_id)
+            if session is None:
+                self._send_text(message, "No active provider session exists yet.")
+                return True
+            if session.writer_mode == "terminal":
+                self._send_text(message, "Use /release for a managed terminal session.")
+                return True
+            if session.writer_mode == "telegram":
+                self._send_text(message, "Telegram already owns this provider session.")
+                return True
+            if self.state.topic_has_running_dispatch(topic.topic_id):
+                self._send_text(
+                    message, "A provider turn is still running; try /return again later."
+                )
+                return True
+            self.state.set_writer_mode(session.session_id, "telegram")
+            self._send_text(message, "Provider session ownership returned to Telegram.")
+            return True
         if command and command.name == "model":
             if not command.arguments:
                 catalog = self._model_catalog()
@@ -640,8 +712,9 @@ class ProjectHubService:
                 self._send_text(message, "Usage: /model MODEL EFFORT")
                 return True
             previous = self._ensure_codex_session(topic)
-            if previous.writer_mode == "terminal":
-                self._send_text(message, "Use /release before changing the model.")
+            if previous.writer_mode != "telegram":
+                release = "/release" if previous.writer_mode == "terminal" else "/return"
+                self._send_text(message, f"Use {release} before changing the model.")
                 return True
             project = self.registry.require_project(binding.project_id)
             try:
@@ -701,6 +774,13 @@ class ProjectHubService:
         ):
             return False
         session = self._ensure_codex_session(topic)
+        if session.writer_mode == "local":
+            self._send_text(
+                message,
+                "This provider session is open in a local CLI. Close it and use /return "
+                "before sending Telegram turns.",
+            )
+            return True
         if session.writer_mode == "terminal":
             if session.terminal_name and self.terminal.is_running(session.terminal_name):
                 self._send_text(

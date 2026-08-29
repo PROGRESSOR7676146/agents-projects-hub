@@ -16,11 +16,14 @@ acceptance criteria live in
   turn for Codex, OpenCode, Antigravity, and Hermes.
 - Numeric project/topic identity, canonical root isolation, idempotency,
   persistent provider session IDs, active agent state, and writer state use
-  SQLite schema v6 with pre-migration backup.
+  SQLite schema v7 with pre-migration backup.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity
   adapters exist; local OpenCode and Antigravity provider probes passed before
   this documentation baseline.
 - Codex terminal takeover/release uses a one-writer lease and tmux fallback.
+- `/local` and `/return` explicitly transfer one-writer ownership between
+  Telegram and native Codex, OpenCode, or Antigravity CLIs without launching or
+  scraping terminals; Hermes fails closed pending a native resume contract.
 - `codex-multi-auth` is optional; official Codex stdio is the fallback.
 - Hub, Hermes Gateway, and tlive are diagnosed and monitored independently.
 - Hub, Pythia, and Babelfish are registered as isolated real projects.
@@ -35,7 +38,8 @@ acceptance criteria live in
 
 ## Planned next
 
-1. Implement minimal `/local` and `/return`.
+1. Route operational alerts only to a dedicated Hub Operations/Alerts topic and
+   include a recognizable masked account identity for quota alerts.
 2. Add bounded `/publish` for local-work summaries.
 3. Build and restore-drill an encrypted disaster-recovery bundle.
 

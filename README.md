@@ -101,6 +101,16 @@ Terminal launching is configuration-driven. Supported backends are WSL with
 Windows Terminal, Linux terminal emulators, macOS Terminal, and `tmux-only` for
 manual attachment. All backends create the same named tmux writer first.
 
+### Native CLI transfer
+
+`/local` transfers the persisted writer lease for the active Codex, OpenCode, or
+Antigravity session from Telegram to a native CLI and returns an argv-safe resume
+command for the registered project root. It does not launch a terminal or infer
+process state. Telegram refuses productive turns while `local` owns the lease.
+After closing the native CLI, `/return` explicitly gives the same provider
+session back to Telegram. Hermes remains fail-closed until its native resume
+contract is confirmed.
+
 ## Implemented pilot
 
 - Strict Telegram owner, private-supergroup, topic, and project allowlists.
@@ -108,12 +118,14 @@ manual attachment. All backends create the same named tmux writer first.
 - Idempotent Telegram update processing and local SQLite recovery.
 - Codex metadata footer with model, reasoning effort, context, and available
   usage-window information read from structured app-server events.
-- `/pilot`, normal text, `/new`, `/new all`, `/model`, `/agent`, `/terminal`, and
-  `/release` flows, plus `/status` diagnostics.
+- `/pilot`, normal text, `/new`, `/new all`, `/model`, `/agent`, `/terminal`,
+  `/release`, `/local`, and `/return` flows, plus `/status` diagnostics.
 - Bidirectional Codex ↔ Hermes handoff with fail-closed Hermes admission.
 - Locally managed OpenCode and Antigravity headless adapters with structured output,
   persistent session IDs, bounded handoffs, and no auto-approval flags.
 - Explicit terminal writer takeover/release using tmux and `codex resume`.
+- Explicit native-CLI writer transfer for Codex, OpenCode, and Antigravity with
+  provider-specific resume commands and fail-closed Telegram turns.
 - Versioned SQLite migrations with automatic pre-migration backups and rollback.
 - Local project administration plus explicitly confirmed topic binding and safe,
   branch-retaining cleanup for worktree-backed parallel lanes.

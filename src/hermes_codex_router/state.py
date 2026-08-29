@@ -208,7 +208,7 @@ class HubState:
         return self.get_session(session_id)
 
     def set_writer_mode(self, session_id: str, writer_mode: str) -> SessionRecord:
-        if writer_mode not in {"telegram", "terminal"}:
+        if writer_mode not in {"telegram", "local", "terminal"}:
             raise StateError("invalid writer mode")
         with self._connection:
             cursor = self._connection.execute(
@@ -218,6 +218,13 @@ class HubState:
         if cursor.rowcount != 1:
             raise StateError(f"unknown session_id: {session_id}")
         return self.get_session(session_id)
+
+    def topic_has_running_dispatch(self, topic_id: int) -> bool:
+        row = self._connection.execute(
+            "SELECT 1 FROM turn_dispatches WHERE topic_id = ? AND status = 'running' LIMIT 1",
+            (topic_id,),
+        ).fetchone()
+        return row is not None
 
     def stage_handoff(
         self,

@@ -56,6 +56,13 @@ group poller и поэтому не конкурируют за update.
    диска и возвращает lease Telegram.
 5. Незавершённый turn никогда не мигрирует между writer-режимами.
 
+Для предпочтительного нативного интерфейса `/local` передаёт lease активной
+сессии Codex, OpenCode или Antigravity локальному CLI и возвращает безопасную
+команду resume для зарегистрированного корня проекта. Терминал автоматически не
+запускается и его экран не читается. Пока writer равен `local`, продуктивные
+Telegram turns запрещены. После закрытия CLI владелец явно выполняет `/return`.
+Hermes пока отвечает fail-closed: его нативный контракт resume ещё не подтверждён.
+
 Для нескольких одновременно активных тем runtime supervisor должен быть
 per-topic либо использовать подтверждённый multiplex API провайдера. Глобальный
 рестарт всех Codex-сессий ради одной темы запрещён.
@@ -71,6 +78,7 @@ per-topic либо использовать подтверждённый multipl
 | `/model MODEL EFFORT` | реализовано | live validation + новая session + handoff |
 | `/agent`, `/agent AGENT` | двусторонний Codex ↔ Hermes | inline-выбор; Codex summary и bounded visible Hermes excerpts |
 | `/terminal`, `/release` | реализовано | явная передача writer lease |
+| `/local`, `/return` | реализовано | нативный CLI ↔ Telegram, тот же provider session |
 | `/status` | реализовано | active agent/session/writer/schema без hidden данных |
 
 Локальный CLI дополнен командами `doctor`, `status`, `backup`, `migrate`,

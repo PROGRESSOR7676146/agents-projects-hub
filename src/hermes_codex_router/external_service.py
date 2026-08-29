@@ -94,6 +94,16 @@ class ExternalAgentService:
                 self.agent.default_model,
                 self.agent.default_effort,
             )
+        if session.writer_mode == "local":
+            self.telegram.send_html(
+                message.chat_id,
+                message.thread_id,
+                html.escape(
+                    "This provider session is open in a local CLI. Close it and use "
+                    "/return before sending Telegram turns."
+                ),
+            )
+            return True
         clean_text = re.sub(
             rf"(?i)(?<![A-Za-z0-9_])@{re.escape(self.agent.telegram_username)}\b",
             "",

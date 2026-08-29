@@ -116,8 +116,15 @@ class ServiceIntegrationTests(unittest.TestCase):
                 projects=(ProjectBinding("project", -1001234567890),),
                 agents=(
                     AgentDefinition(
-                        "codex", "Codex", "project_codex_bot", "codex", None,
-                        True, False, "gpt-5.6-sol", "high",
+                        "codex",
+                        "Codex",
+                        "project_codex_bot",
+                        "codex",
+                        None,
+                        True,
+                        False,
+                        "gpt-5.6-sol",
+                        "high",
                     ),
                 ),
             )
@@ -417,6 +424,73 @@ class ServiceIntegrationTests(unittest.TestCase):
         self.assertEqual(len(telegram.sent), 3)
         self.assertIn("Visible answer", telegram.sent[0][2])
         self.assertIn("Writer: telegram", telegram.sent[-1][2])
+
+    def test_local_takeover_blocks_telegram_and_returns_to_same_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project_root = base / "Project With Space"
+            (project_root / ".git").mkdir(parents=True)
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(42,),
+                registry_path=base / "projects.json",
+                state_path=base / "state.db",
+                codex_socket_path=base / "codex.sock",
+                manage_codex_server=False,
+                terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+                projects=(ProjectBinding("project", -1001234567890),),
+                agents=(
+                    AgentDefinition(
+                        "codex",
+                        "Codex",
+                        "project_codex_bot",
+                        "codex",
+                        None,
+                        True,
+                        False,
+                        "gpt-5.6-sol",
+                        "high",
+                    ),
+                ),
+            )
+            registry = ProjectRegistry(
+                1, (base,), (Project("project", "Project", "Project", project_root),)
+            )
+            client = FakeClient()
+            telegram = FakeTelegram()
+            value = ProjectHubService.__new__(ProjectHubService)
+            value.config = config
+            value.registry = registry
+            value.state = HubState.open(config.state_path)
+            value.agent = config.agents[0]
+            value.telegram = cast(Any, telegram)
+            value.supervisor = cast(Any, FakeSupervisor(client))
+            value._codex_client = None
+            value.usernames = {"codex": "project_codex_bot"}
+
+            self.assertTrue(value.handle_update(update(10, "start")))
+            self.assertTrue(value.handle_update(update(11, "/local")))
+            topic = value.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            active = value.state.active_session(topic.topic_id)
+            assert active is not None
+            self.assertEqual(active.writer_mode, "local")
+            self.assertIn("codex resume thread-1 -C", telegram.sent[-1][2])
+
+            prompt_count = len(client.prompts)
+            self.assertTrue(value.handle_update(update(12, "must not run")))
+            self.assertEqual(len(client.prompts), prompt_count)
+            self.assertIn("/return", telegram.sent[-1][2])
+
+            self.assertTrue(value.handle_update(update(13, "/return")))
+            active = value.state.active_session(topic.topic_id)
+            assert active is not None
+            self.assertEqual(active.writer_mode, "telegram")
+            self.assertTrue(value.handle_update(update(14, "continue")))
+            value.state.close()
+
+        self.assertEqual(client.started, 1)
+        self.assertEqual(client.resumed, 1)
 
 
 if __name__ == "__main__":
