@@ -4,10 +4,15 @@ Privacy-first orchestration hub connecting Telegram project topics to persistent
 Codex, Hermes, and other agent sessions with context handoffs, model switching,
 approvals, and terminal takeover.
 
-> **Status:** v0.4 pilot. The Codex ↔ Hermes flow has passed live acceptance on
-> a private Telegram forum. OpenCode and Antigravity adapters have also passed
-> local live provider checks. A second project group and Gemini still require
-> credentials and operator-owned Telegram resources for live acceptance.
+> **Status:** v0.4 pilot. Hub, Pythia, and Babelfish are bound as isolated real
+> projects. Hub General has passed the live central-ingress baseline for Codex,
+> Hermes, OpenCode, and Antigravity, including Reply-to-author, shared context,
+> no idle-provider invocation, and controlled-restart continuity.
+
+New contributors and agents should start with the
+[documentation map](docs/INDEX.md), then read the canonical
+[product requirements](docs/product/PRODUCT_REQUIREMENTS.md) and
+[current status](docs/status/PROJECT_STATUS.md).
 
 ## Why this project exists
 
@@ -49,7 +54,8 @@ Agents Projects Hub ─── local registry + SQLite state
         │
         ├── Hermes gateway/plugin ─── persistent Hermes topic session
         │
-        └── Gemini/OpenCode CLI adapters ─── provider-owned sessions
+        ├── OpenCode/Antigravity CLI adapters ─── provider-owned sessions
+        └── recovery plane ─── Hermes Telegram + tlive approvals
 ```
 
 Topic identity is the numeric pair `(chat_id, message_thread_id)`; topic titles
@@ -60,8 +66,11 @@ private SQLite database.
 
 ### Routing and handoff
 
-Each topic has one active agent. Normal text is admitted only by that agent;
-explicit mentions can address another runtime without silently changing the
+Each topic has one active agent. A single hub poller receives allowlisted group
+updates and deterministically dispatches them; provider bot identities send
+their own replies but do not run competing group pollers. Normal text is
+admitted only by the active agent; a real Telegram Reply goes to the author bot,
+and explicit mentions can address another runtime without silently changing the
 active route. `/agent` changes the active runtime and creates a provider session
 with a one-time handoff:
 
@@ -69,6 +78,12 @@ with a one-time handoff:
 - Hermes → Codex uses bounded excerpts of visible user/assistant turns;
 - hidden reasoning, tool output, credentials, and raw terminal content are
   excluded.
+
+Completed visible turns are also kept in a bounded topic journal. On the next
+productive turn of another agent, its unseen journal delta is added as shared
+conversation context. Merely observing a satellite exchange does not start a
+provider turn or spend model tokens, and the prompt explicitly marks who the
+old messages addressed so the active agent does not answer them as new requests.
 
 The Hermes integration is a native gateway plugin and turn-export hook. Hermes
 continues to own its Telegram token and topic sessions, so the hub does not run
@@ -86,6 +101,16 @@ Terminal launching is configuration-driven. Supported backends are WSL with
 Windows Terminal, Linux terminal emulators, macOS Terminal, and `tmux-only` for
 manual attachment. All backends create the same named tmux writer first.
 
+### Native CLI transfer
+
+`/local` transfers the persisted writer lease for the active Codex, OpenCode, or
+Antigravity session from Telegram to a native CLI and returns an argv-safe resume
+command for the registered project root. It does not launch a terminal or infer
+process state. Telegram refuses productive turns while `local` owns the lease.
+After closing the native CLI, `/return` explicitly gives the same provider
+session back to Telegram. Hermes remains fail-closed until its native resume
+contract is confirmed.
+
 ## Implemented pilot
 
 - Strict Telegram owner, private-supergroup, topic, and project allowlists.
@@ -93,30 +118,36 @@ manual attachment. All backends create the same named tmux writer first.
 - Idempotent Telegram update processing and local SQLite recovery.
 - Codex metadata footer with model, reasoning effort, context, and available
   usage-window information read from structured app-server events.
-- `/pilot`, normal text, `/new`, `/new all`, `/model`, `/agent`, `/terminal`, and
-  `/release` flows, plus `/status` diagnostics.
+- `/pilot`, normal text, `/new`, `/new all`, `/model`, `/agent`, `/terminal`,
+  `/release`, `/local`, and `/return` flows, plus `/status` diagnostics.
 - Bidirectional Codex ↔ Hermes handoff with fail-closed Hermes admission.
-- Locally managed Gemini and OpenCode headless adapters with structured output,
+- Locally managed OpenCode and Antigravity headless adapters with structured output,
   persistent session IDs, bounded handoffs, and no auto-approval flags.
 - Explicit terminal writer takeover/release using tmux and `codex resume`.
+- Explicit native-CLI writer transfer for Codex, OpenCode, and Antigravity with
+  provider-specific resume commands and fail-closed Telegram turns.
 - Versioned SQLite migrations with automatic pre-migration backups and rollback.
 - Local project administration plus explicitly confirmed topic binding and safe,
   branch-retaining cleanup for worktree-backed parallel lanes.
 - Cooldown-deduplicated operational alerts for deployment health, Codex account
-  availability/quota, and stuck dispatches, with a systemd timer template.
+  availability/quota, and stuck dispatches, with a systemd timer template. They
+  go only to the explicitly configured Hub Operations/Alerts topic; quota alerts
+  include a masked account hint such as `pr***@***.com`. Hermes is a fallback
+  sender to that same topic, not a second alert destination.
 - Hermes's native runtime footer and a public `agent:end` hook that exports only
   bounded visible turns for handoff.
 - User-level service templates, installer, doctor, CI, CodeQL, and Dependabot.
 
-See [the current specification](docs/PROJECT_HUB_SPEC.ru.md) for acceptance
-results and the next implementation queue. Older design documents in `docs/`
-are retained for history and are marked when superseded.
+See the [product requirements](docs/product/PRODUCT_REQUIREMENTS.md) for accepted
+behavior and lifecycle status, and [project status](docs/status/PROJECT_STATUS.md)
+for current evidence and the next milestone. The earlier
+[pilot specification](docs/PROJECT_HUB_SPEC.ru.md) remains supporting history.
 
 ## Repository layout
 
 ```text
 config/       publishable configuration examples (real config is ignored)
-docs/         architecture, security model, roadmap, and pilot specification
+docs/         product, status, architecture, decisions, risks, operations, tests, and handoffs
 integrations/ Hermes plugin and visible-turn export hook
 scripts/      installer, doctor wrapper, and complete validation gate
 src/          router, adapters, state, Telegram service, and terminal runtime
@@ -134,9 +165,13 @@ tests/        unit and contract-style tests with fake external services
 - Gemini CLI and/or OpenCode only when those adapters are configured
 - tmux plus a supported terminal backend for `/terminal`
 
-If an active bot must receive ordinary group messages without an explicit
-mention, disable its Telegram Privacy Mode and remove/re-add the bot after the
-change. Keep the group private and restrict `owner_user_ids` in local config.
+The single ingress bot must receive ordinary group messages: disable its
+Telegram Privacy Mode (or make it an administrator), then remove/re-add it after
+the change. Provider identity bots can keep Privacy Mode enabled because the hub
+routes their group turns centrally and sends replies with their own tokens.
+Privacy Mode is a stable deployment setting; it is not switched when `/agent`
+changes the active runtime. Keep the group private and restrict
+`owner_user_ids` in local config.
 
 ## Local setup
 
@@ -186,24 +221,47 @@ agents-projects-hub serve config/hub.json
 ```
 
 The default service manages Codex. Additional locally managed adapters use an
-instance unit, for example `agents-projects-hub@gemini.service`. Hermes remains
+instance unit, for example `agents-projects-hub@opencode.service`. Hermes remains
 owned by its native gateway and uses the included drop-in. Copy the desired
 objects from `config/external-agents.example.json` into the local `agents` array;
 the primary example does not require unused external bot credentials.
 
-Give each Gemini account a separate private `runtime_home`. The adapter exports
-it as `GEMINI_CLI_HOME` only to that agent process, so OAuth state and session
-history cannot overwrite another account. Antigravity is supported through
-`agy` in sandboxed `plan` mode; its dangerous permission-bypass flag is never
-used.
+Antigravity is supported through `agy` in sandboxed `plan` mode; its dangerous
+permission-bypass flag is never used. Automatic Google account rotation remains
+disabled until `agy` exposes a stable account-pool or headless authentication
+interface.
 
 For transparent Codex account rotation, run one persistent `codex-multi-auth`
 app-server on `codex_socket_path`, leave `manage_codex_server` disabled, and set
-`codex_multi_auth_dir` plus `codex_multi_auth_executable`. Hub resumes the same
-provider thread ID through that socket and exposes only redacted account numbers
-and cached quota health in `/status`; OAuth tokens and account emails are never
-returned. `codex_stdio_executable` remains an isolated fallback for diagnostics,
-not the recommended service topology.
+`codex_multi_auth_dir` plus `codex_multi_auth_executable`. Also set
+`codex_stdio_executable` to the official Codex executable. The Hub prefers the
+shared rotating socket while it is healthy and automatically uses an isolated
+official stdio app-server when that socket is absent. Multi-auth is therefore an
+optional accelerator, not a service dependency. Hub resumes the same persisted
+provider thread ID in either mode and exposes only redacted account numbers and
+cached quota health in `/status`; OAuth tokens and account emails are never
+returned.
+
+### Independent recovery plane
+
+The existing private Hermes Telegram chat is the administrative and recovery
+interface; it is not a project group and has no filesystem binding. Hermes
+Gateway and tlive remain independently installed upstream components, while
+this repository owns their integration contract: private config paths,
+user-service health probes, cooldown alerts, startup templates, and recovery
+runbooks. Tokens, sessions, dashboard tokens, and provider OAuth state remain
+outside Git.
+
+Enable `recovery_plane` in `hub.json` to make `doctor` and `monitor` report
+Hermes and tlive separately. One failed channel is a warning; losing both is an
+error. The included `tlive.service` is installed only when no user unit already
+exists, so a customized unit is never overwritten. See
+[the recovery runbook](docs/RECOVERY_PLANE.ru.md).
+
+Set `operational_alerts.project_id` to the registered Hub project and
+`operational_alerts.telegram_thread_id` to its dedicated Operations/Alerts topic.
+The monitor fails closed when this destination is absent; it never derives alert
+destinations from ordinary project-topic activity.
 
 Some custom account proxies do not implement Codex's model-discovery response
 schema. In that topology, pass a validated local catalog to the app-server at
@@ -214,7 +272,6 @@ only during a planned or natural service start.
 Install BotFather tokens without echoing them or placing them in JSON:
 
 ```bash
-./scripts/configure-telegram-token.sh gemini
 ./scripts/configure-telegram-token.sh antigravity
 ./scripts/configure-telegram-token.sh opencode
 ```
@@ -325,7 +382,7 @@ outside an isolated pilot.
 ## Roadmap
 
 - Run live acceptance for a second private project group.
-- Validate Gemini with a real provider account and a dedicated Telegram bot.
+- Complete the existing Babelfish group's numeric-ID binding.
 - Run end-to-end Telegram acceptance for OpenCode and Antigravity once dedicated
   bot tokens are provisioned; their provider adapters already pass live checks.
 - Add additional terminal emulators only through reviewed argv-only backends.

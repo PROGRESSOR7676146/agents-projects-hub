@@ -44,9 +44,41 @@ class RoutingTests(unittest.TestCase):
             ("codex",),
         )
 
+    def test_reply_to_known_bot_targets_only_the_reply_author(self) -> None:
+        self.assertEqual(
+            decide_targets(
+                "relax, this is only a connection test",
+                active_agent="codex",
+                usernames=self.usernames,
+                reply_to_username="pythia_gemini_bot",
+            ),
+            ("gemini",),
+        )
+
+    def test_reply_author_has_priority_over_mentions_and_active_agent(self) -> None:
+        self.assertEqual(
+            decide_targets(
+                "@project_codex_bot do not intercept this reply",
+                active_agent="codex",
+                usernames=self.usernames,
+                reply_to_username="pythia_gemini_bot",
+            ),
+            ("gemini",),
+        )
+
+    def test_textual_quote_without_telegram_reply_stays_with_active_agent(self) -> None:
+        self.assertEqual(
+            decide_targets(
+                "> quoted bot text\nrelax",
+                active_agent="codex",
+                usernames=self.usernames,
+                reply_to_username=None,
+            ),
+            ("codex",),
+        )
+
     def test_commands_are_parsed_without_accepting_paths(self) -> None:
         self.assertEqual(parse_command("/new"), Command("new", ()))
-        self.assertEqual(parse_command("/new all"), Command("new", ("all",)))
         self.assertEqual(parse_command("/agent Gemini"), Command("agent", ("gemini",)))
         self.assertEqual(
             parse_command("/model gpt-5.6-sol high"),

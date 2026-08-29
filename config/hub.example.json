@@ -5,14 +5,29 @@
   "state_path": "/home/example/.local/state/agents-projects-hub/state.db",
   "codex_socket_path": "/home/example/.codex/app-server-control/app-server-control.sock",
   "manage_codex_server": false,
+  "codex_stdio_executable": "/home/example/.local/bin/codex",
   "codex_multi_auth_dir": "/home/example/.codex/multi-auth",
   "codex_multi_auth_executable": "/home/example/.local/bin/codex-multi-auth",
+  "codex_account_hints": {"1": "prg", "2": "767"},
   "terminal": {
     "backend": "auto",
     "program": null,
     "wsl_distro": "Ubuntu"
   },
+  "recovery_plane": {
+    "enabled": true,
+    "hermes_service": "hermes-gateway.service",
+    "tlive_service": "tlive.service",
+    "hermes_config_path": "/home/example/.hermes/config.yaml",
+    "tlive_config_path": "/home/example/.tlive/config.json",
+    "hermes_notify_target": "telegram"
+  },
+  "operational_alerts": {
+    "project_id": "hub",
+    "telegram_thread_id": 41
+  },
   "projects": [
+    {"project_id": "hub", "telegram_chat_id": null},
     {"project_id": "pythia", "telegram_chat_id": null}
   ],
   "agents": [

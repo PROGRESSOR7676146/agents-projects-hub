@@ -20,6 +20,7 @@ class TopicMessage:
     chat_title: str
     sender_id: int
     text: str
+    reply_to_username: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +41,18 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
     sender = message.get("from")
     text = message.get("text")
     raw_thread_id = message.get("message_thread_id")
+    reply_to_username = None
+    reply = message.get("reply_to_message")
+    # A manually selected Telegram quote is commentary for the active agent,
+    # while a plain Reply is direct addressing of the original bot author.
+    if isinstance(reply, dict) and not isinstance(message.get("quote"), dict):
+        reply_author = reply.get("from")
+        if (
+            isinstance(reply_author, dict)
+            and reply_author.get("is_bot") is True
+            and isinstance(reply_author.get("username"), str)
+        ):
+            reply_to_username = str(reply_author["username"])
     # Telegram omits message_thread_id for the General forum topic. Keep a
     # stable local numeric identity without pretending it is an API thread id.
     thread_id = raw_thread_id if isinstance(raw_thread_id, int) else 1
@@ -60,6 +73,7 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
         chat_title=str(chat.get("title") or chat["id"]),
         sender_id=int(sender["id"]),
         text=text,
+        reply_to_username=reply_to_username,
     )
 
 

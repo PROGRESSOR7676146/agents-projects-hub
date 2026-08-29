@@ -4,12 +4,20 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from .state import HubState, StateError
+
 
 @dataclass(frozen=True, slots=True)
 class PendingHandoff:
     handoff_id: str
     source_agent_id: str
     text: str
+
+
+@dataclass(frozen=True, slots=True)
+class VisibleContext:
+    text: str
+    last_turn_id: int
 
 
 def is_active_agent(
@@ -33,7 +41,7 @@ def is_active_agent(
             (chat_id, thread_id),
         ).fetchone()
         return row is not None and row[0] == agent_id
-    except (OSError, sqlite3.Error):
+    except (OSError, sqlite3.Error, StateError):
         return False
     finally:
         if connection is not None:
@@ -63,7 +71,7 @@ def peek_pending_handoff(
         if row is None:
             return None
         return PendingHandoff(str(row[0]), str(row[1]), str(row[2]))
-    except (OSError, sqlite3.Error):
+    except (OSError, sqlite3.Error, StateError):
         return None
     finally:
         if connection is not None:
@@ -82,11 +90,68 @@ def consume_pending_handoff(state_path: Path, handoff_id: str) -> bool:
                 "DELETE FROM pending_handoffs WHERE handoff_id = ?", (handoff_id,)
             )
         return cursor.rowcount == 1
-    except (OSError, sqlite3.Error):
+    except (OSError, sqlite3.Error, StateError):
         return False
     finally:
         if connection is not None:
             connection.close()
+
+
+def peek_unseen_visible_context(
+    state_path: Path,
+    chat_id: int,
+    thread_id: int,
+    *,
+    observer_agent_id: str,
+) -> VisibleContext | None:
+    path = state_path.expanduser().resolve()
+    if not path.is_file() or not observer_agent_id:
+        return None
+    state: HubState | None = None
+    try:
+        state = HubState.open(path)
+        topic = state.find_topic(chat_id, thread_id)
+        if topic is None:
+            return None
+        text, last_turn_id = state.unseen_visible_context(topic.topic_id, observer_agent_id)
+        if text is None or last_turn_id is None:
+            return None
+        return VisibleContext(text, last_turn_id)
+    except (OSError, sqlite3.Error, StateError):
+        return None
+    finally:
+        if state is not None:
+            state.close()
+
+
+def acknowledge_unseen_visible_context(
+    state_path: Path,
+    chat_id: int,
+    thread_id: int,
+    *,
+    observer_agent_id: str,
+) -> bool:
+    visible = peek_unseen_visible_context(
+        state_path,
+        chat_id,
+        thread_id,
+        observer_agent_id=observer_agent_id,
+    )
+    if visible is None:
+        return False
+    state: HubState | None = None
+    try:
+        state = HubState.open(state_path)
+        topic = state.find_topic(chat_id, thread_id)
+        if topic is None:
+            return False
+        state.acknowledge_visible_context(topic.topic_id, observer_agent_id, visible.last_turn_id)
+        return True
+    except (OSError, sqlite3.Error, StateError):
+        return False
+    finally:
+        if state is not None:
+            state.close()
 
 
 def record_external_turn(
@@ -101,7 +166,7 @@ def record_external_turn(
     user_excerpt: str,
     response_excerpt: str,
 ) -> bool:
-    """Persist visible turn excerpts only when this agent is currently active."""
+    """Persist a bounded visible turn for active or satellite agents."""
     path = state_path.expanduser().resolve()
     if not path.is_file() or not user_excerpt.strip() or not response_excerpt.strip():
         return False
@@ -110,10 +175,10 @@ def record_external_turn(
         connection = sqlite3.connect(path, timeout=0.5)
         with connection:
             row = connection.execute(
-                "SELECT topic_id, active_agent_id FROM topics WHERE chat_id = ? AND thread_id = ?",
+                "SELECT topic_id FROM topics WHERE chat_id = ? AND thread_id = ?",
                 (chat_id, thread_id),
             ).fetchone()
-            if row is None or row[1] != agent_id:
+            if row is None:
                 return False
             connection.execute(
                 """INSERT INTO external_turn_excerpts

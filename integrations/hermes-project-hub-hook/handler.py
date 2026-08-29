@@ -11,7 +11,10 @@ if not _SOURCE_ROOT:
 if _SOURCE_ROOT not in sys.path:
     sys.path.insert(0, _SOURCE_ROOT)
 
-from hermes_codex_router.external_admission import record_external_turn  # noqa: E402
+from hermes_codex_router.external_admission import (  # noqa: E402
+    acknowledge_unseen_visible_context,
+    record_external_turn,
+)
 
 _STATE_PATH = Path(
     os.getenv(
@@ -36,14 +39,21 @@ async def handle(event_type: str, context: dict[str, Any]) -> None:
         thread_id = int(context.get("thread_id") or 1)
     except (TypeError, ValueError):
         return
-    record_external_turn(
+    recorded = record_external_turn(
         _STATE_PATH,
         chat_id=chat_id,
         thread_id=thread_id,
         agent_id="hermes",
         provider_session_id=str(context.get("session_id") or ""),
         model=str(context.get("model") or ""),
-        provider=str(context.get("provider") or ""),
+        provider=str(context.get("provider") or "hermes"),
         user_excerpt=str(context.get("message") or ""),
         response_excerpt=str(context.get("response") or ""),
     )
+    if recorded:
+        acknowledge_unseen_visible_context(
+            _STATE_PATH,
+            chat_id,
+            thread_id,
+            observer_agent_id="hermes",
+        )

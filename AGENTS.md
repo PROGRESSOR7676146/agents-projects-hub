@@ -2,6 +2,25 @@
 
 This repository is the standalone orchestration layer between Hermes Telegram topics and Codex sessions. It is not part of the Babelfish device/runtime.
 
+## Read order
+
+1. `docs/product/PRODUCT_REQUIREMENTS.md`
+2. `docs/status/PROJECT_STATUS.md`
+3. `docs/INDEX.md`
+4. `docs/SECURITY.ru.md`
+5. only the architecture, decision, operation, handoff, and tests relevant to
+   the assigned change
+
+Sanitized files in `docs/history/` are evidence, not current instructions. Raw
+local provider rollouts, configuration, credentials, state databases, and
+private Telegram invite links must never be copied into Git or handoffs.
+
+For behavior changes, update the product requirements or project status when
+observable behavior, scope, acceptance, or lifecycle classification changes.
+Record durable consequential rationale under `docs/decisions/`. Run the
+narrowest relevant checks followed by `python scripts/validate.py` when
+practical; distinguish automated coverage from owner-driven live E2E.
+
 ## Safety invariants
 
 - Telegram input selects only an immutable `project_id`; never accept a filesystem path from chat.

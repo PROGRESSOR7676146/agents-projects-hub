@@ -1,4 +1,4 @@
-# Hermes Project Hub — спецификация и план
+# Hub — спецификация и план
 
 Дата актуализации: 2026-08-29. Pythia acceptance пройден, operational hardening
 v0.4 реализован.
@@ -11,10 +11,22 @@ v0.4 реализован.
 темы — изменяемая подпись, а не ключ.
 
 Один агент темы активен. Обычный текст идёт активному агенту; явное упоминание
-`@Codex`, `@Gemini`, `@Hermes` создаёт/продолжает satellite session и не меняет
-активного агента. Смена активного агента или модели создаёт новую provider
-session с handoff предыдущего контекста. `/new` сбрасывает активную сессию,
-`/new all` — все сессии темы.
+`@Codex`, `@OpenCode`, `@Antigravity`, `@Hermes` создаёт/продолжает satellite
+session и не меняет активного агента. При смене активного агента его прежняя
+provider session возобновляется. Смена модели создаёт новую сессию с handoff.
+`/new` после явного подтверждения сбрасывает только активную сессию; массового
+сброса всех агентов нет.
+
+Один центральный ingress (Codex/Project Hub) получает сообщения группы и
+маршрутизирует локально управляемые provider-боты. Настоящий Telegram Reply
+адресуется боту-автору; упоминание — указанному агенту; вручную выбранная цитата
+остаётся контекстом для активного агента. Provider-боты не запускают параллельные
+group poller и поэтому не конкурируют за update.
+
+Каждый завершённый видимый turn записывается в ограниченный журнал темы. При
+следующем продуктивном обращении к другому агенту непрочитанный фрагмент журнала
+автоматически добавляется в его контекст с явной разметкой адресата. Наблюдение
+само по себе не вызывает модель, не тратит токены и не порождает ответ главного.
 
 ## Подтверждённая вертикаль
 
@@ -45,6 +57,13 @@ session с handoff предыдущего контекста. `/new` сбрас�
    диска и возвращает lease Telegram.
 5. Незавершённый turn никогда не мигрирует между writer-режимами.
 
+Для предпочтительного нативного интерфейса `/local` передаёт lease активной
+сессии Codex, OpenCode или Antigravity локальному CLI и возвращает безопасную
+команду resume для зарегистрированного корня проекта. Терминал автоматически не
+запускается и его экран не читается. Пока writer равен `local`, продуктивные
+Telegram turns запрещены. После закрытия CLI владелец явно выполняет `/return`.
+Hermes пока отвечает fail-closed: его нативный контракт resume ещё не подтверждён.
+
 Для нескольких одновременно активных тем runtime supervisor должен быть
 per-topic либо использовать подтверждённый multiplex API провайдера. Глобальный
 рестарт всех Codex-сессий ради одной темы запрещён.
@@ -55,27 +74,25 @@ per-topic либо использовать подтверждённый multipl
 | --- | --- | --- |
 | `/pilot` | работает | показать/создать привязку темы |
 | обычный текст / `@Codex` | работает | продолжить Codex thread |
-| `/new` | работает в state | новая активная provider session на следующем turn |
-| `/new all` | работает в state | сбросить active + satellites |
-| `/model MODEL EFFORT` | реализовано | live validation + новая session + handoff |
-| `/agent`, `/agent AGENT` | двусторонний Codex ↔ Hermes | inline-выбор; Codex summary и bounded visible Hermes excerpts |
+| `/new` | реализовано | подтверждённая новая сессия только активного провайдера |
+| `/model` | реализовано | provider → model → effort; LKG-каталог и пагинация |
 | `/terminal`, `/release` | реализовано | явная передача writer lease |
+| `/local`, `/return` | реализовано | нативный CLI ↔ Telegram, тот же provider session |
 | `/status` | реализовано | active agent/session/writer/schema без hidden данных |
 
 Локальный CLI дополнен командами `doctor`, `status`, `backup`, `migrate`,
-`project add/list/enable/disable`, `lane create/list/bind/archive/cleanup` и
-`monitor`. Telegram по-прежнему не принимает локальные пути и не создаёт
+`project add/list/enable/disable`, `lane create/list/bind/archive/cleanup`,
+`telegram-commands` и `monitor`. Telegram по-прежнему не принимает локальные пути и не создаёт
 worktree самостоятельно. Binding требует локального подтверждения точной пары
 `chat_id:thread_id`; cleanup — архивной lane и подтверждения её точного ID.
 
 ## Следующая очередь
 
-1. Провести живую приёмку второй приватной project group без переиспользования
-   Pythia topic/session IDs.
-2. Проверить Gemini с реальным provider account и отдельным Telegram bot token;
-   CLI и credentials на этой машине пока отсутствуют. OpenCode и Antigravity
-   прошли живые provider-проверки, включая двухходовый resume OpenCode, но для
-   Telegram E2E им также нужны отдельные bot tokens.
+1. Провести Telegram E2E-приёмку центрального ingress: Reply автору,
+   mention-сабагенту, автоматический видимый контекст главного и отсутствие
+   дублей/лишних provider turns.
+2. Сохранить ручную смену двух Google-аккаунтов через Hermes как fallback;
+   автоматическую ротацию Antigravity отложить до появления стабильного API.
 3. Настроить GitHub ruleset и private vulnerability reporting после
    восстановления административной GitHub CLI-сессии.
 
@@ -84,13 +101,14 @@ worktree самостоятельно. Binding требует локальног
 - CI на Python 3.11–3.13, Ruff, Pyright, unit/integration tests и CodeQL;
 - Dependabot для pip и GitHub Actions;
 - MIT license, security policy, changelog и acknowledgments upstream-проектам;
-- versioned SQLite schema v5, automatic pre-migration backup и integrity check;
+- versioned SQLite schema v6, automatic pre-migration backup и integrity check;
 - dispatch status для queued/running/completed/failed и диагностический snapshot;
 - fail-closed `doctor`, systemd user templates и installer без auto-enable;
 - configurable WSL/Linux/macOS/tmux-only terminal launchers;
 - локальные project administration, подтверждённый lane binding и безопасный
   cleanup с сохранением branch;
-- Gemini/OpenCode CLI adapters через structured output без auto-approval.
+- OpenCode/Antigravity CLI adapters через structured output без auto-approval;
+- независимый recovery plane Hermes Telegram + tlive и Codex stdio fallback;
 - cooldown-alerts о deployment health, Codex quota/account и зависших dispatch;
 - Hermes native runtime footer и публичный `agent:end` visible-turn hook.
 
@@ -107,6 +125,6 @@ worktree самостоятельно. Binding требует локальног
   отдельной satellite-сессией;
 - после `/agent Hermes` первый Hermes turn однократно получает handoff Codex —
   пройдено; обратный Hermes → Codex handoff также пройден;
-- Privacy Mode отключён либо бот назначен администратором, если активный бот
-  должен получать обычный текст без упоминания — отключён для обоих пилотных
-  ботов, после изменения они повторно добавлены в группу.
+- Privacy Mode отключён либо ingress-бот назначен администратором, чтобы он
+  получал обычный текст; у provider identity bots Privacy Mode может оставаться
+  включённым, потому что они не запускают собственные group poller.

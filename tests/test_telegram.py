@@ -62,6 +62,92 @@ class TelegramUpdateTests(unittest.TestCase):
         assert parsed is not None
         self.assertEqual(parsed.thread_id, 1)
 
+    def test_extracts_bot_author_from_real_telegram_reply(self) -> None:
+        parsed = parse_topic_message(
+            {
+                "update_id": 13,
+                "message": {
+                    "message_id": 22,
+                    "chat": {
+                        "id": -1001234567890,
+                        "type": "supergroup",
+                        "title": "Babelfish",
+                        "is_forum": True,
+                    },
+                    "from": {"id": 123456789, "is_bot": False},
+                    "text": "relax, this is a connection test",
+                    "reply_to_message": {
+                        "message_id": 21,
+                        "from": {
+                            "id": 8752263516,
+                            "is_bot": True,
+                            "username": "Antigravity_Lenovo_bot",
+                        },
+                        "text": "previous bot answer",
+                    },
+                },
+            }
+        )
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.reply_to_username, "Antigravity_Lenovo_bot")
+
+    def test_text_quote_is_not_mistaken_for_telegram_reply(self) -> None:
+        parsed = parse_topic_message(
+            {
+                "update_id": 14,
+                "message": {
+                    "message_id": 23,
+                    "chat": {
+                        "id": -1001234567890,
+                        "type": "supergroup",
+                        "title": "Babelfish",
+                        "is_forum": True,
+                    },
+                    "from": {"id": 123456789, "is_bot": False},
+                    "text": "> previous bot answer\nrelax",
+                },
+            }
+        )
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertIsNone(parsed.reply_to_username)
+
+    def test_manually_selected_telegram_quote_stays_with_active_agent(self) -> None:
+        parsed = parse_topic_message(
+            {
+                "update_id": 15,
+                "message": {
+                    "message_id": 24,
+                    "chat": {
+                        "id": -1001234567890,
+                        "type": "supergroup",
+                        "title": "Babelfish",
+                        "is_forum": True,
+                    },
+                    "from": {"id": 123456789, "is_bot": False},
+                    "text": "commenting on this quote",
+                    "reply_to_message": {
+                        "message_id": 21,
+                        "from": {
+                            "id": 8752263516,
+                            "is_bot": True,
+                            "username": "Antigravity_Lenovo_bot",
+                        },
+                        "text": "long previous bot answer",
+                    },
+                    "quote": {
+                        "text": "selected fragment",
+                        "position": 0,
+                        "is_manual": True,
+                    },
+                },
+            }
+        )
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertIsNone(parsed.reply_to_username)
+
     def test_parses_inline_model_callback(self) -> None:
         parsed = parse_topic_callback(
             {

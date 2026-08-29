@@ -1,5 +1,5 @@
 name: hermes-project-hub
 version: "0.1.0"
-description: "Route ordinary Telegram forum-topic messages to Hermes only when Hermes Project Hub selects it as the active agent."
+description: "Route ordinary Telegram forum-topic messages to Hermes only when Hub selects it as the active agent."
 author: "local"
 kind: standalone

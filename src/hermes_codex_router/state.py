@@ -36,6 +36,7 @@ class SessionRecord:
     provider_session_id: str | None
     terminal_name: str | None
     writer_mode: str
+    context_remaining_percent: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +109,7 @@ class HubState:
             provider_session_id=row["provider_session_id"],
             terminal_name=row["terminal_name"],
             writer_mode=row["writer_mode"],
+            context_remaining_percent=row["context_remaining_percent"],
         )
 
     def observe_topic(
@@ -208,7 +210,7 @@ class HubState:
         return self.get_session(session_id)
 
     def set_writer_mode(self, session_id: str, writer_mode: str) -> SessionRecord:
-        if writer_mode not in {"telegram", "terminal"}:
+        if writer_mode not in {"telegram", "local", "terminal"}:
             raise StateError("invalid writer mode")
         with self._connection:
             cursor = self._connection.execute(
@@ -218,6 +220,25 @@ class HubState:
         if cursor.rowcount != 1:
             raise StateError(f"unknown session_id: {session_id}")
         return self.get_session(session_id)
+
+    def set_context_remaining(self, session_id: str, percent: float) -> SessionRecord:
+        bounded = max(0.0, min(100.0, percent))
+        with self._connection:
+            cursor = self._connection.execute(
+                "UPDATE agent_sessions SET context_remaining_percent = ?, updated_at = ? "
+                "WHERE session_id = ?",
+                (bounded, _now(), session_id),
+            )
+        if cursor.rowcount != 1:
+            raise StateError(f"unknown session_id: {session_id}")
+        return self.get_session(session_id)
+
+    def topic_has_running_dispatch(self, topic_id: int) -> bool:
+        row = self._connection.execute(
+            "SELECT 1 FROM turn_dispatches WHERE topic_id = ? AND status = 'running' LIMIT 1",
+            (topic_id,),
+        ).fetchone()
+        return row is not None
 
     def stage_handoff(
         self,
@@ -275,6 +296,97 @@ class HubState:
             parts.append(f"USER: {row['user_excerpt']}\n{label.upper()}: {row['response_excerpt']}")
         return "\n\n".join(parts)
 
+    def record_visible_turn(
+        self,
+        topic_id: int,
+        *,
+        agent_id: str,
+        provider: str,
+        model: str,
+        user_excerpt: str,
+        response_excerpt: str,
+        provider_session_id: str | None = None,
+    ) -> int:
+        self.get_topic(topic_id)
+        if not agent_id or not user_excerpt.strip() or not response_excerpt.strip():
+            raise StateError("invalid visible turn")
+        with self._connection:
+            cursor = self._connection.execute(
+                """INSERT INTO external_turn_excerpts
+                   (topic_id, agent_id, provider_session_id, model, provider,
+                    user_excerpt, response_excerpt, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    topic_id,
+                    agent_id,
+                    (provider_session_id or "")[:200],
+                    model[:200],
+                    provider[:200],
+                    user_excerpt.strip()[:2000],
+                    response_excerpt.strip()[:4000],
+                    _now(),
+                ),
+            )
+            if cursor.lastrowid is None:
+                raise StateError("failed to persist visible turn")
+            turn_id = cursor.lastrowid
+            self._connection.execute(
+                """DELETE FROM external_turn_excerpts
+                   WHERE topic_id = ? AND turn_id NOT IN (
+                     SELECT turn_id FROM external_turn_excerpts
+                     WHERE topic_id = ? ORDER BY turn_id DESC LIMIT 100
+                   )""",
+                (topic_id, topic_id),
+            )
+        return turn_id
+
+    def unseen_visible_context(
+        self, topic_id: int, observer_agent_id: str, *, limit: int = 8
+    ) -> tuple[str | None, int | None]:
+        if not observer_agent_id or limit <= 0 or limit > 20:
+            raise StateError("invalid visible context request")
+        cursor = self._connection.execute(
+            """SELECT last_turn_id FROM visible_context_cursors
+               WHERE topic_id = ? AND observer_agent_id = ?""",
+            (topic_id, observer_agent_id),
+        ).fetchone()
+        last_turn_id = int(cursor["last_turn_id"]) if cursor is not None else 0
+        rows = self._connection.execute(
+            """SELECT turn_id, agent_id, user_excerpt, response_excerpt, model, provider
+               FROM external_turn_excerpts
+               WHERE topic_id = ? AND agent_id != ? AND turn_id > ?
+               ORDER BY turn_id DESC LIMIT ?""",
+            (topic_id, observer_agent_id, last_turn_id, limit),
+        ).fetchall()
+        if not rows:
+            return None, None
+        parts: list[str] = []
+        for row in reversed(rows):
+            label = "/".join(
+                value for value in (row["agent_id"], row["provider"], row["model"]) if value
+            )
+            parts.append(
+                f"USER → {row['agent_id']}: {row['user_excerpt']}\n"
+                f"{label.upper()}: {row['response_excerpt']}"
+            )
+        return "\n\n".join(parts), max(int(row["turn_id"]) for row in rows)
+
+    def acknowledge_visible_context(
+        self, topic_id: int, observer_agent_id: str, last_turn_id: int
+    ) -> None:
+        if not observer_agent_id or last_turn_id <= 0:
+            raise StateError("invalid visible context cursor")
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO visible_context_cursors
+                   (topic_id, observer_agent_id, last_turn_id, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(topic_id, observer_agent_id) DO UPDATE SET
+                     last_turn_id = MAX(last_turn_id, excluded.last_turn_id),
+                     updated_at = excluded.updated_at""",
+                (topic_id, observer_agent_id, last_turn_id, _now()),
+            )
+
     def _next_generation(self, topic_id: int, agent_id: str) -> int:
         row = self._connection.execute(
             "SELECT COALESCE(MAX(generation), 0) + 1 AS value "
@@ -309,17 +421,39 @@ class HubState:
         self.get_topic(topic_id)
         now = _now()
         with self._connection:
-            self._connection.execute(
-                "UPDATE agent_sessions SET status = 'archived', updated_at = ? "
-                "WHERE topic_id = ? AND (status = 'active' OR (agent_id = ? AND status = 'satellite'))",
-                (now, topic_id, agent_id),
-            )
-            session = self._insert_session(topic_id, agent_id, model, effort, "active")
+            current = self._connection.execute(
+                "SELECT * FROM agent_sessions WHERE topic_id = ? AND status = 'active'",
+                (topic_id,),
+            ).fetchone()
+            target = self._connection.execute(
+                "SELECT * FROM agent_sessions WHERE topic_id = ? AND agent_id = ? "
+                "AND status = 'satellite'",
+                (topic_id, agent_id),
+            ).fetchone()
+            if current is not None and current["agent_id"] == agent_id:
+                session_id = str(current["session_id"])
+            else:
+                if current is not None:
+                    self._connection.execute(
+                        "UPDATE agent_sessions SET status = 'satellite', updated_at = ? "
+                        "WHERE session_id = ?",
+                        (now, current["session_id"]),
+                    )
+                if target is not None:
+                    session_id = str(target["session_id"])
+                    self._connection.execute(
+                        "UPDATE agent_sessions SET status = 'active', updated_at = ? "
+                        "WHERE session_id = ?",
+                        (now, session_id),
+                    )
+                else:
+                    session = self._insert_session(topic_id, agent_id, model, effort, "active")
+                    session_id = session.session_id
             self._connection.execute(
                 "UPDATE topics SET active_agent_id = ?, updated_at = ? WHERE topic_id = ?",
                 (agent_id, now, topic_id),
             )
-        return self.get_session(session.session_id)
+        return self.get_session(session_id)
 
     def ensure_satellite(
         self, topic_id: int, agent_id: str, model: str, effort: str
@@ -361,7 +495,7 @@ class HubState:
             )
         return self.get_session(replacement.session_id)
 
-    def new_all_sessions(self, topic_id: int) -> SessionRecord:
+    def replace_active_session(self, topic_id: int, *, model: str, effort: str) -> SessionRecord:
         row = self._connection.execute(
             "SELECT * FROM agent_sessions WHERE topic_id = ? AND status = 'active'",
             (topic_id,),
@@ -372,12 +506,10 @@ class HubState:
         with self._connection:
             self._connection.execute(
                 "UPDATE agent_sessions SET status = 'archived', updated_at = ? "
-                "WHERE topic_id = ? AND status != 'archived'",
-                (_now(), topic_id),
+                "WHERE session_id = ?",
+                (_now(), previous.session_id),
             )
-            replacement = self._insert_session(
-                topic_id, previous.agent_id, previous.model, previous.effort, "active"
-            )
+            replacement = self._insert_session(topic_id, previous.agent_id, model, effort, "active")
         return self.get_session(replacement.session_id)
 
     def claim_message(self, chat_id: int, message_id: int, *, observer_agent_id: str) -> bool:
@@ -442,12 +574,17 @@ class HubState:
                FROM turn_dispatches WHERE status IN ('queued', 'running')
                ORDER BY created_at"""
         ).fetchall()
+        runtime_events = self._connection.execute(
+            """SELECT component, level, code, detail, created_at
+               FROM runtime_events ORDER BY event_id DESC LIMIT 50"""
+        ).fetchall()
         return {
             "schema_version": self.schema_version,
             "topics": [dict(row) for row in topics],
             "bot_offsets": [dict(row) for row in offsets],
             "dispatch_counts": {row["status"]: row["count"] for row in dispatch_counts},
             "pending_dispatches": [dict(row) for row in running],
+            "runtime_events": [dict(row) for row in runtime_events],
         }
 
     def start_dispatch(
@@ -493,6 +630,53 @@ class HubState:
                    VALUES (?, ?, ?, ?, ?)""",
                 (component[:64], level, code[:64], detail[:1000], _now()),
             )
+
+    def latest_runtime_event(self, component: str, code: str) -> dict[str, object] | None:
+        row = self._connection.execute(
+            """SELECT component, level, code, detail, created_at FROM runtime_events
+               WHERE component = ? AND code = ? ORDER BY event_id DESC LIMIT 1""",
+            (component, code),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def observe_runtime_counter(self, key: str, value: int) -> int | None:
+        if not key.strip() or value < 0:
+            raise StateError("invalid runtime counter")
+        row = self._connection.execute(
+            "SELECT integer_value FROM runtime_checkpoints WHERE checkpoint_key = ?",
+            (key,),
+        ).fetchone()
+        previous = int(row["integer_value"]) if row is not None else None
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO runtime_checkpoints
+                   (checkpoint_key, integer_value, updated_at) VALUES (?, ?, ?)
+                   ON CONFLICT(checkpoint_key) DO UPDATE SET
+                     integer_value = MAX(integer_value, excluded.integer_value),
+                     updated_at = excluded.updated_at""",
+                (key[:128], value, _now()),
+            )
+        return previous
+
+    def runtime_counter(self, key: str) -> int | None:
+        row = self._connection.execute(
+            "SELECT integer_value FROM runtime_checkpoints WHERE checkpoint_key = ?",
+            (key,),
+        ).fetchone()
+        return int(row["integer_value"]) if row is not None else None
+
+    def set_runtime_counter(self, key: str, value: int) -> None:
+        self.observe_runtime_counter(key, value)
+
+    def active_topics_for_agent(self, agent_id: str) -> tuple[TopicRecord, ...]:
+        rows = self._connection.execute(
+            """SELECT t.* FROM topics t
+               JOIN agent_sessions s ON s.topic_id = t.topic_id
+               WHERE s.status = 'active' AND s.agent_id = ?
+               ORDER BY t.topic_id""",
+            (agent_id,),
+        ).fetchall()
+        return tuple(self._topic(row) for row in rows)
 
     def claim_alert_delivery(self, alert_key: str, *, cooldown_seconds: int) -> bool:
         if not alert_key.strip() or cooldown_seconds < 0:

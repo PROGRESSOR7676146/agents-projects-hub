@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
+from .command_menu import configure_public_commands
 from .diagnostics import run_doctor
 from .external_service import ExternalAgentService
 from .hub_config import HubConfigError, load_hub_config
@@ -58,7 +59,14 @@ def _parser() -> argparse.ArgumentParser:
     monitor = commands.add_parser("monitor", help="evaluate operational alerts once")
     monitor.add_argument("config", type=Path)
     monitor.add_argument("--notify", action="store_true")
+    monitor.add_argument("--repair", action="store_true")
     monitor.add_argument("--cooldown-seconds", type=int, default=3600)
+
+    telegram_commands = commands.add_parser(
+        "telegram-commands", help="check or synchronize the public Telegram command menu"
+    )
+    telegram_commands.add_argument("config", type=Path)
+    telegram_commands.add_argument("--sync", action="store_true")
 
     project = commands.add_parser("project", help="manage the local project registry")
     project_commands = project.add_subparsers(dest="project_command", required=True)
@@ -302,10 +310,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = run_monitor_once(
                 load_hub_config(args.config),
                 notify=args.notify,
+                repair=args.repair,
                 cooldown_seconds=args.cooldown_seconds,
             )
             _print(result)
             return 0
+        if args.command == "telegram-commands":
+            result = configure_public_commands(load_hub_config(args.config), sync=args.sync)
+            _print(result)
+            return 0 if result["ok"] else 1
         if args.command == "project":
             return _project_command(args)
         if args.command == "lane":

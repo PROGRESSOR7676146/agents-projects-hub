@@ -5,6 +5,38 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+### Added
+
+- Pass and document the Hub General live Telegram E2E baseline, add Hermes
+  registered-group policy/heartbeat/Bot API/queue monitoring, and provide
+  cooldown-bounded Hermes-only self-repair for policy drift or stuck ingress.
+- Establish a canonical product-requirements baseline and proportionate durable
+  documentation map for current status, decisions, risks, operations, testing,
+  and future-agent orientation.
+- Add independent Hermes Gateway and tlive recovery-plane health checks,
+  dual-channel operational alert delivery, an optional tlive user-service
+  template, and a Russian recovery runbook.
+- Record only the numeric chat ID and bounded title of authorized but unbound
+  Telegram project groups so an existing group can be bound without storing its
+  message text.
+- Add per-agent systemd health probes plus bounded startup and Telegram-error
+  events for OpenCode and Antigravity pollers.
+- Monitor each locally managed bot's access to every configured project group.
+- Route real Telegram replies exclusively to the bot that authored the replied
+  message; manually selected Telegram quotes and pasted textual quotes continue
+  to follow the topic's active agent.
+- Add a single central group ingress for locally managed provider identities and
+  a bounded visible-topic journal whose unseen delta is supplied to other agents
+  on their next productive turn without triggering observer model calls.
+
+### Changed
+
+- Make `codex-multi-auth` an optional accelerator: prefer its shared socket when
+  healthy and fall back to the official Codex stdio app-server when unavailable.
+- Treat OpenCode and Antigravity as the active external provider adapters and
+  require configured Telegram usernames to be valid bot usernames.
+- Advance the state database to schema v6 for per-agent visible-context cursors.
+
 ## [0.4.0] - 2026-08-29
 
 ### Added

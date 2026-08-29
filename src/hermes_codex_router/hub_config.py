@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
+SERVICE_UNIT = re.compile(r"^[A-Za-z0-9_.@-]+\.service$")
 SUPPORTED_RUNTIMES = {"codex", "hermes", "gemini", "antigravity", "opencode", "api"}
 
 
@@ -34,6 +35,7 @@ class AgentDefinition:
     default_effort: str
     executable: str | None = None
     runtime_home: Path | None = None
+    service_unit: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +43,22 @@ class TerminalSettings:
     backend: str
     program: str | None
     wsl_distro: str
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryPlaneSettings:
+    enabled: bool
+    hermes_service: str
+    tlive_service: str
+    hermes_config_path: Path | None
+    tlive_config_path: Path | None
+    hermes_notify_target: str
+
+
+@dataclass(frozen=True, slots=True)
+class OperationalAlertSettings:
+    telegram_chat_id: int | None
+    telegram_thread_id: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,9 +72,23 @@ class HubConfig:
     terminal: TerminalSettings
     projects: tuple[ProjectBinding, ...]
     agents: tuple[AgentDefinition, ...]
+    recovery_plane: RecoveryPlaneSettings = field(
+        default_factory=lambda: RecoveryPlaneSettings(
+            False,
+            "hermes-gateway.service",
+            "tlive.service",
+            None,
+            None,
+            "telegram",
+        )
+    )
+    operational_alerts: OperationalAlertSettings = field(
+        default_factory=lambda: OperationalAlertSettings(None, None)
+    )
     codex_multi_auth_dir: Path | None = None
     codex_multi_auth_executable: Path | None = None
     codex_stdio_executable: Path | None = None
+    codex_account_hints: dict[int, str] = field(default_factory=dict)
 
     def require_agent(self, agent_id: str) -> AgentDefinition:
         for agent in self.agents:
@@ -158,6 +190,22 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
             codex_multi_auth_executable.stat().st_mode & 0o111
         ):
             raise HubConfigError("codex_multi_auth_executable must be executable")
+    raw_account_hints = root.get("codex_account_hints", {})
+    if not isinstance(raw_account_hints, dict):
+        raise HubConfigError("codex_account_hints must be an object")
+    codex_account_hints: dict[int, str] = {}
+    for raw_index, raw_hint in raw_account_hints.items():
+        try:
+            account_index = int(raw_index)
+        except (TypeError, ValueError) as exc:
+            raise HubConfigError("codex_account_hints has an invalid index") from exc
+        if (
+            account_index <= 0
+            or not isinstance(raw_hint, str)
+            or not re.fullmatch(r"[A-Za-z0-9]{3}", raw_hint)
+        ):
+            raise HubConfigError("codex_account_hints values must be three characters")
+        codex_account_hints[account_index] = raw_hint
     stdio_executable_value = root.get("codex_stdio_executable")
     codex_stdio_executable = None
     if stdio_executable_value is not None:
@@ -186,6 +234,37 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
     if not isinstance(wsl_distro, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", wsl_distro):
         raise HubConfigError("terminal.wsl_distro is invalid")
 
+    recovery_data = _object(root.get("recovery_plane", {}), "recovery_plane")
+    recovery_enabled = recovery_data.get("enabled", False)
+    if not isinstance(recovery_enabled, bool):
+        raise HubConfigError("recovery_plane.enabled must be boolean")
+    hermes_service = recovery_data.get("hermes_service", "hermes-gateway.service")
+    tlive_service = recovery_data.get("tlive_service", "tlive.service")
+    hermes_notify_target = recovery_data.get("hermes_notify_target", "telegram")
+    for label, value in (
+        ("hermes_service", hermes_service),
+        ("tlive_service", tlive_service),
+    ):
+        if not isinstance(value, str) or not SERVICE_UNIT.fullmatch(value):
+            raise HubConfigError(f"recovery_plane.{label} is invalid")
+    if not isinstance(hermes_notify_target, str) or not re.fullmatch(
+        r"telegram(?::(-?\d+)(?::\d+)?)?", hermes_notify_target
+    ):
+        raise HubConfigError("recovery_plane.hermes_notify_target is invalid")
+    hermes_config_path = None
+    tlive_config_path = None
+    if recovery_enabled:
+        hermes_config_path = _absolute_path(
+            recovery_data.get("hermes_config_path"),
+            "recovery_plane.hermes_config_path",
+            must_exist=True,
+        )
+        tlive_config_path = _absolute_path(
+            recovery_data.get("tlive_config_path"),
+            "recovery_plane.tlive_config_path",
+            must_exist=True,
+        )
+
     raw_projects = root.get("projects")
     if not isinstance(raw_projects, list) or not raw_projects:
         raise HubConfigError("projects must be a non-empty array")
@@ -212,6 +291,22 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
             chat_ids.add(chat_id)
         projects.append(ProjectBinding(project_id, chat_id))
 
+    alerts_data = _object(root.get("operational_alerts", {}), "operational_alerts")
+    alerts_project_id = alerts_data.get("project_id")
+    alerts_thread_id = alerts_data.get("telegram_thread_id")
+    alerts_chat_id: int | None = None
+    if alerts_project_id is not None or alerts_thread_id is not None:
+        if alerts_project_id != "hub":
+            raise HubConfigError("operational_alerts.project_id must be hub")
+        if not isinstance(alerts_project_id, str) or not IDENTIFIER.fullmatch(alerts_project_id):
+            raise HubConfigError("operational_alerts.project_id is invalid")
+        matching_projects = [item for item in projects if item.project_id == alerts_project_id]
+        if len(matching_projects) != 1 or matching_projects[0].telegram_chat_id is None:
+            raise HubConfigError("operational_alerts.project_id is not a bound project")
+        if not isinstance(alerts_thread_id, int) or alerts_thread_id <= 1:
+            raise HubConfigError("operational_alerts.telegram_thread_id is invalid")
+        alerts_chat_id = matching_projects[0].telegram_chat_id
+
     raw_agents = root.get("agents")
     if not isinstance(raw_agents, list) or not raw_agents:
         raise HubConfigError("agents must be a non-empty array")
@@ -230,6 +325,8 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
             raise HubConfigError(f"invalid or duplicate agent_id: {agent_id}")
         if not USERNAME.fullmatch(username) or username.casefold() in usernames:
             raise HubConfigError(f"invalid or duplicate telegram_username: {username}")
+        if not username.casefold().endswith("bot"):
+            raise HubConfigError(f"telegram_username for {agent_id} must end in bot")
         if runtime not in SUPPORTED_RUNTIMES:
             raise HubConfigError(f"unsupported runtime for {agent_id}: {runtime}")
         managed_externally = data.get("managed_externally", False)
@@ -273,6 +370,11 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
                 raise HubConfigError(f"runtime_home for {agent_id} is not a directory")
             if runtime_home.stat().st_mode & 0o077:
                 raise HubConfigError(f"runtime_home for {agent_id} must have mode 0700")
+        service_unit = data.get("service_unit")
+        if service_unit is not None and (
+            not isinstance(service_unit, str) or not SERVICE_UNIT.fullmatch(service_unit)
+        ):
+            raise HubConfigError(f"service_unit is invalid for {agent_id}")
         agents.append(
             AgentDefinition(
                 agent_id=agent_id,
@@ -286,6 +388,7 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
                 default_effort=default_effort,
                 executable=executable.strip() if executable else None,
                 runtime_home=runtime_home,
+                service_unit=service_unit,
             )
         )
 
@@ -301,9 +404,19 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
             program=terminal_program.strip() if terminal_program else None,
             wsl_distro=wsl_distro,
         ),
+        recovery_plane=RecoveryPlaneSettings(
+            enabled=recovery_enabled,
+            hermes_service=hermes_service,
+            tlive_service=tlive_service,
+            hermes_config_path=hermes_config_path,
+            tlive_config_path=tlive_config_path,
+            hermes_notify_target=hermes_notify_target,
+        ),
+        operational_alerts=OperationalAlertSettings(alerts_chat_id, alerts_thread_id),
         projects=tuple(projects),
         agents=tuple(agents),
         codex_multi_auth_dir=codex_multi_auth_dir,
         codex_multi_auth_executable=codex_multi_auth_executable,
         codex_stdio_executable=codex_stdio_executable,
+        codex_account_hints=codex_account_hints,
     )

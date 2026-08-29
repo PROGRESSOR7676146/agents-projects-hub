@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=%h/.local/share/agents-projects-hub/venv/bin/agents-projects-hub monitor %h/.config/agents-projects-hub/hub.json --notify
+ExecStart=%h/.local/share/agents-projects-hub/venv/bin/agents-projects-hub monitor %h/.config/agents-projects-hub/hub.json --notify --repair
 EnvironmentFile=-%h/.config/agents-projects-hub/environment
 UMask=0077
 NoNewPrivileges=true

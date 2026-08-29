@@ -51,7 +51,7 @@ class CodexAccountStatusTests(unittest.TestCase):
             def runner(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
                 return subprocess.CompletedProcess([], 0, json.dumps(report), "")
 
-            status = read_codex_pool_status(root, runner=runner)
+            status = read_codex_pool_status(root, runner=runner, identity_hints={1: "prg"})
             rendered = format_codex_pool_status(status, timezone_name="Europe/Moscow")
 
         self.assertTrue(status.available)
@@ -60,8 +60,10 @@ class CodexAccountStatusTests(unittest.TestCase):
         self.assertEqual(status.account_rotations, 4)
         self.assertEqual(status.accounts[0].five_hour_remaining, 75)
         self.assertEqual(status.accounts[0].weekly_remaining, 60)
+        self.assertEqual(status.accounts[0].identity_hint, "prg…")
         self.assertNotIn("secret@example.com", rendered)
         self.assertNotIn("ABC123", rendered)
+        self.assertIn("prg…", rendered)
 
     def test_cli_failure_is_non_fatal_and_redacted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

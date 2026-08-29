@@ -5,9 +5,11 @@ import unittest
 from pathlib import Path
 
 from hermes_codex_router.external_admission import (
+    acknowledge_unseen_visible_context,
     consume_pending_handoff,
     is_active_agent,
     peek_pending_handoff,
+    peek_unseen_visible_context,
     record_external_turn,
 )
 from hermes_codex_router.state import HubState
@@ -66,7 +68,7 @@ class ExternalAdmissionTests(unittest.TestCase):
             peek_pending_handoff(self.path, -1001234567890, 73, target_agent_id="hermes")
         )
 
-    def test_records_only_visible_turn_for_current_active_agent(self) -> None:
+    def test_records_visible_turns_for_active_and_satellite_agents_in_known_topic(self) -> None:
         self.assertTrue(
             record_external_turn(
                 self.path,
@@ -80,7 +82,7 @@ class ExternalAdmissionTests(unittest.TestCase):
                 response_excerpt="answer",
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             record_external_turn(
                 self.path,
                 chat_id=-1001234567890,
@@ -92,6 +94,46 @@ class ExternalAdmissionTests(unittest.TestCase):
                 user_excerpt="question",
                 response_excerpt="answer",
             )
+        )
+        self.assertFalse(
+            record_external_turn(
+                self.path,
+                chat_id=-1001234567890,
+                thread_id=999,
+                agent_id="codex",
+                provider_session_id="cs-2",
+                model="gpt",
+                provider="openai",
+                user_excerpt="question",
+                response_excerpt="answer",
+            )
+        )
+
+    def test_peeks_and_acknowledges_visible_context_for_hermes(self) -> None:
+        state = HubState.open(self.path)
+        state.record_visible_turn(
+            self.topic.topic_id,
+            agent_id="antigravity",
+            provider="antigravity",
+            model="provider-selected",
+            user_excerpt="satellite question",
+            response_excerpt="satellite answer",
+        )
+        state.close()
+
+        visible = peek_unseen_visible_context(
+            self.path, -1001234567890, 73, observer_agent_id="hermes"
+        )
+        self.assertIsNotNone(visible)
+        assert visible is not None
+        self.assertIn("satellite answer", visible.text)
+        self.assertTrue(
+            acknowledge_unseen_visible_context(
+                self.path, -1001234567890, 73, observer_agent_id="hermes"
+            )
+        )
+        self.assertIsNone(
+            peek_unseen_visible_context(self.path, -1001234567890, 73, observer_agent_id="hermes")
         )
 
 

@@ -274,7 +274,7 @@ class CodexAppServerClient:
             {
                 "clientInfo": {
                     "name": "hermes-project-hub",
-                    "title": "Hermes Project Hub",
+                    "title": "Agents Projects Hub",
                     "version": "0.2.0",
                 },
                 "capabilities": {"experimentalApi": True},

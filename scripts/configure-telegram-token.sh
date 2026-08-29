@@ -7,7 +7,7 @@ if [[ ! "$agent_id" =~ ^[a-z][a-z0-9_-]{0,47}$ ]]; then
   exit 2
 fi
 
-secrets_root="${XDG_CONFIG_HOME:-$HOME/.config}/hermes-codex-router/secrets"
+secrets_root="${XDG_CONFIG_HOME:-$HOME/.config}/agents-projects-hub/secrets"
 token_path="$secrets_root/$agent_id-telegram-token"
 if [[ -e "$token_path" ]]; then
   printf 'refusing to overwrite existing token file: %s\n' "$token_path" >&2

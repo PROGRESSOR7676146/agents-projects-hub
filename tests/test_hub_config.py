@@ -67,9 +67,42 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(config.terminal.backend, "auto")
         self.assertNotIn("secret-token-value", path.read_text(encoding="utf-8"))
 
+    def test_loads_single_operational_alert_topic_from_registered_hub_project(self) -> None:
+        config = load_hub_config(
+            self.write_config(
+                projects=[
+                    {"project_id": "hub", "telegram_chat_id": -1003935052066},
+                    {"project_id": "pythia", "telegram_chat_id": -1001234567890},
+                ],
+                operational_alerts={"project_id": "hub", "telegram_thread_id": 41},
+            )
+        )
+        self.assertEqual(config.operational_alerts.telegram_chat_id, -1003935052066)
+        self.assertEqual(config.operational_alerts.telegram_thread_id, 41)
+
+    def test_rejects_operational_alert_destination_outside_registered_projects(self) -> None:
+        with self.assertRaisesRegex(HubConfigError, "operational_alerts.project_id"):
+            load_hub_config(
+                self.write_config(
+                    operational_alerts={"project_id": "missing", "telegram_thread_id": 41}
+                )
+            )
+
+    def test_rejects_project_chat_as_operational_alert_destination(self) -> None:
+        with self.assertRaisesRegex(HubConfigError, "must be hub"):
+            load_hub_config(
+                self.write_config(
+                    operational_alerts={"project_id": "pythia", "telegram_thread_id": 41}
+                )
+            )
+
     def test_rejects_non_boolean_manage_codex_server(self) -> None:
         with self.assertRaisesRegex(HubConfigError, "manage_codex_server"):
             load_hub_config(self.write_config(manage_codex_server="no"))
+
+    def test_loads_three_character_codex_account_hints(self) -> None:
+        config = load_hub_config(self.write_config(codex_account_hints={"1": "prg", "2": "767"}))
+        self.assertEqual(config.codex_account_hints, {1: "prg", 2: "767"})
 
     def test_rejects_group_chat_id_that_is_not_supergroup_shaped(self) -> None:
         with self.assertRaisesRegex(HubConfigError, "telegram_chat_id"):
@@ -103,6 +136,50 @@ class HubConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(HubConfigError, "inline token"):
             load_hub_config(self.write_config(agents=agents))
 
+    def test_rejects_telegram_username_that_cannot_be_a_bot(self) -> None:
+        agents = [
+            {
+                "agent_id": "opencode",
+                "display_name": "OpenCode",
+                "telegram_username": "opencode",
+                "runtime": "opencode",
+                "managed_externally": True,
+            }
+        ]
+        with self.assertRaisesRegex(HubConfigError, "must end in bot"):
+            load_hub_config(self.write_config(agents=agents))
+
+    def test_loads_safe_agent_service_unit(self) -> None:
+        agents = [
+            {
+                "agent_id": "opencode",
+                "display_name": "OpenCode",
+                "telegram_username": "project_opencode_bot",
+                "runtime": "opencode",
+                "managed_externally": True,
+                "service_unit": "agents-projects-hub@opencode.service",
+            }
+        ]
+        config = load_hub_config(self.write_config(agents=agents))
+        self.assertEqual(
+            config.require_agent("opencode").service_unit,
+            "agents-projects-hub@opencode.service",
+        )
+
+    def test_rejects_unsafe_agent_service_unit(self) -> None:
+        agents = [
+            {
+                "agent_id": "opencode",
+                "display_name": "OpenCode",
+                "telegram_username": "project_opencode_bot",
+                "runtime": "opencode",
+                "managed_externally": True,
+                "service_unit": "../../opencode.service",
+            }
+        ]
+        with self.assertRaisesRegex(HubConfigError, "service_unit"):
+            load_hub_config(self.write_config(agents=agents))
+
     def test_state_parent_is_not_required_to_exist_during_config_parse(self) -> None:
         missing = self.base / "private" / "state.db"
         config = load_hub_config(self.write_config(state_path=str(missing)))
@@ -116,6 +193,40 @@ class HubConfigTests(unittest.TestCase):
         )
         self.assertEqual(config.terminal.backend, "linux")
         self.assertEqual(config.terminal.program, "kitty")
+
+    def test_loads_recovery_plane_without_embedding_credentials(self) -> None:
+        hermes_config = self.base / "hermes.yaml"
+        tlive_config = self.base / "tlive.json"
+        hermes_config.write_text("model: provider-selected\n", encoding="utf-8")
+        tlive_config.write_text("{}\n", encoding="utf-8")
+        hermes_config.chmod(0o600)
+        tlive_config.chmod(0o600)
+        config = load_hub_config(
+            self.write_config(
+                recovery_plane={
+                    "enabled": True,
+                    "hermes_service": "hermes-gateway.service",
+                    "tlive_service": "tlive.service",
+                    "hermes_config_path": str(hermes_config),
+                    "tlive_config_path": str(tlive_config),
+                }
+            )
+        )
+        self.assertTrue(config.recovery_plane.enabled)
+        self.assertEqual(config.recovery_plane.hermes_service, "hermes-gateway.service")
+        self.assertEqual(config.recovery_plane.tlive_config_path, tlive_config.resolve())
+        self.assertEqual(config.recovery_plane.hermes_notify_target, "telegram")
+
+    def test_rejects_unsafe_recovery_service_unit(self) -> None:
+        with self.assertRaisesRegex(HubConfigError, "hermes_service"):
+            load_hub_config(
+                self.write_config(
+                    recovery_plane={
+                        "enabled": True,
+                        "hermes_service": "../../escape.service",
+                    }
+                )
+            )
 
     def test_loads_private_runtime_home_for_isolated_provider_account(self) -> None:
         runtime_home = self.base / "gemini-account-a"

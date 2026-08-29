@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-LATEST_SCHEMA_VERSION = 5
+LATEST_SCHEMA_VERSION = 9
 
 
 MIGRATION_1 = """
@@ -141,6 +141,67 @@ ALTER TABLE worktree_lanes ADD COLUMN cleaned_at TEXT;
 """
 
 
+MIGRATION_6 = """
+CREATE TABLE IF NOT EXISTS visible_context_cursors (
+    topic_id INTEGER NOT NULL REFERENCES topics(topic_id),
+    observer_agent_id TEXT NOT NULL,
+    last_turn_id INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(topic_id, observer_agent_id)
+);
+"""
+
+
+MIGRATION_7 = """
+DROP INDEX IF EXISTS one_active_session_per_topic;
+DROP INDEX IF EXISTS one_satellite_session_per_agent;
+ALTER TABLE agent_sessions RENAME TO agent_sessions_before_local_writer;
+CREATE TABLE agent_sessions (
+    session_id TEXT PRIMARY KEY,
+    topic_id INTEGER NOT NULL REFERENCES topics(topic_id),
+    agent_id TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('active', 'satellite', 'archived')),
+    model TEXT NOT NULL,
+    effort TEXT NOT NULL,
+    provider_session_id TEXT,
+    terminal_name TEXT,
+    writer_mode TEXT NOT NULL DEFAULT 'telegram'
+        CHECK(writer_mode IN ('telegram', 'local', 'terminal')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(topic_id, agent_id, generation)
+);
+INSERT INTO agent_sessions (
+    session_id, topic_id, agent_id, generation, status, model, effort,
+    provider_session_id, terminal_name, writer_mode, created_at, updated_at
+)
+SELECT
+    session_id, topic_id, agent_id, generation, status, model, effort,
+    provider_session_id, terminal_name, writer_mode, created_at, updated_at
+FROM agent_sessions_before_local_writer;
+DROP TABLE agent_sessions_before_local_writer;
+CREATE UNIQUE INDEX one_active_session_per_topic
+ON agent_sessions(topic_id) WHERE status = 'active';
+CREATE UNIQUE INDEX one_satellite_session_per_agent
+ON agent_sessions(topic_id, agent_id) WHERE status = 'satellite';
+"""
+
+
+MIGRATION_8 = """
+ALTER TABLE agent_sessions ADD COLUMN context_remaining_percent REAL;
+"""
+
+
+MIGRATION_9 = """
+CREATE TABLE IF NOT EXISTS runtime_checkpoints (
+    checkpoint_key TEXT PRIMARY KEY,
+    integer_value INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -217,6 +278,18 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     if previous < 5:
         connection.executescript(MIGRATION_5)
         connection.execute("PRAGMA user_version = 5")
+    if previous < 6:
+        connection.executescript(MIGRATION_6)
+        connection.execute("PRAGMA user_version = 6")
+    if previous < 7:
+        connection.executescript(MIGRATION_7)
+        connection.execute("PRAGMA user_version = 7")
+    if previous < 8:
+        connection.executescript(MIGRATION_8)
+        connection.execute("PRAGMA user_version = 8")
+    if previous < 9:
+        connection.executescript(MIGRATION_9)
+        connection.execute("PRAGMA user_version = 9")
     connection.commit()
     current = int(connection.execute("PRAGMA user_version").fetchone()[0])
     return previous, current

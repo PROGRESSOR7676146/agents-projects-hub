@@ -28,8 +28,14 @@ def decide_targets(
     *,
     active_agent: str,
     usernames: Mapping[str, str],
+    reply_to_username: str | None = None,
 ) -> tuple[str, ...]:
-    """Route explicit known mentions, otherwise target only the active agent."""
+    """Route a real Telegram reply, then mentions, then the active agent."""
+    if reply_to_username is not None:
+        replied = reply_to_username.removeprefix("@").casefold()
+        for agent_id, username in usernames.items():
+            if username.removeprefix("@").casefold() == replied:
+                return (agent_id,)
     positions: list[tuple[int, str]] = []
     for agent_id, username in usernames.items():
         pattern = re.compile(rf"(?<![A-Za-z0-9_])@{re.escape(username)}\b", re.IGNORECASE)
