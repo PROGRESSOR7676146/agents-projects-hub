@@ -37,6 +37,7 @@ class ExternalAgentService:
             state_path = state_path.with_name(
                 f"{state_path.stem}-{self.agent.agent_id}-dm{state_path.suffix}"
             )
+        self.state_path = state_path
         self.state = HubState.open(state_path)
         self.telegram = TelegramBotApi(self.agent.token_file.read_text(encoding="utf-8").strip())
         self.adapter = ExternalCliAdapter(
@@ -238,7 +239,7 @@ class ExternalAgentService:
             )
             return True
         handoff = peek_pending_handoff(
-            self.config.state_path,
+            self.state_path,
             message.chat_id,
             message.thread_id,
             target_agent_id=self.agent.agent_id,
@@ -300,7 +301,7 @@ class ExternalAgentService:
                 session.session_id, result.provider_session_id, None
             )
         record_external_turn(
-            self.config.state_path,
+            self.state_path,
             chat_id=message.chat_id,
             thread_id=message.thread_id,
             agent_id=self.agent.agent_id,
@@ -315,7 +316,7 @@ class ExternalAgentService:
                 topic.topic_id, self.agent.agent_id, context_watermark
             )
         if handoff is not None:
-            consume_pending_handoff(self.config.state_path, handoff.handoff_id)
+            consume_pending_handoff(self.state_path, handoff.handoff_id)
         response = format_agent_response(
             result.text,
             {
