@@ -11,7 +11,7 @@ from hermes_codex_router.hub_config import AgentDefinition, HubConfig, TerminalS
 
 class FakeApi:
     def __init__(self, commands: list[dict[str, str]]) -> None:
-        self.commands = {None: commands}
+        self.commands: dict[str | None, list[dict[str, str]]] = {None: commands}
         self.set_calls = 0
 
     def call(self, method: str, **params: object) -> object:
