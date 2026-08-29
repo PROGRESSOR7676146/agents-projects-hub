@@ -56,6 +56,12 @@ class RecoveryPlaneSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class OperationalAlertSettings:
+    telegram_chat_id: int | None
+    telegram_thread_id: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class HubConfig:
     schema_version: int
     owner_user_ids: tuple[int, ...]
@@ -75,6 +81,9 @@ class HubConfig:
             None,
             "telegram",
         )
+    )
+    operational_alerts: OperationalAlertSettings = field(
+        default_factory=lambda: OperationalAlertSettings(None, None)
     )
     codex_multi_auth_dir: Path | None = None
     codex_multi_auth_executable: Path | None = None
@@ -265,6 +274,22 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
             chat_ids.add(chat_id)
         projects.append(ProjectBinding(project_id, chat_id))
 
+    alerts_data = _object(root.get("operational_alerts", {}), "operational_alerts")
+    alerts_project_id = alerts_data.get("project_id")
+    alerts_thread_id = alerts_data.get("telegram_thread_id")
+    alerts_chat_id: int | None = None
+    if alerts_project_id is not None or alerts_thread_id is not None:
+        if alerts_project_id != "hub":
+            raise HubConfigError("operational_alerts.project_id must be hub")
+        if not isinstance(alerts_project_id, str) or not IDENTIFIER.fullmatch(alerts_project_id):
+            raise HubConfigError("operational_alerts.project_id is invalid")
+        matching_projects = [item for item in projects if item.project_id == alerts_project_id]
+        if len(matching_projects) != 1 or matching_projects[0].telegram_chat_id is None:
+            raise HubConfigError("operational_alerts.project_id is not a bound project")
+        if not isinstance(alerts_thread_id, int) or alerts_thread_id <= 1:
+            raise HubConfigError("operational_alerts.telegram_thread_id is invalid")
+        alerts_chat_id = matching_projects[0].telegram_chat_id
+
     raw_agents = root.get("agents")
     if not isinstance(raw_agents, list) or not raw_agents:
         raise HubConfigError("agents must be a non-empty array")
@@ -370,6 +395,7 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
             tlive_config_path=tlive_config_path,
             hermes_notify_target=hermes_notify_target,
         ),
+        operational_alerts=OperationalAlertSettings(alerts_chat_id, alerts_thread_id),
         projects=tuple(projects),
         agents=tuple(agents),
         codex_multi_auth_dir=codex_multi_auth_dir,

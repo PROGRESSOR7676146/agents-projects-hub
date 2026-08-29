@@ -130,7 +130,10 @@ contract is confirmed.
 - Local project administration plus explicitly confirmed topic binding and safe,
   branch-retaining cleanup for worktree-backed parallel lanes.
 - Cooldown-deduplicated operational alerts for deployment health, Codex account
-  availability/quota, and stuck dispatches, with a systemd timer template.
+  availability/quota, and stuck dispatches, with a systemd timer template. They
+  go only to the explicitly configured Hub Operations/Alerts topic; quota alerts
+  include a masked account hint such as `pr***@***.com`. Hermes is a fallback
+  sender to that same topic, not a second alert destination.
 - Hermes's native runtime footer and a public `agent:end` hook that exports only
   bounded visible turns for handoff.
 - User-level service templates, installer, doctor, CI, CodeQL, and Dependabot.
@@ -254,6 +257,11 @@ Hermes and tlive separately. One failed channel is a warning; losing both is an
 error. The included `tlive.service` is installed only when no user unit already
 exists, so a customized unit is never overwritten. See
 [the recovery runbook](docs/RECOVERY_PLANE.ru.md).
+
+Set `operational_alerts.project_id` to the registered Hub project and
+`operational_alerts.telegram_thread_id` to its dedicated Operations/Alerts topic.
+The monitor fails closed when this destination is absent; it never derives alert
+destinations from ordinary project-topic activity.
 
 Some custom account proxies do not implement Codex's model-discovery response
 schema. In that topology, pass a validated local catalog to the app-server at

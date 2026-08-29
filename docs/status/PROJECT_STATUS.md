@@ -33,15 +33,16 @@ acceptance criteria live in
 - Hermes project-group policy, gateway heartbeat, Bot API, and pending-update
   queue are monitored; cooldown-bounded repair can sync missing registered
   groups and restart only Hermes Gateway.
+- Operational alerts have one explicit destination: Hub topic
+  `Operations · Alerts` (thread `41`). Codex is primary and Hermes may fall back
+  only to that same topic. Quota alerts contain a masked account identity.
 - The live evidence is recorded in
   [`docs/testing/2026-08-29-hub-general-live-e2e.md`](../testing/2026-08-29-hub-general-live-e2e.md).
 
 ## Planned next
 
-1. Route operational alerts only to a dedicated Hub Operations/Alerts topic and
-   include a recognizable masked account identity for quota alerts.
-2. Add bounded `/publish` for local-work summaries.
-3. Build and restore-drill an encrypted disaster-recovery bundle.
+1. Add bounded `/publish` for local-work summaries.
+2. Build and restore-drill an encrypted disaster-recovery bundle.
 
 ## Deferred
 

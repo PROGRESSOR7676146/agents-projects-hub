@@ -67,6 +67,35 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(config.terminal.backend, "auto")
         self.assertNotIn("secret-token-value", path.read_text(encoding="utf-8"))
 
+    def test_loads_single_operational_alert_topic_from_registered_hub_project(self) -> None:
+        config = load_hub_config(
+            self.write_config(
+                projects=[
+                    {"project_id": "hub", "telegram_chat_id": -1003935052066},
+                    {"project_id": "pythia", "telegram_chat_id": -1001234567890},
+                ],
+                operational_alerts={"project_id": "hub", "telegram_thread_id": 41},
+            )
+        )
+        self.assertEqual(config.operational_alerts.telegram_chat_id, -1003935052066)
+        self.assertEqual(config.operational_alerts.telegram_thread_id, 41)
+
+    def test_rejects_operational_alert_destination_outside_registered_projects(self) -> None:
+        with self.assertRaisesRegex(HubConfigError, "operational_alerts.project_id"):
+            load_hub_config(
+                self.write_config(
+                    operational_alerts={"project_id": "missing", "telegram_thread_id": 41}
+                )
+            )
+
+    def test_rejects_project_chat_as_operational_alert_destination(self) -> None:
+        with self.assertRaisesRegex(HubConfigError, "must be hub"):
+            load_hub_config(
+                self.write_config(
+                    operational_alerts={"project_id": "pythia", "telegram_thread_id": 41}
+                )
+            )
+
     def test_rejects_non_boolean_manage_codex_server(self) -> None:
         with self.assertRaisesRegex(HubConfigError, "manage_codex_server"):
             load_hub_config(self.write_config(manage_codex_server="no"))

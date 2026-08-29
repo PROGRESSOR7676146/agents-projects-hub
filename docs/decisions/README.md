@@ -19,6 +19,7 @@ with a new record.
 | Provider identity | One bot identity per runtime, not per model or account. | Product requirements and sanitized history |
 | Codex accounts | Multi-auth is optional; official Codex app-server is the fallback. | Product requirements; `RECOVERY_PLANE.ru.md` |
 | Recovery plane | Hermes Gateway and Agent Session Remote/tlive are independent service channels, not project groups or mandatory Hub dependencies. | Product requirements; `RECOVERY_PLANE.ru.md` |
+| Operational alerts | One explicit Hub Operations/Alerts topic; Codex primary, Hermes fallback to the same topic; masked account hints. | Product requirements REQ-OPS-006 |
 | Local frontend | Native CLI is preferred; one-writer lease is mandatory; tmux remains fallback. | Product requirements; `PROJECT_HUB_SPEC.ru.md` |
 | Near-term delivery | Complete live E2E, then minimal `/local`/`/return`, bounded `/publish`, and encrypted recovery. | Product requirements and latest handoff |
 

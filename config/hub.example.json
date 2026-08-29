@@ -21,7 +21,12 @@
     "tlive_config_path": "/home/example/.tlive/config.json",
     "hermes_notify_target": "telegram"
   },
+  "operational_alerts": {
+    "project_id": "hub",
+    "telegram_thread_id": 41
+  },
   "projects": [
+    {"project_id": "hub", "telegram_chat_id": null},
     {"project_id": "pythia", "telegram_chat_id": null}
   ],
   "agents": [

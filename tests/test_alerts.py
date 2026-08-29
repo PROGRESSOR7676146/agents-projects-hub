@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 
 from hermes_codex_router.alerts import evaluate_operational_alerts
 from hermes_codex_router.codex_accounts import CodexAccountStatus, CodexPoolStatus
-from hermes_codex_router.monitoring import _destinations, _send_hermes
+from hermes_codex_router.hub_config import OperationalAlertSettings
+from hermes_codex_router.monitoring import _destination, _send_hermes
 
 
 class OperationalAlertTests(unittest.TestCase):
@@ -14,7 +15,19 @@ class OperationalAlertTests(unittest.TestCase):
             available=True,
             rotation_enabled=True,
             accounts=(
-                CodexAccountStatus(1, True, "ready", "low", 8, 53, None, None, None, False),
+                CodexAccountStatus(
+                    1,
+                    True,
+                    "ready",
+                    "low",
+                    8,
+                    53,
+                    None,
+                    None,
+                    None,
+                    False,
+                    "pr***@***.com",
+                ),
                 CodexAccountStatus(
                     2, False, "unavailable", "high", None, 67, None, None, None, False
                 ),
@@ -48,6 +61,7 @@ class OperationalAlertTests(unittest.TestCase):
         )
         rendered = "\n".join(alert.message for alert in alerts)
         self.assertNotIn("dispatch-secret", rendered)
+        self.assertIn("account 1 (pr***@***.com)", rendered)
 
     def test_healthy_state_has_no_alerts(self) -> None:
         pool = CodexPoolStatus(
@@ -67,15 +81,9 @@ class OperationalAlertTests(unittest.TestCase):
         )
         self.assertEqual(alerts, ())
 
-    def test_monitor_chooses_one_destination_per_chat(self) -> None:
-        snapshot = {
-            "topics": [
-                {"chat_id": -1001, "thread_id": 7},
-                {"chat_id": -1001, "thread_id": 8},
-                {"chat_id": -1002, "thread_id": 3},
-            ]
-        }
-        self.assertEqual(_destinations(snapshot), [(-1001, 7), (-1002, 3)])
+    def test_monitor_uses_only_configured_hub_operations_topic(self) -> None:
+        settings = OperationalAlertSettings(-1003935052066, 41)
+        self.assertEqual(_destination(settings), (-1003935052066, 41))
 
     def test_recovery_channels_are_reported_independently(self) -> None:
         pool = CodexPoolStatus(

@@ -148,13 +148,14 @@ def evaluate_operational_alerts(
                 )
             )
         for account in pool.accounts:
+            identity = f" ({account.identity_hint})" if account.identity_hint else ""
             if account.availability == "unavailable":
                 alerts.append(
                     OperationalAlert(
                         f"codex:account:{account.index}:unavailable",
                         "codex_account_unavailable",
                         "error",
-                        f"Codex account {account.index} is unavailable; authentication needs attention.",
+                        f"Codex account {account.index}{identity} is unavailable; authentication needs attention.",
                     )
                 )
             if (
@@ -166,7 +167,7 @@ def evaluate_operational_alerts(
                         f"codex:account:{account.index}:5h-low",
                         "codex_5h_low",
                         "warning",
-                        f"Codex account {account.index} has {account.five_hour_remaining}% of its 5-hour quota left.",
+                        f"Codex account {account.index}{identity} has {account.five_hour_remaining}% of its 5-hour quota left.",
                     )
                 )
             if (
@@ -178,7 +179,7 @@ def evaluate_operational_alerts(
                         f"codex:account:{account.index}:week-low",
                         "codex_weekly_low",
                         "warning",
-                        f"Codex account {account.index} has {account.weekly_remaining}% of its weekly quota left.",
+                        f"Codex account {account.index}{identity} has {account.weekly_remaining}% of its weekly quota left.",
                     )
                 )
     pending = state_snapshot.get("pending_dispatches")

@@ -4,7 +4,7 @@ import html
 import subprocess
 import time
 from dataclasses import asdict
-from typing import Any, Callable, Mapping
+from typing import Any, Callable
 
 from .alerts import OperationalAlert, evaluate_operational_alerts
 from .codex_accounts import read_codex_pool_status
@@ -19,7 +19,7 @@ from .hermes_health import (
     restart_hermes_gateway,
     sync_hermes_group_policy,
 )
-from .hub_config import HubConfig
+from .hub_config import HubConfig, OperationalAlertSettings
 from .state import HubState
 from .telegram import TelegramBotApi, TelegramError
 
@@ -30,25 +30,11 @@ def _render(alerts: tuple[OperationalAlert, ...]) -> str:
     return html.escape("\n".join(lines))
 
 
-def _destinations(snapshot: Mapping[str, object]) -> list[tuple[int, int]]:
-    """Choose one stable operational-alert topic per Telegram chat."""
-    destinations: list[tuple[int, int]] = []
-    seen_chats: set[int] = set()
-    topics = snapshot.get("topics")
-    if not isinstance(topics, list):
-        return destinations
-    for row in topics:
-        if not isinstance(row, dict):
-            continue
-        chat_id = row.get("chat_id")
-        thread_id = row.get("thread_id")
-        if not isinstance(chat_id, int) or not isinstance(thread_id, int):
-            continue
-        if chat_id in seen_chats:
-            continue
-        seen_chats.add(chat_id)
-        destinations.append((chat_id, thread_id))
-    return destinations
+def _destination(settings: OperationalAlertSettings) -> tuple[int, int] | None:
+    """Return the one explicitly configured Hub operations topic, or fail closed."""
+    if settings.telegram_chat_id is None or settings.telegram_thread_id is None:
+        return None
+    return settings.telegram_chat_id, settings.telegram_thread_id
 
 
 def _send_hermes(
@@ -201,48 +187,41 @@ def run_monitor_once(
         )
         delivered: list[str] = []
         if notify and alerts:
-            destinations = _destinations(snapshot)
-            codex_due = tuple(
+            destination = _destination(config.operational_alerts)
+            operations_due = tuple(
                 alert
                 for alert in alerts
-                if destinations
+                if destination is not None
                 and state.claim_alert_delivery(
-                    f"{alert.key}:codex", cooldown_seconds=cooldown_seconds
+                    f"{alert.key}:operations", cooldown_seconds=cooldown_seconds
                 )
             )
-            if codex_due and destinations:
-                agent = config.require_agent("codex")
-                if agent.token_file is None:
-                    raise RuntimeError("managed Codex bot token is unavailable")
-                telegram = TelegramBotApi(agent.token_file.read_text(encoding="utf-8").strip())
-                rendered = _render(codex_due)
+            if operations_due and destination is not None:
+                chat_id, thread_id = destination
+                rendered = _render(operations_due)
                 try:
-                    for chat_id, thread_id in destinations:
-                        telegram.send_html(chat_id, thread_id, rendered[:4090])
+                    agent = config.require_agent("codex")
+                    if agent.token_file is None:
+                        raise RuntimeError("managed Codex bot token is unavailable")
+                    telegram = TelegramBotApi(agent.token_file.read_text(encoding="utf-8").strip())
+                    telegram.send_html(chat_id, thread_id, rendered[:4090])
                 except Exception:
-                    for alert in codex_due:
-                        state.release_alert_delivery(f"{alert.key}:codex")
-                    raise
-                delivered.extend(f"{alert.code}:codex" for alert in codex_due)
-            if config.recovery_plane.enabled and recovery_status.get("hermes", False):
-                hermes_due = tuple(
-                    alert
-                    for alert in alerts
-                    if state.claim_alert_delivery(
-                        f"{alert.key}:hermes", cooldown_seconds=cooldown_seconds
-                    )
-                )
-                if hermes_due:
                     try:
-                        _send_hermes(
-                            config.recovery_plane.hermes_notify_target,
-                            html.unescape(_render(hermes_due)),
-                        )
+                        if not (
+                            config.recovery_plane.enabled and recovery_status.get("hermes", False)
+                        ):
+                            raise RuntimeError("Hermes recovery channel is unavailable")
+                        _send_hermes(f"telegram:{chat_id}:{thread_id}", html.unescape(rendered))
                     except Exception:
-                        for alert in hermes_due:
-                            state.release_alert_delivery(f"{alert.key}:hermes")
+                        for alert in operations_due:
+                            state.release_alert_delivery(f"{alert.key}:operations")
                         raise
-                    delivered.extend(f"{alert.code}:hermes" for alert in hermes_due)
+                    else:
+                        delivered.extend(
+                            f"{alert.code}:hermes-fallback" for alert in operations_due
+                        )
+                else:
+                    delivered.extend(f"{alert.code}:codex" for alert in operations_due)
         return {
             "ok": not any(alert.severity == "error" for alert in alerts),
             "alerts": [asdict(alert) for alert in alerts],

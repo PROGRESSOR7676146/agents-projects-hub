@@ -339,8 +339,10 @@ more specific and consistent with this baseline.
 - **REQ-OPS-005 (Implemented):** Hermes Gateway and tlive MUST be monitored as
   independent recovery channels. Failure of one is degraded service; neither is
   a mandatory dependency of Project Hub.
-- **REQ-OPS-006 (Accepted):** Alerts SHOULD be bounded, deduplicated, and sent by
-  a channel other than the failed component when possible.
+- **REQ-OPS-006 (Implemented):** Alerts are bounded, deduplicated, and delivered
+  only to one explicitly configured Hub Operations/Alerts topic. Codex is the
+  primary sender; Hermes may fall back only to that same topic. Quota alerts
+  include a recognizable masked account hint and never expose a full identity.
 - **REQ-OPS-007 (Planned):** A curated encrypted recovery bundle will include a
   consistent Hub database, deployment manifest, necessary provider session
   stores, versions, and checksums, with backup/verify/restore commands and a

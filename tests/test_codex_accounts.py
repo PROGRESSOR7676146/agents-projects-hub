@@ -60,8 +60,10 @@ class CodexAccountStatusTests(unittest.TestCase):
         self.assertEqual(status.account_rotations, 4)
         self.assertEqual(status.accounts[0].five_hour_remaining, 75)
         self.assertEqual(status.accounts[0].weekly_remaining, 60)
+        self.assertEqual(status.accounts[0].identity_hint, "se***@***.com")
         self.assertNotIn("secret@example.com", rendered)
         self.assertNotIn("ABC123", rendered)
+        self.assertIn("se***@***.com", rendered)
 
     def test_cli_failure_is_non_fatal_and_redacted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

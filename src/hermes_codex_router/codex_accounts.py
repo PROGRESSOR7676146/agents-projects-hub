@@ -11,6 +11,7 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 _ID_SUFFIX = re.compile(r"\[id:([^\]]+)\]")
+_EMAIL = re.compile(r"([A-Za-z0-9][A-Za-z0-9.*_-]*)@([A-Za-z0-9.*_-]+(?:\.[A-Za-z0-9_-]+)+)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +26,7 @@ class CodexAccountStatus:
     weekly_resets_at: int | None
     quota_updated_at: int | None
     quota_stale: bool
+    identity_hint: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -38,6 +40,7 @@ class CodexAccountStatus:
             "weekly_resets_at": self.weekly_resets_at,
             "quota_updated_at": self.quota_updated_at,
             "quota_stale": self.quota_stale,
+            "identity_hint": self.identity_hint,
         }
 
 
@@ -81,6 +84,18 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{path.name} must contain an object")
     return value
+
+
+def _masked_identity_hint(label: str) -> str | None:
+    match = _EMAIL.search(label)
+    if match is None:
+        return None
+    local, domain = match.groups()
+    visible = local.split("*", 1)[0][:4] or local[:2]
+    if "*" not in local:
+        visible = local[:2]
+    suffix = domain.rsplit(".", 1)[-1]
+    return f"{visible}***@***.{suffix}"
 
 
 def read_codex_pool_status(
@@ -160,6 +175,7 @@ def read_codex_pool_status(
                     ),
                     quota_updated_at=updated_at,
                     quota_stale=updated_at is None or time.time() - updated_at > 30 * 60,
+                    identity_hint=_masked_identity_hint(label),
                 )
             )
 
@@ -187,6 +203,7 @@ def format_codex_pool_status(status: CodexPoolStatus, *, timezone_name: str) -> 
     timezone = ZoneInfo(timezone_name)
     for account in status.accounts:
         marker = "active" if account.active else account.availability
+        identity = f" ({account.identity_hint})" if account.identity_hint else ""
         limits = []
         if account.five_hour_remaining is not None:
             limits.append(f"5h {account.five_hour_remaining}%")
@@ -199,5 +216,5 @@ def format_codex_pool_status(status: CodexPoolStatus, *, timezone_name: str) -> 
             if account.quota_stale:
                 updated += " (stale)"
         quota_text = ", ".join(limits) if limits else "quota unknown"
-        lines.append(f"Account {account.index}: {marker}; {quota_text}{updated}")
+        lines.append(f"Account {account.index}{identity}: {marker}; {quota_text}{updated}")
     return "\n".join(lines)
