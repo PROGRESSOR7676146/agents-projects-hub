@@ -1,0 +1,4 @@
+name: hermes-project-hub-turn-export
+description: Store bounded visible Hermes turn excerpts for cross-agent handoff.
+events:
+  - agent:end

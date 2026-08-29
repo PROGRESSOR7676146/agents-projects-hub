@@ -1,0 +1,262 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from hermes_codex_router.hub_config import HubConfigError, load_hub_config
+
+
+class HubConfigTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.base = Path(self.tempdir.name)
+        self.token = self.base / "codex-token"
+        self.token.write_text("123456:secret-token-value", encoding="utf-8")
+        self.token.chmod(0o600)
+        self.registry = self.base / "projects.json"
+        self.registry.write_text(
+            json.dumps({"schema_version": 1, "allowed_roots": [], "projects": []}),
+            encoding="utf-8",
+        )
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def write_config(self, **overrides: object) -> Path:
+        document = {
+            "schema_version": 1,
+            "owner_user_ids": [123456789],
+            "registry_path": str(self.registry),
+            "state_path": str(self.base / "state.db"),
+            "projects": [{"project_id": "alpha", "telegram_chat_id": -1001234567890}],
+            "agents": [
+                {
+                    "agent_id": "codex",
+                    "display_name": "Codex",
+                    "telegram_username": "project_codex_bot",
+                    "runtime": "codex",
+                    "token_file": str(self.token),
+                    "terminal_enabled": True,
+                },
+                {
+                    "agent_id": "hermes",
+                    "display_name": "Hermes",
+                    "telegram_username": "project_hermes_bot",
+                    "runtime": "hermes",
+                    "managed_externally": True,
+                    "terminal_enabled": False,
+                },
+            ],
+        }
+        document.update(overrides)
+        path = self.base / "hub.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        return path
+
+    def test_loads_token_by_file_reference_without_embedding_secret(self) -> None:
+        path = self.write_config()
+        config = load_hub_config(path)
+        self.assertEqual(config.require_agent("codex").token_file, self.token.resolve())
+        self.assertEqual(
+            config.codex_socket_path,
+            Path.home() / ".codex/app-server-control/app-server-control.sock",
+        )
+        self.assertFalse(config.manage_codex_server)
+        self.assertEqual(config.terminal.backend, "auto")
+        self.assertNotIn("secret-token-value", path.read_text(encoding="utf-8"))
+
+    def test_loads_single_operational_alert_topic_from_registered_hub_project(self) -> None:
+        config = load_hub_config(
+            self.write_config(
+                projects=[
+                    {"project_id": "hub", "telegram_chat_id": -1000000000001},
+                    {"project_id": "alpha", "telegram_chat_id": -1001234567890},
+                ],
+                operational_alerts={"project_id": "hub", "telegram_thread_id": 41},
+            )
+        )
+        self.assertEqual(config.operational_alerts.telegram_chat_id, -1000000000001)
+        self.assertEqual(config.operational_alerts.telegram_thread_id, 41)
+
+    def test_rejects_operational_alert_destination_outside_registered_projects(self) -> None:
+        with self.assertRaisesRegex(HubConfigError, "operational_alerts.project_id"):
+            load_hub_config(
+                self.write_config(
+                    operational_alerts={"project_id": "missing", "telegram_thread_id": 41}
+                )
+            )
+
+    def test_rejects_project_chat_as_operational_alert_destination(self) -> None:
+        with self.assertRaisesRegex(HubConfigError, "must be hub"):
+            load_hub_config(
+                self.write_config(
+                    operational_alerts={"project_id": "alpha", "telegram_thread_id": 41}
+                )
+            )
+
+    def test_rejects_non_boolean_manage_codex_server(self) -> None:
+        with self.assertRaisesRegex(HubConfigError, "manage_codex_server"):
+            load_hub_config(self.write_config(manage_codex_server="no"))
+
+    def test_loads_three_character_codex_account_hints(self) -> None:
+        config = load_hub_config(self.write_config(codex_account_hints={"1": "acc", "2": "alt"}))
+        self.assertEqual(config.codex_account_hints, {1: "acc", 2: "alt"})
+
+    def test_rejects_group_chat_id_that_is_not_supergroup_shaped(self) -> None:
+        with self.assertRaisesRegex(HubConfigError, "telegram_chat_id"):
+            load_hub_config(
+                self.write_config(projects=[{"project_id": "alpha", "telegram_chat_id": 123}])
+            )
+
+    def test_allows_unbound_group_only_during_bootstrap(self) -> None:
+        path = self.write_config(projects=[{"project_id": "alpha", "telegram_chat_id": None}])
+        with self.assertRaisesRegex(HubConfigError, "unbound"):
+            load_hub_config(path)
+        config = load_hub_config(path, allow_unbound=True)
+        self.assertIsNone(config.projects[0].telegram_chat_id)
+
+    def test_rejects_world_readable_token_file(self) -> None:
+        self.token.chmod(0o644)
+        with self.assertRaisesRegex(HubConfigError, "0600"):
+            load_hub_config(self.write_config())
+
+    def test_rejects_inline_token_field(self) -> None:
+        agents = [
+            {
+                "agent_id": "codex",
+                "display_name": "Codex",
+                "telegram_username": "project_codex_bot",
+                "runtime": "codex",
+                "token": "must-not-be-here",
+                "token_file": str(self.token),
+            }
+        ]
+        with self.assertRaisesRegex(HubConfigError, "inline token"):
+            load_hub_config(self.write_config(agents=agents))
+
+    def test_rejects_telegram_username_that_cannot_be_a_bot(self) -> None:
+        agents = [
+            {
+                "agent_id": "opencode",
+                "display_name": "OpenCode",
+                "telegram_username": "opencode",
+                "runtime": "opencode",
+                "managed_externally": True,
+            }
+        ]
+        with self.assertRaisesRegex(HubConfigError, "must end in bot"):
+            load_hub_config(self.write_config(agents=agents))
+
+    def test_loads_safe_agent_service_unit(self) -> None:
+        agents = [
+            {
+                "agent_id": "opencode",
+                "display_name": "OpenCode",
+                "telegram_username": "project_opencode_bot",
+                "runtime": "opencode",
+                "managed_externally": True,
+                "service_unit": "agents-projects-hub@opencode.service",
+            }
+        ]
+        config = load_hub_config(self.write_config(agents=agents))
+        self.assertEqual(
+            config.require_agent("opencode").service_unit,
+            "agents-projects-hub@opencode.service",
+        )
+
+    def test_rejects_unsafe_agent_service_unit(self) -> None:
+        agents = [
+            {
+                "agent_id": "opencode",
+                "display_name": "OpenCode",
+                "telegram_username": "project_opencode_bot",
+                "runtime": "opencode",
+                "managed_externally": True,
+                "service_unit": "../../opencode.service",
+            }
+        ]
+        with self.assertRaisesRegex(HubConfigError, "service_unit"):
+            load_hub_config(self.write_config(agents=agents))
+
+    def test_state_parent_is_not_required_to_exist_during_config_parse(self) -> None:
+        missing = self.base / "private" / "state.db"
+        config = load_hub_config(self.write_config(state_path=str(missing)))
+        self.assertEqual(config.state_path, missing.resolve())
+
+    def test_loads_explicit_terminal_backend(self) -> None:
+        config = load_hub_config(
+            self.write_config(
+                terminal={"backend": "linux", "program": "kitty", "wsl_distro": "Ubuntu"}
+            )
+        )
+        self.assertEqual(config.terminal.backend, "linux")
+        self.assertEqual(config.terminal.program, "kitty")
+
+    def test_loads_recovery_plane_without_embedding_credentials(self) -> None:
+        hermes_config = self.base / "hermes.yaml"
+        tlive_config = self.base / "tlive.json"
+        hermes_config.write_text("model: provider-selected\n", encoding="utf-8")
+        tlive_config.write_text("{}\n", encoding="utf-8")
+        hermes_config.chmod(0o600)
+        tlive_config.chmod(0o600)
+        config = load_hub_config(
+            self.write_config(
+                recovery_plane={
+                    "enabled": True,
+                    "hermes_service": "hermes-gateway.service",
+                    "tlive_service": "tlive.service",
+                    "hermes_config_path": str(hermes_config),
+                    "tlive_config_path": str(tlive_config),
+                }
+            )
+        )
+        self.assertTrue(config.recovery_plane.enabled)
+        self.assertEqual(config.recovery_plane.hermes_service, "hermes-gateway.service")
+        self.assertEqual(config.recovery_plane.tlive_config_path, tlive_config.resolve())
+        self.assertEqual(config.recovery_plane.hermes_notify_target, "telegram")
+
+    def test_rejects_unsafe_recovery_service_unit(self) -> None:
+        with self.assertRaisesRegex(HubConfigError, "hermes_service"):
+            load_hub_config(
+                self.write_config(
+                    recovery_plane={
+                        "enabled": True,
+                        "hermes_service": "../../escape.service",
+                    }
+                )
+            )
+
+    def test_loads_private_runtime_home_for_isolated_provider_account(self) -> None:
+        runtime_home = self.base / "gemini-account-a"
+        runtime_home.mkdir(mode=0o700)
+        agent = {
+            "agent_id": "gemini-a",
+            "display_name": "Gemini A",
+            "telegram_username": "project_gemini_a_bot",
+            "runtime": "gemini",
+            "managed_externally": True,
+            "runtime_home": str(runtime_home),
+        }
+        config = load_hub_config(self.write_config(agents=[agent]))
+        self.assertEqual(config.require_agent("gemini-a").runtime_home, runtime_home.resolve())
+
+    def test_rejects_world_readable_runtime_home(self) -> None:
+        runtime_home = self.base / "gemini-account-a"
+        runtime_home.mkdir(mode=0o755)
+        runtime_home.chmod(0o755)
+        agent = {
+            "agent_id": "gemini-a",
+            "display_name": "Gemini A",
+            "telegram_username": "project_gemini_a_bot",
+            "runtime": "gemini",
+            "managed_externally": True,
+            "runtime_home": str(runtime_home),
+        }
+        with self.assertRaisesRegex(HubConfigError, "runtime_home.*0700"):
+            load_hub_config(self.write_config(agents=[agent]))
+
+
+if __name__ == "__main__":
+    unittest.main()

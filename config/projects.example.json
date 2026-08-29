@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "allowed_roots": [
+    "/home/example/projects"
+  ],
+  "projects": [
+    {
+      "project_id": "example-project",
+      "display_name": "Example Project",
+      "topic_name": "Example Project",
+      "root": "/home/example/projects/example-project",
+      "sandbox": "workspace-write",
+      "approval_policy": "on-request",
+      "enabled": true
+    },
+    {
+      "project_id": "disabled-example",
+      "display_name": "Disabled Example",
+      "topic_name": "Disabled Example",
+      "root": "/home/example/projects/disabled-example",
+      "sandbox": "workspace-write",
+      "approval_policy": "on-request",
+      "enabled": false
+    }
+  ]
+}

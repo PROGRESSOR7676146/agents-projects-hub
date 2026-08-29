@@ -1,0 +1,36 @@
+[
+  {
+    "agent_id": "gemini",
+    "display_name": "Gemini",
+    "telegram_username": "your_gemini_bot",
+    "runtime": "gemini",
+    "token_file": "/home/example/.config/agents-projects-hub/secrets/gemini-telegram-token",
+    "terminal_enabled": false,
+    "default_model": "provider-selected",
+    "default_effort": "high",
+    "executable": "gemini",
+    "runtime_home": "/home/example/.local/share/agents-projects-hub/providers/gemini"
+  },
+  {
+    "agent_id": "antigravity",
+    "display_name": "Antigravity",
+    "telegram_username": "your_antigravity_bot",
+    "runtime": "antigravity",
+    "token_file": "/home/example/.config/agents-projects-hub/secrets/antigravity-telegram-token",
+    "terminal_enabled": false,
+    "default_model": "provider-selected",
+    "default_effort": "high",
+    "executable": "agy"
+  },
+  {
+    "agent_id": "opencode",
+    "display_name": "OpenCode",
+    "telegram_username": "your_opencode_bot",
+    "runtime": "opencode",
+    "token_file": "/home/example/.config/agents-projects-hub/secrets/opencode-telegram-token",
+    "terminal_enabled": false,
+    "default_model": "provider-selected",
+    "default_effort": "high",
+    "executable": "opencode"
+  }
+]

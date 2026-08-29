@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "owner_user_ids": [123456789],
+  "registry_path": "/home/example/agents-projects-hub/config/projects.json",
+  "state_path": "/home/example/.local/state/agents-projects-hub/state.db",
+  "codex_socket_path": "/home/example/.codex/app-server-control/app-server-control.sock",
+  "manage_codex_server": false,
+  "codex_stdio_executable": "/home/example/.local/bin/codex",
+  "codex_multi_auth_dir": "/home/example/.codex/multi-auth",
+  "codex_multi_auth_executable": "/home/example/.local/bin/codex-multi-auth",
+  "codex_account_hints": {"1": "acc", "2": "alt"},
+  "terminal": {
+    "backend": "auto",
+    "program": null,
+    "wsl_distro": "Ubuntu"
+  },
+  "recovery_plane": {
+    "enabled": true,
+    "hermes_service": "hermes-gateway.service",
+    "tlive_service": "tlive.service",
+    "hermes_config_path": "/home/example/.hermes/config.yaml",
+    "tlive_config_path": "/home/example/.tlive/config.json",
+    "hermes_notify_target": "telegram"
+  },
+  "operational_alerts": {
+    "project_id": "hub",
+    "telegram_thread_id": 41
+  },
+  "projects": [
+    {"project_id": "hub", "telegram_chat_id": null},
+    {"project_id": "example-project", "telegram_chat_id": null}
+  ],
+  "agents": [
+    {
+      "agent_id": "codex",
+      "display_name": "Codex",
+      "telegram_username": "your_codex_bot",
+      "runtime": "codex",
+      "token_file": "/home/example/.config/agents-projects-hub/secrets/codex-telegram-token",
+      "terminal_enabled": true,
+      "default_model": "gpt-5.6-sol",
+      "default_effort": "high"
+    },
+    {
+      "agent_id": "hermes",
+      "display_name": "Hermes",
+      "telegram_username": "your_hermes_bot",
+      "runtime": "hermes",
+      "managed_externally": true,
+      "terminal_enabled": false,
+      "default_model": "provider-selected",
+      "default_effort": "high"
+    }
+  ]
+}

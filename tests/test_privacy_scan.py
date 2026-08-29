@@ -1,0 +1,40 @@
+from pathlib import Path
+from unittest import TestCase
+
+from hermes_codex_router.privacy_scan import scan_text
+
+
+class PrivacyScanTests(TestCase):
+    def assert_rule(self, text: str, rule: str) -> None:
+        findings = scan_text(Path("fixture.txt"), text)
+        self.assertIn(rule, {finding.rule for finding in findings})
+
+    def test_rejects_non_example_email(self) -> None:
+        self.assert_rule("person" + "@private.invalid", "non-example email address")
+
+    def test_rejects_owner_home_path(self) -> None:
+        self.assert_rule("/home/" + "private-user/project", "owner-specific home path")
+
+    def test_rejects_private_invite(self) -> None:
+        self.assert_rule("https://t.me/" + "+private-code", "private Telegram invite link")
+
+    def test_rejects_credential_like_value(self) -> None:
+        value = "1234567890AA" + "abcdefghijklmnopqrstuvwxyz012345"
+        self.assert_rule(value, "credential-like high-entropy value")
+
+    def test_rejects_non_placeholder_chat_id(self) -> None:
+        self.assert_rule("-100" + "7654321098", "non-placeholder Telegram chat ID")
+
+    def test_rejects_non_example_bot_username(self) -> None:
+        self.assert_rule("@private_" + "service_bot", "non-example Telegram bot username")
+
+    def test_rejects_non_placeholder_session_uuid(self) -> None:
+        value = "12345678-1234-4234-8234-" + "123456789abc"
+        self.assert_rule(value, "non-placeholder session UUID")
+
+    def test_rejects_raw_session_marker(self) -> None:
+        self.assert_rule("<environment" + "_context>", "raw agent/session transcript marker")
+
+    def test_allows_publishable_examples(self) -> None:
+        text = "account@example.com /home/example/project @example_agent_bot -1001234567890"
+        self.assertEqual(scan_text(Path("fixture.txt"), text), [])

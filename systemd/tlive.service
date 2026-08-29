@@ -1,0 +1,17 @@
+[Unit]
+Description=tlive Telegram monitoring and Codex remote approvals
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.config/agents-projects-hub/environment
+ExecStart=/usr/bin/env tlive start --foreground
+Restart=always
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

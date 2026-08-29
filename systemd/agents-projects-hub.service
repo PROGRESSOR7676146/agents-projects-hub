@@ -1,0 +1,17 @@
+[Unit]
+Description=Agents Projects Hub Telegram router
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/agents-projects-hub/venv/bin/agents-projects-hub serve %h/.config/agents-projects-hub/hub.json
+EnvironmentFile=-%h/.config/agents-projects-hub/environment
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
