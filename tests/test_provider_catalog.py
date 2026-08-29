@@ -34,10 +34,11 @@ opencode-go/kimi-k3
         )
 
     def test_groups_antigravity_effort_suffixes(self) -> None:
-        output = """gemini-3.7-flash-high
-gemini-3.7-flash-medium
-gemini-3.7-flash-low
-claude-sonnet-4-6
+        output = """Fetching available models...
+gemini-3.7-flash-high\tGemini 3.7 Flash (High)
+gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)
+gemini-3.7-flash-low\tGemini 3.7 Flash (Low)
+claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
 """
         models = antigravity_models(
             "/usr/bin/agy",

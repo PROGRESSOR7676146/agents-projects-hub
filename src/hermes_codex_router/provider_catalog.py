@@ -94,9 +94,15 @@ def antigravity_models(executable: str, *, run: Run = subprocess.run) -> tuple[P
     grouped: OrderedDict[str, list[str]] = OrderedDict()
     suffixes = ("high", "medium", "low", "max", "minimal")
     for raw in output.splitlines():
-        model_id = raw.strip()
-        if not model_id or " " in model_id:
+        line = raw.strip()
+        if not line:
             continue
+        if "\t" in line:
+            model_id = line.split("\t", 1)[0]
+        elif " " in line:
+            continue
+        else:
+            model_id = line
         base = model_id
         effort = "default"
         for candidate in suffixes:
