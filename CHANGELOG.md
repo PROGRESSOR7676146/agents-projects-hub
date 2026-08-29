@@ -7,6 +7,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ### Added
 
+- Establish a canonical product-requirements baseline and proportionate durable
+  documentation map for current status, decisions, risks, operations, testing,
+  and future-agent orientation.
 - Add independent Hermes Gateway and tlive recovery-plane health checks,
   dual-channel operational alert delivery, an optional tlive user-service
   template, and a Russian recovery runbook.

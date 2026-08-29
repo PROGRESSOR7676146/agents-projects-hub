@@ -1,0 +1,32 @@
+# Operations map
+
+Status: active  
+Last updated: 2026-08-29
+
+Operational truth is split by purpose:
+
+- Repository setup, commands, service topology, and configuration examples:
+  [`README.md`](../../README.md).
+- Independent Hermes/tlive health and recovery:
+  [`RECOVERY_PLANE.ru.md`](../RECOVERY_PLANE.ru.md).
+- Threat response and fail-closed behavior:
+  [`SECURITY.ru.md`](../SECURITY.ru.md) and [`SECURITY.md`](../../SECURITY.md).
+- Planned post-baseline sequence: [`ROADMAP.ru.md`](../ROADMAP.ru.md) and the
+  latest accepted handoff.
+- Complete validation gate: `python scripts/validate.py`.
+- Read-only deployment diagnostics: `agents-projects-hub doctor HUB_CONFIG` and
+  `agents-projects-hub monitor HUB_CONFIG`.
+
+## Operating rules
+
+- Keep real configuration, state, tokens, OAuth material, sockets, logs, and
+  provider sessions outside Git with restrictive permissions.
+- Repair only the failed component. Do not make Hub, Hermes, tlive, or optional
+  multi-auth mandatory dependencies of each other.
+- Back up SQLite consistently before migration and verify recovery artifacts.
+- Do not restart services, alter bot/privacy settings, or run live Telegram E2E
+  as part of a documentation-only task.
+- External upgrades require a backup, contract tests, smoke test, health gate,
+  and rollback path.
+- Exact in-flight turns are not recoverable after machine loss; communicate this
+  limit instead of inferring success from stale state.

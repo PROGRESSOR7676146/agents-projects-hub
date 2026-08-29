@@ -4,10 +4,15 @@ Privacy-first orchestration hub connecting Telegram project topics to persistent
 Codex, Hermes, and other agent sessions with context handoffs, model switching,
 approvals, and terminal takeover.
 
-> **Status:** v0.4 pilot. The Codex ↔ Hermes flow has passed live acceptance on
-> a private Telegram forum. OpenCode and Antigravity adapters have also passed
-> local live provider checks. A second project group and Gemini still require
-> credentials and operator-owned Telegram resources for live acceptance.
+> **Status:** v0.4 pilot. Hub, Pythia, and Babelfish are bound as isolated real
+> projects. Codex ↔ Hermes has passed live acceptance, and OpenCode/Antigravity
+> adapters have passed local provider checks. The central-ingress live Telegram
+> E2E baseline in Hub General is the next acceptance milestone.
+
+New contributors and agents should start with the
+[documentation map](docs/INDEX.md), then read the canonical
+[product requirements](docs/product/PRODUCT_REQUIREMENTS.md) and
+[current status](docs/status/PROJECT_STATUS.md).
 
 ## Why this project exists
 
@@ -118,15 +123,16 @@ manual attachment. All backends create the same named tmux writer first.
   bounded visible turns for handoff.
 - User-level service templates, installer, doctor, CI, CodeQL, and Dependabot.
 
-See [the current specification](docs/PROJECT_HUB_SPEC.ru.md) for acceptance
-results and the next implementation queue. Older design documents in `docs/`
-are retained for history and are marked when superseded.
+See the [product requirements](docs/product/PRODUCT_REQUIREMENTS.md) for accepted
+behavior and lifecycle status, and [project status](docs/status/PROJECT_STATUS.md)
+for current evidence and the next milestone. The earlier
+[pilot specification](docs/PROJECT_HUB_SPEC.ru.md) remains supporting history.
 
 ## Repository layout
 
 ```text
 config/       publishable configuration examples (real config is ignored)
-docs/         architecture, security model, roadmap, and pilot specification
+docs/         product, status, architecture, decisions, risks, operations, tests, and handoffs
 integrations/ Hermes plugin and visible-turn export hook
 scripts/      installer, doctor wrapper, and complete validation gate
 src/          router, adapters, state, Telegram service, and terminal runtime
