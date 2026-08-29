@@ -71,7 +71,7 @@ def run_codex_pilot(
             thread_id=thread.thread_id,
             cwd=project.root,
             text=(
-                "Connectivity pilot for Hermes Project Hub. Do not use tools and do not modify "
+                "Connectivity pilot for Agents Projects Hub. Do not use tools and do not modify "
                 "files. Reply briefly in Russian that the Codex session for the Pythia topic "
                 f"'{topic.title}' is connected and ready."
             ),
