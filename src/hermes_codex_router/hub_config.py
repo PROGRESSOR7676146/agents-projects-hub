@@ -398,9 +398,7 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
         not isinstance(direct_message_project_id, str)
         or direct_message_project_id not in project_ids
     ):
-        raise HubConfigError(
-            "direct_message_project_id must reference a registered project"
-        )
+        raise HubConfigError("direct_message_project_id must reference a registered project")
 
     return HubConfig(
         schema_version=1,

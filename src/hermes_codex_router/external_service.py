@@ -183,8 +183,10 @@ class ExternalAgentService:
                 self.agent.default_model,
                 self.agent.default_effort,
             )
-        active_agent = active.agent_id if active else (
-            self.agent.agent_id if self.direct_messages_only else "codex"
+        active_agent = (
+            active.agent_id
+            if active
+            else (self.agent.agent_id if self.direct_messages_only else "codex")
         )
         targets = (
             {self.agent.agent_id}

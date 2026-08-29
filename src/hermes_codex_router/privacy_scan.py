@@ -192,9 +192,7 @@ def _metadata_for_privacy_scan(metadata: str) -> str:
     github_committer = re.search(
         r"(?m)^committer GitHub <noreply@github\.com> \d+ [+-]\d{4}$", metadata
     )
-    synthetic_subject = re.search(
-        r"(?m)^Merge [0-9a-f]{40} into [0-9a-f]{40}$", metadata
-    )
+    synthetic_subject = re.search(r"(?m)^Merge [0-9a-f]{40} into [0-9a-f]{40}$", metadata)
     if len(parents) == 2 and github_committer and synthetic_subject:
         return re.sub(r"(?m)^author .*\n", "", metadata, count=1)
     return metadata
