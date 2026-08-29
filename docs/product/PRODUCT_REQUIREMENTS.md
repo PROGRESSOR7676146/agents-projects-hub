@@ -267,8 +267,10 @@ or response metadata when the provider exposes it.
   effort, context remainder when observable, masked active account, and compact
   provider-supplied limit/reset windows.
 - **REQ-CMD-002 (Implemented):** `/model` is the single cascaded selector for
-  provider, model, and effort. It marks current values and validates every
-  callback against a fresh local provider catalog before changing state.
+  provider, model, and effort. It marks current values and validates callbacks
+  against the exact cached catalog snapshot displayed to the user. The final
+  click changes local session state deterministically and MUST NOT depend on a
+  new provider RPC or an AI-generated handoff.
 - **REQ-CMD-002A (Implemented):** Successful provider discovery updates a
   private atomic last-known-good catalog with source version and timestamp.
   Telegram callbacks use bounded opaque keys rather than provider model IDs;
@@ -284,8 +286,16 @@ or response metadata when the provider exposes it.
 - **REQ-CMD-005 (Implemented):** The public Telegram command menu contains only
   `/status`, `/model`, `/accounts`, `/new`, `/local`, and `/return`. Legacy
   maintenance commands may remain locally callable for compatibility but are
-  not part of the normal mobile interface. A deterministic local command checks
-  drift and synchronizes all locally managed provider bot identities.
+  not part of the normal mobile interface. In registered project groups only
+  the central router bot publishes this universal menu; provider bots publish
+  empty chat-scoped menus so Telegram does not duplicate commands with bot
+  username suffixes. Direct provider chats expose only commands implemented by
+  that provider endpoint. A deterministic local command checks and synchronizes
+  every scope.
+- **REQ-CMD-006 (Implemented):** Provider, model, and effort buttons mark the
+  active choice and use Telegram's success style where supported. Account and
+  quota summaries use portable green/yellow/red status symbols because message
+  text itself has no reliable cross-client color API.
 
 ## 11. Frontends, writer lease, and local transfer
 

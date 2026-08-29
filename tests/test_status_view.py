@@ -26,6 +26,7 @@ class StatusViewTests(unittest.TestCase):
         self.assertTrue(text.startswith("Codex · GPT-5.6 Sol · High"))
         self.assertIn("Context 73.2% · Account acc…", text)
         self.assertIn("5h 83%", text)
+        self.assertIn("🟢 5h", text)
         self.assertNotIn("provider", text.lower())
 
     def test_accounts_lists_codex_and_opencode_go_capabilities(self) -> None:
@@ -40,6 +41,7 @@ class StatusViewTests(unittest.TestCase):
         self.assertIn("Codex", text)
         self.assertIn("✓ acc…", text)
         self.assertIn("OpenCode Go", text)
+        self.assertIn("🟢 plan", text)
         self.assertIn("plan: 5h $12", text)
 
     def test_accounts_shows_latest_provider_supplied_opencode_reset(self) -> None:

@@ -120,7 +120,9 @@ class HubState:
         thread_id: int,
         title: str,
     ) -> TopicRecord:
-        if chat_id >= 0 or thread_id <= 0 or not title.strip():
+        # Supergroups use negative IDs; direct bot chats use the positive user
+        # ID. Zero is never a valid Telegram chat identity.
+        if chat_id == 0 or thread_id <= 0 or not title.strip():
             raise StateError("invalid Telegram topic identity")
         now = _now()
         with self._connection:

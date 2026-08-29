@@ -37,6 +37,15 @@ class HubStateTests(unittest.TestCase):
         self.assertEqual(renamed.topic_id, self.topic.topic_id)
         self.assertEqual(renamed.title, "API renamed")
 
+    def test_private_chat_topic_uses_positive_owner_identity(self) -> None:
+        direct = self.state.observe_topic(
+            project_id="alpha",
+            chat_id=123456789,
+            thread_id=1,
+            title="Direct",
+        )
+        self.assertEqual((direct.chat_id, direct.thread_id), (123456789, 1))
+
     def test_switching_agents_preserves_and_resumes_each_provider_session(self) -> None:
         codex = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
         satellite = self.state.ensure_satellite(

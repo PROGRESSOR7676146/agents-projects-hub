@@ -15,13 +15,25 @@ PUBLIC_COMMANDS: tuple[tuple[str, str], ...] = (
     ("return", "Return to Telegram and publish"),
 )
 
+DIRECT_PROVIDER_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("status", "Current provider and model"),
+    ("new", "Start a new provider session"),
+)
+
 ApiFactory = Callable[[str], TelegramBotApi]
 
 
-def _desired() -> list[dict[str, str]]:
-    return [
-        {"command": command, "description": description} for command, description in PUBLIC_COMMANDS
-    ]
+def _desired(
+    commands: tuple[tuple[str, str], ...] = PUBLIC_COMMANDS,
+) -> list[dict[str, str]]:
+    return [{"command": command, "description": description} for command, description in commands]
+
+
+def _scope(scope_type: str, *, chat_id: int | None = None) -> str:
+    value: dict[str, object] = {"type": scope_type}
+    if chat_id is not None:
+        value["chat_id"] = chat_id
+    return json.dumps(value, separators=(",", ":"))
 
 
 def configure_public_commands(
@@ -40,13 +52,30 @@ def configure_public_commands(
         ):
             continue
         api = api_factory(agent.token_file.read_text(encoding="utf-8").strip())
-        current = api.call("getMyCommands")
-        matches = current == desired
+        direct = desired if agent.agent_id == "codex" else _desired(DIRECT_PROVIDER_COMMANDS)
+        scoped: list[tuple[str | None, list[dict[str, str]]]] = [(None, direct)]
+        for project in config.projects:
+            if project.telegram_chat_id is not None:
+                scoped.append(
+                    (
+                        _scope("chat", chat_id=project.telegram_chat_id),
+                        desired if agent.agent_id == "codex" else [],
+                    )
+                )
+        matches = True
         changed = False
-        if sync and not matches:
-            api.call("setMyCommands", commands=json.dumps(desired))
-            changed = True
-            matches = api.call("getMyCommands") == desired
+        for scope, expected in scoped:
+            params = {"scope": scope} if scope is not None else {}
+            current = api.call("getMyCommands", **params)
+            scope_matches = current == expected
+            # Telegram reports both an unset scope and an explicitly empty
+            # scope as []. Re-assert empty project scopes during every sync so
+            # provider defaults cannot leak back into the shared group menu.
+            if sync and (not scope_matches or not expected):
+                api.call("setMyCommands", commands=json.dumps(expected), **params)
+                changed = True
+                scope_matches = api.call("getMyCommands", **params) == expected
+            matches = matches and scope_matches
         bots.append(
             {
                 "agent_id": agent.agent_id,

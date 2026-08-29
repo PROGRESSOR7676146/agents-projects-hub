@@ -195,16 +195,20 @@ class ServiceIntegrationTests(unittest.TestCase):
             choose = callback_values(telegram.markups[-1])[0]
             self.assertRegex(choose, r"^choose:codex:[a-f0-9]{12}$")
             self.assertTrue(value.handle_update(callback(3, "cb-model", choose)))
-            apply = callback_values(telegram.markups[-1])[0]
-            self.assertRegex(apply, r"^use:codex:[a-f0-9]{12}:high$")
+            apply = next(
+                item for item in callback_values(telegram.markups[-1]) if item.endswith(":medium")
+            )
+            self.assertRegex(apply, r"^use:codex:[a-f0-9]{12}:medium$")
             self.assertTrue(value.handle_update(callback(4, "cb-effort", apply)))
             topic = value.state.find_topic(-1001234567890, 77)
             assert topic is not None
             active = value.state.active_session(topic.topic_id)
             assert active is not None
             self.assertEqual(
-                (active.agent_id, active.model, active.effort), ("codex", "gpt-5.6-sol", "high")
+                (active.agent_id, active.model, active.effort),
+                ("codex", "gpt-5.6-sol", "medium"),
             )
+            self.assertIn("will start on the next message", telegram.sent[-1][2])
             original_session_id = active.session_id
             self.assertTrue(value.handle_update(update(5, "/new")))
             confirm = next(
