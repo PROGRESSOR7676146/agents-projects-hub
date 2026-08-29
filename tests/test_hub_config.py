@@ -116,6 +116,37 @@ class HubConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(HubConfigError, "must end in bot"):
             load_hub_config(self.write_config(agents=agents))
 
+    def test_loads_safe_agent_service_unit(self) -> None:
+        agents = [
+            {
+                "agent_id": "opencode",
+                "display_name": "OpenCode",
+                "telegram_username": "project_opencode_bot",
+                "runtime": "opencode",
+                "managed_externally": True,
+                "service_unit": "agents-projects-hub@opencode.service",
+            }
+        ]
+        config = load_hub_config(self.write_config(agents=agents))
+        self.assertEqual(
+            config.require_agent("opencode").service_unit,
+            "agents-projects-hub@opencode.service",
+        )
+
+    def test_rejects_unsafe_agent_service_unit(self) -> None:
+        agents = [
+            {
+                "agent_id": "opencode",
+                "display_name": "OpenCode",
+                "telegram_username": "project_opencode_bot",
+                "runtime": "opencode",
+                "managed_externally": True,
+                "service_unit": "../../opencode.service",
+            }
+        ]
+        with self.assertRaisesRegex(HubConfigError, "service_unit"):
+            load_hub_config(self.write_config(agents=agents))
+
     def test_state_parent_is_not_required_to_exist_during_config_parse(self) -> None:
         missing = self.base / "private" / "state.db"
         config = load_hub_config(self.write_config(state_path=str(missing)))

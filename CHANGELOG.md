@@ -13,6 +13,8 @@ and releases use semantic versioning while the public API is still evolving.
 - Record only the numeric chat ID and bounded title of authorized but unbound
   Telegram project groups so an existing group can be bound without storing its
   message text.
+- Add per-agent systemd health probes plus bounded startup and Telegram-error
+  events for OpenCode and Antigravity pollers.
 
 ### Changed
 

@@ -35,6 +35,7 @@ class AgentDefinition:
     default_effort: str
     executable: str | None = None
     runtime_home: Path | None = None
+    service_unit: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,6 +328,11 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
                 raise HubConfigError(f"runtime_home for {agent_id} is not a directory")
             if runtime_home.stat().st_mode & 0o077:
                 raise HubConfigError(f"runtime_home for {agent_id} must have mode 0700")
+        service_unit = data.get("service_unit")
+        if service_unit is not None and (
+            not isinstance(service_unit, str) or not SERVICE_UNIT.fullmatch(service_unit)
+        ):
+            raise HubConfigError(f"service_unit is invalid for {agent_id}")
         agents.append(
             AgentDefinition(
                 agent_id=agent_id,
@@ -340,6 +346,7 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
                 default_effort=default_effort,
                 executable=executable.strip() if executable else None,
                 runtime_home=runtime_home,
+                service_unit=service_unit,
             )
         )
 

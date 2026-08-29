@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 import shutil
 import stat
+import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any, Callable
 
 from .hub_config import HubConfig
 from .migrations import LATEST_SCHEMA_VERSION
@@ -35,6 +37,26 @@ def _socket_check(path: Path, *, required: bool = True) -> Check:
     except OSError as exc:
         return Check("codex_socket", False, str(exc), required)
     return Check("codex_socket", stat.S_ISSOCK(mode), str(path), required)
+
+
+def _service_check(
+    unit: str,
+    *,
+    run: Callable[..., Any] = subprocess.run,
+) -> Check:
+    try:
+        completed = run(
+            ("systemctl", "--user", "is-active", "--quiet", unit),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return Check(f"service:{unit}", False, "probe failed")
+    active = completed.returncode == 0
+    return Check(f"service:{unit}", active, "active" if active else "inactive")
 
 
 def run_doctor(config: HubConfig) -> dict[str, object]:
@@ -69,6 +91,24 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
         checks.append(Check("state", False, str(exc)))
 
     checks.extend([_command("git"), _command("codex"), _command("tmux")])
+    for agent in config.agents:
+        if agent.service_unit is not None:
+            checks.append(_service_check(agent.service_unit))
+        if agent.runtime in {"gemini", "antigravity", "opencode"}:
+            executable = agent.executable or (
+                "agy" if agent.runtime == "antigravity" else agent.runtime
+            )
+            if Path(executable).is_absolute():
+                path = Path(executable)
+                checks.append(
+                    Check(
+                        f"command:{agent.agent_id}",
+                        path.is_file() and bool(path.stat().st_mode & 0o111),
+                        str(path),
+                    )
+                )
+            else:
+                checks.append(_command(executable))
     terminal = TerminalRuntime(
         socket_path=config.codex_socket_path,
         backend=config.terminal.backend,

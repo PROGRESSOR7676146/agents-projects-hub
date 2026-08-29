@@ -170,6 +170,12 @@ class ExternalAgentService:
         return True
 
     def run_forever(self) -> None:
+        self.state.record_runtime_event(
+            self.agent.agent_id,
+            "info",
+            "service_started",
+            f"runtime={self.agent.runtime}; polling",
+        )
         offset = self.state.get_bot_offset(self.agent.agent_id)
         while True:
             try:
@@ -182,5 +188,11 @@ class ExternalAgentService:
                     finally:
                         offset = update_id + 1
                         self.state.set_bot_offset(self.agent.agent_id, offset)
-            except TelegramError:
+            except TelegramError as exc:
+                self.state.record_runtime_event(
+                    self.agent.agent_id,
+                    "warning",
+                    "telegram_error",
+                    type(exc).__name__,
+                )
                 time.sleep(3)
