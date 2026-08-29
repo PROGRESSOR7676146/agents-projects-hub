@@ -15,6 +15,7 @@ and releases use semantic versioning while the public API is still evolving.
   message text.
 - Add per-agent systemd health probes plus bounded startup and Telegram-error
   events for OpenCode and Antigravity pollers.
+- Monitor each locally managed bot's access to every configured project group.
 
 ### Changed
 

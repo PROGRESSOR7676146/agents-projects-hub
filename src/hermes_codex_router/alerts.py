@@ -31,6 +31,7 @@ def evaluate_operational_alerts(
     state_snapshot: Mapping[str, object],
     doctor_ok: bool,
     recovery_status: Mapping[str, bool] | None = None,
+    telegram_access: Mapping[tuple[str, str], bool] | None = None,
     now: datetime | None = None,
     low_quota_percent: int = 10,
     stuck_after_seconds: int = 15 * 60,
@@ -74,6 +75,18 @@ def evaluate_operational_alerts(
                     "recovery_plane_unavailable",
                     "error",
                     "Both independent recovery channels are unavailable; local intervention is required.",
+                )
+            )
+    if telegram_access is not None:
+        for (agent_id, project_id), accessible in telegram_access.items():
+            if accessible:
+                continue
+            alerts.append(
+                OperationalAlert(
+                    f"telegram:{agent_id}:{project_id}",
+                    "telegram_bot_group_unavailable",
+                    "error" if agent_id == "codex" else "warning",
+                    f"The {agent_id} bot cannot access the {project_id} project group.",
                 )
             )
     if not pool.available:

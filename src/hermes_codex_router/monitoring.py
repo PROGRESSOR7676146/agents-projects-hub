@@ -10,7 +10,7 @@ from .codex_accounts import read_codex_pool_status
 from .diagnostics import run_doctor
 from .hub_config import HubConfig
 from .state import HubState
-from .telegram import TelegramBotApi
+from .telegram import TelegramBotApi, TelegramError
 
 
 def _render(alerts: tuple[OperationalAlert, ...]) -> str:
@@ -59,6 +59,24 @@ def _send_hermes(
         raise RuntimeError("Hermes recovery-channel delivery failed")
 
 
+def _telegram_access(config: HubConfig) -> dict[tuple[str, str], bool]:
+    access: dict[tuple[str, str], bool] = {}
+    for agent in config.agents:
+        if agent.managed_externally or agent.token_file is None:
+            continue
+        telegram = TelegramBotApi(agent.token_file.read_text(encoding="utf-8").strip())
+        for project in config.projects:
+            if project.telegram_chat_id is None:
+                continue
+            try:
+                result = telegram.call("getChat", chat_id=project.telegram_chat_id)
+            except TelegramError:
+                access[(agent.agent_id, project.project_id)] = False
+            else:
+                access[(agent.agent_id, project.project_id)] = isinstance(result, dict)
+    return access
+
+
 def run_monitor_once(
     config: HubConfig,
     *,
@@ -97,6 +115,7 @@ def run_monitor_once(
             state_snapshot=snapshot,
             doctor_ok=bool(doctor["ok"]),
             recovery_status=recovery_status or None,
+            telegram_access=_telegram_access(config),
         )
         delivered: list[str] = []
         if notify and alerts:

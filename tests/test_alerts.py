@@ -125,6 +125,32 @@ class OperationalAlertTests(unittest.TestCase):
         self.assertEqual(calls[0][1]["input"], "safe alert")
         self.assertNotIn("shell", calls[0][1])
 
+    def test_missing_bot_group_access_is_alerted_per_agent_and_project(self) -> None:
+        pool = CodexPoolStatus(
+            available=True,
+            rotation_enabled=True,
+            accounts=(),
+            recommended_account=None,
+            account_rotations=0,
+        )
+        alerts = evaluate_operational_alerts(
+            pool=pool,
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+            telegram_access={
+                ("codex", "pythia"): True,
+                ("opencode", "pythia"): False,
+                ("antigravity", "babelfish"): False,
+            },
+        )
+        self.assertEqual(
+            {(item.key, item.severity) for item in alerts},
+            {
+                ("telegram:opencode:pythia", "warning"),
+                ("telegram:antigravity:babelfish", "warning"),
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
