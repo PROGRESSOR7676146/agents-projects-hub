@@ -160,6 +160,52 @@ class HubStateTests(unittest.TestCase):
         self.assertEqual(completed["dispatch_counts"], {"completed": 1})
         self.assertEqual(completed["pending_dispatches"], [])
 
+    def test_lane_binding_requires_same_project_and_is_unique_per_topic(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "lane"
+            path.mkdir()
+            self.state.register_lane(
+                lane_id="backend",
+                project_id="pythia",
+                worktree_path=path,
+                branch_name="lane/backend",
+            )
+            bound = self.state.bind_lane("backend", self.topic.topic_id)
+            self.assertEqual(bound["topic_id"], self.topic.topic_id)
+
+            other = Path(directory) / "other"
+            other.mkdir()
+            self.state.register_lane(
+                lane_id="frontend",
+                project_id="pythia",
+                worktree_path=other,
+                branch_name="lane/frontend",
+            )
+            with self.assertRaisesRegex(RuntimeError, "already bound"):
+                self.state.bind_lane("frontend", self.topic.topic_id)
+
+    def test_alert_delivery_claim_has_cooldown(self) -> None:
+        self.assertTrue(self.state.claim_alert_delivery("codex:quota", cooldown_seconds=3600))
+        self.assertFalse(self.state.claim_alert_delivery("codex:quota", cooldown_seconds=3600))
+        self.state.release_alert_delivery("codex:quota")
+        self.assertTrue(self.state.claim_alert_delivery("codex:quota", cooldown_seconds=3600))
+
+    def test_cleaned_lane_is_recorded_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "lane"
+            path.mkdir()
+            self.state.register_lane(
+                lane_id="cleanup",
+                project_id="pythia",
+                worktree_path=path,
+                branch_name="lane/cleanup",
+            )
+            self.state.archive_lane("cleanup")
+            self.state.mark_lane_cleaned("cleanup")
+            self.assertIsNotNone(self.state.get_lane("cleanup")["cleaned_at"])
+            with self.assertRaisesRegex(RuntimeError, "already cleaned"):
+                self.state.mark_lane_cleaned("cleanup")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,12 +9,13 @@ from .diagnostics import run_doctor
 from .external_service import ExternalAgentService
 from .hub_config import HubConfigError, load_hub_config
 from .migrations import backup_database, migrate_database
+from .monitoring import run_monitor_once
 from .pilot import run_codex_pilot
 from .project_admin import add_project, set_project_enabled
 from .registry import RegistryError, load_registry
 from .service import ProjectHubService
 from .state import HubState, StateError
-from .worktrees import WorktreeError, create_worktree
+from .worktrees import WorktreeError, cleanup_worktree, create_worktree
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -54,6 +55,11 @@ def _parser() -> argparse.ArgumentParser:
     backup.add_argument("state", type=Path)
     backup.add_argument("destination", nargs="?", type=Path)
 
+    monitor = commands.add_parser("monitor", help="evaluate operational alerts once")
+    monitor.add_argument("config", type=Path)
+    monitor.add_argument("--notify", action="store_true")
+    monitor.add_argument("--cooldown-seconds", type=int, default=3600)
+
     project = commands.add_parser("project", help="manage the local project registry")
     project_commands = project.add_subparsers(dest="project_command", required=True)
     project_list = project_commands.add_parser("list")
@@ -81,6 +87,16 @@ def _parser() -> argparse.ArgumentParser:
     lane_archive = lane_commands.add_parser("archive")
     lane_archive.add_argument("config", type=Path)
     lane_archive.add_argument("--lane", required=True)
+    lane_bind = lane_commands.add_parser("bind")
+    lane_bind.add_argument("config", type=Path)
+    lane_bind.add_argument("--lane", required=True)
+    lane_bind.add_argument("--chat-id", required=True, type=int)
+    lane_bind.add_argument("--thread-id", required=True, type=int)
+    lane_bind.add_argument("--confirm", required=True)
+    lane_cleanup = lane_commands.add_parser("cleanup")
+    lane_cleanup.add_argument("config", type=Path)
+    lane_cleanup.add_argument("--lane", required=True)
+    lane_cleanup.add_argument("--confirm", required=True)
     return parser
 
 
@@ -132,6 +148,49 @@ def _lane_command(args: argparse.Namespace) -> int:
         if args.lane_command == "archive":
             state.archive_lane(args.lane)
             _print({"ok": True, "lane_id": args.lane, "status": "archived"})
+            return 0
+        if args.lane_command == "bind":
+            expected = f"{args.chat_id}:{args.thread_id}"
+            if args.confirm != expected:
+                raise WorktreeError(f"binding confirmation must equal {expected}")
+            topic = state.find_topic(args.chat_id, args.thread_id)
+            if topic is None:
+                raise WorktreeError("Telegram topic must be observed before lane binding")
+            lane = state.bind_lane(args.lane, topic.topic_id)
+            _print(
+                {
+                    "ok": True,
+                    "lane_id": args.lane,
+                    "chat_id": args.chat_id,
+                    "thread_id": args.thread_id,
+                    "topic_id": lane["topic_id"],
+                }
+            )
+            return 0
+        if args.lane_command == "cleanup":
+            if args.confirm != args.lane:
+                raise WorktreeError("cleanup confirmation must exactly equal the lane id")
+            lane = state.get_lane(args.lane)
+            if lane["status"] != "archived":
+                raise WorktreeError("archive the lane before cleanup")
+            if lane["cleaned_at"] is not None:
+                raise WorktreeError("lane worktree was already cleaned")
+            registry = load_registry(config.registry_path)
+            project = registry.require_project(str(lane["project_id"]))
+            cleanup_worktree(
+                project,
+                args.lane,
+                recorded_path=Path(str(lane["worktree_path"])),
+            )
+            state.mark_lane_cleaned(args.lane)
+            _print(
+                {
+                    "ok": True,
+                    "lane_id": args.lane,
+                    "status": "cleaned",
+                    "branch_retained": lane["branch_name"],
+                }
+            )
             return 0
         registry = load_registry(config.registry_path)
         project = registry.require_project(args.project)
@@ -208,7 +267,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             config = load_hub_config(args.config)
             state = HubState.open(config.state_path)
             try:
-                _print({"ok": True, **state.status_snapshot()})
+                result = {"ok": True, **state.status_snapshot()}
+                if config.codex_multi_auth_dir is not None:
+                    from .codex_accounts import read_codex_pool_status
+
+                    result["codex_account_pool"] = read_codex_pool_status(
+                        config.codex_multi_auth_dir,
+                        executable=str(config.codex_multi_auth_executable)
+                        if config.codex_multi_auth_executable
+                        else "codex-multi-auth",
+                    ).as_dict()
+                _print(result)
             finally:
                 state.close()
             return 0
@@ -226,6 +295,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "backup":
             destination = backup_database(args.state, args.destination)
             _print({"ok": True, "backup_path": str(destination)})
+            return 0
+        if args.command == "monitor":
+            if args.cooldown_seconds < 0:
+                raise ValueError("cooldown-seconds cannot be negative")
+            result = run_monitor_once(
+                load_hub_config(args.config),
+                notify=args.notify,
+                cooldown_seconds=args.cooldown_seconds,
+            )
+            _print(result)
             return 0
         if args.command == "project":
             return _project_command(args)

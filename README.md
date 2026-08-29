@@ -4,10 +4,10 @@ Privacy-first orchestration hub connecting Telegram project topics to persistent
 Codex, Hermes, and other agent sessions with context handoffs, model switching,
 approvals, and terminal takeover.
 
-> **Status:** v0.3 pilot. The Codex ↔ Hermes flow has passed live acceptance on
-> a private Telegram forum. Reproducible installation, migrations, diagnostics,
-> CI, and Gemini/OpenCode CLI adapters are included; additional live projects
-> and provider combinations still require operator acceptance.
+> **Status:** v0.4 pilot. The Codex ↔ Hermes flow has passed live acceptance on
+> a private Telegram forum. OpenCode and Antigravity adapters have also passed
+> local live provider checks. A second project group and Gemini still require
+> credentials and operator-owned Telegram resources for live acceptance.
 
 ## Why this project exists
 
@@ -100,7 +100,12 @@ manual attachment. All backends create the same named tmux writer first.
   persistent session IDs, bounded handoffs, and no auto-approval flags.
 - Explicit terminal writer takeover/release using tmux and `codex resume`.
 - Versioned SQLite migrations with automatic pre-migration backups and rollback.
-- Local project administration and worktree-backed parallel-lane foundations.
+- Local project administration plus explicitly confirmed topic binding and safe,
+  branch-retaining cleanup for worktree-backed parallel lanes.
+- Cooldown-deduplicated operational alerts for deployment health, Codex account
+  availability/quota, and stuck dispatches, with a systemd timer template.
+- Hermes's native runtime footer and a public `agent:end` hook that exports only
+  bounded visible turns for handoff.
 - User-level service templates, installer, doctor, CI, CodeQL, and Dependabot.
 
 See [the current specification](docs/PROJECT_HUB_SPEC.ru.md) for acceptance
@@ -186,12 +191,41 @@ owned by its native gateway and uses the included drop-in. Copy the desired
 objects from `config/external-agents.example.json` into the local `agents` array;
 the primary example does not require unused external bot credentials.
 
+Give each Gemini account a separate private `runtime_home`. The adapter exports
+it as `GEMINI_CLI_HOME` only to that agent process, so OAuth state and session
+history cannot overwrite another account. Antigravity is supported through
+`agy` in sandboxed `plan` mode; its dangerous permission-bypass flag is never
+used.
+
+For transparent Codex account rotation, run one persistent `codex-multi-auth`
+app-server on `codex_socket_path`, leave `manage_codex_server` disabled, and set
+`codex_multi_auth_dir` plus `codex_multi_auth_executable`. Hub resumes the same
+provider thread ID through that socket and exposes only redacted account numbers
+and cached quota health in `/status`; OAuth tokens and account emails are never
+returned. `codex_stdio_executable` remains an isolated fallback for diagnostics,
+not the recommended service topology.
+
+Some custom account proxies do not implement Codex's model-discovery response
+schema. In that topology, pass a validated local catalog to the app-server at
+startup with `-c model_catalog_json="/absolute/path/models_cache.json"`. This
+keeps model discovery local; the catalog is startup configuration, so apply it
+only during a planned or natural service start.
+
+Install BotFather tokens without echoing them or placing them in JSON:
+
+```bash
+./scripts/configure-telegram-token.sh gemini
+./scripts/configure-telegram-token.sh antigravity
+./scripts/configure-telegram-token.sh opencode
+```
+
 ## Operations CLI
 
 ```bash
 # Read-only diagnostics and persisted status
 agents-projects-hub doctor config/hub.json
 agents-projects-hub status config/hub.json
+agents-projects-hub monitor config/hub.json
 
 # SQLite-consistent backup and versioned migration
 agents-projects-hub backup /path/to/state.db
@@ -206,11 +240,20 @@ agents-projects-hub project disable config/projects.json my-project
 # Separate Git worktree for a concurrent lane
 agents-projects-hub lane create config/hub.json --project my-project --lane backend
 agents-projects-hub lane list config/hub.json
+agents-projects-hub lane bind config/hub.json --lane backend \
+  --chat-id -1001234567890 --thread-id 73 --confirm=-1001234567890:73
+agents-projects-hub lane archive config/hub.json --lane backend
+agents-projects-hub lane cleanup config/hub.json --lane backend --confirm backend
+
+# Notify one stable observed topic per project chat; repeated alerts are cooled down
+agents-projects-hub monitor config/hub.json --notify --cooldown-seconds 3600
 ```
 
 Project creation remains local: Telegram cannot submit or approve filesystem
-paths. Lane creation makes a sibling Git worktree and records it in state; it
-does not automatically bind a Telegram topic or start an agent.
+paths. Lane creation makes a sibling Git worktree and records it in state. Topic
+binding requires the exact numeric `chat_id:thread_id` confirmation locally.
+Cleanup requires prior archival and the exact lane ID; it removes only the
+derived worktree, retains the Git branch, and records completion in state.
 
 ## Hermes integration
 
@@ -282,10 +325,9 @@ outside an isolated pilot.
 ## Roadmap
 
 - Run live acceptance for a second private project group.
-- Validate Gemini and OpenCode with real provider accounts and bot tokens.
-- Add a Hermes-native unified metadata footer upstream or through a stable hook.
-- Bind locally created worktree lanes to Telegram topics with explicit operator
-  confirmation and safe cleanup.
+- Validate Gemini with a real provider account and a dedicated Telegram bot.
+- Run end-to-end Telegram acceptance for OpenCode and Antigravity once dedicated
+  bot tokens are provisioned; their provider adapters already pass live checks.
 - Add additional terminal emulators only through reviewed argv-only backends.
 
 ## License

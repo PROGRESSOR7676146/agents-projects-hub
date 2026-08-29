@@ -1,0 +1,12 @@
+[Unit]
+Description=Agents Projects Hub operational alert check
+After=network-online.target agents-projects-hub.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/agents-projects-hub/venv/bin/agents-projects-hub monitor %h/.config/agents-projects-hub/hub.json --notify
+EnvironmentFile=-%h/.config/agents-projects-hub/environment
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true

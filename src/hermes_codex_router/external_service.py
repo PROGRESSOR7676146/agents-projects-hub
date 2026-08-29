@@ -22,8 +22,10 @@ class ExternalAgentService:
     def __init__(self, config: HubConfig, agent_id: str) -> None:
         self.config = config
         self.agent = config.require_agent(agent_id)
-        if self.agent.runtime not in {"gemini", "opencode"}:
-            raise RuntimeError("external CLI service supports gemini and opencode only")
+        if self.agent.runtime not in {"gemini", "antigravity", "opencode"}:
+            raise RuntimeError(
+                "external CLI service supports gemini, antigravity, and opencode only"
+            )
         if self.agent.managed_externally or self.agent.token_file is None:
             raise RuntimeError("external CLI agent requires a locally managed token_file")
         self.registry = load_registry(config.registry_path)
@@ -32,6 +34,7 @@ class ExternalAgentService:
         self.adapter = ExternalCliAdapter(
             self.agent.runtime,
             executable=self.agent.executable,
+            runtime_home=self.agent.runtime_home,
         )
         self.usernames = {
             candidate.agent_id: candidate.telegram_username for candidate in config.agents

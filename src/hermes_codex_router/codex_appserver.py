@@ -76,9 +76,9 @@ class StdioJsonLineTransport:
         self._closed = False
 
     @classmethod
-    def start(cls) -> "StdioJsonLineTransport":
+    def start(cls, executable: str = "codex") -> "StdioJsonLineTransport":
         process = subprocess.Popen(
-            ("codex", "app-server", "--stdio"),
+            (executable, "app-server", "--stdio"),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

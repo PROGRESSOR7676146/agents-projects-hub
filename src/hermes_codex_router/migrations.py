@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-LATEST_SCHEMA_VERSION = 3
+LATEST_SCHEMA_VERSION = 5
 
 
 MIGRATION_1 = """
@@ -128,6 +128,19 @@ ON turn_dispatches(status, updated_at);
 """
 
 
+MIGRATION_4 = """
+CREATE TABLE IF NOT EXISTS alert_deliveries (
+    alert_key TEXT PRIMARY KEY,
+    last_sent_at TEXT NOT NULL
+);
+"""
+
+
+MIGRATION_5 = """
+ALTER TABLE worktree_lanes ADD COLUMN cleaned_at TEXT;
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -198,6 +211,12 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     if previous < 3:
         connection.executescript(MIGRATION_3)
         connection.execute("PRAGMA user_version = 3")
+    if previous < 4:
+        connection.executescript(MIGRATION_4)
+        connection.execute("PRAGMA user_version = 4")
+    if previous < 5:
+        connection.executescript(MIGRATION_5)
+        connection.execute("PRAGMA user_version = 5")
     connection.commit()
     current = int(connection.execute("PRAGMA user_version").fetchone()[0])
     return previous, current

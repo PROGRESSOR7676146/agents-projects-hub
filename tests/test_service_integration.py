@@ -29,10 +29,13 @@ class FakeClient:
     def __init__(self) -> None:
         self.started = 0
         self.resumed = 0
+        self.start_roots: list[Path] = []
 
-    def start_thread(self, **_: object) -> CodexThread:
+    def start_thread(self, **kwargs: object) -> CodexThread:
         self.started += 1
-        return CodexThread("thread-1", Path.cwd(), "gpt-5.6-sol", "openai")
+        root = Path(str(kwargs["cwd"]))
+        self.start_roots.append(root)
+        return CodexThread(f"thread-{self.started}", root, "gpt-5.6-sol", "openai")
 
     def resume_thread(self, **_: object) -> CodexThread:
         self.resumed += 1
@@ -54,26 +57,104 @@ class FakeClient:
 class FakeSupervisor:
     def __init__(self, client: FakeClient) -> None:
         self.value = client
+        self.client_calls = 0
 
     def client(self) -> FakeClient:
+        self.client_calls += 1
         return self.value
 
 
-def update(message_id: int, text: str) -> dict[str, object]:
+def update(
+    message_id: int,
+    text: str,
+    *,
+    chat_id: int = -1001234567890,
+    thread_id: int = 77,
+) -> dict[str, object]:
     return {
         "update_id": message_id,
         "message": {
             "message_id": message_id,
-            "message_thread_id": 77,
+            "message_thread_id": thread_id,
             "is_topic_message": True,
             "from": {"id": 42, "is_bot": False},
-            "chat": {"id": -1001234567890, "type": "supergroup", "title": "Private"},
+            "chat": {"id": chat_id, "type": "supergroup", "title": "Private"},
             "text": text,
         },
     }
 
 
 class ServiceIntegrationTests(unittest.TestCase):
+    def test_two_project_chats_create_isolated_topics_threads_and_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            roots = (base / "First", base / "Second")
+            for root in roots:
+                (root / ".git").mkdir(parents=True)
+            state_path = base / "state.db"
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(42,),
+                registry_path=base / "projects.json",
+                state_path=state_path,
+                codex_socket_path=base / "codex.sock",
+                manage_codex_server=False,
+                terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+                projects=(
+                    ProjectBinding("first", -1001111111111),
+                    ProjectBinding("second", -1002222222222),
+                ),
+                agents=(
+                    AgentDefinition(
+                        "codex",
+                        "Codex",
+                        "project_codex_bot",
+                        "codex",
+                        None,
+                        True,
+                        False,
+                        "gpt-5.6-sol",
+                        "high",
+                    ),
+                ),
+            )
+            registry = ProjectRegistry(
+                1,
+                (base,),
+                (
+                    Project("first", "First", "First", roots[0]),
+                    Project("second", "Second", "Second", roots[1]),
+                ),
+            )
+            client = FakeClient()
+            value = ProjectHubService.__new__(ProjectHubService)
+            value.config = config
+            value.registry = registry
+            value.state = HubState.open(state_path)
+            value.agent = config.agents[0]
+            value.telegram = cast(Any, FakeTelegram())
+            value.supervisor = cast(Any, FakeSupervisor(client))
+            value._codex_client = None
+            value.usernames = {"codex": "project_codex_bot"}
+
+            self.assertTrue(
+                value.handle_update(update(1, "first", chat_id=-1001111111111, thread_id=7))
+            )
+            self.assertTrue(
+                value.handle_update(update(2, "second", chat_id=-1002222222222, thread_id=7))
+            )
+            first = value.state.find_topic(-1001111111111, 7)
+            second = value.state.find_topic(-1002222222222, 7)
+            assert first is not None and second is not None
+            first_session = value.state.active_session(first.topic_id)
+            second_session = value.state.active_session(second.topic_id)
+            value.state.close()
+
+        assert first_session is not None and second_session is not None
+        self.assertNotEqual(first.topic_id, second.topic_id)
+        self.assertNotEqual(first_session.provider_session_id, second_session.provider_session_id)
+        self.assertEqual(client.start_roots, [root.resolve() for root in roots])
+
     def test_message_reply_dedup_restart_and_resume_same_thread(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
@@ -111,6 +192,8 @@ class ServiceIntegrationTests(unittest.TestCase):
             client = FakeClient()
             telegram = FakeTelegram()
 
+            supervisors: list[FakeSupervisor] = []
+
             def service() -> ProjectHubService:
                 value = ProjectHubService.__new__(ProjectHubService)
                 value.config = config
@@ -118,7 +201,10 @@ class ServiceIntegrationTests(unittest.TestCase):
                 value.state = HubState.open(state_path)
                 value.agent = config.agents[0]
                 value.telegram = cast(Any, telegram)
-                value.supervisor = cast(Any, FakeSupervisor(client))
+                supervisor = FakeSupervisor(client)
+                supervisors.append(supervisor)
+                value.supervisor = cast(Any, supervisor)
+                value._codex_client = None
                 value.usernames = {"codex": "project_codex_bot"}
                 return value
 
@@ -134,6 +220,7 @@ class ServiceIntegrationTests(unittest.TestCase):
 
         self.assertEqual(client.started, 1)
         self.assertEqual(client.resumed, 1)
+        self.assertEqual([item.client_calls for item in supervisors], [1, 1])
         self.assertEqual(len(telegram.sent), 3)
         self.assertIn("Visible answer", telegram.sent[0][2])
         self.assertIn("Writer: telegram", telegram.sent[-1][2])

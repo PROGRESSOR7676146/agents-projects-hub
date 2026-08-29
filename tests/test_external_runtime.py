@@ -43,6 +43,41 @@ class ExternalRuntimeTests(unittest.TestCase):
         self.assertEqual(result.text, "Visible answer")
         self.assertNotIn("--auto", calls[0])
 
+    def test_gemini_profile_is_isolated_in_child_environment(self) -> None:
+        environments: list[dict[str, str]] = []
+
+        def fake_run(argv: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            environments.append(dict(kwargs["env"]))  # type: ignore[arg-type]
+            return subprocess.CompletedProcess(argv, 0, '{"response":"ok"}', "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "gemini-account-a"
+            profile.mkdir()
+            ExternalCliAdapter("gemini", runtime_home=profile, run=fake_run).run_turn(
+                cwd=root, prompt="hello"
+            )
+        self.assertEqual(environments[0]["GEMINI_CLI_HOME"], str(profile.resolve()))
+
+    def test_antigravity_uses_sandboxed_plan_mode_and_resumes_conversation(self) -> None:
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            output = '{"conversation_id":"conv-1","status":"SUCCESS","response":"Visible answer"}'
+            return subprocess.CompletedProcess(argv, 0, output, "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            result = ExternalCliAdapter("antigravity", executable="agy", run=fake_run).run_turn(
+                cwd=Path(directory), prompt="hello", session_id="conv-1"
+            )
+        self.assertEqual(result.provider_session_id, "conv-1")
+        self.assertEqual(result.text, "Visible answer")
+        self.assertIn("--sandbox", calls[0])
+        self.assertIn("plan", calls[0])
+        self.assertIn("--conversation", calls[0])
+        self.assertNotIn("--dangerously-skip-permissions", calls[0])
+
 
 if __name__ == "__main__":
     unittest.main()
