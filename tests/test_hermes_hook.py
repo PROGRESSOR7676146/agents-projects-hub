@@ -29,7 +29,7 @@ class HermesHookTests(unittest.IsolatedAsyncioTestCase):
         setattr(
             module,
             "record_external_turn",
-            lambda *_args, **kwargs: (recorded.append(kwargs) or True),
+            lambda *_args, **kwargs: recorded.append(kwargs) or True,
         )
         acknowledged: list[dict[str, Any]] = []
         setattr(
@@ -75,6 +75,36 @@ class HermesHookTests(unittest.IsolatedAsyncioTestCase):
         await module.handle("agent:end", {"platform": "cli", "user_id": 42})
         await module.handle("agent:start", {"platform": "telegram", "user_id": 42})
         self.assertEqual(recorded, [])
+
+    async def test_defaults_missing_provider_identity_to_hermes(self) -> None:
+        handler_path = (
+            Path(__file__).resolve().parents[1] / "integrations/hermes-project-hub-hook/handler.py"
+        )
+        spec = importlib.util.spec_from_file_location("test_hermes_hook_provider", handler_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(os.environ, {"HERMES_PROJECT_HUB_OWNER_IDS": "42"}):
+            spec.loader.exec_module(module)
+        recorded: list[dict[str, Any]] = []
+        setattr(
+            module,
+            "record_external_turn",
+            lambda *_args, **kwargs: recorded.append(kwargs) or True,
+        )
+        setattr(module, "acknowledge_unseen_visible_context", lambda *_args, **_kwargs: None)
+
+        await module.handle(
+            "agent:end",
+            {
+                "platform": "telegram",
+                "user_id": 42,
+                "chat_id": -1001,
+                "message": "question",
+                "response": "answer",
+            },
+        )
+
+        self.assertEqual(recorded[0]["provider"], "hermes")
 
 
 if __name__ == "__main__":

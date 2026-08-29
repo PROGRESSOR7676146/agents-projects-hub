@@ -7,6 +7,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ### Added
 
+- Pass and document the Hub General live Telegram E2E baseline, add Hermes
+  registered-group policy/heartbeat/Bot API/queue monitoring, and provide
+  cooldown-bounded Hermes-only self-repair for policy drift or stuck ingress.
 - Establish a canonical product-requirements baseline and proportionate durable
   documentation map for current status, decisions, risks, operations, testing,
   and future-agent orientation.

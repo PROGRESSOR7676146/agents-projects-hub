@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from .hermes_health import probe_gateway_heartbeat, probe_hermes_group_policy
 from .hub_config import HubConfig
 from .migrations import LATEST_SCHEMA_VERSION
 from .recovery_plane import RecoveryPlaneProbe, probe_recovery_plane
@@ -158,6 +159,13 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
             )
         )
         recovery_available = recovery.available
+        expected_chats = tuple(
+            item.telegram_chat_id for item in config.projects if item.telegram_chat_id is not None
+        )
+        hermes_policy = probe_hermes_group_policy(expected_chats)
+        heartbeat = probe_gateway_heartbeat(
+            config.recovery_plane.hermes_config_path.parent / "state" / "gateway.heartbeat"
+        )
         checks.extend(
             (
                 Check(
@@ -170,6 +178,18 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
                     "recovery:tlive",
                     recovery.tlive_ok,
                     recovery.details["tlive"],
+                    required=False,
+                ),
+                Check(
+                    "hermes:telegram_group_policy",
+                    hermes_policy.ok,
+                    hermes_policy.detail,
+                    required=False,
+                ),
+                Check(
+                    "hermes:gateway_heartbeat",
+                    heartbeat.ok,
+                    heartbeat.detail,
                     required=False,
                 ),
             )

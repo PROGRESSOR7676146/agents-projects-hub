@@ -5,9 +5,9 @@ Codex, Hermes, and other agent sessions with context handoffs, model switching,
 approvals, and terminal takeover.
 
 > **Status:** v0.4 pilot. Hub, Pythia, and Babelfish are bound as isolated real
-> projects. Codex ↔ Hermes has passed live acceptance, and OpenCode/Antigravity
-> adapters have passed local provider checks. The central-ingress live Telegram
-> E2E baseline in Hub General is the next acceptance milestone.
+> projects. Hub General has passed the live central-ingress baseline for Codex,
+> Hermes, OpenCode, and Antigravity, including Reply-to-author, shared context,
+> no idle-provider invocation, and controlled-restart continuity.
 
 New contributors and agents should start with the
 [documentation map](docs/INDEX.md), then read the canonical

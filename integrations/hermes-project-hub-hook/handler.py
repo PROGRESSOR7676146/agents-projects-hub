@@ -46,7 +46,7 @@ async def handle(event_type: str, context: dict[str, Any]) -> None:
         agent_id="hermes",
         provider_session_id=str(context.get("session_id") or ""),
         model=str(context.get("model") or ""),
-        provider=str(context.get("provider") or ""),
+        provider=str(context.get("provider") or "hermes"),
         user_excerpt=str(context.get("message") or ""),
         response_excerpt=str(context.get("response") or ""),
     )

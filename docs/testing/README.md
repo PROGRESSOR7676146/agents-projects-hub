@@ -31,6 +31,11 @@ Do not substitute automated tests for these live observations, and do not run
 the live E2E during unrelated documentation or implementation tasks. Never
 weaken owner, project-root, sandbox, account, or approval allowlists for a test.
 
+The initial Hub General baseline passed on 2026-08-29; see the
+[live E2E record](2026-08-29-hub-general-live-e2e.md). Future behavior or
+provider changes still require the relevant live canary rather than inheriting
+that result indefinitely.
+
 ## Evidence rules
 
 - Report exact commands and pass/fail summaries, not raw secret-bearing logs.

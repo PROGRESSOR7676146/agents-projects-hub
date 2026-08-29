@@ -58,6 +58,7 @@ def _parser() -> argparse.ArgumentParser:
     monitor = commands.add_parser("monitor", help="evaluate operational alerts once")
     monitor.add_argument("config", type=Path)
     monitor.add_argument("--notify", action="store_true")
+    monitor.add_argument("--repair", action="store_true")
     monitor.add_argument("--cooldown-seconds", type=int, default=3600)
 
     project = commands.add_parser("project", help="manage the local project registry")
@@ -302,6 +303,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = run_monitor_once(
                 load_hub_config(args.config),
                 notify=args.notify,
+                repair=args.repair,
                 cooldown_seconds=args.cooldown_seconds,
             )
             _print(result)

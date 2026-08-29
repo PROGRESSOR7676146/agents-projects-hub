@@ -32,6 +32,7 @@ def evaluate_operational_alerts(
     doctor_ok: bool,
     recovery_status: Mapping[str, bool] | None = None,
     telegram_access: Mapping[tuple[str, str], bool] | None = None,
+    hermes_telegram: Mapping[str, object] | None = None,
     now: datetime | None = None,
     low_quota_percent: int = 10,
     stuck_after_seconds: int = 15 * 60,
@@ -87,6 +88,44 @@ def evaluate_operational_alerts(
                     "telegram_bot_group_unavailable",
                     "error" if agent_id == "codex" else "warning",
                     f"The {agent_id} bot cannot access the {project_id} project group.",
+                )
+            )
+    if hermes_telegram is not None:
+        if hermes_telegram.get("policy_ok") is False:
+            alerts.append(
+                OperationalAlert(
+                    "hermes:telegram:policy",
+                    "hermes_group_policy_incomplete",
+                    "error",
+                    "Hermes does not allow every registered Telegram project group.",
+                )
+            )
+        if hermes_telegram.get("heartbeat_ok") is False:
+            alerts.append(
+                OperationalAlert(
+                    "hermes:telegram:heartbeat",
+                    "hermes_gateway_heartbeat_stale",
+                    "error",
+                    "Hermes Gateway is active but its event-loop heartbeat is stale.",
+                )
+            )
+        if hermes_telegram.get("api_ok") is False:
+            alerts.append(
+                OperationalAlert(
+                    "hermes:telegram:api",
+                    "hermes_telegram_api_unavailable",
+                    "warning",
+                    "Hermes Telegram Bot API liveness probe failed.",
+                )
+            )
+        pending = hermes_telegram.get("pending_updates")
+        if isinstance(pending, int) and pending > 0:
+            alerts.append(
+                OperationalAlert(
+                    "hermes:telegram:pending",
+                    "hermes_telegram_updates_pending",
+                    "warning",
+                    f"Hermes has {pending} Telegram update(s) waiting for its gateway.",
                 )
             )
     if not pool.available:

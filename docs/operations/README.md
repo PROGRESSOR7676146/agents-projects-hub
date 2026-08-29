@@ -30,3 +30,16 @@ Operational truth is split by purpose:
   and rollback path.
 - Exact in-flight turns are not recoverable after machine loss; communicate this
   limit instead of inferring success from stale state.
+
+## Hermes Telegram drift and liveness
+
+`agents-projects-hub doctor HUB_CONFIG` reports whether all registered project
+chat IDs are present in both Hermes Telegram group allowlists and whether the
+gateway event-loop heartbeat is fresh.
+
+`agents-projects-hub monitor HUB_CONFIG --repair` additionally checks the
+private Hermes Bot API status. A non-empty update queue is sampled twice before
+repair. Missing registered groups are merged into Hermes configuration without
+removing unrelated groups, and policy drift, a stale heartbeat, or a persistent
+queue can trigger one Hermes-only restart per cooldown. API/network failure by
+itself is alerted but does not cause a restart loop.

@@ -24,15 +24,20 @@ acceptance criteria live in
 - `codex-multi-auth` is optional; official Codex stdio is the fallback.
 - Hub, Hermes Gateway, and tlive are diagnosed and monitored independently.
 - Hub, Pythia, and Babelfish are registered as isolated real projects.
-- The handoff records 112 passing tests plus Ruff and Pyright before this task.
+- Hub General passed live owner-driven E2E for ordinary routing, satellite
+  mention, Reply-to-author, shared context, idle-provider non-invocation,
+  provider identity, and controlled-restart continuity.
+- Hermes project-group policy, gateway heartbeat, Bot API, and pending-update
+  queue are monitored; cooldown-bounded repair can sync missing registered
+  groups and restart only Hermes Gateway.
+- The live evidence is recorded in
+  [`docs/testing/2026-08-29-hub-general-live-e2e.md`](../testing/2026-08-29-hub-general-live-e2e.md).
 
 ## Planned next
 
-1. Run the owner-driven Hub General live Telegram E2E baseline described in the
-   latest handoff and product acceptance criteria.
-2. After review and E2E acceptance, implement minimal `/local` and `/return`.
-3. Add bounded `/publish` for local-work summaries.
-4. Build and restore-drill an encrypted disaster-recovery bundle.
+1. Implement minimal `/local` and `/return`.
+2. Add bounded `/publish` for local-work summaries.
+3. Build and restore-drill an encrypted disaster-recovery bundle.
 
 ## Deferred
 
@@ -51,7 +56,6 @@ acceptance criteria live in
 
 ## Known limitations and blockers
 
-- The Hub General central-ingress E2E has not been run under this baseline.
 - The Codex bot can send messages/documents in Hub General but lacks Manage
   Topics, so it cannot create additional forum topics.
 - Exact in-flight provider turns cannot be recovered after process or machine

@@ -435,7 +435,7 @@ necessary but not sufficient for items marked live.
 | OpenCode and Antigravity adapters | Implemented | Local live provider probes passed; full Hub General E2E pending. |
 | Codex tmux takeover/release | Implemented | Fallback frontend, not preferred long-term UX. |
 | Optional Codex account pool/fallback | Implemented | Natural exhaustion E2E remains an acceptance item. |
-| Hub General Telegram E2E baseline | Planned next | Must precede roadmap implementation steps 4+. |
+| Hub General Telegram E2E baseline | Implemented/live accepted | Passed ordinary, satellite, Reply, context, no-idle-spend, identity, and restart cases on 2026-08-29. |
 | `/local` and `/return` | Planned | Minimal explicit native writer transfer. |
 | Bounded `/publish` | Planned | Summary only, no full transcript mirroring. |
 | Encrypted disaster-recovery bundle | Planned | Includes a restore drill and off-machine key custody. |
@@ -448,9 +448,8 @@ necessary but not sufficient for items marked live.
 
 ## 18. Known limitations
 
-- Hub General has not yet completed the specified owner-driven live Telegram E2E
-  baseline for central ingress, satellite Reply, shared context, no-idle-spend,
-  and restart continuity.
+- Live acceptance is point-in-time evidence and must be repeated after material
+  routing, provider, Telegram-policy, or persistence changes.
 - Exact provider capability and resume flags can change between CLI versions.
 - OpenCode and Antigravity lack a tlive-equivalent semantic remote companion;
   tmux/PTY remains the low-level fallback.

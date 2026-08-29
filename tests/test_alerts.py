@@ -151,6 +151,31 @@ class OperationalAlertTests(unittest.TestCase):
             },
         )
 
+    def test_hermes_policy_and_transport_failures_are_distinct(self) -> None:
+        pool = CodexPoolStatus(
+            available=True,
+            rotation_enabled=True,
+            accounts=(),
+            recommended_account=None,
+            account_rotations=0,
+        )
+        alerts = evaluate_operational_alerts(
+            pool=pool,
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+            hermes_telegram={
+                "policy_ok": False,
+                "heartbeat_ok": True,
+                "api_ok": True,
+                "pending_updates": 2,
+            },
+        )
+
+        self.assertEqual(
+            {item.code for item in alerts},
+            {"hermes_group_policy_incomplete", "hermes_telegram_updates_pending"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
