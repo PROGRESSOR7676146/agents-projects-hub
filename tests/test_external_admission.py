@@ -5,9 +5,11 @@ import unittest
 from pathlib import Path
 
 from hermes_codex_router.external_admission import (
+    acknowledge_unseen_visible_context,
     consume_pending_handoff,
     is_active_agent,
     peek_pending_handoff,
+    peek_unseen_visible_context,
     record_external_turn,
 )
 from hermes_codex_router.state import HubState
@@ -104,6 +106,35 @@ class ExternalAdmissionTests(unittest.TestCase):
                 provider="openai",
                 user_excerpt="question",
                 response_excerpt="answer",
+            )
+        )
+
+    def test_peeks_and_acknowledges_visible_context_for_hermes(self) -> None:
+        state = HubState.open(self.path)
+        state.record_visible_turn(
+            self.topic.topic_id,
+            agent_id="antigravity",
+            provider="antigravity",
+            model="provider-selected",
+            user_excerpt="satellite question",
+            response_excerpt="satellite answer",
+        )
+        state.close()
+
+        visible = peek_unseen_visible_context(
+            self.path, -1001234567890, 73, observer_agent_id="hermes"
+        )
+        self.assertIsNotNone(visible)
+        assert visible is not None
+        self.assertIn("satellite answer", visible.text)
+        self.assertTrue(
+            acknowledge_unseen_visible_context(
+                self.path, -1001234567890, 73, observer_agent_id="hermes"
+            )
+        )
+        self.assertIsNone(
+            peek_unseen_visible_context(
+                self.path, -1001234567890, 73, observer_agent_id="hermes"
             )
         )
 

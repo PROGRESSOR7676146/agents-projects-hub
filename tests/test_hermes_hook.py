@@ -26,7 +26,17 @@ class HermesHookTests(unittest.IsolatedAsyncioTestCase):
             spec.loader.exec_module(module)
 
         recorded: list[dict[str, Any]] = []
-        setattr(module, "record_external_turn", lambda *_args, **kwargs: recorded.append(kwargs))
+        setattr(
+            module,
+            "record_external_turn",
+            lambda *_args, **kwargs: (recorded.append(kwargs) or True),
+        )
+        acknowledged: list[dict[str, Any]] = []
+        setattr(
+            module,
+            "acknowledge_unseen_visible_context",
+            lambda *_args, **kwargs: acknowledged.append(kwargs),
+        )
         await module.handle(
             "agent:end",
             {
@@ -47,6 +57,7 @@ class HermesHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(recorded[0]["user_excerpt"], "visible question")
         self.assertEqual(recorded[0]["response_excerpt"], "visible answer")
         self.assertNotIn("reasoning", recorded[0])
+        self.assertEqual(acknowledged[0]["observer_agent_id"], "hermes")
 
     async def test_ignores_non_owner_and_non_telegram_events(self) -> None:
         handler_path = (
