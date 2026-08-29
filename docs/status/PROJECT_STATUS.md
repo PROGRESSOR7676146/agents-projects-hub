@@ -16,7 +16,8 @@ acceptance criteria live in
   turn for Codex, OpenCode, Antigravity, and Hermes.
 - Numeric project/topic identity, canonical root isolation, idempotency,
   persistent provider session IDs, active agent state, and writer state use
-  SQLite schema v7 with pre-migration backup.
+  SQLite schema v8 with pre-migration backup; the last known context remainder
+  is persisted per provider session for compact status output.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity
   adapters exist; local OpenCode and Antigravity provider probes passed before
   this documentation baseline.

@@ -103,6 +103,7 @@ def read_codex_pool_status(
     *,
     executable: str = "codex-multi-auth",
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    identity_hints: dict[int, str] | None = None,
 ) -> CodexPoolStatus:
     """Read a redacted pool snapshot; credentials never enter this process."""
     try:
@@ -175,7 +176,11 @@ def read_codex_pool_status(
                     ),
                     quota_updated_at=updated_at,
                     quota_stale=updated_at is None or time.time() - updated_at > 30 * 60,
-                    identity_hint=_masked_identity_hint(label),
+                    identity_hint=(
+                        f"{identity_hints[index + 1]}…"
+                        if identity_hints and index + 1 in identity_hints
+                        else _masked_identity_hint(label)
+                    ),
                 )
             )
 

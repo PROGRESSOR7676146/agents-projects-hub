@@ -37,17 +37,20 @@ class HubStateTests(unittest.TestCase):
         self.assertEqual(renamed.topic_id, self.topic.topic_id)
         self.assertEqual(renamed.title, "API renamed")
 
-    def test_promoting_agent_creates_new_active_session_and_keeps_other_satellites(self) -> None:
+    def test_switching_agents_preserves_and_resumes_each_provider_session(self) -> None:
         codex = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
         satellite = self.state.ensure_satellite(
             self.topic.topic_id, "gemini", "gemini-3-pro", "high"
         )
         promoted = self.state.activate_agent(self.topic.topic_id, "gemini", "gemini-3-pro", "high")
 
-        self.assertNotEqual(promoted.session_id, satellite.session_id)
-        self.assertEqual(self.state.get_session(codex.session_id).status, "archived")
-        self.assertEqual(self.state.get_session(satellite.session_id).status, "archived")
+        self.assertEqual(promoted.session_id, satellite.session_id)
+        self.assertEqual(self.state.get_session(codex.session_id).status, "satellite")
         self.assertEqual(promoted.status, "active")
+
+        resumed = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
+        self.assertEqual(resumed.session_id, codex.session_id)
+        self.assertEqual(self.state.get_session(promoted.session_id).status, "satellite")
 
     def test_new_resets_only_active_and_preserves_satellite(self) -> None:
         first = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
@@ -86,6 +89,11 @@ class HubStateTests(unittest.TestCase):
         assert found is not None
         self.assertEqual(found.topic_id, self.topic.topic_id)
         self.assertEqual(found.active_agent_id, "codex")
+
+    def test_session_context_remaining_is_persisted(self) -> None:
+        session = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
+        updated = self.state.set_context_remaining(session.session_id, 73.25)
+        self.assertEqual(updated.context_remaining_percent, 73.25)
 
     def test_bot_update_offset_is_persisted_monotonically_by_caller(self) -> None:
         self.assertIsNone(self.state.get_bot_offset("codex"))

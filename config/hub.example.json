@@ -8,6 +8,7 @@
   "codex_stdio_executable": "/home/example/.local/bin/codex",
   "codex_multi_auth_dir": "/home/example/.codex/multi-auth",
   "codex_multi_auth_executable": "/home/example/.local/bin/codex-multi-auth",
+  "codex_account_hints": {"1": "prg", "2": "767"},
   "terminal": {
     "backend": "auto",
     "program": null,

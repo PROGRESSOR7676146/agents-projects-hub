@@ -88,6 +88,7 @@ class HubConfig:
     codex_multi_auth_dir: Path | None = None
     codex_multi_auth_executable: Path | None = None
     codex_stdio_executable: Path | None = None
+    codex_account_hints: dict[int, str] = field(default_factory=dict)
 
     def require_agent(self, agent_id: str) -> AgentDefinition:
         for agent in self.agents:
@@ -189,6 +190,22 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
             codex_multi_auth_executable.stat().st_mode & 0o111
         ):
             raise HubConfigError("codex_multi_auth_executable must be executable")
+    raw_account_hints = root.get("codex_account_hints", {})
+    if not isinstance(raw_account_hints, dict):
+        raise HubConfigError("codex_account_hints must be an object")
+    codex_account_hints: dict[int, str] = {}
+    for raw_index, raw_hint in raw_account_hints.items():
+        try:
+            account_index = int(raw_index)
+        except (TypeError, ValueError) as exc:
+            raise HubConfigError("codex_account_hints has an invalid index") from exc
+        if (
+            account_index <= 0
+            or not isinstance(raw_hint, str)
+            or not re.fullmatch(r"[A-Za-z0-9]{3}", raw_hint)
+        ):
+            raise HubConfigError("codex_account_hints values must be three characters")
+        codex_account_hints[account_index] = raw_hint
     stdio_executable_value = root.get("codex_stdio_executable")
     codex_stdio_executable = None
     if stdio_executable_value is not None:
@@ -401,4 +418,5 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
         codex_multi_auth_dir=codex_multi_auth_dir,
         codex_multi_auth_executable=codex_multi_auth_executable,
         codex_stdio_executable=codex_stdio_executable,
+        codex_account_hints=codex_account_hints,
     )

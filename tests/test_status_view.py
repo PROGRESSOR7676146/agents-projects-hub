@@ -1,0 +1,42 @@
+from __future__ import annotations
+
+import unittest
+
+from hermes_codex_router.codex_accounts import CodexAccountStatus, CodexPoolStatus
+from hermes_codex_router.codex_appserver import LimitWindow, RateLimits
+from hermes_codex_router.status_view import format_accounts, format_session_status
+
+
+class StatusViewTests(unittest.TestCase):
+    def test_compact_status_omits_technical_provider_noise(self) -> None:
+        text = format_session_status(
+            agent="Codex",
+            model="gpt-5.6-sol",
+            effort="high",
+            writer="telegram",
+            context_remaining=73.25,
+            account_hint="prg…",
+            limits=RateLimits(
+                LimitWindow(83, 1_800_000_000, 300),
+                LimitWindow(64, 1_800_600_000, 10080),
+            ),
+            timezone_name="Europe/Moscow",
+        )
+        self.assertTrue(text.startswith("Codex · GPT-5.6 Sol · High"))
+        self.assertIn("Context 73.2% · Account prg…", text)
+        self.assertIn("5h 83%", text)
+        self.assertNotIn("provider", text.lower())
+
+    def test_accounts_lists_codex_and_opencode_go_capabilities(self) -> None:
+        pool = CodexPoolStatus(
+            True,
+            True,
+            (CodexAccountStatus(1, True, "ready", "low", 83, 64, None, None, None, False, "prg…"),),
+            1,
+            0,
+        )
+        text = format_accounts(pool, include_opencode_go=True)
+        self.assertIn("Codex", text)
+        self.assertIn("✓ prg…", text)
+        self.assertIn("OpenCode Go", text)
+        self.assertIn("5h $12 · week $30 · month $60", text)

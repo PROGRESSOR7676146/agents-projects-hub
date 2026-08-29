@@ -100,6 +100,12 @@ class HubConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(HubConfigError, "manage_codex_server"):
             load_hub_config(self.write_config(manage_codex_server="no"))
 
+    def test_loads_three_character_codex_account_hints(self) -> None:
+        config = load_hub_config(
+            self.write_config(codex_account_hints={"1": "prg", "2": "767"})
+        )
+        self.assertEqual(config.codex_account_hints, {1: "prg", 2: "767"})
+
     def test_rejects_group_chat_id_that_is_not_supergroup_shaped(self) -> None:
         with self.assertRaisesRegex(HubConfigError, "telegram_chat_id"):
             load_hub_config(

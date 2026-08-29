@@ -4,8 +4,8 @@ import html
 import re
 import time
 
-from .codex_accounts import format_codex_pool_status, read_codex_pool_status
-from .codex_appserver import CodexAppServerClient
+from .codex_accounts import CodexPoolStatus, read_codex_pool_status
+from .codex_appserver import CodexAppServerClient, RateLimits
 from .external_service import ExternalAgentService
 from .hub_config import HubConfig
 from .local_transfer import LocalTransferError, local_resume_command
@@ -14,6 +14,7 @@ from .model_selection import ModelSelectionError, available_models, require_mode
 from .registry import Project, load_registry
 from .routing import decide_targets, parse_command
 from .state import HubState, SessionRecord, TopicRecord
+from .status_view import format_accounts, format_session_status
 from .supervisor import CodexAppServerSupervisor
 from .telegram import (
     TelegramBotApi,
@@ -80,6 +81,19 @@ class ProjectHubService:
 
     def _send_text(self, message: TopicMessage, text: str) -> None:
         self.telegram.send_html(message.chat_id, message.thread_id, html.escape(text))
+
+    def _codex_pool(self) -> CodexPoolStatus | None:
+        if self.config.codex_multi_auth_dir is None:
+            return None
+        return read_codex_pool_status(
+            self.config.codex_multi_auth_dir,
+            executable=(
+                str(self.config.codex_multi_auth_executable)
+                if self.config.codex_multi_auth_executable
+                else "codex-multi-auth"
+            ),
+            identity_hints=self.config.codex_account_hints,
+        )
 
     def _topic(self, message: TopicMessage, project_id: str) -> TopicRecord:
         existing = self.state.find_topic(message.chat_id, message.thread_id)
@@ -158,6 +172,11 @@ class ProjectHubService:
             effort=session.effort,
         )
         result = client.wait_for_turn(turn_id)
+        if result.context_window and result.context_tokens_used is not None:
+            remaining = max(0, result.context_window - result.context_tokens_used)
+            session = self.state.set_context_remaining(
+                session.session_id, remaining * 100 / result.context_window
+            )
         limits = client.read_rate_limits()
         response = format_telegram_response(
             result=result,
@@ -537,6 +556,7 @@ class ProjectHubService:
         control_commands = {
             "pilot",
             "status",
+            "accounts",
             "new",
             "terminal",
             "release",
@@ -559,34 +579,40 @@ class ProjectHubService:
             return True
         if command and command.name == "status":
             active = self.state.active_session(topic.topic_id)
-            project = self.registry.require_project(binding.project_id)
             if active is None:
                 detail = "No active agent session has been created yet."
             else:
-                provider = active.provider_session_id or "not started"
-                detail = "\n".join(
-                    (
-                        f"Project: {project.display_name}",
-                        f"Topic: {topic.title}",
-                        f"Active agent: {active.agent_id}",
-                        f"Model: {active.model}",
-                        f"Effort: {active.effort}",
-                        f"Writer: {active.writer_mode}",
-                        f"Provider session: {provider}",
-                        f"State schema: {self.state.schema_version}",
-                    )
+                agent = self.config.require_agent(active.agent_id)
+                pool = self._codex_pool() if agent.runtime == "codex" else None
+                current_account = (
+                    next((item for item in pool.accounts if item.active), None)
+                    if pool and pool.available
+                    else None
                 )
-            if self.config.codex_multi_auth_dir is not None:
-                pool = read_codex_pool_status(
-                    self.config.codex_multi_auth_dir,
-                    executable=str(self.config.codex_multi_auth_executable)
-                    if self.config.codex_multi_auth_executable
-                    else "codex-multi-auth",
+                limits = (
+                    self._client().read_rate_limits()
+                    if agent.runtime == "codex" and active.provider_session_id
+                    else RateLimits(None, None)
                 )
-                detail = (
-                    f"{detail}\n\n{format_codex_pool_status(pool, timezone_name='Europe/Moscow')}"
+                detail = format_session_status(
+                    agent=agent.display_name,
+                    model=active.model,
+                    effort=active.effort,
+                    writer=active.writer_mode,
+                    context_remaining=active.context_remaining_percent,
+                    account_hint=current_account.identity_hint if current_account else None,
+                    limits=limits,
+                    timezone_name="Europe/Moscow",
                 )
             self._send_text(message, detail)
+            return True
+        if command and command.name == "accounts":
+            pool = self._codex_pool()
+            if pool is None:
+                pool = CodexPoolStatus(False, False, (), None, 0, "not_configured")
+            include_opencode = any(item.runtime == "opencode" for item in self.config.agents)
+            detail = format_accounts(pool, include_opencode_go=include_opencode)
+            self._send_text(message, detail or "No provider accounts are configured.")
             return True
         if command and command.name == "new":
             active = self.state.active_session(topic.topic_id)

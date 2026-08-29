@@ -36,6 +36,7 @@ class SessionRecord:
     provider_session_id: str | None
     terminal_name: str | None
     writer_mode: str
+    context_remaining_percent: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +109,7 @@ class HubState:
             provider_session_id=row["provider_session_id"],
             terminal_name=row["terminal_name"],
             writer_mode=row["writer_mode"],
+            context_remaining_percent=row["context_remaining_percent"],
         )
 
     def observe_topic(
@@ -214,6 +216,18 @@ class HubState:
             cursor = self._connection.execute(
                 "UPDATE agent_sessions SET writer_mode = ?, updated_at = ? WHERE session_id = ?",
                 (writer_mode, _now(), session_id),
+            )
+        if cursor.rowcount != 1:
+            raise StateError(f"unknown session_id: {session_id}")
+        return self.get_session(session_id)
+
+    def set_context_remaining(self, session_id: str, percent: float) -> SessionRecord:
+        bounded = max(0.0, min(100.0, percent))
+        with self._connection:
+            cursor = self._connection.execute(
+                "UPDATE agent_sessions SET context_remaining_percent = ?, updated_at = ? "
+                "WHERE session_id = ?",
+                (bounded, _now(), session_id),
             )
         if cursor.rowcount != 1:
             raise StateError(f"unknown session_id: {session_id}")
@@ -407,17 +421,39 @@ class HubState:
         self.get_topic(topic_id)
         now = _now()
         with self._connection:
-            self._connection.execute(
-                "UPDATE agent_sessions SET status = 'archived', updated_at = ? "
-                "WHERE topic_id = ? AND (status = 'active' OR (agent_id = ? AND status = 'satellite'))",
-                (now, topic_id, agent_id),
-            )
-            session = self._insert_session(topic_id, agent_id, model, effort, "active")
+            current = self._connection.execute(
+                "SELECT * FROM agent_sessions WHERE topic_id = ? AND status = 'active'",
+                (topic_id,),
+            ).fetchone()
+            target = self._connection.execute(
+                "SELECT * FROM agent_sessions WHERE topic_id = ? AND agent_id = ? "
+                "AND status = 'satellite'",
+                (topic_id, agent_id),
+            ).fetchone()
+            if current is not None and current["agent_id"] == agent_id:
+                session_id = str(current["session_id"])
+            else:
+                if current is not None:
+                    self._connection.execute(
+                        "UPDATE agent_sessions SET status = 'satellite', updated_at = ? "
+                        "WHERE session_id = ?",
+                        (now, current["session_id"]),
+                    )
+                if target is not None:
+                    session_id = str(target["session_id"])
+                    self._connection.execute(
+                        "UPDATE agent_sessions SET status = 'active', updated_at = ? "
+                        "WHERE session_id = ?",
+                        (now, session_id),
+                    )
+                else:
+                    session = self._insert_session(topic_id, agent_id, model, effort, "active")
+                    session_id = session.session_id
             self._connection.execute(
                 "UPDATE topics SET active_agent_id = ?, updated_at = ? WHERE topic_id = ?",
                 (agent_id, now, topic_id),
             )
-        return self.get_session(session.session_id)
+        return self.get_session(session_id)
 
     def ensure_satellite(
         self, topic_id: int, agent_id: str, model: str, effort: str

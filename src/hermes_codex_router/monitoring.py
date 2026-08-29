@@ -149,6 +149,7 @@ def run_monitor_once(
                     if config.codex_multi_auth_executable
                     else "codex-multi-auth"
                 ),
+                identity_hints=config.codex_account_hints,
             )
             if config.codex_multi_auth_dir is not None
             else None

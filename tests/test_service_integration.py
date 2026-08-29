@@ -423,7 +423,8 @@ class ServiceIntegrationTests(unittest.TestCase):
         self.assertEqual([item.client_calls for item in supervisors], [1, 1])
         self.assertEqual(len(telegram.sent), 3)
         self.assertIn("Visible answer", telegram.sent[0][2])
-        self.assertIn("Writer: telegram", telegram.sent[-1][2])
+        self.assertIn("Codex · GPT-5.6 Sol · High", telegram.sent[-1][2])
+        self.assertIn("Context 90.0%", telegram.sent[-1][2])
 
     def test_local_takeover_blocks_telegram_and_returns_to_same_thread(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
