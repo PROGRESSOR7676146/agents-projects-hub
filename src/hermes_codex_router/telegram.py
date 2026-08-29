@@ -77,6 +77,36 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
     )
 
 
+def parse_direct_message(update: dict[str, Any]) -> TopicMessage | None:
+    """Parse an owner-to-bot private message without treating groups as DMs."""
+    message = update.get("message")
+    if not isinstance(message, dict) or message.get("from", {}).get("is_bot"):
+        return None
+    chat = message.get("chat")
+    sender = message.get("from")
+    text = message.get("text")
+    if (
+        not isinstance(chat, dict)
+        or chat.get("type") != "private"
+        or not isinstance(chat.get("id"), int)
+        or not isinstance(sender, dict)
+        or not isinstance(sender.get("id"), int)
+        or chat["id"] != sender["id"]
+        or not isinstance(text, str)
+    ):
+        return None
+    raw_thread_id = message.get("message_thread_id")
+    return TopicMessage(
+        update_id=int(update["update_id"]),
+        message_id=int(message["message_id"]),
+        chat_id=int(chat["id"]),
+        thread_id=raw_thread_id if isinstance(raw_thread_id, int) else 1,
+        chat_title="Direct",
+        sender_id=int(sender["id"]),
+        text=text,
+    )
+
+
 def parse_topic_callback(update: dict[str, Any]) -> TopicCallback | None:
     callback = update.get("callback_query")
     if not isinstance(callback, dict):
@@ -103,6 +133,38 @@ def parse_topic_callback(update: dict[str, Any]) -> TopicCallback | None:
         message_id=int(message["message_id"]),
         chat_id=int(chat["id"]),
         thread_id=thread_id,
+        sender_id=int(sender["id"]),
+        data=data,
+    )
+
+
+def parse_direct_callback(update: dict[str, Any]) -> TopicCallback | None:
+    callback = update.get("callback_query")
+    if not isinstance(callback, dict):
+        return None
+    message = callback.get("message")
+    sender = callback.get("from")
+    if not isinstance(message, dict) or not isinstance(sender, dict):
+        return None
+    chat = message.get("chat")
+    data = callback.get("data")
+    callback_id = callback.get("id")
+    if (
+        not isinstance(chat, dict)
+        or chat.get("type") != "private"
+        or not isinstance(chat.get("id"), int)
+        or not isinstance(sender.get("id"), int)
+        or chat["id"] != sender["id"]
+        or not isinstance(data, str)
+        or not isinstance(callback_id, str)
+    ):
+        return None
+    raw_thread_id = message.get("message_thread_id")
+    return TopicCallback(
+        callback_id=callback_id,
+        message_id=int(message["message_id"]),
+        chat_id=int(chat["id"]),
+        thread_id=raw_thread_id if isinstance(raw_thread_id, int) else 1,
         sender_id=int(sender["id"]),
         data=data,
     )

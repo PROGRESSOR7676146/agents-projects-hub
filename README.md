@@ -73,6 +73,13 @@ and explicit mentions can address another runtime without silently changing the
 active route. `/agent` changes the active runtime and creates a provider session
 with a one-time handoff:
 
+Private bot chats are opt-in through `direct_message_project_id`. Codex polls
+its private chat in the main router, while external provider services run
+private-only pollers with isolated state databases. Those pollers ignore and
+discard group updates, so they cannot duplicate the central group route. A DM
+can therefore use only the explicitly registered project root and cannot select
+an arbitrary filesystem path.
+
 - Codex → Hermes uses a bounded summary;
 - Hermes → Codex uses bounded excerpts of visible user/assistant turns;
 - hidden reasoning, tool output, credentials, and raw terminal content are

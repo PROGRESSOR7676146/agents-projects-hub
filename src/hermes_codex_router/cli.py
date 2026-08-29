@@ -242,7 +242,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             service = (
                 ProjectHubService(config)
                 if args.agent == "codex"
-                else ExternalAgentService(config, args.agent)
+                else ExternalAgentService(config, args.agent, direct_messages_only=True)
             )
             try:
                 service.run_forever()

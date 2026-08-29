@@ -15,11 +15,13 @@ from .metadata import format_agent_response
 from .registry import load_registry
 from .routing import decide_targets, parse_command
 from .state import HubState
-from .telegram import TelegramBotApi, TelegramError, parse_topic_message
+from .telegram import TelegramBotApi, TelegramError, parse_direct_message, parse_topic_message
 
 
 class ExternalAgentService:
-    def __init__(self, config: HubConfig, agent_id: str) -> None:
+    def __init__(
+        self, config: HubConfig, agent_id: str, *, direct_messages_only: bool = False
+    ) -> None:
         self.config = config
         self.agent = config.require_agent(agent_id)
         if self.agent.runtime not in {"gemini", "antigravity", "opencode"}:
@@ -29,7 +31,13 @@ class ExternalAgentService:
         if self.agent.managed_externally or self.agent.token_file is None:
             raise RuntimeError("external CLI agent requires a locally managed token_file")
         self.registry = load_registry(config.registry_path)
-        self.state = HubState.open(config.state_path)
+        self.direct_messages_only = direct_messages_only
+        state_path = config.state_path
+        if direct_messages_only:
+            state_path = state_path.with_name(
+                f"{state_path.stem}-{self.agent.agent_id}-dm{state_path.suffix}"
+            )
+        self.state = HubState.open(state_path)
         self.telegram = TelegramBotApi(self.agent.token_file.read_text(encoding="utf-8").strip())
         self.adapter = ExternalCliAdapter(
             self.agent.runtime,
@@ -93,23 +101,72 @@ class ExternalAgentService:
         self.telegram.send_html(chat_id, thread_id, response[:4090])
 
     def handle_update(self, update: dict[str, object]) -> bool:
-        message = parse_topic_message(update)
+        message = (
+            parse_direct_message(update)
+            if self.direct_messages_only
+            else parse_topic_message(update)
+        )
         if message is None or message.sender_id not in self.config.owner_user_ids:
             return False
-        try:
-            binding = self.config.project_for_chat(message.chat_id)
-        except KeyError:
-            title = " ".join(message.chat_title.split())[:128]
-            self.state.record_runtime_event(
-                "telegram",
-                "info",
-                "unbound_project_group",
-                f"chat_id={message.chat_id}; title={title}",
+        if self.direct_messages_only:
+            direct_project = self.config.direct_message_project_id
+            if direct_project is None:
+                return False
+            binding = next(
+                item for item in self.config.projects if item.project_id == direct_project
             )
-            return False
+        else:
+            try:
+                binding = self.config.project_for_chat(message.chat_id)
+            except KeyError:
+                title = " ".join(message.chat_title.split())[:128]
+                self.state.record_runtime_event(
+                    "telegram",
+                    "info",
+                    "unbound_project_group",
+                    f"chat_id={message.chat_id}; title={title}",
+                )
+                return False
         command = parse_command(message.text)
         if command is not None:
-            return False
+            if not self.direct_messages_only:
+                return False
+            topic = self.state.find_topic(message.chat_id, message.thread_id)
+            if topic is None:
+                topic = self.state.observe_topic(
+                    project_id=binding.project_id,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    title="General" if message.thread_id == 1 else f"Topic {message.thread_id}",
+                )
+            active = self.state.active_session(topic.topic_id)
+            if command.name == "status":
+                detail = (
+                    f"{self.agent.display_name} · {active.model} · {active.effort.title()}"
+                    if active is not None
+                    else f"{self.agent.display_name} · {self.agent.default_model} · "
+                    f"{self.agent.default_effort.title()}"
+                )
+                self.telegram.send_html(message.chat_id, message.thread_id, html.escape(detail))
+                return True
+            if command.name == "new":
+                if active is not None:
+                    self.state.new_active_session(topic.topic_id)
+                self.telegram.send_html(
+                    message.chat_id,
+                    message.thread_id,
+                    html.escape(f"New {self.agent.display_name} session is ready."),
+                )
+                return True
+            self.telegram.send_html(
+                message.chat_id,
+                message.thread_id,
+                html.escape(
+                    f"/{command.name} is managed from a project group. "
+                    "In this direct chat, /status and /new are available."
+                ),
+            )
+            return True
         topic = self.state.find_topic(message.chat_id, message.thread_id)
         if topic is None:
             topic = self.state.observe_topic(
@@ -119,12 +176,25 @@ class ExternalAgentService:
                 title="General" if message.thread_id == 1 else f"Topic {message.thread_id}",
             )
         active = self.state.active_session(topic.topic_id)
-        active_agent = active.agent_id if active else "codex"
-        targets = decide_targets(
-            message.text,
-            active_agent=active_agent,
-            usernames=self.usernames,
-            reply_to_username=message.reply_to_username,
+        if self.direct_messages_only and active is None:
+            active = self.state.activate_agent(
+                topic.topic_id,
+                self.agent.agent_id,
+                self.agent.default_model,
+                self.agent.default_effort,
+            )
+        active_agent = active.agent_id if active else (
+            self.agent.agent_id if self.direct_messages_only else "codex"
+        )
+        targets = (
+            {self.agent.agent_id}
+            if self.direct_messages_only
+            else decide_targets(
+                message.text,
+                active_agent=active_agent,
+                usernames=self.usernames,
+                reply_to_username=message.reply_to_username,
+            )
         )
         if self.agent.agent_id not in targets:
             return False
@@ -275,6 +345,13 @@ class ExternalAgentService:
                         continue
                     try:
                         self.handle_update(update)
+                    except Exception as exc:
+                        self.state.record_runtime_event(
+                            self.agent.agent_id,
+                            "error",
+                            "update_error",
+                            type(exc).__name__,
+                        )
                     finally:
                         offset = update_id + 1
                         self.state.set_bot_offset(self.agent.agent_id, offset)
