@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "allowed_roots": [
+    "/home/example/projects"
+  ],
+  "projects": [
+    {
+      "project_id": "babelfish",
+      "display_name": "Babelfish",
+      "topic_name": "Babelfish",
+      "root": "/home/example/projects/Babelfish",
+      "sandbox": "workspace-write",
+      "approval_policy": "on-request",
+      "enabled": true
+    },
+    {
+      "project_id": "pythia",
+      "display_name": "Pythia",
+      "topic_name": "Pythia",
+      "root": "/home/example/projects/Pythia",
+      "sandbox": "workspace-write",
+      "approval_policy": "on-request",
+      "enabled": false
+    }
+  ]
+}

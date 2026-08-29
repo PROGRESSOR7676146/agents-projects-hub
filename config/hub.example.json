@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "owner_user_ids": [123456789],
+  "registry_path": "/home/example/agents-projects-hub/config/projects.json",
+  "state_path": "/home/example/.local/state/agents-projects-hub/state.db",
+  "codex_socket_path": "/home/example/.codex/app-server-control/app-server-control.sock",
+  "manage_codex_server": false,
+  "projects": [
+    {"project_id": "pythia", "telegram_chat_id": null}
+  ],
+  "agents": [
+    {
+      "agent_id": "codex",
+      "display_name": "Codex",
+      "telegram_username": "your_codex_bot",
+      "runtime": "codex",
+      "token_file": "/home/example/.config/agents-projects-hub/secrets/codex-telegram-token",
+      "terminal_enabled": true,
+      "default_model": "gpt-5.6-sol",
+      "default_effort": "high"
+    },
+    {
+      "agent_id": "hermes",
+      "display_name": "Hermes",
+      "telegram_username": "your_hermes_bot",
+      "runtime": "hermes",
+      "managed_externally": true,
+      "terminal_enabled": false,
+      "default_model": "provider-selected",
+      "default_effort": "high"
+    }
+  ]
+}
