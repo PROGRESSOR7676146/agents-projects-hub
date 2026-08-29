@@ -134,6 +134,7 @@ class HubConfigTests(unittest.TestCase):
     def test_rejects_world_readable_runtime_home(self) -> None:
         runtime_home = self.base / "gemini-account-a"
         runtime_home.mkdir(mode=0o755)
+        runtime_home.chmod(0o755)
         agent = {
             "agent_id": "gemini-a",
             "display_name": "Gemini A",

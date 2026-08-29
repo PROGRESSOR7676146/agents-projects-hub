@@ -8,7 +8,7 @@ from typing import Any
 
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
-SUPPORTED_RUNTIMES = {"codex", "hermes", "gemini", "opencode", "api"}
+SUPPORTED_RUNTIMES = {"codex", "hermes", "gemini", "antigravity", "opencode", "api"}
 
 
 class HubConfigError(ValueError):
@@ -54,6 +54,9 @@ class HubConfig:
     terminal: TerminalSettings
     projects: tuple[ProjectBinding, ...]
     agents: tuple[AgentDefinition, ...]
+    codex_multi_auth_dir: Path | None = None
+    codex_multi_auth_executable: Path | None = None
+    codex_stdio_executable: Path | None = None
 
     def require_agent(self, agent_id: str) -> AgentDefinition:
         for agent in self.agents:
@@ -135,6 +138,40 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
     manage_codex_server = root.get("manage_codex_server", False)
     if not isinstance(manage_codex_server, bool):
         raise HubConfigError("manage_codex_server must be boolean")
+    multi_auth_value = root.get("codex_multi_auth_dir")
+    codex_multi_auth_dir = None
+    if multi_auth_value is not None:
+        codex_multi_auth_dir = _absolute_path(
+            multi_auth_value, "codex_multi_auth_dir", must_exist=True
+        )
+        if not codex_multi_auth_dir.is_dir():
+            raise HubConfigError("codex_multi_auth_dir must be a directory")
+        if codex_multi_auth_dir.stat().st_mode & 0o077:
+            raise HubConfigError("codex_multi_auth_dir must have mode 0700")
+    multi_auth_executable_value = root.get("codex_multi_auth_executable")
+    codex_multi_auth_executable = None
+    if multi_auth_executable_value is not None:
+        codex_multi_auth_executable = _absolute_path(
+            multi_auth_executable_value, "codex_multi_auth_executable", must_exist=True
+        )
+        if not codex_multi_auth_executable.is_file() or not (
+            codex_multi_auth_executable.stat().st_mode & 0o111
+        ):
+            raise HubConfigError("codex_multi_auth_executable must be executable")
+    stdio_executable_value = root.get("codex_stdio_executable")
+    codex_stdio_executable = None
+    if stdio_executable_value is not None:
+        codex_stdio_executable = _absolute_path(
+            stdio_executable_value, "codex_stdio_executable", must_exist=True
+        )
+        if not codex_stdio_executable.is_file() or not (
+            codex_stdio_executable.stat().st_mode & 0o111
+        ):
+            raise HubConfigError("codex_stdio_executable must be executable")
+        if manage_codex_server:
+            raise HubConfigError(
+                "manage_codex_server and codex_stdio_executable are mutually exclusive"
+            )
 
     terminal_data = _object(root.get("terminal", {}), "terminal")
     terminal_backend = terminal_data.get("backend", "auto")
@@ -266,4 +303,7 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
         ),
         projects=tuple(projects),
         agents=tuple(agents),
+        codex_multi_auth_dir=codex_multi_auth_dir,
+        codex_multi_auth_executable=codex_multi_auth_executable,
+        codex_stdio_executable=codex_stdio_executable,
     )

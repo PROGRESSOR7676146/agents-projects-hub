@@ -5,7 +5,13 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+- Add per-agent private runtime homes for isolated Gemini credentials.
+- Add a sandboxed, plan-mode Antigravity headless adapter with persistent
+  conversations.
+- Add a no-echo helper for installing mode-`0600` Telegram token files.
+- Add observable Codex account rotation through the MIT-licensed `codex-multi-auth`
+  runtime proxy while preserving provider thread IDs; retain its stdio wrapper as
+  a diagnostic fallback.
 
 ## [0.3.0] - 2026-08-29
 

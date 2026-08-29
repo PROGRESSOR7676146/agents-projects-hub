@@ -1,5 +1,10 @@
 # Acknowledgments
 
+- [codex-multi-auth](https://github.com/ndycode/codex-multi-auth), by ndycode (MIT),
+  provides the optional local Codex OAuth account pool, health-aware selection, quota
+  diagnostics, and runtime rotation proxy. Thank you for making careful multi-account
+  operations observable and reversible.
+
 Agents Projects Hub is original integration and orchestration code. It does not
 vendor source code from the projects below, but it would not exist without
 their protocols, command-line interfaces, libraries, and communities.
@@ -24,6 +29,10 @@ With sincere thanks to:
 - [Gemini CLI](https://github.com/google-gemini/gemini-cli) for its documented
   headless JSON and session-resume interfaces. Gemini CLI is distributed under
   Apache-2.0.
+- Google Antigravity and its `agy` CLI for the sandboxed headless conversation
+  interface used when an account is served through Antigravity. This is an
+  interoperability integration; no Antigravity source code or credentials are
+  included here.
 - [OpenCode](https://github.com/anomalyco/opencode) for its open session and CLI
   interfaces. OpenCode is distributed under MIT.
 - The Python, SQLite, Git, Ruff, Pyright, and GitHub Actions communities for the

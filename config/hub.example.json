@@ -5,6 +5,8 @@
   "state_path": "/home/example/.local/state/agents-projects-hub/state.db",
   "codex_socket_path": "/home/example/.codex/app-server-control/app-server-control.sock",
   "manage_codex_server": false,
+  "codex_multi_auth_dir": "/home/example/.codex/multi-auth",
+  "codex_multi_auth_executable": "/home/example/.local/bin/codex-multi-auth",
   "terminal": {
     "backend": "auto",
     "program": null,

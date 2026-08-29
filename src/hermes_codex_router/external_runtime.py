@@ -52,10 +52,10 @@ class ExternalCliAdapter:
         runtime_home: Path | None = None,
         run: Run = subprocess.run,
     ) -> None:
-        if runtime not in {"gemini", "opencode"}:
+        if runtime not in {"gemini", "antigravity", "opencode"}:
             raise ExternalRuntimeError(f"unsupported external runtime: {runtime}")
         self.runtime = runtime
-        self.executable = executable or runtime
+        self.executable = executable or ("agy" if runtime == "antigravity" else runtime)
         self.runtime_home = runtime_home.expanduser().resolve(strict=True) if runtime_home else None
         self._run = run
 
@@ -84,6 +84,24 @@ class ExternalCliAdapter:
             if model:
                 argv.extend(("--model", model))
             argv.extend(("--prompt", prompt))
+            return tuple(argv)
+        if self.runtime == "antigravity":
+            argv = [
+                self.executable,
+                "--print",
+                prompt,
+                "--output-format",
+                "json",
+                "--sandbox",
+                "--mode",
+                "plan",
+                "--print-timeout",
+                "15m",
+            ]
+            if session_id:
+                argv.extend(("--conversation", session_id))
+            if model:
+                argv.extend(("--model", model))
             return tuple(argv)
         argv = [
             self.executable,
@@ -137,7 +155,7 @@ class ExternalCliAdapter:
         detected_model: str | None = model
         text_parts: list[str] = []
         for value in values:
-            for key in ("session_id", "sessionId", "sessionID"):
+            for key in ("session_id", "sessionId", "sessionID", "conversation_id"):
                 if isinstance(value.get(key), str):
                     provider_session_id = str(value[key])
             if isinstance(value.get("model"), str):

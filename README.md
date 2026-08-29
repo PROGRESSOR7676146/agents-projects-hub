@@ -186,6 +186,28 @@ owned by its native gateway and uses the included drop-in. Copy the desired
 objects from `config/external-agents.example.json` into the local `agents` array;
 the primary example does not require unused external bot credentials.
 
+Give each Gemini account a separate private `runtime_home`. The adapter exports
+it as `GEMINI_CLI_HOME` only to that agent process, so OAuth state and session
+history cannot overwrite another account. Antigravity is supported through
+`agy` in sandboxed `plan` mode; its dangerous permission-bypass flag is never
+used.
+
+For transparent Codex account rotation, run one persistent `codex-multi-auth`
+app-server on `codex_socket_path`, leave `manage_codex_server` disabled, and set
+`codex_multi_auth_dir` plus `codex_multi_auth_executable`. Hub resumes the same
+provider thread ID through that socket and exposes only redacted account numbers
+and cached quota health in `/status`; OAuth tokens and account emails are never
+returned. `codex_stdio_executable` remains an isolated fallback for diagnostics,
+not the recommended service topology.
+
+Install BotFather tokens without echoing them or placing them in JSON:
+
+```bash
+./scripts/configure-telegram-token.sh gemini
+./scripts/configure-telegram-token.sh antigravity
+./scripts/configure-telegram-token.sh opencode
+```
+
 ## Operations CLI
 
 ```bash

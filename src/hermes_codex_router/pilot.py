@@ -36,7 +36,10 @@ def run_codex_pilot(
         raise ValueError("managed Codex bot is not configured")
 
     state = HubState.open(config.state_path)
-    supervisor = CodexAppServerSupervisor(config.state_path.parent / "codex-stdio-placeholder.sock")
+    supervisor = CodexAppServerSupervisor(
+        config.state_path.parent / "codex-stdio-placeholder.sock",
+        stdio_executable=config.codex_stdio_executable,
+    )
     try:
         topic = state.observe_topic(
             project_id=project_id,

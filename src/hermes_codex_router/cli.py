@@ -208,7 +208,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             config = load_hub_config(args.config)
             state = HubState.open(config.state_path)
             try:
-                _print({"ok": True, **state.status_snapshot()})
+                result = {"ok": True, **state.status_snapshot()}
+                if config.codex_multi_auth_dir is not None:
+                    from .codex_accounts import read_codex_pool_status
+
+                    result["codex_account_pool"] = read_codex_pool_status(
+                        config.codex_multi_auth_dir,
+                        executable=str(config.codex_multi_auth_executable)
+                        if config.codex_multi_auth_executable
+                        else "codex-multi-auth",
+                    ).as_dict()
+                _print(result)
             finally:
                 state.close()
             return 0

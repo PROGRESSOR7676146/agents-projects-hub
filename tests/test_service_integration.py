@@ -54,8 +54,10 @@ class FakeClient:
 class FakeSupervisor:
     def __init__(self, client: FakeClient) -> None:
         self.value = client
+        self.client_calls = 0
 
     def client(self) -> FakeClient:
+        self.client_calls += 1
         return self.value
 
 
@@ -111,6 +113,8 @@ class ServiceIntegrationTests(unittest.TestCase):
             client = FakeClient()
             telegram = FakeTelegram()
 
+            supervisors: list[FakeSupervisor] = []
+
             def service() -> ProjectHubService:
                 value = ProjectHubService.__new__(ProjectHubService)
                 value.config = config
@@ -118,7 +122,10 @@ class ServiceIntegrationTests(unittest.TestCase):
                 value.state = HubState.open(state_path)
                 value.agent = config.agents[0]
                 value.telegram = cast(Any, telegram)
-                value.supervisor = cast(Any, FakeSupervisor(client))
+                supervisor = FakeSupervisor(client)
+                supervisors.append(supervisor)
+                value.supervisor = cast(Any, supervisor)
+                value._codex_client = None
                 value.usernames = {"codex": "project_codex_bot"}
                 return value
 
@@ -134,6 +141,7 @@ class ServiceIntegrationTests(unittest.TestCase):
 
         self.assertEqual(client.started, 1)
         self.assertEqual(client.resumed, 1)
+        self.assertEqual([item.client_calls for item in supervisors], [1, 1])
         self.assertEqual(len(telegram.sent), 3)
         self.assertIn("Visible answer", telegram.sent[0][2])
         self.assertIn("Writer: telegram", telegram.sent[-1][2])

@@ -5,7 +5,11 @@ import subprocess
 import time
 from pathlib import Path
 
-from .codex_appserver import CodexAppServerClient, UnixWebSocketTransport
+from .codex_appserver import (
+    CodexAppServerClient,
+    StdioJsonLineTransport,
+    UnixWebSocketTransport,
+)
 
 
 class AppServerError(RuntimeError):
@@ -13,12 +17,23 @@ class AppServerError(RuntimeError):
 
 
 class CodexAppServerSupervisor:
-    def __init__(self, socket_path: Path, *, manage_process: bool = True) -> None:
+    def __init__(
+        self,
+        socket_path: Path,
+        *,
+        manage_process: bool = True,
+        stdio_executable: Path | None = None,
+    ) -> None:
         self.socket_path = socket_path.expanduser().resolve()
         self.manage_process = manage_process
+        self.stdio_executable = (
+            stdio_executable.expanduser().resolve(strict=True) if stdio_executable else None
+        )
         self.process: subprocess.Popen[bytes] | None = None
 
     def start(self, *, timeout: float = 15.0) -> None:
+        if self.stdio_executable is not None:
+            return
         if not self.manage_process:
             if not self.socket_path.is_socket():
                 raise AppServerError("shared Codex app-server socket is unavailable")
@@ -46,6 +61,10 @@ class CodexAppServerSupervisor:
         raise AppServerError("Codex app-server socket did not appear")
 
     def client(self) -> CodexAppServerClient:
+        if self.stdio_executable is not None:
+            client = CodexAppServerClient(StdioJsonLineTransport.start(str(self.stdio_executable)))
+            client.initialize()
+            return client
         if self.manage_process and (self.process is None or self.process.poll() is not None):
             raise AppServerError("Codex app-server is not started")
         if not self.manage_process and not self.socket_path.is_socket():
@@ -55,6 +74,8 @@ class CodexAppServerSupervisor:
         return client
 
     def stop(self) -> None:
+        if self.stdio_executable is not None:
+            return
         if not self.manage_process:
             return
         if self.process is not None and self.process.poll() is None:
