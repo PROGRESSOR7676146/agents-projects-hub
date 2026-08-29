@@ -108,7 +108,7 @@ class ExternalCliAdapter:
                 "json",
                 "--sandbox",
                 "--mode",
-                "plan",
+                "accept-edits",
                 "--print-timeout",
                 "15m",
             ]

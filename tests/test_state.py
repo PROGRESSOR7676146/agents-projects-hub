@@ -75,18 +75,6 @@ class HubStateTests(unittest.TestCase):
         self.assertEqual(replacement.effort, "max")
         self.assertEqual(replacement.generation, previous.generation + 1)
 
-    def test_new_all_resets_satellites_and_recreates_only_active(self) -> None:
-        first = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
-        satellite = self.state.ensure_satellite(
-            self.topic.topic_id, "gemini", "gemini-3-pro", "high"
-        )
-        replacement = self.state.new_all_sessions(self.topic.topic_id)
-
-        self.assertEqual(self.state.get_session(first.session_id).status, "archived")
-        self.assertEqual(self.state.get_session(satellite.session_id).status, "archived")
-        self.assertEqual(replacement.agent_id, "codex")
-        self.assertEqual(replacement.status, "active")
-
     def test_duplicate_telegram_message_is_claimed_once_across_bot_tokens(self) -> None:
         self.assertTrue(self.state.claim_message(-1001234567890, 501, observer_agent_id="codex"))
         self.assertFalse(self.state.claim_message(-1001234567890, 501, observer_agent_id="gemini"))

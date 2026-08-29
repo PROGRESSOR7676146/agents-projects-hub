@@ -79,7 +79,6 @@ class RoutingTests(unittest.TestCase):
 
     def test_commands_are_parsed_without_accepting_paths(self) -> None:
         self.assertEqual(parse_command("/new"), Command("new", ()))
-        self.assertEqual(parse_command("/new all"), Command("new", ("all",)))
         self.assertEqual(parse_command("/agent Gemini"), Command("agent", ("gemini",)))
         self.assertEqual(
             parse_command("/model gpt-5.6-sol high"),

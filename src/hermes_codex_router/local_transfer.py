@@ -43,7 +43,7 @@ def local_resume_command(
             session_id,
             "--sandbox",
             "--mode",
-            "plan",
+            "accept-edits",
         )
     else:
         raise LocalTransferError(f"local resume is not supported for runtime: {runtime}")

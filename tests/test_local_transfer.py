@@ -30,11 +30,11 @@ class LocalTransferTests(unittest.TestCase):
         antigravity = local_resume_command("antigravity", "agy", "conv-123", root)
         self.assertEqual(
             antigravity.argv,
-            ("agy", "--conversation", "conv-123", "--sandbox", "--mode", "plan"),
+            ("agy", "--conversation", "conv-123", "--sandbox", "--mode", "accept-edits"),
         )
         self.assertEqual(
             antigravity.display,
-            f"cd -- {root} && agy --conversation conv-123 --sandbox --mode plan",
+            f"cd -- {root} && agy --conversation conv-123 --sandbox --mode accept-edits",
         )
 
     def test_unsupported_runtime_fails_closed(self) -> None:

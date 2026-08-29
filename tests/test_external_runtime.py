@@ -70,7 +70,7 @@ class ExternalRuntimeTests(unittest.TestCase):
             )
         self.assertEqual(environments[0]["GEMINI_CLI_HOME"], str(profile.resolve()))
 
-    def test_antigravity_uses_sandboxed_plan_mode_and_resumes_conversation(self) -> None:
+    def test_antigravity_uses_sandboxed_work_mode_and_resumes_conversation(self) -> None:
         calls: list[tuple[str, ...]] = []
 
         def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
@@ -85,7 +85,8 @@ class ExternalRuntimeTests(unittest.TestCase):
         self.assertEqual(result.provider_session_id, "conv-1")
         self.assertEqual(result.text, "Visible answer")
         self.assertIn("--sandbox", calls[0])
-        self.assertIn("plan", calls[0])
+        self.assertIn("accept-edits", calls[0])
+        self.assertNotIn("plan", calls[0])
         self.assertIn("--conversation", calls[0])
         self.assertNotIn("--dangerously-skip-permissions", calls[0])
 

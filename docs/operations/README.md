@@ -1,7 +1,7 @@
 # Operations map
 
 Status: active  
-Last updated: 2026-08-29
+Last updated: 2026-08-30
 
 Operational truth is split by purpose:
 
@@ -16,6 +16,9 @@ Operational truth is split by purpose:
 - Complete validation gate: `python scripts/validate.py`.
 - Read-only deployment diagnostics: `agents-projects-hub doctor HUB_CONFIG` and
   `agents-projects-hub monitor HUB_CONFIG`.
+- Public Telegram menu drift: `agents-projects-hub telegram-commands HUB_CONFIG`.
+  Apply the exact six-command menu with
+  `agents-projects-hub telegram-commands HUB_CONFIG --sync`.
 
 ## Operating rules
 

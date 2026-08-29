@@ -20,6 +20,7 @@ from .hermes_health import (
     sync_hermes_group_policy,
 )
 from .hub_config import HubConfig, OperationalAlertSettings
+from .provider_catalog_cache import ProviderCatalogCache
 from .provider_events import (
     codex_rotation_targets,
     format_codex_rotation_event,
@@ -203,6 +204,19 @@ def run_monitor_once(
             recovery_status=recovery_status or None,
             telegram_access=_telegram_access(config),
             hermes_telegram=hermes_telegram,
+        )
+        stale_catalogs = ProviderCatalogCache(
+            config.state_path.with_name("provider-model-catalogs.json")
+        ).stale_agents()
+        alerts += tuple(
+            OperationalAlert(
+                f"catalog:{agent_id}:stale",
+                "provider_catalog_stale",
+                "warning",
+                f"The {agent_id} model catalog is stale after a failed refresh; "
+                "the last known-good local catalog remains active.",
+            )
+            for agent_id in stale_catalogs
         )
         delivered: list[str] = []
         if notify and provider_limit_count:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import re
+import subprocess
 import time
 
 from .codex_accounts import CodexPoolStatus, read_codex_pool_status
@@ -18,6 +19,7 @@ from .provider_catalog import (
     antigravity_models,
     opencode_models,
 )
+from .provider_catalog_cache import CatalogSnapshot, ProviderCatalogCache
 from .provider_limits import decode_provider_limit
 from .registry import Project, load_registry
 from .routing import decide_targets, parse_command
@@ -41,6 +43,8 @@ class ServiceError(RuntimeError):
 
 
 class ProjectHubService:
+    MODEL_PAGE_SIZE = 8
+
     def __init__(self, config: HubConfig) -> None:
         self.config = config
         self.registry = load_registry(config.registry_path)
@@ -201,7 +205,29 @@ class ProjectHubService:
     def _model_catalog(self) -> dict[str, tuple[str, ...]]:
         return available_models(self._client().list_models())
 
-    def _provider_models(self, agent_id: str) -> tuple[ProviderModel, ...]:
+    def _catalog_cache(self) -> ProviderCatalogCache:
+        return ProviderCatalogCache(
+            self.config.state_path.with_name("provider-model-catalogs.json")
+        )
+
+    @staticmethod
+    def _source_version(executable: str) -> str | None:
+        try:
+            result = subprocess.run(
+                (executable, "--version"),
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        first = (result.stdout or result.stderr).strip().splitlines()
+        return first[0][:128] if first else None
+
+    def _discover_provider_models(self, agent_id: str) -> tuple[ProviderModel, ...]:
         agent = self.config.require_agent(agent_id)
         if agent.runtime == "codex":
             return tuple(
@@ -211,11 +237,43 @@ class ProjectHubService:
         if agent.runtime == "opencode":
             return opencode_models(agent.executable or "opencode")
         if agent.runtime == "antigravity":
-            try:
-                return antigravity_models(agent.executable or "agy")
-            except ProviderCatalogError:
-                return ANTIGRAVITY_FALLBACK
+            return antigravity_models(agent.executable or "agy")
         return (ProviderModel("provider-selected", "Provider selected", ("high",)),)
+
+    def _provider_catalog(self, agent_id: str, *, refresh: bool) -> CatalogSnapshot:
+        cache = self._catalog_cache()
+        if not refresh and (cached := cache.load(agent_id)) is not None:
+            return cached
+        agent = self.config.require_agent(agent_id)
+        try:
+            models = self._discover_provider_models(agent_id)
+            executable = "codex" if agent.runtime == "codex" else agent.executable
+            return cache.store(
+                agent_id,
+                models,
+                source_version=(
+                    self._source_version(executable)
+                    if executable is not None
+                    else "provider-managed"
+                ),
+            )
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            cache.mark_failure(agent_id)
+            if (cached := cache.load(agent_id)) is not None:
+                return cached
+            if agent.runtime == "antigravity":
+                cache.store(
+                    agent_id,
+                    ANTIGRAVITY_FALLBACK,
+                    source_version="built-in fallback",
+                )
+                cache.mark_failure(agent_id)
+                fallback = cache.load(agent_id)
+                assert fallback is not None
+                return fallback
+            raise ProviderCatalogError(
+                f"{agent.display_name} model catalog is unavailable and has no local cache"
+            )
 
     def _prepare_codex_handoff(self, *, project: Project, previous: SessionRecord) -> str:
         if previous.agent_id != self.agent.agent_id or not previous.provider_session_id:
@@ -375,7 +433,9 @@ class ProjectHubService:
         }
 
     @staticmethod
-    def _inline_grid(values: list[tuple[str, str]], width: int = 2) -> dict[str, object]:
+    def _inline_grid(
+        values: list[tuple[str, str]], width: int = 2
+    ) -> dict[str, list[list[dict[str, str]]]]:
         rows: list[list[dict[str, str]]] = []
         for position in range(0, len(values), width):
             rows.append(
@@ -399,9 +459,25 @@ class ProjectHubService:
             reply_markup=self._inline_grid(values),
         )
 
-    def _show_model_menu(self, message: TopicMessage, topic: TopicRecord, agent_id: str) -> None:
+    def _show_model_menu(
+        self,
+        message: TopicMessage,
+        topic: TopicRecord,
+        agent_id: str,
+        *,
+        page: int = 0,
+        refresh: bool = True,
+    ) -> None:
         active = self.state.active_session(topic.topic_id)
-        models = self._provider_models(agent_id)
+        catalog = self._provider_catalog(agent_id, refresh=refresh)
+        page_count = max(
+            1,
+            (len(catalog.models) + self.MODEL_PAGE_SIZE - 1) // self.MODEL_PAGE_SIZE,
+        )
+        if page < 0 or page >= page_count:
+            raise ModelSelectionError("model catalog page is unavailable")
+        start = page * self.MODEL_PAGE_SIZE
+        models = catalog.models[start : start + self.MODEL_PAGE_SIZE]
         values = []
         for model in models:
             marker = (
@@ -409,13 +485,22 @@ class ProjectHubService:
                 if active and active.agent_id == agent_id and active.model == model.model_id
                 else ""
             )
-            values.append((f"{marker}{model.label}", f"pick:{agent_id}:{model.model_id}"))
+            values.append((f"{marker}{model.label}", f"choose:{agent_id}:{model.callback_key}"))
+        navigation: list[tuple[str, str]] = []
+        if page > 0:
+            navigation.append(("←", f"models:{agent_id}:{page - 1}"))
+        if page + 1 < page_count:
+            navigation.append(("→", f"models:{agent_id}:{page + 1}"))
         agent = self.config.require_agent(agent_id)
+        cached = " · cached" if catalog.last_failure_at is not None else ""
+        keyboard = self._inline_grid(values)["inline_keyboard"]
+        if navigation:
+            keyboard.extend(self._inline_grid(navigation)["inline_keyboard"])
         self.telegram.send_html(
             message.chat_id,
             message.thread_id,
-            html.escape(f"{agent.display_name}: choose model"),
-            reply_markup=self._inline_grid(values),
+            html.escape(f"{agent.display_name}: choose model · {page + 1}/{page_count}{cached}"),
+            reply_markup={"inline_keyboard": keyboard},
         )
 
     def _show_effort_menu(
@@ -423,14 +508,15 @@ class ProjectHubService:
         message: TopicMessage,
         topic: TopicRecord,
         agent_id: str,
-        model_id: str,
+        callback_key: str,
     ) -> None:
+        catalog = self._provider_catalog(agent_id, refresh=False)
         model = next(
-            (item for item in self._provider_models(agent_id) if item.model_id == model_id),
+            (item for item in catalog.models if item.callback_key == callback_key),
             None,
         )
         if model is None:
-            raise ModelSelectionError(f"model is unavailable: {model_id}")
+            raise ModelSelectionError("model selection is unavailable")
         active = self.state.active_session(topic.topic_id)
         values = []
         for effort in model.efforts:
@@ -438,11 +524,16 @@ class ProjectHubService:
                 "✓ "
                 if active
                 and active.agent_id == agent_id
-                and active.model == model_id
+                and active.model == model.model_id
                 and active.effort == effort
                 else ""
             )
-            values.append((f"{marker}{effort.title()}", f"apply:{agent_id}:{model_id}:{effort}"))
+            values.append(
+                (
+                    f"{marker}{effort.title()}",
+                    f"use:{agent_id}:{model.callback_key}:{effort}",
+                )
+            )
         self.telegram.send_html(
             message.chat_id,
             message.thread_id,
@@ -456,16 +547,18 @@ class ProjectHubService:
         project: Project,
         topic: TopicRecord,
         agent_id: str,
-        model: str,
+        callback_key: str,
         effort: str,
         message: TopicMessage,
     ) -> None:
+        catalog = self._provider_catalog(agent_id, refresh=True)
         selected = next(
-            (item for item in self._provider_models(agent_id) if item.model_id == model),
+            (item for item in catalog.models if item.callback_key == callback_key),
             None,
         )
         if selected is None or effort not in selected.efforts:
             raise ModelSelectionError("provider selection is no longer available")
+        model = selected.model_id
         active = self.state.active_session(topic.topic_id)
         if active is None:
             replacement = self.state.activate_agent(topic.topic_id, agent_id, model, effort)
@@ -551,25 +644,61 @@ class ProjectHubService:
             reply_to_username=None,
         )
         try:
+            if callback.data.startswith("new:"):
+                _, action, expected_session_id = callback.data.split(":", 2)
+                active = self.state.active_session(topic.topic_id)
+                if active is None or active.session_id != expected_session_id:
+                    raise ServiceError("The active session changed; run /new again")
+                if action == "cancel":
+                    self.telegram.answer_callback(callback.callback_id, "Cancelled")
+                    self._send_text(message, "Session reset cancelled.")
+                    return True
+                if action != "confirm":
+                    raise ServiceError("Unknown session-reset action")
+                if active.writer_mode != "telegram":
+                    command = "/release" if active.writer_mode == "terminal" else "/return"
+                    raise ServiceError(f"Use {command} before resetting the session")
+                if self.state.topic_has_running_dispatch(topic.topic_id):
+                    raise ServiceError("A provider turn is still running")
+                replacement = self.state.new_active_session(topic.topic_id)
+                self.telegram.answer_callback(callback.callback_id, "New session ready")
+                self._send_text(
+                    message,
+                    f"New {self.config.require_agent(replacement.agent_id).display_name} "
+                    f"session generation {replacement.generation} will start on the next "
+                    "message.",
+                )
+                return True
             if callback.data.startswith("provider:"):
                 agent_id = callback.data.removeprefix("provider:")
                 self.config.require_agent(agent_id)
                 self.telegram.answer_callback(callback.callback_id, "Choose model")
                 self._show_model_menu(message, topic, agent_id)
                 return True
-            if callback.data.startswith("pick:"):
-                _, agent_id, model = callback.data.split(":", 2)
-                self.telegram.answer_callback(callback.callback_id, "Choose effort")
-                self._show_effort_menu(message, topic, agent_id, model)
+            if callback.data.startswith("models:"):
+                _, agent_id, raw_page = callback.data.split(":", 2)
+                self.telegram.answer_callback(callback.callback_id, "Choose model")
+                self._show_model_menu(
+                    message,
+                    topic,
+                    agent_id,
+                    page=int(raw_page),
+                    refresh=False,
+                )
                 return True
-            if callback.data.startswith("apply:"):
-                _, agent_id, model, effort = callback.data.split(":", 3)
+            if callback.data.startswith("choose:"):
+                _, agent_id, callback_key = callback.data.split(":", 2)
+                self.telegram.answer_callback(callback.callback_id, "Choose effort")
+                self._show_effort_menu(message, topic, agent_id, callback_key)
+                return True
+            if callback.data.startswith("use:"):
+                _, agent_id, callback_key, effort = callback.data.split(":", 3)
                 self.telegram.answer_callback(callback.callback_id, "Applying…")
                 self._apply_model_selection(
                     project=self.registry.require_project(binding.project_id),
                     topic=topic,
                     agent_id=agent_id,
-                    model=model,
+                    callback_key=callback_key,
                     effort=effort,
                     message=message,
                 )
@@ -750,6 +879,9 @@ class ProjectHubService:
             self._send_text(message, detail or "No provider accounts are configured.")
             return True
         if command and command.name == "new":
+            if command.arguments:
+                self._send_text(message, "Usage: /new")
+                return True
             active = self.state.active_session(topic.topic_id)
             if active is None:
                 self._send_text(message, "No active provider session exists yet.")
@@ -758,15 +890,20 @@ class ProjectHubService:
                 release = "/release" if active.writer_mode == "terminal" else "/return"
                 self._send_text(message, f"Use {release} before resetting the session.")
                 return True
-            replacement = (
-                self.state.new_all_sessions(topic.topic_id)
-                if command.arguments == ("all",)
-                else self.state.new_active_session(topic.topic_id)
-            )
-            self._send_text(
-                message,
-                f"New {self.config.require_agent(replacement.agent_id).display_name} session "
-                f"generation {replacement.generation} will start on the next message.",
+            agent = self.config.require_agent(active.agent_id)
+            self.telegram.send_html(
+                message.chat_id,
+                message.thread_id,
+                html.escape(
+                    f"Start a new {agent.display_name} session? The current provider "
+                    "session will be archived."
+                ),
+                reply_markup=self._inline_grid(
+                    [
+                        ("Confirm", f"new:confirm:{active.session_id}"),
+                        ("Cancel", f"new:cancel:{active.session_id}"),
+                    ]
+                ),
             )
             return True
         if command and command.name == "terminal":

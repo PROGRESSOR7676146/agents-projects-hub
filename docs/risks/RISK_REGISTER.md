@@ -12,7 +12,7 @@ Last updated: 2026-08-29
 | R-005 | Optional multi-auth breaks Codex/Hub | Official stdio fallback; component health checks; manual Hermes recovery | Test controlled/natural exhaustion and version upgrades. |
 | R-006 | Provider CLI upgrade breaks adapter | Structured interfaces, capability probes, visible failure | Pin/test versions and retain rollback; never screen-scrape as fallback. |
 | R-007 | Hermes or tlive becomes a mandatory dependency | Independent services and alerts; Hub continues without either | Exercise independent failure recovery periodically. |
-| R-008 | Machine loss destroys session continuity | Git + Telegram retain partial history; session stores remain local | Implement encrypted curated recovery bundle and restore drill. |
+| R-008 | Machine loss destroys session continuity | Git + Telegram retain partial history; session stores remain local | Accepted limitation; machine-loss tooling is outside the current plan. |
 | R-009 | In-flight turn cannot be recovered | Fail closed; persist completed state only | Explicit accepted limitation; never promise exact recovery. |
 | R-010 | Antigravity account rotation duplicates side effects or corrupts auth | Automation deferred; manual provider-aware runbook only | Wait for stable supported headless pool/idle semantics. |
 | R-011 | Documentation contradicts code/history | Canonical PRD, status file, doc map, automated tests as implementation evidence | Update durable docs with behavior changes; treat histories as evidence only. |

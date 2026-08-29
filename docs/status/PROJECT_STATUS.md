@@ -28,8 +28,10 @@ acceptance criteria live in
   Hermes fails closed pending a native resume contract.
 - The compact control surface provides `/status`, a single provider → model →
   effort `/model` menu, `/accounts`, provider-neutral `/new`, `/local`, and
-  `/return`. Provider catalogs are locally validated and Antigravity has a
-  bounded fallback catalog if its discovery probe is unavailable.
+  `/return`. `/new` requires confirmation and resets only the active provider;
+  the former mass-reset form is removed. Provider catalogs use private atomic
+  last-known-good snapshots, bounded callback keys, eight-model pages, source
+  versions, and stale-after-failed-refresh alerts.
 - Codex account rotation telemetry is event-driven from upstream provider `429`
   counters. Notifications always target Hub Operations and additionally target
   a work topic only when exactly one Codex topic is active.
@@ -40,6 +42,10 @@ acceptance criteria live in
   `/model`, `/accounts`, `/new`, `/local`, `/return`) for the locally managed
   Codex, OpenCode, and Antigravity bot identities. Live catalog probes returned
   25 OpenCode Go models and 7 grouped Antigravity model families.
+- The public Telegram menu is declarative and can be checked or restored with
+  the local `telegram-commands` command. Antigravity runs in sandboxed
+  `accept-edits` work mode instead of the accidentally restrictive `plan` mode;
+  dangerous permission bypass remains prohibited.
 - `codex-multi-auth` is optional; official Codex stdio is the fallback.
 - Hub, Hermes Gateway, and tlive are diagnosed and monitored independently.
 - Hub, Pythia, and Babelfish are registered as isolated real projects.

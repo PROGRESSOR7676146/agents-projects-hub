@@ -132,6 +132,21 @@ def callback(message_id: int, callback_id: str, data: str) -> dict[str, object]:
     }
 
 
+def callback_values(markup: object) -> list[str]:
+    if not isinstance(markup, dict):
+        return []
+    keyboard = markup.get("inline_keyboard")
+    if not isinstance(keyboard, list):
+        return []
+    return [
+        str(button["callback_data"])
+        for row in keyboard
+        if isinstance(row, list)
+        for button in row
+        if isinstance(button, dict) and isinstance(button.get("callback_data"), str)
+    ]
+
+
 class ServiceIntegrationTests(unittest.TestCase):
     def test_model_command_cascades_provider_model_effort_before_applying(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -177,12 +192,12 @@ class ServiceIntegrationTests(unittest.TestCase):
             self.assertTrue(value.handle_update(update(1, "/model")))
             self.assertIn("provider:codex", str(telegram.markups[-1]))
             self.assertTrue(value.handle_update(callback(2, "cb-provider", "provider:codex")))
-            self.assertIn("pick:codex:gpt-5.6-sol", str(telegram.markups[-1]))
-            self.assertTrue(value.handle_update(callback(3, "cb-model", "pick:codex:gpt-5.6-sol")))
-            self.assertIn("apply:codex:gpt-5.6-sol:high", str(telegram.markups[-1]))
-            self.assertTrue(
-                value.handle_update(callback(4, "cb-effort", "apply:codex:gpt-5.6-sol:high"))
-            )
+            choose = callback_values(telegram.markups[-1])[0]
+            self.assertRegex(choose, r"^choose:codex:[a-f0-9]{12}$")
+            self.assertTrue(value.handle_update(callback(3, "cb-model", choose)))
+            apply = callback_values(telegram.markups[-1])[0]
+            self.assertRegex(apply, r"^use:codex:[a-f0-9]{12}:high$")
+            self.assertTrue(value.handle_update(callback(4, "cb-effort", apply)))
             topic = value.state.find_topic(-1001234567890, 77)
             assert topic is not None
             active = value.state.active_session(topic.topic_id)
@@ -190,6 +205,22 @@ class ServiceIntegrationTests(unittest.TestCase):
             self.assertEqual(
                 (active.agent_id, active.model, active.effort), ("codex", "gpt-5.6-sol", "high")
             )
+            original_session_id = active.session_id
+            self.assertTrue(value.handle_update(update(5, "/new")))
+            confirm = next(
+                item
+                for item in callback_values(telegram.markups[-1])
+                if item.startswith("new:confirm:")
+            )
+            unchanged = value.state.active_session(topic.topic_id)
+            assert unchanged is not None
+            self.assertEqual(unchanged.session_id, original_session_id)
+            self.assertTrue(value.handle_update(callback(6, "cb-new", confirm)))
+            replacement = value.state.active_session(topic.topic_id)
+            assert replacement is not None
+            self.assertNotEqual(replacement.session_id, original_session_id)
+            self.assertTrue(value.handle_update(update(7, "/new unexpected")))
+            self.assertIn("Usage: /new", telegram.sent[-1][2])
             value.state.close()
 
     def test_main_receives_unseen_satellite_dialogue_on_next_productive_turn(self) -> None:

@@ -512,25 +512,6 @@ class HubState:
             replacement = self._insert_session(topic_id, previous.agent_id, model, effort, "active")
         return self.get_session(replacement.session_id)
 
-    def new_all_sessions(self, topic_id: int) -> SessionRecord:
-        row = self._connection.execute(
-            "SELECT * FROM agent_sessions WHERE topic_id = ? AND status = 'active'",
-            (topic_id,),
-        ).fetchone()
-        if row is None:
-            raise StateError("topic has no active session")
-        previous = self._session(row)
-        with self._connection:
-            self._connection.execute(
-                "UPDATE agent_sessions SET status = 'archived', updated_at = ? "
-                "WHERE topic_id = ? AND status != 'archived'",
-                (_now(), topic_id),
-            )
-            replacement = self._insert_session(
-                topic_id, previous.agent_id, previous.model, previous.effort, "active"
-            )
-        return self.get_session(replacement.session_id)
-
     def claim_message(self, chat_id: int, message_id: int, *, observer_agent_id: str) -> bool:
         try:
             with self._connection:

@@ -234,7 +234,7 @@ Current provider status:
 | Codex | Implemented | Persistent app-server thread; `workspace-write` + `on-request`; metadata and usage status. |
 | Hermes | Implemented integration | Native Gateway owns Telegram/session; Hub plugin/hook owns fail-closed project admission and bounded visible exchange. |
 | OpenCode | Implemented adapter | Go-authenticated provider-owned session through structured CLI output; centrally routed bot identity. |
-| Antigravity | Implemented adapter | `agy` conversation in sandboxed plan mode; no dangerous permission bypass. |
+| Antigravity | Implemented adapter | `agy` conversation in sandboxed `accept-edits` work mode; no dangerous permission bypass. |
 | Gemini CLI | Rejected for active product | Google provider work uses Antigravity; do not reactivate a parallel Gemini CLI path without a new decision. |
 
 Provider bot identity maps to a runtime, not to a model or paid account. Model
@@ -271,16 +271,23 @@ or response metadata when the provider exposes it.
 - **REQ-CMD-002 (Implemented):** `/model` is the single cascaded selector for
   provider, model, and effort. It marks current values and validates every
   callback against a fresh local provider catalog before changing state.
+- **REQ-CMD-002A (Implemented):** Successful provider discovery updates a
+  private atomic last-known-good catalog with source version and timestamp.
+  Telegram callbacks use bounded opaque keys rather than provider model IDs;
+  long catalogs are paginated. Failed discovery uses the cache and becomes an
+  Operations warning only after the cached success is older than 24 hours.
 - **REQ-CMD-003 (Implemented):** `/accounts` lists configured provider accounts
   and observable limits. OpenCode Go exact exhaustion/reset telemetry is shown
   only after a real provider `429`; plan caps are labelled separately.
-- **REQ-CMD-004 (Implemented):** `/new` resets only the active provider session;
-  `/local` transfers writer ownership; `/return` returns ownership and publishes
-  a bounded safe summary of the local interval.
-- **REQ-CMD-005 (Accepted):** The public Telegram command menu contains only
+- **REQ-CMD-004 (Implemented):** `/new` requires an owner callback confirmation
+  and resets only the active provider session; mass reset behavior is removed.
+  `/local` transfers writer ownership; `/return` returns ownership and
+  publishes a bounded safe summary of the local interval.
+- **REQ-CMD-005 (Implemented):** The public Telegram command menu contains only
   `/status`, `/model`, `/accounts`, `/new`, `/local`, and `/return`. Legacy
   maintenance commands may remain locally callable for compatibility but are
-  not part of the normal mobile interface.
+  not part of the normal mobile interface. A deterministic local command checks
+  drift and synchronizes all locally managed provider bot identities.
 
 ## 11. Frontends, writer lease, and local transfer
 
@@ -317,7 +324,7 @@ or response metadata when the provider exposes it.
 
 Initial reviewed resume shapes are `codex resume SESSION_ID -C ROOT`,
 `opencode ROOT --session SESSION_ID`, and
-`cd -- ROOT && agy --conversation SESSION_ID --sandbox --mode plan`. They are version-sensitive
+`cd -- ROOT && agy --conversation SESSION_ID --sandbox --mode accept-edits`. They are version-sensitive
 adapter capabilities, not permanent user-input templates. Hermes requires a
 separate native capability check.
 
@@ -400,16 +407,16 @@ necessary but not sufficient for items marked live.
 
 - **AC-F-001 (REQ-ID-001..006):** A message in project/topic A cannot resolve,
   start, resume, or write a session in project/topic B.
-- **AC-F-002 (REQ-ROUTE-001..008, live pending):** In Hub General, an ordinary
+- **AC-F-002 (REQ-ROUTE-001..008, live accepted 2026-08-29):** In Hub General, an ordinary
   owner message invokes only the active agent; a mention invokes only the named
   satellite; a real Reply returns to the response author; a selected/pasted
   quote remains with the active agent.
-- **AC-F-003 (REQ-CTX-001..007, live pending):** After a satellite exchange, the
+- **AC-F-003 (REQ-CTX-001..007, live accepted 2026-08-29):** After a satellite exchange, the
   main agent receives the unseen visible delta on its next productive turn,
   understands its addressee, and does not answer the old message as a new task.
-- **AC-F-004 (REQ-ROUTE-006, live pending):** Idle provider models show no
+- **AC-F-004 (REQ-ROUTE-006, live accepted 2026-08-29):** Idle provider models show no
   provider invocation or token use during another agent's turn.
-- **AC-F-005 (REQ-OPS-001..004, live pending):** A controlled restart retains
+- **AC-F-005 (REQ-OPS-001..004, live accepted 2026-08-29):** A controlled restart retains
   active agent, numeric topic identity, provider session ID, ingress offset, and
   exactly-once processing.
 - **AC-F-006 (REQ-WRITER-001..003):** Terminal takeover and release retain the
@@ -451,19 +458,18 @@ necessary but not sufficient for items marked live.
 | --- | --- | --- |
 | Numeric project/topic isolation | Implemented | Automated tests and live Pythia/Babelfish deployment history. |
 | Central Telegram group ingress | Implemented | External provider group pollers disabled by design. |
-| Reply/mention/quote/ordinary semantics | Implemented | Automated coverage; Hub General live E2E pending. |
+| Reply/mention/quote/ordinary semantics | Implemented/live accepted | Automated coverage and Hub General live E2E passed. |
 | Bounded shared visible context | Implemented | Codex, OpenCode, Antigravity, and Hermes paths covered. |
 | Codex persistent sessions and metadata | Implemented | App-server integration and restart persistence covered. |
 | Hermes project integration | Implemented | Native Gateway plus fail-closed plugin/hook boundary. |
-| OpenCode and Antigravity adapters | Implemented | Local live provider probes passed; full Hub General E2E pending. |
+| OpenCode and Antigravity adapters | Implemented/live accepted | Local provider probes and Hub General provider routing passed. |
 | Codex tmux takeover/release | Implemented | Fallback frontend, not preferred long-term UX. |
 | Optional Codex account pool/fallback | Implemented | Natural exhaustion E2E remains an acceptance item. |
 | Hub General Telegram E2E baseline | Implemented/live accepted | Passed ordinary, satellite, Reply, context, no-idle-spend, identity, and restart cases on 2026-08-29. |
 | `/local` and `/return` | Implemented | Codex, OpenCode, and Antigravity; Hermes fails closed pending a native resume contract. |
-| Compact command surface | Implemented | `/status`, cascaded `/model`, `/accounts`, `/new`, `/local`, `/return`; live menu acceptance pending. |
+| Compact command surface | Implemented | `/status`, cached/paginated `/model`, `/accounts`, confirmed `/new`, `/local`, `/return`; Telegram menu readback passed. |
 | Return-and-publish | Implemented | `/return` publishes a bounded summary; no full transcript mirroring. |
 | Provider-limit rotation events | Implemented | Provider `429` drives Codex rotation visibility; natural exhaustion E2E remains pending. |
-| Encrypted disaster-recovery bundle | Planned | Includes a restore drill and off-machine key custody. |
 | Automatic Antigravity account rotation | Deferred | Await stable supported headless account-pool capability. |
 | Universal provider-neutral Session Bridge | Deferred | Add only if real adapters/companions cannot meet needs. |
 | Automatic OS terminal window/PID management | Rejected | Explicit resume commands and writer leases are simpler and safer. |
@@ -482,8 +488,8 @@ necessary but not sufficient for items marked live.
   common `/local` experience can claim provider parity.
 - Antigravity automatic rotation is unavailable without a supported headless
   account-pool interface.
-- The current disaster recovery plane handles component/service failure on the
-  existing machine, not complete machine loss; the encrypted bundle is planned.
+- The current recovery plane handles component/service failure on the existing
+  machine, not complete machine loss; machine-loss tooling is not in scope.
 - The Hub bot can publish in Hub General but cannot create more forum topics
   without Telegram Manage Topics permission.
 
