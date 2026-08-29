@@ -357,6 +357,7 @@ class ProjectHubService:
             chat_title=binding.project_id,
             sender_id=callback.sender_id,
             text="",
+            reply_to_username=None,
         )
         catalog = self._model_catalog()
         if callback.data.startswith("model:"):
@@ -675,6 +676,7 @@ class ProjectHubService:
             message.text,
             active_agent=active_agent,
             usernames=self.usernames,
+            reply_to_username=message.reply_to_username,
         )
         if self.agent.agent_id not in targets:
             return False

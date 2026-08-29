@@ -75,6 +75,7 @@ class ExternalAgentService:
             message.text,
             active_agent=active_agent,
             usernames=self.usernames,
+            reply_to_username=message.reply_to_username,
         )
         if self.agent.agent_id not in targets:
             return False
