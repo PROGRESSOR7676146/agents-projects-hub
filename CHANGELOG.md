@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-30
+
 ### Added
 
 - Pass and document the Hub General live Telegram E2E baseline, add Hermes
@@ -28,6 +30,15 @@ and releases use semantic versioning while the public API is still evolving.
 - Add a single central group ingress for locally managed provider identities and
   a bounded visible-topic journal whose unseen delta is supplied to other agents
   on their next productive turn without triggering observer model calls.
+- Add compact `/status` and `/accounts` summaries plus a cached, paginated
+  `/model` menu with collision-checked short callback identifiers.
+- Cache each provider's last-known-good model catalog in private local state and
+  alert Operations only when a failed refresh leaves that catalog stale.
+- Add event-driven Codex quota rotation notices, exact OpenCode reset telemetry,
+  declarative Telegram command-menu synchronization, and `/local`/`/return`
+  session publishing.
+- Require an owner confirmation bound to the current session before `/new`
+  archives it; remove the mass-reset `/new all` operation.
 
 ### Changed
 
@@ -35,7 +46,9 @@ and releases use semantic versioning while the public API is still evolving.
   healthy and fall back to the official Codex stdio app-server when unavailable.
 - Treat OpenCode and Antigravity as the active external provider adapters and
   require configured Telegram usernames to be valid bot usernames.
-- Advance the state database to schema v6 for per-agent visible-context cursors.
+- Run Antigravity in sandboxed `accept-edits` mode instead of forcing plan mode.
+- Advance the state database to schema v9 for visible-context cursors, compact
+  status telemetry, local-writer state, and runtime checkpoints.
 
 ## [0.4.0] - 2026-08-29
 
