@@ -36,6 +36,10 @@ acceptance criteria live in
 - OpenCode Go records exact reset telemetry from provider `429` responses and
   otherwise labels only static plan caps; provider failures are isolated and do
   not crash central ingress.
+- Telegram accepted and returned the exact public command menu (`/status`,
+  `/model`, `/accounts`, `/new`, `/local`, `/return`) for the locally managed
+  Codex, OpenCode, and Antigravity bot identities. Live catalog probes returned
+  25 OpenCode Go models and 7 grouped Antigravity model families.
 - `codex-multi-auth` is optional; official Codex stdio is the fallback.
 - Hub, Hermes Gateway, and tlive are diagnosed and monitored independently.
 - Hub, Pythia, and Babelfish are registered as isolated real projects.
@@ -53,8 +57,9 @@ acceptance criteria live in
 
 ## Planned next
 
-1. Complete owner-driven live E2E for the compact command menu, provider/model
-   selection, and a natural or controlled Codex quota transition.
+1. Complete owner-driven click-through E2E for provider/model selection and a
+   natural or controlled Codex quota transition. Telegram menu readback and
+   real provider catalog discovery already passed.
 
 ## Deferred
 
