@@ -101,9 +101,7 @@ class HubConfigTests(unittest.TestCase):
             load_hub_config(self.write_config(manage_codex_server="no"))
 
     def test_loads_three_character_codex_account_hints(self) -> None:
-        config = load_hub_config(
-            self.write_config(codex_account_hints={"1": "prg", "2": "767"})
-        )
+        config = load_hub_config(self.write_config(codex_account_hints={"1": "prg", "2": "767"}))
         self.assertEqual(config.codex_account_hints, {1: "prg", 2: "767"})
 
     def test_rejects_group_chat_id_that_is_not_supergroup_shaped(self) -> None:

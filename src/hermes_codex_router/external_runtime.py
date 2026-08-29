@@ -7,11 +7,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from .provider_limits import ProviderLimit, parse_opencode_limit
+
 Run = Callable[..., subprocess.CompletedProcess[str]]
 
 
 class ExternalRuntimeError(RuntimeError):
     pass
+
+
+class ProviderLimitError(ExternalRuntimeError):
+    def __init__(self, limit: ProviderLimit) -> None:
+        super().__init__(
+            f"{limit.provider} {limit.window} limit exhausted; reset telemetry recorded"
+        )
+        self.limit = limit
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +76,7 @@ class ExternalCliAdapter:
         prompt: str,
         session_id: str | None = None,
         model: str | None = None,
+        effort: str | None = None,
     ) -> tuple[str, ...]:
         canonical_cwd = cwd.expanduser().resolve(strict=True)
         if not prompt.strip():
@@ -86,6 +97,9 @@ class ExternalCliAdapter:
             argv.extend(("--prompt", prompt))
             return tuple(argv)
         if self.runtime == "antigravity":
+            selected_model = model
+            if model and effort and effort != "default":
+                selected_model = f"{model}-{effort}"
             argv = [
                 self.executable,
                 "--print",
@@ -100,8 +114,8 @@ class ExternalCliAdapter:
             ]
             if session_id:
                 argv.extend(("--conversation", session_id))
-            if model:
-                argv.extend(("--model", model))
+            if selected_model:
+                argv.extend(("--model", selected_model))
             return tuple(argv)
         argv = [
             self.executable,
@@ -115,6 +129,8 @@ class ExternalCliAdapter:
             argv.extend(("--session", session_id))
         if model:
             argv.extend(("--model", model))
+        if effort and effort != "default":
+            argv.extend(("--variant", effort))
         argv.append(prompt)
         return tuple(argv)
 
@@ -125,6 +141,7 @@ class ExternalCliAdapter:
         prompt: str,
         session_id: str | None = None,
         model: str | None = None,
+        effort: str | None = None,
         timeout: float = 900,
     ) -> ExternalTurnResult:
         argv = self.build_argv(
@@ -132,6 +149,7 @@ class ExternalCliAdapter:
             prompt=prompt,
             session_id=session_id,
             model=model,
+            effort=effort,
         )
         environment = os.environ.copy()
         if self.runtime == "gemini" and self.runtime_home is not None:
@@ -147,6 +165,8 @@ class ExternalCliAdapter:
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()[:1000]
+            if self.runtime == "opencode" and (limit := parse_opencode_limit(detail)):
+                raise ProviderLimitError(limit)
             raise ExternalRuntimeError(f"{self.runtime} failed safely: {detail}")
         values = _json_values(result.stdout)
         if not values:

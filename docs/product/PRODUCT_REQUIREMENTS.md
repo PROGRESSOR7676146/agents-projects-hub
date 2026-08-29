@@ -254,7 +254,7 @@ or response metadata when the provider exposes it.
 - **REQ-AUTH-004 (Implemented):** When multi-auth is unavailable, Hub MUST be
   able to use the official Codex stdio app-server rather than fail the entire
   Project Hub.
-- **REQ-AUTH-005 (Accepted):** Account changes and quota state MUST remain
+- **REQ-AUTH-005 (Implemented):** Account changes and quota state MUST remain
   visible to the owner; switching MUST NOT be silent.
 - **REQ-AUTH-006 (Accepted):** Hermes MAY guide a mode-aware manual device-login
   recovery, but MUST NOT copy or display tokens, change the wrong credential
@@ -262,6 +262,25 @@ or response metadata when the provider exposes it.
 - **REQ-AUTH-007 (Planned acceptance):** A natural or controlled quota-exhaustion
   test must demonstrate one response, the same persisted thread, bounded retry,
   and a visible account transition.
+
+### Compact control surface
+
+- **REQ-CMD-001 (Implemented):** `/status` shows the active provider, model,
+  effort, context remainder when observable, masked active account, and compact
+  provider-supplied limit/reset windows.
+- **REQ-CMD-002 (Implemented):** `/model` is the single cascaded selector for
+  provider, model, and effort. It marks current values and validates every
+  callback against a fresh local provider catalog before changing state.
+- **REQ-CMD-003 (Implemented):** `/accounts` lists configured provider accounts
+  and observable limits. OpenCode Go exact exhaustion/reset telemetry is shown
+  only after a real provider `429`; plan caps are labelled separately.
+- **REQ-CMD-004 (Implemented):** `/new` resets only the active provider session;
+  `/local` transfers writer ownership; `/return` returns ownership and publishes
+  a bounded safe summary of the local interval.
+- **REQ-CMD-005 (Accepted):** The public Telegram command menu contains only
+  `/status`, `/model`, `/accounts`, `/new`, `/local`, and `/return`. Legacy
+  maintenance commands may remain locally callable for compatibility but are
+  not part of the normal mobile interface.
 
 ## 11. Frontends, writer lease, and local transfer
 
@@ -289,12 +308,12 @@ or response metadata when the provider exposes it.
   provider-specific resume command for the canonical root and session ID.
 - **REQ-WRITER-007 (Implemented with explicit owner assertion):** `/return`
   restores Telegram ownership after instructing the owner to close the local
-  CLI and confirming that no Hub dispatch is running. V1 deliberately does not
-  infer OS process state.
+  CLI and confirming that no Hub dispatch is running, then asks the same
+  provider session for a bounded `Completed / Verified / Next` publication.
+  Summary failure does not take the writer lease back from Telegram. V1
+  deliberately does not infer OS process state.
 - **REQ-WRITER-008 (Implemented):** Messages arriving while `local` owns the
   writer do not call a provider and explain how to return safely.
-- **REQ-WRITER-009 (Planned):** `/publish` will publish a bounded safe summary of
-  the local interval to Telegram; it will not promise full transcript import.
 
 Initial reviewed resume shapes are `codex resume SESSION_ID -C ROOT`,
 `opencode ROOT --session SESSION_ID`, and
@@ -339,18 +358,17 @@ more specific and consistent with this baseline.
 - **REQ-OPS-005 (Implemented):** Hermes Gateway and tlive MUST be monitored as
   independent recovery channels. Failure of one is degraded service; neither is
   a mandatory dependency of Project Hub.
-- **REQ-OPS-006 (Implemented):** Alerts are bounded, deduplicated, and delivered
+- **REQ-OPS-006 (Implemented):** General operational alerts are bounded,
+  deduplicated, and delivered
   only to one explicitly configured Hub Operations/Alerts topic. Codex is the
   primary sender; Hermes may fall back only to that same topic. Quota alerts
   include a recognizable masked account hint and never expose a full identity.
-- **REQ-OPS-007 (Planned):** A curated encrypted recovery bundle will include a
-  consistent Hub database, deployment manifest, necessary provider session
-  stores, versions, and checksums, with backup/verify/restore commands and a
-  real restore drill.
-- **REQ-OPS-008 (Planned):** Recovery MUST exclude logs, caches, sockets, PIDs,
-  tmux state, binaries, and raw environment dumps; encryption keys remain off
-  the protected machine.
-- **REQ-OPS-009 (Accepted):** On replacement hardware, stale writer leases from
+- **REQ-OPS-007 (Implemented):** Codex rotation reacts to the upstream provider
+  `429` handled by the optional multi-auth proxy, never to a forecast threshold.
+  The transition is always reported to Hub Operations with masked source/target
+  identity. It is also reported to the work topic only when exactly one Codex
+  topic is active; multiple work topics are never spammed.
+- **REQ-OPS-008 (Accepted):** On replacement hardware, stale writer leases from
   the lost host MUST be reset safely after verifying the old processes cannot
   exist.
 
@@ -442,7 +460,9 @@ necessary but not sufficient for items marked live.
 | Optional Codex account pool/fallback | Implemented | Natural exhaustion E2E remains an acceptance item. |
 | Hub General Telegram E2E baseline | Implemented/live accepted | Passed ordinary, satellite, Reply, context, no-idle-spend, identity, and restart cases on 2026-08-29. |
 | `/local` and `/return` | Implemented | Codex, OpenCode, and Antigravity; Hermes fails closed pending a native resume contract. |
-| Bounded `/publish` | Planned | Summary only, no full transcript mirroring. |
+| Compact command surface | Implemented | `/status`, cascaded `/model`, `/accounts`, `/new`, `/local`, `/return`; live menu acceptance pending. |
+| Return-and-publish | Implemented | `/return` publishes a bounded summary; no full transcript mirroring. |
+| Provider-limit rotation events | Implemented | Provider `429` drives Codex rotation visibility; natural exhaustion E2E remains pending. |
 | Encrypted disaster-recovery bundle | Planned | Includes a restore drill and off-machine key custody. |
 | Automatic Antigravity account rotation | Deferred | Await stable supported headless account-pool capability. |
 | Universal provider-neutral Session Bridge | Deferred | Add only if real adapters/companions cannot meet needs. |

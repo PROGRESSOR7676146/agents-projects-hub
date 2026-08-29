@@ -1,7 +1,7 @@
 # Project status
 
 Status: active pilot  
-As of: 2026-08-29  
+As of: 2026-08-30
 Branch observed: `feat/provider-account-profiles`
 
 This file is a concise implementation/evidence view. Product intent and full
@@ -16,7 +16,7 @@ acceptance criteria live in
   turn for Codex, OpenCode, Antigravity, and Hermes.
 - Numeric project/topic identity, canonical root isolation, idempotency,
   persistent provider session IDs, active agent state, and writer state use
-  SQLite schema v8 with pre-migration backup; the last known context remainder
+  SQLite schema v9 with pre-migration backup; the last known context remainder
   is persisted per provider session for compact status output.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity
   adapters exist; local OpenCode and Antigravity provider probes passed before
@@ -24,7 +24,18 @@ acceptance criteria live in
 - Codex terminal takeover/release uses a one-writer lease and tmux fallback.
 - `/local` and `/return` explicitly transfer one-writer ownership between
   Telegram and native Codex, OpenCode, or Antigravity CLIs without launching or
-  scraping terminals; Hermes fails closed pending a native resume contract.
+  scraping terminals; `/return` also publishes a bounded local-interval summary.
+  Hermes fails closed pending a native resume contract.
+- The compact control surface provides `/status`, a single provider → model →
+  effort `/model` menu, `/accounts`, provider-neutral `/new`, `/local`, and
+  `/return`. Provider catalogs are locally validated and Antigravity has a
+  bounded fallback catalog if its discovery probe is unavailable.
+- Codex account rotation telemetry is event-driven from upstream provider `429`
+  counters. Notifications always target Hub Operations and additionally target
+  a work topic only when exactly one Codex topic is active.
+- OpenCode Go records exact reset telemetry from provider `429` responses and
+  otherwise labels only static plan caps; provider failures are isolated and do
+  not crash central ingress.
 - `codex-multi-auth` is optional; official Codex stdio is the fallback.
 - Hub, Hermes Gateway, and tlive are diagnosed and monitored independently.
 - Hub, Pythia, and Babelfish are registered as isolated real projects.
@@ -42,8 +53,8 @@ acceptance criteria live in
 
 ## Planned next
 
-1. Add bounded `/publish` for local-work summaries.
-2. Build and restore-drill an encrypted disaster-recovery bundle.
+1. Complete owner-driven live E2E for the compact command menu, provider/model
+   selection, and a natural or controlled Codex quota transition.
 
 ## Deferred
 
@@ -66,7 +77,7 @@ acceptance criteria live in
   Topics, so it cannot create additional forum topics.
 - Exact in-flight provider turns cannot be recovered after process or machine
   loss; only completed persisted state is recoverable.
-- Machine-loss recovery tooling is planned rather than implemented.
+- Machine-loss reconstruction remains manual and is not in the current plan.
 
 ## Status update rule
 

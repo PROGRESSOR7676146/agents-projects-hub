@@ -43,6 +43,17 @@ class ExternalRuntimeTests(unittest.TestCase):
         self.assertEqual(result.text, "Visible answer")
         self.assertNotIn("--auto", calls[0])
 
+    def test_opencode_effort_is_passed_as_provider_variant(self) -> None:
+        adapter = ExternalCliAdapter("opencode", executable="/usr/bin/opencode")
+        argv = adapter.build_argv(
+            cwd=Path.cwd(),
+            prompt="Inspect",
+            model="opencode-go/glm-5.3",
+            effort="high",
+        )
+        self.assertIn("--variant", argv)
+        self.assertEqual(argv[argv.index("--variant") + 1], "high")
+
     def test_gemini_profile_is_isolated_in_child_environment(self) -> None:
         environments: list[dict[str, str]] = []
 
@@ -77,6 +88,16 @@ class ExternalRuntimeTests(unittest.TestCase):
         self.assertIn("plan", calls[0])
         self.assertIn("--conversation", calls[0])
         self.assertNotIn("--dangerously-skip-permissions", calls[0])
+
+    def test_antigravity_effort_is_encoded_in_selected_model(self) -> None:
+        adapter = ExternalCliAdapter("antigravity", executable="/usr/bin/agy")
+        argv = adapter.build_argv(
+            cwd=Path.cwd(),
+            prompt="Inspect",
+            model="gemini-3.7-flash",
+            effort="medium",
+        )
+        self.assertEqual(argv[argv.index("--model") + 1], "gemini-3.7-flash-medium")
 
 
 if __name__ == "__main__":

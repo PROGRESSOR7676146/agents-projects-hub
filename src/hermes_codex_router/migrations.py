@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-LATEST_SCHEMA_VERSION = 8
+LATEST_SCHEMA_VERSION = 9
 
 
 MIGRATION_1 = """
@@ -193,6 +193,15 @@ ALTER TABLE agent_sessions ADD COLUMN context_remaining_percent REAL;
 """
 
 
+MIGRATION_9 = """
+CREATE TABLE IF NOT EXISTS runtime_checkpoints (
+    checkpoint_key TEXT PRIMARY KEY,
+    integer_value INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -278,6 +287,9 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     if previous < 8:
         connection.executescript(MIGRATION_8)
         connection.execute("PRAGMA user_version = 8")
+    if previous < 9:
+        connection.executescript(MIGRATION_9)
+        connection.execute("PRAGMA user_version = 9")
     connection.commit()
     current = int(connection.execute("PRAGMA user_version").fetchone()[0])
     return previous, current

@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from .codex_accounts import CodexPoolStatus
 from .codex_appserver import LimitWindow, RateLimits
+from .provider_limits import ProviderLimit
 
 
 def _name(value: str) -> str:
@@ -58,7 +59,13 @@ def format_session_status(
     return "\n".join(lines)
 
 
-def format_accounts(pool: CodexPoolStatus, *, include_opencode_go: bool) -> str:
+def format_accounts(
+    pool: CodexPoolStatus,
+    *,
+    include_opencode_go: bool,
+    opencode_limit: ProviderLimit | None = None,
+    timezone_name: str = "Europe/Moscow",
+) -> str:
     lines: list[str] = []
     if pool.available:
         lines.append("Codex")
@@ -75,5 +82,13 @@ def format_accounts(pool: CodexPoolStatus, *, include_opencode_go: bool) -> str:
     if include_opencode_go:
         if lines:
             lines.append("")
-        lines.extend(("OpenCode Go", "✓ 5h $12 · week $30 · month $60"))
+        lines.extend(("OpenCode Go", "✓ plan: 5h $12 · week $30 · month $60"))
+        if opencode_limit is not None:
+            reset = datetime.fromtimestamp(opencode_limit.resets_at, ZoneInfo(timezone_name))
+            label = {
+                "5-hour": "5h",
+                "weekly": "Week",
+                "monthly": "Month",
+            }.get(opencode_limit.window, opencode_limit.window)
+            lines.append(f"{label} {opencode_limit.remaining_percent}% ↻ {reset:%d.%m %H:%M}")
     return "\n".join(lines)

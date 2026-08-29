@@ -20,9 +20,15 @@ from hermes_codex_router.state import HubState
 class FakeTelegram:
     def __init__(self) -> None:
         self.sent: list[tuple[int, int, str]] = []
+        self.markups: list[object | None] = []
+        self.callbacks: list[tuple[str, str]] = []
 
-    def send_html(self, chat_id: int, thread_id: int, text: str, **_: object) -> None:
+    def send_html(self, chat_id: int, thread_id: int, text: str, **kwargs: object) -> None:
         self.sent.append((chat_id, thread_id, text))
+        self.markups.append(kwargs.get("reply_markup"))
+
+    def answer_callback(self, callback_id: str, text: str = "") -> None:
+        self.callbacks.append((callback_id, text))
 
 
 class FakeClient:
@@ -51,6 +57,17 @@ class FakeClient:
 
     def read_rate_limits(self) -> RateLimits:
         return RateLimits(None, None)
+
+    def list_models(self) -> list[dict[str, object]]:
+        return [
+            {
+                "id": "gpt-5.6-sol",
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "high"},
+                    {"reasoningEffort": "medium"},
+                ],
+            }
+        ]
 
     def close(self) -> None:
         pass
@@ -98,7 +115,83 @@ def update(
     }
 
 
+def callback(message_id: int, callback_id: str, data: str) -> dict[str, object]:
+    return {
+        "update_id": message_id,
+        "callback_query": {
+            "id": callback_id,
+            "from": {"id": 42, "is_bot": False},
+            "data": data,
+            "message": {
+                "message_id": message_id,
+                "message_thread_id": 77,
+                "is_topic_message": True,
+                "chat": {"id": -1001234567890, "type": "supergroup", "title": "Private"},
+            },
+        },
+    }
+
+
 class ServiceIntegrationTests(unittest.TestCase):
+    def test_model_command_cascades_provider_model_effort_before_applying(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project_root = base / "Project"
+            (project_root / ".git").mkdir(parents=True)
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(42,),
+                registry_path=base / "projects.json",
+                state_path=base / "state.db",
+                codex_socket_path=base / "codex.sock",
+                manage_codex_server=False,
+                terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+                projects=(ProjectBinding("project", -1001234567890),),
+                agents=(
+                    AgentDefinition(
+                        "codex",
+                        "Codex",
+                        "project_codex_bot",
+                        "codex",
+                        None,
+                        True,
+                        False,
+                        "gpt-5.6-sol",
+                        "high",
+                    ),
+                ),
+            )
+            value = ProjectHubService.__new__(ProjectHubService)
+            value.config = config
+            value.registry = ProjectRegistry(
+                1, (base,), (Project("project", "Project", "Project", project_root),)
+            )
+            value.state = HubState.open(config.state_path)
+            value.agent = config.agents[0]
+            telegram = FakeTelegram()
+            value.telegram = cast(Any, telegram)
+            value.supervisor = cast(Any, FakeSupervisor(FakeClient()))
+            value._codex_client = None
+            value.usernames = {"codex": "project_codex_bot"}
+
+            self.assertTrue(value.handle_update(update(1, "/model")))
+            self.assertIn("provider:codex", str(telegram.markups[-1]))
+            self.assertTrue(value.handle_update(callback(2, "cb-provider", "provider:codex")))
+            self.assertIn("pick:codex:gpt-5.6-sol", str(telegram.markups[-1]))
+            self.assertTrue(value.handle_update(callback(3, "cb-model", "pick:codex:gpt-5.6-sol")))
+            self.assertIn("apply:codex:gpt-5.6-sol:high", str(telegram.markups[-1]))
+            self.assertTrue(
+                value.handle_update(callback(4, "cb-effort", "apply:codex:gpt-5.6-sol:high"))
+            )
+            topic = value.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            active = value.state.active_session(topic.topic_id)
+            assert active is not None
+            self.assertEqual(
+                (active.agent_id, active.model, active.effort), ("codex", "gpt-5.6-sol", "high")
+            )
+            value.state.close()
+
     def test_main_receives_unseen_satellite_dialogue_on_next_productive_turn(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
@@ -237,6 +330,7 @@ class ServiceIntegrationTests(unittest.TestCase):
 
         self.assertEqual(external.updates, [incoming])
         self.assertEqual(client.started, 0)
+
     def test_authorized_unknown_group_is_discoverable_without_storing_message_text(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

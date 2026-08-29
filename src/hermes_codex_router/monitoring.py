@@ -20,6 +20,11 @@ from .hermes_health import (
     sync_hermes_group_policy,
 )
 from .hub_config import HubConfig, OperationalAlertSettings
+from .provider_events import (
+    codex_rotation_targets,
+    format_codex_rotation_event,
+    read_codex_runtime_snapshot,
+)
 from .state import HubState
 from .telegram import TelegramBotApi, TelegramError
 
@@ -158,6 +163,19 @@ def run_monitor_once(
             from .codex_accounts import CodexPoolStatus
 
             pool = CodexPoolStatus(False, False, (), None, 0, "not_configured")
+        provider_limit_count = 0
+        runtime_snapshot = (
+            read_codex_runtime_snapshot(config.codex_multi_auth_dir)
+            if config.codex_multi_auth_dir is not None
+            else None
+        )
+        if runtime_snapshot is not None:
+            current_429 = runtime_snapshot.rate_limited_responses
+            previous_429 = state.runtime_counter("codex:provider-429")
+            if previous_429 is None:
+                state.set_runtime_counter("codex:provider-429", current_429)
+            elif current_429 > previous_429:
+                provider_limit_count = current_429 - previous_429
         doctor = run_doctor(config)
         raw_checks = doctor.get("checks")
         doctor_checks = raw_checks if isinstance(raw_checks, list) else []
@@ -187,6 +205,41 @@ def run_monitor_once(
             hermes_telegram=hermes_telegram,
         )
         delivered: list[str] = []
+        if notify and provider_limit_count:
+            destination = _destination(config.operational_alerts)
+            targets = codex_rotation_targets(state, destination)
+            if targets:
+                agent = config.require_agent("codex")
+                if agent.token_file is None:
+                    raise RuntimeError("managed Codex bot token is unavailable")
+                telegram = TelegramBotApi(agent.token_file.read_text(encoding="utf-8").strip())
+                event_text = format_codex_rotation_event(pool, provider_limit_count)
+                operations_sent = False
+                for target in targets:
+                    try:
+                        telegram.send_html(target[0], target[1], html.escape(event_text))
+                    except Exception:
+                        if target != destination:
+                            continue
+                        if not (
+                            config.recovery_plane.enabled and recovery_status.get("hermes", False)
+                        ):
+                            raise
+                        _send_hermes(
+                            f"telegram:{target[0]}:{target[1]}",
+                            event_text,
+                        )
+                        delivered.append("codex_provider_limit:hermes-fallback")
+                        operations_sent = True
+                    else:
+                        delivered.append("codex_provider_limit:codex")
+                        if target == destination:
+                            operations_sent = True
+                if operations_sent or destination is None:
+                    assert runtime_snapshot is not None
+                    state.set_runtime_counter(
+                        "codex:provider-429", runtime_snapshot.rate_limited_responses
+                    )
         if notify and alerts:
             destination = _destination(config.operational_alerts)
             operations_due = tuple(

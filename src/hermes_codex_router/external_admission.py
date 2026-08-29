@@ -145,9 +145,7 @@ def acknowledge_unseen_visible_context(
         topic = state.find_topic(chat_id, thread_id)
         if topic is None:
             return False
-        state.acknowledge_visible_context(
-            topic.topic_id, observer_agent_id, visible.last_turn_id
-        )
+        state.acknowledge_visible_context(topic.topic_id, observer_agent_id, visible.last_turn_id)
         return True
     except (OSError, sqlite3.Error, StateError):
         return False

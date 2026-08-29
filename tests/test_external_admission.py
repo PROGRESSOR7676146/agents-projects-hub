@@ -133,9 +133,7 @@ class ExternalAdmissionTests(unittest.TestCase):
             )
         )
         self.assertIsNone(
-            peek_unseen_visible_context(
-                self.path, -1001234567890, 73, observer_agent_id="hermes"
-            )
+            peek_unseen_visible_context(self.path, -1001234567890, 73, observer_agent_id="hermes")
         )
 
 

@@ -9,7 +9,7 @@ from .external_admission import (
     peek_pending_handoff,
     record_external_turn,
 )
-from .external_runtime import ExternalCliAdapter
+from .external_runtime import ExternalCliAdapter, ProviderLimitError
 from .hub_config import HubConfig
 from .metadata import format_agent_response
 from .registry import load_registry
@@ -60,6 +60,7 @@ class ExternalAgentService:
             cwd=project.root,
             session_id=session.provider_session_id,
             model=session.model if session.model != "provider-selected" else None,
+            effort=session.effort,
             prompt=(
                 "Summarize only the work completed through the local CLI since Telegram "
                 "handed this session over. Do not use tools. Do not include hidden reasoning, "
@@ -202,10 +203,25 @@ class ExternalAgentService:
                 prompt=prompt,
                 session_id=session.provider_session_id,
                 model=session.model if session.model != "provider-selected" else None,
+                effort=session.effort,
             )
         except Exception as exc:
             self.state.finish_dispatch(dispatch_id, success=False, error_code=type(exc).__name__)
-            raise
+            if isinstance(exc, ProviderLimitError):
+                self.state.record_runtime_event(
+                    self.agent.agent_id,
+                    "warning",
+                    "provider_limit",
+                    exc.limit.to_json(),
+                )
+                visible = (
+                    f"{self.agent.display_name}: {exc.limit.window} limit exhausted. "
+                    "Reset time was recorded; use /accounts for the current value."
+                )
+            else:
+                visible = f"{self.agent.display_name} failed safely ({type(exc).__name__})."
+            self.telegram.send_html(message.chat_id, message.thread_id, html.escape(visible)[:4090])
+            return True
         self.state.finish_dispatch(dispatch_id, success=True)
         if result.provider_session_id and result.provider_session_id != session.provider_session_id:
             session = self.state.bind_provider_session(

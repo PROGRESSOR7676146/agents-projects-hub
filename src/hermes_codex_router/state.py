@@ -495,6 +495,23 @@ class HubState:
             )
         return self.get_session(replacement.session_id)
 
+    def replace_active_session(self, topic_id: int, *, model: str, effort: str) -> SessionRecord:
+        row = self._connection.execute(
+            "SELECT * FROM agent_sessions WHERE topic_id = ? AND status = 'active'",
+            (topic_id,),
+        ).fetchone()
+        if row is None:
+            raise StateError("topic has no active session")
+        previous = self._session(row)
+        with self._connection:
+            self._connection.execute(
+                "UPDATE agent_sessions SET status = 'archived', updated_at = ? "
+                "WHERE session_id = ?",
+                (_now(), previous.session_id),
+            )
+            replacement = self._insert_session(topic_id, previous.agent_id, model, effort, "active")
+        return self.get_session(replacement.session_id)
+
     def new_all_sessions(self, topic_id: int) -> SessionRecord:
         row = self._connection.execute(
             "SELECT * FROM agent_sessions WHERE topic_id = ? AND status = 'active'",
@@ -632,6 +649,53 @@ class HubState:
                    VALUES (?, ?, ?, ?, ?)""",
                 (component[:64], level, code[:64], detail[:1000], _now()),
             )
+
+    def latest_runtime_event(self, component: str, code: str) -> dict[str, object] | None:
+        row = self._connection.execute(
+            """SELECT component, level, code, detail, created_at FROM runtime_events
+               WHERE component = ? AND code = ? ORDER BY event_id DESC LIMIT 1""",
+            (component, code),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def observe_runtime_counter(self, key: str, value: int) -> int | None:
+        if not key.strip() or value < 0:
+            raise StateError("invalid runtime counter")
+        row = self._connection.execute(
+            "SELECT integer_value FROM runtime_checkpoints WHERE checkpoint_key = ?",
+            (key,),
+        ).fetchone()
+        previous = int(row["integer_value"]) if row is not None else None
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO runtime_checkpoints
+                   (checkpoint_key, integer_value, updated_at) VALUES (?, ?, ?)
+                   ON CONFLICT(checkpoint_key) DO UPDATE SET
+                     integer_value = MAX(integer_value, excluded.integer_value),
+                     updated_at = excluded.updated_at""",
+                (key[:128], value, _now()),
+            )
+        return previous
+
+    def runtime_counter(self, key: str) -> int | None:
+        row = self._connection.execute(
+            "SELECT integer_value FROM runtime_checkpoints WHERE checkpoint_key = ?",
+            (key,),
+        ).fetchone()
+        return int(row["integer_value"]) if row is not None else None
+
+    def set_runtime_counter(self, key: str, value: int) -> None:
+        self.observe_runtime_counter(key, value)
+
+    def active_topics_for_agent(self, agent_id: str) -> tuple[TopicRecord, ...]:
+        rows = self._connection.execute(
+            """SELECT t.* FROM topics t
+               JOIN agent_sessions s ON s.topic_id = t.topic_id
+               WHERE s.status = 'active' AND s.agent_id = ?
+               ORDER BY t.topic_id""",
+            (agent_id,),
+        ).fetchall()
+        return tuple(self._topic(row) for row in rows)
 
     def claim_alert_delivery(self, alert_key: str, *, cooldown_seconds: int) -> bool:
         if not alert_key.strip() or cooldown_seconds < 0:
