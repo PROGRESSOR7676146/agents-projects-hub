@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
+
 
 class StateError(RuntimeError):
     pass
@@ -45,78 +47,6 @@ class HandoffRecord:
     text: str
 
 
-SCHEMA = """
-PRAGMA foreign_keys = ON;
-CREATE TABLE IF NOT EXISTS topics (
-    topic_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id TEXT NOT NULL,
-    chat_id INTEGER NOT NULL,
-    thread_id INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    active_agent_id TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(chat_id, thread_id)
-);
-CREATE TABLE IF NOT EXISTS agent_sessions (
-    session_id TEXT PRIMARY KEY,
-    topic_id INTEGER NOT NULL REFERENCES topics(topic_id),
-    agent_id TEXT NOT NULL,
-    generation INTEGER NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('active', 'satellite', 'archived')),
-    model TEXT NOT NULL,
-    effort TEXT NOT NULL,
-    provider_session_id TEXT,
-    terminal_name TEXT,
-    writer_mode TEXT NOT NULL DEFAULT 'telegram' CHECK(writer_mode IN ('telegram', 'terminal')),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(topic_id, agent_id, generation)
-);
-CREATE UNIQUE INDEX IF NOT EXISTS one_active_session_per_topic
-ON agent_sessions(topic_id) WHERE status = 'active';
-CREATE UNIQUE INDEX IF NOT EXISTS one_satellite_session_per_agent
-ON agent_sessions(topic_id, agent_id) WHERE status = 'satellite';
-CREATE TABLE IF NOT EXISTS observed_messages (
-    chat_id INTEGER NOT NULL,
-    message_id INTEGER NOT NULL,
-    observer_agent_id TEXT NOT NULL,
-    observed_at TEXT NOT NULL,
-    PRIMARY KEY(chat_id, message_id)
-);
-CREATE TABLE IF NOT EXISTS bot_offsets (
-    agent_id TEXT PRIMARY KEY,
-    next_update_id INTEGER NOT NULL,
-    updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS observed_callbacks (
-    callback_id TEXT PRIMARY KEY,
-    observer_agent_id TEXT NOT NULL,
-    observed_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS pending_handoffs (
-    handoff_id TEXT PRIMARY KEY,
-    topic_id INTEGER NOT NULL REFERENCES topics(topic_id),
-    target_agent_id TEXT NOT NULL,
-    source_agent_id TEXT NOT NULL,
-    text TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    UNIQUE(topic_id, target_agent_id)
-);
-CREATE TABLE IF NOT EXISTS external_turn_excerpts (
-    turn_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    topic_id INTEGER NOT NULL REFERENCES topics(topic_id),
-    agent_id TEXT NOT NULL,
-    provider_session_id TEXT,
-    model TEXT,
-    provider TEXT,
-    user_excerpt TEXT NOT NULL,
-    response_excerpt TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-"""
-
-
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -133,18 +63,23 @@ class HubState:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if not parent_existed:
             path.parent.chmod(0o700)
+        existed = path.exists() and path.stat().st_size > 0
+        if existed:
+            probe = sqlite3.connect(path)
+            try:
+                version = int(probe.execute("PRAGMA user_version").fetchone()[0])
+            finally:
+                probe.close()
+            if version < LATEST_SCHEMA_VERSION:
+                migrate_database(path, create_backup=True)
         connection = sqlite3.connect(path)
         os.chmod(path, 0o600)
-        connection.executescript(SCHEMA)
-        columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(agent_sessions)")
-        }
-        if "writer_mode" not in columns:
-            connection.execute(
-                "ALTER TABLE agent_sessions ADD COLUMN writer_mode TEXT NOT NULL DEFAULT 'telegram'"
-            )
-        connection.commit()
+        migrate_connection(connection)
         return cls(connection)
+
+    @property
+    def schema_version(self) -> int:
+        return int(self._connection.execute("PRAGMA user_version").fetchone()[0])
 
     def close(self) -> None:
         self._connection.close()
@@ -316,9 +251,7 @@ class HubState:
                     _now(),
                 ),
             )
-        return HandoffRecord(
-            handoff_id, topic_id, target_agent_id, source_agent_id, bounded
-        )
+        return HandoffRecord(handoff_id, topic_id, target_agent_id, source_agent_id, bounded)
 
     def recent_external_context(
         self, topic_id: int, agent_id: str, *, limit: int = 8
@@ -336,12 +269,10 @@ class HubState:
             return None
         parts: list[str] = []
         for row in reversed(rows):
-            label = "/".join(
-                value for value in (row["provider"], row["model"]) if value
-            ) or agent_id
-            parts.append(
-                f"USER: {row['user_excerpt']}\n{label.upper()}: {row['response_excerpt']}"
+            label = (
+                "/".join(value for value in (row["provider"], row["model"]) if value) or agent_id
             )
+            parts.append(f"USER: {row['user_excerpt']}\n{label.upper()}: {row['response_excerpt']}")
         return "\n\n".join(parts)
 
     def _next_generation(self, topic_id: int, agent_id: str) -> int:
@@ -489,3 +420,118 @@ class HubState:
         except sqlite3.IntegrityError:
             return False
         return True
+
+    def status_snapshot(self) -> dict[str, object]:
+        topics = self._connection.execute(
+            """SELECT t.topic_id, t.project_id, t.chat_id, t.thread_id, t.title,
+                      t.active_agent_id, s.session_id, s.provider_session_id,
+                      s.writer_mode, s.model, s.effort
+               FROM topics t
+               LEFT JOIN agent_sessions s
+                 ON s.topic_id = t.topic_id AND s.status = 'active'
+               ORDER BY t.project_id, t.thread_id"""
+        ).fetchall()
+        offsets = self._connection.execute(
+            "SELECT agent_id, next_update_id, updated_at FROM bot_offsets ORDER BY agent_id"
+        ).fetchall()
+        dispatch_counts = self._connection.execute(
+            "SELECT status, COUNT(*) AS count FROM turn_dispatches GROUP BY status"
+        ).fetchall()
+        running = self._connection.execute(
+            """SELECT dispatch_id, topic_id, agent_id, status, created_at, updated_at
+               FROM turn_dispatches WHERE status IN ('queued', 'running')
+               ORDER BY created_at"""
+        ).fetchall()
+        return {
+            "schema_version": self.schema_version,
+            "topics": [dict(row) for row in topics],
+            "bot_offsets": [dict(row) for row in offsets],
+            "dispatch_counts": {row["status"]: row["count"] for row in dispatch_counts},
+            "pending_dispatches": [dict(row) for row in running],
+        }
+
+    def start_dispatch(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        topic_id: int,
+        agent_id: str,
+    ) -> str:
+        dispatch_id = str(uuid.uuid4())
+        now = _now()
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO turn_dispatches
+                   (dispatch_id, chat_id, message_id, topic_id, agent_id, status,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, 'running', ?, ?)""",
+                (dispatch_id, chat_id, message_id, topic_id, agent_id, now, now),
+            )
+        return dispatch_id
+
+    def finish_dispatch(
+        self, dispatch_id: str, *, success: bool, error_code: str | None = None
+    ) -> None:
+        status = "completed" if success else "failed"
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE turn_dispatches
+                   SET status = ?, error_code = ?, updated_at = ?
+                   WHERE dispatch_id = ?""",
+                (status, error_code[:128] if error_code else None, _now(), dispatch_id),
+            )
+        if cursor.rowcount != 1:
+            raise StateError(f"unknown dispatch_id: {dispatch_id}")
+
+    def record_runtime_event(self, component: str, level: str, code: str, detail: str) -> None:
+        if level not in {"info", "warning", "error"}:
+            raise StateError("invalid runtime event level")
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO runtime_events(component, level, code, detail, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (component[:64], level, code[:64], detail[:1000], _now()),
+            )
+
+    def register_lane(
+        self,
+        *,
+        lane_id: str,
+        project_id: str,
+        worktree_path: Path,
+        branch_name: str,
+        topic_id: int | None = None,
+    ) -> None:
+        now = _now()
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO worktree_lanes
+                   (lane_id, project_id, topic_id, worktree_path, branch_name,
+                    status, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, 'active', ?, ?)""",
+                (
+                    lane_id,
+                    project_id,
+                    topic_id,
+                    str(worktree_path.resolve(strict=True)),
+                    branch_name,
+                    now,
+                    now,
+                ),
+            )
+
+    def archive_lane(self, lane_id: str) -> None:
+        with self._connection:
+            cursor = self._connection.execute(
+                "UPDATE worktree_lanes SET status = 'archived', updated_at = ? WHERE lane_id = ?",
+                (_now(), lane_id),
+            )
+        if cursor.rowcount != 1:
+            raise StateError(f"unknown lane_id: {lane_id}")
+
+    def list_lanes(self) -> list[dict[str, object]]:
+        rows = self._connection.execute(
+            "SELECT * FROM worktree_lanes ORDER BY created_at"
+        ).fetchall()
+        return [dict(row) for row in rows]

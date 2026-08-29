@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
 SUPPORTED_RUNTIMES = {"codex", "hermes", "gemini", "opencode", "api"}
@@ -33,6 +32,14 @@ class AgentDefinition:
     managed_externally: bool
     default_model: str
     default_effort: str
+    executable: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalSettings:
+    backend: str
+    program: str | None
+    wsl_distro: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +50,7 @@ class HubConfig:
     state_path: Path
     codex_socket_path: Path
     manage_codex_server: bool
+    terminal: TerminalSettings
     projects: tuple[ProjectBinding, ...]
     agents: tuple[AgentDefinition, ...]
 
@@ -127,6 +135,19 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
     if not isinstance(manage_codex_server, bool):
         raise HubConfigError("manage_codex_server must be boolean")
 
+    terminal_data = _object(root.get("terminal", {}), "terminal")
+    terminal_backend = terminal_data.get("backend", "auto")
+    if terminal_backend not in {"auto", "wsl", "linux", "macos", "tmux-only"}:
+        raise HubConfigError("terminal.backend is unsupported")
+    terminal_program = terminal_data.get("program")
+    if terminal_program is not None and (
+        not isinstance(terminal_program, str) or not terminal_program.strip()
+    ):
+        raise HubConfigError("terminal.program must be a non-empty string")
+    wsl_distro = terminal_data.get("wsl_distro", "Ubuntu")
+    if not isinstance(wsl_distro, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", wsl_distro):
+        raise HubConfigError("terminal.wsl_distro is invalid")
+
     raw_projects = root.get("projects")
     if not isinstance(raw_projects, list) or not raw_projects:
         raise HubConfigError("projects must be a non-empty array")
@@ -184,14 +205,26 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
             token_file = _private_token_file(data.get("token_file"), agent_id)
         agent_ids.add(agent_id)
         usernames.add(username.casefold())
-        default_model = data.get("default_model", "gpt-5.6-sol" if runtime == "codex" else "unknown")
+        default_model = data.get(
+            "default_model", "gpt-5.6-sol" if runtime == "codex" else "unknown"
+        )
         default_effort = data.get("default_effort", "high")
         if not isinstance(default_model, str) or not default_model.strip():
             raise HubConfigError(f"default_model is invalid for {agent_id}")
         if default_effort not in {
-            "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra",
         }:
             raise HubConfigError(f"default_effort is invalid for {agent_id}")
+        executable = data.get("executable")
+        if executable is not None and (not isinstance(executable, str) or not executable.strip()):
+            raise HubConfigError(f"executable is invalid for {agent_id}")
         agents.append(
             AgentDefinition(
                 agent_id=agent_id,
@@ -203,6 +236,7 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
                 managed_externally=managed_externally,
                 default_model=default_model.strip(),
                 default_effort=default_effort,
+                executable=executable.strip() if executable else None,
             )
         )
 
@@ -213,6 +247,11 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
         state_path=state_path,
         codex_socket_path=codex_socket_path,
         manage_codex_server=manage_codex_server,
+        terminal=TerminalSettings(
+            backend=terminal_backend,
+            program=terminal_program.strip() if terminal_program else None,
+            wsl_distro=wsl_distro,
+        ),
         projects=tuple(projects),
         agents=tuple(agents),
     )

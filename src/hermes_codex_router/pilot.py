@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from .hub_config import HubConfig
 from .metadata import format_telegram_response
 from .registry import load_registry
-from .state import HubState, SessionRecord
+from .state import HubState
 from .supervisor import CodexAppServerSupervisor
 from .telegram import TelegramBotApi
 from .terminal import terminal_session_name
@@ -37,9 +36,7 @@ def run_codex_pilot(
         raise ValueError("managed Codex bot is not configured")
 
     state = HubState.open(config.state_path)
-    supervisor = CodexAppServerSupervisor(
-        config.state_path.parent / "codex-stdio-placeholder.sock"
-    )
+    supervisor = CodexAppServerSupervisor(config.state_path.parent / "codex-stdio-placeholder.sock")
     try:
         topic = state.observe_topic(
             project_id=project_id,

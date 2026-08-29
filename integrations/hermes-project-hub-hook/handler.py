@@ -5,7 +5,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 _SOURCE_ROOT = os.getenv("HERMES_PROJECT_HUB_SOURCE")
 if not _SOURCE_ROOT:
     _SOURCE_ROOT = str(Path(__file__).resolve().parents[2] / "src")
@@ -13,7 +12,6 @@ if _SOURCE_ROOT not in sys.path:
     sys.path.insert(0, _SOURCE_ROOT)
 
 from hermes_codex_router.external_admission import record_external_turn  # noqa: E402
-
 
 _STATE_PATH = Path(
     os.getenv(

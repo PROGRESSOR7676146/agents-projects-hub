@@ -12,3 +12,6 @@ config/projects.json
 *.sock
 *.pid
 *.log
+*.backup-*
+dist/
+build/

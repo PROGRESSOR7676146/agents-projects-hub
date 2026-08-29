@@ -42,9 +42,7 @@ class HubStateTests(unittest.TestCase):
         satellite = self.state.ensure_satellite(
             self.topic.topic_id, "gemini", "gemini-3-pro", "high"
         )
-        promoted = self.state.activate_agent(
-            self.topic.topic_id, "gemini", "gemini-3-pro", "high"
-        )
+        promoted = self.state.activate_agent(self.topic.topic_id, "gemini", "gemini-3-pro", "high")
 
         self.assertNotEqual(promoted.session_id, satellite.session_id)
         self.assertEqual(self.state.get_session(codex.session_id).status, "archived")
@@ -75,17 +73,11 @@ class HubStateTests(unittest.TestCase):
         self.assertEqual(replacement.status, "active")
 
     def test_duplicate_telegram_message_is_claimed_once_across_bot_tokens(self) -> None:
-        self.assertTrue(
-            self.state.claim_message(-1001234567890, 501, observer_agent_id="codex")
-        )
-        self.assertFalse(
-            self.state.claim_message(-1001234567890, 501, observer_agent_id="gemini")
-        )
+        self.assertTrue(self.state.claim_message(-1001234567890, 501, observer_agent_id="codex"))
+        self.assertFalse(self.state.claim_message(-1001234567890, 501, observer_agent_id="gemini"))
 
     def test_provider_session_binding_is_persisted(self) -> None:
-        session = self.state.activate_agent(
-            self.topic.topic_id, "codex", "gpt-5.6-sol", "high"
-        )
+        session = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
         bound = self.state.bind_provider_session(session.session_id, "thread-123", "tab-name")
         self.assertEqual(bound.provider_session_id, "thread-123")
         self.assertEqual(bound.terminal_name, "tab-name")
@@ -101,9 +93,7 @@ class HubStateTests(unittest.TestCase):
         self.assertEqual(self.state.get_bot_offset("codex"), 514951014)
 
     def test_writer_mode_persists_terminal_takeover(self) -> None:
-        session = self.state.activate_agent(
-            self.topic.topic_id, "codex", "gpt-5.6-sol", "high"
-        )
+        session = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
         terminal = self.state.set_writer_mode(session.session_id, "terminal")
         self.assertEqual(terminal.writer_mode, "terminal")
         telegram = self.state.set_writer_mode(session.session_id, "telegram")
@@ -113,9 +103,7 @@ class HubStateTests(unittest.TestCase):
         self.assertIsNone(
             self.state.active_agent_for_route(self.topic.chat_id, self.topic.thread_id)
         )
-        self.state.activate_agent(
-            self.topic.topic_id, "hermes", "provider-selected", "high"
-        )
+        self.state.activate_agent(self.topic.topic_id, "hermes", "provider-selected", "high")
         self.assertEqual(
             self.state.active_agent_for_route(self.topic.chat_id, self.topic.thread_id),
             "hermes",
@@ -152,13 +140,25 @@ class HubStateTests(unittest.TestCase):
                        VALUES (?, 'hermes', 'session', 'glm', 'opencode-go', ?, ?, ?)""",
                     (self.topic.topic_id, f"u{index}", f"r{index}", str(index)),
                 )
-        context = self.state.recent_external_context(
-            self.topic.topic_id, "hermes", limit=3
-        )
+        context = self.state.recent_external_context(self.topic.topic_id, "hermes", limit=3)
         self.assertIsNotNone(context)
         assert context is not None
         self.assertNotIn("u6", context)
         self.assertLess(context.index("u7"), context.index("u9"))
+
+    def test_dispatch_health_tracks_running_and_completed_turns(self) -> None:
+        dispatch_id = self.state.start_dispatch(
+            chat_id=self.topic.chat_id,
+            message_id=700,
+            topic_id=self.topic.topic_id,
+            agent_id="codex",
+        )
+        running = self.state.status_snapshot()
+        self.assertEqual(running["dispatch_counts"], {"running": 1})
+        self.state.finish_dispatch(dispatch_id, success=True)
+        completed = self.state.status_snapshot()
+        self.assertEqual(completed["dispatch_counts"], {"completed": 1})
+        self.assertEqual(completed["pending_dispatches"], [])
 
 
 if __name__ == "__main__":

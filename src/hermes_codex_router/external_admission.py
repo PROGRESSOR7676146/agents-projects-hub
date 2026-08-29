@@ -27,9 +27,7 @@ def is_active_agent(
         return False
     connection: sqlite3.Connection | None = None
     try:
-        connection = sqlite3.connect(
-            f"file:{path}?mode=ro", uri=True, timeout=0.2
-        )
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.2)
         row = connection.execute(
             "SELECT active_agent_id FROM topics WHERE chat_id = ? AND thread_id = ?",
             (chat_id, thread_id),
@@ -97,8 +95,8 @@ def record_external_turn(
     chat_id: int,
     thread_id: int,
     agent_id: str,
-    provider_session_id: str,
-    model: str,
+    provider_session_id: str | None,
+    model: str | None,
     provider: str,
     user_excerpt: str,
     response_excerpt: str,
@@ -125,8 +123,8 @@ def record_external_turn(
                 (
                     row[0],
                     agent_id,
-                    provider_session_id[:200],
-                    model[:200],
+                    (provider_session_id or "")[:200],
+                    (model or "unknown")[:200],
                     provider[:200],
                     user_excerpt.strip()[:500],
                     response_excerpt.strip()[:500],

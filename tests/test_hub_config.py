@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -65,6 +64,7 @@ class HubConfigTests(unittest.TestCase):
             Path.home() / ".codex/app-server-control/app-server-control.sock",
         )
         self.assertFalse(config.manage_codex_server)
+        self.assertEqual(config.terminal.backend, "auto")
         self.assertNotIn("secret-token-value", path.read_text(encoding="utf-8"))
 
     def test_rejects_non_boolean_manage_codex_server(self) -> None:
@@ -107,6 +107,15 @@ class HubConfigTests(unittest.TestCase):
         missing = self.base / "private" / "state.db"
         config = load_hub_config(self.write_config(state_path=str(missing)))
         self.assertEqual(config.state_path, missing.resolve())
+
+    def test_loads_explicit_terminal_backend(self) -> None:
+        config = load_hub_config(
+            self.write_config(
+                terminal={"backend": "linux", "program": "kitty", "wsl_distro": "Ubuntu"}
+            )
+        )
+        self.assertEqual(config.terminal.backend, "linux")
+        self.assertEqual(config.terminal.program, "kitty")
 
 
 if __name__ == "__main__":

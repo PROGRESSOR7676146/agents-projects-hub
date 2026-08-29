@@ -1,6 +1,7 @@
 # Hermes Project Hub — спецификация и план
 
-Дата актуализации: 2026-08-28. Pythia acceptance пройден.
+Дата актуализации: 2026-08-29. Pythia acceptance пройден, operational hardening
+v0.3 реализован.
 
 ## Целевая модель
 
@@ -59,21 +60,37 @@ per-topic либо использовать подтверждённый multipl
 | `/model MODEL EFFORT` | реализовано | live validation + новая session + handoff |
 | `/agent`, `/agent AGENT` | двусторонний Codex ↔ Hermes | inline-выбор; Codex summary и bounded visible Hermes excerpts |
 | `/terminal`, `/release` | реализовано | явная передача writer lease |
+| `/status` | реализовано | active agent/session/writer/schema без hidden данных |
+
+Локальный CLI дополнен командами `doctor`, `status`, `backup`, `migrate`,
+`project add/list/enable/disable` и `lane create/list/archive`. Telegram по-прежнему
+не принимает локальные пути и не создаёт worktree самостоятельно.
 
 ## Следующая очередь
 
-1. Проверить постоянный long-polling реальным `@Codex` сообщением в `main thia`.
-2. Проверить `/terminal`/`/release` реальной темой и закрытием Terminal вручную.
-3. Проверить inline-кнопки `/model` в реальной теме: модели и efforts уже
-   валидируются через provider API, новая session получает handoff без hidden reasoning.
-4. Проверить двусторонний Hermes adapter живой темой; admission plugin, общая
-   state DB и экспорт контекста подключены без второго long-poller. Затем
-   добавить унифицированный metadata footer Hermes.
-5. Добавить Gemini/OpenCode adapters; неизвестные лимиты обозначать
-   `unavailable`, а не оценивать.
-6. Сделать создание/переименование темы и выбор initial active agent удобным,
-   сохраняя числовой ключ.
-7. Добавить Babelfish и Robots только после прохождения Pythia acceptance.
+1. Провести живую приёмку второй приватной project group без переиспользования
+   Pythia topic/session IDs.
+2. Проверить Gemini/OpenCode adapters с реальными provider accounts и отдельными
+   Telegram bot tokens; auto/yolo flags запрещены, неизвестные лимиты показываются
+   как `unavailable`.
+3. Подключить единый metadata footer к Hermes через стабильный публичный hook,
+   не разбирая terminal output или hidden reasoning.
+4. Добавить явное локальное подтверждение binding worktree lane → Telegram topic
+   и отдельный безопасный cleanup workflow.
+5. Настроить GitHub ruleset и private vulnerability reporting после
+   восстановления административной GitHub CLI-сессии.
+
+## Operational hardening v0.3
+
+- CI на Python 3.11–3.13, Ruff, Pyright, unit/integration tests и CodeQL;
+- Dependabot для pip и GitHub Actions;
+- MIT license, security policy, changelog и acknowledgments upstream-проектам;
+- versioned SQLite schema v3, automatic pre-migration backup и integrity check;
+- dispatch status для queued/running/completed/failed и диагностический snapshot;
+- fail-closed `doctor`, systemd user templates и installer без auto-enable;
+- configurable WSL/Linux/macOS/tmux-only terminal launchers;
+- локальные project administration и worktree-lane foundation;
+- Gemini/OpenCode CLI adapters через structured output без auto-approval.
 
 ## Acceptance Pythia
 

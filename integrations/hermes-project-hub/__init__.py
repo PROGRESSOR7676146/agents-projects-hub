@@ -6,7 +6,6 @@ import os
 import sys
 from pathlib import Path
 
-
 _SOURCE_ROOT = os.getenv("HERMES_PROJECT_HUB_SOURCE")
 if not _SOURCE_ROOT:
     _SOURCE_ROOT = str(Path(__file__).resolve().parents[2] / "src")

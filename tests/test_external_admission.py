@@ -24,24 +24,16 @@ class ExternalAdmissionTests(unittest.TestCase):
             thread_id=73,
             title="main",
         )
-        state.activate_agent(
-            self.topic.topic_id, "hermes", "provider-selected", "high"
-        )
+        state.activate_agent(self.topic.topic_id, "hermes", "provider-selected", "high")
         state.close()
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
     def test_allows_only_exact_topic_selected_for_agent(self) -> None:
-        self.assertTrue(
-            is_active_agent(self.path, -1001234567890, 73, agent_id="hermes")
-        )
-        self.assertFalse(
-            is_active_agent(self.path, -1001234567890, 74, agent_id="hermes")
-        )
-        self.assertFalse(
-            is_active_agent(self.path, -1001234567890, 73, agent_id="codex")
-        )
+        self.assertTrue(is_active_agent(self.path, -1001234567890, 73, agent_id="hermes"))
+        self.assertFalse(is_active_agent(self.path, -1001234567890, 74, agent_id="hermes"))
+        self.assertFalse(is_active_agent(self.path, -1001234567890, 73, agent_id="codex"))
 
     def test_missing_or_invalid_database_fails_closed(self) -> None:
         self.assertFalse(
@@ -54,9 +46,7 @@ class ExternalAdmissionTests(unittest.TestCase):
         )
         broken = Path(self.tempdir.name) / "broken.db"
         broken.write_text("not sqlite", encoding="utf-8")
-        self.assertFalse(
-            is_active_agent(broken, -1001234567890, 73, agent_id="hermes")
-        )
+        self.assertFalse(is_active_agent(broken, -1001234567890, 73, agent_id="hermes"))
 
     def test_handoff_is_peeked_then_consumed_explicitly(self) -> None:
         state = HubState.open(self.path)
@@ -67,17 +57,13 @@ class ExternalAdmissionTests(unittest.TestCase):
             text="context",
         )
         state.close()
-        found = peek_pending_handoff(
-            self.path, -1001234567890, 73, target_agent_id="hermes"
-        )
+        found = peek_pending_handoff(self.path, -1001234567890, 73, target_agent_id="hermes")
         self.assertIsNotNone(found)
         assert found is not None
         self.assertEqual(found.text, "context")
         self.assertTrue(consume_pending_handoff(self.path, staged.handoff_id))
         self.assertIsNone(
-            peek_pending_handoff(
-                self.path, -1001234567890, 73, target_agent_id="hermes"
-            )
+            peek_pending_handoff(self.path, -1001234567890, 73, target_agent_id="hermes")
         )
 
     def test_records_only_visible_turn_for_current_active_agent(self) -> None:

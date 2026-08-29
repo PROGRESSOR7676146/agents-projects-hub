@@ -1,0 +1,4 @@
+# Shared by agents-projects-hub.service and the Hermes gateway drop-in.
+HERMES_PROJECT_HUB_SOURCE=/home/example/src/agents-projects-hub/src
+HERMES_PROJECT_HUB_STATE=/home/example/.local/state/agents-projects-hub/state.db
+HERMES_PROJECT_HUB_OWNER_IDS=123456789

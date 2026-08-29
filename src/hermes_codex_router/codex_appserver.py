@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import asyncio
+import json
 import queue
 import socket
 import subprocess
@@ -244,9 +244,7 @@ class CodexAppServerClient:
     def _request(self, method: str, params: dict[str, Any]) -> Any:
         request_id = self._next_request_id
         self._next_request_id += 1
-        self._transport.send(
-            {"method": method, "id": request_id, "params": params}
-        )
+        self._transport.send({"method": method, "id": request_id, "params": params})
         while True:
             message = self._transport.receive()
             if "method" in message and "id" in message:

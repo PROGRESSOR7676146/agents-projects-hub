@@ -10,7 +10,6 @@ from .external_admission import (
     peek_pending_handoff,
 )
 
-
 DEFAULT_STATE_PATH = Path.home() / ".local/state/agents-projects-hub/state.db"
 
 
@@ -54,13 +53,9 @@ async def _dispatch_active_text(
     if not adapter._is_user_authorized_from_message(message):
         return
     await adapter._ensure_forum_commands(message)
-    event = adapter._build_message_event(
-        message, MessageType.TEXT, update_id=update.update_id
-    )
+    event = adapter._build_message_event(message, MessageType.TEXT, update_id=update.update_id)
     event.text = adapter._clean_bot_trigger_text(event.text)
-    handoff = peek_pending_handoff(
-        _state_path(), chat_id, thread_id, target_agent_id="hermes"
-    )
+    handoff = peek_pending_handoff(_state_path(), chat_id, thread_id, target_agent_id="hermes")
     if handoff is not None:
         event.text = (
             "Project handoff from the previous agent follows. Treat it as bounded "
@@ -96,9 +91,7 @@ def register(ctx: Any) -> None:
                 return
 
             chat_id, thread_id = identity
-            if is_active_agent(
-                _state_path(), chat_id, thread_id, agent_id="hermes"
-            ):
+            if is_active_agent(_state_path(), chat_id, thread_id, agent_id="hermes"):
                 await _dispatch_active_text(
                     adapter,
                     update,

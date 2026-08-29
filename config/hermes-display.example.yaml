@@ -1,0 +1,10 @@
+# Merge this block into ~/.hermes/config.yaml. Hermes owns rendering; the Hub
+# hook only exports bounded visible excerpts for handoff.
+display:
+  runtime_footer:
+    enabled: true
+    fields:
+      - model
+      - context_pct
+      - latency
+      - cwd

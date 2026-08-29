@@ -3,9 +3,8 @@ from __future__ import annotations
 import html
 import re
 import time
-from pathlib import Path
 
-from .hub_config import AgentDefinition, HubConfig
+from .hub_config import HubConfig
 from .metadata import format_telegram_response
 from .model_selection import ModelSelectionError, available_models, require_model_effort
 from .registry import Project, load_registry
@@ -42,7 +41,12 @@ class ProjectHubService:
             self.config.codex_socket_path,
             manage_process=self.config.manage_codex_server,
         )
-        self.terminal = TerminalRuntime(socket_path=self.config.codex_socket_path)
+        self.terminal = TerminalRuntime(
+            socket_path=self.config.codex_socket_path,
+            backend=self.config.terminal.backend,
+            program=self.config.terminal.program,
+            distro=self.config.terminal.wsl_distro,
+        )
         self.usernames = {
             candidate.agent_id: candidate.telegram_username for candidate in config.agents
         }
@@ -96,9 +100,7 @@ class ProjectHubService:
         tab_name = terminal_session_name(
             project.display_name, topic.title, self.agent.display_name, topic.thread_id
         )
-        return self.state.bind_provider_session(
-            session.session_id, thread.thread_id, tab_name
-        )
+        return self.state.bind_provider_session(session.session_id, thread.thread_id, tab_name)
 
     def _run_codex_turn(
         self,
@@ -160,9 +162,7 @@ class ProjectHubService:
         finally:
             client.close()
 
-    def _prepare_codex_handoff(
-        self, *, project: Project, previous: SessionRecord
-    ) -> str:
+    def _prepare_codex_handoff(self, *, project: Project, previous: SessionRecord) -> str:
         if previous.agent_id != self.agent.agent_id or not previous.provider_session_id:
             return "No prior provider conversation was available."
         client = self.supervisor.client()
@@ -212,9 +212,7 @@ class ProjectHubService:
             self._send_text(message, "Use /release before changing the active agent.")
             return
         if previous.agent_id != self.agent.agent_id:
-            context = self.state.recent_external_context(
-                topic.topic_id, previous.agent_id
-            )
+            context = self.state.recent_external_context(topic.topic_id, previous.agent_id)
             if context is None:
                 self._send_text(
                     message,
@@ -223,9 +221,23 @@ class ProjectHubService:
                 )
                 return
             if target.agent_id != self.agent.agent_id:
+                replacement = self.state.activate_agent(
+                    topic.topic_id,
+                    target.agent_id,
+                    target.default_model,
+                    target.default_effort,
+                )
+                self.state.stage_handoff(
+                    topic.topic_id,
+                    target_agent_id=target.agent_id,
+                    source_agent_id=previous.agent_id,
+                    text=context,
+                )
                 self._send_text(
                     message,
-                    "Direct switching between external agents is not enabled yet.",
+                    f"{target.display_name} is now active (generation "
+                    f"{replacement.generation}). The visible external-agent context "
+                    "is staged for its first message.",
                 )
                 return
             self._start_codex_from_handoff(
@@ -513,16 +525,41 @@ class ProjectHubService:
             binding = self.config.project_for_chat(message.chat_id)
         except KeyError:
             return False
-        if not self.state.claim_message(
-            message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
-        ):
-            return False
         topic = self._topic(message, binding.project_id)
         command = parse_command(message.text)
+        control_commands = {"pilot", "status", "new", "terminal", "release", "model", "agent"}
+        if command and command.name in control_commands:
+            if not self.state.claim_message(
+                message.chat_id,
+                message.message_id,
+                observer_agent_id=self.agent.agent_id,
+            ):
+                return False
         if command and command.name == "pilot":
             session = self._ensure_codex_session(topic)
             status = "connected" if session.provider_session_id else "registered"
             self._send_text(message, f"Codex topic session is {status}.")
+            return True
+        if command and command.name == "status":
+            active = self.state.active_session(topic.topic_id)
+            project = self.registry.require_project(binding.project_id)
+            if active is None:
+                detail = "No active agent session has been created yet."
+            else:
+                provider = active.provider_session_id or "not started"
+                detail = "\n".join(
+                    (
+                        f"Project: {project.display_name}",
+                        f"Topic: {topic.title}",
+                        f"Active agent: {active.agent_id}",
+                        f"Model: {active.model}",
+                        f"Effort: {active.effort}",
+                        f"Writer: {active.writer_mode}",
+                        f"Provider session: {provider}",
+                        f"State schema: {self.state.schema_version}",
+                    )
+                )
+            self._send_text(message, detail)
             return True
         if command and command.name == "new":
             active = self.state.active_session(topic.topic_id)
@@ -544,9 +581,7 @@ class ProjectHubService:
         if command and command.name == "terminal":
             session = self._ensure_codex_session(topic)
             project = self.registry.require_project(binding.project_id)
-            session = self._ensure_provider_thread(
-                project=project, topic=topic, session=session
-            )
+            session = self._ensure_provider_thread(project=project, topic=topic, session=session)
             if not session.provider_session_id or not session.terminal_name:
                 raise ServiceError("provider thread is not ready for terminal takeover")
             if session.writer_mode == "terminal" and self.terminal.is_running(
@@ -641,6 +676,10 @@ class ProjectHubService:
         )
         if self.agent.agent_id not in targets:
             return False
+        if not self.state.claim_message(
+            message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
+        ):
+            return False
         session = self._ensure_codex_session(topic)
         if session.writer_mode == "terminal":
             if session.terminal_name and self.terminal.is_running(session.terminal_name):
@@ -659,6 +698,12 @@ class ProjectHubService:
         if not clean_text:
             self._send_text(message, "Add a request after the Codex mention.")
             return True
+        dispatch_id = self.state.start_dispatch(
+            chat_id=message.chat_id,
+            message_id=message.message_id,
+            topic_id=topic.topic_id,
+            agent_id=self.agent.agent_id,
+        )
         try:
             self._run_codex_turn(
                 project=project,
@@ -667,7 +712,9 @@ class ProjectHubService:
                 text=clean_text,
                 message=message,
             )
+            self.state.finish_dispatch(dispatch_id, success=True)
         except Exception as exc:
+            self.state.finish_dispatch(dispatch_id, success=False, error_code=type(exc).__name__)
             self._send_text(
                 message,
                 f"Codex turn failed safely ({type(exc).__name__}); no permission was auto-approved.",
@@ -677,6 +724,7 @@ class ProjectHubService:
 
     def run_forever(self) -> None:
         self.supervisor.start()
+        self.state.record_runtime_event("codex", "info", "service_started", "polling")
         offset = self.state.get_bot_offset(self.agent.agent_id)
         while True:
             try:
@@ -690,5 +738,8 @@ class ProjectHubService:
                     finally:
                         offset = update_id + 1
                         self.state.set_bot_offset(self.agent.agent_id, offset)
-            except TelegramError:
+            except TelegramError as exc:
+                self.state.record_runtime_event(
+                    "codex", "warning", "telegram_error", type(exc).__name__
+                )
                 time.sleep(3)

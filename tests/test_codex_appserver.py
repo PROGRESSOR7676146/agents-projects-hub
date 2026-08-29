@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import unittest
 import tempfile
+import unittest
 from collections import deque
 from pathlib import Path
 
@@ -140,6 +140,10 @@ class CodexAppServerTests(unittest.TestCase):
         )
         client = CodexAppServerClient(transport, initialized=True)
         limits = client.read_rate_limits()
+        self.assertIsNotNone(limits.primary)
+        self.assertIsNotNone(limits.secondary)
+        assert limits.primary is not None
+        assert limits.secondary is not None
         self.assertEqual(limits.primary.remaining_percent, 65)
         self.assertEqual(limits.secondary.remaining_percent, 48)
         self.assertEqual(limits.primary.resets_at, 1770000000)

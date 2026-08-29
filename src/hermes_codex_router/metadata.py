@@ -7,6 +7,12 @@ from zoneinfo import ZoneInfo
 from .codex_appserver import LimitWindow, RateLimits, TurnResult
 
 
+def format_agent_response(answer: str, details: dict[str, str]) -> str:
+    visible = html.escape(answer or "The agent completed without a visible text response.")
+    block = "\n".join(f"{key}: {value}" for key, value in details.items())
+    return f"{visible}\n\n<blockquote expandable>{html.escape(block)}</blockquote>"
+
+
 def _reset_text(window: LimitWindow | None, timezone: ZoneInfo) -> str:
     if window is None or window.resets_at is None:
         return "unavailable"
@@ -50,5 +56,7 @@ def format_telegram_response(
             f"Weekly reset: {_reset_text(limits.secondary, timezone)}",
         ]
     )
-    answer = html.escape(result.text or "Codex completed the turn without a text response.")
-    return f"{answer}\n\n<blockquote expandable>{html.escape(details)}</blockquote>"
+    return format_agent_response(
+        result.text or "Codex completed the turn without a text response.",
+        dict(line.split(": ", 1) for line in details.splitlines()),
+    )

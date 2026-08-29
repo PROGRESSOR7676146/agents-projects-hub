@@ -5,6 +5,11 @@
   "state_path": "/home/example/.local/state/agents-projects-hub/state.db",
   "codex_socket_path": "/home/example/.codex/app-server-control/app-server-control.sock",
   "manage_codex_server": false,
+  "terminal": {
+    "backend": "auto",
+    "program": null,
+    "wsl_distro": "Ubuntu"
+  },
   "projects": [
     {"project_id": "pythia", "telegram_chat_id": null}
   ],

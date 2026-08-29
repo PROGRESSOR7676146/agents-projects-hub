@@ -4,9 +4,10 @@ Privacy-first orchestration hub connecting Telegram project topics to persistent
 Codex, Hermes, and other agent sessions with context handoffs, model switching,
 approvals, and terminal takeover.
 
-> **Status:** working pilot. The Codex ↔ Hermes flow has passed live acceptance
-> on a private Telegram forum, but installation is still operator-driven and
-> some adapters and administration commands remain on the roadmap.
+> **Status:** v0.3 pilot. The Codex ↔ Hermes flow has passed live acceptance on
+> a private Telegram forum. Reproducible installation, migrations, diagnostics,
+> CI, and Gemini/OpenCode CLI adapters are included; additional live projects
+> and provider combinations still require operator acceptance.
 
 ## Why this project exists
 
@@ -46,7 +47,9 @@ Agents Projects Hub ─── local registry + SQLite state
         │
         ├── Codex app-server ─── persistent Codex thread ─── project worktree
         │
-        └── Hermes gateway/plugin ─── persistent Hermes topic session
+        ├── Hermes gateway/plugin ─── persistent Hermes topic session
+        │
+        └── Gemini/OpenCode CLI adapters ─── provider-owned sessions
 ```
 
 Topic identity is the numeric pair `(chat_id, message_thread_id)`; topic titles
@@ -79,9 +82,9 @@ thread with `codex resume`. While the terminal owns the lease, Telegram cannot
 start another turn in that thread. `/release` closes the tmux session, reloads
 the persisted thread, and returns the lease to Telegram.
 
-The current terminal launcher targets WSL with Windows Terminal. The core router
-is otherwise platform-neutral, but other terminal frontends need their own
-launcher adapter.
+Terminal launching is configuration-driven. Supported backends are WSL with
+Windows Terminal, Linux terminal emulators, macOS Terminal, and `tmux-only` for
+manual attachment. All backends create the same named tmux writer first.
 
 ## Implemented pilot
 
@@ -91,10 +94,14 @@ launcher adapter.
 - Codex metadata footer with model, reasoning effort, context, and available
   usage-window information read from structured app-server events.
 - `/pilot`, normal text, `/new`, `/new all`, `/model`, `/agent`, `/terminal`, and
-  `/release` flows.
+  `/release` flows, plus `/status` diagnostics.
 - Bidirectional Codex ↔ Hermes handoff with fail-closed Hermes admission.
+- Locally managed Gemini and OpenCode headless adapters with structured output,
+  persistent session IDs, bounded handoffs, and no auto-approval flags.
 - Explicit terminal writer takeover/release using tmux and `codex resume`.
-- User-level service operation for the deployed pilot.
+- Versioned SQLite migrations with automatic pre-migration backups and rollback.
+- Local project administration and worktree-backed parallel-lane foundations.
+- User-level service templates, installer, doctor, CI, CodeQL, and Dependabot.
 
 See [the current specification](docs/PROJECT_HUB_SPEC.ru.md) for acceptance
 results and the next implementation queue. Older design documents in `docs/`
@@ -106,7 +113,9 @@ are retained for history and are marked when superseded.
 config/       publishable configuration examples (real config is ignored)
 docs/         architecture, security model, roadmap, and pilot specification
 integrations/ Hermes plugin and visible-turn export hook
+scripts/      installer, doctor wrapper, and complete validation gate
 src/          router, adapters, state, Telegram service, and terminal runtime
+systemd/      user-service and Hermes gateway drop-in templates
 tests/        unit and contract-style tests with fake external services
 ```
 
@@ -117,7 +126,8 @@ tests/        unit and contract-style tests with fake external services
 - a current Codex CLI/app-server installation for Codex sessions
 - Telegram bots configured for the intended private forum
 - Hermes with user-plugin and hook support for the Hermes adapter
-- tmux, WSL, and Windows Terminal for the current `/terminal` implementation
+- Gemini CLI and/or OpenCode only when those adapters are configured
+- tmux plus a supported terminal backend for `/terminal`
 
 If an active bot must receive ordinary group messages without an explicit
 mention, disable its Telegram Privacy Mode and remove/re-add the bot after the
@@ -125,12 +135,23 @@ change. Keep the group private and restrict `owner_user_ids` in local config.
 
 ## Local setup
 
-Clone the repository and install it in an isolated environment:
+For a user-service installation, review the script and run:
+
+```bash
+./scripts/install.sh
+```
+
+It creates a private virtual environment, copies configuration examples only
+when local files do not already exist, installs the Hermes plugin/hook, and
+installs—but does not enable—the systemd user units. Edit the generated files,
+then run `scripts/doctor.sh` before enabling any service.
+
+For development, install in an isolated environment:
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install -e .
+python -m pip install -e '.[dev]'
 ```
 
 Create local configuration from the examples:
@@ -154,13 +175,42 @@ Validate before starting the service:
 ```bash
 agents-projects-hub validate config/projects.json
 agents-projects-hub validate-hub config/hub.json
+agents-projects-hub migrate /path/to/state.db
+agents-projects-hub doctor config/hub.json
 agents-projects-hub serve config/hub.json
 ```
 
-For a systemd deployment, run the same `serve` command from an unprivileged user
-unit and provide the Hermes integration environment variables there. Service
-unit templates and an automated installer are not yet included, so review paths
-and permissions explicitly for each machine.
+The default service manages Codex. Additional locally managed adapters use an
+instance unit, for example `agents-projects-hub@gemini.service`. Hermes remains
+owned by its native gateway and uses the included drop-in. Copy the desired
+objects from `config/external-agents.example.json` into the local `agents` array;
+the primary example does not require unused external bot credentials.
+
+## Operations CLI
+
+```bash
+# Read-only diagnostics and persisted status
+agents-projects-hub doctor config/hub.json
+agents-projects-hub status config/hub.json
+
+# SQLite-consistent backup and versioned migration
+agents-projects-hub backup /path/to/state.db
+agents-projects-hub migrate /path/to/state.db
+
+# Local-only project administration
+agents-projects-hub project list config/projects.json
+agents-projects-hub project add config/projects.json \
+  --id my-project --name "My Project" --topic "My Project" --root /allowed/root/project
+agents-projects-hub project disable config/projects.json my-project
+
+# Separate Git worktree for a concurrent lane
+agents-projects-hub lane create config/hub.json --project my-project --lane backend
+agents-projects-hub lane list config/hub.json
+```
+
+Project creation remains local: Telegram cannot submit or approve filesystem
+paths. Lane creation makes a sibling Git worktree and records it in state; it
+does not automatically bind a Telegram topic or start an agent.
 
 ## Hermes integration
 
@@ -178,12 +228,31 @@ Install them using the Hermes user-plugin/hook mechanism, and provide:
 Admission fails closed when the database or binding is unavailable. Explicit
 Hermes mentions remain on Hermes's native exclusive-mention path.
 
-## Tests
+For response provenance, merge `config/hermes-display.example.yaml` into the
+Hermes config. It enables Hermes's native runtime footer; the Hub hook does not
+rewrite response bodies or inspect hidden reasoning.
 
-The suite does not contact Telegram, Codex, or Hermes:
+## Tests and quality gate
+
+The suite uses fake Telegram/provider transports and disposable Git/SQLite
+fixtures; it does not contact Telegram, Codex, Hermes, Gemini, or OpenCode:
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -q
+```
+
+Run the same formatting, lint, type, test, and example-validation gate as CI:
+
+```bash
+python scripts/validate.py
+```
+
+After the first CI run, an authenticated administrator can enable private
+vulnerability reporting, Dependabot security updates, and the included `main`
+ruleset with:
+
+```bash
+./scripts/configure-github.sh OWNER/agents-projects-hub
 ```
 
 Configuration templates can be schema-checked without creating their example
@@ -212,14 +281,16 @@ outside an isolated pilot.
 
 ## Roadmap
 
-- Finish operator-friendly bootstrap, service templates, and health checks.
-- Add unified metadata for Hermes responses.
-- Add Gemini and OpenCode adapters behind the same admission contract.
-- Support locally approved project/topic creation and renaming workflows.
-- Add worktree-backed parallel lanes without concurrent writers in one worktree.
-- Expand live acceptance beyond the current private Pythia pilot.
+- Run live acceptance for a second private project group.
+- Validate Gemini and OpenCode with real provider accounts and bot tokens.
+- Add a Hermes-native unified metadata footer upstream or through a stable hook.
+- Bind locally created worktree lanes to Telegram topics with explicit operator
+  confirmation and safe cleanup.
+- Add additional terminal emulators only through reviewed argv-only backends.
 
 ## License
 
-No open-source license has been selected yet. Until one is added, the repository
-is source-available for inspection but no additional reuse rights are granted.
+Released under the [MIT License](LICENSE). See [Acknowledgments](ACKNOWLEDGMENTS.md)
+for the open-source projects and public interfaces that made this integration
+possible. Agents Projects Hub is an independent project and is not endorsed by
+the upstream product vendors.

@@ -96,7 +96,9 @@ def load_registry(path: Path, *, require_exists: bool = True) -> ProjectRegistry
         if sandbox not in ALLOWED_SANDBOXES:
             raise RegistryError(f"unsafe or unsupported sandbox for {project_id}: {sandbox}")
         if approval not in ALLOWED_APPROVAL_POLICIES:
-            raise RegistryError(f"unsafe or unsupported approval policy for {project_id}: {approval}")
+            raise RegistryError(
+                f"unsafe or unsupported approval policy for {project_id}: {approval}"
+            )
         enabled = data.get("enabled", True)
         if not isinstance(enabled, bool):
             raise RegistryError(f"enabled must be boolean for {project_id}")

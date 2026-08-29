@@ -8,7 +8,6 @@ from hermes_codex_router.model_selection import (
     require_model_effort,
 )
 
-
 MODELS = [
     {
         "id": "gpt-5.6-sol",
