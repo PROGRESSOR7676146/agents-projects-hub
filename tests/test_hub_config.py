@@ -103,6 +103,19 @@ class HubConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(HubConfigError, "inline token"):
             load_hub_config(self.write_config(agents=agents))
 
+    def test_rejects_telegram_username_that_cannot_be_a_bot(self) -> None:
+        agents = [
+            {
+                "agent_id": "opencode",
+                "display_name": "OpenCode",
+                "telegram_username": "opencode",
+                "runtime": "opencode",
+                "managed_externally": True,
+            }
+        ]
+        with self.assertRaisesRegex(HubConfigError, "must end in bot"):
+            load_hub_config(self.write_config(agents=agents))
+
     def test_state_parent_is_not_required_to_exist_during_config_parse(self) -> None:
         missing = self.base / "private" / "state.db"
         config = load_hub_config(self.write_config(state_path=str(missing)))
@@ -116,6 +129,40 @@ class HubConfigTests(unittest.TestCase):
         )
         self.assertEqual(config.terminal.backend, "linux")
         self.assertEqual(config.terminal.program, "kitty")
+
+    def test_loads_recovery_plane_without_embedding_credentials(self) -> None:
+        hermes_config = self.base / "hermes.yaml"
+        tlive_config = self.base / "tlive.json"
+        hermes_config.write_text("model: provider-selected\n", encoding="utf-8")
+        tlive_config.write_text("{}\n", encoding="utf-8")
+        hermes_config.chmod(0o600)
+        tlive_config.chmod(0o600)
+        config = load_hub_config(
+            self.write_config(
+                recovery_plane={
+                    "enabled": True,
+                    "hermes_service": "hermes-gateway.service",
+                    "tlive_service": "tlive.service",
+                    "hermes_config_path": str(hermes_config),
+                    "tlive_config_path": str(tlive_config),
+                }
+            )
+        )
+        self.assertTrue(config.recovery_plane.enabled)
+        self.assertEqual(config.recovery_plane.hermes_service, "hermes-gateway.service")
+        self.assertEqual(config.recovery_plane.tlive_config_path, tlive_config.resolve())
+        self.assertEqual(config.recovery_plane.hermes_notify_target, "telegram")
+
+    def test_rejects_unsafe_recovery_service_unit(self) -> None:
+        with self.assertRaisesRegex(HubConfigError, "hermes_service"):
+            load_hub_config(
+                self.write_config(
+                    recovery_plane={
+                        "enabled": True,
+                        "hermes_service": "../../escape.service",
+                    }
+                )
+            )
 
     def test_loads_private_runtime_home_for_isolated_provider_account(self) -> None:
         runtime_home = self.base / "gemini-account-a"

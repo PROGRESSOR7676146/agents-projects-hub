@@ -30,6 +30,7 @@ def evaluate_operational_alerts(
     pool: CodexPoolStatus,
     state_snapshot: Mapping[str, object],
     doctor_ok: bool,
+    recovery_status: Mapping[str, bool] | None = None,
     now: datetime | None = None,
     low_quota_percent: int = 10,
     stuck_after_seconds: int = 15 * 60,
@@ -45,6 +46,36 @@ def evaluate_operational_alerts(
                 "Project Hub diagnostics are unhealthy; run the local doctor report.",
             )
         )
+    if recovery_status is not None:
+        hermes_ok = recovery_status.get("hermes", False)
+        tlive_ok = recovery_status.get("tlive", False)
+        if not hermes_ok:
+            alerts.append(
+                OperationalAlert(
+                    "recovery:hermes",
+                    "hermes_recovery_unavailable",
+                    "warning",
+                    "The independent Hermes Telegram recovery channel is unavailable.",
+                )
+            )
+        if not tlive_ok:
+            alerts.append(
+                OperationalAlert(
+                    "recovery:tlive",
+                    "tlive_recovery_unavailable",
+                    "warning",
+                    "The tlive monitoring and remote-approval channel is unavailable.",
+                )
+            )
+        if not hermes_ok and not tlive_ok:
+            alerts.append(
+                OperationalAlert(
+                    "recovery:all",
+                    "recovery_plane_unavailable",
+                    "error",
+                    "Both independent recovery channels are unavailable; local intervention is required.",
+                )
+            )
     if not pool.available:
         alerts.append(
             OperationalAlert(

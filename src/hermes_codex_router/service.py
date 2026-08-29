@@ -509,6 +509,13 @@ class ProjectHubService:
         try:
             binding = self.config.project_for_chat(message.chat_id)
         except KeyError:
+            title = " ".join(message.chat_title.split())[:128]
+            self.state.record_runtime_event(
+                "telegram",
+                "info",
+                "unbound_project_group",
+                f"chat_id={message.chat_id}; title={title}",
+            )
             return False
         topic = self._topic(message, binding.project_id)
         command = parse_command(message.text)

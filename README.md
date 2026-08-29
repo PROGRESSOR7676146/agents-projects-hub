@@ -49,7 +49,8 @@ Agents Projects Hub ─── local registry + SQLite state
         │
         ├── Hermes gateway/plugin ─── persistent Hermes topic session
         │
-        └── Gemini/OpenCode CLI adapters ─── provider-owned sessions
+        ├── OpenCode/Antigravity CLI adapters ─── provider-owned sessions
+        └── recovery plane ─── Hermes Telegram + tlive approvals
 ```
 
 Topic identity is the numeric pair `(chat_id, message_thread_id)`; topic titles
@@ -96,7 +97,7 @@ manual attachment. All backends create the same named tmux writer first.
 - `/pilot`, normal text, `/new`, `/new all`, `/model`, `/agent`, `/terminal`, and
   `/release` flows, plus `/status` diagnostics.
 - Bidirectional Codex ↔ Hermes handoff with fail-closed Hermes admission.
-- Locally managed Gemini and OpenCode headless adapters with structured output,
+- Locally managed OpenCode and Antigravity headless adapters with structured output,
   persistent session IDs, bounded handoffs, and no auto-approval flags.
 - Explicit terminal writer takeover/release using tmux and `codex resume`.
 - Versioned SQLite migrations with automatic pre-migration backups and rollback.
@@ -186,24 +187,42 @@ agents-projects-hub serve config/hub.json
 ```
 
 The default service manages Codex. Additional locally managed adapters use an
-instance unit, for example `agents-projects-hub@gemini.service`. Hermes remains
+instance unit, for example `agents-projects-hub@opencode.service`. Hermes remains
 owned by its native gateway and uses the included drop-in. Copy the desired
 objects from `config/external-agents.example.json` into the local `agents` array;
 the primary example does not require unused external bot credentials.
 
-Give each Gemini account a separate private `runtime_home`. The adapter exports
-it as `GEMINI_CLI_HOME` only to that agent process, so OAuth state and session
-history cannot overwrite another account. Antigravity is supported through
-`agy` in sandboxed `plan` mode; its dangerous permission-bypass flag is never
-used.
+Antigravity is supported through `agy` in sandboxed `plan` mode; its dangerous
+permission-bypass flag is never used. Automatic Google account rotation remains
+disabled until `agy` exposes a stable account-pool or headless authentication
+interface.
 
 For transparent Codex account rotation, run one persistent `codex-multi-auth`
 app-server on `codex_socket_path`, leave `manage_codex_server` disabled, and set
-`codex_multi_auth_dir` plus `codex_multi_auth_executable`. Hub resumes the same
-provider thread ID through that socket and exposes only redacted account numbers
-and cached quota health in `/status`; OAuth tokens and account emails are never
-returned. `codex_stdio_executable` remains an isolated fallback for diagnostics,
-not the recommended service topology.
+`codex_multi_auth_dir` plus `codex_multi_auth_executable`. Also set
+`codex_stdio_executable` to the official Codex executable. The Hub prefers the
+shared rotating socket while it is healthy and automatically uses an isolated
+official stdio app-server when that socket is absent. Multi-auth is therefore an
+optional accelerator, not a service dependency. Hub resumes the same persisted
+provider thread ID in either mode and exposes only redacted account numbers and
+cached quota health in `/status`; OAuth tokens and account emails are never
+returned.
+
+### Independent recovery plane
+
+The existing private Hermes Telegram chat is the administrative and recovery
+interface; it is not a project group and has no filesystem binding. Hermes
+Gateway and tlive remain independently installed upstream components, while
+this repository owns their integration contract: private config paths,
+user-service health probes, cooldown alerts, startup templates, and recovery
+runbooks. Tokens, sessions, dashboard tokens, and provider OAuth state remain
+outside Git.
+
+Enable `recovery_plane` in `hub.json` to make `doctor` and `monitor` report
+Hermes and tlive separately. One failed channel is a warning; losing both is an
+error. The included `tlive.service` is installed only when no user unit already
+exists, so a customized unit is never overwritten. See
+[the recovery runbook](docs/RECOVERY_PLANE.ru.md).
 
 Some custom account proxies do not implement Codex's model-discovery response
 schema. In that topology, pass a validated local catalog to the app-server at
@@ -214,7 +233,6 @@ only during a planned or natural service start.
 Install BotFather tokens without echoing them or placing them in JSON:
 
 ```bash
-./scripts/configure-telegram-token.sh gemini
 ./scripts/configure-telegram-token.sh antigravity
 ./scripts/configure-telegram-token.sh opencode
 ```
@@ -325,7 +343,7 @@ outside an isolated pilot.
 ## Roadmap
 
 - Run live acceptance for a second private project group.
-- Validate Gemini with a real provider account and a dedicated Telegram bot.
+- Complete the existing Babelfish group's numeric-ID binding.
 - Run end-to-end Telegram acceptance for OpenCode and Antigravity once dedicated
   bot tokens are provisioned; their provider adapters already pass live checks.
 - Add additional terminal emulators only through reviewed argv-only backends.

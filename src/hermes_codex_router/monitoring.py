@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import html
+import subprocess
 from dataclasses import asdict
-from typing import Mapping
+from typing import Any, Callable, Mapping
 
 from .alerts import OperationalAlert, evaluate_operational_alerts
 from .codex_accounts import read_codex_pool_status
@@ -39,6 +40,25 @@ def _destinations(snapshot: Mapping[str, object]) -> list[tuple[int, int]]:
     return destinations
 
 
+def _send_hermes(
+    target: str,
+    message: str,
+    *,
+    run: Callable[..., Any] = subprocess.run,
+) -> None:
+    completed = run(
+        ("hermes", "send", "--to", target, "--quiet", "-"),
+        input=message,
+        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("Hermes recovery-channel delivery failed")
+
+
 def run_monitor_once(
     config: HubConfig,
     *,
@@ -64,34 +84,64 @@ def run_monitor_once(
             from .codex_accounts import CodexPoolStatus
 
             pool = CodexPoolStatus(False, False, (), None, 0, "not_configured")
+        doctor = run_doctor(config)
+        raw_checks = doctor.get("checks")
+        doctor_checks = raw_checks if isinstance(raw_checks, list) else []
+        recovery_status = {
+            str(check["name"]).split(":", 1)[1]: bool(check["ok"])
+            for check in doctor_checks
+            if isinstance(check, dict) and str(check.get("name", "")).startswith("recovery:")
+        }
         alerts = evaluate_operational_alerts(
             pool=pool,
             state_snapshot=snapshot,
-            doctor_ok=bool(run_doctor(config)["ok"]),
+            doctor_ok=bool(doctor["ok"]),
+            recovery_status=recovery_status or None,
         )
         delivered: list[str] = []
         if notify and alerts:
             destinations = _destinations(snapshot)
-            due = tuple(
+            codex_due = tuple(
                 alert
                 for alert in alerts
                 if destinations
-                and state.claim_alert_delivery(alert.key, cooldown_seconds=cooldown_seconds)
+                and state.claim_alert_delivery(
+                    f"{alert.key}:codex", cooldown_seconds=cooldown_seconds
+                )
             )
-            if due and destinations:
+            if codex_due and destinations:
                 agent = config.require_agent("codex")
                 if agent.token_file is None:
                     raise RuntimeError("managed Codex bot token is unavailable")
                 telegram = TelegramBotApi(agent.token_file.read_text(encoding="utf-8").strip())
-                rendered = _render(due)
+                rendered = _render(codex_due)
                 try:
                     for chat_id, thread_id in destinations:
                         telegram.send_html(chat_id, thread_id, rendered[:4090])
                 except Exception:
-                    for alert in due:
-                        state.release_alert_delivery(alert.key)
+                    for alert in codex_due:
+                        state.release_alert_delivery(f"{alert.key}:codex")
                     raise
-                delivered = [alert.code for alert in due]
+                delivered.extend(f"{alert.code}:codex" for alert in codex_due)
+            if config.recovery_plane.enabled:
+                hermes_due = tuple(
+                    alert
+                    for alert in alerts
+                    if state.claim_alert_delivery(
+                        f"{alert.key}:hermes", cooldown_seconds=cooldown_seconds
+                    )
+                )
+                if hermes_due:
+                    try:
+                        _send_hermes(
+                            config.recovery_plane.hermes_notify_target,
+                            html.unescape(_render(hermes_due)),
+                        )
+                    except Exception:
+                        for alert in hermes_due:
+                            state.release_alert_delivery(f"{alert.key}:hermes")
+                        raise
+                    delivered.extend(f"{alert.code}:hermes" for alert in hermes_due)
         return {
             "ok": not any(alert.severity == "error" for alert in alerts),
             "alerts": [asdict(alert) for alert in alerts],

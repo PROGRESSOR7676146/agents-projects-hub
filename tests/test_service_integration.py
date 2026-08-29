@@ -85,6 +85,54 @@ def update(
 
 
 class ServiceIntegrationTests(unittest.TestCase):
+    def test_authorized_unknown_group_is_discoverable_without_storing_message_text(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(42,),
+                registry_path=base / "projects.json",
+                state_path=base / "state.db",
+                codex_socket_path=base / "codex.sock",
+                manage_codex_server=False,
+                terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+                projects=(ProjectBinding("project", -1001234567890),),
+                agents=(
+                    AgentDefinition(
+                        "codex",
+                        "Codex",
+                        "project_codex_bot",
+                        "codex",
+                        None,
+                        True,
+                        False,
+                        "gpt-5.6-sol",
+                        "high",
+                    ),
+                ),
+            )
+            value = ProjectHubService.__new__(ProjectHubService)
+            value.config = config
+            value.state = HubState.open(config.state_path)
+            value.agent = config.agents[0]
+            value.telegram = cast(Any, FakeTelegram())
+            value.usernames = {"codex": "project_codex_bot"}
+            unknown = update(9, "secret request text", chat_id=-1009999999999)
+            cast(dict[str, Any], cast(dict[str, Any], unknown["message"])["chat"])["title"] = (
+                "Babelfish\nforged"
+            )
+
+            self.assertFalse(value.handle_update(unknown))
+            raw_events = value.state.status_snapshot()["runtime_events"]
+            events = cast(list[dict[str, object]], raw_events)
+            value.state.close()
+
+        self.assertEqual(len(events), 1)
+        detail = str(events[0]["detail"])
+        self.assertIn("-1009999999999", detail)
+        self.assertIn("Babelfish forged", detail)
+        self.assertNotIn("secret request text", detail)
+
     def test_two_project_chats_create_isolated_topics_threads_and_roots(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

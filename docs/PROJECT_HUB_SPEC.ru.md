@@ -11,7 +11,7 @@ v0.4 реализован.
 темы — изменяемая подпись, а не ключ.
 
 Один агент темы активен. Обычный текст идёт активному агенту; явное упоминание
-`@Codex`, `@Gemini`, `@Hermes` создаёт/продолжает satellite session и не меняет
+`@Codex`, `@OpenCode`, `@Antigravity`, `@Hermes` создаёт/продолжает satellite session и не меняет
 активного агента. Смена активного агента или модели создаёт новую provider
 session с handoff предыдущего контекста. `/new` сбрасывает активную сессию,
 `/new all` — все сессии темы.
@@ -72,11 +72,13 @@ worktree самостоятельно. Binding требует локальног
 
 1. Провести живую приёмку второй приватной project group без переиспользования
    Pythia topic/session IDs.
-2. Проверить Gemini с реальным provider account и отдельным Telegram bot token;
-   CLI и credentials на этой машине пока отсутствуют. OpenCode и Antigravity
-   прошли живые provider-проверки, включая двухходовый resume OpenCode, но для
-   Telegram E2E им также нужны отдельные bot tokens.
-3. Настроить GitHub ruleset и private vulnerability reporting после
+2. Подключить отдельные Telegram bot tokens OpenCode и Antigravity. Их provider
+   adapters прошли живые проверки, включая двухходовый resume OpenCode.
+3. Выполнить live binding существующей группы Babelfish после безопасного
+   наблюдения её numeric `chat_id`.
+4. Сохранить ручную смену двух Google-аккаунтов через Hermes как fallback;
+   автоматическую ротацию Antigravity отложить до появления стабильного API.
+5. Настроить GitHub ruleset и private vulnerability reporting после
    восстановления административной GitHub CLI-сессии.
 
 ## Operational hardening v0.4
@@ -90,7 +92,8 @@ worktree самостоятельно. Binding требует локальног
 - configurable WSL/Linux/macOS/tmux-only terminal launchers;
 - локальные project administration, подтверждённый lane binding и безопасный
   cleanup с сохранением branch;
-- Gemini/OpenCode CLI adapters через structured output без auto-approval.
+- OpenCode/Antigravity CLI adapters через structured output без auto-approval;
+- независимый recovery plane Hermes Telegram + tlive и Codex stdio fallback;
 - cooldown-alerts о deployment health, Codex quota/account и зависших dispatch;
 - Hermes native runtime footer и публичный `agent:end` visible-turn hook.
 

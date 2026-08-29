@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .hub_config import HubConfig
 from .migrations import LATEST_SCHEMA_VERSION
+from .recovery_plane import RecoveryPlaneProbe, probe_recovery_plane
 from .registry import load_registry
 from .state import HubState
 from .terminal_runtime import TerminalRuntime
@@ -26,14 +27,14 @@ def _command(name: str, *, required: bool = True) -> Check:
     return Check(f"command:{name}", found is not None, found or "not found", required)
 
 
-def _socket_check(path: Path) -> Check:
+def _socket_check(path: Path, *, required: bool = True) -> Check:
     if not path.exists():
-        return Check("codex_socket", False, f"missing: {path}")
+        return Check("codex_socket", False, f"missing: {path}", required)
     try:
         mode = path.stat().st_mode
     except OSError as exc:
-        return Check("codex_socket", False, str(exc))
-    return Check("codex_socket", stat.S_ISSOCK(mode), str(path))
+        return Check("codex_socket", False, str(exc), required)
+    return Check("codex_socket", stat.S_ISSOCK(mode), str(path), required)
 
 
 def run_doctor(config: HubConfig) -> dict[str, object]:
@@ -82,7 +83,19 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
             required=False,
         )
     )
-    checks.append(_socket_check(config.codex_socket_path))
+    socket = _socket_check(
+        config.codex_socket_path,
+        required=config.codex_stdio_executable is None,
+    )
+    checks.append(socket)
+    if config.codex_stdio_executable is not None:
+        checks.append(
+            Check(
+                "codex_stdio_fallback",
+                True,
+                str(config.codex_stdio_executable),
+            )
+        )
     checks.append(
         Check(
             "hermes_state_environment",
@@ -92,5 +105,39 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
         )
     )
 
+    recovery_available: bool | None = None
+    if config.recovery_plane.enabled:
+        assert config.recovery_plane.hermes_config_path is not None
+        assert config.recovery_plane.tlive_config_path is not None
+        recovery = probe_recovery_plane(
+            RecoveryPlaneProbe(
+                hermes_service=config.recovery_plane.hermes_service,
+                tlive_service=config.recovery_plane.tlive_service,
+                hermes_config_path=config.recovery_plane.hermes_config_path,
+                tlive_config_path=config.recovery_plane.tlive_config_path,
+            )
+        )
+        recovery_available = recovery.available
+        checks.extend(
+            (
+                Check(
+                    "recovery:hermes",
+                    recovery.hermes_ok,
+                    recovery.details["hermes"],
+                    required=False,
+                ),
+                Check(
+                    "recovery:tlive",
+                    recovery.tlive_ok,
+                    recovery.details["tlive"],
+                    required=False,
+                ),
+            )
+        )
+
     healthy = all(check.ok for check in checks if check.required)
-    return {"ok": healthy, "checks": [asdict(check) for check in checks]}
+    return {
+        "ok": healthy,
+        "recovery_available": recovery_available,
+        "checks": [asdict(check) for check in checks],
+    }

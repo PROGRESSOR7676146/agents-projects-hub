@@ -50,6 +50,13 @@ class ExternalAgentService:
         try:
             binding = self.config.project_for_chat(message.chat_id)
         except KeyError:
+            title = " ".join(message.chat_title.split())[:128]
+            self.state.record_runtime_event(
+                "telegram",
+                "info",
+                "unbound_project_group",
+                f"chat_id={message.chat_id}; title={title}",
+            )
             return False
         command = parse_command(message.text)
         if command is not None:

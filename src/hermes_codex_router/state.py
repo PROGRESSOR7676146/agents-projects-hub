@@ -442,12 +442,17 @@ class HubState:
                FROM turn_dispatches WHERE status IN ('queued', 'running')
                ORDER BY created_at"""
         ).fetchall()
+        runtime_events = self._connection.execute(
+            """SELECT component, level, code, detail, created_at
+               FROM runtime_events ORDER BY event_id DESC LIMIT 50"""
+        ).fetchall()
         return {
             "schema_version": self.schema_version,
             "topics": [dict(row) for row in topics],
             "bot_offsets": [dict(row) for row in offsets],
             "dispatch_counts": {row["status"]: row["count"] for row in dispatch_counts},
             "pending_dispatches": [dict(row) for row in running],
+            "runtime_events": [dict(row) for row in runtime_events],
         }
 
     def start_dispatch(

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
+SERVICE_UNIT = re.compile(r"^[A-Za-z0-9_.@-]+\.service$")
 SUPPORTED_RUNTIMES = {"codex", "hermes", "gemini", "antigravity", "opencode", "api"}
 
 
@@ -44,6 +45,16 @@ class TerminalSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class RecoveryPlaneSettings:
+    enabled: bool
+    hermes_service: str
+    tlive_service: str
+    hermes_config_path: Path | None
+    tlive_config_path: Path | None
+    hermes_notify_target: str
+
+
+@dataclass(frozen=True, slots=True)
 class HubConfig:
     schema_version: int
     owner_user_ids: tuple[int, ...]
@@ -54,6 +65,16 @@ class HubConfig:
     terminal: TerminalSettings
     projects: tuple[ProjectBinding, ...]
     agents: tuple[AgentDefinition, ...]
+    recovery_plane: RecoveryPlaneSettings = field(
+        default_factory=lambda: RecoveryPlaneSettings(
+            False,
+            "hermes-gateway.service",
+            "tlive.service",
+            None,
+            None,
+            "telegram",
+        )
+    )
     codex_multi_auth_dir: Path | None = None
     codex_multi_auth_executable: Path | None = None
     codex_stdio_executable: Path | None = None
@@ -186,6 +207,37 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
     if not isinstance(wsl_distro, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", wsl_distro):
         raise HubConfigError("terminal.wsl_distro is invalid")
 
+    recovery_data = _object(root.get("recovery_plane", {}), "recovery_plane")
+    recovery_enabled = recovery_data.get("enabled", False)
+    if not isinstance(recovery_enabled, bool):
+        raise HubConfigError("recovery_plane.enabled must be boolean")
+    hermes_service = recovery_data.get("hermes_service", "hermes-gateway.service")
+    tlive_service = recovery_data.get("tlive_service", "tlive.service")
+    hermes_notify_target = recovery_data.get("hermes_notify_target", "telegram")
+    for label, value in (
+        ("hermes_service", hermes_service),
+        ("tlive_service", tlive_service),
+    ):
+        if not isinstance(value, str) or not SERVICE_UNIT.fullmatch(value):
+            raise HubConfigError(f"recovery_plane.{label} is invalid")
+    if not isinstance(hermes_notify_target, str) or not re.fullmatch(
+        r"telegram(?::(-?\d+)(?::\d+)?)?", hermes_notify_target
+    ):
+        raise HubConfigError("recovery_plane.hermes_notify_target is invalid")
+    hermes_config_path = None
+    tlive_config_path = None
+    if recovery_enabled:
+        hermes_config_path = _absolute_path(
+            recovery_data.get("hermes_config_path"),
+            "recovery_plane.hermes_config_path",
+            must_exist=True,
+        )
+        tlive_config_path = _absolute_path(
+            recovery_data.get("tlive_config_path"),
+            "recovery_plane.tlive_config_path",
+            must_exist=True,
+        )
+
     raw_projects = root.get("projects")
     if not isinstance(raw_projects, list) or not raw_projects:
         raise HubConfigError("projects must be a non-empty array")
@@ -230,6 +282,8 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
             raise HubConfigError(f"invalid or duplicate agent_id: {agent_id}")
         if not USERNAME.fullmatch(username) or username.casefold() in usernames:
             raise HubConfigError(f"invalid or duplicate telegram_username: {username}")
+        if not username.casefold().endswith("bot"):
+            raise HubConfigError(f"telegram_username for {agent_id} must end in bot")
         if runtime not in SUPPORTED_RUNTIMES:
             raise HubConfigError(f"unsupported runtime for {agent_id}: {runtime}")
         managed_externally = data.get("managed_externally", False)
@@ -300,6 +354,14 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
             backend=terminal_backend,
             program=terminal_program.strip() if terminal_program else None,
             wsl_distro=wsl_distro,
+        ),
+        recovery_plane=RecoveryPlaneSettings(
+            enabled=recovery_enabled,
+            hermes_service=hermes_service,
+            tlive_service=tlive_service,
+            hermes_config_path=hermes_config_path,
+            tlive_config_path=tlive_config_path,
+            hermes_notify_target=hermes_notify_target,
         ),
         projects=tuple(projects),
         agents=tuple(agents),

@@ -30,6 +30,9 @@ install -m 644 "$repo_root/systemd/agents-projects-hub-monitor.service" \
   "$systemd_root/agents-projects-hub-monitor.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-monitor.timer" \
   "$systemd_root/agents-projects-hub-monitor.timer"
+if [[ ! -e "$systemd_root/tlive.service" ]]; then
+  install -m 644 "$repo_root/systemd/tlive.service" "$systemd_root/tlive.service"
+fi
 install -m 644 "$repo_root/systemd/hermes-gateway.service.d/20-agents-projects-hub.conf" \
   "$systemd_root/hermes-gateway.service.d/20-agents-projects-hub.conf"
 

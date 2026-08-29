@@ -30,9 +30,14 @@ class CodexAppServerSupervisor:
             stdio_executable.expanduser().resolve(strict=True) if stdio_executable else None
         )
         self.process: subprocess.Popen[bytes] | None = None
+        self.transport_mode: str | None = None
 
     def start(self, *, timeout: float = 15.0) -> None:
+        if not self.manage_process and self.socket_path.is_socket():
+            self.transport_mode = "socket"
+            return
         if self.stdio_executable is not None:
+            self.transport_mode = "stdio-fallback"
             return
         if not self.manage_process:
             if not self.socket_path.is_socket():
@@ -55,26 +60,42 @@ class CodexAppServerSupervisor:
                 raise AppServerError("Codex app-server exited during startup")
             if self.socket_path.exists():
                 os.chmod(self.socket_path, 0o600)
+                self.transport_mode = "managed-socket"
                 return
             time.sleep(0.05)
         self.stop()
         raise AppServerError("Codex app-server socket did not appear")
 
     def client(self) -> CodexAppServerClient:
-        if self.stdio_executable is not None:
+        if self.transport_mode is None:
+            self.start()
+        if self.transport_mode == "stdio-fallback":
+            assert self.stdio_executable is not None
             client = CodexAppServerClient(StdioJsonLineTransport.start(str(self.stdio_executable)))
             client.initialize()
             return client
-        if self.manage_process and (self.process is None or self.process.poll() is not None):
+        if self.transport_mode == "managed-socket" and (
+            self.process is None or self.process.poll() is not None
+        ):
             raise AppServerError("Codex app-server is not started")
-        if not self.manage_process and not self.socket_path.is_socket():
+        if self.transport_mode == "socket" and not self.socket_path.is_socket():
             raise AppServerError("shared Codex app-server socket is unavailable")
-        client = CodexAppServerClient(UnixWebSocketTransport(self.socket_path))
-        client.initialize()
-        return client
+        try:
+            client = CodexAppServerClient(UnixWebSocketTransport(self.socket_path))
+            client.initialize()
+            return client
+        except Exception:
+            if self.stdio_executable is None or self.transport_mode == "managed-socket":
+                raise
+            self.transport_mode = "stdio-fallback"
+            fallback = CodexAppServerClient(
+                StdioJsonLineTransport.start(str(self.stdio_executable))
+            )
+            fallback.initialize()
+            return fallback
 
     def stop(self) -> None:
-        if self.stdio_executable is not None:
+        if self.transport_mode == "stdio-fallback":
             return
         if not self.manage_process:
             return
@@ -86,3 +107,4 @@ class CodexAppServerSupervisor:
                 self.process.kill()
                 self.process.wait(timeout=5)
         self.process = None
+        self.transport_mode = None

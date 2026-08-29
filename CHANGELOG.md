@@ -5,6 +5,22 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+### Added
+
+- Add independent Hermes Gateway and tlive recovery-plane health checks,
+  dual-channel operational alert delivery, an optional tlive user-service
+  template, and a Russian recovery runbook.
+- Record only the numeric chat ID and bounded title of authorized but unbound
+  Telegram project groups so an existing group can be bound without storing its
+  message text.
+
+### Changed
+
+- Make `codex-multi-auth` an optional accelerator: prefer its shared socket when
+  healthy and fall back to the official Codex stdio app-server when unavailable.
+- Treat OpenCode and Antigravity as the active external provider adapters and
+  require configured Telegram usernames to be valid bot usernames.
+
 ## [0.4.0] - 2026-08-29
 
 ### Added
