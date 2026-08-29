@@ -117,6 +117,34 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(config.terminal.backend, "linux")
         self.assertEqual(config.terminal.program, "kitty")
 
+    def test_loads_private_runtime_home_for_isolated_provider_account(self) -> None:
+        runtime_home = self.base / "gemini-account-a"
+        runtime_home.mkdir(mode=0o700)
+        agent = {
+            "agent_id": "gemini-a",
+            "display_name": "Gemini A",
+            "telegram_username": "project_gemini_a_bot",
+            "runtime": "gemini",
+            "managed_externally": True,
+            "runtime_home": str(runtime_home),
+        }
+        config = load_hub_config(self.write_config(agents=[agent]))
+        self.assertEqual(config.require_agent("gemini-a").runtime_home, runtime_home.resolve())
+
+    def test_rejects_world_readable_runtime_home(self) -> None:
+        runtime_home = self.base / "gemini-account-a"
+        runtime_home.mkdir(mode=0o755)
+        agent = {
+            "agent_id": "gemini-a",
+            "display_name": "Gemini A",
+            "telegram_username": "project_gemini_a_bot",
+            "runtime": "gemini",
+            "managed_externally": True,
+            "runtime_home": str(runtime_home),
+        }
+        with self.assertRaisesRegex(HubConfigError, "runtime_home.*0700"):
+            load_hub_config(self.write_config(agents=[agent]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -32,6 +32,7 @@ class ExternalAgentService:
         self.adapter = ExternalCliAdapter(
             self.agent.runtime,
             executable=self.agent.executable,
+            runtime_home=self.agent.runtime_home,
         )
         self.usernames = {
             candidate.agent_id: candidate.telegram_username for candidate in config.agents

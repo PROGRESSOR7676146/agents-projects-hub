@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,12 +49,14 @@ class ExternalCliAdapter:
         runtime: str,
         *,
         executable: str | None = None,
+        runtime_home: Path | None = None,
         run: Run = subprocess.run,
     ) -> None:
         if runtime not in {"gemini", "opencode"}:
             raise ExternalRuntimeError(f"unsupported external runtime: {runtime}")
         self.runtime = runtime
         self.executable = executable or runtime
+        self.runtime_home = runtime_home.expanduser().resolve(strict=True) if runtime_home else None
         self._run = run
 
     def build_argv(
@@ -112,9 +115,13 @@ class ExternalCliAdapter:
             session_id=session_id,
             model=model,
         )
+        environment = os.environ.copy()
+        if self.runtime == "gemini" and self.runtime_home is not None:
+            environment["GEMINI_CLI_HOME"] = str(self.runtime_home)
         result = self._run(
             argv,
             cwd=cwd,
+            env=environment,
             check=False,
             capture_output=True,
             text=True,

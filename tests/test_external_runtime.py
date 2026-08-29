@@ -43,6 +43,24 @@ class ExternalRuntimeTests(unittest.TestCase):
         self.assertEqual(result.text, "Visible answer")
         self.assertNotIn("--auto", calls[0])
 
+    def test_gemini_profile_is_isolated_in_child_environment(self) -> None:
+        environments: list[dict[str, str]] = []
+
+        def fake_run(
+            argv: tuple[str, ...], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            environments.append(dict(kwargs["env"]))  # type: ignore[arg-type]
+            return subprocess.CompletedProcess(argv, 0, '{"response":"ok"}', "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "gemini-account-a"
+            profile.mkdir()
+            ExternalCliAdapter("gemini", runtime_home=profile, run=fake_run).run_turn(
+                cwd=root, prompt="hello"
+            )
+        self.assertEqual(environments[0]["GEMINI_CLI_HOME"], str(profile.resolve()))
+
 
 if __name__ == "__main__":
     unittest.main()

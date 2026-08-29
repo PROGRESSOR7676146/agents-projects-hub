@@ -33,6 +33,7 @@ class AgentDefinition:
     default_model: str
     default_effort: str
     executable: str | None = None
+    runtime_home: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +226,16 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
         executable = data.get("executable")
         if executable is not None and (not isinstance(executable, str) or not executable.strip()):
             raise HubConfigError(f"executable is invalid for {agent_id}")
+        runtime_home_value = data.get("runtime_home")
+        runtime_home = None
+        if runtime_home_value is not None:
+            runtime_home = _absolute_path(
+                runtime_home_value, f"runtime_home for {agent_id}", must_exist=True
+            )
+            if not runtime_home.is_dir():
+                raise HubConfigError(f"runtime_home for {agent_id} is not a directory")
+            if runtime_home.stat().st_mode & 0o077:
+                raise HubConfigError(f"runtime_home for {agent_id} must have mode 0700")
         agents.append(
             AgentDefinition(
                 agent_id=agent_id,
@@ -237,6 +248,7 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
                 default_model=default_model.strip(),
                 default_effort=default_effort,
                 executable=executable.strip() if executable else None,
+                runtime_home=runtime_home,
             )
         )
 
