@@ -491,7 +491,13 @@ class ServiceIntegrationTests(unittest.TestCase):
             value.state.close()
 
         self.assertEqual(client.started, 1)
-        self.assertEqual(client.resumed, 1)
+        self.assertEqual(client.resumed, 2)
+        self.assertTrue(
+            any(
+                "Summarize only the work completed through the local CLI" in item
+                for item in client.prompts
+            )
+        )
 
 
 if __name__ == "__main__":

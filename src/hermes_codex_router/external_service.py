@@ -43,6 +43,54 @@ class ExternalAgentService:
     def close(self) -> None:
         self.state.close()
 
+    def publish_local_interval(
+        self,
+        *,
+        chat_id: int,
+        thread_id: int,
+        topic_id: int,
+        project_id: str,
+        session_id: str,
+    ) -> None:
+        session = self.state.get_session(session_id)
+        if not session.provider_session_id:
+            raise RuntimeError("provider session is not started")
+        project = self.registry.require_project(project_id)
+        result = self.adapter.run_turn(
+            cwd=project.root,
+            session_id=session.provider_session_id,
+            model=session.model if session.model != "provider-selected" else None,
+            prompt=(
+                "Summarize only the work completed through the local CLI since Telegram "
+                "handed this session over. Do not use tools. Do not include hidden reasoning, "
+                "credentials, raw terminal output, or unrelated history. Return at most 1200 "
+                "characters with three headings: Completed, Verified, Next."
+            ),
+        )
+        if result.provider_session_id and result.provider_session_id != session.provider_session_id:
+            session = self.state.bind_provider_session(
+                session.session_id, result.provider_session_id, None
+            )
+        self.state.record_visible_turn(
+            topic_id,
+            agent_id=self.agent.agent_id,
+            provider=self.agent.runtime,
+            model=result.model or session.model,
+            provider_session_id=result.provider_session_id,
+            user_excerpt="Local interval returned to Telegram",
+            response_excerpt=result.text,
+        )
+        response = format_agent_response(
+            result.text[:1200],
+            {
+                "Session": f"{project.display_name} · Local summary",
+                "Agent": self.agent.display_name,
+                "Model": result.model or session.model,
+                "Effort": session.effort,
+            },
+        )
+        self.telegram.send_html(chat_id, thread_id, response[:4090])
+
     def handle_update(self, update: dict[str, object]) -> bool:
         message = parse_topic_message(update)
         if message is None or message.sender_id not in self.config.owner_user_ids:

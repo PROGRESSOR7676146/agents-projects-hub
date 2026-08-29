@@ -720,7 +720,39 @@ class ProjectHubService:
                 )
                 return True
             self.state.set_writer_mode(session.session_id, "telegram")
-            self._send_text(message, "Provider session ownership returned to Telegram.")
+            project = self.registry.require_project(binding.project_id)
+            try:
+                if session.agent_id == self.agent.agent_id:
+                    self._run_codex_turn(
+                        project=project,
+                        topic=topic,
+                        session=self.state.get_session(session.session_id),
+                        text=(
+                            "Summarize only the work completed through the local CLI since "
+                            "Telegram handed this session over. Do not use tools. Do not include "
+                            "hidden reasoning, credentials, raw terminal output, or unrelated "
+                            "history. Return at most 1200 characters with three headings: "
+                            "Completed, Verified, Next."
+                        ),
+                        message=message,
+                    )
+                else:
+                    external = getattr(self, "external_services", {}).get(session.agent_id)
+                    if external is None:
+                        raise ServiceError("local summary is unsupported for this provider")
+                    external.publish_local_interval(
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                        topic_id=topic.topic_id,
+                        project_id=binding.project_id,
+                        session_id=session.session_id,
+                    )
+            except Exception as exc:
+                self._send_text(
+                    message,
+                    "Ownership returned to Telegram, but the local summary failed safely "
+                    f"({type(exc).__name__}).",
+                )
             return True
         if command and command.name == "model":
             if not command.arguments:
