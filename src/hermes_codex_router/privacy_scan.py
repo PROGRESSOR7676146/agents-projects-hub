@@ -81,8 +81,12 @@ def scan_text(path: Path, text: str) -> list[PrivacyFinding]:
 
     for match in _EMAIL_RE.finditer(text):
         domain = match.group(2).casefold()
-        if domain not in {"example.com", "example.org", "example.net"} and not domain.endswith(
-            ".service"
+        address = match.group(0).casefold()
+        if (
+            domain not in {"example.com", "example.org", "example.net"}
+            and not domain.endswith(".service")
+            and address != "noreply@github.com"
+            and not domain.endswith(".users.noreply.github.com")
         ):
             findings.append(_finding(path, text, match.start(), "non-example email address"))
 
@@ -182,6 +186,18 @@ def scan_repository(root: Path) -> list[PrivacyFinding]:
     return findings
 
 
+def _metadata_for_privacy_scan(metadata: str) -> str:
+    """Remove only the author line of GitHub's synthetic PR merge commit."""
+    parents = re.findall(r"(?m)^parent [0-9a-f]{40}$", metadata)
+    github_committer = re.search(
+        r"(?m)^committer GitHub <noreply@github\.com> \d+ [+-]\d{4}$", metadata
+    )
+    synthetic_subject = re.search(r"(?m)^Merge [0-9a-f]{40} into [0-9a-f]{40}$", metadata)
+    if len(parents) == 2 and github_committer and synthetic_subject:
+        return re.sub(r"(?m)^author .*\n", "", metadata, count=1)
+    return metadata
+
+
 def scan_history(root: Path) -> list[PrivacyFinding]:
     result = subprocess.run(
         ["git", "rev-list", "--objects", "--all", "--filter=object:type=blob"],
@@ -212,6 +228,7 @@ def scan_history(root: Path) -> list[PrivacyFinding]:
                 check=True,
                 capture_output=True,
             ).stdout.decode("utf-8", errors="replace")
+            metadata = _metadata_for_privacy_scan(metadata)
             findings.extend(
                 PrivacyFinding(
                     Path(".git-metadata") / object_id[:12],

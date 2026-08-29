@@ -1,10 +1,33 @@
 from pathlib import Path
 from unittest import TestCase
 
-from hermes_codex_router.privacy_scan import scan_text
+from hermes_codex_router.privacy_scan import _metadata_for_privacy_scan, scan_text
 
 
 class PrivacyScanTests(TestCase):
+    def test_ignores_only_author_of_github_synthetic_pr_merge(self) -> None:
+        metadata = (
+            "tree " + "a" * 40 + "\n"
+            "parent " + "b" * 40 + "\n"
+            "parent " + "c" * 40 + "\n"
+            "author Private Owner <owner" + "@private.invalid> 1 +0000\n"
+            "committer GitHub <noreply" + "@github.com> 1 +0000\n\n"
+            "Merge " + "d" * 40 + " into " + "e" * 40 + "\n"
+        )
+        filtered = _metadata_for_privacy_scan(metadata)
+        self.assertNotIn("owner" + "@private.invalid", filtered)
+        self.assertIn("committer GitHub", filtered)
+
+    def test_does_not_ignore_author_of_an_ordinary_merge(self) -> None:
+        metadata = (
+            "parent " + "b" * 40 + "\n"
+            "parent " + "c" * 40 + "\n"
+            "author Private Owner <owner" + "@private.invalid> 1 +0000\n"
+            "committer Contributor <contributors@example.com> 1 +0000\n\n"
+            "Merge a feature branch\n"
+        )
+        self.assertEqual(_metadata_for_privacy_scan(metadata), metadata)
+
     def assert_rule(self, text: str, rule: str) -> None:
         findings = scan_text(Path("fixture.txt"), text)
         self.assertIn(rule, {finding.rule for finding in findings})

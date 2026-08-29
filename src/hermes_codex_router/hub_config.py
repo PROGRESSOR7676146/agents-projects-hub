@@ -72,6 +72,7 @@ class HubConfig:
     terminal: TerminalSettings
     projects: tuple[ProjectBinding, ...]
     agents: tuple[AgentDefinition, ...]
+    direct_message_project_id: str | None = None
     recovery_plane: RecoveryPlaneSettings = field(
         default_factory=lambda: RecoveryPlaneSettings(
             False,
@@ -392,6 +393,13 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
             )
         )
 
+    direct_message_project_id = root.get("direct_message_project_id")
+    if direct_message_project_id is not None and (
+        not isinstance(direct_message_project_id, str)
+        or direct_message_project_id not in project_ids
+    ):
+        raise HubConfigError("direct_message_project_id must reference a registered project")
+
     return HubConfig(
         schema_version=1,
         owner_user_ids=tuple(raw_owners),
@@ -415,6 +423,7 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
         operational_alerts=OperationalAlertSettings(alerts_chat_id, alerts_thread_id),
         projects=tuple(projects),
         agents=tuple(agents),
+        direct_message_project_id=direct_message_project_id,
         codex_multi_auth_dir=codex_multi_auth_dir,
         codex_multi_auth_executable=codex_multi_auth_executable,
         codex_stdio_executable=codex_stdio_executable,

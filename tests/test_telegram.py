@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from hermes_codex_router.telegram import parse_topic_callback, parse_topic_message
+from hermes_codex_router.telegram import (
+    parse_direct_callback,
+    parse_direct_message,
+    parse_topic_callback,
+    parse_topic_message,
+)
 
 
 class TelegramUpdateTests(unittest.TestCase):
@@ -44,6 +49,40 @@ class TelegramUpdateTests(unittest.TestCase):
         base["message"]["from"]["is_bot"] = False
         base["message"]["chat"]["type"] = "private"
         self.assertIsNone(parse_topic_message(base))
+
+    def test_accepts_private_message_only_when_chat_matches_sender(self) -> None:
+        update = {
+            "update_id": 16,
+            "message": {
+                "message_id": 25,
+                "chat": {"id": 123456789, "type": "private"},
+                "from": {"id": 123456789, "is_bot": False},
+                "text": "hello",
+            },
+        }
+        parsed = parse_direct_message(update)
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual((parsed.chat_id, parsed.thread_id), (123456789, 1))
+        update["message"]["chat"]["id"] = 987654321
+        self.assertIsNone(parse_direct_message(update))
+
+    def test_accepts_private_callback_only_when_chat_matches_sender(self) -> None:
+        parsed = parse_direct_callback(
+            {
+                "update_id": 17,
+                "callback_query": {
+                    "id": "callback-direct",
+                    "from": {"id": 123456789},
+                    "data": "new:cancel:session",
+                    "message": {
+                        "message_id": 26,
+                        "chat": {"id": 123456789, "type": "private"},
+                    },
+                },
+            }
+        )
+        self.assertIsNotNone(parsed)
 
     def test_general_forum_topic_gets_stable_local_id(self) -> None:
         parsed = parse_topic_message(

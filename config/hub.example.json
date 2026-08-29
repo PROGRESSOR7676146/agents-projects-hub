@@ -3,6 +3,7 @@
   "owner_user_ids": [123456789],
   "registry_path": "/home/example/agents-projects-hub/config/projects.json",
   "state_path": "/home/example/.local/state/agents-projects-hub/state.db",
+  "direct_message_project_id": "hub",
   "codex_socket_path": "/home/example/.codex/app-server-control/app-server-control.sock",
   "manage_codex_server": false,
   "codex_stdio_executable": "/home/example/.local/bin/codex",

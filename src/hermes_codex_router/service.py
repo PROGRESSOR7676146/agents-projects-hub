@@ -31,6 +31,8 @@ from .telegram import (
     TelegramError,
     TopicCallback,
     TopicMessage,
+    parse_direct_callback,
+    parse_direct_message,
     parse_topic_callback,
     parse_topic_message,
 )
@@ -90,6 +92,16 @@ class ProjectHubService:
         if self._codex_client is None:
             self._codex_client = self.supervisor.client()
         return self._codex_client
+
+    def _discard_codex_client(self) -> None:
+        """Drop a failed RPC connection so the next turn reconnects cleanly."""
+        client = self._codex_client
+        self._codex_client = None
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
 
     def _send_text(self, message: TopicMessage, text: str) -> None:
         self.telegram.send_html(message.chat_id, message.thread_id, html.escape(text))
@@ -618,8 +630,13 @@ class ProjectHubService:
         try:
             binding = self.config.project_for_chat(callback.chat_id)
         except KeyError:
-            self.telegram.answer_callback(callback.callback_id, "Unknown project group")
-            return False
+            direct_project = self.config.direct_message_project_id
+            if direct_project is None or callback.chat_id != callback.sender_id:
+                self.telegram.answer_callback(callback.callback_id, "Unknown project chat")
+                return False
+            binding = next(
+                item for item in self.config.projects if item.project_id == direct_project
+            )
         if not self.state.claim_callback(
             callback.callback_id, observer_agent_id=self.agent.agent_id
         ):
@@ -788,10 +805,10 @@ class ProjectHubService:
         self.telegram.send_html(message.chat_id, message.thread_id, response[:4090])
 
     def handle_update(self, update: dict[str, object]) -> bool:
-        callback = parse_topic_callback(update)
+        callback = parse_topic_callback(update) or parse_direct_callback(update)
         if callback is not None:
             return self._handle_callback(callback)
-        message = parse_topic_message(update)
+        message = parse_topic_message(update) or parse_direct_message(update)
         if message is None:
             return False
         if message.sender_id not in self.config.owner_user_ids:
@@ -799,14 +816,20 @@ class ProjectHubService:
         try:
             binding = self.config.project_for_chat(message.chat_id)
         except KeyError:
-            title = " ".join(message.chat_title.split())[:128]
-            self.state.record_runtime_event(
-                "telegram",
-                "info",
-                "unbound_project_group",
-                f"chat_id={message.chat_id}; title={title}",
-            )
-            return False
+            direct_project = self.config.direct_message_project_id
+            if direct_project is not None and message.chat_id == message.sender_id:
+                binding = next(
+                    item for item in self.config.projects if item.project_id == direct_project
+                )
+            else:
+                title = " ".join(message.chat_title.split())[:128]
+                self.state.record_runtime_event(
+                    "telegram",
+                    "info",
+                    "unbound_project_group",
+                    f"chat_id={message.chat_id}; title={title}",
+                )
+                return False
         topic = self._topic(message, binding.project_id)
         command = parse_command(message.text)
         control_commands = {
@@ -1144,11 +1167,17 @@ class ProjectHubService:
             self.state.finish_dispatch(dispatch_id, success=True)
         except Exception as exc:
             self.state.finish_dispatch(dispatch_id, success=False, error_code=type(exc).__name__)
+            self._discard_codex_client()
+            self.state.record_runtime_event(
+                "codex", "warning", "provider_turn_error", type(exc).__name__
+            )
             self._send_text(
                 message,
                 f"Codex turn failed safely ({type(exc).__name__}); no permission was auto-approved.",
             )
-            raise
+            # A provider/RPC failure belongs to this one update. Letting it escape
+            # terminates the Telegram poller and makes every bot appear offline.
+            return True
         return True
 
     def run_forever(self) -> None:
@@ -1164,6 +1193,11 @@ class ProjectHubService:
                         continue
                     try:
                         self.handle_update(update)
+                    except Exception as exc:
+                        self._discard_codex_client()
+                        self.state.record_runtime_event(
+                            "codex", "error", "update_error", type(exc).__name__
+                        )
                     finally:
                         offset = update_id + 1
                         self.state.set_bot_offset(self.agent.agent_id, offset)

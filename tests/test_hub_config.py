@@ -67,6 +67,12 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(config.terminal.backend, "auto")
         self.assertNotIn("secret-token-value", path.read_text(encoding="utf-8"))
 
+    def test_direct_messages_require_an_explicit_registered_project(self) -> None:
+        config = load_hub_config(self.write_config(direct_message_project_id="alpha"))
+        self.assertEqual(config.direct_message_project_id, "alpha")
+        with self.assertRaisesRegex(HubConfigError, "direct_message_project_id"):
+            load_hub_config(self.write_config(direct_message_project_id="missing"))
+
     def test_loads_single_operational_alert_topic_from_registered_hub_project(self) -> None:
         config = load_hub_config(
             self.write_config(
