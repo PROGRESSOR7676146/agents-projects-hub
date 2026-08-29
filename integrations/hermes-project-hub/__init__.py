@@ -1,4 +1,4 @@
-"""Hermes user-plugin entry point for Hermes Project Hub."""
+"""Hermes user-plugin entry point for Hub."""
 
 from __future__ import annotations
 

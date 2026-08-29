@@ -1,4 +1,4 @@
-# Hermes Project Hub — спецификация и план
+# Hub — спецификация и план
 
 Дата актуализации: 2026-08-29. Pythia acceptance пройден, operational hardening
 v0.4 реализован.
