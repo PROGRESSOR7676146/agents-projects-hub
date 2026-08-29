@@ -17,7 +17,8 @@ and releases use semantic versioning while the public API is still evolving.
   events for OpenCode and Antigravity pollers.
 - Monitor each locally managed bot's access to every configured project group.
 - Route real Telegram replies exclusively to the bot that authored the replied
-  message; pasted textual quotes continue to follow the topic's active agent.
+  message; manually selected Telegram quotes and pasted textual quotes continue
+  to follow the topic's active agent.
 
 ### Changed
 

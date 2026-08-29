@@ -43,7 +43,9 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
     raw_thread_id = message.get("message_thread_id")
     reply_to_username = None
     reply = message.get("reply_to_message")
-    if isinstance(reply, dict):
+    # A manually selected Telegram quote is commentary for the active agent,
+    # while a plain Reply is direct addressing of the original bot author.
+    if isinstance(reply, dict) and not isinstance(message.get("quote"), dict):
         reply_author = reply.get("from")
         if (
             isinstance(reply_author, dict)
