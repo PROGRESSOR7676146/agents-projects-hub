@@ -101,7 +101,7 @@ def record_external_turn(
     user_excerpt: str,
     response_excerpt: str,
 ) -> bool:
-    """Persist visible turn excerpts only when this agent is currently active."""
+    """Persist a bounded visible turn for active or satellite agents."""
     path = state_path.expanduser().resolve()
     if not path.is_file() or not user_excerpt.strip() or not response_excerpt.strip():
         return False
@@ -110,10 +110,10 @@ def record_external_turn(
         connection = sqlite3.connect(path, timeout=0.5)
         with connection:
             row = connection.execute(
-                "SELECT topic_id, active_agent_id FROM topics WHERE chat_id = ? AND thread_id = ?",
+                "SELECT topic_id FROM topics WHERE chat_id = ? AND thread_id = ?",
                 (chat_id, thread_id),
             ).fetchone()
-            if row is None or row[1] != agent_id:
+            if row is None:
                 return False
             connection.execute(
                 """INSERT INTO external_turn_excerpts

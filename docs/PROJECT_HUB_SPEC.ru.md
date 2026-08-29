@@ -16,6 +16,17 @@ v0.4 реализован.
 session с handoff предыдущего контекста. `/new` сбрасывает активную сессию,
 `/new all` — все сессии темы.
 
+Один центральный ingress (Codex/Project Hub) получает сообщения группы и
+маршрутизирует локально управляемые provider-боты. Настоящий Telegram Reply
+адресуется боту-автору; упоминание — указанному агенту; вручную выбранная цитата
+остаётся контекстом для активного агента. Provider-боты не запускают параллельные
+group poller и поэтому не конкурируют за update.
+
+Каждый завершённый видимый turn записывается в ограниченный журнал темы. При
+следующем продуктивном обращении к другому агенту непрочитанный фрагмент журнала
+автоматически добавляется в его контекст с явной разметкой адресата. Наблюдение
+само по себе не вызывает модель, не тратит токены и не порождает ответ главного.
+
 ## Подтверждённая вертикаль
 
 `Telegram topic → Project Hub → Codex app-server → Pythia → Telegram reply`
@@ -70,15 +81,12 @@ worktree самостоятельно. Binding требует локальног
 
 ## Следующая очередь
 
-1. Провести живую приёмку второй приватной project group без переиспользования
-   Pythia topic/session IDs.
-2. Подключить отдельные Telegram bot tokens OpenCode и Antigravity. Их provider
-   adapters прошли живые проверки, включая двухходовый resume OpenCode.
-3. Выполнить live binding существующей группы Babelfish после безопасного
-   наблюдения её numeric `chat_id`.
-4. Сохранить ручную смену двух Google-аккаунтов через Hermes как fallback;
+1. Провести Telegram E2E-приёмку центрального ingress: Reply автору,
+   mention-сабагенту, автоматический видимый контекст главного и отсутствие
+   дублей/лишних provider turns.
+2. Сохранить ручную смену двух Google-аккаунтов через Hermes как fallback;
    автоматическую ротацию Antigravity отложить до появления стабильного API.
-5. Настроить GitHub ruleset и private vulnerability reporting после
+3. Настроить GitHub ruleset и private vulnerability reporting после
    восстановления административной GitHub CLI-сессии.
 
 ## Operational hardening v0.4
@@ -86,7 +94,7 @@ worktree самостоятельно. Binding требует локальног
 - CI на Python 3.11–3.13, Ruff, Pyright, unit/integration tests и CodeQL;
 - Dependabot для pip и GitHub Actions;
 - MIT license, security policy, changelog и acknowledgments upstream-проектам;
-- versioned SQLite schema v5, automatic pre-migration backup и integrity check;
+- versioned SQLite schema v6, automatic pre-migration backup и integrity check;
 - dispatch status для queued/running/completed/failed и диагностический snapshot;
 - fail-closed `doctor`, systemd user templates и installer без auto-enable;
 - configurable WSL/Linux/macOS/tmux-only terminal launchers;
@@ -110,6 +118,6 @@ worktree самостоятельно. Binding требует локальног
   отдельной satellite-сессией;
 - после `/agent Hermes` первый Hermes turn однократно получает handoff Codex —
   пройдено; обратный Hermes → Codex handoff также пройден;
-- Privacy Mode отключён либо бот назначен администратором, если активный бот
-  должен получать обычный текст без упоминания — отключён для обоих пилотных
-  ботов, после изменения они повторно добавлены в группу.
+- Privacy Mode отключён либо ingress-бот назначен администратором, чтобы он
+  получал обычный текст; у provider identity bots Privacy Mode может оставаться
+  включённым, потому что они не запускают собственные group poller.

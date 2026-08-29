@@ -61,8 +61,11 @@ private SQLite database.
 
 ### Routing and handoff
 
-Each topic has one active agent. Normal text is admitted only by that agent;
-explicit mentions can address another runtime without silently changing the
+Each topic has one active agent. A single hub poller receives allowlisted group
+updates and deterministically dispatches them; provider bot identities send
+their own replies but do not run competing group pollers. Normal text is
+admitted only by the active agent; a real Telegram Reply goes to the author bot,
+and explicit mentions can address another runtime without silently changing the
 active route. `/agent` changes the active runtime and creates a provider session
 with a one-time handoff:
 
@@ -70,6 +73,12 @@ with a one-time handoff:
 - Hermes → Codex uses bounded excerpts of visible user/assistant turns;
 - hidden reasoning, tool output, credentials, and raw terminal content are
   excluded.
+
+Completed visible turns are also kept in a bounded topic journal. On the next
+productive turn of another agent, its unseen journal delta is added as shared
+conversation context. Merely observing a satellite exchange does not start a
+provider turn or spend model tokens, and the prompt explicitly marks who the
+old messages addressed so the active agent does not answer them as new requests.
 
 The Hermes integration is a native gateway plugin and turn-export hook. Hermes
 continues to own its Telegram token and topic sessions, so the hub does not run
@@ -135,9 +144,13 @@ tests/        unit and contract-style tests with fake external services
 - Gemini CLI and/or OpenCode only when those adapters are configured
 - tmux plus a supported terminal backend for `/terminal`
 
-If an active bot must receive ordinary group messages without an explicit
-mention, disable its Telegram Privacy Mode and remove/re-add the bot after the
-change. Keep the group private and restrict `owner_user_ids` in local config.
+The single ingress bot must receive ordinary group messages: disable its
+Telegram Privacy Mode (or make it an administrator), then remove/re-add it after
+the change. Provider identity bots can keep Privacy Mode enabled because the hub
+routes their group turns centrally and sends replies with their own tokens.
+Privacy Mode is a stable deployment setting; it is not switched when `/agent`
+changes the active runtime. Keep the group private and restrict
+`owner_user_ids` in local config.
 
 ## Local setup
 

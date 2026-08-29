@@ -66,7 +66,7 @@ class ExternalAdmissionTests(unittest.TestCase):
             peek_pending_handoff(self.path, -1001234567890, 73, target_agent_id="hermes")
         )
 
-    def test_records_only_visible_turn_for_current_active_agent(self) -> None:
+    def test_records_visible_turns_for_active_and_satellite_agents_in_known_topic(self) -> None:
         self.assertTrue(
             record_external_turn(
                 self.path,
@@ -80,13 +80,26 @@ class ExternalAdmissionTests(unittest.TestCase):
                 response_excerpt="answer",
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             record_external_turn(
                 self.path,
                 chat_id=-1001234567890,
                 thread_id=73,
                 agent_id="codex",
                 provider_session_id="cs-1",
+                model="gpt",
+                provider="openai",
+                user_excerpt="question",
+                response_excerpt="answer",
+            )
+        )
+        self.assertFalse(
+            record_external_turn(
+                self.path,
+                chat_id=-1001234567890,
+                thread_id=999,
+                agent_id="codex",
+                provider_session_id="cs-2",
                 model="gpt",
                 provider="openai",
                 user_excerpt="question",

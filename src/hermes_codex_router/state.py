@@ -275,6 +275,97 @@ class HubState:
             parts.append(f"USER: {row['user_excerpt']}\n{label.upper()}: {row['response_excerpt']}")
         return "\n\n".join(parts)
 
+    def record_visible_turn(
+        self,
+        topic_id: int,
+        *,
+        agent_id: str,
+        provider: str,
+        model: str,
+        user_excerpt: str,
+        response_excerpt: str,
+        provider_session_id: str | None = None,
+    ) -> int:
+        self.get_topic(topic_id)
+        if not agent_id or not user_excerpt.strip() or not response_excerpt.strip():
+            raise StateError("invalid visible turn")
+        with self._connection:
+            cursor = self._connection.execute(
+                """INSERT INTO external_turn_excerpts
+                   (topic_id, agent_id, provider_session_id, model, provider,
+                    user_excerpt, response_excerpt, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    topic_id,
+                    agent_id,
+                    (provider_session_id or "")[:200],
+                    model[:200],
+                    provider[:200],
+                    user_excerpt.strip()[:2000],
+                    response_excerpt.strip()[:4000],
+                    _now(),
+                ),
+            )
+            if cursor.lastrowid is None:
+                raise StateError("failed to persist visible turn")
+            turn_id = cursor.lastrowid
+            self._connection.execute(
+                """DELETE FROM external_turn_excerpts
+                   WHERE topic_id = ? AND turn_id NOT IN (
+                     SELECT turn_id FROM external_turn_excerpts
+                     WHERE topic_id = ? ORDER BY turn_id DESC LIMIT 100
+                   )""",
+                (topic_id, topic_id),
+            )
+        return turn_id
+
+    def unseen_visible_context(
+        self, topic_id: int, observer_agent_id: str, *, limit: int = 8
+    ) -> tuple[str | None, int | None]:
+        if not observer_agent_id or limit <= 0 or limit > 20:
+            raise StateError("invalid visible context request")
+        cursor = self._connection.execute(
+            """SELECT last_turn_id FROM visible_context_cursors
+               WHERE topic_id = ? AND observer_agent_id = ?""",
+            (topic_id, observer_agent_id),
+        ).fetchone()
+        last_turn_id = int(cursor["last_turn_id"]) if cursor is not None else 0
+        rows = self._connection.execute(
+            """SELECT turn_id, agent_id, user_excerpt, response_excerpt, model, provider
+               FROM external_turn_excerpts
+               WHERE topic_id = ? AND agent_id != ? AND turn_id > ?
+               ORDER BY turn_id DESC LIMIT ?""",
+            (topic_id, observer_agent_id, last_turn_id, limit),
+        ).fetchall()
+        if not rows:
+            return None, None
+        parts: list[str] = []
+        for row in reversed(rows):
+            label = "/".join(
+                value for value in (row["agent_id"], row["provider"], row["model"]) if value
+            )
+            parts.append(
+                f"USER → {row['agent_id']}: {row['user_excerpt']}\n"
+                f"{label.upper()}: {row['response_excerpt']}"
+            )
+        return "\n\n".join(parts), max(int(row["turn_id"]) for row in rows)
+
+    def acknowledge_visible_context(
+        self, topic_id: int, observer_agent_id: str, last_turn_id: int
+    ) -> None:
+        if not observer_agent_id or last_turn_id <= 0:
+            raise StateError("invalid visible context cursor")
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO visible_context_cursors
+                   (topic_id, observer_agent_id, last_turn_id, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(topic_id, observer_agent_id) DO UPDATE SET
+                     last_turn_id = MAX(last_turn_id, excluded.last_turn_id),
+                     updated_at = excluded.updated_at""",
+                (topic_id, observer_agent_id, last_turn_id, _now()),
+            )
+
     def _next_generation(self, topic_id: int, agent_id: str) -> int:
         row = self._connection.execute(
             "SELECT COALESCE(MAX(generation), 0) + 1 AS value "

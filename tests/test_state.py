@@ -146,6 +146,45 @@ class HubStateTests(unittest.TestCase):
         self.assertNotIn("u6", context)
         self.assertLess(context.index("u7"), context.index("u9"))
 
+    def test_unseen_topic_context_excludes_observer_and_advances_only_when_acknowledged(self) -> None:
+        first = self.state.record_visible_turn(
+            self.topic.topic_id,
+            agent_id="antigravity",
+            provider="antigravity",
+            model="provider-selected",
+            user_excerpt="question for the satellite",
+            response_excerpt="satellite answer",
+        )
+        self.state.record_visible_turn(
+            self.topic.topic_id,
+            agent_id="codex",
+            provider="openai",
+            model="gpt-5.6-sol",
+            user_excerpt="question for main",
+            response_excerpt="main answer",
+        )
+
+        context, watermark = self.state.unseen_visible_context(
+            self.topic.topic_id, "codex"
+        )
+        self.assertIsNotNone(context)
+        assert context is not None
+        self.assertIn("question for the satellite", context)
+        self.assertIn("satellite answer", context)
+        self.assertNotIn("question for main", context)
+        self.assertEqual(watermark, first)
+
+        repeated, repeated_watermark = self.state.unseen_visible_context(
+            self.topic.topic_id, "codex"
+        )
+        self.assertEqual((repeated, repeated_watermark), (context, watermark))
+        assert watermark is not None
+        self.state.acknowledge_visible_context(self.topic.topic_id, "codex", watermark)
+        self.assertEqual(
+            self.state.unseen_visible_context(self.topic.topic_id, "codex"),
+            (None, None),
+        )
+
     def test_dispatch_health_tracks_running_and_completed_turns(self) -> None:
         dispatch_id = self.state.start_dispatch(
             chat_id=self.topic.chat_id,

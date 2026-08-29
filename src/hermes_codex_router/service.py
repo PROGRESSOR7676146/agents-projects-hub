@@ -6,6 +6,7 @@ import time
 
 from .codex_accounts import format_codex_pool_status, read_codex_pool_status
 from .codex_appserver import CodexAppServerClient
+from .external_service import ExternalAgentService
 from .hub_config import HubConfig
 from .metadata import format_telegram_response
 from .model_selection import ModelSelectionError, available_models, require_model_effort
@@ -54,8 +55,17 @@ class ProjectHubService:
         self.usernames = {
             candidate.agent_id: candidate.telegram_username for candidate in config.agents
         }
+        self.external_services = {
+            candidate.agent_id: ExternalAgentService(config, candidate.agent_id)
+            for candidate in config.agents
+            if candidate.runtime in {"gemini", "antigravity", "opencode"}
+            and not candidate.managed_externally
+            and candidate.token_file is not None
+        }
 
     def close(self) -> None:
+        for service in getattr(self, "external_services", {}).values():
+            service.close()
         if self._codex_client is not None:
             self._codex_client.close()
             self._codex_client = None
@@ -119,7 +129,7 @@ class ProjectHubService:
         session: SessionRecord,
         text: str,
         message: TopicMessage,
-    ) -> None:
+    ) -> str:
         client = self._client()
         if session.provider_session_id:
             thread = client.resume_thread(
@@ -158,6 +168,7 @@ class ProjectHubService:
             timezone_name="Europe/Moscow",
         )
         self.telegram.send_html(message.chat_id, message.thread_id, response[:4090])
+        return result.text
 
     def _model_catalog(self) -> dict[str, tuple[str, ...]]:
         return available_models(self._client().list_models())
@@ -679,7 +690,12 @@ class ProjectHubService:
             reply_to_username=message.reply_to_username,
         )
         if self.agent.agent_id not in targets:
-            return False
+            handled = False
+            for target in targets:
+                service = getattr(self, "external_services", {}).get(target)
+                if service is not None:
+                    handled = service.handle_update(update) or handled
+            return handled
         if not self.state.claim_message(
             message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
         ):
@@ -702,6 +718,20 @@ class ProjectHubService:
         if not clean_text:
             self._send_text(message, "Add a request after the Codex mention.")
             return True
+        visible_context, context_watermark = self.state.unseen_visible_context(
+            topic.topic_id, self.agent.agent_id
+        )
+        prompt = clean_text
+        if visible_context is not None:
+            prompt = (
+                "Visible topic dialogue with other agents follows. You are the main agent "
+                "and should understand this activity, but the quoted user messages were "
+                "addressed to those agents, not to you. Do not answer those old messages "
+                "as new requests. Use them as conversation context and respond only to "
+                "CURRENT USER MESSAGE.\n\n"
+                f"UNSEEN TOPIC DIALOGUE:\n{visible_context}\n\n"
+                f"CURRENT USER MESSAGE:\n{clean_text}"
+            )
         dispatch_id = self.state.start_dispatch(
             chat_id=message.chat_id,
             message_id=message.message_id,
@@ -709,12 +739,25 @@ class ProjectHubService:
             agent_id=self.agent.agent_id,
         )
         try:
-            self._run_codex_turn(
+            response_text = self._run_codex_turn(
                 project=project,
                 topic=topic,
                 session=session,
-                text=clean_text,
+                text=prompt,
                 message=message,
+            )
+            if context_watermark is not None:
+                self.state.acknowledge_visible_context(
+                    topic.topic_id, self.agent.agent_id, context_watermark
+                )
+            self.state.record_visible_turn(
+                topic.topic_id,
+                agent_id=self.agent.agent_id,
+                provider="openai",
+                model=session.model,
+                provider_session_id=session.provider_session_id,
+                user_excerpt=clean_text,
+                response_excerpt=response_text,
             )
             self.state.finish_dispatch(dispatch_id, success=True)
         except Exception as exc:

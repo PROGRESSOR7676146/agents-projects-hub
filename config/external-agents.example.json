@@ -9,8 +9,7 @@
     "default_model": "provider-selected",
     "default_effort": "high",
     "executable": "gemini",
-    "runtime_home": "/home/example/.local/share/agents-projects-hub/providers/gemini",
-    "service_unit": "agents-projects-hub@gemini.service"
+    "runtime_home": "/home/example/.local/share/agents-projects-hub/providers/gemini"
   },
   {
     "agent_id": "antigravity",
@@ -21,8 +20,7 @@
     "terminal_enabled": false,
     "default_model": "provider-selected",
     "default_effort": "high",
-    "executable": "agy",
-    "service_unit": "agents-projects-hub@antigravity.service"
+    "executable": "agy"
   },
   {
     "agent_id": "opencode",
@@ -33,7 +31,6 @@
     "terminal_enabled": false,
     "default_model": "provider-selected",
     "default_effort": "high",
-    "executable": "opencode",
-    "service_unit": "agents-projects-hub@opencode.service"
+    "executable": "opencode"
   }
 ]

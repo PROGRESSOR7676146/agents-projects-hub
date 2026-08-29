@@ -30,6 +30,7 @@ class FakeClient:
         self.started = 0
         self.resumed = 0
         self.start_roots: list[Path] = []
+        self.prompts: list[str] = []
 
     def start_thread(self, **kwargs: object) -> CodexThread:
         self.started += 1
@@ -41,7 +42,8 @@ class FakeClient:
         self.resumed += 1
         return CodexThread("thread-1", Path.cwd(), "gpt-5.6-sol", "openai")
 
-    def start_turn(self, **_: object) -> str:
+    def start_turn(self, **kwargs: object) -> str:
+        self.prompts.append(str(kwargs["text"]))
         return "turn-1"
 
     def wait_for_turn(self, _: str) -> TurnResult:
@@ -62,6 +64,18 @@ class FakeSupervisor:
     def client(self) -> FakeClient:
         self.client_calls += 1
         return self.value
+
+
+class FakeExternalService:
+    def __init__(self) -> None:
+        self.updates: list[dict[str, object]] = []
+
+    def handle_update(self, update: dict[str, object]) -> bool:
+        self.updates.append(update)
+        return True
+
+    def close(self) -> None:
+        pass
 
 
 def update(
@@ -85,6 +99,137 @@ def update(
 
 
 class ServiceIntegrationTests(unittest.TestCase):
+    def test_main_receives_unseen_satellite_dialogue_on_next_productive_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project_root = base / "Project"
+            (project_root / ".git").mkdir(parents=True)
+            state_path = base / "state.db"
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(42,),
+                registry_path=base / "projects.json",
+                state_path=state_path,
+                codex_socket_path=base / "codex.sock",
+                manage_codex_server=False,
+                terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+                projects=(ProjectBinding("project", -1001234567890),),
+                agents=(
+                    AgentDefinition(
+                        "codex", "Codex", "project_codex_bot", "codex", None,
+                        True, False, "gpt-5.6-sol", "high",
+                    ),
+                ),
+            )
+            registry = ProjectRegistry(
+                1, (base,), (Project("project", "Project", "Project", project_root),)
+            )
+            client = FakeClient()
+            value = ProjectHubService.__new__(ProjectHubService)
+            value.config = config
+            value.registry = registry
+            value.state = HubState.open(state_path)
+            value.agent = config.agents[0]
+            value.telegram = cast(Any, FakeTelegram())
+            value.supervisor = cast(Any, FakeSupervisor(client))
+            value._codex_client = None
+            value.usernames = {"codex": "project_codex_bot"}
+            topic = value.state.observe_topic(
+                project_id="project", chat_id=-1001234567890, thread_id=77, title="Topic 77"
+            )
+            value.state.record_visible_turn(
+                topic.topic_id,
+                agent_id="antigravity",
+                provider="antigravity",
+                model="provider-selected",
+                user_excerpt="relax, this is a connection test",
+                response_excerpt="understood, connection works",
+            )
+
+            self.assertTrue(value.handle_update(update(8, "Now continue the project")))
+            value.state.close()
+
+        self.assertEqual(len(client.prompts), 1)
+        self.assertIn("relax, this is a connection test", client.prompts[0])
+        self.assertIn("understood, connection works", client.prompts[0])
+        self.assertIn("Now continue the project", client.prompts[0])
+
+    def test_central_ingress_dispatches_reply_to_external_agent_without_codex_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project_root = base / "Project"
+            (project_root / ".git").mkdir(parents=True)
+            state_path = base / "state.db"
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(42,),
+                registry_path=base / "projects.json",
+                state_path=state_path,
+                codex_socket_path=base / "codex.sock",
+                manage_codex_server=False,
+                terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+                projects=(ProjectBinding("project", -1001234567890),),
+                agents=(
+                    AgentDefinition(
+                        "codex",
+                        "Codex",
+                        "project_codex_bot",
+                        "codex",
+                        None,
+                        True,
+                        False,
+                        "gpt-5.6-sol",
+                        "high",
+                    ),
+                    AgentDefinition(
+                        "antigravity",
+                        "Antigravity",
+                        "project_antigravity_bot",
+                        "antigravity",
+                        None,
+                        False,
+                        False,
+                        "provider-selected",
+                        "high",
+                    ),
+                ),
+            )
+            registry = ProjectRegistry(
+                1,
+                (base,),
+                (Project("project", "Project", "Project", project_root),),
+            )
+            client = FakeClient()
+            external = FakeExternalService()
+            value = ProjectHubService.__new__(ProjectHubService)
+            value.config = config
+            value.registry = registry
+            value.state = HubState.open(state_path)
+            value.agent = config.agents[0]
+            value.telegram = cast(Any, FakeTelegram())
+            value.supervisor = cast(Any, FakeSupervisor(client))
+            value._codex_client = None
+            value.usernames = {
+                "codex": "project_codex_bot",
+                "antigravity": "project_antigravity_bot",
+            }
+            value.external_services = cast(Any, {"antigravity": external})
+            incoming = update(4, "relax")
+            cast(dict[str, Any], incoming["message"])["reply_to_message"] = {
+                "message_id": 3,
+                "from": {
+                    "id": 8752263516,
+                    "is_bot": True,
+                    "username": "project_antigravity_bot",
+                },
+                "text": "previous response",
+            }
+
+            self.assertTrue(value.handle_update(incoming))
+            value.state.close()
+
+        self.assertEqual(external.updates, [incoming])
+        self.assertEqual(client.started, 0)
     def test_authorized_unknown_group_is_discoverable_without_storing_message_text(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

@@ -19,6 +19,9 @@ and releases use semantic versioning while the public API is still evolving.
 - Route real Telegram replies exclusively to the bot that authored the replied
   message; manually selected Telegram quotes and pasted textual quotes continue
   to follow the topic's active agent.
+- Add a single central group ingress for locally managed provider identities and
+  a bounded visible-topic journal whose unseen delta is supplied to other agents
+  on their next productive turn without triggering observer model calls.
 
 ### Changed
 
@@ -26,6 +29,7 @@ and releases use semantic versioning while the public API is still evolving.
   healthy and fall back to the official Codex stdio app-server when unavailable.
 - Treat OpenCode and Antigravity as the active external provider adapters and
   require configured Telegram usernames to be valid bot usernames.
+- Advance the state database to schema v6 for per-agent visible-context cursors.
 
 ## [0.4.0] - 2026-08-29
 
