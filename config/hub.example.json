@@ -6,6 +6,8 @@
   "direct_message_project_id": "hub",
   "codex_socket_path": "/home/example/.codex/app-server-control/app-server-control.sock",
   "manage_codex_server": false,
+  "dispatch_mode": "inline",
+  "queue_runtime": "embedded",
   "codex_stdio_executable": "/home/example/.local/bin/codex",
   "codex_multi_auth_dir": "/home/example/.codex/multi-auth",
   "codex_multi_auth_executable": "/home/example/.local/bin/codex-multi-auth",

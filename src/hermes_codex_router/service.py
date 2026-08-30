@@ -67,11 +67,15 @@ class ProjectHubService:
         # remain live; merely swapping this token would silently abandon them.
         token = self.agent.token_file.read_text(encoding="utf-8").strip()
         self.telegram = TelegramBotApi(token)
-        self.supervisor = CodexAppServerSupervisor(
-            self.config.codex_socket_path,
-            manage_process=self.config.manage_codex_server,
-            stdio_executable=self.config.codex_stdio_executable,
-        )
+        # In external queue mode the Controller has no Codex process/RPC
+        # lifecycle.  Only the separately started worker owns that boundary.
+        self.supervisor: CodexAppServerSupervisor | None = None
+        if not self._uses_external_codex_worker():
+            self.supervisor = CodexAppServerSupervisor(
+                self.config.codex_socket_path,
+                manage_process=self.config.manage_codex_server,
+                stdio_executable=self.config.codex_stdio_executable,
+            )
         self._codex_client: CodexAppServerClient | None = None
         self.terminal = TerminalRuntime(
             socket_path=self.config.codex_socket_path,
@@ -91,6 +95,8 @@ class ProjectHubService:
         }
         self._queue_stop = threading.Event()
         self._queue_thread: threading.Thread | None = None
+        self._outbox_stop = threading.Event()
+        self._outbox_thread: threading.Thread | None = None
 
     def close(self) -> None:
         queue_stop = getattr(self, "_queue_stop", None)
@@ -105,18 +111,34 @@ class ProjectHubService:
             queue_thread.join(timeout=5)
             if queue_thread.is_alive():
                 raise ServiceError("embedded queue consumer did not stop")
+        outbox_stop = getattr(self, "_outbox_stop", None)
+        outbox_thread = getattr(self, "_outbox_thread", None)
+        if outbox_stop is not None:
+            outbox_stop.set()
+        if outbox_thread is not None and outbox_thread is not threading.current_thread():
+            outbox_thread.join(timeout=5)
+            if outbox_thread.is_alive():
+                raise ServiceError("controller outbox delivery loop did not stop")
         for service in getattr(self, "external_services", {}).values():
             service.close()
         if self._codex_client is not None:
             self._codex_client.close()
             self._codex_client = None
-        self.supervisor.stop()
+        supervisor = getattr(self, "supervisor", None)
+        if supervisor is not None:
+            supervisor.stop()
         self.state.close()
 
     def _client(self) -> CodexAppServerClient:
+        supervisor = getattr(self, "supervisor", None)
+        if supervisor is None:
+            raise ServiceError("Codex RPC belongs to the external worker in this queue runtime")
         if self._codex_client is None:
-            self._codex_client = self.supervisor.client()
-        return self._codex_client
+            self._codex_client = supervisor.client()
+        client = self._codex_client
+        if client is None:
+            raise ServiceError("Codex RPC client was not initialized")
+        return client
 
     def _discard_codex_client(self) -> None:
         """Drop a failed RPC connection so the next turn reconnects cleanly."""
@@ -142,6 +164,17 @@ class ProjectHubService:
         """Compatibility gate; a missing field keeps hand-built test configs inline."""
         del agent_id  # Per-provider maps are a later rollout refinement.
         return getattr(self.config, "dispatch_mode", "inline") == "queue"
+
+    def _embedded_consumer_owns_agent(self, agent_id: str) -> bool:
+        if not self._queue_enabled(agent_id):
+            return False
+        return not (self._uses_external_codex_worker() and agent_id == "codex")
+
+    def _uses_external_codex_worker(self) -> bool:
+        return (
+            getattr(self.config, "dispatch_mode", "inline") == "queue"
+            and getattr(self.config, "queue_runtime", "embedded") == "external"
+        )
 
     def _enqueue_provider_turn(
         self,
@@ -180,7 +213,9 @@ class ProjectHubService:
         return created
 
     def _start_embedded_queue_consumer(self) -> None:
-        if not any(self._queue_enabled(agent.agent_id) for agent in self.config.agents):
+        if not any(
+            self._embedded_consumer_owns_agent(agent.agent_id) for agent in self.config.agents
+        ):
             return
         if getattr(self, "_queue_thread", None) is not None:
             return
@@ -191,6 +226,49 @@ class ProjectHubService:
             daemon=True,
         )
         self._queue_thread.start()
+
+    def _start_controller_outbox_delivery(self) -> None:
+        """Temporary deterministic sender seam until the outbox is extracted."""
+        if not self._uses_external_codex_worker():
+            return
+        if getattr(self, "_outbox_thread", None) is not None:
+            return
+        self._outbox_stop = threading.Event()
+        self._outbox_thread = threading.Thread(
+            target=self._controller_outbox_loop,
+            name="hub-controller-outbox",
+            daemon=True,
+        )
+        self._outbox_thread.start()
+
+    def _controller_outbox_loop(self) -> None:
+        while not self._outbox_stop.is_set():
+            try:
+                worked = self.run_controller_outbox_cycle()
+            except Exception as exc:
+                try:
+                    error_state = HubState.open(self.config.state_path)
+                    try:
+                        error_state.record_runtime_event(
+                            "outbox", "error", "controller_outbox_error", type(exc).__name__
+                        )
+                    finally:
+                        error_state.close()
+                except Exception:
+                    pass
+                worked = False
+            self._outbox_stop.wait(0.01 if worked else 0.2)
+
+    def run_controller_outbox_cycle(self) -> bool:
+        """Deliver at most one prepared outbox row without leasing provider work."""
+        if not self._uses_external_codex_worker():
+            return False
+        outbox_state = HubState.open(self.config.state_path)
+        try:
+            outbox_state.recover_stale_telegram_outbox()
+            return self._deliver_embedded_outbox(outbox_state, "codex")
+        finally:
+            outbox_state.close()
 
     def _embedded_queue_loop(self) -> None:
         while not self._queue_stop.is_set():
@@ -220,24 +298,26 @@ class ProjectHubService:
         its own SQLite connection so provider execution never runs on the
         polling thread's connection.
         """
-        if not any(self._queue_enabled(agent.agent_id) for agent in self.config.agents):
+        if not any(
+            self._embedded_consumer_owns_agent(agent.agent_id) for agent in self.config.agents
+        ):
             return False
         queue_state = HubState.open(self.config.state_path)
         try:
-            queue_state.recover_stale_provider_jobs()
             queue_state.recover_stale_telegram_outbox()
             for agent in self.config.agents:
-                if not self._queue_enabled(agent.agent_id):
+                if not self._embedded_consumer_owns_agent(agent.agent_id):
                     continue
+                queue_state.recover_stale_provider_jobs(agent_id=agent.agent_id)
                 job = queue_state.lease_provider_job(agent.agent_id, "embedded-consumer")
                 if job is not None:
                     self._execute_embedded_provider_job(queue_state, job)
                     self._deliver_embedded_outbox(queue_state, agent.agent_id)
                     return True
             for agent in self.config.agents:
-                if self._queue_enabled(agent.agent_id) and self._deliver_embedded_outbox(
-                    queue_state, agent.agent_id
-                ):
+                if self._embedded_consumer_owns_agent(
+                    agent.agent_id
+                ) and self._deliver_embedded_outbox(queue_state, agent.agent_id):
                     return True
             return False
         finally:
@@ -418,6 +498,11 @@ class ProjectHubService:
         return True
 
     def _codex_pool(self) -> CodexPoolStatus | None:
+        if self._uses_external_codex_worker():
+            # Controller commands are provider-process-free in external mode.
+            # Worker/monitor telemetry will populate a durable cache in the
+            # monitoring stage; until then, report the pool as unavailable.
+            return None
         if self.config.codex_multi_auth_dir is None:
             return None
         return read_codex_pool_status(
@@ -1706,6 +1791,13 @@ class ProjectHubService:
                 context_watermark=context_watermark,
                 handoff_id=handoff.handoff_id if handoff is not None else None,
             )
+        if self.state.topic_has_pending_provider_job(topic.topic_id):
+            self._send_text(
+                message,
+                "Durable queued work still exists for this topic. Drain or recover it "
+                "before using inline execution.",
+            )
+            return True
         dispatch_id = self.state.start_dispatch(
             chat_id=message.chat_id,
             message_id=message.message_id,
@@ -1752,8 +1844,10 @@ class ProjectHubService:
         return True
 
     def run_forever(self) -> None:
-        self.supervisor.start()
+        if self.supervisor is not None and not self._uses_external_codex_worker():
+            self.supervisor.start()
         self._start_embedded_queue_consumer()
+        self._start_controller_outbox_delivery()
         ingress_agent_id = self.agent.agent_id
         self.state.record_runtime_event(ingress_agent_id, "info", "service_started", "polling")
         offset = self.state.get_bot_offset(ingress_agent_id)

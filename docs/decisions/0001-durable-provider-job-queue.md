@@ -1,6 +1,6 @@
 # ADR 0001: Durable provider job queue and isolated workers
 
-Status: accepted; stage 2 embedded compatibility path implemented, isolated workers planned
+Status: accepted; stage 2 embedded compatibility path and stage 4 isolated Codex worker implemented
 Date: 2026-08-30
 
 ## Context
@@ -173,17 +173,22 @@ Implementation is additive and gated per provider:
    is unchanged.
 3. Add durable enqueue and a compatible embedded consumer behind a feature
    flag, proving ingress does not wait for provider work.
-4. Deploy the isolated Codex worker and outbox, then enable queued execution for
-   Codex only after health and fault tests.
+4. Deploy the isolated Codex worker, then enable queued execution for Codex
+   only after health and fault tests. The controller temporarily delivers only
+   prepared Codex outbox rows; extraction of the outbox sender remains a later
+   stage.
 5. Enable OpenCode and Antigravity independently after each adapter meets the
    same contract.
 6. Retire the synchronous path only after live acceptance. Retain a temporary
    compatible fallback flag for one release cycle; archive, rather than delete,
    legacy dispatch records until the rollback window closes.
 
-A rollback stops new workers and disables the per-provider queue flag without
-dropping the additive schema or destroying queued, failed, or indeterminate
-records. A prior binary must not be started against an unknown schema version.
+A rollback stops or drains the external worker before changing
+`queue_runtime` back to `embedded`; it never reinterprets a queued, leased,
+executing, failed, or indeterminate row as inline work. The additive schema and
+accepted rows are retained. Inline admission is blocked while nonterminal
+durable jobs remain in the topic. A prior binary must not be started against an
+unknown schema version.
 Migration backup restoration is reserved for a failed migration, not ordinary
 feature rollback.
 

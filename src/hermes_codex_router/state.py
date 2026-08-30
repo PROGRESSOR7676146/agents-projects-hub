@@ -855,18 +855,27 @@ class HubState:
             raise StateError("only queued provider work can be cancelled")
         return self.get_provider_job(job_id)
 
-    def recover_stale_provider_jobs(self, *, now: datetime | None = None) -> ProviderJobRecovery:
+    def recover_stale_provider_jobs(
+        self, *, agent_id: str | None = None, now: datetime | None = None
+    ) -> ProviderJobRecovery:
+        target_agent = _bounded(agent_id, name="agent id", maximum=64) if agent_id else None
         timestamp = _timestamp(now)
+        scope = "AND agent_id = ?" if target_agent is not None else ""
+        params: tuple[object, ...] = (timestamp,)
+        if target_agent is not None:
+            params += (target_agent,)
         with self._immediate_transaction():
             leased = self._connection.execute(
-                """SELECT job_id FROM provider_jobs
-                   WHERE status = 'leased' AND lease_expires_at <= ? ORDER BY job_id""",
-                (timestamp,),
+                "SELECT job_id FROM provider_jobs "
+                "WHERE status = 'leased' AND lease_expires_at <= ? " + scope + " ORDER BY job_id",
+                params,
             ).fetchall()
             executing = self._connection.execute(
-                """SELECT job_id FROM provider_jobs
-                   WHERE status = 'executing' AND lease_expires_at <= ? ORDER BY job_id""",
-                (timestamp,),
+                "SELECT job_id FROM provider_jobs "
+                "WHERE status = 'executing' AND lease_expires_at <= ? "
+                + scope
+                + " ORDER BY job_id",
+                params,
             ).fetchall()
             self._connection.execute(
                 """UPDATE provider_jobs
@@ -874,16 +883,18 @@ class HubState:
                        lease_expires_at = NULL, next_attempt_at = NULL,
                        error_class = 'recovered_pre_execution',
                        error_code = 'stale_lease', updated_at = ?
-                   WHERE status = 'leased' AND lease_expires_at <= ?""",
-                (timestamp, timestamp),
+                   WHERE status = 'leased' AND lease_expires_at <= ? """
+                + scope,
+                (timestamp, timestamp) + ((target_agent,) if target_agent is not None else ()),
             )
             self._connection.execute(
                 """UPDATE provider_jobs
                    SET status = 'indeterminate', lease_owner = NULL, lease_token = NULL,
                        lease_expires_at = NULL, error_class = 'ambiguous_execution',
                        error_code = 'stale_executing_lease', updated_at = ?
-                   WHERE status = 'executing' AND lease_expires_at <= ?""",
-                (timestamp, timestamp),
+                   WHERE status = 'executing' AND lease_expires_at <= ? """
+                + scope,
+                (timestamp, timestamp) + ((target_agent,) if target_agent is not None else ()),
             )
         return ProviderJobRecovery(
             requeued_job_ids=tuple(str(row["job_id"]) for row in leased),

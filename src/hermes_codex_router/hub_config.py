@@ -84,6 +84,9 @@ class HubConfig:
     # Kept deliberately small for the compatibility rollout.  The default
     # preserves the synchronous controller used by existing deployments.
     dispatch_mode: str = "inline"
+    # Queue execution stays embedded unless an explicitly started provider
+    # worker owns it.  This keeps rollback to the established runtime trivial.
+    queue_runtime: str = "embedded"
     direct_message_project_id: str | None = None
     recovery_plane: RecoveryPlaneSettings = field(
         default_factory=lambda: RecoveryPlaneSettings(
@@ -141,8 +144,16 @@ def _absolute_path(value: Any, label: str, *, must_exist: bool) -> Path:
         raise HubConfigError(f"cannot resolve {label}: {exc}") from exc
 
 
-def _private_token_file(value: Any, agent_id: str) -> Path:
-    path = _absolute_path(value, f"token_file for {agent_id}", must_exist=True)
+def _private_token_file(value: Any, agent_id: str, *, validate_secret: bool) -> Path:
+    path = _absolute_path(
+        value,
+        f"token_file for {agent_id}",
+        must_exist=validate_secret,
+    )
+    if not validate_secret:
+        # Worker processes need routing metadata but must not read or depend on
+        # Telegram credentials. The controller performs the strict validation.
+        return path
     if not path.is_file():
         raise HubConfigError(f"token_file for {agent_id} is not a file")
     if path.stat().st_mode & 0o077:
@@ -153,7 +164,12 @@ def _private_token_file(value: Any, agent_id: str) -> Path:
     return path
 
 
-def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
+def load_hub_config(
+    path: Path,
+    *,
+    allow_unbound: bool = False,
+    _validate_telegram_secrets: bool = True,
+) -> HubConfig:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -348,9 +364,17 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
             raise HubConfigError(f"boolean agent flags are invalid for {agent_id}")
         token_file = None
         if not managed_externally:
-            token_file = _private_token_file(data.get("token_file"), agent_id)
+            token_file = _private_token_file(
+                data.get("token_file"),
+                agent_id,
+                validate_secret=_validate_telegram_secrets,
+            )
         elif data.get("token_file") is not None:
-            token_file = _private_token_file(data.get("token_file"), agent_id)
+            token_file = _private_token_file(
+                data.get("token_file"),
+                agent_id,
+                validate_secret=_validate_telegram_secrets,
+            )
         agent_ids.add(agent_id)
         usernames.add(username.casefold())
         default_model = data.get(
@@ -420,7 +444,11 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
             raise HubConfigError("hub_bot.telegram_username duplicates an agent")
         hub_bot = HubTelegramBot(
             telegram_username=hub_username,
-            token_file=_private_token_file(hub_data.get("token_file"), "hub_bot"),
+            token_file=_private_token_file(
+                hub_data.get("token_file"),
+                "hub_bot",
+                validate_secret=_validate_telegram_secrets,
+            ),
         )
         if any(agent.token_file == hub_bot.token_file for agent in agents):
             raise HubConfigError("hub_bot.token_file duplicates an agent token_file")
@@ -435,6 +463,11 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
     dispatch_mode = root.get("dispatch_mode", "inline")
     if dispatch_mode not in {"inline", "queue"}:
         raise HubConfigError("dispatch_mode must be inline or queue")
+    queue_runtime = root.get("queue_runtime", "embedded")
+    if queue_runtime not in {"embedded", "external"}:
+        raise HubConfigError("queue_runtime must be embedded or external")
+    if dispatch_mode != "queue" and queue_runtime != "embedded":
+        raise HubConfigError("queue_runtime external requires dispatch_mode queue")
 
     return HubConfig(
         schema_version=1,
@@ -461,9 +494,15 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
         agents=tuple(agents),
         hub_bot=hub_bot,
         dispatch_mode=dispatch_mode,
+        queue_runtime=queue_runtime,
         direct_message_project_id=direct_message_project_id,
         codex_multi_auth_dir=codex_multi_auth_dir,
         codex_multi_auth_executable=codex_multi_auth_executable,
         codex_stdio_executable=codex_stdio_executable,
         codex_account_hints=codex_account_hints,
     )
+
+
+def load_codex_worker_config(path: Path) -> HubConfig:
+    """Load worker metadata without opening any Telegram credential file."""
+    return load_hub_config(path, _validate_telegram_secrets=False)

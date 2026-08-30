@@ -392,7 +392,7 @@ machine loss. Only completed state that was persisted before the loss can be
 recovered. Git and Telegram history can help reconstruct work, but cannot
 recreate unsaved provider context or a partially executed turn.
 
-### Implemented compatibility queue and planned worker isolation
+### Implemented queue compatibility and Codex worker isolation
 
 - **REQ-HUBBOT-001 (Planned):** A separate Hub Telegram bot MUST become the
   central project-group identity. It MUST own group ingress, the universal
@@ -404,9 +404,12 @@ recreate unsaved provider context or a partially executed turn.
 - **REQ-QUEUE-001 (Implemented behind `dispatch_mode: "queue"`):** The deterministic Hub Controller MUST durably
   enqueue each admitted productive request before provider execution and MUST
   NOT wait for a provider CLI, RPC, or model turn to process local commands.
-- **REQ-QUEUE-002 (Planned):** Provider execution MUST occur in isolated
-  provider-specific workers. Failure, quota exhaustion, or restart of one
-  worker MUST NOT block Controller commands or another provider's eligible work.
+- **REQ-QUEUE-002 (Implemented for Codex behind `queue_runtime: "external"`; Planned for other providers):**
+  Provider execution MUST occur in isolated provider-specific workers. The
+  Codex worker owns its app-server lifecycle and SQLite connection, leases only
+  Codex jobs, and has no Telegram transport capability. Failure, quota
+  exhaustion, or restart of one worker MUST NOT block Controller commands or
+  another provider's eligible work.
 - **REQ-QUEUE-003 (Implemented for the embedded compatibility consumer):** Productive jobs MUST execute strict FIFO within
   one numeric topic; different topics MAY execute concurrently. The target
   provider/session/model/effort snapshot MUST be immutable after enqueue.
@@ -515,8 +518,9 @@ necessary but not sufficient for items marked live.
 | Compact command surface | Implemented | `/status`, cached/paginated `/model`, `/accounts`, confirmed `/new`, `/local`, `/return`; Telegram menu readback passed. |
 | Return-and-publish | Implemented | `/return` publishes a bounded summary; no full transcript mirroring. |
 | Provider-limit rotation events | Implemented | Provider `429` drives Codex rotation visibility; natural exhaustion E2E remains pending. |
-| Durable embedded queue compatibility path | Implemented | `dispatch_mode: "inline"` remains default; `"queue"` durably enqueues and consumes work on a background thread. |
-| Isolated provider workers | Planned | Separate per-provider processes and live rollout remain governed by ADR 0001. |
+| Durable embedded queue compatibility path | Implemented | `dispatch_mode: "inline"` remains default; `"queue"` with `queue_runtime: "embedded"` consumes work on a background thread. |
+| Isolated Codex worker | Implemented behind feature gate | `dispatch_mode: "queue"` plus `queue_runtime: "external"`; controller retains temporary outbox delivery only. |
+| Isolated non-Codex workers | Planned | Separate per-provider processes and live rollout remain governed by ADR 0001. |
 | Automatic Antigravity account rotation | Deferred | Await stable supported headless account-pool capability. |
 | Universal provider-neutral Session Bridge | Deferred | Add only if real adapters/companions cannot meet needs. |
 | Automatic OS terminal window/PID management | Rejected | Explicit resume commands and writer leases are simpler and safer. |

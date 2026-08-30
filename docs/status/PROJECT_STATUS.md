@@ -14,12 +14,18 @@ operator deployment inventory or live conversation evidence.
 - Additive durable provider-job, result, and Telegram-outbox schema with atomic
   idempotent enqueue, strict per-topic FIFO leases, conservative stale-job
   recovery, and a feature-gated embedded compatibility consumer. `dispatch_mode`
-  defaults to `inline`; `queue` returns productive ingress to polling after
-  commit, consumes jobs on a background thread with its own SQLite connection,
-  and commits result/outbox before deterministic embedded delivery.
-- Isolated per-provider worker processes and any live queue cutover remain
-  planned; this repository change does not alter deployment, service, or token
-  configuration.
+  defaults to `inline`; `queue_runtime` defaults to `embedded`.
+- An isolated Codex worker is available behind `dispatch_mode: "queue"` and
+  `queue_runtime: "external"`. It owns only Codex app-server/SQLite execution,
+  writes results and outbox rows, and never receives Telegram credentials or
+  sends Telegram. The controller does not own a Codex supervisor in this mode;
+  its temporary deterministic outbox loop delivers prepared Codex rows. Other
+  providers remain on the embedded compatibility consumer pending their own
+  workers. Controller status/account commands do not invoke `codex-multi-auth`
+  in external mode; durable worker telemetry is planned with monitoring. The
+  worker-specific loader does not open Telegram token files. No live queue
+  cutover is implied by this repository change. Signal wiring, bounded shutdown,
+  and managed-socket ownership guards remain part of the service/recovery stage.
 - Central Telegram ingress with deterministic ordinary, Reply, mention, and
   quote routing; non-target providers are not invoked merely to observe.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity

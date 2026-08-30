@@ -223,7 +223,12 @@ agents-projects-hub validate-hub config/hub.json
 agents-projects-hub migrate /path/to/state.db
 agents-projects-hub doctor config/hub.json
 agents-projects-hub serve config/hub.json
+agents-projects-hub worker config/hub.json
 ```
+
+The worker command is Codex-only and is enabled only with
+`dispatch_mode: "queue"` and `queue_runtime: "external"`. It does not receive a
+Telegram token; the controller temporarily delivers its durable outbox rows.
 
 The default service manages Codex. Additional locally managed adapters use an
 instance unit, for example `agents-projects-hub@opencode.service`. Hermes remains

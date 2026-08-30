@@ -5,10 +5,11 @@ import json
 from pathlib import Path
 from typing import Sequence
 
+from .codex_worker import CodexQueueWorker
 from .command_menu import configure_public_commands
 from .diagnostics import run_doctor
 from .external_service import ExternalAgentService
-from .hub_config import HubConfigError, load_hub_config
+from .hub_config import HubConfigError, load_codex_worker_config, load_hub_config
 from .migrations import backup_database, migrate_database
 from .monitoring import run_monitor_once
 from .pilot import run_codex_pilot
@@ -41,6 +42,10 @@ def _parser() -> argparse.ArgumentParser:
     serve = commands.add_parser("serve", help="run the managed Codex Telegram bot")
     serve.add_argument("config", type=Path)
     serve.add_argument("--agent", default="codex")
+
+    worker = commands.add_parser("worker", help="run the isolated Codex queue worker")
+    worker.add_argument("config", type=Path)
+    worker.add_argument("--poll-seconds", type=float, default=0.2)
 
     doctor = commands.add_parser("doctor", help="run local deployment diagnostics")
     doctor.add_argument("config", type=Path)
@@ -248,6 +253,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 service.run_forever()
             finally:
                 service.close()
+            return 0
+        if args.command == "worker":
+            worker = CodexQueueWorker(load_codex_worker_config(args.config))
+            try:
+                worker.run_forever(poll_seconds=args.poll_seconds)
+            finally:
+                worker.close()
             return 0
         if args.command == "pilot":
             result = run_codex_pilot(

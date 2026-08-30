@@ -5,7 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hermes_codex_router.hub_config import HubConfigError, load_hub_config
+from hermes_codex_router.hub_config import (
+    HubConfigError,
+    load_codex_worker_config,
+    load_hub_config,
+)
 
 
 class HubConfigTests(unittest.TestCase):
@@ -67,6 +71,14 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(config.terminal.backend, "auto")
         self.assertNotIn("secret-token-value", path.read_text(encoding="utf-8"))
 
+    def test_worker_loader_does_not_open_or_depend_on_telegram_token_file(self) -> None:
+        path = self.write_config(dispatch_mode="queue", queue_runtime="external")
+        self.token.unlink()
+        with self.assertRaisesRegex(HubConfigError, "token_file"):
+            load_hub_config(path)
+        config = load_codex_worker_config(path)
+        self.assertEqual(config.require_agent("codex").token_file, self.token.resolve())
+
     def test_loads_optional_hub_bot_as_a_separate_identity(self) -> None:
         hub_token = self.base / "hub-token"
         hub_token.write_text("654321:hub-token-value", encoding="utf-8")
@@ -92,12 +104,23 @@ class HubConfigTests(unittest.TestCase):
 
     def test_dispatch_mode_defaults_to_inline_and_accepts_queue(self) -> None:
         self.assertEqual(load_hub_config(self.write_config()).dispatch_mode, "inline")
+        self.assertEqual(load_hub_config(self.write_config()).queue_runtime, "embedded")
         self.assertEqual(
             load_hub_config(self.write_config(dispatch_mode="queue")).dispatch_mode,
             "queue",
         )
+        self.assertEqual(
+            load_hub_config(
+                self.write_config(dispatch_mode="queue", queue_runtime="external")
+            ).queue_runtime,
+            "external",
+        )
         with self.assertRaisesRegex(HubConfigError, "dispatch_mode"):
             load_hub_config(self.write_config(dispatch_mode="background"))
+        with self.assertRaisesRegex(HubConfigError, "queue_runtime"):
+            load_hub_config(self.write_config(queue_runtime="remote"))
+        with self.assertRaisesRegex(HubConfigError, "queue_runtime external requires"):
+            load_hub_config(self.write_config(queue_runtime="external"))
 
     def test_rejects_inline_hub_bot_token(self) -> None:
         with self.assertRaisesRegex(HubConfigError, "inline token"):
