@@ -392,7 +392,7 @@ machine loss. Only completed state that was persisted before the loss can be
 recovered. Git and Telegram history can help reconstruct work, but cannot
 recreate unsaved provider context or a partially executed turn.
 
-### Planned durable execution isolation
+### Implemented compatibility queue and planned worker isolation
 
 - **REQ-HUBBOT-001 (Planned):** A separate Hub Telegram bot MUST become the
   central project-group identity. It MUST own group ingress, the universal
@@ -401,24 +401,24 @@ recreate unsaved provider context or a partially executed turn.
   retaining their own response identities and provider-specific direct-message
   endpoints. The Hub bot token MUST reside only in a restrictive private local
   file and MUST NOT appear in Git, examples, logs, or Telegram content.
-- **REQ-QUEUE-001 (Planned):** The deterministic Hub Controller MUST durably
+- **REQ-QUEUE-001 (Implemented behind `dispatch_mode: "queue"`):** The deterministic Hub Controller MUST durably
   enqueue each admitted productive request before provider execution and MUST
   NOT wait for a provider CLI, RPC, or model turn to process local commands.
 - **REQ-QUEUE-002 (Planned):** Provider execution MUST occur in isolated
   provider-specific workers. Failure, quota exhaustion, or restart of one
   worker MUST NOT block Controller commands or another provider's eligible work.
-- **REQ-QUEUE-003 (Planned):** Productive jobs MUST execute strict FIFO within
+- **REQ-QUEUE-003 (Implemented for the embedded compatibility consumer):** Productive jobs MUST execute strict FIFO within
   one numeric topic; different topics MAY execute concurrently. The target
   provider/session/model/effort snapshot MUST be immutable after enqueue.
-- **REQ-QUEUE-004 (Planned):** A durable job state machine MUST distinguish work
+- **REQ-QUEUE-004 (Implemented for the embedded compatibility consumer):** A durable job state machine MUST distinguish work
   not yet invoked from `executing`, result delivery, terminal failure, and
   `indeterminate` execution. An unproven in-flight turn MUST NOT be retried
   automatically.
-- **REQ-QUEUE-005 (Planned):** Provider result persistence and Telegram delivery
+- **REQ-QUEUE-005 (Implemented for the embedded compatibility consumer):** Provider result persistence and Telegram delivery
   MUST use a durable outbox. Telegram delivery retry MUST NOT create another
   provider turn, and visible-context acknowledgement MUST occur only after a
   successful provider result commit.
-- **REQ-QUEUE-006 (Planned):** Queue migration and per-provider rollout MUST be
+- **REQ-QUEUE-006 (Implemented for the additive schema and global compatibility gate; per-provider rollout Planned):** Queue migration and per-provider rollout MUST be
   additive, feature-gated, recoverable through the existing backup discipline,
   and retain safe rollback without destroying accepted jobs.
 
@@ -515,7 +515,8 @@ necessary but not sufficient for items marked live.
 | Compact command surface | Implemented | `/status`, cached/paginated `/model`, `/accounts`, confirmed `/new`, `/local`, `/return`; Telegram menu readback passed. |
 | Return-and-publish | Implemented | `/return` publishes a bounded summary; no full transcript mirroring. |
 | Provider-limit rotation events | Implemented | Provider `429` drives Codex rotation visibility; natural exhaustion E2E remains pending. |
-| Durable queue and isolated provider workers | Planned | Defined by ADR 0001; synchronous execution remains current behavior until rollout acceptance. |
+| Durable embedded queue compatibility path | Implemented | `dispatch_mode: "inline"` remains default; `"queue"` durably enqueues and consumes work on a background thread. |
+| Isolated provider workers | Planned | Separate per-provider processes and live rollout remain governed by ADR 0001. |
 | Automatic Antigravity account rotation | Deferred | Await stable supported headless account-pool capability. |
 | Universal provider-neutral Session Bridge | Deferred | Add only if real adapters/companions cannot meet needs. |
 | Automatic OS terminal window/PID management | Rejected | Explicit resume commands and writer leases are simpler and safer. |

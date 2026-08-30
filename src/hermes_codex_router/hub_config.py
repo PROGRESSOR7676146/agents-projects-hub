@@ -81,6 +81,9 @@ class HubConfig:
     projects: tuple[ProjectBinding, ...]
     agents: tuple[AgentDefinition, ...]
     hub_bot: HubTelegramBot | None = None
+    # Kept deliberately small for the compatibility rollout.  The default
+    # preserves the synchronous controller used by existing deployments.
+    dispatch_mode: str = "inline"
     direct_message_project_id: str | None = None
     recovery_plane: RecoveryPlaneSettings = field(
         default_factory=lambda: RecoveryPlaneSettings(
@@ -429,6 +432,10 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
     ):
         raise HubConfigError("direct_message_project_id must reference a registered project")
 
+    dispatch_mode = root.get("dispatch_mode", "inline")
+    if dispatch_mode not in {"inline", "queue"}:
+        raise HubConfigError("dispatch_mode must be inline or queue")
+
     return HubConfig(
         schema_version=1,
         owner_user_ids=tuple(raw_owners),
@@ -453,6 +460,7 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
         projects=tuple(projects),
         agents=tuple(agents),
         hub_bot=hub_bot,
+        dispatch_mode=dispatch_mode,
         direct_message_project_id=direct_message_project_id,
         codex_multi_auth_dir=codex_multi_auth_dir,
         codex_multi_auth_executable=codex_multi_auth_executable,

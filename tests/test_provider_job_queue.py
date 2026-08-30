@@ -271,6 +271,25 @@ class ProviderJobQueueTests(unittest.TestCase):
             self.state.get_telegram_outbox_for_job(queued.job_id).telegram_message_id, 9001
         )
 
+    def test_result_rejects_an_arbitrary_outbox_sender_without_partial_commit(self) -> None:
+        queued, _ = self.enqueue(543)
+        leased = self.state.lease_provider_job("codex", "worker-codex")
+        assert leased is not None and leased.lease_token is not None
+        self.state.mark_provider_job_executing(queued.job_id, leased.lease_token)
+
+        with self.assertRaisesRegex(StateError, "sender does not match"):
+            self.state.commit_provider_result(
+                queued.job_id,
+                leased.lease_token,
+                visible_response="Visible response",
+                sender_agent_id="opencode",
+                telegram_html="Visible response",
+            )
+
+        self.assertEqual(self.state.get_provider_job(queued.job_id).status, "executing")
+        with self.assertRaisesRegex(StateError, "has no result"):
+            self.state.get_provider_result(queued.job_id)
+
     def test_result_can_use_an_explicit_bounded_user_excerpt(self) -> None:
         queued, _ = self.enqueue(545)
         leased = self.state.lease_provider_job("codex", "worker-codex")

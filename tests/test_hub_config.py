@@ -90,6 +90,15 @@ class HubConfigTests(unittest.TestCase):
     def test_hub_bot_remains_optional_for_backward_compatible_configs(self) -> None:
         self.assertIsNone(load_hub_config(self.write_config()).hub_bot)
 
+    def test_dispatch_mode_defaults_to_inline_and_accepts_queue(self) -> None:
+        self.assertEqual(load_hub_config(self.write_config()).dispatch_mode, "inline")
+        self.assertEqual(
+            load_hub_config(self.write_config(dispatch_mode="queue")).dispatch_mode,
+            "queue",
+        )
+        with self.assertRaisesRegex(HubConfigError, "dispatch_mode"):
+            load_hub_config(self.write_config(dispatch_mode="background"))
+
     def test_rejects_inline_hub_bot_token(self) -> None:
         with self.assertRaisesRegex(HubConfigError, "inline token"):
             load_hub_config(

@@ -1,6 +1,6 @@
 # ADR 0001: Durable provider job queue and isolated workers
 
-Status: accepted for planned implementation  
+Status: accepted; stage 2 embedded compatibility path implemented, isolated workers planned
 Date: 2026-08-30
 
 ## Context
@@ -11,8 +11,9 @@ provider must never make local commands or another provider unavailable. The
 product also needs a recoverable record of a Telegram request after it has been
 accepted, without treating an interrupted provider turn as safe to run again.
 
-This record defines a replacement execution architecture. It is a contract for
-the planned work; it does not claim that the queue or workers are implemented.
+This record defines a replacement execution architecture. Stage 2 implements a
+feature-gated embedded compatibility consumer using the durable queue; it does
+not claim that the isolated provider workers or a live cutover are implemented.
 
 ## Decision
 

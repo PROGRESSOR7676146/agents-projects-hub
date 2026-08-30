@@ -412,6 +412,17 @@ class HubState:
         ).fetchone()
         return row is not None
 
+    def topic_has_pending_provider_job(self, topic_id: int) -> bool:
+        """Whether durable work still owns this topic's provider writer."""
+        row = self._connection.execute(
+            """SELECT 1 FROM provider_jobs
+               WHERE topic_id = ?
+                 AND status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+               LIMIT 1""",
+            (topic_id,),
+        ).fetchone()
+        return row is not None
+
     def enqueue_provider_job(
         self,
         *,
@@ -429,6 +440,7 @@ class HubState:
         context_watermark: int | None = None,
         handoff_id: str | None = None,
         max_attempts: int = 5,
+        take_local_writer: bool = False,
     ) -> tuple[ProviderJobRecord, bool]:
         """Atomically accept one bounded provider request.
 
@@ -491,8 +503,9 @@ class HubState:
                 raise StateError("provider job session snapshot does not match persisted session")
             if str(session["status"]) not in {"active", "satellite"}:
                 raise StateError("provider job session is not routable")
-            if str(session["writer_mode"]) != "telegram":
-                raise StateError("provider job session writer is not Telegram")
+            expected_writer = "local" if take_local_writer else "telegram"
+            if str(session["writer_mode"]) != expected_writer:
+                raise StateError(f"provider job session writer is not {expected_writer}")
             if str(session["model"]) != selected_model or str(session["effort"]) != selected_effort:
                 raise StateError("provider job model or effort does not match persisted session")
             persisted_provider_session = session["provider_session_id"]
@@ -519,6 +532,24 @@ class HubState:
                 ).fetchone()
                 if pending is None:
                     raise StateError("provider job handoff snapshot is not pending")
+
+            if take_local_writer:
+                pending_job = self._connection.execute(
+                    """SELECT 1 FROM provider_jobs
+                       WHERE topic_id = ? AND status IN
+                         ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                       LIMIT 1""",
+                    (topic_id,),
+                ).fetchone()
+                if pending_job is not None:
+                    raise StateError("provider work is already pending for this topic")
+                cursor = self._connection.execute(
+                    """UPDATE agent_sessions SET writer_mode = 'telegram', updated_at = ?
+                       WHERE session_id = ? AND writer_mode = 'local'""",
+                    (_now(), target_session),
+                )
+                if cursor.rowcount != 1:
+                    raise StateError("local writer ownership changed during provider admission")
 
             now = _now()
             self._connection.execute(
@@ -785,6 +816,33 @@ class HubState:
             raise StateError("provider job lease is missing or invalid")
         return self.get_provider_job(job_id)
 
+    def mark_provider_job_indeterminate(
+        self,
+        job_id: str,
+        lease_token: str,
+        *,
+        error_code: str,
+        error_detail: str | None = None,
+        now: datetime | None = None,
+    ) -> ProviderJobRecord:
+        """Record that a provider invocation might have happened; never retry it."""
+        code = _bounded(error_code, name="error code", maximum=128)
+        detail = error_detail.strip()[:1000] if error_detail else None
+        timestamp = _timestamp(now)
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'indeterminate', lease_owner = NULL, lease_token = NULL,
+                       lease_expires_at = NULL, error_class = 'ambiguous_execution',
+                       error_code = ?, error_detail = ?, updated_at = ?
+                   WHERE job_id = ? AND status = 'executing' AND lease_token = ?
+                     AND lease_expires_at > ?""",
+                (code, detail, timestamp, job_id, lease_token, timestamp),
+            )
+        if cursor.rowcount != 1:
+            raise StateError("provider job lease is missing or invalid")
+        return self.get_provider_job(job_id)
+
     def cancel_provider_job(self, job_id: str) -> ProviderJobRecord:
         with self._connection:
             cursor = self._connection.execute(
@@ -881,6 +939,8 @@ class HubState:
             ).fetchone()
             if job_row is None:
                 raise StateError("provider job lease is missing or invalid")
+            if sender != str(job_row["agent_id"]):
+                raise StateError("Telegram outbox sender does not match provider job agent")
             result_id = str(uuid.uuid4())
             self._connection.execute(
                 """INSERT INTO provider_job_results (
@@ -1511,7 +1571,8 @@ class HubState:
         with self._connection:
             self._connection.execute(
                 "INSERT INTO bot_offsets(agent_id, next_update_id, updated_at) VALUES (?, ?, ?) "
-                "ON CONFLICT(agent_id) DO UPDATE SET next_update_id = excluded.next_update_id, "
+                "ON CONFLICT(agent_id) DO UPDATE SET next_update_id = MAX("
+                "bot_offsets.next_update_id, excluded.next_update_id), "
                 "updated_at = excluded.updated_at",
                 (agent_id, next_update_id, _now()),
             )

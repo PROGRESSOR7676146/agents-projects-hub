@@ -12,8 +12,14 @@ operator deployment inventory or live conversation evidence.
   routing, persistent provider sessions, bounded visible context, and writer
   leases backed by versioned SQLite migrations.
 - Additive durable provider-job, result, and Telegram-outbox schema with atomic
-  idempotent enqueue, strict per-topic FIFO leases, and conservative stale-job
-  recovery. Runtime worker isolation and queue cutover are not yet implemented.
+  idempotent enqueue, strict per-topic FIFO leases, conservative stale-job
+  recovery, and a feature-gated embedded compatibility consumer. `dispatch_mode`
+  defaults to `inline`; `queue` returns productive ingress to polling after
+  commit, consumes jobs on a background thread with its own SQLite connection,
+  and commits result/outbox before deterministic embedded delivery.
+- Isolated per-provider worker processes and any live queue cutover remain
+  planned; this repository change does not alter deployment, service, or token
+  configuration.
 - Central Telegram ingress with deterministic ordinary, Reply, mention, and
   quote routing; non-target providers are not invoked merely to observe.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity
