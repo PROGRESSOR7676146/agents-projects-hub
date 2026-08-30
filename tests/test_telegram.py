@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from hermes_codex_router.telegram import (
+    TelegramBotApi,
     parse_direct_callback,
     parse_direct_message,
     parse_topic_callback,
@@ -11,6 +13,39 @@ from hermes_codex_router.telegram import (
 
 
 class TelegramUpdateTests(unittest.TestCase):
+    def test_long_poll_adds_only_a_bounded_transport_margin(self) -> None:
+        telegram = TelegramBotApi("123456:example")
+        with patch.object(telegram, "_call_with_timeout", return_value=[]) as call:
+            self.assertEqual(telegram.updates(offset=7, timeout=5), [])
+        call.assert_called_once_with(
+            "getUpdates",
+            request_timeout=10,
+            timeout=5,
+            allowed_updates='["message", "callback_query"]',
+            offset=7,
+        )
+
+    def test_ordinary_telegram_calls_use_shutdown_bounded_timeout(self) -> None:
+        class Response:
+            def __enter__(self) -> "Response":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                pass
+
+            def read(self) -> bytes:
+                return b'{"ok":true,"result":{}}'
+
+        observed: list[float] = []
+
+        def opener(_request: object, *, timeout: float) -> Response:
+            observed.append(timeout)
+            return Response()
+
+        telegram = TelegramBotApi("123456:example", opener=opener)
+        telegram.call("getMe")
+        self.assertEqual(observed, [8])
+
     def test_accepts_human_text_in_supergroup_topic(self) -> None:
         parsed = parse_topic_message(
             {

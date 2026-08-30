@@ -154,6 +154,24 @@ class TelegramOutboxSenderTests(unittest.TestCase):
         finally:
             sender.close()
 
+    def test_stop_after_delivery_lease_returns_unsent_row_without_attempt(self) -> None:
+        job_id = self.ready_outbox("opencode", 11)
+        sender = self.sender(opencode=Bot(), antigravity=Bot())
+        original_lease = sender.state.lease_telegram_outbox
+
+        def lease_then_stop(*args: object, **kwargs: object) -> object:
+            leased = cast(Any, original_lease)(*args, **kwargs)
+            sender.stop()
+            return leased
+
+        sender.state.lease_telegram_outbox = lease_then_stop  # type: ignore[method-assign]
+        try:
+            self.assertFalse(sender.run_cycle())
+            outbox = sender.state.get_telegram_outbox_for_job(job_id)
+            self.assertEqual((outbox.status, outbox.attempt_count), ("pending", 0))
+        finally:
+            sender.close()
+
     def test_sender_opens_every_local_queue_agent_token_in_mixed_rollout(self) -> None:
         open_token = Path(self.tempdir.name) / "opencode.token"
         agy_token = Path(self.tempdir.name) / "antigravity.token"

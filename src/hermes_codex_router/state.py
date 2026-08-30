@@ -954,6 +954,20 @@ class HubState:
             raise StateError("provider job lease is missing, expired, or invalid")
         return self.get_provider_job(job_id)
 
+    def release_provider_job_lease(self, job_id: str, lease_token: str) -> None:
+        """Return work that was leased but not invoked to the durable queue."""
+        timestamp = _now()
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'queued', lease_owner = NULL, lease_token = NULL,
+                       lease_expires_at = NULL, updated_at = ?
+                   WHERE job_id = ? AND status = 'leased' AND lease_token = ?""",
+                (timestamp, job_id, lease_token),
+            )
+        if cursor.rowcount != 1:
+            raise StateError("provider job lease is missing or invalid")
+
     def heartbeat_provider_job(
         self,
         job_id: str,
@@ -1398,6 +1412,21 @@ class HubState:
         if cursor.rowcount != 1:
             raise StateError("Telegram outbox lease is missing, expired, or invalid")
         return self.get_telegram_outbox(outbox_id)
+
+    def release_telegram_outbox_lease(self, outbox_id: str, lease_token: str) -> None:
+        """Return an unsent delivery lease without consuming a retry attempt."""
+        timestamp = _now()
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE telegram_outbox
+                   SET status = 'pending', attempt_count = MAX(attempt_count - 1, 0),
+                       lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+                       error_code = NULL, available_at = ?, updated_at = ?
+                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?""",
+                (timestamp, timestamp, outbox_id, lease_token),
+            )
+        if cursor.rowcount != 1:
+            raise StateError("Telegram outbox lease is missing or invalid")
 
     def retry_telegram_outbox(
         self,

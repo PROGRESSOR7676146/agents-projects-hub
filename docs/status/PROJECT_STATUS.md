@@ -30,8 +30,12 @@ operator deployment inventory or live conversation evidence.
   separate endpoints. Hermes remains externally managed
   and out of worker scope. Controller status/account commands do not invoke
   `codex-multi-auth` when Codex is isolated. No live queue cutover is implied by
-  this repository change. Signal wiring, bounded shutdown, and managed-socket
-  ownership guards remain part of the service/recovery stage.
+  this repository change. Controller, direct-provider, worker, and sender
+  processes handle `SIGTERM`/`SIGINT` as stop requests, use bounded Telegram
+  polling and cleanup joins, release work when stop is observed before
+  invocation, and preserve work past the final cooperative boundary for
+  conservative ambiguity recovery. Managed-socket ownership guards remain part
+  of the service/recovery stage.
 - Additive SQLite runtime-health cache and bounded state APIs cover Controller,
   sender, and provider-worker identities. Classification is derived only from
   cached heartbeat/error/provider state and never calls a model or provider.

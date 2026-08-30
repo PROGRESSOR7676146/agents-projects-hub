@@ -170,6 +170,23 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             opencode.close()
             antigravity.close()
 
+    def test_stop_after_provider_lease_returns_unstarted_job_to_queue(self) -> None:
+        job_id = self.enqueue("opencode", 30)
+        worker = self.worker("opencode", Adapter("opencode"))
+        original_lease = worker.state.lease_provider_job
+
+        def lease_then_stop(*args: object, **kwargs: object) -> object:
+            leased = cast(Any, original_lease)(*args, **kwargs)
+            worker.stop()
+            return leased
+
+        worker.state.lease_provider_job = lease_then_stop  # type: ignore[method-assign]
+        try:
+            self.assertFalse(worker.run_cycle())
+            self.assertEqual(worker.state.get_provider_job(job_id).status, "queued")
+        finally:
+            worker.close()
+
     def test_hand_built_config_cannot_make_an_externally_managed_agent_a_worker(self) -> None:
         externally_managed = replace(
             self.config,

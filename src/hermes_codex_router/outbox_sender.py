@@ -98,9 +98,13 @@ class TelegramOutboxSender:
 
     def run_cycle(self) -> bool:
         """Recover stale leases and fairly deliver at most one prepared row."""
+        if self._stop.is_set():
+            return False
         self.state.recover_stale_telegram_outbox(sender_agent_ids=self.agent_ids)
         start = self._cursor % len(self.agent_ids)
         for offset in range(len(self.agent_ids)):
+            if self._stop.is_set():
+                return False
             position = (start + offset) % len(self.agent_ids)
             agent_id = self.agent_ids[position]
             if self._deliver_one(agent_id):
@@ -111,6 +115,9 @@ class TelegramOutboxSender:
     def _deliver_one(self, agent_id: str) -> bool:
         outbox = self.state.lease_telegram_outbox(agent_id, self.sender_id)
         if outbox is None or outbox.lease_token is None:
+            return False
+        if self._stop.is_set():
+            self.state.release_telegram_outbox_lease(outbox.outbox_id, outbox.lease_token)
             return False
         try:
             message_id = self.telegram_bots[agent_id].send_html(

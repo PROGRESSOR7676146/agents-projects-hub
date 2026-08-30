@@ -15,6 +15,7 @@ from .hub_config import (
     load_hub_config,
     load_outbox_sender_config,
 )
+from .lifecycle import stop_on_signals
 from .migrations import backup_database, migrate_database
 from .monitoring import run_monitor_once
 from .outbox_sender import TelegramOutboxSender
@@ -261,21 +262,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else ExternalAgentService(config, args.agent, direct_messages_only=True)
             )
             try:
-                service.run_forever()
+                with stop_on_signals(service):
+                    service.run_forever()
             finally:
                 service.close()
             return 0
         if args.command == "worker":
             worker = ExternalQueueWorker(load_external_worker_config(args.config), args.agent)
             try:
-                worker.run_forever(poll_seconds=args.poll_seconds)
+                with stop_on_signals(worker):
+                    worker.run_forever(poll_seconds=args.poll_seconds)
             finally:
                 worker.close()
             return 0
         if args.command == "sender":
             sender = TelegramOutboxSender(load_outbox_sender_config(args.config))
             try:
-                sender.run_forever(poll_seconds=args.poll_seconds)
+                with stop_on_signals(sender):
+                    sender.run_forever(poll_seconds=args.poll_seconds)
             finally:
                 sender.close()
             return 0

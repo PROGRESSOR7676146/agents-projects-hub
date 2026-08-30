@@ -5,7 +5,6 @@ import html
 import re
 import subprocess
 import threading
-import time
 
 from .codex_accounts import CodexPoolStatus, read_codex_pool_status
 from .codex_appserver import CodexAppServerClient, RateLimits, RpcError
@@ -102,8 +101,26 @@ class ProjectHubService:
         self._outbox_stop = threading.Event()
         self._outbox_thread: threading.Thread | None = None
         self._outbox_agent_cursor = 0
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        """Request that ingress and background polling stop at safe boundaries."""
+        stop = getattr(self, "_stop", None)
+        if stop is None:
+            stop = self._stop = threading.Event()
+        stop.set()
+        queue_stop = getattr(self, "_queue_stop", None)
+        if queue_stop is not None:
+            queue_stop.set()
+        outbox_stop = getattr(self, "_outbox_stop", None)
+        if outbox_stop is not None:
+            outbox_stop.set()
+        for service in getattr(self, "external_services", {}).values():
+            service.stop()
 
     def close(self) -> None:
+        self.stop()
+        close_error: ServiceError | None = None
         queue_stop = getattr(self, "_queue_stop", None)
         queue_thread = getattr(self, "_queue_thread", None)
         if queue_stop is not None:
@@ -115,7 +132,7 @@ class ProjectHubService:
             self._discard_codex_client()
             queue_thread.join(timeout=5)
             if queue_thread.is_alive():
-                raise ServiceError("embedded queue consumer did not stop")
+                close_error = ServiceError("embedded queue consumer did not stop")
         outbox_stop = getattr(self, "_outbox_stop", None)
         outbox_thread = getattr(self, "_outbox_thread", None)
         if outbox_stop is not None:
@@ -123,7 +140,15 @@ class ProjectHubService:
         if outbox_thread is not None and outbox_thread is not threading.current_thread():
             outbox_thread.join(timeout=5)
             if outbox_thread.is_alive():
-                raise ServiceError("controller outbox delivery loop did not stop")
+                close_error = close_error or ServiceError(
+                    "controller outbox delivery loop did not stop"
+                )
+        # A provider thread owns its own SQLite connection, but it may still be
+        # using provider transports and adapter objects held by this service.
+        # Preserve those resources when bounded joining fails; process-level
+        # supervision can then terminate the component without a use-after-close.
+        if close_error is not None:
+            raise close_error
         for service in getattr(self, "external_services", {}).values():
             service.close()
         if self._codex_client is not None:
@@ -278,6 +303,9 @@ class ProjectHubService:
 
     def run_controller_outbox_cycle(self) -> bool:
         """Compatibility sender used until the standalone sender is enabled."""
+        outbox_stop = getattr(self, "_outbox_stop", None)
+        if outbox_stop is not None and outbox_stop.is_set():
+            return False
         if self._uses_external_outbox_sender():
             return False
         external_agents = [
@@ -293,7 +321,11 @@ class ProjectHubService:
             start = getattr(self, "_outbox_agent_cursor", 0) % len(external_agents)
             for offset in range(len(external_agents)):
                 position = (start + offset) % len(external_agents)
-                if self._deliver_embedded_outbox(outbox_state, external_agents[position]):
+                if self._deliver_embedded_outbox(
+                    outbox_state,
+                    external_agents[position],
+                    stop_event=outbox_stop,
+                ):
                     self._outbox_agent_cursor = (position + 1) % len(external_agents)
                     return True
             return False
@@ -328,6 +360,9 @@ class ProjectHubService:
         its own SQLite connection so provider execution never runs on the
         polling thread's connection.
         """
+        queue_stop = getattr(self, "_queue_stop", None)
+        if queue_stop is not None and queue_stop.is_set():
+            return False
         embedded_agent_ids = tuple(
             agent.agent_id
             for agent in self.config.agents
@@ -343,17 +378,27 @@ class ProjectHubService:
                 if not self._embedded_consumer_owns_agent(agent.agent_id):
                     continue
                 queue_state.recover_stale_provider_jobs(agent_id=agent.agent_id)
+                if queue_stop is not None and queue_stop.is_set():
+                    return False
                 job = queue_state.lease_provider_job(agent.agent_id, "embedded-consumer")
                 if job is not None:
+                    if queue_stop is not None and queue_stop.is_set():
+                        assert job.lease_token is not None
+                        queue_state.release_provider_job_lease(job.job_id, job.lease_token)
+                        return False
                     self._execute_embedded_provider_job(queue_state, job)
                     if not self._uses_external_outbox_sender():
-                        self._deliver_embedded_outbox(queue_state, agent.agent_id)
+                        self._deliver_embedded_outbox(
+                            queue_state, agent.agent_id, stop_event=queue_stop
+                        )
                     return True
             if not self._uses_external_outbox_sender():
                 for agent in self.config.agents:
                     if self._embedded_consumer_owns_agent(
                         agent.agent_id
-                    ) and self._deliver_embedded_outbox(queue_state, agent.agent_id):
+                    ) and self._deliver_embedded_outbox(
+                        queue_state, agent.agent_id, stop_event=queue_stop
+                    ):
                         return True
             return False
         finally:
@@ -513,9 +558,20 @@ class ProjectHubService:
             heartbeat_stop.set()
             heartbeat.join(timeout=2)
 
-    def _deliver_embedded_outbox(self, queue_state: HubState, agent_id: str) -> bool:
+    def _deliver_embedded_outbox(
+        self,
+        queue_state: HubState,
+        agent_id: str,
+        *,
+        stop_event: threading.Event | None = None,
+    ) -> bool:
+        if stop_event is not None and stop_event.is_set():
+            return False
         outbox = queue_state.lease_telegram_outbox(agent_id, "embedded-outbox")
         if outbox is None or outbox.lease_token is None:
+            return False
+        if stop_event is not None and stop_event.is_set():
+            queue_state.release_telegram_outbox_lease(outbox.outbox_id, outbox.lease_token)
             return False
         sender = getattr(self, "external_services", {}).get(agent_id)
         telegram = sender.telegram if sender is not None else self.telegram
@@ -1880,6 +1936,9 @@ class ProjectHubService:
         return True
 
     def run_forever(self) -> None:
+        stop = getattr(self, "_stop", None)
+        if stop is None:
+            stop = self._stop = threading.Event()
         if self.supervisor is not None and not self._uses_external_codex_worker():
             self.supervisor.start()
         self._start_embedded_queue_consumer()
@@ -1887,10 +1946,12 @@ class ProjectHubService:
         ingress_agent_id = self.agent.agent_id
         self.state.record_runtime_event(ingress_agent_id, "info", "service_started", "polling")
         offset = self.state.get_bot_offset(ingress_agent_id)
-        while True:
+        while not stop.is_set():
             try:
-                updates = self.telegram.updates(offset=offset)
+                updates = self.telegram.updates(offset=offset, timeout=5)
                 for update in updates:
+                    if stop.is_set():
+                        break
                     update_id = update.get("update_id")
                     if not isinstance(update_id, int):
                         continue
@@ -1920,4 +1981,4 @@ class ProjectHubService:
                 self.state.record_runtime_event(
                     "codex", "warning", "telegram_error", type(exc).__name__
                 )
-                time.sleep(3)
+                stop.wait(3)

@@ -442,6 +442,15 @@ recreate unsaved provider context or a partially executed turn.
 - **REQ-QUEUE-006 (Implemented for the additive schema and global compatibility gate; per-provider rollout Planned):** Queue migration and per-provider rollout MUST be
   additive, feature-gated, recoverable through the existing backup discipline,
   and retain safe rollback without destroying accepted jobs.
+- **REQ-QUEUE-007 (Implemented):** Long-running Controller, direct-provider,
+  worker, and outbox-sender processes MUST translate `SIGTERM` and `SIGINT`
+  into cooperative stop requests only. They MUST stop polling and taking work
+  at the next explicit safe boundary, return a lease when stop is observed
+  before invocation without consuming an attempt, bound transport waits and
+  joins, and restore prior process signal handlers. A signal may race after the
+  final safe-boundary check; work past that boundary is treated as potentially
+  started and remains subject to the existing `indeterminate`/outbox ambiguity
+  rules rather than being made automatically retryable.
 
 The detailed state machine, retry proof rule, reconciliation, and required
 fault acceptance are normative in [ADR 0001](../decisions/0001-durable-provider-job-queue.md).

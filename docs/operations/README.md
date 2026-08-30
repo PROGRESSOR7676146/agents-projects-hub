@@ -38,6 +38,16 @@ Operational truth is split by purpose:
   and rollback path.
 - Exact in-flight turns are not recoverable after machine loss; communicate this
   limit instead of inferring success from stale state.
+- Service `SIGTERM` and `SIGINT` handlers only request shutdown. Controller and
+  direct-provider ingress stop polling at the next bounded return. Workers and
+  the sender check stop state around lease acquisition and return work observed
+  before invocation without consuming an attempt. Cleanup waits are bounded.
+  A signal can still race after the final safe-boundary check; if supervision
+  terminates work past that boundary, provider recovery keeps it
+  `indeterminate` unless provider-specific evidence proves a safe result.
+  Telegram delivery may be duplicated after transport ambiguity, but provider
+  execution is never repeated for that reason. Never manually reset ambiguous
+  work to `queued` merely because shutdown occurred.
 
 ## Hermes Telegram drift and liveness
 

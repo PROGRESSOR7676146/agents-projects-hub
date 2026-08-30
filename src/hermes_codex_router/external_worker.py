@@ -170,10 +170,18 @@ class ExternalQueueWorker:
 
     def run_cycle(self) -> bool:
         """Lease and execute at most one job for this worker's sole agent."""
+        if self._stop.is_set():
+            return False
         self._publish_health()
         self.state.recover_stale_provider_jobs(agent_id=self.agent.agent_id)
+        if self._stop.is_set():
+            return False
         job = self.state.lease_provider_job(self.agent.agent_id, self.worker_id)
         if job is None:
+            return False
+        if self._stop.is_set():
+            assert job.lease_token is not None
+            self.state.release_provider_job_lease(job.job_id, job.lease_token)
             return False
         self._publish_health(activity_state="leased", active_job=job)
         self._execute(job)

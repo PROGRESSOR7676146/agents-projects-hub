@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import html
 import re
-import time
+import threading
 
 from .external_admission import (
     consume_pending_handoff,
@@ -65,8 +65,13 @@ class ExternalAgentService:
         self.usernames = {
             candidate.agent_id: candidate.telegram_username for candidate in config.agents
         }
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        self._stop.set()
 
     def close(self) -> None:
+        self.stop()
         self.state.close()
 
     @staticmethod
@@ -565,9 +570,11 @@ class ExternalAgentService:
             f"runtime={self.agent.runtime}; polling",
         )
         offset = self.state.get_bot_offset(self.agent.agent_id)
-        while True:
+        while not self._stop.is_set():
             try:
-                for update in self.telegram.updates(offset=offset):
+                for update in self.telegram.updates(offset=offset, timeout=5):
+                    if self._stop.is_set():
+                        break
                     update_id = update.get("update_id")
                     if not isinstance(update_id, int):
                         continue
@@ -590,4 +597,4 @@ class ExternalAgentService:
                     "telegram_error",
                     type(exc).__name__,
                 )
-                time.sleep(3)
+                self._stop.wait(3)

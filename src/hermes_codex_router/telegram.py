@@ -183,10 +183,13 @@ class TelegramBotApi:
         self._opener = opener
 
     def call(self, method: str, **params: Any) -> Any:
+        return self._call_with_timeout(method, request_timeout=8, **params)
+
+    def _call_with_timeout(self, method: str, *, request_timeout: float, **params: Any) -> Any:
         body = urllib.parse.urlencode(params).encode("utf-8")
         request = urllib.request.Request(self._base + method, data=body, method="POST")
         try:
-            with self._opener(request, timeout=70) as response:
+            with self._opener(request, timeout=request_timeout) as response:
                 document = json.load(response)
         except Exception as exc:
             raise TelegramError(f"Telegram request failed: {type(exc).__name__}") from exc
@@ -201,7 +204,9 @@ class TelegramBotApi:
         }
         if offset is not None:
             params["offset"] = offset
-        result = self.call("getUpdates", **params)
+        # Keep transport cancellation bounded beyond Telegram's server-side
+        # long poll so service stop fits comfortably within the unit timeout.
+        result = self._call_with_timeout("getUpdates", request_timeout=timeout + 5, **params)
         if not isinstance(result, list):
             raise TelegramError("getUpdates returned a non-list")
         return [item for item in result if isinstance(item, dict)]

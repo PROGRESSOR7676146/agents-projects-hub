@@ -348,8 +348,10 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
                 super().__init__()
                 self.polls = 0
 
-            def updates(self, *, offset: int | None = None) -> list[dict[str, object]]:
-                del offset
+            def updates(
+                self, *, offset: int | None = None, timeout: int = 50
+            ) -> list[dict[str, object]]:
+                del offset, timeout
                 self.polls += 1
                 if self.polls == 1:
                     return [{"update_id": 1}, {"update_id": 2}]
