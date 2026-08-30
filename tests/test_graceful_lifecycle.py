@@ -76,6 +76,7 @@ class GracefulLifecycleTests(unittest.TestCase):
                 self.closed = True
 
         commands = (
+            ("controller", ["controller", "example.json"], "ProjectHubService"),
             ("serve", ["serve", "example.json"], "ProjectHubService"),
             (
                 "direct serve",
@@ -89,6 +90,14 @@ class GracefulLifecycleTests(unittest.TestCase):
             with self.subTest(label=label):
                 instances.clear()
                 with (
+                    patch(
+                        "hermes_codex_router.cli.load_controller_config",
+                        return_value=type("ControllerConfig", (), {"hub_bot": None})(),
+                    ),
+                    patch(
+                        "hermes_codex_router.cli.load_provider_service_config",
+                        return_value=type("Config", (), {"hub_bot": None})(),
+                    ),
                     patch("hermes_codex_router.cli.load_hub_config", return_value=object()),
                     patch(
                         "hermes_codex_router.cli.load_external_worker_config",

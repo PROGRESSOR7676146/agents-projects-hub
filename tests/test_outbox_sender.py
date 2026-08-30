@@ -365,6 +365,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             "high",
         )
         token_file.write_text("123456:example", encoding="utf-8")
+        token_file.chmod(0o600)
         config = replace(
             config,
             agents=(codex,) + config.agents,

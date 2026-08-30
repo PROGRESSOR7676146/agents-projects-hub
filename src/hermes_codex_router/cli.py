@@ -11,9 +11,11 @@ from .external_service import ExternalAgentService
 from .external_worker import ExternalQueueWorker
 from .hub_config import (
     HubConfigError,
+    load_controller_config,
     load_external_worker_config,
     load_hub_config,
     load_outbox_sender_config,
+    load_provider_service_config,
 )
 from .lifecycle import stop_on_signals
 from .migrations import backup_database, migrate_database
@@ -50,6 +52,9 @@ def _parser() -> argparse.ArgumentParser:
     serve = commands.add_parser("serve", help="run the managed Codex Telegram bot")
     serve.add_argument("config", type=Path)
     serve.add_argument("--agent", default="codex")
+
+    controller = commands.add_parser("controller", help="run central Hub group ingress")
+    controller.add_argument("config", type=Path)
 
     worker = commands.add_parser("worker", help="run one isolated provider queue worker")
     worker.add_argument("config", type=Path)
@@ -256,11 +261,27 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
         if args.command == "serve":
-            config = load_hub_config(args.config)
+            config = load_provider_service_config(args.config, args.agent)
             service = (
-                ProjectHubService(config)
+                ProjectHubService(
+                    config,
+                    ingress_identity="codex",
+                    direct_messages_only=config.hub_bot is not None,
+                )
                 if args.agent == "codex"
                 else ExternalAgentService(config, args.agent, direct_messages_only=True)
+            )
+            try:
+                with stop_on_signals(service):
+                    service.run_forever()
+            finally:
+                service.close()
+            return 0
+        if args.command == "controller":
+            config = load_controller_config(args.config)
+            service = ProjectHubService(
+                config,
+                ingress_identity="hub" if config.hub_bot is not None else "codex",
             )
             try:
                 with stop_on_signals(service):

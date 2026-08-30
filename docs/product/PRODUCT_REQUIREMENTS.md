@@ -400,13 +400,22 @@ recreate unsaved provider context or a partially executed turn.
 
 ### Implemented queue compatibility and local provider-worker isolation
 
-- **REQ-HUBBOT-001 (Planned):** A separate Hub Telegram bot MUST become the
+- **REQ-HUBBOT-001 (Implemented behind optional `hub_bot` configuration):** A separate Hub Telegram bot MUST become the
   central project-group identity. It MUST own group ingress, the universal
   command menu, and callbacks; it MUST have Privacy Mode disabled as a
   deployment prerequisite. Provider bots MUST NOT poll project groups, while
   retaining their own response identities and provider-specific direct-message
   endpoints. The Hub bot token MUST reside only in a restrictive private local
-  file and MUST NOT appear in Git, examples, logs, or Telegram content.
+  file and MUST NOT appear in Git, examples, logs, or Telegram content. Hub
+  ingress MUST use a durable offset identity distinct from Codex. When
+  `hub_bot` is omitted, Codex remains the compatibility ingress without
+  changing its existing offset. Controller startup MUST validate and read only
+  the selected ingress token; provider workers, direct-message services, and
+  outbox delivery retain their own credential and response-identity boundaries.
+  Hub mode MUST use external queue/outbox ownership and MUST isolate every
+  locally managed productive provider in its own external worker. A local
+  runtime without external-worker support MUST be rejected rather than run
+  inside the Controller.
 - **REQ-QUEUE-001 (Implemented behind `dispatch_mode: "queue"`):** The deterministic Hub Controller MUST durably
   enqueue each admitted productive request before provider execution and MUST
   NOT wait for a provider CLI, RPC, or model turn to process local commands.

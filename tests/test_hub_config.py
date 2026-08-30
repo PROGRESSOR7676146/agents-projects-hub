@@ -8,6 +8,7 @@ from pathlib import Path
 from hermes_codex_router.hub_config import (
     HubConfigError,
     load_codex_worker_config,
+    load_controller_config,
     load_external_worker_config,
     load_hub_config,
 )
@@ -78,6 +79,52 @@ class HubConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(HubConfigError, "token_file"):
             load_hub_config(path)
         config = load_codex_worker_config(path)
+        self.assertEqual(config.require_agent("codex").token_file, self.token.resolve())
+
+    def test_controller_loader_validates_only_configured_hub_ingress_token(self) -> None:
+        hub_token = self.base / "hub-token"
+        hub_token.write_text("654321:hub-token-value", encoding="utf-8")
+        hub_token.chmod(0o600)
+        path = self.write_config(
+            hub_bot={
+                "telegram_username": "project_hub_bot",
+                "token_file": str(hub_token),
+            },
+            dispatch_mode="queue",
+            queue_runtime="external",
+            outbox_runtime="external",
+        )
+        self.token.unlink()
+
+        config = load_controller_config(path)
+
+        self.assertEqual(config.hub_bot.token_file, hub_token.resolve())  # type: ignore[union-attr]
+        self.assertEqual(config.require_agent("codex").token_file, self.token.resolve())
+
+    def test_controller_loader_uses_codex_token_for_legacy_ingress_only(self) -> None:
+        unrelated = self.base / "opencode-token"
+        agents = [
+            {
+                "agent_id": "codex",
+                "display_name": "Codex",
+                "telegram_username": "project_codex_bot",
+                "runtime": "codex",
+                "token_file": str(self.token),
+                "terminal_enabled": True,
+            },
+            {
+                "agent_id": "opencode",
+                "display_name": "OpenCode",
+                "telegram_username": "project_opencode_bot",
+                "runtime": "opencode",
+                "token_file": str(unrelated),
+                "terminal_enabled": False,
+            },
+        ]
+
+        config = load_controller_config(self.write_config(agents=agents))
+
+        self.assertIsNone(config.hub_bot)
         self.assertEqual(config.require_agent("codex").token_file, self.token.resolve())
 
     def test_external_worker_agent_ids_default_to_codex_and_validate_local_runtimes(self) -> None:
@@ -156,7 +203,10 @@ class HubConfigTests(unittest.TestCase):
                 hub_bot={
                     "telegram_username": "project_hub_bot",
                     "token_file": str(hub_token),
-                }
+                },
+                dispatch_mode="queue",
+                queue_runtime="external",
+                outbox_runtime="external",
             )
         )
 
@@ -165,6 +215,57 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(config.hub_bot.telegram_username, "project_hub_bot")
         self.assertEqual(config.hub_bot.token_file, hub_token.resolve())
         self.assertNotIsInstance(config.hub_bot, type(config.require_agent("codex")))
+
+    def test_hub_bot_rejects_coupled_inline_or_embedded_runtime(self) -> None:
+        hub_token = self.base / "hub-token"
+        hub_token.write_text("654321:hub-token-value", encoding="utf-8")
+        hub_token.chmod(0o600)
+        with self.assertRaisesRegex(HubConfigError, "external workers and external outbox"):
+            load_hub_config(
+                self.write_config(
+                    hub_bot={
+                        "telegram_username": "project_hub_bot",
+                        "token_file": str(hub_token),
+                    }
+                )
+            )
+
+    def test_hub_bot_rejects_local_runtime_without_isolated_worker_support(self) -> None:
+        hub_token = self.base / "hub-token"
+        hub_token.write_text("654321:hub-token-value", encoding="utf-8")
+        hub_token.chmod(0o600)
+        agents = [
+            {
+                "agent_id": "codex",
+                "display_name": "Codex",
+                "telegram_username": "project_codex_bot",
+                "runtime": "codex",
+                "token_file": str(self.token),
+                "terminal_enabled": True,
+            },
+            {
+                "agent_id": "gemini",
+                "display_name": "Gemini",
+                "telegram_username": "project_gemini_bot",
+                "runtime": "gemini",
+                "token_file": str(self.base / "unused-gemini-token"),
+                "terminal_enabled": False,
+            },
+        ]
+        with self.assertRaisesRegex(HubConfigError, "unisolated local runtime.*gemini"):
+            load_controller_config(
+                self.write_config(
+                    agents=agents,
+                    hub_bot={
+                        "telegram_username": "project_hub_bot",
+                        "token_file": str(hub_token),
+                    },
+                    dispatch_mode="queue",
+                    queue_runtime="external",
+                    outbox_runtime="external",
+                    external_worker_agent_ids=["codex"],
+                )
+            )
 
     def test_hub_bot_remains_optional_for_backward_compatible_configs(self) -> None:
         self.assertIsNone(load_hub_config(self.write_config()).hub_bot)

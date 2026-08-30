@@ -28,6 +28,17 @@ Operational truth is split by purpose:
   until that sender is ready. In external mode, the sender is the only process
   that delivers shared project-group outbox rows for all locally managed queue
   providers, including providers whose execution remains embedded.
+- Optional Hub ingress: when `hub_bot` is configured, `agents-projects-hub
+  controller HUB_CONFIG` polls project groups as Hub and stores its Telegram offset
+  separately from Codex. Controller startup reads only that ingress token;
+  provider tokens remain owned by response senders and direct-message services.
+  Hub mode requires an external queue worker for every locally managed
+  productive provider and the external outbox sender.
+  `agents-projects-hub serve HUB_CONFIG --agent codex` remains a separate,
+  direct-message-only Codex ingress with its own offset and credential boundary.
+  Direct-message ingress does not overwrite the Controller health identity.
+  Omitting `hub_bot` retains Codex ingress for rollback. Privacy Mode and live
+  bot/menu changes remain an owner-coordinated deployment acceptance step.
 - Public Telegram menu drift: `agents-projects-hub telegram-commands HUB_CONFIG`.
   Apply the exact six-command menu with
   `agents-projects-hub telegram-commands HUB_CONFIG --sync`.

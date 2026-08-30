@@ -37,7 +37,12 @@ class ExternalAgentService:
     MODEL_PAGE_SIZE = 8
 
     def __init__(
-        self, config: HubConfig, agent_id: str, *, direct_messages_only: bool = False
+        self,
+        config: HubConfig,
+        agent_id: str,
+        *,
+        direct_messages_only: bool = False,
+        response_transport: bool = True,
     ) -> None:
         self.config = config
         self.agent = config.require_agent(agent_id)
@@ -56,7 +61,12 @@ class ExternalAgentService:
             )
         self.state_path = state_path
         self.state = HubState.open(state_path)
-        self.telegram = TelegramBotApi(self.agent.token_file.read_text(encoding="utf-8").strip())
+        self.response_transport_enabled = response_transport
+        self._telegram = (
+            TelegramBotApi(self.agent.token_file.read_text(encoding="utf-8").strip())
+            if response_transport
+            else None
+        )
         self.adapter = ExternalCliAdapter(
             self.agent.runtime,
             executable=self.agent.executable,
@@ -66,6 +76,17 @@ class ExternalAgentService:
             candidate.agent_id: candidate.telegram_username for candidate in config.agents
         }
         self._stop = threading.Event()
+
+    @property
+    def telegram(self) -> TelegramBotApi:
+        if self._telegram is None:
+            raise RuntimeError("provider Telegram response transport is externally owned")
+        return self._telegram
+
+    @telegram.setter
+    def telegram(self, value: TelegramBotApi) -> None:
+        self._telegram = value
+        self.response_transport_enabled = True
 
     def stop(self) -> None:
         self._stop.set()

@@ -15,7 +15,7 @@ from .codex_appserver import CodexAppServerClient, RateLimits, RpcError
 from .external_admission import consume_pending_handoff, peek_pending_handoff
 from .external_runtime import ProviderLimitError
 from .external_service import ExternalAgentService
-from .hub_config import HubConfig
+from .hub_config import HubConfig, read_telegram_token
 from .local_transfer import LocalTransferError, local_resume_command
 from .metadata import format_agent_response, format_telegram_response
 from .model_selection import ModelSelectionError, available_models, require_model_effort
@@ -59,18 +59,42 @@ class QueueAcceptanceError(ServiceError):
 class ProjectHubService:
     MODEL_PAGE_SIZE = 8
 
-    def __init__(self, config: HubConfig) -> None:
+    def __init__(
+        self,
+        config: HubConfig,
+        *,
+        ingress_identity: str | None = None,
+        direct_messages_only: bool = False,
+    ) -> None:
         self.config = config
         self.registry = load_registry(config.registry_path)
         self.state = HubState.open(config.state_path)
         self.agent = config.require_agent("codex")
         if self.agent.runtime != "codex" or self.agent.token_file is None:
             raise ServiceError("managed Codex bot is not configured")
-        # Stage 2 keeps the existing Codex ingress identity.  The separate Hub
-        # bot needs its own controller poller so provider direct messages can
-        # remain live; merely swapping this token would silently abandon them.
-        token = self.agent.token_file.read_text(encoding="utf-8").strip()
+        self.ingress_identity = ingress_identity or (
+            "hub" if config.hub_bot is not None else self.agent.agent_id
+        )
+        self.direct_messages_only = direct_messages_only
+        self._publishes_controller_health = not direct_messages_only
+        if self.ingress_identity not in {"hub", self.agent.agent_id}:
+            raise ServiceError("unsupported controller ingress identity")
+        if self.ingress_identity == "hub" and config.hub_bot is None:
+            raise ServiceError("Hub ingress identity is not configured")
+        ingress_token_file = (
+            config.hub_bot.token_file
+            if self.ingress_identity == "hub" and config.hub_bot is not None
+            else self.agent.token_file
+        )
+        assert ingress_token_file is not None
+        token = read_telegram_token(ingress_token_file, self.ingress_identity)
         self.telegram = TelegramBotApi(token)
+        # Codex remains the productive provider identity. With a separate Hub
+        # ingress its token is opened lazily only if this compatibility process
+        # still owns Codex response delivery.
+        self._codex_telegram: TelegramBotApi | None = (
+            self.telegram if self.ingress_identity == self.agent.agent_id else None
+        )
         # In external queue mode the Controller has no Codex process/RPC
         # lifecycle.  Only the separately started worker owns that boundary.
         self.supervisor: CodexAppServerSupervisor | None = None
@@ -91,7 +115,11 @@ class ProjectHubService:
             candidate.agent_id: candidate.telegram_username for candidate in config.agents
         }
         self.external_services = {
-            candidate.agent_id: ExternalAgentService(config, candidate.agent_id)
+            candidate.agent_id: ExternalAgentService(
+                config,
+                candidate.agent_id,
+                response_transport=not self._uses_external_outbox_sender(),
+            )
             for candidate in config.agents
             if candidate.runtime in {"gemini", "antigravity", "opencode"}
             and not candidate.managed_externally
@@ -137,6 +165,8 @@ class ProjectHubService:
         force: bool = False,
     ) -> None:
         """Best-effort Controller liveness with bounded, non-secret identity only."""
+        if not getattr(self, "_publishes_controller_health", True):
+            return
         now_monotonic = time.monotonic()
         last_publish = getattr(self, "_health_last_publish_monotonic", 0.0)
         if not force and now_monotonic - last_publish < 10.0:
@@ -224,11 +254,35 @@ class ProjectHubService:
         self.telegram.send_html(message.chat_id, message.thread_id, html.escape(text))
 
     def _send_text_as_agent(self, message: TopicMessage, *, agent_id: str, text: str) -> None:
+        if self.config.hub_bot is not None:
+            # Status and other controller commands are owned by the Hub even
+            # when their cached content describes a provider session.
+            self._send_text(message, text)
+            return
         external = getattr(self, "external_services", {}).get(agent_id)
-        if external is not None:
+        if external is not None and getattr(external, "response_transport_enabled", True):
             external.telegram.send_html(message.chat_id, message.thread_id, html.escape(text))
             return
         self._send_text(message, text)
+
+    def _provider_telegram(self, agent_id: str) -> TelegramBotApi:
+        external = getattr(self, "external_services", {}).get(agent_id)
+        if external is not None and getattr(external, "response_transport_enabled", True):
+            return external.telegram
+        if agent_id != self.agent.agent_id:
+            raise ServiceError(f"Telegram response identity is unavailable for {agent_id}")
+        if getattr(self, "ingress_identity", self.agent.agent_id) == "hub":
+            raise ServiceError("Hub controller does not own provider response credentials")
+        existing = getattr(self, "_codex_telegram", None)
+        if existing is not None:
+            return existing
+        if getattr(self.config, "hub_bot", None) is None:
+            return self.telegram
+        token_file = self.agent.token_file
+        if token_file is None:
+            raise ServiceError("Codex Telegram response identity is not configured")
+        self._codex_telegram = TelegramBotApi(read_telegram_token(token_file, self.agent.agent_id))
+        return self._codex_telegram
 
     def _queue_enabled(self, agent_id: str) -> bool:
         """Compatibility gate; a missing field keeps hand-built test configs inline."""
@@ -614,7 +668,7 @@ class ProjectHubService:
             queue_state.release_telegram_outbox_lease(outbox.outbox_id, outbox.lease_token)
             return False
         sender = getattr(self, "external_services", {}).get(agent_id)
-        telegram = sender.telegram if sender is not None else self.telegram
+        telegram = sender.telegram if sender is not None else self._provider_telegram(agent_id)
         try:
             message_id = telegram.send_html(outbox.chat_id, outbox.thread_id, outbox.telegram_html)
             queue_state.mark_telegram_outbox_delivered(
@@ -739,7 +793,9 @@ class ProjectHubService:
             limits=limits,
             timezone_name="Europe/Moscow",
         )
-        self.telegram.send_html(message.chat_id, message.thread_id, response[:4090])
+        self._provider_telegram(self.agent.agent_id).send_html(
+            message.chat_id, message.thread_id, response[:4090]
+        )
         return result.text
 
     def _model_catalog(self) -> dict[str, tuple[str, ...]]:
@@ -1448,13 +1504,27 @@ class ProjectHubService:
             limits=limits,
             timezone_name="Europe/Moscow",
         )
-        self.telegram.send_html(message.chat_id, message.thread_id, response[:4090])
+        self._provider_telegram(self.agent.agent_id).send_html(
+            message.chat_id, message.thread_id, response[:4090]
+        )
 
     def handle_update(self, update: dict[str, object]) -> bool:
-        callback = parse_topic_callback(update) or parse_direct_callback(update)
+        direct_messages_only = getattr(self, "direct_messages_only", False)
+        ingress_identity = getattr(self, "ingress_identity", self.agent.agent_id)
+        if direct_messages_only:
+            callback = parse_direct_callback(update)
+        elif ingress_identity == "hub":
+            callback = parse_topic_callback(update)
+        else:
+            callback = parse_topic_callback(update) or parse_direct_callback(update)
         if callback is not None:
             return self._handle_callback(callback)
-        message = parse_topic_message(update) or parse_direct_message(update)
+        if direct_messages_only:
+            message = parse_direct_message(update)
+        elif ingress_identity == "hub":
+            message = parse_topic_message(update)
+        else:
+            message = parse_topic_message(update) or parse_direct_message(update)
         if message is None:
             return False
         if message.sender_id not in self.config.owner_user_ids:
@@ -1759,8 +1829,18 @@ class ProjectHubService:
 
         active = self.state.active_session(topic.topic_id)
         active_agent = active.agent_id if active else self.agent.agent_id
+        routing_text = message.text
+        if self.config.hub_bot is not None:
+            # Addressing the transport/controller bot does not create a model
+            # identity. It keeps the ordinary active-provider route while an
+            # explicit provider mention still wins deterministically.
+            routing_text = re.sub(
+                rf"(?i)(?<![A-Za-z0-9_])@{re.escape(self.config.hub_bot.telegram_username)}\b",
+                "",
+                routing_text,
+            ).strip()
         targets = decide_targets(
-            message.text,
+            routing_text,
             active_agent=active_agent,
             usernames=self.usernames,
             reply_to_username=message.reply_to_username,
@@ -1800,7 +1880,7 @@ class ProjectHubService:
                 clean_text = re.sub(
                     rf"(?i)(?<![A-Za-z0-9_])@{re.escape(target_agent.telegram_username)}\b",
                     "",
-                    message.text,
+                    routing_text,
                 ).strip()
                 if not clean_text:
                     self._send_text(
@@ -1878,7 +1958,7 @@ class ProjectHubService:
         clean_text = re.sub(
             rf"(?i)(?<![A-Za-z0-9_])@{re.escape(self.agent.telegram_username)}\b",
             "",
-            message.text,
+            routing_text,
         ).strip()
         if not clean_text:
             if queue_mode:
@@ -1983,9 +2063,11 @@ class ProjectHubService:
             self.supervisor.start()
         self._start_embedded_queue_consumer()
         self._start_controller_outbox_delivery()
-        ingress_agent_id = self.agent.agent_id
-        self.state.record_runtime_event(ingress_agent_id, "info", "service_started", "polling")
-        offset = self.state.get_bot_offset(ingress_agent_id)
+        ingress_identity = getattr(self, "ingress_identity", None)
+        if ingress_identity is None:
+            ingress_identity = self.agent.agent_id
+        self.state.record_runtime_event(ingress_identity, "info", "service_started", "polling")
+        offset = self.state.get_bot_offset(ingress_identity)
         while not stop.is_set():
             self._publish_runtime_health()
             try:
@@ -2011,7 +2093,7 @@ class ProjectHubService:
                         # Retry the Telegram update: no durable acceptance occurred.
                         advance_offset = False
                         self.state.record_runtime_event(
-                            ingress_agent_id, "error", "queue_enqueue_error", type(exc).__name__
+                            ingress_identity, "error", "queue_enqueue_error", type(exc).__name__
                         )
                         self._health_last_error_code = "queue_enqueue_error"
                     except Exception as exc:
@@ -2026,7 +2108,7 @@ class ProjectHubService:
                     self._publish_runtime_health(force=True)
                     if advance_offset:
                         offset = update_id + 1
-                        self.state.set_bot_offset(ingress_agent_id, offset)
+                        self.state.set_bot_offset(ingress_identity, offset)
                     else:
                         # Do not process later updates from this Telegram batch:
                         # advancing past any of them would also skip this
@@ -2034,7 +2116,7 @@ class ProjectHubService:
                         break
             except TelegramError as exc:
                 self.state.record_runtime_event(
-                    "codex", "warning", "telegram_error", type(exc).__name__
+                    ingress_identity, "warning", "telegram_error", type(exc).__name__
                 )
                 self._health_last_error_code = "telegram_error"
                 self._publish_runtime_health(force=True)

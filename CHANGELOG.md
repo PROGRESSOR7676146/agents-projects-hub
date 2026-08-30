@@ -5,6 +5,14 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+### Added
+
+- Activate the optional separate Hub Telegram controller identity with its own
+  durable ingress offset and controller-specific token loading, while retaining
+  Codex as the default provider and preserving provider response/outbox and
+  direct-message identity boundaries. Legacy configurations without `hub_bot`
+  continue to use Codex ingress.
+
 ## [0.5.1] - 2026-08-30
 
 ### Added

@@ -222,7 +222,8 @@ agents-projects-hub validate config/projects.json
 agents-projects-hub validate-hub config/hub.json
 agents-projects-hub migrate /path/to/state.db
 agents-projects-hub doctor config/hub.json
-agents-projects-hub serve config/hub.json
+agents-projects-hub controller config/hub.json
+agents-projects-hub serve config/hub.json --agent codex
 agents-projects-hub worker config/hub.json
 agents-projects-hub worker config/hub.json --agent opencode
 agents-projects-hub worker config/hub.json --agent antigravity
@@ -248,6 +249,11 @@ endpoints; they are not queue workers. External queue execution uses one
 `agents-projects-hub-worker@AGENT.service` per selected local provider, plus one
 `agents-projects-hub-sender.service` after the external outbox gate is enabled.
 These units restart independently and deliberately do not require one another.
+When `hub_bot` is configured, every locally managed productive provider must
+have an external worker, the standalone sender must own outbox delivery, and
+the corresponding `agents-projects-hub@AGENT.service` may be enabled to retain
+that provider's private-chat endpoint. The Hub controller reads only the Hub
+credential and never owns a provider runtime or response token.
 Hermes remains owned by its native gateway and uses the included drop-in. Copy
 the desired objects from `config/external-agents.example.json` into the local
 `agents` array; the primary example does not require unused external bot

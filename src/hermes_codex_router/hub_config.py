@@ -160,14 +160,23 @@ def _private_token_file(value: Any, agent_id: str, *, validate_secret: bool) -> 
         # Worker processes need routing metadata but must not read or depend on
         # Telegram credentials. The controller performs the strict validation.
         return path
-    if not path.is_file():
-        raise HubConfigError(f"token_file for {agent_id} is not a file")
-    if path.stat().st_mode & 0o077:
-        raise HubConfigError(f"token_file for {agent_id} must have mode 0600")
-    token = path.read_text(encoding="utf-8").strip()
-    if not token or "\n" in token or ":" not in token:
-        raise HubConfigError(f"token_file for {agent_id} is malformed")
+    read_telegram_token(path, agent_id)
     return path
+
+
+def read_telegram_token(path: Path, identity: str) -> str:
+    """Read one selected Telegram credential after strict local validation."""
+    if not path.is_file():
+        raise HubConfigError(f"token_file for {identity} is not a file")
+    if path.stat().st_mode & 0o077:
+        raise HubConfigError(f"token_file for {identity} must have mode 0600")
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise HubConfigError(f"cannot read token_file for {identity}: {exc}") from exc
+    if not token or "\n" in token or ":" not in token:
+        raise HubConfigError(f"token_file for {identity} is malformed")
+    return token
 
 
 def load_hub_config(
@@ -175,6 +184,8 @@ def load_hub_config(
     *,
     allow_unbound: bool = False,
     _validate_telegram_secrets: bool = True,
+    _controller_ingress_only: bool = False,
+    _provider_ingress_agent_id: str | None = None,
 ) -> HubConfig:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
@@ -342,6 +353,7 @@ def load_hub_config(
             raise HubConfigError("operational_alerts.telegram_thread_id is invalid")
         alerts_chat_id = matching_projects[0].telegram_chat_id
 
+    raw_hub_bot = root.get("hub_bot")
     raw_agents = root.get("agents")
     if not isinstance(raw_agents, list) or not raw_agents:
         raise HubConfigError("agents must be a non-empty array")
@@ -369,17 +381,22 @@ def load_hub_config(
         if not isinstance(managed_externally, bool) or not isinstance(terminal_enabled, bool):
             raise HubConfigError(f"boolean agent flags are invalid for {agent_id}")
         token_file = None
+        validate_agent_secret = _validate_telegram_secrets and (
+            (not _controller_ingress_only and _provider_ingress_agent_id is None)
+            or (_controller_ingress_only and raw_hub_bot is None and agent_id == "codex")
+            or agent_id == _provider_ingress_agent_id
+        )
         if not managed_externally:
             token_file = _private_token_file(
                 data.get("token_file"),
                 agent_id,
-                validate_secret=_validate_telegram_secrets,
+                validate_secret=validate_agent_secret,
             )
         elif data.get("token_file") is not None:
             token_file = _private_token_file(
                 data.get("token_file"),
                 agent_id,
-                validate_secret=_validate_telegram_secrets,
+                validate_secret=validate_agent_secret,
             )
         agent_ids.add(agent_id)
         usernames.add(username.casefold())
@@ -444,7 +461,6 @@ def load_hub_config(
         local_token_files.add(agent.token_file)
 
     hub_bot = None
-    raw_hub_bot = root.get("hub_bot")
     if raw_hub_bot is not None:
         hub_data = _object(raw_hub_bot, "hub_bot")
         if "token" in hub_data:
@@ -461,7 +477,7 @@ def load_hub_config(
             token_file=_private_token_file(
                 hub_data.get("token_file"),
                 "hub_bot",
-                validate_secret=_validate_telegram_secrets,
+                validate_secret=_validate_telegram_secrets and _provider_ingress_agent_id is None,
             ),
         )
         if any(agent.token_file == hub_bot.token_file for agent in agents):
@@ -487,6 +503,12 @@ def load_hub_config(
         raise HubConfigError("outbox_runtime must be controller or external")
     if outbox_runtime == "external" and (dispatch_mode != "queue" or queue_runtime != "external"):
         raise HubConfigError("outbox_runtime external requires external queue runtime")
+    if hub_bot is not None and (
+        dispatch_mode != "queue" or queue_runtime != "external" or outbox_runtime != "external"
+    ):
+        raise HubConfigError(
+            "hub_bot requires queue dispatch with external workers and external outbox"
+        )
     raw_external_workers = root.get("external_worker_agent_ids")
     if raw_external_workers is None:
         # Compatibility with the first external-worker rollout: external queue
@@ -515,6 +537,24 @@ def load_hub_config(
             )
         if agent.managed_externally:
             raise HubConfigError(f"external worker agent {agent_id} must be locally managed")
+    if hub_bot is not None:
+        unsupported_local = sorted(
+            agent.agent_id
+            for agent in agents
+            if not agent.managed_externally
+            and agent.runtime not in {"codex", "opencode", "antigravity"}
+        )
+        if unsupported_local:
+            raise HubConfigError(
+                "hub_bot does not support an in-controller or unisolated local runtime for "
+                f"agent: {unsupported_local[0]}"
+            )
+        required_workers = {agent.agent_id for agent in agents if not agent.managed_externally}
+        missing_workers = sorted(required_workers.difference(external_worker_agent_ids))
+        if missing_workers:
+            raise HubConfigError(
+                f"hub_bot requires an isolated external worker for agent: {missing_workers[0]}"
+            )
 
     return HubConfig(
         schema_version=1,
@@ -555,6 +595,27 @@ def load_hub_config(
 def load_codex_worker_config(path: Path) -> HubConfig:
     """Load worker metadata without opening any Telegram credential file."""
     return load_external_worker_config(path)
+
+
+def load_controller_config(path: Path) -> HubConfig:
+    """Load controller metadata and validate only its selected ingress token.
+
+    A configured Hub bot is the ingress identity.  Otherwise Codex remains the
+    compatibility ingress. Provider credentials belong to provider response or
+    direct-message runtimes and are deliberately not opened by this loader.
+    """
+    return load_hub_config(path, _controller_ingress_only=True)
+
+
+def load_provider_service_config(path: Path, agent_id: str) -> HubConfig:
+    """Load one provider ingress and validate only that provider's bot token."""
+    config = load_hub_config(
+        path,
+        _validate_telegram_secrets=True,
+        _provider_ingress_agent_id=agent_id,
+    )
+    config.require_agent(agent_id)
+    return config
 
 
 def load_external_worker_config(path: Path) -> HubConfig:

@@ -47,6 +47,12 @@ operator deployment inventory or live conversation evidence.
   Operations destination.
 - Central Telegram ingress with deterministic ordinary, Reply, mention, and
   quote routing; non-target providers are not invoked merely to observe.
+- Optional separate Hub Telegram controller identity for project-group ingress,
+  commands, callbacks, and menu ownership. It persists a distinct `hub` update
+  offset, keeps Codex as the default productive provider, and does not replace
+  provider response/outbox identities. The controller loader opens only the Hub
+  token when configured, or only Codex's token for legacy ingress; omitted
+  `hub_bot` configuration preserves the prior Codex controller behavior.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity
   adapters with isolated failure boundaries.
 - Compact `/status`, `/accounts`, cached and paginated `/model`, confirmed
