@@ -45,8 +45,34 @@ def configure_public_commands(
     sync: bool,
     api_factory: ApiFactory = TelegramBotApi,
 ) -> dict[str, object]:
-    desired = _desired()
     bots: list[dict[str, object]] = []
+    identity_matches: list[bool] = []
+
+    if config.hub_bot is not None:
+        api = api_factory(config.hub_bot.token_file.read_text(encoding="utf-8").strip())
+        hub_matches = True
+        changed = False
+        for project in config.projects:
+            if project.telegram_chat_id is None:
+                continue
+            scope = _scope("chat", chat_id=project.telegram_chat_id)
+            expected = _desired(GROUP_COMMANDS)
+            current = api.call("getMyCommands", scope=scope)
+            scope_matches = current == expected
+            if sync and not scope_matches:
+                api.call("setMyCommands", commands=json.dumps(expected), scope=scope)
+                changed = True
+                scope_matches = api.call("getMyCommands", scope=scope) == expected
+            hub_matches = hub_matches and scope_matches
+        identity_matches.append(hub_matches)
+        bots.append(
+            {
+                "identity": "hub_bot",
+                "matches": hub_matches,
+                "changed": changed,
+            }
+        )
+
     for agent in config.agents:
         if (
             agent.agent_id not in {"codex", "opencode", "antigravity"}
@@ -55,17 +81,25 @@ def configure_public_commands(
         ):
             continue
         api = api_factory(agent.token_file.read_text(encoding="utf-8").strip())
-        direct = desired if agent.agent_id == "codex" else _desired(DIRECT_PROVIDER_COMMANDS)
+        direct = (
+            _desired(PUBLIC_COMMANDS)
+            if agent.agent_id == "codex"
+            else _desired(DIRECT_PROVIDER_COMMANDS)
+        )
         scoped: list[tuple[str | None, list[dict[str, str]]]] = [(None, direct)]
         for project in config.projects:
             if project.telegram_chat_id is not None:
                 scoped.append(
                     (
                         _scope("chat", chat_id=project.telegram_chat_id),
-                        _desired(GROUP_COMMANDS) if agent.agent_id == "codex" else [],
+                        (
+                            []
+                            if config.hub_bot is not None
+                            else (_desired(GROUP_COMMANDS) if agent.agent_id == "codex" else [])
+                        ),
                     )
                 )
-        matches = True
+        agent_matches = True
         changed = False
         for scope, expected in scoped:
             params = {"scope": scope} if scope is not None else {}
@@ -78,16 +112,17 @@ def configure_public_commands(
                 api.call("setMyCommands", commands=json.dumps(expected), **params)
                 changed = True
                 scope_matches = api.call("getMyCommands", **params) == expected
-            matches = matches and scope_matches
+            agent_matches = agent_matches and scope_matches
+        identity_matches.append(agent_matches)
         bots.append(
             {
                 "agent_id": agent.agent_id,
-                "matches": matches,
+                "matches": agent_matches,
                 "changed": changed,
             }
         )
     return {
-        "ok": bool(bots) and all(bool(item["matches"]) for item in bots),
+        "ok": bool(identity_matches) and all(identity_matches),
         "sync": sync,
         "commands": [item[0] for item in PUBLIC_COMMANDS],
         "group_commands": [item[0] for item in GROUP_COMMANDS],

@@ -10,7 +10,13 @@ from hermes_codex_router.command_menu import (
     PUBLIC_COMMANDS,
     configure_public_commands,
 )
-from hermes_codex_router.hub_config import AgentDefinition, HubConfig, TerminalSettings
+from hermes_codex_router.hub_config import (
+    AgentDefinition,
+    HubConfig,
+    HubTelegramBot,
+    ProjectBinding,
+    TerminalSettings,
+)
 
 
 class FakeApi:
@@ -76,7 +82,7 @@ class CommandMenuTests(unittest.TestCase):
         )
         self.assertNotIn("new all", str(api.commands))
 
-    def test_only_codex_publishes_universal_commands_in_project_groups(self) -> None:
+    def test_codex_publishes_group_menu_without_configured_hub_bot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             tokens = []
@@ -99,8 +105,6 @@ class CommandMenuTests(unittest.TestCase):
                 )
                 for name, token in zip(("codex", "opencode"), tokens, strict=True)
             )
-            from hermes_codex_router.hub_config import ProjectBinding
-
             config = HubConfig(
                 schema_version=1,
                 owner_user_ids=(1,),
@@ -127,6 +131,67 @@ class CommandMenuTests(unittest.TestCase):
                 [item[0] for item in GROUP_COMMANDS],
             )
             self.assertEqual(apis["opencode"].commands[chat_scope], [])
+            self.assertEqual(
+                [item["command"] for item in apis["opencode"].commands[None]],
+                ["status", "model", "new"],
+            )
+
+    def test_configured_hub_bot_publishes_group_menu_and_clears_provider_scopes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            tokens: dict[str, Path] = {}
+            for name in ("hub", "codex", "opencode"):
+                token = base / name
+                token.write_text(f"123:{name}-token", encoding="utf-8")
+                token.chmod(0o600)
+                tokens[name] = token
+            agents = tuple(
+                AgentDefinition(
+                    name,
+                    name.title(),
+                    f"project_{name}_bot",
+                    name,
+                    tokens[name],
+                    True,
+                    False,
+                    "provider-selected",
+                    "high",
+                )
+                for name in ("codex", "opencode")
+            )
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(1,),
+                registry_path=base / "projects.json",
+                state_path=base / "state.db",
+                codex_socket_path=base / "socket",
+                manage_codex_server=False,
+                terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+                projects=(ProjectBinding("project", -1001234567890),),
+                agents=agents,
+                hub_bot=HubTelegramBot("project_hub_bot", tokens["hub"]),
+            )
+            apis = {name: FakeApi([]) for name in ("hub", "codex", "opencode")}
+            configure_public_commands(
+                config,
+                sync=True,
+                api_factory=cast(
+                    Any,
+                    lambda token: next(api for name, api in apis.items() if name in token),
+                ),
+            )
+
+            chat_scope = '{"type":"chat","chat_id":-1001234567890}'
+            self.assertEqual(
+                [item["command"] for item in apis["hub"].commands[chat_scope]],
+                [item[0] for item in GROUP_COMMANDS],
+            )
+            self.assertEqual(apis["codex"].commands[chat_scope], [])
+            self.assertEqual(apis["opencode"].commands[chat_scope], [])
+            self.assertEqual(
+                [item["command"] for item in apis["codex"].commands[None]],
+                [item[0] for item in PUBLIC_COMMANDS],
+            )
             self.assertEqual(
                 [item["command"] for item in apis["opencode"].commands[None]],
                 ["status", "model", "new"],

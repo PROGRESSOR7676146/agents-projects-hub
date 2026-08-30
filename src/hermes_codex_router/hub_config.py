@@ -39,6 +39,14 @@ class AgentDefinition:
 
 
 @dataclass(frozen=True, slots=True)
+class HubTelegramBot:
+    """The optional central Telegram identity, distinct from provider agents."""
+
+    telegram_username: str
+    token_file: Path
+
+
+@dataclass(frozen=True, slots=True)
 class TerminalSettings:
     backend: str
     program: str | None
@@ -72,6 +80,7 @@ class HubConfig:
     terminal: TerminalSettings
     projects: tuple[ProjectBinding, ...]
     agents: tuple[AgentDefinition, ...]
+    hub_bot: HubTelegramBot | None = None
     direct_message_project_id: str | None = None
     recovery_plane: RecoveryPlaneSettings = field(
         default_factory=lambda: RecoveryPlaneSettings(
@@ -393,6 +402,26 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
             )
         )
 
+    hub_bot = None
+    raw_hub_bot = root.get("hub_bot")
+    if raw_hub_bot is not None:
+        hub_data = _object(raw_hub_bot, "hub_bot")
+        if "token" in hub_data:
+            raise HubConfigError("inline token fields are forbidden; use token_file")
+        hub_username = _text(hub_data, "telegram_username").removeprefix("@")
+        if not USERNAME.fullmatch(hub_username):
+            raise HubConfigError("invalid hub_bot.telegram_username")
+        if not hub_username.casefold().endswith("bot"):
+            raise HubConfigError("hub_bot.telegram_username must end in bot")
+        if hub_username.casefold() in usernames:
+            raise HubConfigError("hub_bot.telegram_username duplicates an agent")
+        hub_bot = HubTelegramBot(
+            telegram_username=hub_username,
+            token_file=_private_token_file(hub_data.get("token_file"), "hub_bot"),
+        )
+        if any(agent.token_file == hub_bot.token_file for agent in agents):
+            raise HubConfigError("hub_bot.token_file duplicates an agent token_file")
+
     direct_message_project_id = root.get("direct_message_project_id")
     if direct_message_project_id is not None and (
         not isinstance(direct_message_project_id, str)
@@ -423,6 +452,7 @@ def load_hub_config(path: Path, *, allow_unbound: bool = False) -> HubConfig:
         operational_alerts=OperationalAlertSettings(alerts_chat_id, alerts_thread_id),
         projects=tuple(projects),
         agents=tuple(agents),
+        hub_bot=hub_bot,
         direct_message_project_id=direct_message_project_id,
         codex_multi_auth_dir=codex_multi_auth_dir,
         codex_multi_auth_executable=codex_multi_auth_executable,

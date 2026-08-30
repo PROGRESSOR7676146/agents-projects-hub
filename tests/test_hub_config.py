@@ -67,6 +67,77 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(config.terminal.backend, "auto")
         self.assertNotIn("secret-token-value", path.read_text(encoding="utf-8"))
 
+    def test_loads_optional_hub_bot_as_a_separate_identity(self) -> None:
+        hub_token = self.base / "hub-token"
+        hub_token.write_text("654321:hub-token-value", encoding="utf-8")
+        hub_token.chmod(0o600)
+
+        config = load_hub_config(
+            self.write_config(
+                hub_bot={
+                    "telegram_username": "project_hub_bot",
+                    "token_file": str(hub_token),
+                }
+            )
+        )
+
+        self.assertIsNotNone(config.hub_bot)
+        assert config.hub_bot is not None
+        self.assertEqual(config.hub_bot.telegram_username, "project_hub_bot")
+        self.assertEqual(config.hub_bot.token_file, hub_token.resolve())
+        self.assertNotIsInstance(config.hub_bot, type(config.require_agent("codex")))
+
+    def test_hub_bot_remains_optional_for_backward_compatible_configs(self) -> None:
+        self.assertIsNone(load_hub_config(self.write_config()).hub_bot)
+
+    def test_rejects_inline_hub_bot_token(self) -> None:
+        with self.assertRaisesRegex(HubConfigError, "inline token"):
+            load_hub_config(
+                self.write_config(
+                    hub_bot={
+                        "telegram_username": "project_hub_bot",
+                        "token": "must-not-be-here",
+                        "token_file": str(self.token),
+                    }
+                )
+            )
+
+    def test_rejects_hub_bot_username_that_collides_with_a_provider(self) -> None:
+        with self.assertRaisesRegex(HubConfigError, "duplicates an agent"):
+            load_hub_config(
+                self.write_config(
+                    hub_bot={
+                        "telegram_username": "project_codex_bot",
+                        "token_file": str(self.token),
+                    }
+                )
+            )
+
+    def test_rejects_hub_bot_token_file_shared_with_a_provider(self) -> None:
+        with self.assertRaisesRegex(HubConfigError, "duplicates an agent token_file"):
+            load_hub_config(
+                self.write_config(
+                    hub_bot={
+                        "telegram_username": "project_hub_bot",
+                        "token_file": str(self.token),
+                    }
+                )
+            )
+
+    def test_rejects_world_readable_hub_bot_token_file(self) -> None:
+        hub_token = self.base / "hub-token"
+        hub_token.write_text("654321:hub-token-value", encoding="utf-8")
+        hub_token.chmod(0o644)
+        with self.assertRaisesRegex(HubConfigError, "token_file for hub_bot must have mode 0600"):
+            load_hub_config(
+                self.write_config(
+                    hub_bot={
+                        "telegram_username": "project_hub_bot",
+                        "token_file": str(hub_token),
+                    }
+                )
+            )
+
     def test_direct_messages_require_an_explicit_registered_project(self) -> None:
         config = load_hub_config(self.write_config(direct_message_project_id="alpha"))
         self.assertEqual(config.direct_message_project_id, "alpha")

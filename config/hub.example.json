@@ -27,6 +27,10 @@
     "project_id": "hub",
     "telegram_thread_id": 41
   },
+  "hub_bot": {
+    "telegram_username": "example_projects_hub_bot",
+    "token_file": "/home/example/.config/agents-projects-hub/secrets/hub-telegram-token"
+  },
   "projects": [
     {"project_id": "hub", "telegram_chat_id": null},
     {"project_id": "example-project", "telegram_chat_id": null}
