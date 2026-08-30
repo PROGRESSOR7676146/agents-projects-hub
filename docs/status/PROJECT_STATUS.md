@@ -32,6 +32,11 @@ operator deployment inventory or live conversation evidence.
   `codex-multi-auth` when Codex is isolated. No live queue cutover is implied by
   this repository change. Signal wiring, bounded shutdown, and managed-socket
   ownership guards remain part of the service/recovery stage.
+- Additive SQLite runtime-health cache and bounded state APIs cover Controller,
+  sender, and provider-worker identities. Classification is derived only from
+  cached heartbeat/error/provider state and never calls a model or provider.
+  External provider workers publish process, lease, completion, and quota-limit
+  snapshots; Controller and sender lifecycle publication remains planned.
 - Central Telegram ingress with deterministic ordinary, Reply, mention, and
   quote routing; non-target providers are not invoked merely to observe.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity

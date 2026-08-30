@@ -149,6 +149,19 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             self.assertTrue(antigravity.run_cycle())
             self.assertEqual(opencode.state.get_provider_job(open_job).status, "failed")
             self.assertEqual(antigravity.state.get_provider_job(agy_job).status, "result_ready")
+            open_health = opencode.state.get_runtime_health("provider_worker", "test-opencode")
+            agy_health = antigravity.state.get_runtime_health("provider_worker", "test-antigravity")
+            assert open_health is not None
+            assert agy_health is not None
+            self.assertEqual(
+                (open_health.provider_state, open_health.quota_remaining_percent),
+                ("limited", 0.0),
+            )
+            self.assertEqual(open_health.error_code, "provider_limit")
+            self.assertEqual(agy_health.provider_state, "ready")
+            self.assertIsNotNone(agy_health.success_at)
+            self.assertEqual(agy_health.activity_state, "idle")
+            self.assertIsNone(agy_health.active_job_id)
             events = cast(
                 list[dict[str, object]], antigravity.state.status_snapshot()["runtime_events"]
             )

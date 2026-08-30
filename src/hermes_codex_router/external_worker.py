@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import threading
+import uuid
+from datetime import datetime, timezone
 
 from .codex_appserver import CodexAppServerClient, RateLimits
 from .external_runtime import ExternalCliAdapter, ExternalRuntimeError, ProviderLimitError
@@ -53,6 +56,13 @@ class ExternalQueueWorker:
         self.registry = registry or load_registry(config.registry_path)
         self.state = HubState.open(config.state_path)
         self.worker_id = worker_id or f"{self.agent.agent_id}-worker"
+        self._started_at = datetime.now(timezone.utc)
+        self._process_start_marker = uuid.uuid4().hex
+        self._last_success_at: datetime | None = None
+        self._last_error_code: str | None = None
+        self._provider_state = "unknown"
+        self._quota_remaining_percent: float | None = None
+        self._quota_reset_at: datetime | None = None
         self.supervisor: CodexAppServerSupervisor | None = None
         self.adapter: ExternalCliAdapter | None = None
         self._codex_client: CodexAppServerClient | None = None
@@ -69,6 +79,7 @@ class ExternalQueueWorker:
                 runtime_home=self.agent.runtime_home,
             )
         self._stop = threading.Event()
+        self._publish_health()
 
     def close(self) -> None:
         self.stop()
@@ -106,6 +117,41 @@ class ExternalQueueWorker:
         except Exception:
             pass
 
+    def _publish_health(
+        self,
+        *,
+        state: HubState | None = None,
+        activity_state: str = "idle",
+        active_job: ProviderJobRecord | None = None,
+    ) -> None:
+        """Best-effort cached liveness; health reporting never stops useful work."""
+        target = state or self.state
+        try:
+            target.upsert_runtime_health(
+                component="provider_worker",
+                instance_id=self.worker_id,
+                runtime=self.agent.runtime,
+                agent_id=self.agent.agent_id,
+                pid=os.getpid(),
+                process_start_marker=self._process_start_marker,
+                started_at=self._started_at,
+                heartbeat_at=datetime.now(timezone.utc),
+                success_at=self._last_success_at,
+                error_code=self._last_error_code,
+                activity_state=activity_state,
+                active_job_id=None if active_job is None else active_job.job_id,
+                active_lease_expires_at=(
+                    None
+                    if active_job is None or active_job.lease_expires_at is None
+                    else datetime.fromisoformat(active_job.lease_expires_at)
+                ),
+                provider_state=self._provider_state,
+                quota_remaining_percent=self._quota_remaining_percent,
+                quota_reset_at=self._quota_reset_at,
+            )
+        except Exception:
+            pass
+
     def run_forever(self, *, poll_seconds: float = 0.2) -> None:
         if poll_seconds <= 0:
             raise ExternalQueueWorkerError("poll_seconds must be positive")
@@ -124,17 +170,28 @@ class ExternalQueueWorker:
 
     def run_cycle(self) -> bool:
         """Lease and execute at most one job for this worker's sole agent."""
+        self._publish_health()
         self.state.recover_stale_provider_jobs(agent_id=self.agent.agent_id)
         job = self.state.lease_provider_job(self.agent.agent_id, self.worker_id)
         if job is None:
             return False
+        self._publish_health(activity_state="leased", active_job=job)
         self._execute(job)
+        completed = self.state.get_provider_job(job.job_id)
+        if completed.status == "result_ready":
+            self._last_success_at = datetime.now(timezone.utc)
+            self._last_error_code = None
+            self._provider_state = "ready"
+            self._quota_remaining_percent = None
+            self._quota_reset_at = None
+        self._publish_health()
         return True
 
     def _execute(self, job: ProviderJobRecord) -> None:
         if job.lease_token is None:
             raise ExternalQueueWorkerError("leased provider job has no lease token")
         executing = self.state.mark_provider_job_executing(job.job_id, job.lease_token)
+        self._publish_health(activity_state="executing", active_job=executing)
         token = executing.lease_token
         assert token is not None
         topic = self.state.get_topic(executing.topic_id)
@@ -148,6 +205,12 @@ class ExternalQueueWorker:
                     try:
                         heartbeat_state.heartbeat_provider_job(
                             executing.job_id, token, lease_seconds=120
+                        )
+                        refreshed = heartbeat_state.get_provider_job(executing.job_id)
+                        self._publish_health(
+                            state=heartbeat_state,
+                            activity_state="executing",
+                            active_job=refreshed,
                         )
                     except Exception as exc:
                         self._record_event("warning", "worker_heartbeat_error", type(exc).__name__)
@@ -170,6 +233,10 @@ class ExternalQueueWorker:
         except Exception as exc:
             try:
                 if isinstance(exc, ProviderLimitError):
+                    self._last_error_code = "provider_limit"
+                    self._provider_state = "limited"
+                    self._quota_remaining_percent = float(exc.limit.remaining_percent)
+                    self._quota_reset_at = datetime.fromtimestamp(exc.limit.resets_at, timezone.utc)
                     self.state.fail_provider_job(
                         executing.job_id,
                         token,
@@ -178,6 +245,8 @@ class ExternalQueueWorker:
                     )
                     self._record_event("warning", "provider_limit", exc.limit.to_json())
                 else:
+                    self._last_error_code = type(exc).__name__[:128]
+                    self._provider_state = "unavailable"
                     # Invocation has been marked executing; no automatic replay
                     # is safe without runtime-specific proof that it never began.
                     self.state.mark_provider_job_indeterminate(

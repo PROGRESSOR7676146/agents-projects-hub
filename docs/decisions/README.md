@@ -23,6 +23,7 @@ with a new record.
 | Local frontend | Native CLI is preferred; one-writer lease is mandatory; tmux remains fallback. | Product requirements and tests |
 | Publication privacy | Deployment identities and live transcripts remain outside Git; automated privacy scan is mandatory. | Product requirements and security policy |
 | Durable execution isolation | Planned deterministic Controller, SQLite queue, strict topic FIFO, isolated provider workers, and outbox; unknown in-flight turns become `indeterminate`, not automatic retries. | [ADR 0001](0001-durable-provider-job-queue.md) |
+| Runtime health | Components publish bounded last-known state to SQLite; status classifies the cache without provider or model calls. | [ADR 0002](0002-durable-runtime-health-cache.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

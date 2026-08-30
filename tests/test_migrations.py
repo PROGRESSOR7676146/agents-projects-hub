@@ -152,6 +152,7 @@ class MigrationTests(unittest.TestCase):
                         "telegram_outbox",
                         "topic_queue_counters",
                         "turn_dispatches",
+                        "runtime_health",
                     }.issubset(tables)
                 )
                 self.assertIsNotNone(

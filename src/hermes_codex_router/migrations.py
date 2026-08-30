@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-LATEST_SCHEMA_VERSION = 11
+LATEST_SCHEMA_VERSION = 12
 
 
 MIGRATION_1 = """
@@ -337,6 +337,51 @@ WHERE context_watermark IS NOT NULL
 """
 
 
+MIGRATION_12 = """
+CREATE TABLE IF NOT EXISTS runtime_health (
+    component TEXT NOT NULL CHECK(component IN (
+        'controller', 'sender', 'provider_worker'
+    )),
+    instance_id TEXT NOT NULL CHECK(length(instance_id) BETWEEN 1 AND 128),
+    runtime TEXT CHECK(runtime IS NULL OR length(runtime) BETWEEN 1 AND 64),
+    agent_id TEXT CHECK(agent_id IS NULL OR length(agent_id) BETWEEN 1 AND 64),
+    pid INTEGER NOT NULL CHECK(pid > 0),
+    process_start_marker TEXT NOT NULL
+        CHECK(length(process_start_marker) BETWEEN 1 AND 128),
+    started_at TEXT NOT NULL CHECK(length(started_at) BETWEEN 1 AND 64),
+    heartbeat_at TEXT NOT NULL CHECK(length(heartbeat_at) BETWEEN 1 AND 64),
+    success_at TEXT CHECK(success_at IS NULL OR length(success_at) BETWEEN 1 AND 64),
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) BETWEEN 1 AND 128),
+    activity_state TEXT NOT NULL DEFAULT 'idle' CHECK(activity_state IN (
+        'idle', 'leased', 'executing', 'sending', 'unknown'
+    )),
+    active_job_id TEXT CHECK(active_job_id IS NULL OR length(active_job_id) BETWEEN 1 AND 128),
+    active_lease_expires_at TEXT CHECK(
+        active_lease_expires_at IS NULL OR length(active_lease_expires_at) BETWEEN 1 AND 64
+    ),
+    provider_state TEXT NOT NULL DEFAULT 'unknown' CHECK(provider_state IN (
+        'unknown', 'ready', 'limited', 'exhausted', 'unavailable'
+    )),
+    quota_remaining_percent REAL CHECK(
+        quota_remaining_percent IS NULL
+        OR (quota_remaining_percent >= 0 AND quota_remaining_percent <= 100)
+    ),
+    quota_reset_at TEXT CHECK(quota_reset_at IS NULL OR length(quota_reset_at) BETWEEN 1 AND 64),
+    updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64),
+    PRIMARY KEY(component, instance_id),
+    CHECK(active_job_id IS NOT NULL OR activity_state IN ('idle', 'unknown')),
+    CHECK(active_job_id IS NOT NULL OR active_lease_expires_at IS NULL),
+    CHECK(runtime IS NOT NULL OR provider_state = 'unknown'),
+    CHECK(runtime IS NOT NULL OR quota_remaining_percent IS NULL),
+    CHECK(runtime IS NOT NULL OR quota_reset_at IS NULL)
+);
+CREATE INDEX IF NOT EXISTS runtime_health_heartbeat
+ON runtime_health(heartbeat_at);
+CREATE INDEX IF NOT EXISTS runtime_health_agent
+ON runtime_health(agent_id, heartbeat_at);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -434,6 +479,9 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     if previous < 11:
         connection.executescript(MIGRATION_11)
         connection.execute("PRAGMA user_version = 11")
+    if previous < 12:
+        connection.executescript(MIGRATION_12)
+        connection.execute("PRAGMA user_version = 12")
     connection.commit()
     current = int(connection.execute("PRAGMA user_version").fetchone()[0])
     return previous, current

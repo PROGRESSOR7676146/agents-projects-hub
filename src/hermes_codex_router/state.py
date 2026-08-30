@@ -122,6 +122,33 @@ class ProviderJobRecovery:
     indeterminate_job_ids: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeHealthRecord:
+    component: str
+    instance_id: str
+    runtime: str | None
+    agent_id: str | None
+    pid: int
+    process_start_marker: str
+    started_at: str
+    heartbeat_at: str
+    success_at: str | None
+    error_code: str | None
+    activity_state: str
+    active_job_id: str | None
+    active_lease_expires_at: str | None
+    provider_state: str
+    quota_remaining_percent: float | None
+    quota_reset_at: str | None
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeHealthStatus:
+    status: str
+    record: RuntimeHealthRecord | None
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -138,6 +165,22 @@ def _bounded(value: str, *, name: str, maximum: int) -> str:
     if not normalized or len(normalized) > maximum:
         raise StateError(f"invalid {name}")
     return normalized
+
+
+def _optional_bounded(value: str | None, *, name: str, maximum: int) -> str | None:
+    if value is None:
+        return None
+    return _bounded(value, name=name, maximum=maximum)
+
+
+def _parse_timestamp(value: str, *, name: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise StateError(f"invalid {name}") from exc
+    if parsed.tzinfo is None:
+        raise StateError(f"{name} must be timezone-aware")
+    return parsed.astimezone(timezone.utc)
 
 
 class HubState:
@@ -245,6 +288,194 @@ class HubState:
             created_at=str(row["created_at"]),
             updated_at=str(row["updated_at"]),
         )
+
+    @staticmethod
+    def _runtime_health(row: sqlite3.Row) -> RuntimeHealthRecord:
+        return RuntimeHealthRecord(
+            component=str(row["component"]),
+            instance_id=str(row["instance_id"]),
+            runtime=None if row["runtime"] is None else str(row["runtime"]),
+            agent_id=None if row["agent_id"] is None else str(row["agent_id"]),
+            pid=int(row["pid"]),
+            process_start_marker=str(row["process_start_marker"]),
+            started_at=str(row["started_at"]),
+            heartbeat_at=str(row["heartbeat_at"]),
+            success_at=None if row["success_at"] is None else str(row["success_at"]),
+            error_code=None if row["error_code"] is None else str(row["error_code"]),
+            activity_state=str(row["activity_state"]),
+            active_job_id=(None if row["active_job_id"] is None else str(row["active_job_id"])),
+            active_lease_expires_at=(
+                None
+                if row["active_lease_expires_at"] is None
+                else str(row["active_lease_expires_at"])
+            ),
+            provider_state=str(row["provider_state"]),
+            quota_remaining_percent=(
+                None
+                if row["quota_remaining_percent"] is None
+                else float(row["quota_remaining_percent"])
+            ),
+            quota_reset_at=(None if row["quota_reset_at"] is None else str(row["quota_reset_at"])),
+            updated_at=str(row["updated_at"]),
+        )
+
+    def upsert_runtime_health(
+        self,
+        *,
+        component: str,
+        instance_id: str,
+        pid: int,
+        process_start_marker: str,
+        started_at: datetime,
+        heartbeat_at: datetime,
+        runtime: str | None = None,
+        agent_id: str | None = None,
+        success_at: datetime | None = None,
+        error_code: str | None = None,
+        activity_state: str | None = None,
+        active_job_id: str | None = None,
+        active_lease_expires_at: datetime | None = None,
+        provider_state: str = "unknown",
+        quota_remaining_percent: float | None = None,
+        quota_reset_at: datetime | None = None,
+    ) -> RuntimeHealthRecord:
+        """Replace one bounded runtime snapshot without probing its provider."""
+        if component not in {"controller", "sender", "provider_worker"}:
+            raise StateError("invalid runtime health component")
+        instance_id = _bounded(instance_id, name="instance id", maximum=128)
+        process_start_marker = _bounded(
+            process_start_marker, name="process start marker", maximum=128
+        )
+        runtime = _optional_bounded(runtime, name="runtime", maximum=64)
+        agent_id = _optional_bounded(agent_id, name="agent id", maximum=64)
+        error_code = _optional_bounded(error_code, name="error code", maximum=128)
+        active_job_id = _optional_bounded(active_job_id, name="active job id", maximum=128)
+        if pid <= 0:
+            raise StateError("invalid runtime health pid")
+        if component == "provider_worker":
+            if runtime is None or agent_id is None:
+                raise StateError("provider worker health requires runtime and agent id")
+        if provider_state not in {"unknown", "ready", "limited", "exhausted", "unavailable"}:
+            raise StateError("invalid provider state")
+        if component != "provider_worker" and provider_state != "unknown":
+            raise StateError("only provider worker health may report provider state")
+        if quota_remaining_percent is not None and not 0 <= quota_remaining_percent <= 100:
+            raise StateError("invalid quota remaining percent")
+        if component != "provider_worker" and (
+            quota_remaining_percent is not None or quota_reset_at is not None
+        ):
+            raise StateError("only provider worker health may report quota state")
+        activity_state = activity_state or ("leased" if active_job_id is not None else "idle")
+        if activity_state not in {"idle", "leased", "executing", "sending", "unknown"}:
+            raise StateError("invalid runtime activity state")
+        if active_job_id is None and activity_state not in {"idle", "unknown"}:
+            raise StateError("active activity state requires a job id")
+        if active_job_id is None and active_lease_expires_at is not None:
+            raise StateError("active lease requires a job id")
+        started = _timestamp(started_at)
+        heartbeat = _timestamp(heartbeat_at)
+        success = None if success_at is None else _timestamp(success_at)
+        lease_expires = (
+            None if active_lease_expires_at is None else _timestamp(active_lease_expires_at)
+        )
+        quota_reset = None if quota_reset_at is None else _timestamp(quota_reset_at)
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO runtime_health (
+                       component, instance_id, runtime, agent_id, pid, process_start_marker,
+                       started_at, heartbeat_at, success_at, error_code, activity_state,
+                       active_job_id, active_lease_expires_at, provider_state,
+                       quota_remaining_percent, quota_reset_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(component, instance_id) DO UPDATE SET
+                     runtime = excluded.runtime,
+                     agent_id = excluded.agent_id,
+                     pid = excluded.pid,
+                     process_start_marker = excluded.process_start_marker,
+                     started_at = CASE
+                       WHEN runtime_health.process_start_marker = excluded.process_start_marker
+                       THEN runtime_health.started_at ELSE excluded.started_at END,
+                     heartbeat_at = excluded.heartbeat_at,
+                     success_at = excluded.success_at,
+                     error_code = excluded.error_code,
+                     activity_state = excluded.activity_state,
+                     active_job_id = excluded.active_job_id,
+                     active_lease_expires_at = excluded.active_lease_expires_at,
+                     provider_state = excluded.provider_state,
+                     quota_remaining_percent = excluded.quota_remaining_percent,
+                     quota_reset_at = excluded.quota_reset_at,
+                     updated_at = excluded.updated_at""",
+                (
+                    component,
+                    instance_id,
+                    runtime,
+                    agent_id,
+                    pid,
+                    process_start_marker,
+                    started,
+                    heartbeat,
+                    success,
+                    error_code,
+                    activity_state,
+                    active_job_id,
+                    lease_expires,
+                    provider_state,
+                    quota_remaining_percent,
+                    quota_reset,
+                    heartbeat,
+                ),
+            )
+        record = self.get_runtime_health(component, instance_id)
+        if record is None:
+            raise StateError("failed to persist runtime health")
+        return record
+
+    def get_runtime_health(self, component: str, instance_id: str) -> RuntimeHealthRecord | None:
+        row = self._connection.execute(
+            "SELECT * FROM runtime_health WHERE component = ? AND instance_id = ?",
+            (component, instance_id),
+        ).fetchone()
+        return None if row is None else self._runtime_health(row)
+
+    def list_runtime_health(self) -> tuple[RuntimeHealthRecord, ...]:
+        rows = self._connection.execute(
+            "SELECT * FROM runtime_health ORDER BY component, instance_id"
+        ).fetchall()
+        return tuple(self._runtime_health(row) for row in rows)
+
+    def runtime_health_status(
+        self,
+        component: str,
+        instance_id: str,
+        *,
+        now: datetime | None = None,
+        degraded_after: timedelta = timedelta(seconds=60),
+        stale_after: timedelta = timedelta(minutes=3),
+    ) -> RuntimeHealthStatus:
+        """Classify a cached heartbeat; this method performs no runtime probe."""
+        if degraded_after.total_seconds() <= 0 or stale_after <= degraded_after:
+            raise StateError("invalid runtime health staleness thresholds")
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            raise StateError("runtime health classification time must be timezone-aware")
+        record = self.get_runtime_health(component, instance_id)
+        if record is None:
+            return RuntimeHealthStatus("unknown", None)
+        heartbeat = _parse_timestamp(record.heartbeat_at, name="runtime heartbeat")
+        age = current.astimezone(timezone.utc) - heartbeat
+        if age > stale_after:
+            status = "stale"
+        elif age > degraded_after:
+            status = "degraded"
+        elif record.error_code is not None or record.provider_state in {
+            "limited",
+            "exhausted",
+            "unavailable",
+        }:
+            status = "degraded"
+        else:
+            status = "healthy"
+        return RuntimeHealthStatus(status, record)
 
     @staticmethod
     def _provider_result(row: sqlite3.Row) -> ProviderJobResultRecord:
