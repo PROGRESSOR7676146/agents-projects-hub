@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-LATEST_SCHEMA_VERSION = 10
+LATEST_SCHEMA_VERSION = 11
 
 
 MIGRATION_1 = """
@@ -302,6 +302,41 @@ ON telegram_outbox(status, lease_expires_at);
 """
 
 
+MIGRATION_11 = """
+CREATE INDEX IF NOT EXISTS external_turn_excerpts_topic_turn
+ON external_turn_excerpts(topic_id, turn_id);
+CREATE TRIGGER IF NOT EXISTS provider_jobs_context_watermark_topic
+BEFORE INSERT ON provider_jobs
+WHEN NEW.context_watermark IS NOT NULL
+ AND NOT EXISTS (
+     SELECT 1 FROM external_turn_excerpts
+     WHERE turn_id = NEW.context_watermark AND topic_id = NEW.topic_id
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'provider job context watermark is not a visible turn for topic');
+END;
+CREATE TRIGGER IF NOT EXISTS provider_jobs_context_watermark_topic_update
+BEFORE UPDATE OF context_watermark ON provider_jobs
+WHEN NEW.context_watermark IS NOT NULL
+ AND NOT EXISTS (
+     SELECT 1 FROM external_turn_excerpts
+     WHERE turn_id = NEW.context_watermark AND topic_id = NEW.topic_id
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'provider job context watermark is not a visible turn for topic');
+END;
+UPDATE provider_jobs
+SET context_watermark = NULL
+WHERE context_watermark IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM external_turn_excerpts
+      WHERE turn_id = provider_jobs.context_watermark
+        AND topic_id = provider_jobs.topic_id
+        AND created_at <= provider_jobs.created_at
+  );
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -396,6 +431,9 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     if previous < 10:
         connection.executescript(MIGRATION_10)
         connection.execute("PRAGMA user_version = 10")
+    if previous < 11:
+        connection.executescript(MIGRATION_11)
+        connection.execute("PRAGMA user_version = 11")
     connection.commit()
     current = int(connection.execute("PRAGMA user_version").fetchone()[0])
     return previous, current

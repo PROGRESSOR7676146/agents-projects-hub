@@ -82,6 +82,7 @@ The planned durable job states are:
 
 ```text
 queued -> leased -> executing -> result_ready -> completed
+                                           \-> failed (terminal Telegram delivery)
                  \-> retry_wait -> queued
                  \-> failed | cancelled | indeterminate
 ```
@@ -95,7 +96,10 @@ queued -> leased -> executing -> result_ready -> completed
 - `result_ready`: the worker has committed the bounded result and an outbox
   message, but Telegram delivery is unfinished.
 - `completed`: the outbox has recorded successful delivery.
-- `failed`: an understood terminal failure occurred.
+- `failed`: an understood terminal failure occurred. This also records bounded
+  terminal Telegram-delivery exhaustion after a result was committed; the
+  durable result and failed outbox remain available for operator recovery, but
+  the provider turn MUST NOT be invoked again.
 - `cancelled`: the owner cancelled work before provider invocation.
 - `indeterminate`: the worker was lost after execution might have begun and
   reconciliation cannot establish a safe outcome.
@@ -141,6 +145,9 @@ only outbox delivery; it MUST NOT invoke the provider again. If Telegram
 accepts a request but the sender dies before persisting its message identifier,
 an occasional duplicate publication is possible. The system must prefer that
 bounded transport duplicate over repeating a productive provider turn.
+After the bounded outbox retry limit is exhausted, the outbox and its job become
+terminally `failed` with a delivery error. This releases strict topic FIFO while
+retaining the committed provider result for diagnosis and manual recovery.
 
 ### Commands and writer ownership
 

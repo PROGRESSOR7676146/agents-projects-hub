@@ -21,6 +21,14 @@ class ProviderJobQueueTests(unittest.TestCase):
             title="Example topic",
         )
         self.codex = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-example", "high")
+        self.context_turn_id = self.state.record_visible_turn(
+            self.topic.topic_id,
+            agent_id="opencode",
+            provider="opencode",
+            model="gpt-example",
+            user_excerpt="prior visible request",
+            response_excerpt="prior visible response",
+        )
 
     def tearDown(self) -> None:
         self.state.close()
@@ -33,6 +41,10 @@ class ProviderJobQueueTests(unittest.TestCase):
         agent_id: str = "codex",
         session_id: str | None = None,
         generation: int | None = None,
+        model: str = "gpt-example",
+        effort: str = "high",
+        context_watermark: int | None = None,
+        provider_session_id: str | None = None,
     ):
         return self.state.enqueue_provider_job(
             idempotency_key=f"telegram:-1001234567890:{message_id}",
@@ -42,11 +54,13 @@ class ProviderJobQueueTests(unittest.TestCase):
             agent_id=agent_id,
             session_id=session_id or self.codex.session_id,
             session_generation=generation or self.codex.generation,
-            provider_session_id="provider-session-example",
-            model="gpt-example",
-            effort="high",
+            provider_session_id=provider_session_id,
+            model=model,
+            effort=effort,
             payload_text=f"bounded request {message_id}",
-            context_watermark=12,
+            context_watermark=(
+                self.context_turn_id if context_watermark is None else context_watermark
+            ),
         )
 
     def test_open_enables_wal_foreign_keys_and_busy_timeout(self) -> None:
@@ -65,7 +79,7 @@ class ProviderJobQueueTests(unittest.TestCase):
         self.assertEqual(first.topic_sequence, 1)
         self.assertEqual(first.status, "queued")
         self.assertEqual(first.session_generation, self.codex.generation)
-        self.assertEqual(first.context_watermark, 12)
+        self.assertEqual(first.context_watermark, self.context_turn_id)
         self.assertEqual(
             self.state._connection.execute(
                 "SELECT COUNT(*) FROM observed_messages WHERE chat_id = ? AND message_id = ?",
@@ -90,6 +104,38 @@ class ProviderJobQueueTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(StateError, "session snapshot"):
             self.enqueue(503, generation=self.codex.generation + 1)
+        trusted = self.state.bind_provider_session(
+            self.codex.session_id, "trusted-provider-session", None
+        )
+        derived, _ = self.enqueue(504)
+        self.assertEqual(derived.provider_session_id, trusted.provider_session_id)
+        with self.assertRaisesRegex(StateError, "provider session"):
+            self.enqueue(505, provider_session_id="foreign-provider-session")
+        with self.assertRaisesRegex(StateError, "model"):
+            self.enqueue(506, model="different-model")
+        self.state.set_writer_mode(self.codex.session_id, "local")
+        with self.assertRaisesRegex(StateError, "writer"):
+            self.enqueue(507)
+
+    def test_enqueue_rejects_context_watermark_from_another_topic_or_future_turn(self) -> None:
+        other_topic = self.state.observe_topic(
+            project_id="example-project",
+            chat_id=self.topic.chat_id,
+            thread_id=78,
+            title="Other topic",
+        )
+        other_turn = self.state.record_visible_turn(
+            other_topic.topic_id,
+            agent_id="opencode",
+            provider="opencode",
+            model="gpt-example",
+            user_excerpt="other request",
+            response_excerpt="other response",
+        )
+        with self.assertRaisesRegex(StateError, "context watermark"):
+            self.enqueue(506, context_watermark=other_turn)
+        with self.assertRaisesRegex(StateError, "context watermark"):
+            self.enqueue(507, context_watermark=other_turn + 100)
 
     def test_strict_fifo_blocks_other_provider_in_same_topic(self) -> None:
         first, _ = self.enqueue(510)
@@ -101,6 +147,8 @@ class ProviderJobQueueTests(unittest.TestCase):
             agent_id="opencode",
             session_id=satellite.session_id,
             generation=satellite.generation,
+            model=satellite.model,
+            effort=satellite.effort,
         )
 
         self.assertIsNone(self.state.lease_provider_job("opencode", "worker-open"))
@@ -201,6 +249,16 @@ class ProviderJobQueueTests(unittest.TestCase):
 
         self.assertEqual(result.job_id, queued.job_id)
         self.assertEqual(self.state.get_provider_job(queued.job_id).status, "result_ready")
+        excerpt = self.state._connection.execute(
+            """SELECT user_excerpt, response_excerpt, model, provider
+               FROM external_turn_excerpts WHERE topic_id = ? ORDER BY turn_id DESC LIMIT 1""",
+            (self.topic.topic_id,),
+        ).fetchone()
+        assert excerpt is not None
+        self.assertEqual(excerpt["user_excerpt"], queued.payload_text)
+        self.assertEqual(excerpt["response_excerpt"], "bounded visible result")
+        self.assertEqual(excerpt["model"], "gpt-example")
+        self.assertEqual(excerpt["provider"], "codex")
         outbox = self.state.get_telegram_outbox_for_job(queued.job_id)
         self.assertEqual(outbox.status, "pending")
         sending = self.state.lease_telegram_outbox("codex", "sender-one")
@@ -212,6 +270,197 @@ class ProviderJobQueueTests(unittest.TestCase):
         self.assertEqual(
             self.state.get_telegram_outbox_for_job(queued.job_id).telegram_message_id, 9001
         )
+
+    def test_result_can_use_an_explicit_bounded_user_excerpt(self) -> None:
+        queued, _ = self.enqueue(545)
+        leased = self.state.lease_provider_job("codex", "worker-codex")
+        assert leased is not None and leased.lease_token is not None
+        self.state.mark_provider_job_executing(queued.job_id, leased.lease_token)
+        self.state.commit_provider_result(
+            queued.job_id,
+            leased.lease_token,
+            visible_response="result",
+            sender_agent_id="codex",
+            telegram_html="result",
+            user_excerpt="safe admitted excerpt",
+        )
+        excerpt = self.state._connection.execute(
+            "SELECT user_excerpt FROM external_turn_excerpts WHERE topic_id = ? ORDER BY turn_id DESC LIMIT 1",
+            (self.topic.topic_id,),
+        ).fetchone()
+        assert excerpt is not None
+        self.assertEqual(excerpt["user_excerpt"], "safe admitted excerpt")
+
+    def test_result_cannot_bind_provider_session_to_a_different_topic_session(self) -> None:
+        queued, _ = self.enqueue(545)
+        leased = self.state.lease_provider_job("codex", "worker-codex")
+        assert leased is not None and leased.lease_token is not None
+        self.state.mark_provider_job_executing(queued.job_id, leased.lease_token)
+        other_topic = self.state.observe_topic(
+            project_id="example-project",
+            chat_id=self.topic.chat_id,
+            thread_id=80,
+            title="Other binding topic",
+        )
+        other_session = self.state.activate_agent(
+            other_topic.topic_id, "codex", "gpt-example", "high"
+        )
+        self.state._connection.execute(
+            "UPDATE provider_jobs SET session_id = ? WHERE job_id = ?",
+            (other_session.session_id, queued.job_id),
+        )
+        self.state._connection.commit()
+        with self.assertRaisesRegex(StateError, "session generation"):
+            self.state.commit_provider_result(
+                queued.job_id,
+                leased.lease_token,
+                visible_response="result",
+                sender_agent_id="codex",
+                telegram_html="result",
+                provider_session_id="wrong-topic-provider-session",
+            )
+        self.assertEqual(self.state.get_session(other_session.session_id).provider_session_id, None)
+
+    def test_pruned_valid_context_watermark_still_commits_and_advances_cursor(self) -> None:
+        queued, _ = self.enqueue(546)
+        for index in range(100):
+            self.state.record_visible_turn(
+                self.topic.topic_id,
+                agent_id="opencode",
+                provider="opencode",
+                model="gpt-example",
+                user_excerpt=f"later request {index}",
+                response_excerpt=f"later response {index}",
+            )
+        self.assertIsNone(
+            self.state._connection.execute(
+                "SELECT 1 FROM external_turn_excerpts WHERE turn_id = ?", (self.context_turn_id,)
+            ).fetchone()
+        )
+        leased = self.state.lease_provider_job("codex", "worker-codex")
+        assert leased is not None and leased.lease_token is not None
+        self.state.mark_provider_job_executing(queued.job_id, leased.lease_token)
+        self.state.commit_provider_result(
+            queued.job_id,
+            leased.lease_token,
+            visible_response="result",
+            sender_agent_id="codex",
+            telegram_html="result",
+            acknowledge_context=True,
+        )
+        cursor = self.state._connection.execute(
+            """SELECT last_turn_id FROM visible_context_cursors
+               WHERE topic_id = ? AND observer_agent_id = ?""",
+            (self.topic.topic_id, "codex"),
+        ).fetchone()
+        assert cursor is not None
+        self.assertEqual(cursor["last_turn_id"], self.context_turn_id)
+
+    def test_expired_leases_cannot_commit_fail_or_mutate_outbox(self) -> None:
+        past = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        queued, _ = self.enqueue(546)
+        leased = self.state.lease_provider_job("codex", "worker-codex", lease_seconds=1, now=past)
+        assert leased is not None and leased.lease_token is not None
+        self.state.mark_provider_job_executing(queued.job_id, leased.lease_token, now=past)
+        expired = past + timedelta(seconds=2)
+        with self.assertRaisesRegex(StateError, "lease"):
+            self.state.fail_provider_job(
+                queued.job_id,
+                leased.lease_token,
+                error_class="permanent",
+                error_code="bad",
+                now=expired,
+            )
+        with self.assertRaisesRegex(StateError, "lease"):
+            self.state.commit_provider_result(
+                queued.job_id,
+                leased.lease_token,
+                visible_response="late",
+                sender_agent_id="codex",
+                telegram_html="late",
+                now=expired,
+            )
+
+        self.state.recover_stale_provider_jobs(now=expired)
+        self.assertEqual(self.state.get_provider_job(queued.job_id).status, "indeterminate")
+
+        ready_topic = self.state.observe_topic(
+            project_id="example-project",
+            chat_id=self.topic.chat_id,
+            thread_id=79,
+            title="Ready outbox topic",
+        )
+        ready_session = self.state.activate_agent(
+            ready_topic.topic_id, "codex", "gpt-example", "high"
+        )
+        ready, _ = self.state.enqueue_provider_job(
+            idempotency_key="telegram:-1001234567890:547",
+            chat_id=ready_topic.chat_id,
+            message_id=547,
+            topic_id=ready_topic.topic_id,
+            agent_id="codex",
+            session_id=ready_session.session_id,
+            session_generation=ready_session.generation,
+            model="gpt-example",
+            effort="high",
+            payload_text="ready request",
+        )
+        ready_lease = self.state.lease_provider_job(
+            "codex", "worker-ready", lease_seconds=60, now=past
+        )
+        assert ready_lease is not None and ready_lease.lease_token is not None
+        self.state.mark_provider_job_executing(ready.job_id, ready_lease.lease_token, now=past)
+        self.state.commit_provider_result(
+            ready.job_id,
+            ready_lease.lease_token,
+            visible_response="ready",
+            sender_agent_id="codex",
+            telegram_html="ready",
+            now=past,
+        )
+        outbox = self.state.lease_telegram_outbox("codex", "sender", lease_seconds=1, now=past)
+        assert outbox is not None and outbox.lease_token is not None
+        with self.assertRaisesRegex(StateError, "lease"):
+            self.state.retry_telegram_outbox(
+                outbox.outbox_id,
+                outbox.lease_token,
+                error_code="late",
+                delay_seconds=0,
+                now=expired,
+            )
+        with self.assertRaisesRegex(StateError, "lease"):
+            self.state.mark_telegram_outbox_delivered(
+                outbox.outbox_id, outbox.lease_token, telegram_message_id=9002, now=expired
+            )
+
+    def test_terminal_outbox_failure_unblocks_fifo_without_replaying_provider(self) -> None:
+        first, _ = self.enqueue(548)
+        second, _ = self.enqueue(549)
+        first_lease = self.state.lease_provider_job("codex", "worker-one")
+        assert first_lease is not None and first_lease.lease_token is not None
+        self.state.mark_provider_job_executing(first.job_id, first_lease.lease_token)
+        self.state.commit_provider_result(
+            first.job_id,
+            first_lease.lease_token,
+            visible_response="first",
+            sender_agent_id="codex",
+            telegram_html="first",
+        )
+        self.state._connection.execute(
+            "UPDATE telegram_outbox SET attempt_count = 19 WHERE job_id = ?", (first.job_id,)
+        )
+        self.state._connection.commit()
+        outbox = self.state.lease_telegram_outbox("codex", "sender")
+        assert outbox is not None and outbox.lease_token is not None
+        terminal = self.state.retry_telegram_outbox(
+            outbox.outbox_id, outbox.lease_token, error_code="telegram_unavailable", delay_seconds=0
+        )
+        self.assertEqual(terminal.status, "failed")
+        failed = self.state.get_provider_job(first.job_id)
+        self.assertEqual((failed.status, failed.error_class), ("failed", "telegram_delivery"))
+        next_job = self.state.lease_provider_job("codex", "worker-two")
+        assert next_job is not None
+        self.assertEqual(next_job.job_id, second.job_id)
 
     def test_retry_is_allowed_only_before_execution_and_is_bounded(self) -> None:
         queued, _ = self.enqueue(550)

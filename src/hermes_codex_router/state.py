@@ -443,7 +443,7 @@ class HubState:
         selected_model = _bounded(model, name="model", maximum=200)
         selected_effort = _bounded(effort, name="effort", maximum=64)
         payload = _bounded(payload_text, name="payload", maximum=20000)
-        provider_session = (
+        requested_provider_session = (
             _bounded(provider_session_id, name="provider session id", maximum=256)
             if provider_session_id is not None
             else None
@@ -476,7 +476,9 @@ class HubState:
             if int(topic["chat_id"]) != chat_id:
                 raise StateError("provider job chat does not match topic")
             session = self._connection.execute(
-                """SELECT topic_id, agent_id, generation FROM agent_sessions
+                """SELECT topic_id, agent_id, generation, status, writer_mode, model, effort,
+                          provider_session_id
+                   FROM agent_sessions
                    WHERE session_id = ?""",
                 (target_session,),
             ).fetchone()
@@ -487,6 +489,28 @@ class HubState:
                 or int(session["generation"]) != session_generation
             ):
                 raise StateError("provider job session snapshot does not match persisted session")
+            if str(session["status"]) not in {"active", "satellite"}:
+                raise StateError("provider job session is not routable")
+            if str(session["writer_mode"]) != "telegram":
+                raise StateError("provider job session writer is not Telegram")
+            if str(session["model"]) != selected_model or str(session["effort"]) != selected_effort:
+                raise StateError("provider job model or effort does not match persisted session")
+            persisted_provider_session = session["provider_session_id"]
+            if (
+                requested_provider_session is not None
+                and requested_provider_session != persisted_provider_session
+            ):
+                raise StateError("provider job provider session does not match persisted session")
+            if context_watermark is not None:
+                context_turn = self._connection.execute(
+                    """SELECT 1 FROM external_turn_excerpts
+                       WHERE turn_id = ? AND topic_id = ?""",
+                    (context_watermark, topic_id),
+                ).fetchone()
+                if context_turn is None:
+                    raise StateError(
+                        "provider job context watermark is not a visible turn for topic"
+                    )
             if handoff is not None:
                 pending = self._connection.execute(
                     """SELECT 1 FROM pending_handoffs
@@ -543,7 +567,7 @@ class HubState:
                         target_agent,
                         target_session,
                         session_generation,
-                        provider_session,
+                        persisted_provider_session,
                         selected_model,
                         selected_effort,
                         payload,
@@ -741,10 +765,12 @@ class HubState:
         error_class: str,
         error_code: str,
         error_detail: str | None = None,
+        now: datetime | None = None,
     ) -> ProviderJobRecord:
         failure_class = _bounded(error_class, name="error class", maximum=64)
         code = _bounded(error_code, name="error code", maximum=128)
         detail = error_detail.strip()[:1000] if error_detail else None
+        timestamp = _timestamp(now)
         with self._connection:
             cursor = self._connection.execute(
                 """UPDATE provider_jobs
@@ -752,8 +778,8 @@ class HubState:
                        lease_expires_at = NULL, error_class = ?, error_code = ?,
                        error_detail = ?, updated_at = ?
                    WHERE job_id = ? AND status IN ('leased', 'executing')
-                     AND lease_token = ?""",
-                (failure_class, code, detail, _now(), job_id, lease_token),
+                     AND lease_token = ? AND lease_expires_at > ?""",
+                (failure_class, code, detail, timestamp, job_id, lease_token, timestamp),
             )
         if cursor.rowcount != 1:
             raise StateError("provider job lease is missing or invalid")
@@ -817,8 +843,10 @@ class HubState:
         provider_session_id: str | None = None,
         actual_model: str | None = None,
         safe_metadata_json: str | None = None,
+        user_excerpt: str | None = None,
         acknowledge_context: bool = False,
         acknowledge_handoff: bool = False,
+        now: datetime | None = None,
     ) -> ProviderJobResultRecord:
         """Commit result, acknowledgements, and outbox without a network call."""
         response = _bounded(visible_response, name="visible response", maximum=12000)
@@ -837,14 +865,19 @@ class HubState:
         metadata = safe_metadata_json.strip() if safe_metadata_json else None
         if metadata is not None and len(metadata) > 4000:
             raise StateError("invalid safe metadata")
-        timestamp = _now()
+        excerpt = (
+            _bounded(user_excerpt, name="user excerpt", maximum=2000)
+            if user_excerpt is not None
+            else None
+        )
+        timestamp = _timestamp(now)
         with self._immediate_transaction():
             job_row = self._connection.execute(
                 """SELECT jobs.*, topics.thread_id FROM provider_jobs jobs
                    JOIN topics ON topics.topic_id = jobs.topic_id
                    WHERE jobs.job_id = ? AND jobs.status = 'executing'
-                     AND jobs.lease_token = ?""",
-                (job_id, lease_token),
+                     AND jobs.lease_token = ? AND jobs.lease_expires_at > ?""",
+                (job_id, lease_token, timestamp),
             ).fetchone()
             if job_row is None:
                 raise StateError("provider job lease is missing or invalid")
@@ -871,16 +904,44 @@ class HubState:
                 cursor = self._connection.execute(
                     """UPDATE agent_sessions
                        SET provider_session_id = ?, updated_at = ?
-                       WHERE session_id = ? AND generation = ?""",
+                       WHERE session_id = ? AND topic_id = ? AND agent_id = ?
+                         AND generation = ?""",
                     (
                         provider_session,
                         timestamp,
                         job_row["session_id"],
+                        job_row["topic_id"],
+                        job_row["agent_id"],
                         job_row["session_generation"],
                     ),
                 )
                 if cursor.rowcount != 1:
                     raise StateError("provider job session generation changed")
+            visible_user_excerpt = excerpt or str(job_row["payload_text"])
+            self._connection.execute(
+                """INSERT INTO external_turn_excerpts
+                   (topic_id, agent_id, provider_session_id, model, provider,
+                    user_excerpt, response_excerpt, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    job_row["topic_id"],
+                    job_row["agent_id"],
+                    provider_session or job_row["provider_session_id"] or "",
+                    selected_model or job_row["model"],
+                    job_row["agent_id"],
+                    visible_user_excerpt,
+                    response,
+                    timestamp,
+                ),
+            )
+            self._connection.execute(
+                """DELETE FROM external_turn_excerpts
+                   WHERE topic_id = ? AND turn_id NOT IN (
+                     SELECT turn_id FROM external_turn_excerpts
+                     WHERE topic_id = ? ORDER BY turn_id DESC LIMIT 100
+                   )""",
+                (job_row["topic_id"], job_row["topic_id"]),
+            )
             if acknowledge_context and job_row["context_watermark"] is not None:
                 self._connection.execute(
                     """INSERT INTO visible_context_cursors
@@ -1051,17 +1112,34 @@ class HubState:
         current = now or datetime.now(timezone.utc)
         timestamp = _timestamp(current)
         available_at = _timestamp(current + timedelta(seconds=delay_seconds))
-        with self._connection:
+        with self._immediate_transaction():
+            row = self._connection.execute(
+                """SELECT job_id, attempt_count FROM telegram_outbox
+                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
+                     AND lease_expires_at > ?""",
+                (outbox_id, lease_token, timestamp),
+            ).fetchone()
+            if row is None:
+                raise StateError("Telegram outbox lease is missing, expired, or invalid")
             cursor = self._connection.execute(
                 """UPDATE telegram_outbox
                    SET status = CASE WHEN attempt_count >= 20 THEN 'failed' ELSE 'pending' END,
                        available_at = ?, lease_owner = NULL, lease_token = NULL,
                        lease_expires_at = NULL, error_code = ?, updated_at = ?
-                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?""",
-                (available_at, code, timestamp, outbox_id, lease_token),
+                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
+                     AND lease_expires_at > ?""",
+                (available_at, code, timestamp, outbox_id, lease_token, timestamp),
             )
-        if cursor.rowcount != 1:
-            raise StateError("Telegram outbox lease is missing or invalid")
+            if cursor.rowcount != 1:
+                raise StateError("Telegram outbox lease is missing, expired, or invalid")
+            if int(row["attempt_count"]) >= 20:
+                self._connection.execute(
+                    """UPDATE provider_jobs
+                       SET status = 'failed', error_class = 'telegram_delivery',
+                           error_code = ?, error_detail = NULL, updated_at = ?
+                       WHERE job_id = ? AND status = 'result_ready'""",
+                    (code, timestamp, row["job_id"]),
+                )
         return self.get_telegram_outbox(outbox_id)
 
     def mark_telegram_outbox_delivered(
@@ -1070,15 +1148,17 @@ class HubState:
         lease_token: str,
         *,
         telegram_message_id: int,
+        now: datetime | None = None,
     ) -> TelegramOutboxRecord:
         if telegram_message_id <= 0:
             raise StateError("invalid Telegram message id")
-        timestamp = _now()
+        timestamp = _timestamp(now)
         with self._immediate_transaction():
             row = self._connection.execute(
                 """SELECT job_id FROM telegram_outbox
-                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?""",
-                (outbox_id, lease_token),
+                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
+                     AND lease_expires_at > ?""",
+                (outbox_id, lease_token, timestamp),
             ).fetchone()
             if row is None:
                 raise StateError("Telegram outbox lease is missing or invalid")
@@ -1086,8 +1166,9 @@ class HubState:
                 """UPDATE telegram_outbox
                    SET status = 'delivered', telegram_message_id = ?, delivered_at = ?,
                        lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
-                       updated_at = ? WHERE outbox_id = ?""",
-                (telegram_message_id, timestamp, timestamp, outbox_id),
+                       updated_at = ? WHERE outbox_id = ? AND status = 'sending'
+                         AND lease_token = ? AND lease_expires_at > ?""",
+                (telegram_message_id, timestamp, timestamp, outbox_id, lease_token, timestamp),
             )
             cursor = self._connection.execute(
                 """UPDATE provider_jobs SET status = 'completed', updated_at = ?
@@ -1108,7 +1189,7 @@ class HubState:
         timestamp = _timestamp(now)
         with self._immediate_transaction():
             rows = self._connection.execute(
-                """SELECT outbox_id FROM telegram_outbox
+                """SELECT outbox_id, job_id, attempt_count FROM telegram_outbox
                    WHERE status = 'sending' AND lease_expires_at <= ? ORDER BY outbox_id""",
                 (timestamp,),
             ).fetchall()
@@ -1120,6 +1201,19 @@ class HubState:
                    WHERE status = 'sending' AND lease_expires_at <= ?""",
                 (timestamp, timestamp, timestamp),
             )
+            terminal_job_ids = [
+                str(row["job_id"]) for row in rows if int(row["attempt_count"]) >= 20
+            ]
+            if terminal_job_ids:
+                placeholders = ", ".join("?" for _ in terminal_job_ids)
+                self._connection.execute(
+                    f"""UPDATE provider_jobs
+                        SET status = 'failed', error_class = 'telegram_delivery',
+                            error_code = 'stale_sender_lease', error_detail = NULL,
+                            updated_at = ?
+                        WHERE status = 'result_ready' AND job_id IN ({placeholders})""",
+                    (timestamp, *terminal_job_ids),
+                )
         return tuple(str(row["outbox_id"]) for row in rows)
 
     def stage_handoff(

@@ -97,7 +97,7 @@ class MigrationTests(unittest.TestCase):
             finally:
                 connection.close()
 
-    def test_v10_queue_migration_is_additive_and_preserves_legacy_dispatches(self) -> None:
+    def test_queue_migrations_are_additive_and_preserve_legacy_dispatches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
             migrate_database(path, create_backup=False)
@@ -128,7 +128,9 @@ class MigrationTests(unittest.TestCase):
 
             result = migrate_database(path, create_backup=False)
 
-            self.assertEqual((result.previous_version, result.current_version), (9, 10))
+            self.assertEqual(
+                (result.previous_version, result.current_version), (9, LATEST_SCHEMA_VERSION)
+            )
             migrated = sqlite3.connect(path)
             try:
                 self.assertEqual(
@@ -151,6 +153,13 @@ class MigrationTests(unittest.TestCase):
                         "topic_queue_counters",
                         "turn_dispatches",
                     }.issubset(tables)
+                )
+                self.assertIsNotNone(
+                    migrated.execute(
+                        """SELECT 1 FROM sqlite_master
+                           WHERE type = 'trigger'
+                             AND name = 'provider_jobs_context_watermark_topic'"""
+                    ).fetchone()
                 )
             finally:
                 migrated.close()
