@@ -22,6 +22,7 @@ with a new record.
 | Operational alerts | One explicit Hub Operations/Alerts topic; Codex primary, Hermes fallback to the same topic; masked account hints. | Product requirements REQ-OPS-006 |
 | Local frontend | Native CLI is preferred; one-writer lease is mandatory; tmux remains fallback. | Product requirements and tests |
 | Publication privacy | Deployment identities and live transcripts remain outside Git; automated privacy scan is mandatory. | Product requirements and security policy |
+| Durable execution isolation | Planned deterministic Controller, SQLite queue, strict topic FIFO, isolated provider workers, and outbox; unknown in-flight turns become `indeterminate`, not automatic retries. | [ADR 0001](0001-durable-provider-job-queue.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or
