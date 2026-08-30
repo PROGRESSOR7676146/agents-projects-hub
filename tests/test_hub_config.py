@@ -8,6 +8,7 @@ from pathlib import Path
 from hermes_codex_router.hub_config import (
     HubConfigError,
     load_codex_worker_config,
+    load_external_worker_config,
     load_hub_config,
 )
 
@@ -78,6 +79,72 @@ class HubConfigTests(unittest.TestCase):
             load_hub_config(path)
         config = load_codex_worker_config(path)
         self.assertEqual(config.require_agent("codex").token_file, self.token.resolve())
+
+    def test_external_worker_agent_ids_default_to_codex_and_validate_local_runtimes(self) -> None:
+        config = load_hub_config(self.write_config(dispatch_mode="queue", queue_runtime="external"))
+        self.assertEqual(config.external_worker_agent_ids, ("codex",))
+
+        agents = [
+            {
+                "agent_id": "codex",
+                "display_name": "Codex",
+                "telegram_username": "project_codex_bot",
+                "runtime": "codex",
+                "token_file": str(self.token),
+                "terminal_enabled": True,
+            },
+            {
+                "agent_id": "opencode",
+                "display_name": "OpenCode",
+                "telegram_username": "project_opencode_bot",
+                "runtime": "opencode",
+                "token_file": str(self.base / "opencode-token"),
+                "terminal_enabled": False,
+            },
+        ]
+        config = load_external_worker_config(
+            self.write_config(
+                dispatch_mode="queue",
+                queue_runtime="external",
+                external_worker_agent_ids=["codex", "opencode"],
+                agents=agents,
+            )
+        )
+        self.assertEqual(config.external_worker_agent_ids, ("codex", "opencode"))
+        with self.assertRaisesRegex(HubConfigError, "local runtime"):
+            load_hub_config(
+                self.write_config(
+                    dispatch_mode="queue",
+                    queue_runtime="external",
+                    external_worker_agent_ids=["hermes"],
+                )
+            )
+
+    def test_rejects_shared_locally_managed_agent_token_file(self) -> None:
+        duplicate = {
+            "agent_id": "opencode",
+            "display_name": "OpenCode",
+            "telegram_username": "project_opencode_bot",
+            "runtime": "opencode",
+            "token_file": str(self.token),
+            "terminal_enabled": False,
+        }
+        with self.assertRaisesRegex(HubConfigError, "distinct token_file"):
+            load_hub_config(
+                self.write_config(
+                    agents=[
+                        {
+                            "agent_id": "codex",
+                            "display_name": "Codex",
+                            "telegram_username": "project_codex_bot",
+                            "runtime": "codex",
+                            "token_file": str(self.token),
+                            "terminal_enabled": True,
+                        },
+                        duplicate,
+                    ]
+                )
+            )
 
     def test_loads_optional_hub_bot_as_a_separate_identity(self) -> None:
         hub_token = self.base / "hub-token"

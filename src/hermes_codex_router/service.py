@@ -70,7 +70,7 @@ class ProjectHubService:
         # In external queue mode the Controller has no Codex process/RPC
         # lifecycle.  Only the separately started worker owns that boundary.
         self.supervisor: CodexAppServerSupervisor | None = None
-        if not self._uses_external_codex_worker():
+        if not self._has_external_worker("codex"):
             self.supervisor = CodexAppServerSupervisor(
                 self.config.codex_socket_path,
                 manage_process=self.config.manage_codex_server,
@@ -97,6 +97,7 @@ class ProjectHubService:
         self._queue_thread: threading.Thread | None = None
         self._outbox_stop = threading.Event()
         self._outbox_thread: threading.Thread | None = None
+        self._outbox_agent_cursor = 0
 
     def close(self) -> None:
         queue_stop = getattr(self, "_queue_stop", None)
@@ -168,13 +169,21 @@ class ProjectHubService:
     def _embedded_consumer_owns_agent(self, agent_id: str) -> bool:
         if not self._queue_enabled(agent_id):
             return False
-        return not (self._uses_external_codex_worker() and agent_id == "codex")
+        return not self._has_external_worker(agent_id)
+
+    def _has_external_worker(self, agent_id: str) -> bool:
+        if (
+            getattr(self.config, "dispatch_mode", "inline") != "queue"
+            or getattr(self.config, "queue_runtime", "embedded") != "external"
+        ):
+            return False
+        # Hand-built compatibility configs from the Codex-only rollout have no
+        # field; retain their established isolated-Codex behavior.
+        configured = getattr(self.config, "external_worker_agent_ids", ()) or ("codex",)
+        return agent_id in configured
 
     def _uses_external_codex_worker(self) -> bool:
-        return (
-            getattr(self.config, "dispatch_mode", "inline") == "queue"
-            and getattr(self.config, "queue_runtime", "embedded") == "external"
-        )
+        return self._has_external_worker("codex")
 
     def _enqueue_provider_turn(
         self,
@@ -229,7 +238,7 @@ class ProjectHubService:
 
     def _start_controller_outbox_delivery(self) -> None:
         """Temporary deterministic sender seam until the outbox is extracted."""
-        if not self._uses_external_codex_worker():
+        if not any(self._has_external_worker(agent.agent_id) for agent in self.config.agents):
             return
         if getattr(self, "_outbox_thread", None) is not None:
             return
@@ -261,12 +270,23 @@ class ProjectHubService:
 
     def run_controller_outbox_cycle(self) -> bool:
         """Deliver at most one prepared outbox row without leasing provider work."""
-        if not self._uses_external_codex_worker():
+        external_agents = [
+            agent.agent_id
+            for agent in self.config.agents
+            if self._has_external_worker(agent.agent_id)
+        ]
+        if not external_agents:
             return False
         outbox_state = HubState.open(self.config.state_path)
         try:
             outbox_state.recover_stale_telegram_outbox()
-            return self._deliver_embedded_outbox(outbox_state, "codex")
+            start = getattr(self, "_outbox_agent_cursor", 0) % len(external_agents)
+            for offset in range(len(external_agents)):
+                position = (start + offset) % len(external_agents)
+                if self._deliver_embedded_outbox(outbox_state, external_agents[position]):
+                    self._outbox_agent_cursor = (position + 1) % len(external_agents)
+                    return True
+            return False
         finally:
             outbox_state.close()
 

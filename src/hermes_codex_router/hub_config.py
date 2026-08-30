@@ -87,6 +87,9 @@ class HubConfig:
     # Queue execution stays embedded unless an explicitly started provider
     # worker owns it.  This keeps rollback to the established runtime trivial.
     queue_runtime: str = "embedded"
+    # External workers are deliberately selected per provider.  This avoids a
+    # global runtime switch accidentally stranding providers without a worker.
+    external_worker_agent_ids: tuple[str, ...] = ()
     direct_message_project_id: str | None = None
     recovery_plane: RecoveryPlaneSettings = field(
         default_factory=lambda: RecoveryPlaneSettings(
@@ -429,6 +432,14 @@ def load_hub_config(
             )
         )
 
+    local_token_files: set[Path] = set()
+    for agent in agents:
+        if agent.managed_externally or agent.token_file is None:
+            continue
+        if agent.token_file in local_token_files:
+            raise HubConfigError("locally managed agents must use distinct token_file paths")
+        local_token_files.add(agent.token_file)
+
     hub_bot = None
     raw_hub_bot = root.get("hub_bot")
     if raw_hub_bot is not None:
@@ -468,6 +479,34 @@ def load_hub_config(
         raise HubConfigError("queue_runtime must be embedded or external")
     if dispatch_mode != "queue" and queue_runtime != "embedded":
         raise HubConfigError("queue_runtime external requires dispatch_mode queue")
+    raw_external_workers = root.get("external_worker_agent_ids")
+    if raw_external_workers is None:
+        # Compatibility with the first external-worker rollout: external queue
+        # mode isolated Codex and kept every other provider embedded.
+        external_worker_agent_ids = ("codex",) if queue_runtime == "external" else ()
+    else:
+        if not isinstance(raw_external_workers, list):
+            raise HubConfigError("external_worker_agent_ids must be an array")
+        if queue_runtime != "external":
+            raise HubConfigError("external_worker_agent_ids requires queue_runtime external")
+        external_worker_agent_ids = tuple(raw_external_workers)
+        if not external_worker_agent_ids or not all(
+            isinstance(agent_id, str) for agent_id in external_worker_agent_ids
+        ):
+            raise HubConfigError("external_worker_agent_ids must be a non-empty string array")
+        if len(set(external_worker_agent_ids)) != len(external_worker_agent_ids):
+            raise HubConfigError("external_worker_agent_ids contains duplicates")
+    configured_agents = {agent.agent_id: agent for agent in agents}
+    for agent_id in external_worker_agent_ids:
+        agent = configured_agents.get(agent_id)
+        if agent is None:
+            raise HubConfigError(f"external worker references unknown agent_id: {agent_id}")
+        if agent.runtime not in {"codex", "opencode", "antigravity"}:
+            raise HubConfigError(
+                f"external worker agent {agent_id} must use a supported local runtime"
+            )
+        if agent.managed_externally:
+            raise HubConfigError(f"external worker agent {agent_id} must be locally managed")
 
     return HubConfig(
         schema_version=1,
@@ -495,6 +534,7 @@ def load_hub_config(
         hub_bot=hub_bot,
         dispatch_mode=dispatch_mode,
         queue_runtime=queue_runtime,
+        external_worker_agent_ids=external_worker_agent_ids,
         direct_message_project_id=direct_message_project_id,
         codex_multi_auth_dir=codex_multi_auth_dir,
         codex_multi_auth_executable=codex_multi_auth_executable,
@@ -505,4 +545,9 @@ def load_hub_config(
 
 def load_codex_worker_config(path: Path) -> HubConfig:
     """Load worker metadata without opening any Telegram credential file."""
+    return load_external_worker_config(path)
+
+
+def load_external_worker_config(path: Path) -> HubConfig:
+    """Load queue-worker metadata without opening Telegram credential files."""
     return load_hub_config(path, _validate_telegram_secrets=False)

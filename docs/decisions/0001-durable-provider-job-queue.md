@@ -1,6 +1,6 @@
 # ADR 0001: Durable provider job queue and isolated workers
 
-Status: accepted; stage 2 embedded compatibility path and stage 4 isolated Codex worker implemented
+Status: accepted; stage 2 embedded compatibility path and stages 4–5 local isolated workers implemented
 Date: 2026-08-30
 
 ## Context
@@ -177,8 +177,13 @@ Implementation is additive and gated per provider:
    only after health and fault tests. The controller temporarily delivers only
    prepared Codex outbox rows; extraction of the outbox sender remains a later
    stage.
-5. Enable OpenCode and Antigravity independently after each adapter meets the
-   same contract.
+5. OpenCode and Antigravity each use the same provider-scoped external worker
+   contract. `external_worker_agent_ids` selects them independently; an omitted
+   list preserves the original Codex-only external mode. The embedded consumer
+   continues to own every non-selected provider. Hermes remains owned by its
+   native external Gateway and is not an external queue-worker runtime.
+   Provider direct-message services remain separate inline endpoints and their
+   per-agent state databases are not consumed by this project-group queue stage.
 6. Retire the synchronous path only after live acceptance. Retain a temporary
    compatible fallback flag for one release cycle; archive, rather than delete,
    legacy dispatch records until the rollback window closes.

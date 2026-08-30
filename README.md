@@ -224,11 +224,16 @@ agents-projects-hub migrate /path/to/state.db
 agents-projects-hub doctor config/hub.json
 agents-projects-hub serve config/hub.json
 agents-projects-hub worker config/hub.json
+agents-projects-hub worker config/hub.json --agent opencode
+agents-projects-hub worker config/hub.json --agent antigravity
 ```
 
-The worker command is Codex-only and is enabled only with
-`dispatch_mode: "queue"` and `queue_runtime: "external"`. It does not receive a
-Telegram token; the controller temporarily delivers its durable outbox rows.
+The worker command is enabled only with `dispatch_mode: "queue"` and
+`queue_runtime: "external"`. `external_worker_agent_ids` selects Codex,
+OpenCode, and Antigravity independently; omitted providers keep the embedded
+compatibility path. Workers do not receive Telegram tokens, and the controller
+temporarily delivers their durable outbox rows. Hermes remains outside this
+worker mechanism.
 
 The default service manages Codex. Additional locally managed adapters use an
 instance unit, for example `agents-projects-hub@opencode.service`. Hermes remains

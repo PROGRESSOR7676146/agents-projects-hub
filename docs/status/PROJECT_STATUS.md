@@ -15,17 +15,19 @@ operator deployment inventory or live conversation evidence.
   idempotent enqueue, strict per-topic FIFO leases, conservative stale-job
   recovery, and a feature-gated embedded compatibility consumer. `dispatch_mode`
   defaults to `inline`; `queue_runtime` defaults to `embedded`.
-- An isolated Codex worker is available behind `dispatch_mode: "queue"` and
-  `queue_runtime: "external"`. It owns only Codex app-server/SQLite execution,
-  writes results and outbox rows, and never receives Telegram credentials or
-  sends Telegram. The controller does not own a Codex supervisor in this mode;
-  its temporary deterministic outbox loop delivers prepared Codex rows. Other
-  providers remain on the embedded compatibility consumer pending their own
-  workers. Controller status/account commands do not invoke `codex-multi-auth`
-  in external mode; durable worker telemetry is planned with monitoring. The
-  worker-specific loader does not open Telegram token files. No live queue
-  cutover is implied by this repository change. Signal wiring, bounded shutdown,
-  and managed-socket ownership guards remain part of the service/recovery stage.
+- Isolated queue workers are available for locally managed Codex, OpenCode, and
+  Antigravity behind `dispatch_mode: "queue"` and `queue_runtime: "external"`.
+  `external_worker_agent_ids` selects each isolated provider independently and
+  defaults to `codex`, preserving rollback and embedded compatibility for every
+  other provider. Each worker owns only its adapter/process and SQLite execution,
+  writes results and outbox rows, and neither reads Telegram credentials nor
+  sends Telegram. The controller skips only configured isolated agents while its
+  temporary deterministic outbox loop delivers their prepared rows; direct-message
+  provider services remain separate endpoints. Hermes remains externally managed
+  and out of worker scope. Controller status/account commands do not invoke
+  `codex-multi-auth` when Codex is isolated. No live queue cutover is implied by
+  this repository change. Signal wiring, bounded shutdown, and managed-socket
+  ownership guards remain part of the service/recovery stage.
 - Central Telegram ingress with deterministic ordinary, Reply, mention, and
   quote routing; non-target providers are not invoked merely to observe.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity
