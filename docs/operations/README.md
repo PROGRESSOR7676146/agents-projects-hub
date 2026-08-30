@@ -15,6 +15,13 @@ Operational truth is split by purpose:
 - Complete validation gate: `python scripts/validate.py`.
 - Read-only deployment diagnostics: `agents-projects-hub doctor HUB_CONFIG` and
   `agents-projects-hub monitor HUB_CONFIG`.
+- Cache-only status and component health: `agents-projects-hub status HUB_CONFIG` reports
+  the expected Controller, the standalone sender when configured, and every
+  configured external provider worker as `healthy`, `degraded`, `stale`, or
+  `unknown`. This projection reads SQLite only and never invokes a provider or
+  model or optional account helper. Account/provider probes belong to their
+  dedicated command and monitoring paths. Monitoring uses the same projection; general notifications still go
+  only to the explicitly configured Hub Operations topic.
 - External queue delivery: run one `agents-projects-hub sender HUB_CONFIG`
   alongside the selected provider workers, then set `outbox_runtime` to
   `external`. The default `controller` value preserves the previous deployment

@@ -26,6 +26,7 @@ from .provider_events import (
     format_codex_rotation_event,
     read_codex_runtime_snapshot,
 )
+from .runtime_health import project_runtime_health
 from .state import HubState
 from .telegram import TelegramBotApi, TelegramError
 
@@ -204,6 +205,7 @@ def run_monitor_once(
             recovery_status=recovery_status or None,
             telegram_access=_telegram_access(config),
             hermes_telegram=hermes_telegram,
+            runtime_health=project_runtime_health(state, config),
         )
         stale_catalogs = ProviderCatalogCache(
             config.state_path.with_name("provider-model-catalogs.json")

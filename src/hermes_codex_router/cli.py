@@ -22,6 +22,7 @@ from .outbox_sender import TelegramOutboxSender
 from .pilot import run_codex_pilot
 from .project_admin import add_project, set_project_enabled
 from .registry import RegistryError, load_registry
+from .runtime_health import project_runtime_health
 from .service import ProjectHubService
 from .state import HubState, StateError
 from .worktrees import WorktreeError, cleanup_worktree, create_worktree
@@ -310,15 +311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             state = HubState.open(config.state_path)
             try:
                 result = {"ok": True, **state.status_snapshot()}
-                if config.codex_multi_auth_dir is not None:
-                    from .codex_accounts import read_codex_pool_status
-
-                    result["codex_account_pool"] = read_codex_pool_status(
-                        config.codex_multi_auth_dir,
-                        executable=str(config.codex_multi_auth_executable)
-                        if config.codex_multi_auth_executable
-                        else "codex-multi-auth",
-                    ).as_dict()
+                result["runtime_health"] = project_runtime_health(state, config)
                 _print(result)
             finally:
                 state.close()

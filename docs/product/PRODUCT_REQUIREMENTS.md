@@ -386,8 +386,7 @@ more specific and consistent with this baseline.
 - **REQ-OPS-008 (Accepted):** On replacement hardware, stale writer leases from
   the lost host MUST be reset safely after verifying the old processes cannot
   exist.
-- **REQ-OPS-009 (Implemented for the durable schema, state API, and provider
-  workers; Controller and sender publication Planned):** Controller, sender,
+- **REQ-OPS-009 (Implemented):** Controller, sender,
   and provider workers MUST publish bounded last-known runtime health to local
   SQLite. Cached health MUST distinguish `healthy`, `degraded`, `stale`, and
   `unknown` without invoking a model, provider API, or runtime probe. It MUST

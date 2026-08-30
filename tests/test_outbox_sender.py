@@ -132,7 +132,14 @@ class TelegramOutboxSenderTests(unittest.TestCase):
         agy_bot = Bot()
         sender = self.sender(opencode=open_bot, antigravity=agy_bot)
         try:
+            startup = sender.state.get_runtime_health("sender", "test-sender")
+            assert startup is not None
+            self.assertEqual(startup.activity_state, "idle")
             self.assertTrue(sender.run_cycle())
+            delivered = sender.state.get_runtime_health("sender", "test-sender")
+            assert delivered is not None
+            self.assertIsNotNone(delivered.success_at)
+            self.assertIsNone(delivered.error_code)
             self.assertTrue(sender.run_cycle())
             self.assertEqual(len(open_bot.sent), 1)
             self.assertEqual(len(agy_bot.sent), 1)
@@ -151,6 +158,10 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             self.assertEqual(job.status, "result_ready")
             self.assertEqual(outbox.status, "pending")
             self.assertEqual(outbox.attempt_count, 1)
+            health = sender.state.get_runtime_health("sender", "test-sender")
+            assert health is not None
+            self.assertEqual(health.error_code, "RuntimeError")
+            self.assertEqual(health.activity_state, "idle")
         finally:
             sender.close()
 
@@ -368,9 +379,24 @@ class TelegramOutboxSenderTests(unittest.TestCase):
         ):
             controller = ProjectHubService(config)
         try:
+            health = controller.state.get_runtime_health("controller", "project-hub-controller")
+            self.assertIsNotNone(health)
             controller._start_controller_outbox_delivery()
             self.assertIsNone(controller._outbox_thread)
             self.assertNotIn("opencode", controller.external_services)
+
+            class OnePoll:
+                def updates(self, *, offset: int | None, timeout: int) -> list[object]:
+                    del offset, timeout
+                    controller.stop()
+                    return []
+
+            controller.telegram = cast(Any, OnePoll())
+            controller.run_forever()
+            heartbeat = controller.state.get_runtime_health("controller", "project-hub-controller")
+            assert heartbeat is not None
+            self.assertIsNotNone(heartbeat.success_at)
+            self.assertIsNone(heartbeat.error_code)
         finally:
             controller.close()
 

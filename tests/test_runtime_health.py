@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import io
+import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
+from hermes_codex_router.cli import main
+from hermes_codex_router.hub_config import AgentDefinition, HubConfig, TerminalSettings
+from hermes_codex_router.runtime_health import project_runtime_health
 from hermes_codex_router.state import HubState, StateError
 
 
@@ -162,6 +170,161 @@ class RuntimeHealthTests(unittest.TestCase):
             )
         with self.assertRaises(StateError):
             self.state.upsert_runtime_health(**cast(Any, common | {"pid": 0}))
+
+    def test_projection_includes_expected_components_and_uses_cache_only(self) -> None:
+        base = Path(self.tempdir.name)
+        config = HubConfig(
+            schema_version=1,
+            owner_user_ids=(42,),
+            registry_path=base / "projects.json",
+            state_path=base / "state.db",
+            codex_socket_path=base / "codex.sock",
+            manage_codex_server=False,
+            terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+            projects=(),
+            agents=(
+                AgentDefinition(
+                    "codex",
+                    "Codex",
+                    "example_codex_bot",
+                    "codex",
+                    None,
+                    True,
+                    False,
+                    "gpt-example",
+                    "high",
+                ),
+                AgentDefinition(
+                    "opencode",
+                    "OpenCode",
+                    "example_open_bot",
+                    "opencode",
+                    None,
+                    False,
+                    False,
+                    "provider-selected",
+                    "high",
+                ),
+            ),
+            dispatch_mode="queue",
+            queue_runtime="external",
+            outbox_runtime="external",
+            external_worker_agent_ids=("codex", "opencode"),
+        )
+        self.state.upsert_runtime_health(
+            component="controller",
+            instance_id="project-hub-controller",
+            pid=3456,
+            process_start_marker="controller-start",
+            started_at=self.now,
+            heartbeat_at=self.now,
+        )
+        self.state.upsert_runtime_health(
+            component="provider_worker",
+            instance_id="codex-worker",
+            runtime="codex",
+            agent_id="codex",
+            pid=4567,
+            process_start_marker="codex-start",
+            started_at=self.now - timedelta(minutes=5),
+            heartbeat_at=self.now - timedelta(minutes=4),
+        )
+
+        projection = project_runtime_health(self.state, config, now=self.now)
+
+        self.assertEqual(projection["controller"]["status"], "healthy")
+        self.assertEqual(projection["sender"]["status"], "unknown")
+        self.assertEqual(
+            [(item["agent_id"], item["status"]) for item in projection["provider_workers"]],
+            [("codex", "stale"), ("opencode", "unknown")],
+        )
+        self.assertEqual(projection["controller"]["pid"], 3456)
+        self.assertNotIn("command_line", str(projection))
+        self.assertNotIn("environment", str(projection))
+
+        controller_outbox = replace(config, outbox_runtime="controller")
+        self.assertEqual(
+            project_runtime_health(self.state, controller_outbox, now=self.now)["sender"]["status"],
+            "not_configured",
+        )
+
+        output = io.StringIO()
+        with patch("hermes_codex_router.cli.load_hub_config", return_value=config):
+            with redirect_stdout(output):
+                self.assertEqual(main(["status", "example.json"]), 0)
+        rendered = json.loads(output.getvalue())
+        self.assertEqual(rendered["runtime_health"]["sender"]["status"], "unknown")
+        self.assertEqual(len(rendered["runtime_health"]["provider_workers"]), 2)
+
+    def test_status_never_invokes_optional_account_helper(self) -> None:
+        base = Path(self.tempdir.name)
+        config = HubConfig(
+            schema_version=1,
+            owner_user_ids=(42,),
+            registry_path=base / "projects.json",
+            state_path=base / "state.db",
+            codex_socket_path=base / "codex.sock",
+            manage_codex_server=False,
+            terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+            projects=(),
+            agents=(),
+            codex_multi_auth_dir=base / "optional-helper",
+        )
+        output = io.StringIO()
+        with (
+            patch("hermes_codex_router.cli.load_hub_config", return_value=config),
+            patch(
+                "hermes_codex_router.codex_accounts.read_codex_pool_status",
+                side_effect=AssertionError("status must stay cache-only"),
+            ),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(main(["status", "example.json"]), 0)
+        self.assertNotIn("codex_account_pool", json.loads(output.getvalue()))
+
+    def test_projection_degrades_mismatched_cached_worker_identity(self) -> None:
+        base = Path(self.tempdir.name)
+        config = HubConfig(
+            schema_version=1,
+            owner_user_ids=(42,),
+            registry_path=base / "projects.json",
+            state_path=base / "state.db",
+            codex_socket_path=base / "codex.sock",
+            manage_codex_server=False,
+            terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+            projects=(),
+            agents=(
+                AgentDefinition(
+                    "codex",
+                    "Codex",
+                    "example_bot",
+                    "codex",
+                    None,
+                    True,
+                    False,
+                    "gpt-example",
+                    "high",
+                ),
+            ),
+            dispatch_mode="queue",
+            queue_runtime="external",
+            external_worker_agent_ids=("codex",),
+        )
+        self.state.upsert_runtime_health(
+            component="provider_worker",
+            instance_id="codex-worker",
+            runtime="opencode",
+            agent_id="wrong-agent",
+            pid=1234,
+            process_start_marker="wrong-start",
+            started_at=self.now,
+            heartbeat_at=self.now,
+        )
+        worker = project_runtime_health(self.state, config, now=self.now)["provider_workers"][0]
+        self.assertEqual(worker["status"], "degraded")
+        self.assertTrue(worker["identity_mismatch"])
+        self.assertEqual(worker["runtime"], "codex")
+        self.assertEqual(worker["agent_id"], "codex")
 
 
 if __name__ == "__main__":

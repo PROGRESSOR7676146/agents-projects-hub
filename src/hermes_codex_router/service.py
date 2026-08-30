@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import html
+import os
 import re
 import subprocess
 import threading
+import time
+import uuid
+from datetime import datetime, timezone
 
 from .codex_accounts import CodexPoolStatus, read_codex_pool_status
 from .codex_appserver import CodexAppServerClient, RateLimits, RpcError
@@ -26,6 +30,7 @@ from .provider_catalog_cache import CatalogSnapshot, ProviderCatalogCache
 from .provider_limits import decode_provider_limit
 from .registry import Project, load_registry
 from .routing import decide_targets, parse_command
+from .runtime_health import CONTROLLER_INSTANCE_ID
 from .state import HubState, SessionRecord, TopicRecord
 from .status_view import format_accounts, format_session_status
 from .supervisor import CodexAppServerSupervisor
@@ -102,6 +107,12 @@ class ProjectHubService:
         self._outbox_thread: threading.Thread | None = None
         self._outbox_agent_cursor = 0
         self._stop = threading.Event()
+        self._health_started_at = datetime.now(timezone.utc)
+        self._health_process_start_marker = uuid.uuid4().hex
+        self._health_last_success_at: datetime | None = None
+        self._health_last_error_code: str | None = None
+        self._health_last_publish_monotonic = 0.0
+        self._publish_runtime_health()
 
     def stop(self) -> None:
         """Request that ingress and background polling stop at safe boundaries."""
@@ -117,6 +128,35 @@ class ProjectHubService:
             outbox_stop.set()
         for service in getattr(self, "external_services", {}).values():
             service.stop()
+
+    def _publish_runtime_health(
+        self,
+        *,
+        activity_state: str = "idle",
+        active_job_id: str | None = None,
+        force: bool = False,
+    ) -> None:
+        """Best-effort Controller liveness with bounded, non-secret identity only."""
+        now_monotonic = time.monotonic()
+        last_publish = getattr(self, "_health_last_publish_monotonic", 0.0)
+        if not force and now_monotonic - last_publish < 10.0:
+            return
+        try:
+            self.state.upsert_runtime_health(
+                component="controller",
+                instance_id=CONTROLLER_INSTANCE_ID,
+                pid=os.getpid(),
+                process_start_marker=self._health_process_start_marker,
+                started_at=self._health_started_at,
+                heartbeat_at=datetime.now(timezone.utc),
+                success_at=self._health_last_success_at,
+                error_code=self._health_last_error_code,
+                activity_state=activity_state,
+                active_job_id=active_job_id,
+            )
+            self._health_last_publish_monotonic = now_monotonic
+        except Exception:
+            pass
 
     def close(self) -> None:
         self.stop()
@@ -1947,14 +1987,23 @@ class ProjectHubService:
         self.state.record_runtime_event(ingress_agent_id, "info", "service_started", "polling")
         offset = self.state.get_bot_offset(ingress_agent_id)
         while not stop.is_set():
+            self._publish_runtime_health()
             try:
                 updates = self.telegram.updates(offset=offset, timeout=5)
+                if not updates:
+                    self._health_last_success_at = datetime.now(timezone.utc)
+                    self._health_last_error_code = None
+                self._publish_runtime_health(force=True)
                 for update in updates:
                     if stop.is_set():
                         break
                     update_id = update.get("update_id")
                     if not isinstance(update_id, int):
                         continue
+                    health_job_id = f"telegram-update-{update_id}"
+                    self._publish_runtime_health(
+                        activity_state="executing", active_job_id=health_job_id, force=True
+                    )
                     advance_offset = True
                     try:
                         self.handle_update(update)
@@ -1964,11 +2013,17 @@ class ProjectHubService:
                         self.state.record_runtime_event(
                             ingress_agent_id, "error", "queue_enqueue_error", type(exc).__name__
                         )
+                        self._health_last_error_code = "queue_enqueue_error"
                     except Exception as exc:
                         self._discard_codex_client()
                         self.state.record_runtime_event(
                             "codex", "error", "update_error", type(exc).__name__
                         )
+                        self._health_last_error_code = "update_error"
+                    else:
+                        self._health_last_success_at = datetime.now(timezone.utc)
+                        self._health_last_error_code = None
+                    self._publish_runtime_health(force=True)
                     if advance_offset:
                         offset = update_id + 1
                         self.state.set_bot_offset(ingress_agent_id, offset)
@@ -1981,4 +2036,6 @@ class ProjectHubService:
                 self.state.record_runtime_event(
                     "codex", "warning", "telegram_error", type(exc).__name__
                 )
+                self._health_last_error_code = "telegram_error"
+                self._publish_runtime_health(force=True)
                 stop.wait(3)

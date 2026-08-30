@@ -39,8 +39,12 @@ operator deployment inventory or live conversation evidence.
 - Additive SQLite runtime-health cache and bounded state APIs cover Controller,
   sender, and provider-worker identities. Classification is derived only from
   cached heartbeat/error/provider state and never calls a model or provider.
-  External provider workers publish process, lease, completion, and quota-limit
-  snapshots; Controller and sender lifecycle publication remains planned.
+  Controller, standalone Telegram sender, and external provider workers publish
+  startup, heartbeat, activity, bounded error, and success snapshots as
+  applicable. Local `status` projects every configured component from this cache,
+  and monitoring distinguishes unknown, stale, and degraded components without
+  probing their provider. General notifications retain the single configured Hub
+  Operations destination.
 - Central Telegram ingress with deterministic ordinary, Reply, mention, and
   quote routing; non-target providers are not invoked merely to observe.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity

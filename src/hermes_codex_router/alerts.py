@@ -33,12 +33,39 @@ def evaluate_operational_alerts(
     recovery_status: Mapping[str, bool] | None = None,
     telegram_access: Mapping[tuple[str, str], bool] | None = None,
     hermes_telegram: Mapping[str, object] | None = None,
+    runtime_health: Mapping[str, object] | None = None,
     now: datetime | None = None,
     low_quota_percent: int = 10,
     stuck_after_seconds: int = 15 * 60,
 ) -> tuple[OperationalAlert, ...]:
     evaluated_at = now or datetime.now(timezone.utc)
     alerts: list[OperationalAlert] = []
+    if runtime_health is not None:
+        health_items: list[Mapping[str, object]] = []
+        for name in ("controller", "sender"):
+            value = runtime_health.get(name)
+            if isinstance(value, Mapping):
+                health_items.append(value)
+        workers = runtime_health.get("provider_workers")
+        if isinstance(workers, list):
+            health_items.extend(item for item in workers if isinstance(item, Mapping))
+        for item in health_items:
+            status = str(item.get("status") or "unknown")
+            if status in {"healthy", "not_configured"}:
+                continue
+            component = str(item.get("component") or "runtime")[:32]
+            instance_id = str(item.get("instance_id") or "unknown")[:128]
+            agent_id = str(item.get("agent_id") or "")[:64]
+            label = f"provider worker {agent_id}" if component == "provider_worker" else component
+            alerts.append(
+                OperationalAlert(
+                    f"runtime:{component}:{instance_id}",
+                    f"{component}_health_{status}",
+                    "warning" if status == "degraded" else "error",
+                    f"The configured {label} runtime health is {status}; "
+                    "inspect the local cached status and service logs.",
+                )
+            )
     if not doctor_ok:
         alerts.append(
             OperationalAlert(

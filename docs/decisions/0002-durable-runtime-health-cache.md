@@ -34,9 +34,13 @@ using configured age thresholds. Provider limits and bounded runtime errors
 make a fresh row degraded. Classification performs no network request, process
 probe, provider call, or model turn.
 
-Provider workers publish lifecycle, lease, success, and provider-limit state in
-this slice. Controller and sender lifecycle integration remain separate work;
-their rows use the same schema and API.
+Provider workers publish lifecycle, lease, success, and provider-limit state.
+The Controller and standalone Telegram sender publish their own startup,
+heartbeat, bounded activity, success, and error state. Local status projects
+the expected Controller, conditionally configured sender, and every configured
+external worker from SQLite only. Missing expected rows are `unknown`; monitoring
+alerts on unknown, stale, and degraded rows through the existing Hub
+Operations-only delivery path.
 
 ## Consequences
 

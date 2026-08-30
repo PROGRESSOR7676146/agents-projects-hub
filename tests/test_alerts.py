@@ -184,6 +184,74 @@ class OperationalAlertTests(unittest.TestCase):
             {"hermes_group_policy_incomplete", "hermes_telegram_updates_pending"},
         )
 
+    def test_runtime_health_alerts_distinguish_each_expected_component(self) -> None:
+        pool = CodexPoolStatus(True, True, (), None, 0)
+        alerts = evaluate_operational_alerts(
+            pool=pool,
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+            runtime_health={
+                "controller": {
+                    "component": "controller",
+                    "instance_id": "project-hub-controller",
+                    "status": "unknown",
+                },
+                "sender": {
+                    "component": "sender",
+                    "instance_id": "telegram-outbox-sender",
+                    "status": "stale",
+                },
+                "provider_workers": [
+                    {
+                        "component": "provider_worker",
+                        "instance_id": "codex-worker",
+                        "agent_id": "codex",
+                        "status": "degraded",
+                    },
+                    {
+                        "component": "provider_worker",
+                        "instance_id": "opencode-worker",
+                        "agent_id": "opencode",
+                        "status": "unknown",
+                    },
+                ],
+            },
+        )
+
+        self.assertEqual(
+            {item.code for item in alerts},
+            {
+                "controller_health_unknown",
+                "sender_health_stale",
+                "provider_worker_health_degraded",
+                "provider_worker_health_unknown",
+            },
+        )
+        self.assertEqual(len(alerts), 4)
+        self.assertEqual(
+            {item.key for item in alerts},
+            {
+                "runtime:controller:project-hub-controller",
+                "runtime:sender:telegram-outbox-sender",
+                "runtime:provider_worker:codex-worker",
+                "runtime:provider_worker:opencode-worker",
+            },
+        )
+
+        transitioned = evaluate_operational_alerts(
+            pool=pool,
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+            runtime_health={
+                "controller": {
+                    "component": "controller",
+                    "instance_id": "project-hub-controller",
+                    "status": "stale",
+                }
+            },
+        )
+        self.assertEqual(transitioned[0].key, "runtime:controller:project-hub-controller")
+
 
 if __name__ == "__main__":
     unittest.main()
