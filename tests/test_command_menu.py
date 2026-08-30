@@ -5,7 +5,11 @@ import unittest
 from pathlib import Path
 from typing import Any, cast
 
-from hermes_codex_router.command_menu import PUBLIC_COMMANDS, configure_public_commands
+from hermes_codex_router.command_menu import (
+    GROUP_COMMANDS,
+    PUBLIC_COMMANDS,
+    configure_public_commands,
+)
 from hermes_codex_router.hub_config import AgentDefinition, HubConfig, TerminalSettings
 
 
@@ -120,12 +124,12 @@ class CommandMenuTests(unittest.TestCase):
             chat_scope = '{"type":"chat","chat_id":-1001234567890}'
             self.assertEqual(
                 [item["command"] for item in apis["codex"].commands[chat_scope]],
-                [item[0] for item in PUBLIC_COMMANDS],
+                [item[0] for item in GROUP_COMMANDS],
             )
             self.assertEqual(apis["opencode"].commands[chat_scope], [])
             self.assertEqual(
                 [item["command"] for item in apis["opencode"].commands[None]],
-                ["status", "new"],
+                ["status", "model", "new"],
             )
 
 

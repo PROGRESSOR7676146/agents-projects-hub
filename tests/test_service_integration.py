@@ -86,6 +86,7 @@ class FakeSupervisor:
 class FakeExternalService:
     def __init__(self) -> None:
         self.updates: list[dict[str, object]] = []
+        self.telegram = FakeTelegram()
 
     def handle_update(self, update: dict[str, object]) -> bool:
         self.updates.append(update)
@@ -174,6 +175,17 @@ class ServiceIntegrationTests(unittest.TestCase):
                         "gpt-5.6-sol",
                         "high",
                     ),
+                    AgentDefinition(
+                        "opencode",
+                        "OpenCode",
+                        "project_opencode_bot",
+                        "opencode",
+                        None,
+                        False,
+                        False,
+                        "opencode-go/default",
+                        "high",
+                    ),
                 ),
             )
             value = ProjectHubService.__new__(ProjectHubService)
@@ -188,6 +200,21 @@ class ServiceIntegrationTests(unittest.TestCase):
             value.supervisor = cast(Any, FakeSupervisor(FakeClient()))
             value._codex_client = None
             value.usernames = {"codex": "project_codex_bot"}
+
+            self.assertTrue(value.handle_update(update(0, "/menu")))
+            self.assertEqual(
+                callback_values(telegram.markups[-1]),
+                [
+                    "menu:status",
+                    "menu:model",
+                    "menu:accounts",
+                    "menu:new",
+                    "menu:local",
+                    "menu:return",
+                ],
+            )
+            self.assertTrue(value.handle_update(callback(0, "cb-menu-status", "menu:status")))
+            self.assertIn("No active agent session", telegram.sent[-1][2])
 
             self.assertTrue(value.handle_update(update(1, "/model")))
             self.assertIn("provider:codex", str(telegram.markups[-1]))
@@ -225,6 +252,14 @@ class ServiceIntegrationTests(unittest.TestCase):
             self.assertNotEqual(replacement.session_id, original_session_id)
             self.assertTrue(value.handle_update(update(7, "/new unexpected")))
             self.assertIn("Usage: /new", telegram.sent[-1][2])
+
+            external = FakeExternalService()
+            value.external_services = cast(Any, {"opencode": external})
+            value.state.activate_agent(topic.topic_id, "opencode", "opencode-go/default", "high")
+            codex_message_count = len(telegram.sent)
+            self.assertTrue(value.handle_update(update(8, "/status")))
+            self.assertEqual(len(telegram.sent), codex_message_count)
+            self.assertIn("OpenCode", external.telegram.sent[-1][2])
             value.state.close()
 
     def test_main_receives_unseen_satellite_dialogue_on_next_productive_turn(self) -> None:

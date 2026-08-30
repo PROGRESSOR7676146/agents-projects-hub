@@ -12,13 +12,30 @@ from .external_admission import (
 from .external_runtime import ExternalCliAdapter, ProviderLimitError
 from .hub_config import HubConfig
 from .metadata import format_agent_response
+from .provider_catalog import (
+    ANTIGRAVITY_FALLBACK,
+    ProviderCatalogError,
+    antigravity_models,
+    opencode_models,
+)
+from .provider_catalog_cache import CatalogSnapshot, ProviderCatalogCache
 from .registry import load_registry
 from .routing import decide_targets, parse_command
 from .state import HubState
-from .telegram import TelegramBotApi, TelegramError, parse_direct_message, parse_topic_message
+from .telegram import (
+    TelegramBotApi,
+    TelegramError,
+    TopicCallback,
+    TopicMessage,
+    parse_direct_callback,
+    parse_direct_message,
+    parse_topic_message,
+)
 
 
 class ExternalAgentService:
+    MODEL_PAGE_SIZE = 8
+
     def __init__(
         self, config: HubConfig, agent_id: str, *, direct_messages_only: bool = False
     ) -> None:
@@ -51,6 +68,203 @@ class ExternalAgentService:
 
     def close(self) -> None:
         self.state.close()
+
+    @staticmethod
+    def _grid(values: list[tuple[str, str]], width: int = 2) -> dict[str, object]:
+        rows: list[list[dict[str, str]]] = []
+        for position in range(0, len(values), width):
+            rows.append(
+                [
+                    {
+                        "text": label,
+                        "callback_data": callback,
+                        **({"style": "success"} if label.startswith("✓ ") else {}),
+                    }
+                    for label, callback in values[position : position + width]
+                ]
+            )
+        return {"inline_keyboard": rows}
+
+    def _catalog_cache(self) -> ProviderCatalogCache:
+        return ProviderCatalogCache(
+            self.config.state_path.with_name("provider-model-catalogs.json")
+        )
+
+    def _catalog(self, *, refresh: bool) -> CatalogSnapshot:
+        cache = self._catalog_cache()
+        if not refresh and (cached := cache.load(self.agent.agent_id)) is not None:
+            return cached
+        try:
+            if self.agent.runtime == "opencode":
+                models = opencode_models(self.agent.executable or "opencode")
+            else:
+                models = antigravity_models(self.agent.executable or "agy")
+            return cache.store(self.agent.agent_id, models, source_version="provider CLI")
+        except (OSError, RuntimeError, ProviderCatalogError):
+            cache.mark_failure(self.agent.agent_id)
+            if (cached := cache.load(self.agent.agent_id)) is not None:
+                return cached
+            if self.agent.runtime == "antigravity":
+                return cache.store(
+                    self.agent.agent_id,
+                    ANTIGRAVITY_FALLBACK,
+                    source_version="built-in fallback",
+                )
+            raise ProviderCatalogError("provider model catalog is unavailable")
+
+    def _direct_topic(self, chat_id: int, thread_id: int, project_id: str):
+        topic = self.state.find_topic(chat_id, thread_id)
+        if topic is not None:
+            return topic
+        return self.state.observe_topic(
+            project_id=project_id,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            title="General" if thread_id == 1 else f"Topic {thread_id}",
+        )
+
+    def _show_direct_models(
+        self,
+        message: TopicMessage,
+        *,
+        project_id: str,
+        page: int = 0,
+        refresh: bool,
+    ) -> None:
+        topic = self._direct_topic(message.chat_id, message.thread_id, project_id)
+        active = self.state.active_session(topic.topic_id)
+        catalog = self._catalog(refresh=refresh)
+        page_count = max(
+            1,
+            (len(catalog.models) + self.MODEL_PAGE_SIZE - 1) // self.MODEL_PAGE_SIZE,
+        )
+        if page < 0 or page >= page_count:
+            raise ProviderCatalogError("model catalog page is unavailable")
+        start = page * self.MODEL_PAGE_SIZE
+        values: list[tuple[str, str]] = []
+        for model in catalog.models[start : start + self.MODEL_PAGE_SIZE]:
+            marker = "✓ " if active is not None and active.model == model.model_id else ""
+            values.append((f"{marker}{model.label}", f"dmchoose:{model.callback_key}"))
+        navigation: list[tuple[str, str]] = []
+        if page > 0:
+            navigation.append(("←", f"dmmodels:{page - 1}"))
+        if page + 1 < page_count:
+            navigation.append(("→", f"dmmodels:{page + 1}"))
+        keyboard = self._grid(values)["inline_keyboard"]
+        assert isinstance(keyboard, list)
+        if navigation:
+            extra = self._grid(navigation)["inline_keyboard"]
+            assert isinstance(extra, list)
+            keyboard.extend(extra)
+        self.telegram.send_html(
+            message.chat_id,
+            message.thread_id,
+            html.escape(f"{self.agent.display_name}: choose model · {page + 1}/{page_count}"),
+            reply_markup={"inline_keyboard": keyboard},
+        )
+
+    def _handle_direct_callback(self, callback: TopicCallback) -> bool:
+        if callback.sender_id not in self.config.owner_user_ids:
+            self.telegram.answer_callback(callback.callback_id, "Not authorized")
+            return False
+        project_id = self.config.direct_message_project_id
+        if project_id is None or callback.chat_id != callback.sender_id:
+            self.telegram.answer_callback(callback.callback_id, "Direct chat is not configured")
+            return False
+        if not self.state.claim_callback(
+            callback.callback_id, observer_agent_id=self.agent.agent_id
+        ):
+            self.telegram.answer_callback(callback.callback_id)
+            return False
+        topic = self._direct_topic(callback.chat_id, callback.thread_id, project_id)
+        message = TopicMessage(
+            0,
+            callback.message_id,
+            callback.chat_id,
+            callback.thread_id,
+            "Direct",
+            callback.sender_id,
+            "",
+        )
+        try:
+            if callback.data.startswith("dmmodels:"):
+                page = int(callback.data.split(":", 1)[1])
+                self.telegram.answer_callback(callback.callback_id, "Choose model")
+                self._show_direct_models(message, project_id=project_id, page=page, refresh=False)
+                return True
+            if callback.data.startswith("dmchoose:"):
+                key = callback.data.split(":", 1)[1]
+                catalog = self._catalog(refresh=False)
+                model = next((item for item in catalog.models if item.callback_key == key), None)
+                if model is None:
+                    raise ProviderCatalogError("model selection expired; run /model again")
+                active = self.state.active_session(topic.topic_id)
+                values = [
+                    (
+                        (
+                            "✓ "
+                            if active is not None
+                            and active.model == model.model_id
+                            and active.effort == effort
+                            else ""
+                        )
+                        + effort.title(),
+                        f"dmuse:{key}:{effort}",
+                    )
+                    for effort in model.efforts
+                ]
+                self.telegram.answer_callback(callback.callback_id, "Choose effort")
+                self.telegram.send_html(
+                    callback.chat_id,
+                    callback.thread_id,
+                    html.escape(f"{model.label}: choose effort"),
+                    reply_markup=self._grid(values),
+                )
+                return True
+            if callback.data.startswith("dmuse:"):
+                _, key, effort = callback.data.split(":", 2)
+                catalog = self._catalog(refresh=False)
+                model = next((item for item in catalog.models if item.callback_key == key), None)
+                if model is None or effort not in model.efforts:
+                    raise ProviderCatalogError("model selection expired; run /model again")
+                active = self.state.active_session(topic.topic_id)
+                if active is None:
+                    replacement = self.state.activate_agent(
+                        topic.topic_id, self.agent.agent_id, model.model_id, effort
+                    )
+                elif active.writer_mode != "telegram":
+                    raise ProviderCatalogError("use /return before changing model")
+                elif (active.model, active.effort) == (model.model_id, effort):
+                    replacement = active
+                else:
+                    context = self.state.recent_external_context(
+                        topic.topic_id, self.agent.agent_id
+                    )
+                    replacement = self.state.replace_active_session(
+                        topic.topic_id, model=model.model_id, effort=effort
+                    )
+                    if context:
+                        self.state.stage_handoff(
+                            topic.topic_id,
+                            target_agent_id=self.agent.agent_id,
+                            source_agent_id=self.agent.agent_id,
+                            text=context,
+                        )
+                self.telegram.answer_callback(callback.callback_id, "Applied")
+                self.telegram.send_html(
+                    callback.chat_id,
+                    callback.thread_id,
+                    html.escape(
+                        f"{self.agent.display_name} · {replacement.model} · "
+                        f"{replacement.effort.title()} will start on the next message."
+                    ),
+                )
+                return True
+        except (ValueError, ProviderCatalogError) as exc:
+            self.telegram.answer_callback(callback.callback_id, str(exc)[:180])
+            return True
+        self.telegram.answer_callback(callback.callback_id, "Unknown action")
+        return False
 
     def publish_local_interval(
         self,
@@ -102,6 +316,10 @@ class ExternalAgentService:
         self.telegram.send_html(chat_id, thread_id, response[:4090])
 
     def handle_update(self, update: dict[str, object]) -> bool:
+        if self.direct_messages_only:
+            callback = parse_direct_callback(update)
+            if callback is not None:
+                return self._handle_direct_callback(callback)
         message = (
             parse_direct_message(update)
             if self.direct_messages_only
@@ -159,12 +377,19 @@ class ExternalAgentService:
                     html.escape(f"New {self.agent.display_name} session is ready."),
                 )
                 return True
+            if command.name == "model":
+                self._show_direct_models(
+                    message,
+                    project_id=binding.project_id,
+                    refresh=True,
+                )
+                return True
             self.telegram.send_html(
                 message.chat_id,
                 message.thread_id,
                 html.escape(
                     f"/{command.name} is managed from a project group. "
-                    "In this direct chat, /status and /new are available."
+                    "In this direct chat, /status, /model and /new are available."
                 ),
             )
             return True

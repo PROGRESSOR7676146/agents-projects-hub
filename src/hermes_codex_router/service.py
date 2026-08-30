@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import html
 import re
 import subprocess
@@ -106,6 +107,13 @@ class ProjectHubService:
 
     def _send_text(self, message: TopicMessage, text: str) -> None:
         self.telegram.send_html(message.chat_id, message.thread_id, html.escape(text))
+
+    def _send_text_as_agent(self, message: TopicMessage, *, agent_id: str, text: str) -> None:
+        external = getattr(self, "external_services", {}).get(agent_id)
+        if external is not None:
+            external.telegram.send_html(message.chat_id, message.thread_id, html.escape(text))
+            return
+        self._send_text(message, text)
 
     def _codex_pool(self) -> CodexPoolStatus | None:
         if self.config.codex_multi_auth_dir is None:
@@ -492,6 +500,23 @@ class ProjectHubService:
             reply_markup=self._inline_grid(values),
         )
 
+    def _show_control_menu(self, message: TopicMessage) -> None:
+        self.telegram.send_html(
+            message.chat_id,
+            message.thread_id,
+            "Project controls",
+            reply_markup=self._inline_grid(
+                [
+                    ("Status", "menu:status"),
+                    ("Model", "menu:model"),
+                    ("Accounts", "menu:accounts"),
+                    ("New", "menu:new"),
+                    ("Local", "menu:local"),
+                    ("Return", "menu:return"),
+                ]
+            ),
+        )
+
     def _show_model_menu(
         self,
         message: TopicMessage,
@@ -692,6 +717,38 @@ class ProjectHubService:
             reply_to_username=None,
         )
         try:
+            if callback.data.startswith("menu:"):
+                action = callback.data.removeprefix("menu:")
+                if action not in {"status", "model", "accounts", "new", "local", "return"}:
+                    raise ServiceError("Unknown project-control action")
+                self.telegram.answer_callback(callback.callback_id, "Opening…")
+                synthetic_message_id = -(
+                    int.from_bytes(
+                        hashlib.sha256(callback.callback_id.encode("utf-8")).digest()[:4],
+                        "big",
+                    )
+                    + 1
+                )
+                synthetic_message: dict[str, object] = {
+                    "message_id": synthetic_message_id,
+                    "from": {"id": callback.sender_id, "is_bot": False},
+                    "chat": {
+                        "id": callback.chat_id,
+                        "type": "supergroup",
+                        "title": binding.project_id,
+                        "is_forum": True,
+                    },
+                    "text": f"/{action}",
+                }
+                if callback.thread_id != 1:
+                    synthetic_message["message_thread_id"] = callback.thread_id
+                    synthetic_message["is_topic_message"] = True
+                return self.handle_update(
+                    {
+                        "update_id": synthetic_message_id,
+                        "message": synthetic_message,
+                    }
+                )
             if callback.data.startswith("new:"):
                 _, action, expected_session_id = callback.data.split(":", 2)
                 active = self.state.active_session(topic.topic_id)
@@ -867,6 +924,7 @@ class ProjectHubService:
         topic = self._topic(message, binding.project_id)
         command = parse_command(message.text)
         control_commands = {
+            "menu",
             "pilot",
             "status",
             "accounts",
@@ -889,6 +947,9 @@ class ProjectHubService:
             session = self._ensure_codex_session(topic)
             status = "connected" if session.provider_session_id else "registered"
             self._send_text(message, f"Codex topic session is {status}.")
+            return True
+        if command and command.name == "menu":
+            self._show_control_menu(message)
             return True
         if command and command.name == "status":
             active = self.state.active_session(topic.topic_id)
@@ -917,7 +978,10 @@ class ProjectHubService:
                     limits=limits,
                     timezone_name="Europe/Moscow",
                 )
-            self._send_text(message, detail)
+            if active is None:
+                self._send_text(message, detail)
+            else:
+                self._send_text_as_agent(message, agent_id=active.agent_id, text=detail)
             return True
         if command and command.name == "accounts":
             pool = self._codex_pool()

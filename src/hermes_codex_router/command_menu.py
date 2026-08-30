@@ -15,8 +15,11 @@ PUBLIC_COMMANDS: tuple[tuple[str, str], ...] = (
     ("return", "Return to Telegram and publish"),
 )
 
+GROUP_COMMANDS: tuple[tuple[str, str], ...] = (("menu", "Open project controls"),)
+
 DIRECT_PROVIDER_COMMANDS: tuple[tuple[str, str], ...] = (
     ("status", "Current provider and model"),
+    ("model", "Choose model and effort"),
     ("new", "Start a new provider session"),
 )
 
@@ -59,7 +62,7 @@ def configure_public_commands(
                 scoped.append(
                     (
                         _scope("chat", chat_id=project.telegram_chat_id),
-                        desired if agent.agent_id == "codex" else [],
+                        _desired(GROUP_COMMANDS) if agent.agent_id == "codex" else [],
                     )
                 )
         matches = True
@@ -87,5 +90,6 @@ def configure_public_commands(
         "ok": bool(bots) and all(bool(item["matches"]) for item in bots),
         "sync": sync,
         "commands": [item[0] for item in PUBLIC_COMMANDS],
+        "group_commands": [item[0] for item in GROUP_COMMANDS],
         "bots": bots,
     }
