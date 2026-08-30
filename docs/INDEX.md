@@ -15,6 +15,7 @@ are intentionally excluded.
 
 - [Roadmap](ROADMAP.ru.md)
 - [Operations](operations/README.md)
+- [Queue and process recovery](operations/QUEUE_RECOVERY.md)
 - [Recovery plane](RECOVERY_PLANE.ru.md)
 - [Risk register](risks/RISK_REGISTER.md)
 - [Testing and privacy gate](testing/README.md)

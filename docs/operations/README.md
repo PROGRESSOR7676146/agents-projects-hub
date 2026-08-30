@@ -38,6 +38,8 @@ Operational truth is split by purpose:
   and rollback path.
 - Exact in-flight turns are not recoverable after machine loss; communicate this
   limit instead of inferring success from stale state.
+- Durable queue, sender, socket, and replacement-host procedures:
+  [`QUEUE_RECOVERY.md`](QUEUE_RECOVERY.md).
 - Service `SIGTERM` and `SIGINT` handlers only request shutdown. Controller and
   direct-provider ingress stop polling at the next bounded return. Workers and
   the sender check stop state around lease acquisition and return work observed
