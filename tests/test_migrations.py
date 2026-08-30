@@ -97,6 +97,64 @@ class MigrationTests(unittest.TestCase):
             finally:
                 connection.close()
 
+    def test_v10_queue_migration_is_additive_and_preserves_legacy_dispatches(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            migrate_database(path, create_backup=False)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute(
+                    """INSERT INTO topics
+                       (project_id, chat_id, thread_id, title, created_at, updated_at)
+                       VALUES ('example-project', -1001234567890, 7, 'Topic', 'now', 'now')"""
+                )
+                connection.execute(
+                    """INSERT INTO turn_dispatches
+                       (dispatch_id, chat_id, message_id, topic_id, agent_id, status,
+                        created_at, updated_at)
+                       VALUES ('legacy-dispatch', -1001234567890, 42, 1, 'codex',
+                               'completed', 'now', 'now')"""
+                )
+                connection.executescript(
+                    """DROP TABLE telegram_outbox;
+                       DROP TABLE provider_job_results;
+                       DROP TABLE provider_jobs;
+                       DROP TABLE topic_queue_counters;
+                       PRAGMA user_version = 9;"""
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            result = migrate_database(path, create_backup=False)
+
+            self.assertEqual((result.previous_version, result.current_version), (9, 10))
+            migrated = sqlite3.connect(path)
+            try:
+                self.assertEqual(
+                    migrated.execute(
+                        "SELECT status FROM turn_dispatches WHERE dispatch_id = 'legacy-dispatch'"
+                    ).fetchone()[0],
+                    "completed",
+                )
+                tables = {
+                    row[0]
+                    for row in migrated.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+                self.assertTrue(
+                    {
+                        "provider_jobs",
+                        "provider_job_results",
+                        "telegram_outbox",
+                        "topic_queue_counters",
+                        "turn_dispatches",
+                    }.issubset(tables)
+                )
+            finally:
+                migrated.close()
+
 
 if __name__ == "__main__":
     unittest.main()

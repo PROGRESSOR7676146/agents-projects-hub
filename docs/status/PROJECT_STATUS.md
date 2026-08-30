@@ -11,6 +11,9 @@ operator deployment inventory or live conversation evidence.
 - Numeric project/topic identity, canonical allowlisted roots, idempotent
   routing, persistent provider sessions, bounded visible context, and writer
   leases backed by versioned SQLite migrations.
+- Additive durable provider-job, result, and Telegram-outbox schema with atomic
+  idempotent enqueue, strict per-topic FIFO leases, and conservative stale-job
+  recovery. Runtime worker isolation and queue cutover are not yet implemented.
 - Central Telegram ingress with deterministic ordinary, Reply, mention, and
   quote routing; non-target providers are not invoked merely to observe.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity

@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Iterator
 
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
 
@@ -48,8 +50,94 @@ class HandoffRecord:
     text: str
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderJobRecord:
+    job_id: str
+    idempotency_key: str
+    chat_id: int
+    message_id: int
+    topic_id: int
+    topic_sequence: int
+    agent_id: str
+    session_id: str
+    session_generation: int
+    provider_session_id: str | None
+    model: str
+    effort: str
+    payload_text: str
+    context_watermark: int | None
+    handoff_id: str | None
+    status: str
+    attempt_count: int
+    max_attempts: int
+    next_attempt_at: str | None
+    lease_owner: str | None
+    lease_token: str | None
+    lease_expires_at: str | None
+    provider_started_at: str | None
+    error_class: str | None
+    error_code: str | None
+    error_detail: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderJobResultRecord:
+    result_id: str
+    job_id: str
+    visible_response: str
+    provider_session_id: str | None
+    actual_model: str | None
+    safe_metadata_json: str | None
+    context_watermark: int | None
+    handoff_id: str | None
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class TelegramOutboxRecord:
+    outbox_id: str
+    job_id: str
+    sender_agent_id: str
+    chat_id: int
+    thread_id: int
+    telegram_html: str
+    status: str
+    attempt_count: int
+    available_at: str
+    lease_owner: str | None
+    lease_token: str | None
+    lease_expires_at: str | None
+    telegram_message_id: int | None
+    error_code: str | None
+    created_at: str
+    updated_at: str
+    delivered_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderJobRecovery:
+    requeued_job_ids: tuple[str, ...]
+    indeterminate_job_ids: tuple[str, ...]
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _timestamp(value: datetime | None = None) -> str:
+    current = value or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        raise StateError("timestamp must be timezone-aware")
+    return current.astimezone(timezone.utc).isoformat()
+
+
+def _bounded(value: str, *, name: str, maximum: int) -> str:
+    normalized = value.strip()
+    if not normalized or len(normalized) > maximum:
+        raise StateError(f"invalid {name}")
+    return normalized
 
 
 class HubState:
@@ -73,7 +161,7 @@ class HubState:
                 probe.close()
             if version < LATEST_SCHEMA_VERSION:
                 migrate_database(path, create_backup=True)
-        connection = sqlite3.connect(path)
+        connection = sqlite3.connect(path, timeout=5.0)
         os.chmod(path, 0o600)
         migrate_connection(connection)
         return cls(connection)
@@ -84,6 +172,19 @@ class HubState:
 
     def close(self) -> None:
         self._connection.close()
+
+    @contextmanager
+    def _immediate_transaction(self) -> Iterator[None]:
+        if self._connection.in_transaction:
+            raise StateError("cannot nest an immediate state transaction")
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self._connection.rollback()
+            raise
+        else:
+            self._connection.commit()
 
     @staticmethod
     def _topic(row: sqlite3.Row) -> TopicRecord:
@@ -110,6 +211,75 @@ class HubState:
             terminal_name=row["terminal_name"],
             writer_mode=row["writer_mode"],
             context_remaining_percent=row["context_remaining_percent"],
+        )
+
+    @staticmethod
+    def _provider_job(row: sqlite3.Row) -> ProviderJobRecord:
+        return ProviderJobRecord(
+            job_id=str(row["job_id"]),
+            idempotency_key=str(row["idempotency_key"]),
+            chat_id=int(row["chat_id"]),
+            message_id=int(row["message_id"]),
+            topic_id=int(row["topic_id"]),
+            topic_sequence=int(row["topic_sequence"]),
+            agent_id=str(row["agent_id"]),
+            session_id=str(row["session_id"]),
+            session_generation=int(row["session_generation"]),
+            provider_session_id=row["provider_session_id"],
+            model=str(row["model"]),
+            effort=str(row["effort"]),
+            payload_text=str(row["payload_text"]),
+            context_watermark=row["context_watermark"],
+            handoff_id=row["handoff_id"],
+            status=str(row["status"]),
+            attempt_count=int(row["attempt_count"]),
+            max_attempts=int(row["max_attempts"]),
+            next_attempt_at=row["next_attempt_at"],
+            lease_owner=row["lease_owner"],
+            lease_token=row["lease_token"],
+            lease_expires_at=row["lease_expires_at"],
+            provider_started_at=row["provider_started_at"],
+            error_class=row["error_class"],
+            error_code=row["error_code"],
+            error_detail=row["error_detail"],
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _provider_result(row: sqlite3.Row) -> ProviderJobResultRecord:
+        return ProviderJobResultRecord(
+            result_id=str(row["result_id"]),
+            job_id=str(row["job_id"]),
+            visible_response=str(row["visible_response"]),
+            provider_session_id=row["provider_session_id"],
+            actual_model=row["actual_model"],
+            safe_metadata_json=row["safe_metadata_json"],
+            context_watermark=row["context_watermark"],
+            handoff_id=row["handoff_id"],
+            created_at=str(row["created_at"]),
+        )
+
+    @staticmethod
+    def _telegram_outbox(row: sqlite3.Row) -> TelegramOutboxRecord:
+        return TelegramOutboxRecord(
+            outbox_id=str(row["outbox_id"]),
+            job_id=str(row["job_id"]),
+            sender_agent_id=str(row["sender_agent_id"]),
+            chat_id=int(row["chat_id"]),
+            thread_id=int(row["thread_id"]),
+            telegram_html=str(row["telegram_html"]),
+            status=str(row["status"]),
+            attempt_count=int(row["attempt_count"]),
+            available_at=str(row["available_at"]),
+            lease_owner=row["lease_owner"],
+            lease_token=row["lease_token"],
+            lease_expires_at=row["lease_expires_at"],
+            telegram_message_id=row["telegram_message_id"],
+            error_code=row["error_code"],
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+            delivered_at=row["delivered_at"],
         )
 
     def observe_topic(
@@ -241,6 +411,716 @@ class HubState:
             (topic_id,),
         ).fetchone()
         return row is not None
+
+    def enqueue_provider_job(
+        self,
+        *,
+        idempotency_key: str,
+        chat_id: int,
+        message_id: int,
+        topic_id: int,
+        agent_id: str,
+        session_id: str,
+        session_generation: int,
+        model: str,
+        effort: str,
+        payload_text: str,
+        provider_session_id: str | None = None,
+        context_watermark: int | None = None,
+        handoff_id: str | None = None,
+        max_attempts: int = 5,
+    ) -> tuple[ProviderJobRecord, bool]:
+        """Atomically accept one bounded provider request.
+
+        This method is deliberately local-only: callers must finish Telegram
+        admission and content redaction before calling it. It performs no
+        network or provider operation. A duplicate idempotency key returns the
+        original immutable snapshot without allocating another topic sequence.
+        """
+        key = _bounded(idempotency_key, name="idempotency key", maximum=256)
+        target_agent = _bounded(agent_id, name="agent id", maximum=64)
+        target_session = _bounded(session_id, name="session id", maximum=128)
+        selected_model = _bounded(model, name="model", maximum=200)
+        selected_effort = _bounded(effort, name="effort", maximum=64)
+        payload = _bounded(payload_text, name="payload", maximum=20000)
+        provider_session = (
+            _bounded(provider_session_id, name="provider session id", maximum=256)
+            if provider_session_id is not None
+            else None
+        )
+        handoff = (
+            _bounded(handoff_id, name="handoff id", maximum=128) if handoff_id is not None else None
+        )
+        if chat_id == 0 or message_id <= 0 or session_generation <= 0:
+            raise StateError("invalid provider job identity")
+        if context_watermark is not None and context_watermark < 0:
+            raise StateError("invalid context watermark")
+        if not 1 <= max_attempts <= 20:
+            raise StateError("invalid max attempts")
+
+        created = False
+        with self._immediate_transaction():
+            existing = self._connection.execute(
+                "SELECT * FROM provider_jobs WHERE idempotency_key = ?", (key,)
+            ).fetchone()
+            if existing is not None:
+                if int(existing["chat_id"]) != chat_id or int(existing["message_id"]) != message_id:
+                    raise StateError("idempotency key belongs to another Telegram message")
+                return self._provider_job(existing), False
+
+            topic = self._connection.execute(
+                "SELECT chat_id, thread_id FROM topics WHERE topic_id = ?", (topic_id,)
+            ).fetchone()
+            if topic is None:
+                raise StateError(f"unknown topic_id: {topic_id}")
+            if int(topic["chat_id"]) != chat_id:
+                raise StateError("provider job chat does not match topic")
+            session = self._connection.execute(
+                """SELECT topic_id, agent_id, generation FROM agent_sessions
+                   WHERE session_id = ?""",
+                (target_session,),
+            ).fetchone()
+            if (
+                session is None
+                or int(session["topic_id"]) != topic_id
+                or str(session["agent_id"]) != target_agent
+                or int(session["generation"]) != session_generation
+            ):
+                raise StateError("provider job session snapshot does not match persisted session")
+            if handoff is not None:
+                pending = self._connection.execute(
+                    """SELECT 1 FROM pending_handoffs
+                       WHERE handoff_id = ? AND topic_id = ? AND target_agent_id = ?""",
+                    (handoff, topic_id, target_agent),
+                ).fetchone()
+                if pending is None:
+                    raise StateError("provider job handoff snapshot is not pending")
+
+            now = _now()
+            self._connection.execute(
+                """INSERT OR IGNORE INTO observed_messages
+                   (chat_id, message_id, observer_agent_id, observed_at)
+                   VALUES (?, ?, 'hub', ?)""",
+                (chat_id, message_id, now),
+            )
+            self._connection.execute(
+                """INSERT INTO topic_queue_counters(topic_id, next_sequence, updated_at)
+                   VALUES (?, 1, ?)
+                   ON CONFLICT(topic_id) DO NOTHING""",
+                (topic_id, now),
+            )
+            counter = self._connection.execute(
+                "SELECT next_sequence FROM topic_queue_counters WHERE topic_id = ?",
+                (topic_id,),
+            ).fetchone()
+            if counter is None:
+                raise StateError("failed to allocate provider job sequence")
+            topic_sequence = int(counter["next_sequence"])
+            self._connection.execute(
+                """UPDATE topic_queue_counters
+                   SET next_sequence = next_sequence + 1, updated_at = ?
+                   WHERE topic_id = ?""",
+                (now, topic_id),
+            )
+            job_id = str(uuid.uuid4())
+            try:
+                self._connection.execute(
+                    """INSERT INTO provider_jobs (
+                         job_id, idempotency_key, chat_id, message_id, topic_id,
+                         topic_sequence, agent_id, session_id, session_generation,
+                         provider_session_id, model, effort, payload_text,
+                         context_watermark, handoff_id, status, attempt_count,
+                         max_attempts, created_at, updated_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                 'queued', 0, ?, ?, ?)""",
+                    (
+                        job_id,
+                        key,
+                        chat_id,
+                        message_id,
+                        topic_id,
+                        topic_sequence,
+                        target_agent,
+                        target_session,
+                        session_generation,
+                        provider_session,
+                        selected_model,
+                        selected_effort,
+                        payload,
+                        context_watermark,
+                        handoff,
+                        max_attempts,
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                duplicate = self._connection.execute(
+                    """SELECT * FROM provider_jobs
+                       WHERE idempotency_key = ? OR (chat_id = ? AND message_id = ?)""",
+                    (key, chat_id, message_id),
+                ).fetchone()
+                if duplicate is None:
+                    raise
+                if str(duplicate["idempotency_key"]) != key:
+                    raise StateError("Telegram message already has another provider job") from exc
+                return self._provider_job(duplicate), False
+            created = True
+            row = self._connection.execute(
+                "SELECT * FROM provider_jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise StateError("failed to persist provider job")
+            job = self._provider_job(row)
+        return job, created
+
+    def get_provider_job(self, job_id: str) -> ProviderJobRecord:
+        row = self._connection.execute(
+            "SELECT * FROM provider_jobs WHERE job_id = ?", (job_id,)
+        ).fetchone()
+        if row is None:
+            raise StateError(f"unknown provider job: {job_id}")
+        return self._provider_job(row)
+
+    def provider_jobs_for_topic(self, topic_id: int) -> tuple[ProviderJobRecord, ...]:
+        rows = self._connection.execute(
+            "SELECT * FROM provider_jobs WHERE topic_id = ? ORDER BY topic_sequence",
+            (topic_id,),
+        ).fetchall()
+        return tuple(self._provider_job(row) for row in rows)
+
+    def lease_provider_job(
+        self,
+        agent_id: str,
+        worker_id: str,
+        *,
+        lease_seconds: int = 90,
+        now: datetime | None = None,
+    ) -> ProviderJobRecord | None:
+        target_agent = _bounded(agent_id, name="agent id", maximum=64)
+        worker = _bounded(worker_id, name="worker id", maximum=128)
+        if not 1 <= lease_seconds <= 3600:
+            raise StateError("invalid provider lease duration")
+        current = now or datetime.now(timezone.utc)
+        timestamp = _timestamp(current)
+        expires_at = _timestamp(current + timedelta(seconds=lease_seconds))
+        with self._immediate_transaction():
+            row = self._connection.execute(
+                """SELECT candidate.* FROM provider_jobs candidate
+                   WHERE candidate.agent_id = ?
+                     AND candidate.attempt_count < candidate.max_attempts
+                     AND (
+                       candidate.status = 'queued'
+                       OR (candidate.status = 'retry_wait'
+                           AND candidate.next_attempt_at IS NOT NULL
+                           AND candidate.next_attempt_at <= ?)
+                     )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_jobs earlier
+                       WHERE earlier.topic_id = candidate.topic_id
+                         AND earlier.topic_sequence < candidate.topic_sequence
+                         AND earlier.status NOT IN ('completed', 'failed', 'cancelled')
+                     )
+                   ORDER BY candidate.created_at, candidate.topic_id,
+                            candidate.topic_sequence
+                   LIMIT 1""",
+                (target_agent, timestamp),
+            ).fetchone()
+            if row is None:
+                return None
+            token = str(uuid.uuid4())
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'leased', lease_owner = ?, lease_token = ?,
+                       lease_expires_at = ?, next_attempt_at = NULL,
+                       error_class = NULL, error_code = NULL, error_detail = NULL,
+                       updated_at = ?
+                   WHERE job_id = ? AND status IN ('queued', 'retry_wait')""",
+                (worker, token, expires_at, timestamp, row["job_id"]),
+            )
+            if cursor.rowcount != 1:
+                raise StateError("provider job lease race")
+            leased = self._connection.execute(
+                "SELECT * FROM provider_jobs WHERE job_id = ?", (row["job_id"],)
+            ).fetchone()
+            if leased is None:
+                raise StateError("leased provider job disappeared")
+            return self._provider_job(leased)
+
+    def mark_provider_job_executing(
+        self,
+        job_id: str,
+        lease_token: str,
+        *,
+        now: datetime | None = None,
+    ) -> ProviderJobRecord:
+        timestamp = _timestamp(now)
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'executing', attempt_count = attempt_count + 1,
+                       provider_started_at = ?, updated_at = ?
+                   WHERE job_id = ? AND status = 'leased' AND lease_token = ?
+                     AND lease_expires_at > ? AND attempt_count < max_attempts""",
+                (timestamp, timestamp, job_id, lease_token, timestamp),
+            )
+        if cursor.rowcount != 1:
+            raise StateError("provider job lease is missing, expired, or invalid")
+        return self.get_provider_job(job_id)
+
+    def heartbeat_provider_job(
+        self,
+        job_id: str,
+        lease_token: str,
+        *,
+        lease_seconds: int = 90,
+        now: datetime | None = None,
+    ) -> ProviderJobRecord:
+        if not 1 <= lease_seconds <= 3600:
+            raise StateError("invalid provider lease duration")
+        current = now or datetime.now(timezone.utc)
+        timestamp = _timestamp(current)
+        expires_at = _timestamp(current + timedelta(seconds=lease_seconds))
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs SET lease_expires_at = ?, updated_at = ?
+                   WHERE job_id = ? AND status IN ('leased', 'executing')
+                     AND lease_token = ? AND lease_expires_at > ?""",
+                (expires_at, timestamp, job_id, lease_token, timestamp),
+            )
+        if cursor.rowcount != 1:
+            raise StateError("provider job lease is missing, expired, or invalid")
+        return self.get_provider_job(job_id)
+
+    def schedule_provider_job_retry(
+        self,
+        job_id: str,
+        lease_token: str,
+        *,
+        error_code: str,
+        delay_seconds: int,
+        error_detail: str | None = None,
+        now: datetime | None = None,
+    ) -> ProviderJobRecord:
+        """Schedule only work which is still provably pre-execution."""
+        code = _bounded(error_code, name="error code", maximum=128)
+        if not 0 <= delay_seconds <= 86400:
+            raise StateError("invalid retry delay")
+        detail = error_detail.strip()[:1000] if error_detail else None
+        current = now or datetime.now(timezone.utc)
+        timestamp = _timestamp(current)
+        available_at = _timestamp(current + timedelta(seconds=delay_seconds))
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = CASE
+                         WHEN attempt_count + 1 >= max_attempts THEN 'failed'
+                         ELSE 'retry_wait'
+                       END,
+                       attempt_count = attempt_count + 1,
+                       next_attempt_at = CASE
+                         WHEN attempt_count + 1 >= max_attempts THEN NULL
+                         ELSE ?
+                       END,
+                       lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+                       error_class = 'transient_pre_execution', error_code = ?,
+                       error_detail = ?, updated_at = ?
+                   WHERE job_id = ? AND status = 'leased' AND lease_token = ?
+                     AND lease_expires_at > ?""",
+                (available_at, code, detail, timestamp, job_id, lease_token, timestamp),
+            )
+        if cursor.rowcount != 1:
+            raise StateError("retry requires a current pre-execution provider job lease")
+        return self.get_provider_job(job_id)
+
+    def fail_provider_job(
+        self,
+        job_id: str,
+        lease_token: str,
+        *,
+        error_class: str,
+        error_code: str,
+        error_detail: str | None = None,
+    ) -> ProviderJobRecord:
+        failure_class = _bounded(error_class, name="error class", maximum=64)
+        code = _bounded(error_code, name="error code", maximum=128)
+        detail = error_detail.strip()[:1000] if error_detail else None
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'failed', lease_owner = NULL, lease_token = NULL,
+                       lease_expires_at = NULL, error_class = ?, error_code = ?,
+                       error_detail = ?, updated_at = ?
+                   WHERE job_id = ? AND status IN ('leased', 'executing')
+                     AND lease_token = ?""",
+                (failure_class, code, detail, _now(), job_id, lease_token),
+            )
+        if cursor.rowcount != 1:
+            raise StateError("provider job lease is missing or invalid")
+        return self.get_provider_job(job_id)
+
+    def cancel_provider_job(self, job_id: str) -> ProviderJobRecord:
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'cancelled', next_attempt_at = NULL, updated_at = ?
+                   WHERE job_id = ? AND status IN ('queued', 'retry_wait')""",
+                (_now(), job_id),
+            )
+        if cursor.rowcount != 1:
+            raise StateError("only queued provider work can be cancelled")
+        return self.get_provider_job(job_id)
+
+    def recover_stale_provider_jobs(self, *, now: datetime | None = None) -> ProviderJobRecovery:
+        timestamp = _timestamp(now)
+        with self._immediate_transaction():
+            leased = self._connection.execute(
+                """SELECT job_id FROM provider_jobs
+                   WHERE status = 'leased' AND lease_expires_at <= ? ORDER BY job_id""",
+                (timestamp,),
+            ).fetchall()
+            executing = self._connection.execute(
+                """SELECT job_id FROM provider_jobs
+                   WHERE status = 'executing' AND lease_expires_at <= ? ORDER BY job_id""",
+                (timestamp,),
+            ).fetchall()
+            self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'queued', lease_owner = NULL, lease_token = NULL,
+                       lease_expires_at = NULL, next_attempt_at = NULL,
+                       error_class = 'recovered_pre_execution',
+                       error_code = 'stale_lease', updated_at = ?
+                   WHERE status = 'leased' AND lease_expires_at <= ?""",
+                (timestamp, timestamp),
+            )
+            self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'indeterminate', lease_owner = NULL, lease_token = NULL,
+                       lease_expires_at = NULL, error_class = 'ambiguous_execution',
+                       error_code = 'stale_executing_lease', updated_at = ?
+                   WHERE status = 'executing' AND lease_expires_at <= ?""",
+                (timestamp, timestamp),
+            )
+        return ProviderJobRecovery(
+            requeued_job_ids=tuple(str(row["job_id"]) for row in leased),
+            indeterminate_job_ids=tuple(str(row["job_id"]) for row in executing),
+        )
+
+    def commit_provider_result(
+        self,
+        job_id: str,
+        lease_token: str,
+        *,
+        visible_response: str,
+        sender_agent_id: str,
+        telegram_html: str,
+        provider_session_id: str | None = None,
+        actual_model: str | None = None,
+        safe_metadata_json: str | None = None,
+        acknowledge_context: bool = False,
+        acknowledge_handoff: bool = False,
+    ) -> ProviderJobResultRecord:
+        """Commit result, acknowledgements, and outbox without a network call."""
+        response = _bounded(visible_response, name="visible response", maximum=12000)
+        sender = _bounded(sender_agent_id, name="sender agent id", maximum=64)
+        html = _bounded(telegram_html, name="Telegram outbox text", maximum=12000)
+        provider_session = (
+            _bounded(provider_session_id, name="provider session id", maximum=256)
+            if provider_session_id is not None
+            else None
+        )
+        selected_model = (
+            _bounded(actual_model, name="actual model", maximum=200)
+            if actual_model is not None
+            else None
+        )
+        metadata = safe_metadata_json.strip() if safe_metadata_json else None
+        if metadata is not None and len(metadata) > 4000:
+            raise StateError("invalid safe metadata")
+        timestamp = _now()
+        with self._immediate_transaction():
+            job_row = self._connection.execute(
+                """SELECT jobs.*, topics.thread_id FROM provider_jobs jobs
+                   JOIN topics ON topics.topic_id = jobs.topic_id
+                   WHERE jobs.job_id = ? AND jobs.status = 'executing'
+                     AND jobs.lease_token = ?""",
+                (job_id, lease_token),
+            ).fetchone()
+            if job_row is None:
+                raise StateError("provider job lease is missing or invalid")
+            result_id = str(uuid.uuid4())
+            self._connection.execute(
+                """INSERT INTO provider_job_results (
+                     result_id, job_id, visible_response, provider_session_id,
+                     actual_model, safe_metadata_json, context_watermark,
+                     handoff_id, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    result_id,
+                    job_id,
+                    response,
+                    provider_session,
+                    selected_model,
+                    metadata,
+                    job_row["context_watermark"],
+                    job_row["handoff_id"],
+                    timestamp,
+                ),
+            )
+            if provider_session is not None:
+                cursor = self._connection.execute(
+                    """UPDATE agent_sessions
+                       SET provider_session_id = ?, updated_at = ?
+                       WHERE session_id = ? AND generation = ?""",
+                    (
+                        provider_session,
+                        timestamp,
+                        job_row["session_id"],
+                        job_row["session_generation"],
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise StateError("provider job session generation changed")
+            if acknowledge_context and job_row["context_watermark"] is not None:
+                self._connection.execute(
+                    """INSERT INTO visible_context_cursors
+                       (topic_id, observer_agent_id, last_turn_id, updated_at)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(topic_id, observer_agent_id) DO UPDATE SET
+                         last_turn_id = MAX(last_turn_id, excluded.last_turn_id),
+                         updated_at = excluded.updated_at""",
+                    (
+                        job_row["topic_id"],
+                        job_row["agent_id"],
+                        job_row["context_watermark"],
+                        timestamp,
+                    ),
+                )
+            if acknowledge_handoff and job_row["handoff_id"] is not None:
+                self._connection.execute(
+                    "DELETE FROM pending_handoffs WHERE handoff_id = ?",
+                    (job_row["handoff_id"],),
+                )
+            outbox_id = str(uuid.uuid4())
+            self._connection.execute(
+                """INSERT INTO telegram_outbox (
+                     outbox_id, job_id, sender_agent_id, chat_id, thread_id,
+                     telegram_html, status, available_at, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
+                (
+                    outbox_id,
+                    job_id,
+                    sender,
+                    job_row["chat_id"],
+                    job_row["thread_id"],
+                    html,
+                    timestamp,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'result_ready', lease_owner = NULL,
+                       lease_token = NULL, lease_expires_at = NULL, updated_at = ?
+                   WHERE job_id = ? AND status = 'executing' AND lease_token = ?""",
+                (timestamp, job_id, lease_token),
+            )
+            if cursor.rowcount != 1:
+                raise StateError("provider job lease changed during result commit")
+            result_row = self._connection.execute(
+                "SELECT * FROM provider_job_results WHERE result_id = ?", (result_id,)
+            ).fetchone()
+            if result_row is None:
+                raise StateError("provider result disappeared")
+            result = self._provider_result(result_row)
+        return result
+
+    def get_provider_result(self, job_id: str) -> ProviderJobResultRecord:
+        row = self._connection.execute(
+            "SELECT * FROM provider_job_results WHERE job_id = ?", (job_id,)
+        ).fetchone()
+        if row is None:
+            raise StateError(f"provider job has no result: {job_id}")
+        return self._provider_result(row)
+
+    def get_telegram_outbox(self, outbox_id: str) -> TelegramOutboxRecord:
+        row = self._connection.execute(
+            "SELECT * FROM telegram_outbox WHERE outbox_id = ?", (outbox_id,)
+        ).fetchone()
+        if row is None:
+            raise StateError(f"unknown Telegram outbox row: {outbox_id}")
+        return self._telegram_outbox(row)
+
+    def get_telegram_outbox_for_job(self, job_id: str) -> TelegramOutboxRecord:
+        row = self._connection.execute(
+            "SELECT * FROM telegram_outbox WHERE job_id = ?", (job_id,)
+        ).fetchone()
+        if row is None:
+            raise StateError(f"provider job has no Telegram outbox row: {job_id}")
+        return self._telegram_outbox(row)
+
+    def lease_telegram_outbox(
+        self,
+        sender_agent_id: str,
+        worker_id: str,
+        *,
+        lease_seconds: int = 90,
+        now: datetime | None = None,
+    ) -> TelegramOutboxRecord | None:
+        sender = _bounded(sender_agent_id, name="sender agent id", maximum=64)
+        worker = _bounded(worker_id, name="worker id", maximum=128)
+        if not 1 <= lease_seconds <= 3600:
+            raise StateError("invalid Telegram outbox lease duration")
+        current = now or datetime.now(timezone.utc)
+        timestamp = _timestamp(current)
+        expires_at = _timestamp(current + timedelta(seconds=lease_seconds))
+        with self._immediate_transaction():
+            row = self._connection.execute(
+                """SELECT outbox.* FROM telegram_outbox outbox
+                   JOIN provider_jobs job ON job.job_id = outbox.job_id
+                   WHERE outbox.sender_agent_id = ? AND outbox.status = 'pending'
+                     AND outbox.available_at <= ? AND outbox.attempt_count < 20
+                     AND NOT EXISTS (
+                       SELECT 1 FROM telegram_outbox earlier_outbox
+                       JOIN provider_jobs earlier_job
+                         ON earlier_job.job_id = earlier_outbox.job_id
+                       WHERE earlier_job.topic_id = job.topic_id
+                         AND earlier_job.topic_sequence < job.topic_sequence
+                         AND earlier_outbox.status NOT IN ('delivered', 'failed')
+                     )
+                   ORDER BY outbox.created_at, outbox.outbox_id LIMIT 1""",
+                (sender, timestamp),
+            ).fetchone()
+            if row is None:
+                return None
+            token = str(uuid.uuid4())
+            cursor = self._connection.execute(
+                """UPDATE telegram_outbox
+                   SET status = 'sending', attempt_count = attempt_count + 1,
+                       lease_owner = ?, lease_token = ?, lease_expires_at = ?,
+                       error_code = NULL, updated_at = ?
+                   WHERE outbox_id = ? AND status = 'pending'""",
+                (worker, token, expires_at, timestamp, row["outbox_id"]),
+            )
+            if cursor.rowcount != 1:
+                raise StateError("Telegram outbox lease race")
+            leased = self._connection.execute(
+                "SELECT * FROM telegram_outbox WHERE outbox_id = ?", (row["outbox_id"],)
+            ).fetchone()
+            if leased is None:
+                raise StateError("leased Telegram outbox row disappeared")
+            return self._telegram_outbox(leased)
+
+    def heartbeat_telegram_outbox(
+        self,
+        outbox_id: str,
+        lease_token: str,
+        *,
+        lease_seconds: int = 90,
+        now: datetime | None = None,
+    ) -> TelegramOutboxRecord:
+        if not 1 <= lease_seconds <= 3600:
+            raise StateError("invalid Telegram outbox lease duration")
+        current = now or datetime.now(timezone.utc)
+        timestamp = _timestamp(current)
+        expires_at = _timestamp(current + timedelta(seconds=lease_seconds))
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE telegram_outbox SET lease_expires_at = ?, updated_at = ?
+                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
+                     AND lease_expires_at > ?""",
+                (expires_at, timestamp, outbox_id, lease_token, timestamp),
+            )
+        if cursor.rowcount != 1:
+            raise StateError("Telegram outbox lease is missing, expired, or invalid")
+        return self.get_telegram_outbox(outbox_id)
+
+    def retry_telegram_outbox(
+        self,
+        outbox_id: str,
+        lease_token: str,
+        *,
+        error_code: str,
+        delay_seconds: int,
+        now: datetime | None = None,
+    ) -> TelegramOutboxRecord:
+        code = _bounded(error_code, name="error code", maximum=128)
+        if not 0 <= delay_seconds <= 86400:
+            raise StateError("invalid Telegram outbox retry delay")
+        current = now or datetime.now(timezone.utc)
+        timestamp = _timestamp(current)
+        available_at = _timestamp(current + timedelta(seconds=delay_seconds))
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE telegram_outbox
+                   SET status = CASE WHEN attempt_count >= 20 THEN 'failed' ELSE 'pending' END,
+                       available_at = ?, lease_owner = NULL, lease_token = NULL,
+                       lease_expires_at = NULL, error_code = ?, updated_at = ?
+                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?""",
+                (available_at, code, timestamp, outbox_id, lease_token),
+            )
+        if cursor.rowcount != 1:
+            raise StateError("Telegram outbox lease is missing or invalid")
+        return self.get_telegram_outbox(outbox_id)
+
+    def mark_telegram_outbox_delivered(
+        self,
+        outbox_id: str,
+        lease_token: str,
+        *,
+        telegram_message_id: int,
+    ) -> TelegramOutboxRecord:
+        if telegram_message_id <= 0:
+            raise StateError("invalid Telegram message id")
+        timestamp = _now()
+        with self._immediate_transaction():
+            row = self._connection.execute(
+                """SELECT job_id FROM telegram_outbox
+                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?""",
+                (outbox_id, lease_token),
+            ).fetchone()
+            if row is None:
+                raise StateError("Telegram outbox lease is missing or invalid")
+            self._connection.execute(
+                """UPDATE telegram_outbox
+                   SET status = 'delivered', telegram_message_id = ?, delivered_at = ?,
+                       lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+                       updated_at = ? WHERE outbox_id = ?""",
+                (telegram_message_id, timestamp, timestamp, outbox_id),
+            )
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs SET status = 'completed', updated_at = ?
+                   WHERE job_id = ? AND status = 'result_ready'""",
+                (timestamp, row["job_id"]),
+            )
+            if cursor.rowcount != 1:
+                raise StateError("provider job is not ready for Telegram completion")
+            delivered = self._connection.execute(
+                "SELECT * FROM telegram_outbox WHERE outbox_id = ?", (outbox_id,)
+            ).fetchone()
+            if delivered is None:
+                raise StateError("delivered Telegram outbox row disappeared")
+            result = self._telegram_outbox(delivered)
+        return result
+
+    def recover_stale_telegram_outbox(self, *, now: datetime | None = None) -> tuple[str, ...]:
+        timestamp = _timestamp(now)
+        with self._immediate_transaction():
+            rows = self._connection.execute(
+                """SELECT outbox_id FROM telegram_outbox
+                   WHERE status = 'sending' AND lease_expires_at <= ? ORDER BY outbox_id""",
+                (timestamp,),
+            ).fetchall()
+            self._connection.execute(
+                """UPDATE telegram_outbox
+                   SET status = CASE WHEN attempt_count >= 20 THEN 'failed' ELSE 'pending' END,
+                       lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+                       error_code = 'stale_sender_lease', available_at = ?, updated_at = ?
+                   WHERE status = 'sending' AND lease_expires_at <= ?""",
+                (timestamp, timestamp, timestamp),
+            )
+        return tuple(str(row["outbox_id"]) for row in rows)
 
     def stage_handoff(
         self,

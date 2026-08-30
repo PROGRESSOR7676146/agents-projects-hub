@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-LATEST_SCHEMA_VERSION = 9
+LATEST_SCHEMA_VERSION = 10
 
 
 MIGRATION_1 = """
@@ -202,6 +202,106 @@ CREATE TABLE IF NOT EXISTS runtime_checkpoints (
 """
 
 
+MIGRATION_10 = """
+CREATE TABLE IF NOT EXISTS topic_queue_counters (
+    topic_id INTEGER PRIMARY KEY REFERENCES topics(topic_id),
+    next_sequence INTEGER NOT NULL CHECK(next_sequence > 0),
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS provider_jobs (
+    job_id TEXT PRIMARY KEY CHECK(length(job_id) BETWEEN 1 AND 128),
+    idempotency_key TEXT NOT NULL UNIQUE
+        CHECK(length(idempotency_key) BETWEEN 1 AND 256),
+    chat_id INTEGER NOT NULL CHECK(chat_id != 0),
+    message_id INTEGER NOT NULL CHECK(message_id > 0),
+    topic_id INTEGER NOT NULL REFERENCES topics(topic_id),
+    topic_sequence INTEGER NOT NULL CHECK(topic_sequence > 0),
+    agent_id TEXT NOT NULL CHECK(length(agent_id) BETWEEN 1 AND 64),
+    session_id TEXT NOT NULL REFERENCES agent_sessions(session_id),
+    session_generation INTEGER NOT NULL CHECK(session_generation > 0),
+    provider_session_id TEXT CHECK(length(provider_session_id) <= 256),
+    model TEXT NOT NULL CHECK(length(model) BETWEEN 1 AND 200),
+    effort TEXT NOT NULL CHECK(length(effort) BETWEEN 1 AND 64),
+    payload_version INTEGER NOT NULL DEFAULT 1 CHECK(payload_version = 1),
+    payload_text TEXT NOT NULL CHECK(length(payload_text) BETWEEN 1 AND 20000),
+    context_watermark INTEGER CHECK(context_watermark IS NULL OR context_watermark >= 0),
+    handoff_id TEXT CHECK(length(handoff_id) <= 128),
+    status TEXT NOT NULL CHECK(status IN (
+        'queued', 'leased', 'executing', 'retry_wait', 'result_ready',
+        'completed', 'failed', 'cancelled', 'indeterminate'
+    )),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 20),
+    max_attempts INTEGER NOT NULL DEFAULT 5 CHECK(max_attempts BETWEEN 1 AND 20),
+    next_attempt_at TEXT,
+    lease_owner TEXT CHECK(length(lease_owner) <= 128),
+    lease_token TEXT CHECK(length(lease_token) <= 128),
+    lease_expires_at TEXT,
+    provider_started_at TEXT,
+    error_class TEXT CHECK(length(error_class) <= 64),
+    error_code TEXT CHECK(length(error_code) <= 128),
+    error_detail TEXT CHECK(length(error_detail) <= 1000),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(chat_id, message_id),
+    UNIQUE(topic_id, topic_sequence),
+    CHECK(
+        (status IN ('leased', 'executing') AND lease_owner IS NOT NULL
+            AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)
+        OR
+        (status NOT IN ('leased', 'executing') AND lease_owner IS NULL
+            AND lease_token IS NULL AND lease_expires_at IS NULL)
+    )
+);
+CREATE INDEX IF NOT EXISTS provider_jobs_agent_ready
+ON provider_jobs(agent_id, status, next_attempt_at, created_at);
+CREATE INDEX IF NOT EXISTS provider_jobs_topic_fifo
+ON provider_jobs(topic_id, topic_sequence, status);
+CREATE INDEX IF NOT EXISTS provider_jobs_stale_lease
+ON provider_jobs(status, lease_expires_at);
+CREATE TABLE IF NOT EXISTS provider_job_results (
+    result_id TEXT PRIMARY KEY CHECK(length(result_id) BETWEEN 1 AND 128),
+    job_id TEXT NOT NULL UNIQUE REFERENCES provider_jobs(job_id),
+    visible_response TEXT NOT NULL CHECK(length(visible_response) BETWEEN 1 AND 12000),
+    provider_session_id TEXT CHECK(length(provider_session_id) <= 256),
+    actual_model TEXT CHECK(length(actual_model) <= 200),
+    safe_metadata_json TEXT CHECK(length(safe_metadata_json) <= 4000),
+    context_watermark INTEGER CHECK(context_watermark IS NULL OR context_watermark >= 0),
+    handoff_id TEXT CHECK(length(handoff_id) <= 128),
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS telegram_outbox (
+    outbox_id TEXT PRIMARY KEY CHECK(length(outbox_id) BETWEEN 1 AND 128),
+    job_id TEXT NOT NULL UNIQUE REFERENCES provider_jobs(job_id),
+    sender_agent_id TEXT NOT NULL CHECK(length(sender_agent_id) BETWEEN 1 AND 64),
+    chat_id INTEGER NOT NULL CHECK(chat_id != 0),
+    thread_id INTEGER NOT NULL CHECK(thread_id > 0),
+    telegram_html TEXT NOT NULL CHECK(length(telegram_html) BETWEEN 1 AND 12000),
+    status TEXT NOT NULL CHECK(status IN ('pending', 'sending', 'delivered', 'failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 20),
+    available_at TEXT NOT NULL,
+    lease_owner TEXT CHECK(length(lease_owner) <= 128),
+    lease_token TEXT CHECK(length(lease_token) <= 128),
+    lease_expires_at TEXT,
+    telegram_message_id INTEGER CHECK(telegram_message_id IS NULL OR telegram_message_id > 0),
+    error_code TEXT CHECK(length(error_code) <= 128),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    delivered_at TEXT,
+    CHECK(
+        (status = 'sending' AND lease_owner IS NOT NULL
+            AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)
+        OR
+        (status != 'sending' AND lease_owner IS NULL
+            AND lease_token IS NULL AND lease_expires_at IS NULL)
+    )
+);
+CREATE INDEX IF NOT EXISTS telegram_outbox_sender_ready
+ON telegram_outbox(sender_agent_id, status, available_at, created_at);
+CREATE INDEX IF NOT EXISTS telegram_outbox_stale_lease
+ON telegram_outbox(status, lease_expires_at);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -257,6 +357,9 @@ def _ensure_legacy_columns(connection: sqlite3.Connection) -> None:
 
 
 def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
+    connection.execute("PRAGMA busy_timeout = 5000")
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA journal_mode = WAL")
     previous = int(connection.execute("PRAGMA user_version").fetchone()[0])
     if previous > LATEST_SCHEMA_VERSION:
         raise RuntimeError(
@@ -290,6 +393,9 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     if previous < 9:
         connection.executescript(MIGRATION_9)
         connection.execute("PRAGMA user_version = 9")
+    if previous < 10:
+        connection.executescript(MIGRATION_10)
+        connection.execute("PRAGMA user_version = 10")
     connection.commit()
     current = int(connection.execute("PRAGMA user_version").fetchone()[0])
     return previous, current
