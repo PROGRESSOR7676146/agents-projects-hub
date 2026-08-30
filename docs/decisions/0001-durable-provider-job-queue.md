@@ -174,9 +174,7 @@ Implementation is additive and gated per provider:
 3. Add durable enqueue and a compatible embedded consumer behind a feature
    flag, proving ingress does not wait for provider work.
 4. Deploy the isolated Codex worker, then enable queued execution for Codex
-   only after health and fault tests. The controller temporarily delivers only
-   prepared Codex outbox rows; extraction of the outbox sender remains a later
-   stage.
+   only after health and fault tests.
 5. OpenCode and Antigravity each use the same provider-scoped external worker
    contract. `external_worker_agent_ids` selects them independently; an omitted
    list preserves the original Codex-only external mode. The embedded consumer
@@ -184,7 +182,14 @@ Implementation is additive and gated per provider:
    native external Gateway and is not an external queue-worker runtime.
    Provider direct-message services remain separate inline endpoints and their
    per-agent state databases are not consumed by this project-group queue stage.
-6. Retire the synchronous path only after live acceptance. Retain a temporary
+6. Keep `outbox_runtime: controller` as the compatibility default. After the
+   standalone service is provisioned, opt in with `outbox_runtime: external`
+   and run one Telegram sender for every locally managed queue identity. This
+   includes providers whose execution remains embedded during mixed rollout;
+   it fairly leases their prepared outbox rows and uses the matching bot identity.
+   It has no provider adapter or RPC capability, and the Controller neither
+   delivers these rows nor constructs isolated-agent adapters.
+7. Retire the synchronous path only after live acceptance. Retain a temporary
    compatible fallback flag for one release cycle; archive, rather than delete,
    legacy dispatch records until the rollback window closes.
 

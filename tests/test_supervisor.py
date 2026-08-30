@@ -72,6 +72,30 @@ class SupervisorFallbackTests(unittest.TestCase):
         self.assertIsInstance(client, FakeClient)
         self.assertEqual(supervisor.transport_mode, "stdio-fallback")
 
+    def test_managed_server_never_unlinks_an_unowned_existing_socket_path(self) -> None:
+        socket_path = self.base / "codex.sock"
+        socket_path.write_text("owned elsewhere", encoding="utf-8")
+        supervisor = CodexAppServerSupervisor(socket_path, manage_process=True)
+
+        with self.assertRaisesRegex(AppServerError, "already exists"):
+            supervisor.start()
+
+        self.assertEqual(socket_path.read_text(encoding="utf-8"), "owned elsewhere")
+
+    def test_managed_server_uses_an_exclusive_ownership_lock(self) -> None:
+        socket_path = self.base / "codex.sock"
+        first = CodexAppServerSupervisor(socket_path, manage_process=True)
+        second = CodexAppServerSupervisor(socket_path, manage_process=True)
+        first._acquire_socket_ownership()
+        try:
+            lock_metadata = (self.base / "codex.sock.lock").read_text(encoding="utf-8")
+            self.assertIn("pid=", lock_metadata)
+            self.assertIn("start=", lock_metadata)
+            with self.assertRaisesRegex(AppServerError, "ownership lock"):
+                second._acquire_socket_ownership()
+        finally:
+            first.stop()
+
 
 if __name__ == "__main__":
     unittest.main()

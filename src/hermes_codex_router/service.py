@@ -92,6 +92,10 @@ class ProjectHubService:
             if candidate.runtime in {"gemini", "antigravity", "opencode"}
             and not candidate.managed_externally
             and candidate.token_file is not None
+            and not (
+                self._uses_external_outbox_sender()
+                and self._has_external_worker(candidate.agent_id)
+            )
         }
         self._queue_stop = threading.Event()
         self._queue_thread: threading.Thread | None = None
@@ -185,6 +189,9 @@ class ProjectHubService:
     def _uses_external_codex_worker(self) -> bool:
         return self._has_external_worker("codex")
 
+    def _uses_external_outbox_sender(self) -> bool:
+        return getattr(self.config, "outbox_runtime", "controller") == "external"
+
     def _enqueue_provider_turn(
         self,
         *,
@@ -237,7 +244,8 @@ class ProjectHubService:
         self._queue_thread.start()
 
     def _start_controller_outbox_delivery(self) -> None:
-        """Temporary deterministic sender seam until the outbox is extracted."""
+        if self._uses_external_outbox_sender():
+            return
         if not any(self._has_external_worker(agent.agent_id) for agent in self.config.agents):
             return
         if getattr(self, "_outbox_thread", None) is not None:
@@ -269,7 +277,9 @@ class ProjectHubService:
             self._outbox_stop.wait(0.01 if worked else 0.2)
 
     def run_controller_outbox_cycle(self) -> bool:
-        """Deliver at most one prepared outbox row without leasing provider work."""
+        """Compatibility sender used until the standalone sender is enabled."""
+        if self._uses_external_outbox_sender():
+            return False
         external_agents = [
             agent.agent_id
             for agent in self.config.agents
@@ -279,7 +289,7 @@ class ProjectHubService:
             return False
         outbox_state = HubState.open(self.config.state_path)
         try:
-            outbox_state.recover_stale_telegram_outbox()
+            outbox_state.recover_stale_telegram_outbox(sender_agent_ids=tuple(external_agents))
             start = getattr(self, "_outbox_agent_cursor", 0) % len(external_agents)
             for offset in range(len(external_agents)):
                 position = (start + offset) % len(external_agents)
@@ -318,13 +328,17 @@ class ProjectHubService:
         its own SQLite connection so provider execution never runs on the
         polling thread's connection.
         """
-        if not any(
-            self._embedded_consumer_owns_agent(agent.agent_id) for agent in self.config.agents
-        ):
+        embedded_agent_ids = tuple(
+            agent.agent_id
+            for agent in self.config.agents
+            if self._embedded_consumer_owns_agent(agent.agent_id)
+        )
+        if not embedded_agent_ids:
             return False
         queue_state = HubState.open(self.config.state_path)
         try:
-            queue_state.recover_stale_telegram_outbox()
+            if not self._uses_external_outbox_sender():
+                queue_state.recover_stale_telegram_outbox(sender_agent_ids=embedded_agent_ids)
             for agent in self.config.agents:
                 if not self._embedded_consumer_owns_agent(agent.agent_id):
                     continue
@@ -332,13 +346,15 @@ class ProjectHubService:
                 job = queue_state.lease_provider_job(agent.agent_id, "embedded-consumer")
                 if job is not None:
                     self._execute_embedded_provider_job(queue_state, job)
-                    self._deliver_embedded_outbox(queue_state, agent.agent_id)
+                    if not self._uses_external_outbox_sender():
+                        self._deliver_embedded_outbox(queue_state, agent.agent_id)
                     return True
-            for agent in self.config.agents:
-                if self._embedded_consumer_owns_agent(
-                    agent.agent_id
-                ) and self._deliver_embedded_outbox(queue_state, agent.agent_id):
-                    return True
+            if not self._uses_external_outbox_sender():
+                for agent in self.config.agents:
+                    if self._embedded_consumer_owns_agent(
+                        agent.agent_id
+                    ) and self._deliver_embedded_outbox(queue_state, agent.agent_id):
+                        return True
             return False
         finally:
             queue_state.close()

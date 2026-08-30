@@ -226,20 +226,32 @@ agents-projects-hub serve config/hub.json
 agents-projects-hub worker config/hub.json
 agents-projects-hub worker config/hub.json --agent opencode
 agents-projects-hub worker config/hub.json --agent antigravity
+agents-projects-hub sender config/hub.json
 ```
 
 The worker command is enabled only with `dispatch_mode: "queue"` and
 `queue_runtime: "external"`. `external_worker_agent_ids` selects Codex,
 OpenCode, and Antigravity independently; omitted providers keep the embedded
-compatibility path. Workers do not receive Telegram tokens, and the controller
-temporarily delivers their durable outbox rows. Hermes remains outside this
-worker mechanism.
+compatibility path. `outbox_runtime` defaults to `"controller"`, preserving the
+stage-5 rollback path. Set it to `"external"` only when the standalone sender
+is deployed; then the controller does not deliver durable outbox rows or build
+isolated provider adapters. The standalone `sender` process fairly polls every
+locally managed queue-agent identity, including embedded providers during a
+mixed rollout, reads only those Telegram tokens,
+and retries delivery without invoking a provider. Start one sender alongside
+the selected workers before enabling external queue mode. Hermes remains
+outside this worker mechanism.
 
-The default service manages Codex. Additional locally managed adapters use an
-instance unit, for example `agents-projects-hub@opencode.service`. Hermes remains
-owned by its native gateway and uses the included drop-in. Copy the desired
-objects from `config/external-agents.example.json` into the local `agents` array;
-the primary example does not require unused external bot credentials.
+The default service runs the central controller. The
+`agents-projects-hub@AGENT.service` instances are provider direct-message
+endpoints; they are not queue workers. External queue execution uses one
+`agents-projects-hub-worker@AGENT.service` per selected local provider, plus one
+`agents-projects-hub-sender.service` after the external outbox gate is enabled.
+These units restart independently and deliberately do not require one another.
+Hermes remains owned by its native gateway and uses the included drop-in. Copy
+the desired objects from `config/external-agents.example.json` into the local
+`agents` array; the primary example does not require unused external bot
+credentials.
 
 Antigravity is supported through `agy` in sandboxed `accept-edits` mode; its dangerous
 permission-bypass flag is never used. Automatic Google account rotation remains

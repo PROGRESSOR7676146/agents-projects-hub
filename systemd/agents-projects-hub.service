@@ -9,6 +9,7 @@ ExecStart=%h/.local/share/agents-projects-hub/venv/bin/agents-projects-hub serve
 EnvironmentFile=-%h/.config/agents-projects-hub/environment
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=20
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

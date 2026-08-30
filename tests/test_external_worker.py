@@ -135,22 +135,6 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             worker_id=f"test-{agent_id}",
         )
 
-    def test_controller_outbox_delivery_rotates_between_external_providers(self) -> None:
-        controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
-        controller.config = self.config
-        controller._outbox_agent_cursor = 0
-        delivered: list[str] = []
-
-        def deliver(_state: HubState, agent_id: str) -> bool:
-            delivered.append(agent_id)
-            return True
-
-        controller._deliver_embedded_outbox = deliver
-
-        self.assertTrue(controller.run_controller_outbox_cycle())
-        self.assertTrue(controller.run_controller_outbox_cycle())
-        self.assertEqual(delivered, ["opencode", "antigravity"])
-
     def test_opencode_and_antigravity_workers_are_independent_and_have_no_telegram(self) -> None:
         open_job = self.enqueue("opencode", 1)
         agy_job = self.enqueue("antigravity", 2)

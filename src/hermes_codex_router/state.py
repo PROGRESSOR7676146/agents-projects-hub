@@ -1256,21 +1256,35 @@ class HubState:
             result = self._telegram_outbox(delivered)
         return result
 
-    def recover_stale_telegram_outbox(self, *, now: datetime | None = None) -> tuple[str, ...]:
+    def recover_stale_telegram_outbox(
+        self,
+        *,
+        sender_agent_ids: tuple[str, ...] | None = None,
+        now: datetime | None = None,
+    ) -> tuple[str, ...]:
         timestamp = _timestamp(now)
+        agent_filter = ""
+        parameters: tuple[object, ...] = (timestamp,)
+        if sender_agent_ids is not None:
+            if not sender_agent_ids:
+                return ()
+            placeholders = ", ".join("?" for _ in sender_agent_ids)
+            agent_filter = f" AND sender_agent_id IN ({placeholders})"
+            parameters = (timestamp, *sender_agent_ids)
         with self._immediate_transaction():
             rows = self._connection.execute(
-                """SELECT outbox_id, job_id, attempt_count FROM telegram_outbox
-                   WHERE status = 'sending' AND lease_expires_at <= ? ORDER BY outbox_id""",
-                (timestamp,),
+                f"""SELECT outbox_id, job_id, attempt_count FROM telegram_outbox
+                   WHERE status = 'sending' AND lease_expires_at <= ?{agent_filter}
+                   ORDER BY outbox_id""",
+                parameters,
             ).fetchall()
             self._connection.execute(
-                """UPDATE telegram_outbox
+                f"""UPDATE telegram_outbox
                    SET status = CASE WHEN attempt_count >= 20 THEN 'failed' ELSE 'pending' END,
                        lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
                        error_code = 'stale_sender_lease', available_at = ?, updated_at = ?
-                   WHERE status = 'sending' AND lease_expires_at <= ?""",
-                (timestamp, timestamp, timestamp),
+                   WHERE status = 'sending' AND lease_expires_at <= ?{agent_filter}""",
+                (timestamp, timestamp, timestamp, *parameters[1:]),
             )
             terminal_job_ids = [
                 str(row["job_id"]) for row in rows if int(row["attempt_count"]) >= 20
@@ -1727,27 +1741,28 @@ class HubState:
         return tuple(self._topic(row) for row in rows)
 
     def claim_alert_delivery(self, alert_key: str, *, cooldown_seconds: int) -> bool:
-        if not alert_key.strip() or cooldown_seconds < 0:
+        if cooldown_seconds < 0:
             raise StateError("invalid alert delivery claim")
+        key = _bounded(alert_key, name="alert delivery key", maximum=256)
         now = datetime.now(timezone.utc)
-        existing = self._connection.execute(
-            "SELECT last_sent_at FROM alert_deliveries WHERE alert_key = ?",
-            (alert_key,),
-        ).fetchone()
-        if existing is not None:
-            try:
-                last_sent = datetime.fromisoformat(str(existing["last_sent_at"]))
-            except ValueError:
-                last_sent = datetime.min.replace(tzinfo=timezone.utc)
-            if last_sent.tzinfo is None:
-                last_sent = last_sent.replace(tzinfo=timezone.utc)
-            if (now - last_sent).total_seconds() < cooldown_seconds:
-                return False
-        with self._connection:
+        with self._immediate_transaction():
+            existing = self._connection.execute(
+                "SELECT last_sent_at FROM alert_deliveries WHERE alert_key = ?",
+                (key,),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    last_sent = datetime.fromisoformat(str(existing["last_sent_at"]))
+                except ValueError:
+                    last_sent = datetime.min.replace(tzinfo=timezone.utc)
+                if last_sent.tzinfo is None:
+                    last_sent = last_sent.replace(tzinfo=timezone.utc)
+                if (now - last_sent).total_seconds() < cooldown_seconds:
+                    return False
             self._connection.execute(
                 """INSERT INTO alert_deliveries(alert_key, last_sent_at) VALUES (?, ?)
                    ON CONFLICT(alert_key) DO UPDATE SET last_sent_at = excluded.last_sent_at""",
-                (alert_key[:256], now.isoformat()),
+                (key, now.isoformat()),
             )
         return True
 

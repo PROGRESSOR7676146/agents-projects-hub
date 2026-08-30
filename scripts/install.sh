@@ -26,6 +26,10 @@ install -m 644 "$repo_root/systemd/agents-projects-hub.service" \
   "$systemd_root/agents-projects-hub.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub@.service" \
   "$systemd_root/agents-projects-hub@.service"
+install -m 644 "$repo_root/systemd/agents-projects-hub-worker@.service" \
+  "$systemd_root/agents-projects-hub-worker@.service"
+install -m 644 "$repo_root/systemd/agents-projects-hub-sender.service" \
+  "$systemd_root/agents-projects-hub-sender.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-monitor.service" \
   "$systemd_root/agents-projects-hub-monitor.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-monitor.timer" \

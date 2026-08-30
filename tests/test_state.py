@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from hermes_codex_router.state import HubState
@@ -259,6 +261,22 @@ class HubStateTests(unittest.TestCase):
         self.assertFalse(self.state.claim_alert_delivery("codex:quota", cooldown_seconds=3600))
         self.state.release_alert_delivery("codex:quota")
         self.assertTrue(self.state.claim_alert_delivery("codex:quota", cooldown_seconds=3600))
+
+    def test_concurrent_alert_delivery_has_exactly_one_winner(self) -> None:
+        barrier = threading.Barrier(2)
+
+        def claim() -> bool:
+            state = HubState.open(self.path)
+            try:
+                barrier.wait()
+                return state.claim_alert_delivery("worker:offline", cooldown_seconds=3600)
+            finally:
+                state.close()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _index: claim(), range(2)))
+
+        self.assertEqual(sorted(results), [False, True])
 
     def test_runtime_counter_baselines_and_advances_monotonically(self) -> None:
         self.assertIsNone(self.state.observe_runtime_counter("codex:429", 4))

@@ -172,6 +172,7 @@ class HubConfigTests(unittest.TestCase):
     def test_dispatch_mode_defaults_to_inline_and_accepts_queue(self) -> None:
         self.assertEqual(load_hub_config(self.write_config()).dispatch_mode, "inline")
         self.assertEqual(load_hub_config(self.write_config()).queue_runtime, "embedded")
+        self.assertEqual(load_hub_config(self.write_config()).outbox_runtime, "controller")
         self.assertEqual(
             load_hub_config(self.write_config(dispatch_mode="queue")).dispatch_mode,
             "queue",
@@ -188,6 +189,20 @@ class HubConfigTests(unittest.TestCase):
             load_hub_config(self.write_config(queue_runtime="remote"))
         with self.assertRaisesRegex(HubConfigError, "queue_runtime external requires"):
             load_hub_config(self.write_config(queue_runtime="external"))
+        self.assertEqual(
+            load_hub_config(
+                self.write_config(
+                    dispatch_mode="queue",
+                    queue_runtime="external",
+                    outbox_runtime="external",
+                )
+            ).outbox_runtime,
+            "external",
+        )
+        with self.assertRaisesRegex(HubConfigError, "outbox_runtime"):
+            load_hub_config(self.write_config(outbox_runtime="remote"))
+        with self.assertRaisesRegex(HubConfigError, "external queue runtime"):
+            load_hub_config(self.write_config(outbox_runtime="external"))
 
     def test_rejects_inline_hub_bot_token(self) -> None:
         with self.assertRaisesRegex(HubConfigError, "inline token"):

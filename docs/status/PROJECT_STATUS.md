@@ -21,9 +21,13 @@ operator deployment inventory or live conversation evidence.
   defaults to `codex`, preserving rollback and embedded compatibility for every
   other provider. Each worker owns only its adapter/process and SQLite execution,
   writes results and outbox rows, and neither reads Telegram credentials nor
-  sends Telegram. The controller skips only configured isolated agents while its
-  temporary deterministic outbox loop delivers their prepared rows; direct-message
-  provider services remain separate endpoints. Hermes remains externally managed
+  sends Telegram. `outbox_runtime` defaults to the stage-5 `controller` delivery
+  path for safe rollback. When explicitly set to `external`, a standalone fair
+  outbox sender owns every locally managed queue agent's
+  Telegram identities and durable delivery retries; it has no provider adapter
+  or RPC capability. The controller neither constructs adapters for isolated
+  agents nor delivers their prepared rows. Direct-message provider services remain
+  separate endpoints. Hermes remains externally managed
   and out of worker scope. Controller status/account commands do not invoke
   `codex-multi-auth` when Codex is isolated. No live queue cutover is implied by
   this repository change. Signal wiring, bounded shutdown, and managed-socket

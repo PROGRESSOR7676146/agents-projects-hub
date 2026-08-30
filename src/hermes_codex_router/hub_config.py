@@ -87,6 +87,9 @@ class HubConfig:
     # Queue execution stays embedded unless an explicitly started provider
     # worker owns it.  This keeps rollback to the established runtime trivial.
     queue_runtime: str = "embedded"
+    # Keep the stage-5 controller delivery path unless the standalone sender is
+    # explicitly deployed alongside external workers.
+    outbox_runtime: str = "controller"
     # External workers are deliberately selected per provider.  This avoids a
     # global runtime switch accidentally stranding providers without a worker.
     external_worker_agent_ids: tuple[str, ...] = ()
@@ -479,6 +482,11 @@ def load_hub_config(
         raise HubConfigError("queue_runtime must be embedded or external")
     if dispatch_mode != "queue" and queue_runtime != "embedded":
         raise HubConfigError("queue_runtime external requires dispatch_mode queue")
+    outbox_runtime = root.get("outbox_runtime", "controller")
+    if outbox_runtime not in {"controller", "external"}:
+        raise HubConfigError("outbox_runtime must be controller or external")
+    if outbox_runtime == "external" and (dispatch_mode != "queue" or queue_runtime != "external"):
+        raise HubConfigError("outbox_runtime external requires external queue runtime")
     raw_external_workers = root.get("external_worker_agent_ids")
     if raw_external_workers is None:
         # Compatibility with the first external-worker rollout: external queue
@@ -534,6 +542,7 @@ def load_hub_config(
         hub_bot=hub_bot,
         dispatch_mode=dispatch_mode,
         queue_runtime=queue_runtime,
+        outbox_runtime=outbox_runtime,
         external_worker_agent_ids=external_worker_agent_ids,
         direct_message_project_id=direct_message_project_id,
         codex_multi_auth_dir=codex_multi_auth_dir,
@@ -550,4 +559,9 @@ def load_codex_worker_config(path: Path) -> HubConfig:
 
 def load_external_worker_config(path: Path) -> HubConfig:
     """Load queue-worker metadata without opening Telegram credential files."""
+    return load_hub_config(path, _validate_telegram_secrets=False)
+
+
+def load_outbox_sender_config(path: Path) -> HubConfig:
+    """Load sender metadata; the sender opens only its selected agent tokens."""
     return load_hub_config(path, _validate_telegram_secrets=False)

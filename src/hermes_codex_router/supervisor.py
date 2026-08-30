@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import fcntl
 import os
 import subprocess
 import time
 from pathlib import Path
+from typing import BinaryIO
 
 from .codex_appserver import (
     CodexAppServerClient,
@@ -14,6 +16,15 @@ from .codex_appserver import (
 
 class AppServerError(RuntimeError):
     pass
+
+
+def _process_start_marker() -> str:
+    """Return the Linux process start tick without exposing environment data."""
+    try:
+        fields = Path("/proc/self/stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+        return fields[19]
+    except (OSError, IndexError):
+        return "unknown"
 
 
 class CodexAppServerSupervisor:
@@ -31,6 +42,46 @@ class CodexAppServerSupervisor:
         )
         self.process: subprocess.Popen[bytes] | None = None
         self.transport_mode: str | None = None
+        self._ownership_file: BinaryIO | None = None
+
+    def _acquire_socket_ownership(self) -> None:
+        if self._ownership_file is not None:
+            return
+        self.socket_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.socket_path.parent.chmod(0o700)
+        lock_path = self.socket_path.with_name(f"{self.socket_path.name}.lock")
+        flags = os.O_RDWR | os.O_CREAT | os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(lock_path, flags, 0o600)
+        except OSError as exc:
+            raise AppServerError("cannot open managed Codex socket ownership lock") from exc
+        ownership_file = os.fdopen(descriptor, "a+b")
+        try:
+            os.fchmod(ownership_file.fileno(), 0o600)
+            fcntl.flock(ownership_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            ownership_file.seek(0)
+            ownership_file.truncate()
+            ownership_file.write(
+                f"pid={os.getpid()}\nstart={_process_start_marker()}\n".encode("ascii")
+            )
+            ownership_file.flush()
+            os.fsync(ownership_file.fileno())
+        except (BlockingIOError, OSError) as exc:
+            ownership_file.close()
+            raise AppServerError("managed Codex socket ownership lock is already held") from exc
+        self._ownership_file = ownership_file
+
+    def _release_socket_ownership(self) -> None:
+        ownership_file = self._ownership_file
+        self._ownership_file = None
+        if ownership_file is None:
+            return
+        try:
+            fcntl.flock(ownership_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            ownership_file.close()
 
     def start(self, *, timeout: float = 15.0) -> None:
         if not self.manage_process and self.socket_path.is_socket():
@@ -43,20 +94,27 @@ class CodexAppServerSupervisor:
             if not self.socket_path.is_socket():
                 raise AppServerError("shared Codex app-server socket is unavailable")
             return
-        self.socket_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.socket_path.parent.chmod(0o700)
-        if self.socket_path.exists():
-            self.socket_path.unlink()
-        self.process = subprocess.Popen(
-            ("codex", "app-server", "--listen", f"unix://{self.socket_path}"),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        self._acquire_socket_ownership()
+        if os.path.lexists(self.socket_path):
+            self._release_socket_ownership()
+            raise AppServerError(
+                "managed Codex socket path already exists; verify its owner before removal"
+            )
+        try:
+            self.process = subprocess.Popen(
+                ("codex", "app-server", "--listen", f"unix://{self.socket_path}"),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception:
+            self._release_socket_ownership()
+            raise
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
+                self.stop()
                 raise AppServerError("Codex app-server exited during startup")
             if self.socket_path.exists():
                 os.chmod(self.socket_path, 0o600)
@@ -108,3 +166,6 @@ class CodexAppServerSupervisor:
                 self.process.wait(timeout=5)
         self.process = None
         self.transport_mode = None
+        if self._ownership_file is not None and os.path.lexists(self.socket_path):
+            self.socket_path.unlink()
+        self._release_socket_ownership()

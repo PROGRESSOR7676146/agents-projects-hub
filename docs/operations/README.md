@@ -15,6 +15,12 @@ Operational truth is split by purpose:
 - Complete validation gate: `python scripts/validate.py`.
 - Read-only deployment diagnostics: `agents-projects-hub doctor HUB_CONFIG` and
   `agents-projects-hub monitor HUB_CONFIG`.
+- External queue delivery: run one `agents-projects-hub sender HUB_CONFIG`
+  alongside the selected provider workers, then set `outbox_runtime` to
+  `external`. The default `controller` value preserves the previous deployment
+  until that sender is ready. In external mode, the sender is the only process
+  that delivers shared project-group outbox rows for all locally managed queue
+  providers, including providers whose execution remains embedded.
 - Public Telegram menu drift: `agents-projects-hub telegram-commands HUB_CONFIG`.
   Apply the exact six-command menu with
   `agents-projects-hub telegram-commands HUB_CONFIG --sync`.

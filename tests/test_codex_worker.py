@@ -204,7 +204,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
         finally:
             worker.close()
 
-    def test_controller_external_mode_delivers_outbox_without_starting_provider(self) -> None:
+    def test_controller_external_mode_leaves_delivery_to_sender(self) -> None:
         job_id = self.enqueue()
         worker = self.worker(WorkerClient())
         try:
@@ -212,30 +212,16 @@ class CodexQueueWorkerTests(unittest.TestCase):
         finally:
             worker.close()
 
-        class Telegram:
-            def __init__(self) -> None:
-                self.sent = 0
-
-            def send_html(self, *_args: object, **_kwargs: object) -> int:
-                self.sent += 1
-                return self.sent
-
-        class ForbiddenSupervisor:
-            def start(self) -> None:
-                raise AssertionError("controller started Codex supervisor")
-
-            def client(self) -> object:
-                raise AssertionError("controller called Codex RPC")
-
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
         controller.config = self.config
-        controller.telegram = Telegram()
         controller.external_services = {}
-        controller.supervisor = ForbiddenSupervisor()
-        self.assertTrue(controller.run_controller_outbox_cycle())
+        self.assertFalse(controller.run_embedded_queue_cycle())
+        controller.config = replace(self.config, outbox_runtime="external")
+        self.assertFalse(controller.run_controller_outbox_cycle())
         state = HubState.open(self.config.state_path)
         try:
-            self.assertEqual(state.get_provider_job(job_id).status, "completed")
+            self.assertEqual(state.get_provider_job(job_id).status, "result_ready")
+            self.assertEqual(state.get_telegram_outbox_for_job(job_id).status, "pending")
         finally:
             state.close()
 

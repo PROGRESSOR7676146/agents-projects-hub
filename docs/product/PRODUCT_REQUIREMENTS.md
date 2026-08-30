@@ -423,10 +423,15 @@ recreate unsaved provider context or a partially executed turn.
   not yet invoked from `executing`, result delivery, terminal failure, and
   `indeterminate` execution. An unproven in-flight turn MUST NOT be retried
   automatically.
-- **REQ-QUEUE-005 (Implemented for the embedded compatibility consumer):** Provider result persistence and Telegram delivery
+- **REQ-QUEUE-005 (Implemented for embedded compatibility and the external sender):** Provider result persistence and Telegram delivery
   MUST use a durable outbox. Telegram delivery retry MUST NOT create another
   provider turn, and visible-context acknowledgement MUST occur only after a
-  successful provider result commit.
+  successful provider result commit. With external queue mode and the explicit
+  `outbox_runtime: "external"` rollout gate, a standalone
+  sender MUST fairly poll every locally managed queue agent, including embedded
+  execution during mixed rollout, use each provider bot identity, recover only
+  their stale delivery leases, and MUST NOT own a provider adapter
+  or RPC client. The Controller MUST NOT deliver external-worker outbox rows.
 - **REQ-QUEUE-006 (Implemented for the additive schema and global compatibility gate; per-provider rollout Planned):** Queue migration and per-provider rollout MUST be
   additive, feature-gated, recoverable through the existing backup discipline,
   and retain safe rollback without destroying accepted jobs.
@@ -525,7 +530,7 @@ necessary but not sufficient for items marked live.
 | Return-and-publish | Implemented | `/return` publishes a bounded summary; no full transcript mirroring. |
 | Provider-limit rotation events | Implemented | Provider `429` drives Codex rotation visibility; natural exhaustion E2E remains pending. |
 | Durable embedded queue compatibility path | Implemented | `dispatch_mode: "inline"` remains default; `"queue"` with `queue_runtime: "embedded"` consumes work on a background thread. |
-| Isolated local provider workers | Implemented behind feature gate | `dispatch_mode: "queue"`, `queue_runtime: "external"`, and explicit `external_worker_agent_ids`; default list is `codex`, controller retains temporary outbox delivery only. |
+| Isolated local provider workers | Implemented behind feature gate | `dispatch_mode: "queue"`, `queue_runtime: "external"`, explicit `external_worker_agent_ids`, and opt-in `outbox_runtime: "external"`; controller delivery remains the default rollback path. |
 | Automatic Antigravity account rotation | Deferred | Await stable supported headless account-pool capability. |
 | Universal provider-neutral Session Bridge | Deferred | Add only if real adapters/companions cannot meet needs. |
 | Automatic OS terminal window/PID management | Rejected | Explicit resume commands and writer leases are simpler and safer. |

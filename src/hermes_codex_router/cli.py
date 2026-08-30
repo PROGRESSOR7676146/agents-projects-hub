@@ -9,9 +9,15 @@ from .command_menu import configure_public_commands
 from .diagnostics import run_doctor
 from .external_service import ExternalAgentService
 from .external_worker import ExternalQueueWorker
-from .hub_config import HubConfigError, load_external_worker_config, load_hub_config
+from .hub_config import (
+    HubConfigError,
+    load_external_worker_config,
+    load_hub_config,
+    load_outbox_sender_config,
+)
 from .migrations import backup_database, migrate_database
 from .monitoring import run_monitor_once
+from .outbox_sender import TelegramOutboxSender
 from .pilot import run_codex_pilot
 from .project_admin import add_project, set_project_enabled
 from .registry import RegistryError, load_registry
@@ -47,6 +53,10 @@ def _parser() -> argparse.ArgumentParser:
     worker.add_argument("config", type=Path)
     worker.add_argument("--agent", default="codex")
     worker.add_argument("--poll-seconds", type=float, default=0.2)
+
+    sender = commands.add_parser("sender", help="deliver external-worker Telegram outbox")
+    sender.add_argument("config", type=Path)
+    sender.add_argument("--poll-seconds", type=float, default=0.2)
 
     doctor = commands.add_parser("doctor", help="run local deployment diagnostics")
     doctor.add_argument("config", type=Path)
@@ -261,6 +271,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 worker.run_forever(poll_seconds=args.poll_seconds)
             finally:
                 worker.close()
+            return 0
+        if args.command == "sender":
+            sender = TelegramOutboxSender(load_outbox_sender_config(args.config))
+            try:
+                sender.run_forever(poll_seconds=args.poll_seconds)
+            finally:
+                sender.close()
             return 0
         if args.command == "pilot":
             result = run_codex_pilot(
