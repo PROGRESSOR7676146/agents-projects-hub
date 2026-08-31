@@ -131,6 +131,12 @@ class TelegramOutboxSender:
             while not self._stop.is_set():
                 try:
                     worked = self.run_cycle()
+                    if self._last_error_code == "sender_cycle_error":
+                        # A complete cycle proves that the queue/SQLite path
+                        # recovered even when there was nothing to deliver.
+                        self._last_success_at = datetime.now(timezone.utc)
+                        self._last_error_code = None
+                        self._publish_health(force=True)
                 except Exception as exc:
                     self._record_event("error", "sender_cycle_error", type(exc).__name__)
                     self._last_error_code = "sender_cycle_error"

@@ -165,6 +165,29 @@ class TelegramOutboxSenderTests(unittest.TestCase):
         finally:
             sender.close()
 
+    def test_successful_idle_cycle_clears_prior_cycle_error(self) -> None:
+        sender = self.sender(opencode=Bot(), antigravity=Bot())
+        calls = 0
+
+        def fail_then_recover() -> bool:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise OSError("temporary SQLite failure")
+            sender.stop()
+            return False
+
+        sender.run_cycle = fail_then_recover  # type: ignore[method-assign]
+        try:
+            sender.run_forever(poll_seconds=0.001)
+            health = sender.state.get_runtime_health("sender", "test-sender")
+            assert health is not None
+            self.assertEqual(calls, 2)
+            self.assertIsNone(health.error_code)
+            self.assertIsNotNone(health.success_at)
+        finally:
+            sender.close()
+
     def test_stop_after_delivery_lease_returns_unsent_row_without_attempt(self) -> None:
         job_id = self.ready_outbox("opencode", 11)
         sender = self.sender(opencode=Bot(), antigravity=Bot())
