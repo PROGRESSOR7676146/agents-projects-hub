@@ -336,6 +336,29 @@ class ProviderJobQueueTests(unittest.TestCase):
         assert excerpt is not None
         self.assertEqual(excerpt["user_excerpt"], "safe admitted excerpt")
 
+    def test_result_bounds_large_prompt_to_latest_visible_excerpt(self) -> None:
+        queued, _ = self.enqueue(547)
+        leased = self.state.lease_provider_job("codex", "worker-codex")
+        assert leased is not None and leased.lease_token is not None
+        self.state.mark_provider_job_executing(queued.job_id, leased.lease_token)
+        latest = "latest visible request"
+        self.state.commit_provider_result(
+            queued.job_id,
+            leased.lease_token,
+            visible_response="result",
+            sender_agent_id="codex",
+            telegram_html="result",
+            user_excerpt=f"{'context ' * 400}{latest}",
+        )
+        excerpt = self.state._connection.execute(
+            "SELECT user_excerpt FROM external_turn_excerpts "
+            "WHERE topic_id = ? ORDER BY turn_id DESC LIMIT 1",
+            (self.topic.topic_id,),
+        ).fetchone()
+        assert excerpt is not None
+        self.assertLessEqual(len(excerpt["user_excerpt"]), 2000)
+        self.assertTrue(str(excerpt["user_excerpt"]).endswith(latest))
+
     def test_result_cannot_bind_provider_session_to_a_different_topic_session(self) -> None:
         queued, _ = self.enqueue(545)
         leased = self.state.lease_provider_job("codex", "worker-codex")

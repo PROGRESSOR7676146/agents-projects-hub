@@ -173,6 +173,14 @@ def _optional_bounded(value: str | None, *, name: str, maximum: int) -> str | No
     return _bounded(value, name=name, maximum=maximum)
 
 
+def _visible_excerpt(value: str) -> str:
+    """Keep the newest bounded portion of a provider prompt for visible history."""
+    normalized = value.strip()
+    if not normalized:
+        raise StateError("invalid user excerpt")
+    return normalized[-2000:]
+
+
 def _parse_timestamp(value: str, *, name: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(value)
@@ -1198,11 +1206,7 @@ class HubState:
         metadata = safe_metadata_json.strip() if safe_metadata_json else None
         if metadata is not None and len(metadata) > 4000:
             raise StateError("invalid safe metadata")
-        excerpt = (
-            _bounded(user_excerpt, name="user excerpt", maximum=2000)
-            if user_excerpt is not None
-            else None
-        )
+        excerpt = _visible_excerpt(user_excerpt) if user_excerpt is not None else None
         timestamp = _timestamp(now)
         with self._immediate_transaction():
             job_row = self._connection.execute(
@@ -1252,7 +1256,7 @@ class HubState:
                 )
                 if cursor.rowcount != 1:
                     raise StateError("provider job session generation changed")
-            visible_user_excerpt = excerpt or str(job_row["payload_text"])
+            visible_user_excerpt = excerpt or _visible_excerpt(str(job_row["payload_text"]))
             self._connection.execute(
                 """INSERT INTO external_turn_excerpts
                    (topic_id, agent_id, provider_session_id, model, provider,
