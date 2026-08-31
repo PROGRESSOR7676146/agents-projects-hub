@@ -24,13 +24,22 @@ def _health(remaining: int | None, *, warning: int = 20) -> str:
     return "🟢"
 
 
-def _window(label: str, window: LimitWindow | None, timezone: ZoneInfo) -> str | None:
+def _window(
+    label: str,
+    window: LimitWindow | None,
+    timezone: ZoneInfo,
+    *,
+    stale: bool = False,
+) -> str | None:
     if window is None:
         return None
-    text = f"{_health(window.remaining_percent)} {label} {window.remaining_percent}%"
+    marker = "🟡" if stale else _health(window.remaining_percent)
+    text = f"{marker} {label} {window.remaining_percent}%"
     if window.resets_at is not None:
         reset = datetime.fromtimestamp(window.resets_at, timezone)
         text += f" ↻ {reset:%d.%m %H:%M}"
+    if stale:
+        text += " · cached"
     return text
 
 
@@ -61,6 +70,7 @@ def format_session_status(
     account_hint: str | None,
     limits: RateLimits,
     timezone_name: str,
+    limits_stale: bool = False,
 ) -> str:
     headline = f"{agent} · {_name(model)} · {effort.title()}"
     if writer != "telegram":
@@ -77,8 +87,8 @@ def format_session_status(
     windows = [
         value
         for value in (
-            _window("5h", limits.primary, timezone),
-            _window("Week", limits.secondary, timezone),
+            _window("5h", limits.primary, timezone, stale=limits_stale),
+            _window("Week", limits.secondary, timezone, stale=limits_stale),
         )
         if value is not None
     ]

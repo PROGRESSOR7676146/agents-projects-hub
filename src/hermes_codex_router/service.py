@@ -1666,6 +1666,7 @@ class ProjectHubService:
                     account_hint=current_account.identity_hint if current_account else None,
                     limits=limits,
                     timezone_name="Europe/Moscow",
+                    limits_stale=current_account.quota_stale if current_account else False,
                 )
             if active is None:
                 self._send_text(message, detail)

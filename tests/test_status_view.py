@@ -36,6 +36,26 @@ class StatusViewTests(unittest.TestCase):
         self.assertEqual(limits.secondary.remaining_percent, 62)
         self.assertEqual(limits.secondary.resets_at, 1_800_100_000)
 
+    def test_stale_status_limits_are_yellow_and_labelled_cached(self) -> None:
+        text = format_session_status(
+            agent="Codex",
+            model="gpt-5.6-sol",
+            effort="high",
+            writer="telegram",
+            context_remaining=None,
+            account_hint="abc…",
+            limits=RateLimits(
+                LimitWindow(90, 1_800_000_000, None),
+                LimitWindow(80, 1_800_100_000, None),
+            ),
+            timezone_name="UTC",
+            limits_stale=True,
+        )
+
+        self.assertIn("🟡 5h 90%", text)
+        self.assertIn("🟡 Week 80%", text)
+        self.assertEqual(text.count("· cached"), 2)
+
     def test_compact_status_omits_technical_provider_noise(self) -> None:
         text = format_session_status(
             agent="Codex",
