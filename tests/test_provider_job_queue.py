@@ -165,6 +165,32 @@ class ProviderJobQueueTests(unittest.TestCase):
         assert next_job is not None
         self.assertEqual(next_job.job_id, second.job_id)
 
+    def test_indeterminate_provider_does_not_block_other_provider_forever(self) -> None:
+        first, _ = self.enqueue(512)
+        satellite = self.state.ensure_satellite(
+            self.topic.topic_id, "opencode", "provider-selected", "high"
+        )
+        second, _ = self.enqueue(
+            513,
+            agent_id="opencode",
+            session_id=satellite.session_id,
+            generation=satellite.generation,
+            model=satellite.model,
+            effort=satellite.effort,
+        )
+
+        leased = self.state.lease_provider_job("codex", "worker-codex")
+        assert leased is not None and leased.lease_token is not None
+        self.state.mark_provider_job_executing(first.job_id, leased.lease_token)
+        self.state.mark_provider_job_indeterminate(
+            first.job_id, leased.lease_token, error_code="provider_failure"
+        )
+
+        next_job = self.state.lease_provider_job("opencode", "worker-open")
+        self.assertIsNotNone(next_job)
+        assert next_job is not None
+        self.assertEqual(next_job.job_id, second.job_id)
+
     def test_lease_token_guards_execution_heartbeat_and_result(self) -> None:
         queued, _ = self.enqueue(520)
         leased = self.state.lease_provider_job("codex", "worker-codex")

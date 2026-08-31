@@ -199,7 +199,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
         worker = self.worker(WorkerClient(fail_after_start=True))
         try:
             self.assertTrue(worker.run_cycle())
-            self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
+            failed = worker.state.get_provider_job(job_id)
+            self.assertEqual(failed.status, "indeterminate")
+            self.assertEqual(failed.error_detail, "provider may have accepted the turn")
             self.assertFalse(worker.run_cycle())
         finally:
             worker.close()

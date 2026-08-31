@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from .codex_proxy_health import probe_codex_runtime_proxy
 from .hermes_health import probe_gateway_heartbeat, probe_hermes_group_policy
 from .hub_config import HubConfig
 from .migrations import LATEST_SCHEMA_VERSION
@@ -129,6 +130,16 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
         required=config.codex_stdio_executable is None,
     )
     checks.append(socket)
+    if config.codex_multi_auth_dir is not None:
+        proxy = probe_codex_runtime_proxy()
+        checks.append(
+            Check(
+                "codex_multi_auth_runtime_proxy",
+                proxy.ok,
+                proxy.detail,
+                required=False,
+            )
+        )
     if config.codex_stdio_executable is not None:
         checks.append(
             Check(

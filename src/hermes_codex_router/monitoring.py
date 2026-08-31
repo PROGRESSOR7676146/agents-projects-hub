@@ -207,6 +207,24 @@ def run_monitor_once(
             hermes_telegram=hermes_telegram,
             runtime_health=project_runtime_health(state, config),
         )
+        proxy_check = next(
+            (
+                check
+                for check in doctor_checks
+                if isinstance(check, dict) and check.get("name") == "codex_multi_auth_runtime_proxy"
+            ),
+            None,
+        )
+        if isinstance(proxy_check, dict) and proxy_check.get("ok") is False:
+            alerts += (
+                OperationalAlert(
+                    "codex:runtime-proxy",
+                    "codex_runtime_proxy_unavailable",
+                    "error",
+                    "Codex multi-auth is active but its runtime proxy is unavailable; "
+                    "Codex work is isolated and requires out-of-band app-server recovery.",
+                ),
+            )
         stale_catalogs = ProviderCatalogCache(
             config.state_path.with_name("provider-model-catalogs.json")
         ).stale_agents()

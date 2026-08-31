@@ -12,11 +12,13 @@ class FakeTransport:
     def __init__(self, incoming: list[dict]) -> None:
         self.incoming = deque(incoming)
         self.sent: list[dict] = []
+        self.receive_timeouts: list[float | None] = []
 
     def send(self, message: dict) -> None:
         self.sent.append(message)
 
-    def receive(self) -> dict:
+    def receive(self, *, timeout: float | None = None) -> dict:
+        self.receive_timeouts.append(timeout)
         if not self.incoming:
             raise EOFError("fake transport exhausted")
         return self.incoming.popleft()
@@ -195,6 +197,7 @@ class CodexAppServerTests(unittest.TestCase):
         self.assertEqual(result.context_window, 100000)
         self.assertEqual(result.context_tokens_used, 25000)
         self.assertNotIn("reasoning", result.text)
+        self.assertEqual(transport.receive_timeouts, [3600.0] * 4)
 
     def test_server_approval_request_is_left_for_tlive_and_never_auto_allowed(self) -> None:
         transport = FakeTransport(
@@ -213,6 +216,48 @@ class CodexAppServerTests(unittest.TestCase):
         client = CodexAppServerClient(transport, initialized=True)
         client.wait_for_turn("turn-9")
         self.assertEqual(transport.sent, [])
+
+    def test_wait_for_turn_uses_nested_terminal_error_message(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "method": "error",
+                    "params": {
+                        "threadId": "thread-123",
+                        "turnId": "turn-9",
+                        "willRetry": False,
+                        "error": {"message": "usage limit reached"},
+                    },
+                }
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True)
+        with self.assertRaisesRegex(RpcError, "usage limit reached"):
+            client.wait_for_turn("turn-9")
+
+    def test_wait_for_turn_ignores_retrying_error_then_completes(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "method": "error",
+                    "params": {
+                        "threadId": "thread-123",
+                        "turnId": "turn-9",
+                        "willRetry": True,
+                        "error": {"message": "temporary transport failure"},
+                    },
+                },
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": "thread-123",
+                        "turn": {"id": "turn-9", "status": "completed"},
+                    },
+                },
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True)
+        self.assertEqual(client.wait_for_turn("turn-9").text, "")
 
 
 if __name__ == "__main__":

@@ -255,10 +255,17 @@ class ExternalQueueWorker:
                 else:
                     self._last_error_code = type(exc).__name__[:128]
                     self._provider_state = "unavailable"
+                    # Keep the provider's bounded diagnostic in the private state DB.
+                    # Without it every app-server protocol or quota failure collapses
+                    # to an unhelpful ``RpcError`` and cannot be repaired remotely.
+                    error_detail = " ".join(str(exc).split())[:1000] or None
                     # Invocation has been marked executing; no automatic replay
                     # is safe without runtime-specific proof that it never began.
                     self.state.mark_provider_job_indeterminate(
-                        executing.job_id, token, error_code=type(exc).__name__
+                        executing.job_id,
+                        token,
+                        error_code=type(exc).__name__,
+                        error_detail=error_detail,
                     )
                     self._record_event(
                         "warning",

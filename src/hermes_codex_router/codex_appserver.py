@@ -20,7 +20,7 @@ class RpcError(RuntimeError):
 class MessageTransport(Protocol):
     def send(self, message: dict[str, Any]) -> None: ...
 
-    def receive(self) -> dict[str, Any]: ...
+    def receive(self, *, timeout: float | None = None) -> dict[str, Any]: ...
 
     def close(self) -> None: ...
 
@@ -46,7 +46,8 @@ class UnixJsonLineTransport:
         self._writer.write("\n")
         self._writer.flush()
 
-    def receive(self) -> dict[str, Any]:
+    def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
+        del timeout
         line = self._reader.readline()
         if not line:
             raise EOFError("Codex app-server closed the connection")
@@ -93,7 +94,8 @@ class StdioJsonLineTransport:
         self._writer.write("\n")
         self._writer.flush()
 
-    def receive(self) -> dict[str, Any]:
+    def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
+        del timeout
         line = self._reader.readline()
         if not line:
             raise EOFError("Codex app-server closed stdout")
@@ -184,9 +186,9 @@ class UnixWebSocketTransport:
             raise RpcError("Codex Unix WebSocket is closed")
         self._outbound.put(message)
 
-    def receive(self) -> dict[str, Any]:
+    def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
         try:
-            value = self._inbound.get(timeout=self._timeout)
+            value = self._inbound.get(timeout=self._timeout if timeout is None else timeout)
         except queue.Empty as exc:
             raise RpcError("timed out waiting for Codex Unix WebSocket") from exc
         if isinstance(value, BaseException):
@@ -398,7 +400,10 @@ class CodexAppServerClient:
         context_window: int | None = None
         context_tokens_used: int | None = None
         while True:
-            message = self._transport.receive()
+            # Model turns routinely exceed the short RPC handshake timeout.
+            # Keep a finite ceiling so a lost app-server cannot strand a worker
+            # forever; the worker heartbeat protects the durable job meanwhile.
+            message = self._transport.receive(timeout=3600.0)
             method = message.get("method")
             if method and "id" in message:
                 # tlive answers approvals on its companion connection.
@@ -429,13 +434,24 @@ class CodexAppServerClient:
             if method == "turn/completed":
                 turn = params.get("turn")
                 if isinstance(turn, dict) and turn.get("id") == turn_id:
+                    if turn.get("status") in {"failed", "interrupted"}:
+                        error = turn.get("error")
+                        message = error.get("message") if isinstance(error, dict) else None
+                        raise RpcError(str(message or f"Codex turn {turn.get('status')}"))
                     return TurnResult(
                         text="\n\n".join(answer for answer in answers if answer).strip(),
                         context_window=context_window,
                         context_tokens_used=context_tokens_used,
                     )
             if method == "error" and params.get("turnId") == turn_id:
-                raise RpcError(str(params.get("message") or "Codex turn failed"))
+                # Current app-server nests the public message under ``error``.
+                # A retrying notification is informational; the terminal event
+                # arrives later and must remain the source of truth.
+                if params.get("willRetry") is True:
+                    continue
+                error = params.get("error")
+                message = error.get("message") if isinstance(error, dict) else None
+                raise RpcError(str(message or params.get("message") or "Codex turn failed"))
 
     def list_models(self) -> tuple[dict[str, Any], ...]:
         result = self._request("model/list", {"includeHidden": False})

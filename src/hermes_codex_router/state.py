@@ -922,7 +922,9 @@ class HubState:
                        SELECT 1 FROM provider_jobs earlier
                        WHERE earlier.topic_id = candidate.topic_id
                          AND earlier.topic_sequence < candidate.topic_sequence
-                         AND earlier.status NOT IN ('completed', 'failed', 'cancelled')
+                         AND earlier.status NOT IN (
+                           'completed', 'failed', 'cancelled', 'indeterminate'
+                         )
                      )
                    ORDER BY candidate.created_at, candidate.topic_id,
                             candidate.topic_sequence
