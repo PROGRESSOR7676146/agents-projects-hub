@@ -5,10 +5,37 @@ import unittest
 from hermes_codex_router.codex_accounts import CodexAccountStatus, CodexPoolStatus
 from hermes_codex_router.codex_appserver import LimitWindow, RateLimits
 from hermes_codex_router.provider_limits import ProviderLimit
-from hermes_codex_router.status_view import format_accounts, format_session_status
+from hermes_codex_router.status_view import (
+    cached_codex_rate_limits,
+    format_accounts,
+    format_session_status,
+)
 
 
 class StatusViewTests(unittest.TestCase):
+    def test_cached_codex_account_projects_into_compact_rate_limits(self) -> None:
+        account = CodexAccountStatus(
+            1,
+            True,
+            "ready",
+            "low",
+            14,
+            62,
+            1_800_000_000,
+            1_800_100_000,
+            1_799_900_000,
+            True,
+            "abc…",
+        )
+
+        limits = cached_codex_rate_limits(account)
+
+        assert limits.primary is not None and limits.secondary is not None
+        self.assertEqual(limits.primary.remaining_percent, 14)
+        self.assertEqual(limits.primary.resets_at, 1_800_000_000)
+        self.assertEqual(limits.secondary.remaining_percent, 62)
+        self.assertEqual(limits.secondary.resets_at, 1_800_100_000)
+
     def test_compact_status_omits_technical_provider_noise(self) -> None:
         text = format_session_status(
             agent="Codex",

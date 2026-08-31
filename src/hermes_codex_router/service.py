@@ -37,7 +37,7 @@ from .registry import Project, load_registry
 from .routing import decide_targets, parse_command
 from .runtime_health import CONTROLLER_INSTANCE_ID
 from .state import HubState, SessionRecord, TopicRecord
-from .status_view import format_accounts, format_session_status
+from .status_view import cached_codex_rate_limits, format_accounts, format_session_status
 from .supervisor import CodexAppServerSupervisor
 from .telegram import (
     TelegramBotApi,
@@ -1655,7 +1655,7 @@ class ProjectHubService:
                     if agent.runtime == "codex"
                     and active.provider_session_id
                     and not self._queue_enabled(agent.agent_id)
-                    else RateLimits(None, None)
+                    else cached_codex_rate_limits(current_account)
                 )
                 detail = format_session_status(
                     agent=agent.display_name,

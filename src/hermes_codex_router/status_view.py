@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .codex_accounts import CodexPoolStatus
+from .codex_accounts import CodexAccountStatus, CodexPoolStatus
 from .codex_appserver import LimitWindow, RateLimits
 from .provider_limits import ProviderLimit
 
@@ -32,6 +32,23 @@ def _window(label: str, window: LimitWindow | None, timezone: ZoneInfo) -> str |
         reset = datetime.fromtimestamp(window.resets_at, timezone)
         text += f" ↻ {reset:%d.%m %H:%M}"
     return text
+
+
+def cached_codex_rate_limits(account: CodexAccountStatus | None) -> RateLimits:
+    """Project a masked account snapshot into the normal compact status view."""
+    if account is None:
+        return RateLimits(None, None)
+    primary = (
+        LimitWindow(account.five_hour_remaining, account.five_hour_resets_at, None)
+        if account.five_hour_remaining is not None
+        else None
+    )
+    secondary = (
+        LimitWindow(account.weekly_remaining, account.weekly_resets_at, None)
+        if account.weekly_remaining is not None
+        else None
+    )
+    return RateLimits(primary, secondary)
 
 
 def format_session_status(
