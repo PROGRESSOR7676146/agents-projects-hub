@@ -53,6 +53,15 @@ operator deployment inventory or live conversation evidence.
   provider response/outbox identities. The controller loader opens only the Hub
   token when configured, or only Codex's token for legacy ingress; omitted
   `hub_bot` configuration preserves the prior Codex controller behavior.
+- A reusable fictional subprocess fault matrix exercises Controller admission,
+  durable SQLite handoff, isolated external workers, and standalone outbox
+  delivery together. Parent tests terminate child actors after enqueue but
+  before offset persistence, during provider invocation, and after Telegram
+  acceptance but before delivery persistence. It proves redelivery
+  idempotency, conservative recovery on both sides of `executing`, outbox-only
+  retry, concurrent provider isolation, responsive cached Controller status,
+  and distinct Hub/provider polling offsets without network, credentials, or
+  live services.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity
   adapters with isolated failure boundaries.
 - Compact `/status`, `/accounts`, cached and paginated `/model`, confirmed

@@ -142,25 +142,25 @@ class TelegramOutboxSender:
         except KeyboardInterrupt:
             return
 
-    def run_cycle(self) -> bool:
+    def run_cycle(self, *, now: datetime | None = None) -> bool:
         """Recover stale leases and fairly deliver at most one prepared row."""
         if self._stop.is_set():
             return False
         self._publish_health()
-        self.state.recover_stale_telegram_outbox(sender_agent_ids=self.agent_ids)
+        self.state.recover_stale_telegram_outbox(sender_agent_ids=self.agent_ids, now=now)
         start = self._cursor % len(self.agent_ids)
         for offset in range(len(self.agent_ids)):
             if self._stop.is_set():
                 return False
             position = (start + offset) % len(self.agent_ids)
             agent_id = self.agent_ids[position]
-            if self._deliver_one(agent_id):
+            if self._deliver_one(agent_id, now=now):
                 self._cursor = (position + 1) % len(self.agent_ids)
                 return True
         return False
 
-    def _deliver_one(self, agent_id: str) -> bool:
-        outbox = self.state.lease_telegram_outbox(agent_id, self.sender_id)
+    def _deliver_one(self, agent_id: str, *, now: datetime | None = None) -> bool:
+        outbox = self.state.lease_telegram_outbox(agent_id, self.sender_id, now=now)
         if outbox is None or outbox.lease_token is None:
             return False
         if self._stop.is_set():
@@ -185,6 +185,7 @@ class TelegramOutboxSender:
                 outbox.outbox_id,
                 outbox.lease_token,
                 telegram_message_id=message_id or 1,
+                now=now,
             )
             self._last_success_at = datetime.now(timezone.utc)
             self._last_error_code = None
@@ -195,6 +196,7 @@ class TelegramOutboxSender:
                 outbox.lease_token,
                 error_code=type(exc).__name__,
                 delay_seconds=1,
+                now=now,
             )
         self._publish_health(force=True)
         return True

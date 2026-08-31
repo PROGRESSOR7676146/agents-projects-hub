@@ -13,6 +13,12 @@ unit/integration tests, and publishable configuration validation. Automated
 tests use fake transports and temporary Git/SQLite fixtures. They must not
 contact real Telegram groups or consume provider tokens.
 
+`tests/test_fault_injection_matrix.py` is the subprocess queue acceptance gate.
+It uses marker-synchronized fictional child actors, bounded parent waits, and
+forced process termination to join real Controller polling, SQLite recovery,
+isolated workers, and the standalone sender. Lower-level state-machine tests
+remain in their focused modules.
+
 ## Privacy gate
 
 `python -m hermes_codex_router.privacy_scan . --history` scans both the proposed

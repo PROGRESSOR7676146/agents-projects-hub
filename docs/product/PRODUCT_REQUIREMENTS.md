@@ -507,10 +507,14 @@ necessary but not sufficient for items marked live.
 - **AC-F-009 (REQ-ONBOARD-001..004):** Telegram cannot create or rebind an
   arbitrary local project, even through crafted text, titles, quotes, or
   callback data.
-- **AC-F-010 (Planned; REQ-QUEUE-001..006):** A committed request survives
-  Controller restart; an interrupted unknown provider turn is not repeated;
-  Telegram delivery retry does not repeat provider work; and provider failure
-  does not make controller commands or another eligible provider unavailable.
+- **AC-F-010 (Automated; live cutover acceptance still required;
+  REQ-QUEUE-001..006):** A committed request survives Controller restart; an
+  interrupted unknown provider turn is not repeated; Telegram delivery retry
+  does not repeat provider work; and provider failure does not make controller
+  commands or another eligible provider unavailable. The fictional
+  subprocess fault matrix terminates fictional Controller, worker, and sender
+  actors at the durable boundaries and covers these invariants without provider
+  or Telegram network access.
 
 ## 16. Non-functional acceptance criteria
 

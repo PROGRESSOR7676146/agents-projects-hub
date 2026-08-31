@@ -120,3 +120,13 @@ it.
 
 Migration backup restoration is reserved for a failed migration. Runtime
 rollback retains accepted jobs, results, outbox rows, and diagnostic history.
+
+## Automated fault gate
+
+Before a live queue cutover, run the full repository validation gate. Its
+fictional subprocess matrix terminates child actors after Controller commit but
+before offset persistence, during provider execution, and after fake Telegram
+acceptance but before delivery persistence. It also covers pre-execution lease
+recovery, concurrent provider isolation, and separate Hub/provider polling
+offsets. This automated evidence does not replace the owner-driven Telegram and
+provider acceptance required for a deployment.
