@@ -1979,7 +1979,15 @@ class ProjectHubService:
             message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
         ):
             return False
-        session = self._ensure_codex_session(topic)
+        if active is None or active.agent_id == self.agent.agent_id:
+            session = self._ensure_codex_session(topic)
+        else:
+            session = self.state.ensure_satellite(
+                topic.topic_id,
+                self.agent.agent_id,
+                self.agent.default_model,
+                self.agent.default_effort,
+            )
         if session.writer_mode == "local":
             if queue_mode:
                 self.state.claim_message(
@@ -2148,7 +2156,7 @@ class ProjectHubService:
                     except Exception as exc:
                         self._discard_codex_client()
                         self.state.record_runtime_event(
-                            "codex", "error", "update_error", type(exc).__name__
+                            ingress_identity, "error", "update_error", type(exc).__name__
                         )
                         self._health_last_error_code = "update_error"
                     else:

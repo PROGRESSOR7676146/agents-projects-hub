@@ -36,6 +36,12 @@ class SystemdTopologyTests(unittest.TestCase):
         self.assertIn("agents-projects-hub-worker@.service", installer)
         self.assertIn("agents-projects-hub-sender.service", installer)
 
+    def test_monitor_timer_schedules_from_each_activation(self) -> None:
+        timer = self.unit("agents-projects-hub-monitor.timer")
+        self.assertIn("OnActiveSec=5min", timer)
+        self.assertIn("OnUnitActiveSec=5min", timer)
+        self.assertNotIn("OnBootSec=", timer)
+
 
 if __name__ == "__main__":
     unittest.main()

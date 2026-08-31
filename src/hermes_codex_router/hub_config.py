@@ -9,6 +9,7 @@ from typing import Any
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
 SERVICE_UNIT = re.compile(r"^[A-Za-z0-9_.@-]+\.service$")
+TELEGRAM_BOT_TOKEN = re.compile(r"^[0-9]{6,12}:[A-Za-z0-9_-]{5,100}$")
 SUPPORTED_RUNTIMES = {"codex", "hermes", "gemini", "antigravity", "opencode", "api"}
 
 
@@ -174,7 +175,7 @@ def read_telegram_token(path: Path, identity: str) -> str:
         token = path.read_text(encoding="utf-8").strip()
     except OSError as exc:
         raise HubConfigError(f"cannot read token_file for {identity}: {exc}") from exc
-    if not token or "\n" in token or ":" not in token:
+    if TELEGRAM_BOT_TOKEN.fullmatch(token) is None:
         raise HubConfigError(f"token_file for {identity} is malformed")
     return token
 

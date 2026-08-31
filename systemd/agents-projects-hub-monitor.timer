@@ -2,7 +2,7 @@
 Description=Run Agents Projects Hub operational checks
 
 [Timer]
-OnBootSec=5min
+OnActiveSec=5min
 OnUnitActiveSec=5min
 RandomizedDelaySec=30s
 Persistent=true

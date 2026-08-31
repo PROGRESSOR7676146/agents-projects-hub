@@ -414,6 +414,13 @@ class HubConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(HubConfigError, "0600"):
             load_hub_config(self.write_config())
 
+    def test_rejects_token_surrounded_by_noncredential_text(self) -> None:
+        self.token.write_text(
+            "bot token 123456:secret-token-value for deployment", encoding="utf-8"
+        )
+        with self.assertRaisesRegex(HubConfigError, "malformed"):
+            load_hub_config(self.write_config())
+
     def test_rejects_inline_token_field(self) -> None:
         agents = [
             {

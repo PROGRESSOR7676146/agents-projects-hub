@@ -54,6 +54,10 @@ delete a socket merely to make the canary continue.
    - every locally managed Codex, OpenCode, and Antigravity identity in
      `external_worker_agent_ids`.
 
+   Also create the private deployment environment file expected by the units.
+   Its `PATH` must resolve the configured Hermes, tlive, and provider commands;
+   validate its mode and presence without printing its owner metadata.
+
 4. The shadow configuration must intentionally reference the active, backed-up
    state database so offsets and queue continuity are preserved. Run
    `agents-projects-hub validate-hub SHADOW_CONFIG`; this is a comprehensive
@@ -68,9 +72,14 @@ delete a socket merely to make the canary continue.
    Controller, one standalone sender, one worker per local provider, and only
    the desired provider direct-message ingress units. No provider group ingress
    process may compete with the Hub Controller.
+   Run one monitor cycle through its actual systemd unit, not only from an
+   interactive shell, and confirm that its next timer trigger is scheduled.
 6. Confirm the intended Telegram policy privately. The Hub must receive the
-   project-group updates needed for deterministic routing. Provider bot privacy
-   and membership must prevent provider group admission while preserving their
+   project-group updates needed for deterministic routing. It must either be a
+   group administrator or have BotFather Privacy Mode disabled; a successful
+   command or direct mention while privacy remains enabled proves only targeted
+   delivery, not ordinary active-provider routing. Provider bot privacy and
+   membership must prevent provider group admission while preserving their
    response identity and optional private-chat endpoint. Menu synchronization
    is a separate explicit external change.
 

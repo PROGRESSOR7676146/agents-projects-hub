@@ -570,6 +570,34 @@ class ExternalQueueWorkerTests(unittest.TestCase):
                 ],
                 ["opencode"],
             )
+
+            codex_topic = controller.state.observe_topic(
+                project_id="example-project",
+                chat_id=-1001234567890,
+                thread_id=114,
+                title="Example",
+            )
+            controller.state.activate_agent(
+                codex_topic.topic_id,
+                "antigravity",
+                "provider-selected",
+                "high",
+            )
+            self.assertTrue(
+                controller.handle_update(
+                    incoming(14, 114, "@example_codex_bot answer as a satellite")
+                )
+            )
+            active_after = controller.state.active_session(codex_topic.topic_id)
+            assert active_after is not None
+            self.assertEqual(active_after.agent_id, "antigravity")
+            self.assertEqual(
+                [
+                    job.agent_id
+                    for job in controller.state.provider_jobs_for_topic(codex_topic.topic_id)
+                ],
+                ["codex"],
+            )
         finally:
             controller.state.close()
 

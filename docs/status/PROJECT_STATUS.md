@@ -46,7 +46,9 @@ operator deployment inventory or live conversation evidence.
   probing their provider. General notifications retain the single configured Hub
   Operations destination.
 - Central Telegram ingress with deterministic ordinary, Reply, mention, and
-  quote routing; non-target providers are not invoked merely to observe.
+  quote routing; non-target providers are not invoked merely to observe. An
+  explicit Codex mention while another provider is active uses a satellite
+  Codex session and does not silently change the active provider.
 - Providers declared `managed_externally` retain their native admission path
   and are never enqueued into the local worker queue, preventing accepted jobs
   without an eligible consumer. All-external productive routes remain unclaimed
@@ -61,6 +63,10 @@ operator deployment inventory or live conversation evidence.
   provider response/outbox identities. The controller loader opens only the Hub
   token when configured, or only Codex's token for legacy ingress; omitted
   `hub_bot` configuration preserves the prior Codex controller behavior.
+- Telegram token files are validated as a single credential rather than merely
+  containing a colon, so labels or copied surrounding text fail preflight. The
+  operational timer schedules its first run relative to activation and every
+  later run relative to the monitored unit, including a post-cutover start.
 - A reusable fictional subprocess fault matrix exercises Controller admission,
   durable SQLite handoff, isolated external workers, and standalone outbox
   delivery together. Parent tests terminate child actors after enqueue but
