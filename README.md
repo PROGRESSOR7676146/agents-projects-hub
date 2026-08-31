@@ -129,6 +129,8 @@ contract is confirmed.
 - Bidirectional Codex ↔ Hermes handoff with fail-closed Hermes admission.
 - Locally managed OpenCode and Antigravity headless adapters with structured output,
   persistent session IDs, bounded handoffs, and no auto-approval flags.
+- Provider-identity Telegram typing indicators while durable work is accepted,
+  executing, or awaiting delivery, without any additional model invocation.
 - Explicit terminal writer takeover/release using tmux and `codex resume`.
 - Explicit native-CLI writer transfer for Codex, OpenCode, and Antigravity with
   provider-specific resume commands and fail-closed Telegram turns.

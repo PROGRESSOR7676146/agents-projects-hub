@@ -143,7 +143,9 @@ operator-controlled operations.
 2. Send one harmless request separately to each locally queued provider that
    has a selected external worker. Verify one durable job, one provider
    invocation, one result, and delivery through the matching provider response
-   identity. Test an externally managed provider such as the recovery agent
+   identity. While the job is nonterminal, verify that Telegram shows the
+   matching provider identity as typing; idle provider identities must remain
+   silent. Test an externally managed provider such as the recovery agent
    separately through its native Gateway: Hub must not claim or enqueue that
    productive request, and no local worker may consume it.
 3. Verify ordinary active-provider routing, explicit mention routing, and a

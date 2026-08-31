@@ -474,6 +474,12 @@ recreate unsaved provider context or a partially executed turn.
   final safe-boundary check; work past that boundary is treated as potentially
   started and remains subject to the existing `indeterminate`/outbox ambiguity
   rules rather than being made automatically retryable.
+- **REQ-QUEUE-008 (Implemented):** While the head job of a Telegram topic is
+  queued, leased, executing, or awaiting outbox delivery, the standalone sender
+  SHOULD refresh Telegram's `typing` chat action through the target provider bot
+  identity. This acknowledgement MUST be derived only from durable local state,
+  MUST NOT invoke a model or idle provider, and MUST remain best-effort so a chat
+  action failure cannot block execution or result delivery.
 
 The detailed state machine, retry proof rule, reconciliation, and required
 fault acceptance are normative in [ADR 0001](../decisions/0001-durable-provider-job-queue.md).

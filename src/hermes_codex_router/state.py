@@ -123,6 +123,13 @@ class ProviderJobRecovery:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderChatActivity:
+    agent_id: str
+    chat_id: int
+    thread_id: int
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeHealthRecord:
     component: str
     instance_id: str
@@ -678,6 +685,42 @@ class HubState:
             bounded_ids,
         ).fetchall()
         return {str(row["agent_id"]): int(row["job_count"]) for row in rows}
+
+    def provider_chat_activities(
+        self, agent_ids: Sequence[str]
+    ) -> tuple[ProviderChatActivity, ...]:
+        """Return each topic whose head job should display provider activity."""
+        bounded_ids = tuple(
+            _bounded(agent_id, name="agent id", maximum=64) for agent_id in agent_ids
+        )
+        if not bounded_ids:
+            return ()
+        placeholders = ", ".join("?" for _ in bounded_ids)
+        rows = self._connection.execute(
+            f"""SELECT current.agent_id, current.chat_id, topics.thread_id
+                FROM provider_jobs current
+                JOIN topics ON topics.topic_id = current.topic_id
+                WHERE current.agent_id IN ({placeholders})
+                  AND current.status IN ('queued', 'leased', 'executing', 'result_ready')
+                  AND NOT EXISTS (
+                    SELECT 1 FROM provider_jobs earlier
+                    WHERE earlier.topic_id = current.topic_id
+                      AND earlier.topic_sequence < current.topic_sequence
+                      AND earlier.status NOT IN (
+                        'completed', 'failed', 'cancelled', 'indeterminate'
+                      )
+                  )
+                ORDER BY current.created_at, current.topic_id""",
+            bounded_ids,
+        ).fetchall()
+        return tuple(
+            ProviderChatActivity(
+                agent_id=str(row["agent_id"]),
+                chat_id=int(row["chat_id"]),
+                thread_id=int(row["thread_id"]),
+            )
+            for row in rows
+        )
 
     def enqueue_provider_job(
         self,

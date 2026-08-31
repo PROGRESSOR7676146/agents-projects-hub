@@ -24,6 +24,10 @@ class Bot:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.sent: list[tuple[int, int, str]] = []
+        self.actions: list[tuple[int, int, str]] = []
+
+    def send_chat_action(self, chat_id: int, thread_id: int, action: str = "typing") -> None:
+        self.actions.append((chat_id, thread_id, action))
 
     def send_html(self, chat_id: int, thread_id: int, html: str) -> int:
         self.sent.append((chat_id, thread_id, html))
@@ -145,6 +149,24 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             self.assertEqual(len(agy_bot.sent), 1)
             self.assertEqual(sender.state.get_provider_job(open_first).status, "completed")
             self.assertEqual(sender.state.get_provider_job(agy_first).status, "completed")
+        finally:
+            sender.close()
+
+    def test_accepted_work_refreshes_provider_typing_indicator(self) -> None:
+        self.ready_outbox("opencode", 9)
+        open_bot = Bot()
+        sender = self.sender(opencode=open_bot, antigravity=Bot())
+        try:
+            sender._refresh_chat_actions(now_monotonic=10.0)
+            sender._refresh_chat_actions(now_monotonic=13.9)
+            sender._refresh_chat_actions(now_monotonic=14.0)
+            self.assertEqual(
+                open_bot.actions,
+                [
+                    (-1001234567890, 79, "typing"),
+                    (-1001234567890, 79, "typing"),
+                ],
+            )
         finally:
             sender.close()
 

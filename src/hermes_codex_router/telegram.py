@@ -234,6 +234,13 @@ class TelegramBotApi:
             raise TelegramError("sendMessage returned an invalid result")
         return result["message_id"]
 
+    def send_chat_action(self, chat_id: int, thread_id: int, action: str = "typing") -> None:
+        params: dict[str, Any] = {"chat_id": chat_id, "action": action}
+        if thread_id != 1:
+            params["message_thread_id"] = thread_id
+        if self._call_with_timeout("sendChatAction", request_timeout=2, **params) is not True:
+            raise TelegramError("sendChatAction returned an invalid result")
+
     def answer_callback(self, callback_id: str, text: str = "") -> None:
         params: dict[str, Any] = {"callback_query_id": callback_id}
         if text:

@@ -19,6 +19,7 @@ class TelegramOutboxSender:
     """Deliver durable provider results without owning any provider runtime."""
 
     _LOCAL_QUEUE_RUNTIMES = frozenset({"codex", "gemini", "opencode", "antigravity"})
+    _CHAT_ACTION_INTERVAL_SECONDS = 4.0
 
     def __init__(
         self,
@@ -77,6 +78,8 @@ class TelegramOutboxSender:
         self._last_success_at: datetime | None = None
         self._last_error_code: str | None = None
         self._last_health_publish_monotonic = 0.0
+        self._chat_action_due: dict[tuple[str, int, int], float] = {}
+        self._chat_action_failures: set[tuple[str, int, int]] = set()
         self._publish_health()
 
     def close(self) -> None:
@@ -163,7 +166,40 @@ class TelegramOutboxSender:
             if self._deliver_one(agent_id, now=now):
                 self._cursor = (position + 1) % len(self.agent_ids)
                 return True
+        # Result delivery always has priority over an advisory chat action.
+        self._refresh_chat_actions()
         return False
+
+    def _refresh_chat_actions(self, *, now_monotonic: float | None = None) -> None:
+        """Best-effort provider-identity typing indicators for accepted work."""
+        current = time.monotonic() if now_monotonic is None else now_monotonic
+        activities = self.state.provider_chat_activities(self.agent_ids)
+        active_keys = {
+            (activity.agent_id, activity.chat_id, activity.thread_id) for activity in activities
+        }
+        self._chat_action_due = {
+            key: due for key, due in self._chat_action_due.items() if key in active_keys
+        }
+        self._chat_action_failures.intersection_update(active_keys)
+        for activity in activities:
+            key = (activity.agent_id, activity.chat_id, activity.thread_id)
+            if current < self._chat_action_due.get(key, 0.0):
+                continue
+            try:
+                self.telegram_bots[activity.agent_id].send_chat_action(
+                    activity.chat_id, activity.thread_id
+                )
+            except Exception as exc:
+                if key not in self._chat_action_failures:
+                    self._record_event(
+                        "warning",
+                        "chat_action_error",
+                        f"{activity.agent_id}:{type(exc).__name__}",
+                    )
+                    self._chat_action_failures.add(key)
+            else:
+                self._chat_action_failures.discard(key)
+            self._chat_action_due[key] = current + self._CHAT_ACTION_INTERVAL_SECONDS
 
     def _deliver_one(self, agent_id: str, *, now: datetime | None = None) -> bool:
         outbox = self.state.lease_telegram_outbox(agent_id, self.sender_id, now=now)

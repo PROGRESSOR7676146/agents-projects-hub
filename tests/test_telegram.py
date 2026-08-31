@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import call as mock_call
 from unittest.mock import patch
 
 from hermes_codex_router.telegram import (
@@ -13,6 +14,30 @@ from hermes_codex_router.telegram import (
 
 
 class TelegramUpdateTests(unittest.TestCase):
+    def test_chat_action_targets_forum_topic_and_general_without_fake_thread(self) -> None:
+        telegram = TelegramBotApi("123456:example")
+        with patch.object(telegram, "_call_with_timeout", return_value=True) as api_call:
+            telegram.send_chat_action(-1001234567890, 77)
+            telegram.send_chat_action(-1001234567890, 1)
+        self.assertEqual(
+            api_call.call_args_list,
+            [
+                mock_call(
+                    "sendChatAction",
+                    request_timeout=2,
+                    chat_id=-1001234567890,
+                    action="typing",
+                    message_thread_id=77,
+                ),
+                mock_call(
+                    "sendChatAction",
+                    request_timeout=2,
+                    chat_id=-1001234567890,
+                    action="typing",
+                ),
+            ],
+        )
+
     def test_long_poll_adds_only_a_bounded_transport_margin(self) -> None:
         telegram = TelegramBotApi("123456:example")
         with patch.object(telegram, "_call_with_timeout", return_value=[]) as call:

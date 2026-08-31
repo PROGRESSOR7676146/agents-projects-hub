@@ -48,6 +48,9 @@ class RecordingBot:
         self.sent.append((chat_id, thread_id, html))
         return len(self.sent)
 
+    def send_chat_action(self, _chat_id: int, _thread_id: int, _action: str = "typing") -> None:
+        pass
+
 
 class FaultMatrixHarness:
     """Reusable fictional topology shared by parent tests and child actors."""
