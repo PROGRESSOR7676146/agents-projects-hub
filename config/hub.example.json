@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "owner_user_ids": [123456789],
+  "acceptance_actors": [],
   "registry_path": "/home/example/agents-projects-hub/config/projects.json",
   "state_path": "/home/example/.local/state/agents-projects-hub/state.db",
   "direct_message_project_id": "hub",

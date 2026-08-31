@@ -525,6 +525,13 @@ necessary but not sufficient for items marked live.
   subprocess fault matrix terminates fictional Controller, worker, and sender
   actors at the durable boundaries and covers these invariants without provider
   or Telegram network access.
+- **AC-F-011 (Implemented scaffold; deployment authorization pending):** A
+  dedicated MTProto acceptance user MAY execute the fixed non-destructive live
+  baseline. Hub MUST authorize it only for one exact configured group/topic;
+  the actor MUST reject arbitrary configured commands and prompts, keep all
+  credentials/session/evidence outside Git, and never be treated as a global
+  owner. Bot identities MUST NOT be used to impersonate the operator because
+  Telegram does not deliver bot-authored messages to other bots.
 
 ## 16. Non-functional acceptance criteria
 
@@ -562,7 +569,7 @@ necessary but not sufficient for items marked live.
 | OpenCode and Antigravity adapters | Implemented | Contract tests; live provider acceptance is deployment-local. |
 | Codex tmux takeover/release | Implemented | Fallback frontend, not preferred long-term UX. |
 | Optional Codex account pool/fallback | Implemented | Natural exhaustion E2E remains an acceptance item. |
-| Telegram E2E baseline | Operator acceptance | Results remain private deployment evidence. |
+| Telegram E2E baseline | Bounded actor implemented; live authorization pending | Results remain private deployment evidence. |
 | `/local` and `/return` | Implemented | Codex, OpenCode, and Antigravity; Hermes fails closed pending a native resume contract. |
 | Compact command surface | Implemented | `/status`, cached/paginated `/model`, `/accounts`, confirmed `/new`, `/local`, `/return`; Telegram menu readback passed. |
 | Return-and-publish | Implemented | `/return` publishes a bounded summary; no full transcript mirroring. |

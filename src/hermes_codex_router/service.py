@@ -1330,7 +1330,7 @@ class ProjectHubService:
         )
 
     def _handle_callback(self, callback: TopicCallback) -> bool:
-        if callback.sender_id not in self.config.owner_user_ids:
+        if not self.config.is_authorized(callback.sender_id, callback.chat_id, callback.thread_id):
             self.telegram.answer_callback(callback.callback_id, "Not authorized")
             return False
         try:
@@ -1568,7 +1568,7 @@ class ProjectHubService:
             message = parse_topic_message(update) or parse_direct_message(update)
         if message is None:
             return False
-        if message.sender_id not in self.config.owner_user_ids:
+        if not self.config.is_authorized(message.sender_id, message.chat_id, message.thread_id):
             return False
         try:
             binding = self.config.project_for_chat(message.chat_id)

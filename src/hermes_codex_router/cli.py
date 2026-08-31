@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from pathlib import Path
 from typing import Sequence
 
+from .acceptance_actor import (
+    AcceptanceActorError,
+    load_acceptance_actor_config,
+    login_acceptance_actor,
+    run_acceptance_checks,
+)
 from .command_menu import configure_public_commands
 from .diagnostics import run_doctor
 from .external_service import ExternalAgentService
@@ -90,6 +97,19 @@ def _parser() -> argparse.ArgumentParser:
     )
     telegram_commands.add_argument("config", type=Path)
     telegram_commands.add_argument("--sync", action="store_true")
+
+    e2e_validate = commands.add_parser(
+        "e2e-validate", help="validate a private Telegram acceptance-actor config"
+    )
+    e2e_validate.add_argument("config", type=Path)
+    e2e_login = commands.add_parser(
+        "e2e-login", help="authorize the dedicated Telegram acceptance user"
+    )
+    e2e_login.add_argument("config", type=Path)
+    e2e_run = commands.add_parser(
+        "e2e-run", help="run bounded checks from the dedicated Telegram acceptance user"
+    )
+    e2e_run.add_argument("config", type=Path)
 
     project = commands.add_parser("project", help="manage the local project registry")
     project_commands = project.add_subparsers(dest="project_command", required=True)
@@ -367,6 +387,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = configure_public_commands(load_hub_config(args.config), sync=args.sync)
             _print(result)
             return 0 if result["ok"] else 1
+        if args.command == "e2e-validate":
+            config = load_acceptance_actor_config(args.config)
+            _print({"ok": True, "checks": list(config.checks)})
+            return 0
+        if args.command == "e2e-login":
+            result = asyncio.run(login_acceptance_actor(load_acceptance_actor_config(args.config)))
+            _print(result)
+            return 0
+        if args.command == "e2e-run":
+            result = asyncio.run(run_acceptance_checks(load_acceptance_actor_config(args.config)))
+            _print(result)
+            return 0 if result["ok"] else 1
         if args.command == "project":
             return _project_command(args)
         if args.command == "lane":
@@ -384,6 +416,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except KeyboardInterrupt:
         return 130
     except (
+        AcceptanceActorError,
         HubConfigError,
         RegistryError,
         StateError,

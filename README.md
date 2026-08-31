@@ -169,6 +169,7 @@ tests/        unit and contract-style tests with fake external services
 - Hermes with user-plugin and hook support for the Hermes adapter
 - Gemini CLI and/or OpenCode only when those adapters are configured
 - tmux plus a supported terminal backend for `/terminal`
+- Telethon 1.44+ only for the optional dedicated-user live E2E runner
 
 The single ingress bot must receive ordinary group messages: disable its
 Telegram Privacy Mode (or make it an administrator), then remove/re-add it after
@@ -177,6 +178,12 @@ routes their group turns centrally and sends replies with their own tokens.
 Privacy Mode is a stable deployment setting; it is not switched when `/agent`
 changes the active runtime. Keep the group private and restrict
 `owner_user_ids` in local config.
+
+For unattended live acceptance, a dedicated Telegram user may be listed under
+`acceptance_actors` with one exact group and forum-topic scope. It is not a bot,
+is never a global owner, and is rejected in every other topic and in direct
+messages. Its MTProto configuration and session remain outside Git; see the
+[testing guide](docs/testing/README.md).
 
 ## Local setup
 

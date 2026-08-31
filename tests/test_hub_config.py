@@ -73,6 +73,43 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(config.terminal.backend, "auto")
         self.assertNotIn("secret-token-value", path.read_text(encoding="utf-8"))
 
+    def test_acceptance_actor_is_authorized_only_in_its_exact_topic(self) -> None:
+        config = load_hub_config(
+            self.write_config(
+                acceptance_actors=[
+                    {
+                        "user_id": 987654321,
+                        "telegram_chat_id": -1001234567890,
+                        "telegram_thread_id": 77,
+                    }
+                ]
+            )
+        )
+
+        self.assertTrue(config.is_authorized(123456789, -1001234567890, 12))
+        self.assertTrue(config.is_authorized(987654321, -1001234567890, 77))
+        self.assertFalse(config.is_authorized(987654321, -1001234567890, 78))
+        self.assertFalse(config.is_authorized(987654321, -1009999999999, 77))
+        self.assertFalse(config.is_authorized(987654321, 987654321, 1))
+
+    def test_acceptance_actor_requires_unique_positive_exact_scope(self) -> None:
+        invalid_values = (
+            "not-an-array",
+            [{"user_id": 0, "telegram_chat_id": -1001234567890, "telegram_thread_id": 77}],
+            [{"user_id": 7, "telegram_chat_id": 0, "telegram_thread_id": 77}],
+            [{"user_id": 7, "telegram_chat_id": -1001234567890, "telegram_thread_id": 0}],
+            [
+                {"user_id": 7, "telegram_chat_id": -1001234567890, "telegram_thread_id": 77},
+                {"user_id": 7, "telegram_chat_id": -1001234567890, "telegram_thread_id": 78},
+            ],
+            [{"user_id": 123456789, "telegram_chat_id": -1001234567890, "telegram_thread_id": 77}],
+            [{"user_id": 7, "telegram_chat_id": -1009999999999, "telegram_thread_id": 77}],
+        )
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(HubConfigError, "acceptance_actors"):
+                    load_hub_config(self.write_config(acceptance_actors=value))
+
     def test_worker_loader_does_not_open_or_depend_on_telegram_token_file(self) -> None:
         path = self.write_config(dispatch_mode="queue", queue_runtime="external")
         self.token.unlink()

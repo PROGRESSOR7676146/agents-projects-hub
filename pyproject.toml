@@ -20,6 +20,9 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+e2e = [
+  "Telethon>=1.44,<2",
+]
 dev = [
   "pyright>=1.1.400,<2",
   "ruff>=0.12,<1",

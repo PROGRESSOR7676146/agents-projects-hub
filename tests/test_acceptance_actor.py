@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from hermes_codex_router.acceptance_actor import (
+    AcceptanceActorError,
+    load_acceptance_actor_config,
+)
+
+
+class AcceptanceActorConfigTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.base = Path(self.tempdir.name)
+        self.secret = self.base / "telegram-api-hash"
+        self.secret.touch()
+        self.secret.chmod(0o600)
+        self.api_hash_reader = patch(
+            "hermes_codex_router.acceptance_actor._read_api_hash",
+            return_value="0" * 32,
+        )
+        self.api_hash_reader.start()
+        self.artifacts = self.base / "artifacts"
+        self.artifacts.mkdir(mode=0o700)
+
+    def tearDown(self) -> None:
+        self.api_hash_reader.stop()
+        self.tempdir.cleanup()
+
+    def write_config(self, **overrides: object) -> Path:
+        document = {
+            "schema_version": 1,
+            "api_id": 12345,
+            "session_path": str(self.base / "acceptance.session"),
+            "expected_user_id": 987654321,
+            "telegram_chat_id": -1001234567890,
+            "telegram_thread_id": 77,
+            "hub_username": "example_hub_bot",
+            "provider_usernames": ["example_provider_bot"],
+            "checks": ["status", "accounts", "model_menu", "provider_ping"],
+            "timeout_seconds": 15,
+            "artifacts_dir": str(self.artifacts),
+        }
+        document.update(overrides)
+        path = self.base / "actor.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        path.chmod(0o600)
+        return path
+
+    def test_loads_private_scoped_config(self) -> None:
+        config = load_acceptance_actor_config(self.write_config())
+
+        self.assertEqual(config.telegram_thread_id, 77)
+        self.assertEqual(config.checks, ("status", "accounts", "model_menu", "provider_ping"))
+        self.assertEqual(config.provider_usernames, ("example_provider_bot",))
+
+    def test_rejects_world_readable_config_or_secret(self) -> None:
+        path = self.write_config()
+        path.chmod(0o644)
+        with self.assertRaisesRegex(AcceptanceActorError, "mode 0600"):
+            load_acceptance_actor_config(path)
+
+        path.chmod(0o600)
+        self.secret.chmod(0o644)
+        with self.assertRaisesRegex(AcceptanceActorError, "mode 0600"):
+            load_acceptance_actor_config(path)
+
+    def test_rejects_unknown_checks_and_general_topic(self) -> None:
+        with self.assertRaisesRegex(AcceptanceActorError, "checks"):
+            load_acceptance_actor_config(self.write_config(checks=["arbitrary_command"]))
+        with self.assertRaisesRegex(AcceptanceActorError, "dedicated forum topic"):
+            load_acceptance_actor_config(self.write_config(telegram_thread_id=1))
+
+    def test_rejects_malformed_api_hash_content(self) -> None:
+        with patch(
+            "hermes_codex_router.acceptance_actor._read_api_hash",
+            return_value="not-an-api-hash",
+        ):
+            with self.assertRaisesRegex(AcceptanceActorError, "API hash"):
+                load_acceptance_actor_config(self.write_config())
+
+    def test_rejects_api_hash_or_path_embedded_in_config(self) -> None:
+        for key in ("api_hash", "api_hash_file"):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(AcceptanceActorError, "sibling"):
+                    load_acceptance_actor_config(self.write_config(**{key: "forbidden"}))
+
+    def test_provider_ping_requires_a_provider_allowlist(self) -> None:
+        with self.assertRaisesRegex(AcceptanceActorError, "provider_usernames"):
+            load_acceptance_actor_config(self.write_config(provider_usernames=[]))
+
+
+if __name__ == "__main__":
+    unittest.main()

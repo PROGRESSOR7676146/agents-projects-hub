@@ -190,7 +190,7 @@ class ExternalAgentService:
         )
 
     def _handle_direct_callback(self, callback: TopicCallback) -> bool:
-        if callback.sender_id not in self.config.owner_user_ids:
+        if not self.config.is_authorized(callback.sender_id, callback.chat_id, callback.thread_id):
             self.telegram.answer_callback(callback.callback_id, "Not authorized")
             return False
         project_id = self.config.direct_message_project_id
@@ -351,7 +351,9 @@ class ExternalAgentService:
             if self.direct_messages_only
             else parse_topic_message(update)
         )
-        if message is None or message.sender_id not in self.config.owner_user_ids:
+        if message is None or not self.config.is_authorized(
+            message.sender_id, message.chat_id, message.thread_id
+        ):
             return False
         if self.direct_messages_only:
             direct_project = self.config.direct_message_project_id

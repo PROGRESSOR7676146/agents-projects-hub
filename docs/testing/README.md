@@ -42,3 +42,26 @@ IDs, account hints, screenshots, and service logs outside Git. Public status may
 state only the reusable behavior tested and the kind of acceptance required.
 The reusable go/no-go sequence and rollback boundary are defined in
 [`LIVE_CANARY.md`](../operations/LIVE_CANARY.md).
+
+## Dedicated acceptance user
+
+Telegram bots never receive messages sent by other bots, so a service bot cannot
+impersonate the operator for live E2E. An optional MTProto user actor covers the
+bounded, non-destructive baseline while remaining restricted by Hub to one exact
+canary topic.
+
+Install the optional client and prepare private deployment files outside Git:
+
+```bash
+python -m pip install -e '.[e2e]'
+agents-projects-hub e2e-validate PRIVATE_ACTOR_CONFIG
+agents-projects-hub e2e-login PRIVATE_ACTOR_CONFIG
+agents-projects-hub e2e-run PRIVATE_ACTOR_CONFIG
+```
+
+Copy `config/acceptance-actor.example.json` only to a private location and set
+mode `0600`. Store only the hash value in a sibling file named
+`telegram-api-hash`; that file and the generated session must also be mode
+`0600`, and the artifact directory must be mode `0700`. Add the same user/chat/topic
+triple to the private Hub configuration under `acceptance_actors`. Never commit
+the copied config, session, identifiers, or result files.

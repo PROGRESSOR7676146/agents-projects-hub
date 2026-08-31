@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from hermes_codex_router.codex_appserver import CodexThread, RateLimits, TurnResult
 from hermes_codex_router.hub_config import (
+    AcceptanceActor,
     AgentDefinition,
     HubConfig,
     ProjectBinding,
@@ -102,6 +103,7 @@ def update(
     *,
     chat_id: int = -1001234567890,
     thread_id: int = 77,
+    sender_id: int = 42,
 ) -> dict[str, object]:
     return {
         "update_id": message_id,
@@ -109,7 +111,7 @@ def update(
             "message_id": message_id,
             "message_thread_id": thread_id,
             "is_topic_message": True,
-            "from": {"id": 42, "is_bot": False},
+            "from": {"id": sender_id, "is_bot": False},
             "chat": {"id": chat_id, "type": "supergroup", "title": "Private"},
             "text": text,
         },
@@ -163,6 +165,7 @@ class ServiceIntegrationTests(unittest.TestCase):
                 manage_codex_server=False,
                 terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
                 projects=(ProjectBinding("project", -1001234567890),),
+                acceptance_actors=(AcceptanceActor(987654321, -1001234567890, 77),),
                 agents=(
                     AgentDefinition(
                         "codex",
@@ -215,8 +218,12 @@ class ServiceIntegrationTests(unittest.TestCase):
             )
             self.assertTrue(value.handle_update(callback(0, "cb-menu-status", "menu:status")))
             self.assertIn("No active agent session", telegram.sent[-1][2])
+            self.assertTrue(value.handle_update(update(1, "/status", sender_id=987654321)))
+            self.assertFalse(
+                value.handle_update(update(2, "/status", thread_id=78, sender_id=987654321))
+            )
 
-            self.assertTrue(value.handle_update(update(1, "/model")))
+            self.assertTrue(value.handle_update(update(3, "/model")))
             self.assertIn("provider:codex", str(telegram.markups[-1]))
             self.assertTrue(value.handle_update(callback(2, "cb-provider", "provider:codex")))
             choose = callback_values(telegram.markups[-1])[0]

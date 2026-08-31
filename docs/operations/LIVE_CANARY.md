@@ -126,6 +126,14 @@ rollback signal.
 Use one explicitly selected canary topic. Do not begin with a file-changing or
 otherwise irreversible provider request.
 
+The bounded baseline may be driven by the dedicated MTProto acceptance user
+defined in [ADR 0003](../decisions/0003-scoped-telegram-acceptance-actor.md).
+Validate its private configuration before the run and confirm its exact
+user/chat/topic scope in the active Hub configuration. Its fixed checks cover
+steps 1 and the harmless provider connectivity part of step 2. The remaining
+routing, failure, restart, and recovery tests below are still explicit
+operator-controlled operations.
+
 1. Run `/status` and `/accounts`. They must remain compact and responsive
    without a productive model turn.
 2. Send one harmless request separately to each locally queued provider that

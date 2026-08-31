@@ -71,6 +71,15 @@ class OperationalAlertSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class AcceptanceActor:
+    """A dedicated test user restricted to one forum topic."""
+
+    user_id: int
+    telegram_chat_id: int
+    telegram_thread_id: int
+
+
+@dataclass(frozen=True, slots=True)
 class HubConfig:
     schema_version: int
     owner_user_ids: tuple[int, ...]
@@ -108,6 +117,7 @@ class HubConfig:
     operational_alerts: OperationalAlertSettings = field(
         default_factory=lambda: OperationalAlertSettings(None, None)
     )
+    acceptance_actors: tuple[AcceptanceActor, ...] = ()
     codex_multi_auth_dir: Path | None = None
     codex_multi_auth_executable: Path | None = None
     codex_stdio_executable: Path | None = None
@@ -124,6 +134,17 @@ class HubConfig:
             if project.telegram_chat_id == chat_id:
                 return project
         raise KeyError(f"unregistered Telegram project group: {chat_id}")
+
+    def is_authorized(self, user_id: int, chat_id: int, thread_id: int) -> bool:
+        """Authorize owners globally and acceptance users only in an exact topic."""
+        if user_id in self.owner_user_ids:
+            return True
+        return any(
+            actor.user_id == user_id
+            and actor.telegram_chat_id == chat_id
+            and actor.telegram_thread_id == thread_id
+            for actor in self.acceptance_actors
+        )
 
 
 def _object(value: Any, label: str) -> dict[str, Any]:
@@ -203,6 +224,29 @@ def load_hub_config(
         raise HubConfigError("owner_user_ids must contain positive integers")
     if len(set(raw_owners)) != len(raw_owners):
         raise HubConfigError("owner_user_ids contains duplicates")
+
+    raw_acceptance_actors = root.get("acceptance_actors", [])
+    if not isinstance(raw_acceptance_actors, list):
+        raise HubConfigError("acceptance_actors must be an array")
+    acceptance_actors: list[AcceptanceActor] = []
+    acceptance_user_ids: set[int] = set()
+    for index, value in enumerate(raw_acceptance_actors):
+        actor = _object(value, f"acceptance_actors[{index}]")
+        user_id = actor.get("user_id")
+        chat_id = actor.get("telegram_chat_id")
+        thread_id = actor.get("telegram_thread_id")
+        if not isinstance(user_id, int) or user_id <= 0:
+            raise HubConfigError(f"acceptance_actors[{index}].user_id must be positive")
+        if not isinstance(chat_id, int) or chat_id >= 0:
+            raise HubConfigError(
+                f"acceptance_actors[{index}].telegram_chat_id must be a negative group id"
+            )
+        if not isinstance(thread_id, int) or thread_id <= 0:
+            raise HubConfigError(f"acceptance_actors[{index}].telegram_thread_id must be positive")
+        if user_id in acceptance_user_ids or user_id in raw_owners:
+            raise HubConfigError("acceptance_actors must use distinct non-owner user IDs")
+        acceptance_user_ids.add(user_id)
+        acceptance_actors.append(AcceptanceActor(user_id, chat_id, thread_id))
 
     registry_path = _absolute_path(root.get("registry_path"), "registry_path", must_exist=True)
     state_path = _absolute_path(root.get("state_path"), "state_path", must_exist=False)
@@ -337,6 +381,9 @@ def load_hub_config(
         if chat_id is not None:
             chat_ids.add(chat_id)
         projects.append(ProjectBinding(project_id, chat_id))
+    for actor in acceptance_actors:
+        if actor.telegram_chat_id not in chat_ids:
+            raise HubConfigError("acceptance_actors must reference a configured project group")
 
     alerts_data = _object(root.get("operational_alerts", {}), "operational_alerts")
     alerts_project_id = alerts_data.get("project_id")
@@ -582,6 +629,7 @@ def load_hub_config(
             hermes_notify_target=hermes_notify_target,
         ),
         operational_alerts=OperationalAlertSettings(alerts_chat_id, alerts_thread_id),
+        acceptance_actors=tuple(acceptance_actors),
         projects=tuple(projects),
         agents=tuple(agents),
         hub_bot=hub_bot,

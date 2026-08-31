@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "api_id": 12345,
+  "session_path": "/var/lib/agents-projects-hub/private/acceptance-user.session",
+  "expected_user_id": 987654321,
+  "telegram_chat_id": -1001234567890,
+  "telegram_thread_id": 77,
+  "hub_username": "example_projects_hub_bot",
+  "provider_usernames": [
+    "example_codex_bot",
+    "example_opencode_bot"
+  ],
+  "checks": [
+    "status",
+    "accounts",
+    "model_menu",
+    "provider_ping"
+  ],
+  "timeout_seconds": 30,
+  "artifacts_dir": "/var/lib/agents-projects-hub/private/acceptance-results"
+}

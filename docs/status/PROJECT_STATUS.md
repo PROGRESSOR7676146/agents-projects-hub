@@ -94,7 +94,8 @@ operator deployment inventory or live conversation evidence.
 
 ## Acceptance still required per deployment
 
-- Owner-driven provider/model/effort click-through.
+- Dedicated-user bounded Telegram baseline after deployment-local MTProto
+  authorization; model/effort selection still needs owner-driven click-through.
 - Natural or controlled Codex quota transition.
 - Telegram privacy/admin policy, restart continuity, and reply provenance after
   any material provider or routing upgrade.
