@@ -65,3 +65,8 @@ mode `0600`. Store only the hash value in a sibling file named
 `0600`, and the artifact directory must be mode `0700`. Add the same user/chat/topic
 triple to the private Hub configuration under `acceptance_actors`. Never commit
 the copied config, session, identifiers, or result files.
+
+For the first login only, `expected_user_id` may be omitted. `e2e-login` prints
+the authenticated numeric user ID locally; immediately add it to both the actor
+config and the matching Hub `acceptance_actors` entry. `e2e-validate` and
+`e2e-run` fail closed until that identity is pinned.

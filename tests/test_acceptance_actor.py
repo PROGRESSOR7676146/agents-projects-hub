@@ -93,6 +93,17 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(AcceptanceActorError, "provider_usernames"):
             load_acceptance_actor_config(self.write_config(provider_usernames=[]))
 
+    def test_login_bootstrap_may_load_without_expected_identity(self) -> None:
+        path = self.write_config()
+        document = json.loads(path.read_text(encoding="utf-8"))
+        del document["expected_user_id"]
+        path.write_text(json.dumps(document), encoding="utf-8")
+
+        config = load_acceptance_actor_config(path, require_identity=False)
+        self.assertIsNone(config.expected_user_id)
+        with self.assertRaisesRegex(AcceptanceActorError, "expected_user_id"):
+            load_acceptance_actor_config(path)
+
 
 if __name__ == "__main__":
     unittest.main()

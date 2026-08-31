@@ -392,7 +392,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print({"ok": True, "checks": list(config.checks)})
             return 0
         if args.command == "e2e-login":
-            result = asyncio.run(login_acceptance_actor(load_acceptance_actor_config(args.config)))
+            result = asyncio.run(
+                login_acceptance_actor(
+                    load_acceptance_actor_config(args.config, require_identity=False)
+                )
+            )
             _print(result)
             return 0
         if args.command == "e2e-run":

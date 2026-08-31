@@ -22,7 +22,7 @@ class AcceptanceActorConfig:
     api_id: int
     api_hash_file: Path
     session_path: Path
-    expected_user_id: int
+    expected_user_id: int | None
     telegram_chat_id: int
     telegram_thread_id: int
     hub_username: str
@@ -70,7 +70,9 @@ def _read_api_hash(path: Path) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
-def load_acceptance_actor_config(path: Path) -> AcceptanceActorConfig:
+def load_acceptance_actor_config(
+    path: Path, *, require_identity: bool = True
+) -> AcceptanceActorConfig:
     path = path.expanduser().resolve(strict=False)
     _private_file(path, "acceptance actor config")
     try:
@@ -87,7 +89,9 @@ def load_acceptance_actor_config(path: Path) -> AcceptanceActorConfig:
     timeout = raw.get("timeout_seconds", 30)
     if not isinstance(api_id, int) or api_id <= 0:
         raise AcceptanceActorError("api_id must be a positive integer")
-    if not isinstance(expected_user_id, int) or expected_user_id <= 0:
+    if expected_user_id is None and not require_identity:
+        pass
+    elif not isinstance(expected_user_id, int) or expected_user_id <= 0:
         raise AcceptanceActorError("expected_user_id must be a positive integer")
     if not isinstance(chat_id, int) or chat_id >= 0:
         raise AcceptanceActorError("telegram_chat_id must be a negative group id")
@@ -238,14 +242,14 @@ async def login_acceptance_actor(config: AcceptanceActorConfig) -> dict[str, obj
         await client.start()
         identity = await client.get_me()
         user_id = int(identity.id)
-        if user_id != config.expected_user_id:
+        if config.expected_user_id is not None and user_id != config.expected_user_id:
             raise AcceptanceActorError(
                 "authorized Telegram account does not match expected_user_id"
             )
     finally:
         await client.disconnect()
     os.chmod(config.session_path, 0o600)
-    return {"ok": True, "authorized": True}
+    return {"ok": True, "authorized": True, "user_id": user_id}
 
 
 async def run_acceptance_checks(config: AcceptanceActorConfig) -> dict[str, object]:
@@ -260,6 +264,8 @@ async def run_acceptance_checks(config: AcceptanceActorConfig) -> dict[str, obje
         if not await client.is_user_authorized():
             raise AcceptanceActorError("acceptance actor is not authorized; run e2e-login")
         identity = await client.get_me()
+        if config.expected_user_id is None:
+            raise AcceptanceActorError("expected_user_id must be pinned before e2e-run")
         if int(identity.id) != config.expected_user_id:
             raise AcceptanceActorError(
                 "authorized Telegram account does not match expected_user_id"
