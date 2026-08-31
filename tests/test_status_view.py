@@ -55,3 +55,19 @@ class StatusViewTests(unittest.TestCase):
         self.assertIn("Month 0%", text)
         self.assertIn("↻", text)
         self.assertIn("5h $12 · week $30 · month $60", text)
+
+    def test_accounts_lists_antigravity_accounts_and_known_runtime_limit(self) -> None:
+        pool = CodexPoolStatus(False, False, (), None, 0, "not configured")
+        text = format_accounts(
+            pool,
+            include_opencode_go=False,
+            provider_account_hints={"antigravity": ("abc", "xyz")},
+            provider_limits={
+                "antigravity": ProviderLimit("antigravity", "individual", 0, 2_000_000_000)
+            },
+            timezone_name="UTC",
+        )
+        self.assertIn("Antigravity", text)
+        self.assertIn("🟡 abc… · limits unknown", text)
+        self.assertIn("🟡 xyz… · limits unknown", text)
+        self.assertIn("🔴 current account unknown · quota 0%", text)

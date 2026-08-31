@@ -73,6 +73,22 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(config.terminal.backend, "auto")
         self.assertNotIn("secret-token-value", path.read_text(encoding="utf-8"))
 
+    def test_loads_masked_provider_account_hints(self) -> None:
+        config = load_hub_config(
+            self.write_config(provider_account_hints={"hermes": ["abc", "xyz"]})
+        )
+        self.assertEqual(config.provider_account_hints, {"hermes": ("abc", "xyz")})
+
+    def test_rejects_unmasked_or_unknown_provider_account_hints(self) -> None:
+        for value in (
+            {"missing": ["abc"]},
+            {"hermes": ["full@example.com"]},
+            {"hermes": ["abc", "abc"]},
+        ):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(HubConfigError, "provider_account_hints"):
+                    load_hub_config(self.write_config(provider_account_hints=value))
+
     def test_acceptance_actor_is_authorized_only_in_its_exact_topic(self) -> None:
         config = load_hub_config(
             self.write_config(

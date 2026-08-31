@@ -64,6 +64,75 @@ class CodexPoolStatus:
         }
 
 
+def encode_codex_pool_snapshot(status: CodexPoolStatus) -> str:
+    """Serialize only bounded, masked account telemetry for the Controller."""
+    value = {
+        "v": 1,
+        "ok": status.available,
+        "rotation": status.rotation_enabled,
+        "recommended": status.recommended_account,
+        "rotations": status.account_rotations,
+        "error": status.error,
+        "accounts": [
+            {
+                "i": item.index,
+                "active": item.active,
+                "availability": item.availability,
+                "risk": item.risk,
+                "5h": item.five_hour_remaining,
+                "week": item.weekly_remaining,
+                "5h_reset": item.five_hour_resets_at,
+                "week_reset": item.weekly_resets_at,
+                "updated": item.quota_updated_at,
+                "stale": item.quota_stale,
+                "hint": item.identity_hint,
+            }
+            for item in status.accounts
+        ],
+    }
+    encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=True)
+    if len(encoded) > 1000:
+        raise ValueError("Codex pool snapshot exceeds runtime-event bound")
+    return encoded
+
+
+def decode_codex_pool_snapshot(value: str) -> CodexPoolStatus:
+    try:
+        raw = json.loads(value)
+        if not isinstance(raw, dict) or raw.get("v") != 1:
+            raise ValueError("unsupported Codex pool snapshot")
+        raw_accounts = raw.get("accounts")
+        if not isinstance(raw_accounts, list):
+            raise ValueError("invalid Codex pool snapshot accounts")
+        accounts = tuple(
+            CodexAccountStatus(
+                index=int(item["i"]),
+                active=item.get("active") is True,
+                availability=str(item["availability"])[:64],
+                risk=str(item["risk"])[:64],
+                five_hour_remaining=_integer(item.get("5h")),
+                weekly_remaining=_integer(item.get("week")),
+                five_hour_resets_at=_integer(item.get("5h_reset")),
+                weekly_resets_at=_integer(item.get("week_reset")),
+                quota_updated_at=_integer(item.get("updated")),
+                quota_stale=item.get("stale") is True,
+                identity_hint=(str(item["hint"])[:32] if item.get("hint") else None),
+            )
+            for item in raw_accounts
+            if isinstance(item, dict)
+        )
+        return CodexPoolStatus(
+            available=raw.get("ok") is True,
+            rotation_enabled=raw.get("rotation") is True,
+            accounts=accounts,
+            recommended_account=_integer(raw.get("recommended")),
+            account_rotations=_integer(raw.get("rotations")) or 0,
+            error=str(raw["error"])[:128] if raw.get("error") else None,
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid Codex pool snapshot") from exc
+
+
 def _object(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 

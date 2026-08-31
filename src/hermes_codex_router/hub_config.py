@@ -9,6 +9,7 @@ from typing import Any
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
 SERVICE_UNIT = re.compile(r"^[A-Za-z0-9_.@-]+\.service$")
+ACCOUNT_HINT = re.compile(r"^[A-Za-z0-9]{2,8}$")
 TELEGRAM_BOT_TOKEN = re.compile(r"^[0-9]{6,12}:[A-Za-z0-9_-]{5,100}$")
 SUPPORTED_RUNTIMES = {"codex", "hermes", "gemini", "antigravity", "opencode", "api"}
 
@@ -122,6 +123,7 @@ class HubConfig:
     codex_multi_auth_executable: Path | None = None
     codex_stdio_executable: Path | None = None
     codex_account_hints: dict[int, str] = field(default_factory=dict)
+    provider_account_hints: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     def require_agent(self, agent_id: str) -> AgentDefinition:
         for agent in self.agents:
@@ -512,6 +514,23 @@ def load_hub_config(
             raise HubConfigError("locally managed agents must use distinct token_file paths")
         local_token_files.add(agent.token_file)
 
+    raw_provider_hints = root.get("provider_account_hints", {})
+    if not isinstance(raw_provider_hints, dict):
+        raise HubConfigError("provider_account_hints must be an object")
+    provider_account_hints: dict[str, tuple[str, ...]] = {}
+    for agent_id, raw_hints in raw_provider_hints.items():
+        if agent_id not in agent_ids:
+            raise HubConfigError("provider_account_hints references an unknown agent")
+        if not isinstance(raw_hints, list) or not raw_hints:
+            raise HubConfigError("provider_account_hints values must be non-empty arrays")
+        if len(raw_hints) > 16:
+            raise HubConfigError("provider_account_hints supports at most 16 prefixes per provider")
+        if not all(isinstance(hint, str) and ACCOUNT_HINT.fullmatch(hint) for hint in raw_hints):
+            raise HubConfigError("provider_account_hints must contain masked prefixes only")
+        if len(set(raw_hints)) != len(raw_hints):
+            raise HubConfigError("provider_account_hints contains duplicate prefixes")
+        provider_account_hints[str(agent_id)] = tuple(raw_hints)
+
     hub_bot = None
     if raw_hub_bot is not None:
         hub_data = _object(raw_hub_bot, "hub_bot")
@@ -642,6 +661,7 @@ def load_hub_config(
         codex_multi_auth_executable=codex_multi_auth_executable,
         codex_stdio_executable=codex_stdio_executable,
         codex_account_hints=codex_account_hints,
+        provider_account_hints=provider_account_hints,
     )
 
 

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from .provider_limits import ProviderLimit, parse_opencode_limit
+from .provider_limits import ProviderLimit, parse_antigravity_limit, parse_opencode_limit
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -166,6 +166,8 @@ class ExternalCliAdapter:
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()[:1000]
             if self.runtime == "opencode" and (limit := parse_opencode_limit(detail)):
+                raise ProviderLimitError(limit)
+            if self.runtime == "antigravity" and (limit := parse_antigravity_limit(detail)):
                 raise ProviderLimitError(limit)
             raise ExternalRuntimeError(f"{self.runtime} failed safely: {detail}")
         values = _json_values(result.stdout)

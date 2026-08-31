@@ -221,6 +221,9 @@ Then edit the ignored local files:
 4. Store bot tokens in separate mode-`0600` files and reference them through
    `token_file`; inline tokens are rejected.
 5. Keep the state database in a private local state directory.
+6. Optionally map providers to two-to-eight-character account prefixes through
+   `provider_account_hints`. Keep this mapping only in ignored private config;
+   full email addresses are rejected.
 
 Validate before starting the service:
 
@@ -279,8 +282,17 @@ shared rotating socket while it is healthy and automatically uses an isolated
 official stdio app-server when that socket is absent. Multi-auth is therefore an
 optional accelerator, not a service dependency. Hub resumes the same persisted
 provider thread ID in either mode and exposes only redacted account numbers and
-cached quota health in `/status`; OAuth tokens and account emails are never
-returned.
+cached quota health in `/status` and `/accounts`; OAuth tokens and account emails
+are never returned. In an external-worker deployment the monitor publishes a
+bounded masked snapshot to local durable state, so `/accounts` remains a local
+Controller command and never spends model tokens. A snapshot older than thirty
+minutes is displayed as stale.
+
+If tlive and a persistent multi-auth app-server share Codex's default control
+socket, order tlive after the multi-auth unit and make that unit's activation
+wait until the socket exists. Otherwise both boot services can race to bind the
+same socket. This is an ordering constraint only: neither service should be a
+hard requirement of the other, and Hub retains its official Codex fallback.
 
 ### Independent recovery plane
 

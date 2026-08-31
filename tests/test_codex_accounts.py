@@ -7,12 +7,35 @@ import unittest
 from pathlib import Path
 
 from hermes_codex_router.codex_accounts import (
+    CodexAccountStatus,
+    CodexPoolStatus,
+    decode_codex_pool_snapshot,
+    encode_codex_pool_snapshot,
     format_codex_pool_status,
     read_codex_pool_status,
 )
 
 
 class CodexAccountStatusTests(unittest.TestCase):
+    def test_safe_snapshot_round_trip_contains_only_masked_status(self) -> None:
+        original = CodexPoolStatus(
+            True,
+            True,
+            (
+                CodexAccountStatus(
+                    1, True, "ready", "low", 80, 60, 1_800_000_000, None, None, False, "abc…"
+                ),
+            ),
+            1,
+            2,
+        )
+
+        encoded = encode_codex_pool_snapshot(original)
+        restored = decode_codex_pool_snapshot(encoded)
+
+        self.assertEqual(restored, original)
+        self.assertLessEqual(len(encoded), 1000)
+
     def test_redacts_identity_and_reports_limits(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

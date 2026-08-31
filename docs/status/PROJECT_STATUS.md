@@ -84,6 +84,9 @@ operator deployment inventory or live conversation evidence.
   stale-after-failed-refresh monitoring.
 - Event-driven Codex quota rotation telemetry and provider-supplied OpenCode
   reset telemetry.
+- Durable masked Codex account snapshots for provider-free Controller status,
+  plus private masked account hints and honest unknown-limit display for other
+  providers.
 - Declarative Telegram command-menu synchronization.
 - Sandboxed Antigravity `accept-edits` mode; dangerous permission bypass is
   rejected.

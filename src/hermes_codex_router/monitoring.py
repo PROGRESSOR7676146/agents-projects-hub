@@ -7,7 +7,7 @@ from dataclasses import asdict
 from typing import Any, Callable
 
 from .alerts import OperationalAlert, evaluate_operational_alerts
-from .codex_accounts import read_codex_pool_status
+from .codex_accounts import encode_codex_pool_snapshot, read_codex_pool_status
 from .diagnostics import run_doctor
 from .hermes_health import (
     HermesBotApiHealth,
@@ -165,6 +165,17 @@ def run_monitor_once(
             from .codex_accounts import CodexPoolStatus
 
             pool = CodexPoolStatus(False, False, (), None, 0, "not_configured")
+        try:
+            pool_snapshot = encode_codex_pool_snapshot(pool)
+        except ValueError:
+            pool_snapshot = None
+        if pool_snapshot is not None:
+            previous_pool_snapshot = state.latest_runtime_event("codex", "account_pool_snapshot")
+            if (
+                previous_pool_snapshot is None
+                or str(previous_pool_snapshot["detail"]) != pool_snapshot
+            ):
+                state.record_runtime_event("codex", "info", "account_pool_snapshot", pool_snapshot)
         provider_limit_count = 0
         runtime_snapshot = (
             read_codex_runtime_snapshot(config.codex_multi_auth_dir)

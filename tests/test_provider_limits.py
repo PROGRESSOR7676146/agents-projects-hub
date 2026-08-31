@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from hermes_codex_router.external_runtime import ExternalCliAdapter, ProviderLimitError
-from hermes_codex_router.provider_limits import parse_opencode_limit
+from hermes_codex_router.provider_limits import parse_antigravity_limit, parse_opencode_limit
 
 
 class ProviderLimitTests(unittest.TestCase):
@@ -33,6 +33,28 @@ class ProviderLimitTests(unittest.TestCase):
                     cwd=Path(directory), prompt="hello"
                 )
         self.assertEqual(raised.exception.limit.window, "monthly")
+
+    def test_parses_antigravity_individual_quota_reset(self) -> None:
+        now = datetime(2026, 8, 30, 0, 0, tzinfo=timezone.utc)
+        value = parse_antigravity_limit("Individual quota reached. Resets in 118h31m10s.", now=now)
+        assert value is not None
+        self.assertEqual(value.provider, "antigravity")
+        self.assertEqual(value.window, "individual")
+        self.assertEqual(value.remaining_percent, 0)
+        self.assertEqual(value.resets_at, int(now.timestamp()) + 426670)
+
+    def test_adapter_classifies_antigravity_quota_without_raw_error(self) -> None:
+        def run(argv: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                argv, 1, "", "Individual quota reached. Resets in 2h4m."
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(ProviderLimitError) as raised:
+                ExternalCliAdapter("antigravity", run=run).run_turn(
+                    cwd=Path(directory), prompt="hello"
+                )
+        self.assertEqual(raised.exception.limit.provider, "antigravity")
 
 
 if __name__ == "__main__":

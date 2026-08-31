@@ -74,6 +74,8 @@ def format_accounts(
     *,
     include_opencode_go: bool,
     opencode_limit: ProviderLimit | None = None,
+    provider_account_hints: dict[str, tuple[str, ...]] | None = None,
+    provider_limits: dict[str, ProviderLimit] | None = None,
     timezone_name: str = "Europe/Moscow",
 ) -> str:
     lines: list[str] = []
@@ -132,5 +134,17 @@ def format_accounts(
             lines.append(
                 f"{_health(opencode_limit.remaining_percent)} {label} "
                 f"{opencode_limit.remaining_percent}% ↻ {reset:%d.%m %H:%M}"
+            )
+    for provider, hints in (provider_account_hints or {}).items():
+        if lines:
+            lines.append("")
+        lines.append(provider.replace("_", " ").replace("-", " ").title())
+        lines.extend(f"🟡 {hint}… · limits unknown" for hint in hints)
+        limit = (provider_limits or {}).get(provider)
+        if limit is not None:
+            reset = datetime.fromtimestamp(limit.resets_at, ZoneInfo(timezone_name))
+            lines.append(
+                f"{_health(limit.remaining_percent)} current account unknown · quota "
+                f"{limit.remaining_percent}% ↻ {reset:%d.%m %H:%M}"
             )
     return "\n".join(lines)

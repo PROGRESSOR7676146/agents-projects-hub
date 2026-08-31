@@ -83,6 +83,10 @@ delete a socket merely to make the canary continue.
    response identity and optional private-chat endpoint. Menu synchronization
    is a separate explicit external change.
 
+   Repeat this check in every registered project group. Hub administrator status
+   in one group says nothing about another group; ordinary-message E2E is the
+   acceptance proof for each binding.
+
 Preparation ends here when restarts or Telegram changes are not authorized.
 
 ## Controlled cutover

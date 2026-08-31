@@ -11,6 +11,12 @@ _LIMIT = re.compile(
     re.IGNORECASE,
 )
 _PART = re.compile(r"(\d+)\s*(d|day|days|hr|hour|hours|min|minute|minutes)", re.I)
+_ANTIGRAVITY_LIMIT = re.compile(
+    r"Individual quota reached\..*?Resets in\s*"
+    r"(?:(?P<days>\d+)d)?(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?"
+    r"(?:(?P<seconds>\d+)s)?",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +51,29 @@ def parse_opencode_limit(text: str, *, now: datetime | None = None) -> ProviderL
     return ProviderLimit(
         provider="opencode-go",
         window=match.group("window").casefold(),
+        remaining_percent=0,
+        resets_at=round((observed + duration).timestamp()),
+    )
+
+
+def parse_antigravity_limit(text: str, *, now: datetime | None = None) -> ProviderLimit | None:
+    match = _ANTIGRAVITY_LIMIT.search(text)
+    if match is None:
+        return None
+    duration = timedelta(
+        days=int(match.group("days") or 0),
+        hours=int(match.group("hours") or 0),
+        minutes=int(match.group("minutes") or 0),
+        seconds=int(match.group("seconds") or 0),
+    )
+    if duration <= timedelta():
+        return None
+    observed = now or datetime.now(timezone.utc)
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=timezone.utc)
+    return ProviderLimit(
+        provider="antigravity",
+        window="individual",
         remaining_percent=0,
         resets_at=round((observed + duration).timestamp()),
     )

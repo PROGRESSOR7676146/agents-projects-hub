@@ -278,7 +278,12 @@ or response metadata when the provider exposes it.
   Operations warning only after the cached success is older than 24 hours.
 - **REQ-CMD-003 (Implemented):** `/accounts` lists configured provider accounts
   and observable limits. OpenCode Go exact exhaustion/reset telemetry is shown
-  only after a real provider `429`; plan caps are labelled separately.
+  only after a real provider `429`; plan caps are labelled separately. In the
+  isolated-worker topology the Controller MUST read a bounded, masked Codex
+  account snapshot from durable local state and MUST NOT invoke a provider,
+  model, or account helper. Other providers MAY declare short masked account
+  prefixes in private configuration; unknown limits remain explicitly unknown,
+  while a provider-reported exhaustion is shown for the current unknown account.
 - **REQ-CMD-004 (Implemented):** `/new` requires an owner callback confirmation
   and resets only the active provider session; mass reset behavior is removed.
   `/local` transfers writer ownership; `/return` returns ownership and

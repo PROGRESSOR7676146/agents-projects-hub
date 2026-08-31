@@ -5,6 +5,11 @@ import unittest
 from pathlib import Path
 from typing import Any, cast
 
+from hermes_codex_router.codex_accounts import (
+    CodexAccountStatus,
+    CodexPoolStatus,
+    encode_codex_pool_snapshot,
+)
 from hermes_codex_router.codex_appserver import CodexThread, RateLimits, TurnResult
 from hermes_codex_router.hub_config import (
     AcceptanceActor,
@@ -151,6 +156,91 @@ def callback_values(markup: object) -> list[str]:
 
 
 class ServiceIntegrationTests(unittest.TestCase):
+    def test_external_controller_reads_codex_accounts_from_durable_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(42,),
+                registry_path=base / "projects.json",
+                state_path=base / "state.db",
+                codex_socket_path=base / "codex.sock",
+                manage_codex_server=False,
+                terminal=TerminalSettings("auto", None, "Ubuntu"),
+                projects=(),
+                agents=(),
+                dispatch_mode="queue",
+                queue_runtime="external",
+                external_worker_agent_ids=("codex",),
+            )
+            expected = CodexPoolStatus(
+                True,
+                True,
+                (
+                    CodexAccountStatus(
+                        1, True, "ready", "low", 80, 60, None, None, None, False, "abc…"
+                    ),
+                ),
+                1,
+                0,
+            )
+            value = ProjectHubService.__new__(ProjectHubService)
+            value.config = config
+            value.state = HubState.open(config.state_path)
+            try:
+                value.state.record_runtime_event(
+                    "codex", "info", "account_pool_snapshot", encode_codex_pool_snapshot(expected)
+                )
+                self.assertEqual(value._codex_pool(), expected)
+            finally:
+                value.state.close()
+
+    def test_external_controller_marks_old_codex_pool_snapshot_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(42,),
+                registry_path=base / "projects.json",
+                state_path=base / "state.db",
+                codex_socket_path=base / "codex.sock",
+                manage_codex_server=False,
+                terminal=TerminalSettings("auto", None, "Ubuntu"),
+                projects=(),
+                agents=(),
+                dispatch_mode="queue",
+                queue_runtime="external",
+                external_worker_agent_ids=("codex",),
+            )
+            expected = CodexPoolStatus(
+                True,
+                True,
+                (
+                    CodexAccountStatus(
+                        1, True, "ready", "low", 80, 70, None, None, None, False, "abc…"
+                    ),
+                ),
+                1,
+                0,
+            )
+            value = ProjectHubService.__new__(ProjectHubService)
+            value.config = config
+            value.state = HubState.open(config.state_path)
+            try:
+                value.state.record_runtime_event(
+                    "codex", "info", "account_pool_snapshot", encode_codex_pool_snapshot(expected)
+                )
+                with value.state._connection:
+                    value.state._connection.execute(
+                        "UPDATE runtime_events SET created_at = ? WHERE code = ?",
+                        ("2020-01-01T00:00:00+00:00", "account_pool_snapshot"),
+                    )
+                actual = value._codex_pool()
+                assert actual is not None
+                self.assertTrue(actual.accounts[0].quota_stale)
+            finally:
+                value.state.close()
+
     def test_model_command_cascades_provider_model_effort_before_applying(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

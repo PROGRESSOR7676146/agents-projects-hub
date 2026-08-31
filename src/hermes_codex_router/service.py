@@ -8,9 +8,14 @@ import subprocess
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
-from .codex_accounts import CodexPoolStatus, read_codex_pool_status
+from .codex_accounts import (
+    CodexPoolStatus,
+    decode_codex_pool_snapshot,
+    read_codex_pool_status,
+)
 from .codex_appserver import CodexAppServerClient, RateLimits, RpcError
 from .external_admission import consume_pending_handoff, peek_pending_handoff
 from .external_runtime import ProviderLimitError
@@ -710,10 +715,23 @@ class ProjectHubService:
 
     def _codex_pool(self) -> CodexPoolStatus | None:
         if self._uses_external_codex_worker():
-            # Controller commands are provider-process-free in external mode.
-            # Worker/monitor telemetry will populate a durable cache in the
-            # monitoring stage; until then, report the pool as unavailable.
-            return None
+            state = getattr(self, "state", None)
+            if state is None:
+                return None
+            event = state.latest_runtime_event("codex", "account_pool_snapshot")
+            if event is None:
+                return None
+            try:
+                pool = decode_codex_pool_snapshot(str(event["detail"]))
+                observed_at = datetime.fromisoformat(str(event["created_at"]))
+            except (TypeError, ValueError):
+                return None
+            if datetime.now(timezone.utc) - observed_at > timedelta(minutes=30):
+                pool = replace(
+                    pool,
+                    accounts=tuple(replace(account, quota_stale=True) for account in pool.accounts),
+                )
+            return pool
         if self.config.codex_multi_auth_dir is None:
             return None
         return read_codex_pool_status(
@@ -1660,13 +1678,23 @@ class ProjectHubService:
                 pool = CodexPoolStatus(False, False, (), None, 0, "not_configured")
             include_opencode = any(item.runtime == "opencode" for item in self.config.agents)
             event = self.state.latest_runtime_event("opencode", "provider_limit")
-            opencode_limit = (
-                decode_provider_limit(str(event["detail"])) if event is not None else None
-            )
+            opencode_limit = decode_provider_limit(str(event["detail"])) if event else None
+            if opencode_limit is not None and opencode_limit.resets_at <= time.time():
+                opencode_limit = None
+            provider_limits = {}
+            for agent_id in self.config.provider_account_hints:
+                limit_event = self.state.latest_runtime_event(agent_id, "provider_limit")
+                if limit_event is None:
+                    continue
+                limit = decode_provider_limit(str(limit_event["detail"]))
+                if limit is not None and limit.resets_at > time.time():
+                    provider_limits[agent_id] = limit
             detail = format_accounts(
                 pool,
                 include_opencode_go=include_opencode,
                 opencode_limit=opencode_limit,
+                provider_account_hints=self.config.provider_account_hints,
+                provider_limits=provider_limits,
             )
             self._send_text(message, detail or "No provider accounts are configured.")
             return True
