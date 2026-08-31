@@ -40,3 +40,5 @@ Live Telegram acceptance is a separate owner-coordinated operation because it
 changes external state and uses real identities/accounts. Store its transcript,
 IDs, account hints, screenshots, and service logs outside Git. Public status may
 state only the reusable behavior tested and the kind of acceptance required.
+The reusable go/no-go sequence and rollback boundary are defined in
+[`LIVE_CANARY.md`](../operations/LIVE_CANARY.md).
