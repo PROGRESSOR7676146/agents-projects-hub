@@ -380,6 +380,10 @@ def load_hub_config(
         terminal_enabled = data.get("terminal_enabled", False)
         if not isinstance(managed_externally, bool) or not isinstance(terminal_enabled, bool):
             raise HubConfigError(f"boolean agent flags are invalid for {agent_id}")
+        if agent_id == "codex" and managed_externally:
+            raise HubConfigError(
+                "codex cannot be managed_externally; it is the Controller's primary provider"
+            )
         token_file = None
         validate_agent_secret = _validate_telegram_secrets and (
             (not _controller_ingress_only and _provider_ingress_agent_id is None)

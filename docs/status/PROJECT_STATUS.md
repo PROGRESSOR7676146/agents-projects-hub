@@ -47,6 +47,14 @@ operator deployment inventory or live conversation evidence.
   Operations destination.
 - Central Telegram ingress with deterministic ordinary, Reply, mention, and
   quote routing; non-target providers are not invoked merely to observe.
+- Providers declared `managed_externally` retain their native admission path
+  and are never enqueued into the local worker queue, preventing accepted jobs
+  without an eligible consumer. All-external productive routes remain unclaimed
+  by Hub, mixed routes admit only their locally managed target set, and model
+  menus use cached/configured data without invoking the external runtime. Codex
+  remains the locally managed primary provider. Startup detects nonterminal
+  queue rows left by a prior ownership configuration and fails visibly until
+  they are drained or explicitly reconciled.
 - Optional separate Hub Telegram controller identity for project-group ingress,
   commands, callbacks, and menu ownership. It persists a distinct `hub` update
   offset, keeps Codex as the default productive provider, and does not replace

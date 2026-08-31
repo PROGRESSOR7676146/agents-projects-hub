@@ -73,6 +73,23 @@ If a provider has no safe reconciliation capability, retain the
 create a new explicit user request only after deciding whether duplicate side
 effects are acceptable.
 
+## Changing provider ownership
+
+Before changing a locally queued provider to `managed_externally`, stop new
+admission for that provider and inspect its durable jobs. Drain `queued` and
+`retry_wait` work with the old eligible worker, let the sender finish
+`result_ready` work, and apply the conservative recovery rules above to any
+`leased` or `executing` row. Cancellation is allowed only as an explicit local
+operator decision for work that state validation still identifies as safely
+unstarted; do not edit SQLite directly.
+
+The Controller deliberately refuses startup when a configured externally
+managed agent still owns any nonterminal local queue row. This is a diagnostic
+barrier, not an automatic migration: restore the prior locally managed
+configuration to drain safe work, or reconcile/cancel it through reviewed state
+operations, then validate the new configuration again. Never start a native
+gateway and a local worker as competing consumers for the same provider.
+
 ## Telegram outbox recovery
 
 - An expired `sending` lease returns to `pending` through sender-scoped stale

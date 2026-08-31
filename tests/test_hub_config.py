@@ -428,6 +428,19 @@ class HubConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(HubConfigError, "inline token"):
             load_hub_config(self.write_config(agents=agents))
 
+    def test_rejects_managed_external_primary_codex(self) -> None:
+        agents = [
+            {
+                "agent_id": "codex",
+                "display_name": "Codex",
+                "telegram_username": "project_codex_bot",
+                "runtime": "codex",
+                "managed_externally": True,
+            }
+        ]
+        with self.assertRaisesRegex(HubConfigError, "codex cannot be managed_externally"):
+            load_hub_config(self.write_config(agents=agents))
+
     def test_rejects_telegram_username_that_cannot_be_a_bot(self) -> None:
         agents = [
             {

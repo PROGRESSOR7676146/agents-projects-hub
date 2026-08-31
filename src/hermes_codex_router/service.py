@@ -76,6 +76,23 @@ class ProjectHubService:
             "hub" if config.hub_bot is not None else self.agent.agent_id
         )
         self.direct_messages_only = direct_messages_only
+        if not direct_messages_only:
+            externally_managed = tuple(
+                candidate.agent_id for candidate in config.agents if candidate.managed_externally
+            )
+            stranded = self.state.nonterminal_provider_job_counts(externally_managed)
+            if stranded:
+                detail = ", ".join(
+                    f"{agent_id}={count}" for agent_id, count in sorted(stranded.items())
+                )
+                self.state.record_runtime_event(
+                    "controller", "error", "managed_external_jobs", detail
+                )
+                self.state.close()
+                raise ServiceError(
+                    "accepted provider jobs still belong to managed-external agents; "
+                    f"drain or explicitly reconcile them before startup ({detail})"
+                )
         self._publishes_controller_health = not direct_messages_only
         if self.ingress_identity not in {"hub", self.agent.agent_id}:
             raise ServiceError("unsupported controller ingress identity")
@@ -286,8 +303,12 @@ class ProjectHubService:
 
     def _queue_enabled(self, agent_id: str) -> bool:
         """Compatibility gate; a missing field keeps hand-built test configs inline."""
-        del agent_id  # Per-provider maps are a later rollout refinement.
-        return getattr(self.config, "dispatch_mode", "inline") == "queue"
+        if getattr(self.config, "dispatch_mode", "inline") != "queue":
+            return False
+        # Externally managed providers retain their native admission/runtime
+        # boundary. Enqueuing them locally would create work with no eligible
+        # worker and could silently strand an already-accepted Telegram update.
+        return not self.config.require_agent(agent_id).managed_externally
 
     def _embedded_consumer_owns_agent(self, agent_id: str) -> bool:
         if not self._queue_enabled(agent_id):
@@ -322,6 +343,10 @@ class ProjectHubService:
         handoff_id: str | None,
         take_local_writer: bool = False,
     ) -> bool:
+        if self.config.require_agent(session.agent_id).managed_externally:
+            raise QueueAcceptanceError(
+                "managed-external provider admission belongs to its native gateway"
+            )
         payload = prompt
         if len(payload) > 20000:
             marker = "[Earlier visible context was truncated for durable admission.]\n\n"
@@ -838,9 +863,25 @@ class ProjectHubService:
 
     def _provider_catalog(self, agent_id: str, *, refresh: bool) -> CatalogSnapshot:
         cache = self._catalog_cache()
+        agent = self.config.require_agent(agent_id)
+        if agent.managed_externally:
+            # The native gateway owns this provider process. Even an explicit
+            # refresh callback must remain local-data-only in the Controller.
+            if (cached := cache.load(agent_id)) is not None:
+                return cached
+            return cache.store(
+                agent_id,
+                (
+                    ProviderModel(
+                        agent.default_model,
+                        agent.default_model,
+                        (agent.default_effort,),
+                    ),
+                ),
+                source_version="externally managed fallback",
+            )
         if not refresh and (cached := cache.load(agent_id)) is not None:
             return cached
-        agent = self.config.require_agent(agent_id)
         if not refresh and self._queue_enabled(agent_id):
             # Controller callbacks are cache-only in queue mode. A cold cache
             # gets a minimal configured choice without invoking a provider CLI.
@@ -1845,7 +1886,15 @@ class ProjectHubService:
             usernames=self.usernames,
             reply_to_username=message.reply_to_username,
         )
-        if self._queue_enabled(self.agent.agent_id) and len(targets) > 1:
+        local_targets = tuple(
+            target for target in targets if not self.config.require_agent(target).managed_externally
+        )
+        # Native gateways see the Telegram update independently. The Hub may
+        # retain shared topic metadata, but it must neither claim nor answer a
+        # message whose productive targets are all externally managed.
+        if not local_targets:
+            return False
+        if self._queue_enabled(self.agent.agent_id) and len(local_targets) > 1:
             if not self.state.claim_message(
                 message.chat_id,
                 message.message_id,
@@ -1858,9 +1907,9 @@ class ProjectHubService:
                 "send separate messages for multiple providers.",
             )
             return True
-        if self.agent.agent_id not in targets:
-            if self._queue_enabled(next(iter(targets))):
-                target_agent_id = next(iter(targets))
+        if self.agent.agent_id not in local_targets:
+            if self._queue_enabled(next(iter(local_targets))):
+                target_agent_id = next(iter(local_targets))
                 target_agent = self.config.require_agent(target_agent_id)
                 session = (
                     active
@@ -1920,7 +1969,7 @@ class ProjectHubService:
                     handoff_id=handoff.handoff_id if handoff is not None else None,
                 )
             handled = False
-            for target in targets:
+            for target in local_targets:
                 service = getattr(self, "external_services", {}).get(target)
                 if service is not None:
                     handled = service.handle_update(update) or handled

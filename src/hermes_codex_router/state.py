@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Sequence
 
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
 
@@ -653,6 +653,23 @@ class HubState:
             (topic_id,),
         ).fetchone()
         return row is not None
+
+    def nonterminal_provider_job_counts(self, agent_ids: Sequence[str]) -> dict[str, int]:
+        """Count accepted work that must be drained before runtime ownership changes."""
+        bounded_ids = tuple(
+            _bounded(agent_id, name="agent id", maximum=64) for agent_id in agent_ids
+        )
+        if not bounded_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in bounded_ids)
+        rows = self._connection.execute(
+            f"""SELECT agent_id, COUNT(*) AS job_count FROM provider_jobs
+                WHERE agent_id IN ({placeholders})
+                  AND status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                GROUP BY agent_id""",
+            bounded_ids,
+        ).fetchall()
+        return {str(row["agent_id"]): int(row["job_count"]) for row in rows}
 
     def enqueue_provider_job(
         self,

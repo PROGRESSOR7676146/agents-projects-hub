@@ -419,6 +419,13 @@ recreate unsaved provider context or a partially executed turn.
 - **REQ-QUEUE-001 (Implemented behind `dispatch_mode: "queue"`):** The deterministic Hub Controller MUST durably
   enqueue each admitted productive request before provider execution and MUST
   NOT wait for a provider CLI, RPC, or model turn to process local commands.
+  A provider declared `managed_externally` MUST retain its native admission
+  boundary and MUST NOT be accepted into the local durable queue. The Controller
+  MUST ignore productive routes whose targets are all externally managed, MUST
+  partition mixed multi-target routes before applying local admission rules,
+  and MUST NOT invoke an externally managed provider merely to refresh a model
+  catalog. Codex is the Controller's primary local provider and cannot be
+  declared `managed_externally` in this architecture.
 - **REQ-QUEUE-002 (Implemented for Codex, OpenCode, and Antigravity behind
   `queue_runtime: "external"`):** Provider execution MAY occur in one isolated
   worker per explicitly configured local agent ID. A worker owns its adapter or
@@ -449,7 +456,10 @@ recreate unsaved provider context or a partially executed turn.
   or RPC client. The Controller MUST NOT deliver external-worker outbox rows.
 - **REQ-QUEUE-006 (Implemented for the additive schema and global compatibility gate; per-provider rollout Planned):** Queue migration and per-provider rollout MUST be
   additive, feature-gated, recoverable through the existing backup discipline,
-  and retain safe rollback without destroying accepted jobs.
+  and retain safe rollback without destroying accepted jobs. Changing an agent
+  to `managed_externally` requires its accepted local jobs to be drained or
+  explicitly reconciled first; Controller startup MUST fail visibly while any
+  such nonterminal rows remain.
 - **REQ-QUEUE-007 (Implemented):** Long-running Controller, direct-provider,
   worker, and outbox-sender processes MUST translate `SIGTERM` and `SIGINT`
   into cooperative stop requests only. They MUST stop polling and taking work

@@ -19,8 +19,9 @@ from hermes_codex_router.hub_config import (
 )
 from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.provider_limits import ProviderLimit
-from hermes_codex_router.service import ProjectHubService
+from hermes_codex_router.service import ProjectHubService, QueueAcceptanceError, ServiceError
 from hermes_codex_router.state import HubState
+from hermes_codex_router.telegram import TopicMessage
 
 
 class Adapter:
@@ -367,6 +368,294 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             self.assertEqual([(job.agent_id, job.status) for job in jobs], [("opencode", "queued")])
         finally:
             controller.state.close()
+
+    def test_managed_external_provider_is_never_admitted_to_local_queue(self) -> None:
+        codex = AgentDefinition(
+            "codex",
+            "Codex",
+            "example_codex_bot",
+            "codex",
+            None,
+            True,
+            False,
+            "gpt-5.6-sol",
+            "high",
+        )
+        external = AgentDefinition(
+            "hermes",
+            "Hermes",
+            "example_hermes_bot",
+            "hermes",
+            None,
+            False,
+            True,
+            "provider-selected",
+            "high",
+        )
+        config = replace(self.config, agents=(codex,) + self.config.agents + (external,))
+
+        class Sender:
+            def send_html(self, *_args: object, **_kwargs: object) -> int:
+                raise AssertionError("managed external routing must not send as Hub")
+
+        controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
+        controller.config = config
+        controller.registry = self.registry
+        controller.state = HubState.open(config.state_path)
+        controller.agent = codex
+        controller.telegram = Sender()
+        controller.usernames = {agent.agent_id: agent.telegram_username for agent in config.agents}
+        controller.external_services = {}
+        controller._codex_client = None
+        try:
+            self.assertFalse(controller._queue_enabled("hermes"))
+            self.assertFalse(controller._embedded_consumer_owns_agent("hermes"))
+            self.assertFalse(
+                controller.handle_update(
+                    {
+                        "update_id": 8,
+                        "message": {
+                            "message_id": 8,
+                            "message_thread_id": 108,
+                            "is_topic_message": True,
+                            "from": {"id": 42, "is_bot": False},
+                            "chat": {
+                                "id": -1001234567890,
+                                "type": "supergroup",
+                                "title": "Example",
+                            },
+                            "text": "@example_hermes_bot native gateway request",
+                        },
+                    }
+                )
+            )
+            topic = controller.state.find_topic(-1001234567890, 108)
+            assert topic is not None
+            self.assertEqual(controller.state.provider_jobs_for_topic(topic.topic_id), ())
+            self.assertTrue(
+                controller.state.claim_message(-1001234567890, 8, observer_agent_id="claim-audit")
+            )
+            session = controller.state.activate_agent(
+                topic.topic_id, "hermes", "provider-selected", "high"
+            )
+            with self.assertRaisesRegex(QueueAcceptanceError, "native gateway"):
+                controller._enqueue_provider_turn(
+                    message=TopicMessage(
+                        80,
+                        80,
+                        -1001234567890,
+                        108,
+                        "Example",
+                        42,
+                        "must not enqueue",
+                    ),
+                    topic=topic,
+                    session=session,
+                    prompt="must not enqueue",
+                    context_watermark=None,
+                    handoff_id=None,
+                )
+            self.assertEqual(controller.state.provider_jobs_for_topic(topic.topic_id), ())
+        finally:
+            controller.state.close()
+
+    def test_managed_external_routes_are_partitioned_before_local_admission(self) -> None:
+        codex = AgentDefinition(
+            "codex",
+            "Codex",
+            "example_codex_bot",
+            "codex",
+            None,
+            True,
+            False,
+            "gpt-5.6-sol",
+            "high",
+        )
+        hermes = AgentDefinition(
+            "hermes",
+            "Hermes",
+            "example_hermes_bot",
+            "hermes",
+            None,
+            False,
+            True,
+            "provider-selected",
+            "high",
+        )
+        native = AgentDefinition(
+            "native",
+            "Native",
+            "example_native_bot",
+            "hermes",
+            None,
+            False,
+            True,
+            "provider-selected",
+            "high",
+        )
+        config = replace(self.config, agents=(codex,) + self.config.agents + (hermes, native))
+
+        class Sender:
+            def send_html(self, *_args: object, **_kwargs: object) -> int:
+                raise AssertionError("externally managed traffic must not be answered by Hub")
+
+        controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
+        controller.config = config
+        controller.registry = self.registry
+        controller.state = HubState.open(config.state_path)
+        controller.agent = codex
+        controller.telegram = Sender()
+        controller.usernames = {agent.agent_id: agent.telegram_username for agent in config.agents}
+        controller.external_services = {}
+        controller._codex_client = None
+
+        def incoming(message_id: int, thread_id: int, text: str) -> dict[str, object]:
+            return {
+                "update_id": message_id,
+                "message": {
+                    "message_id": message_id,
+                    "message_thread_id": thread_id,
+                    "is_topic_message": True,
+                    "from": {"id": 42, "is_bot": False},
+                    "chat": {"id": -1001234567890, "type": "supergroup", "title": "Example"},
+                    "text": text,
+                },
+            }
+
+        try:
+            active_topic = controller.state.observe_topic(
+                project_id="example-project",
+                chat_id=-1001234567890,
+                thread_id=109,
+                title="Example",
+            )
+            controller.state.activate_agent(
+                active_topic.topic_id, "hermes", "provider-selected", "high"
+            )
+            self.assertFalse(controller.handle_update(incoming(9, 109, "native active request")))
+            self.assertTrue(
+                controller.state.claim_message(-1001234567890, 9, observer_agent_id="audit")
+            )
+
+            reply = incoming(10, 110, "native reply")
+            cast(dict[str, Any], reply["message"])["reply_to_message"] = {
+                "message_id": 90,
+                "from": {"id": 90, "is_bot": True, "username": "example_hermes_bot"},
+            }
+            self.assertFalse(controller.handle_update(reply))
+            self.assertTrue(
+                controller.state.claim_message(-1001234567890, 10, observer_agent_id="audit")
+            )
+
+            self.assertFalse(
+                controller.handle_update(
+                    incoming(11, 111, "@example_hermes_bot @example_native_bot native only")
+                )
+            )
+            self.assertTrue(
+                controller.state.claim_message(-1001234567890, 11, observer_agent_id="audit")
+            )
+
+            self.assertTrue(
+                controller.handle_update(
+                    incoming(12, 112, "@example_hermes_bot @example_open_bot mixed request")
+                )
+            )
+            mixed_topic = controller.state.find_topic(-1001234567890, 112)
+            assert mixed_topic is not None
+            self.assertEqual(
+                [
+                    job.agent_id
+                    for job in controller.state.provider_jobs_for_topic(mixed_topic.topic_id)
+                ],
+                ["opencode"],
+            )
+        finally:
+            controller.state.close()
+
+    def test_managed_external_catalog_refresh_never_invokes_local_runtime(self) -> None:
+        external = AgentDefinition(
+            "hermes",
+            "Hermes",
+            "example_hermes_bot",
+            "hermes",
+            None,
+            False,
+            True,
+            "provider-selected",
+            "high",
+        )
+        controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
+        controller.config = replace(self.config, agents=self.config.agents + (external,))
+        with patch.object(
+            controller, "_discover_provider_models", side_effect=AssertionError("CLI invoked")
+        ):
+            cold = controller._provider_catalog("hermes", refresh=True)
+            warm = controller._provider_catalog("hermes", refresh=False)
+        self.assertEqual(cold.source_version, "externally managed fallback")
+        self.assertEqual(warm.models[0].model_id, "provider-selected")
+
+    def test_controller_fails_fast_for_legacy_managed_external_jobs(self) -> None:
+        token = Path(self.tempdir.name) / "codex-token"
+        token.write_text("123456:secret-token-value", encoding="utf-8")
+        token.chmod(0o600)
+        project_root = self.registry.require_project("example-project").root
+        self.config.registry_path.write_text(
+            '{"schema_version": 1, "allowed_roots": ["%s"], "projects": '
+            '[{"project_id": "example-project", "display_name": "Example", '
+            '"topic_name": "Example", "root": "%s"}]}' % (project_root.parent, project_root),
+            encoding="utf-8",
+        )
+        codex = AgentDefinition(
+            "codex",
+            "Codex",
+            "example_codex_bot",
+            "codex",
+            token,
+            True,
+            False,
+            "gpt-5.6-sol",
+            "high",
+        )
+        hermes = AgentDefinition(
+            "hermes",
+            "Hermes",
+            "example_hermes_bot",
+            "hermes",
+            None,
+            False,
+            True,
+            "provider-selected",
+            "high",
+        )
+        config = replace(self.config, agents=(codex, hermes))
+        state = HubState.open(config.state_path)
+        try:
+            topic = state.observe_topic(
+                project_id="example-project",
+                chat_id=-1001234567890,
+                thread_id=113,
+                title="Example",
+            )
+            session = state.activate_agent(topic.topic_id, "hermes", "provider-selected", "high")
+            state.enqueue_provider_job(
+                idempotency_key="legacy-managed-external",
+                chat_id=-1001234567890,
+                message_id=13,
+                topic_id=topic.topic_id,
+                agent_id="hermes",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                model=session.model,
+                effort=session.effort,
+                payload_text="accepted before ownership changed",
+            )
+        finally:
+            state.close()
+        with self.assertRaisesRegex(ServiceError, "drain or explicitly reconcile"):
+            ProjectHubService(config)
+        direct_service = ProjectHubService(config, direct_messages_only=True)
+        direct_service.close()
 
     def test_cli_selects_one_configured_external_worker_and_rejects_unknown_agent(self) -> None:
         config_path = Path(self.tempdir.name) / "hub.json"
