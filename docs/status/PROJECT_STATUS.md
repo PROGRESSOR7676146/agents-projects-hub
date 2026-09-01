@@ -97,10 +97,18 @@ operator deployment inventory or live conversation evidence.
 - Private last-known-good provider catalogs with bounded callback keys and
   stale-after-failed-refresh monitoring.
 - Event-driven Codex quota rotation telemetry and provider-supplied OpenCode
-  reset telemetry.
+  reset telemetry. The isolated OpenCode worker watches only runtime-log bytes
+  appended after its owned process starts, recognizes the provider's exact
+  usage-limit/reset phrase even when the CLI omits HTTP status, terminates a CLI
+  that otherwise remains alive, and releases topic FIFO with a cached quota
+  failure instead of waiting for the general turn timeout.
 - Durable masked Codex account snapshots for provider-free Controller status,
   plus private masked account hints and honest unknown-limit display for other
   providers.
+- Provider replies share one compact Telegram identity line: session and agent
+  are not duplicated, model and effort use one label, and runtime implementation
+  details are hidden. Available context and quota telemetry uses short follow-up
+  lines with mobile-friendly reset timestamps; unavailable fields are omitted.
 - Declarative Telegram command-menu synchronization.
 - Durable bounded Telegram burst collection, socket-backed Codex same-turn
   steering, deterministic queued follow-up for runtimes without steering, and

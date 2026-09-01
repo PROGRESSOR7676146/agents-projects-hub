@@ -66,6 +66,7 @@ class ExternalCliAdapter:
         *,
         executable: str | None = None,
         runtime_home: Path | None = None,
+        opencode_log_path: Path | None = None,
         run: Run = subprocess.run,
     ) -> None:
         if runtime not in {"gemini", "antigravity", "opencode"}:
@@ -73,6 +74,12 @@ class ExternalCliAdapter:
         self.runtime = runtime
         self.executable = executable or ("agy" if runtime == "antigravity" else runtime)
         self.runtime_home = runtime_home.expanduser().resolve(strict=True) if runtime_home else None
+        self.opencode_log_path = (
+            opencode_log_path.expanduser().resolve(strict=False)
+            if opencode_log_path is not None
+            else Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share")))
+            / "opencode/log/opencode.log"
+        )
         self._run = run
         self._uses_default_runner = run is subprocess.run
         self._process_lock = threading.Lock()
@@ -190,7 +197,15 @@ class ExternalCliAdapter:
             environment["GEMINI_CLI_HOME"] = str(self.runtime_home)
         if not interrupt_prepared:
             self.prepare_interruptible_turn()
+        detected_limit: list[ProviderLimit] = []
         if self._uses_default_runner:
+            log_offset: int | None = None
+            if self.runtime == "opencode":
+                try:
+                    if self.opencode_log_path.is_file() and not self.opencode_log_path.is_symlink():
+                        log_offset = self.opencode_log_path.stat().st_size
+                except OSError:
+                    pass
             process = subprocess.Popen(
                 argv,
                 cwd=cwd,
@@ -203,6 +218,44 @@ class ExternalCliAdapter:
             )
             with self._process_lock:
                 self._active_process = process
+            limit_stop = threading.Event()
+
+            def watch_opencode_limit() -> None:
+                if log_offset is None:
+                    return
+                offset = log_offset
+                carry = ""
+                while not limit_stop.wait(0.2):
+                    try:
+                        size = self.opencode_log_path.stat().st_size
+                        if size < offset:
+                            offset = 0
+                        if size == offset:
+                            continue
+                        with self.opencode_log_path.open("rb") as log:
+                            log.seek(offset)
+                            appended = log.read(min(size - offset, 131072))
+                            offset = log.tell()
+                    except OSError:
+                        continue
+                    sample = (carry + appended.decode("utf-8", errors="replace"))[-135168:]
+                    limit = parse_opencode_limit(sample)
+                    carry = sample[-4096:]
+                    if limit is None:
+                        continue
+                    detected_limit.append(limit)
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    return
+
+            limit_monitor = threading.Thread(
+                target=watch_opencode_limit,
+                name="opencode-limit-monitor",
+                daemon=True,
+            )
+            limit_monitor.start()
             try:
                 try:
                     stdout, stderr = process.communicate(timeout=timeout)
@@ -216,6 +269,8 @@ class ExternalCliAdapter:
                     raise ExternalRuntimeError(f"{self.runtime} timed out safely")
                 result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
             finally:
+                limit_stop.set()
+                limit_monitor.join(timeout=1)
                 with self._process_lock:
                     if self._active_process is process:
                         self._active_process = None
@@ -231,6 +286,8 @@ class ExternalCliAdapter:
             )
         if self._interrupt_requested.is_set():
             raise ExternalTurnInterrupted(f"{self.runtime} turn interrupted by user")
+        if detected_limit:
+            raise ProviderLimitError(detected_limit[0])
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()[:1000]
             if self.runtime == "opencode" and (limit := parse_opencode_limit(detail)):

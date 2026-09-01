@@ -8,10 +8,65 @@ import time
 import unittest
 from pathlib import Path
 
-from hermes_codex_router.external_runtime import ExternalCliAdapter, ExternalTurnInterrupted
+from hermes_codex_router.external_runtime import (
+    ExternalCliAdapter,
+    ExternalTurnInterrupted,
+    ProviderLimitError,
+)
 
 
 class ExternalRuntimeTests(unittest.TestCase):
+    def test_opencode_limit_log_interrupts_cli_that_does_not_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "opencode.log"
+            log.touch()
+            executable = root / "provider"
+            executable.write_text(
+                f"#!{sys.executable}\n"
+                "import pathlib, time\n"
+                f"p=pathlib.Path({str(log)!r})\n"
+                "p.write_text('Monthly usage limit reached. Resets in 14 days.\\n')\n"
+                "time.sleep(30)\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o700)
+            adapter = ExternalCliAdapter(
+                "opencode",
+                executable=str(executable),
+                opencode_log_path=log,
+            )
+            started = time.monotonic()
+            with self.assertRaises(ProviderLimitError) as raised:
+                adapter.run_turn(cwd=root, prompt="work", timeout=5)
+
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(raised.exception.limit.window, "monthly")
+
+    def test_opencode_limit_monitor_ignores_preexisting_log_history(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "opencode.log"
+            log.write_text(
+                "Monthly usage limit reached. Resets in 14 days.\n",
+                encoding="utf-8",
+            )
+            executable = root / "provider"
+            executable.write_text(
+                f"#!{sys.executable}\n"
+                'print(\'{"sessionID":"ses-ok","response":"Visible answer"}\')\n',
+                encoding="utf-8",
+            )
+            executable.chmod(0o700)
+
+            result = ExternalCliAdapter(
+                "opencode",
+                executable=str(executable),
+                opencode_log_path=log,
+            ).run_turn(cwd=root, prompt="work", timeout=5)
+
+        self.assertEqual(result.text, "Visible answer")
+
     def test_interrupt_kills_a_provider_that_ignores_sigterm(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

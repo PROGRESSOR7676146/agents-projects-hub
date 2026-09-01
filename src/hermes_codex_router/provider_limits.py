@@ -32,7 +32,9 @@ class ProviderLimit:
 
 def parse_opencode_limit(text: str, *, now: datetime | None = None) -> ProviderLimit | None:
     match = _LIMIT.search(text)
-    if match is None or "429" not in text:
+    # The CLI response may carry HTTP 429, while OpenCode's durable log records
+    # the same provider-authored sentence without the status code.
+    if match is None:
         return None
     duration = timedelta()
     for amount, unit in _PART.findall(match.group("duration")):

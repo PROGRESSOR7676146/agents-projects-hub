@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from hermes_codex_router.codex_appserver import LimitWindow, RateLimits, TurnResult
-from hermes_codex_router.metadata import format_telegram_response
+from hermes_codex_router.metadata import format_agent_response, format_telegram_response
 
 
 class MetadataTests(unittest.TestCase):
@@ -30,11 +30,39 @@ class MetadataTests(unittest.TestCase):
         )
         self.assertIn("Fixed &lt;main&gt; &amp; tests", rendered)
         self.assertIn("<blockquote expandable>", rendered)
+        self.assertIn(
+            "Session: Example Project Alpha · Backend / Agent: Codex · gpt-5.6-sol-high",
+            rendered,
+        )
         self.assertIn("Context remaining: 75.0%", rendered)
-        self.assertIn("5-hour remaining: 65%", rendered)
-        self.assertIn("Weekly remaining: 48%", rendered)
-        self.assertIn("Model: gpt-5.6-sol", rendered)
-        self.assertIn("Effort: high", rendered)
+        self.assertIn("5-hour remaining: 65%, reset: Feb. 2, 05:40", rendered)
+        self.assertIn("Weekly remaining: 48%, reset: Feb. 8, 00:33", rendered)
+        self.assertNotIn("2026", rendered)
+        self.assertNotIn("MSK", rendered)
+        self.assertNotIn("Model:", rendered)
+        self.assertNotIn("Effort:", rendered)
+
+    def test_external_footer_is_compact_and_omits_unavailable_fields(self) -> None:
+        rendered = format_agent_response(
+            "Done",
+            {
+                "Session": "Hub · General · Antigravity",
+                "Agent": "Antigravity",
+                "Runtime": "antigravity",
+                "Model": "gemini-3.7-flash",
+                "Effort": "high",
+                "Context remaining": "unavailable",
+                "Usage windows": "unavailable",
+            },
+        )
+
+        self.assertIn(
+            "Session: Hub · General / Agent: Antigravity · gemini-3.7-flash-high",
+            rendered,
+        )
+        self.assertNotIn("Runtime", rendered)
+        self.assertNotIn("unavailable", rendered)
+        self.assertEqual(rendered.count("\n", rendered.index("<blockquote")), 0)
 
 
 if __name__ == "__main__":
