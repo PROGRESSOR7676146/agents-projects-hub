@@ -25,6 +25,7 @@ class Bot:
         self.fail = fail
         self.sent: list[tuple[int, int, str]] = []
         self.actions: list[tuple[int, int, str]] = []
+        self.drafts: list[tuple[int, int, int, str]] = []
 
     def send_chat_action(self, chat_id: int, thread_id: int, action: str = "typing") -> None:
         self.actions.append((chat_id, thread_id, action))
@@ -34,6 +35,11 @@ class Bot:
         if self.fail:
             raise RuntimeError("transport unavailable")
         return len(self.sent)
+
+    def send_message_draft(
+        self, chat_id: int, thread_id: int, *, draft_id: int, text: str = ""
+    ) -> None:
+        self.drafts.append((chat_id, thread_id, draft_id, text))
 
 
 class TelegramOutboxSenderTests(unittest.TestCase):
@@ -167,6 +173,40 @@ class TelegramOutboxSenderTests(unittest.TestCase):
                     (-1001234567890, 79, "typing"),
                 ],
             )
+        finally:
+            sender.close()
+
+    def test_private_work_refreshes_native_thinking_draft(self) -> None:
+        state = HubState.open(self.config.state_path)
+        try:
+            topic = state.observe_topic(
+                project_id="example-project",
+                chat_id=123456789,
+                thread_id=1,
+                title="Direct",
+            )
+            session = state.activate_agent(topic.topic_id, "opencode", "model-1", "high")
+            state.enqueue_provider_job(
+                idempotency_key="telegram:123456789:44",
+                chat_id=123456789,
+                message_id=44,
+                topic_id=topic.topic_id,
+                agent_id="opencode",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                provider_session_id=None,
+                model=session.model,
+                effort=session.effort,
+                payload_text="private task",
+            )
+        finally:
+            state.close()
+        open_bot = Bot()
+        sender = self.sender(opencode=open_bot, antigravity=Bot())
+        try:
+            sender._refresh_chat_actions(now_monotonic=10.0)
+            self.assertEqual(open_bot.drafts, [(123456789, 1, 44, "")])
+            self.assertEqual(open_bot.actions, [])
         finally:
             sender.close()
 

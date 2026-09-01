@@ -23,6 +23,7 @@ from hermes_codex_router.state import HubState
 class FakeTelegram:
     def __init__(self) -> None:
         self.sent: list[str] = []
+        self.chat_actions: list[tuple[int, int, str]] = []
 
     def send_html(self, _chat_id: int, _thread_id: int, text: str, **_kwargs: object) -> int:
         self.sent.append(text)
@@ -30,6 +31,9 @@ class FakeTelegram:
 
     def answer_callback(self, _callback_id: str, _text: str = "") -> None:
         pass
+
+    def send_chat_action(self, chat_id: int, thread_id: int, action: str = "typing") -> None:
+        self.chat_actions.append((chat_id, thread_id, action))
 
 
 class QueueClient:
@@ -192,7 +196,7 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
 
     def test_duplicate_update_creates_one_job_and_one_turn(self) -> None:
         client = QueueClient()
-        service, _ = self.service(client)
+        service, telegram = self.service(client)
         self.assertTrue(service.handle_update(update(1, "one task")))
         self.assertFalse(service.handle_update(update(1, "one task")))
         topic = service.state.find_topic(-1001234567890, 77)
@@ -200,6 +204,44 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         self.assertEqual(len(service.state.provider_jobs_for_topic(topic.topic_id)), 1)
         self.assertTrue(service.run_embedded_queue_cycle())
         self.assertEqual(len(client.turn_threads), 1)
+        self.assertEqual(
+            telegram.chat_actions,
+            [(-1001234567890, 77, "typing")],
+        )
+        service.close()
+
+    def test_consecutive_productive_messages_form_one_durable_provider_turn(self) -> None:
+        client = QueueClient()
+        service, _ = self.service(client)
+        service.config = replace(
+            service.config, message_batch_quiet_ms=1500, message_batch_max_ms=8000
+        )
+        self.assertTrue(service.handle_update(update(1, "first part")))
+        self.assertTrue(service.handle_update(update(2, "second part")))
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        jobs = service.state.provider_jobs_for_topic(topic.topic_id)
+        self.assertEqual(len(jobs), 1)
+        self.assertIn("first part", jobs[0].payload_text)
+        self.assertIn(
+            "FOLLOW-UP USER MESSAGE (same Telegram burst):\nsecond part", jobs[0].payload_text
+        )
+        self.assertFalse(service.run_embedded_queue_cycle())
+        service.close()
+
+    def test_plain_emergency_word_cancels_queued_work_without_provider_call(self) -> None:
+        client = QueueClient()
+        service, telegram = self.service(client)
+        self.assertTrue(service.handle_update(update(1, "queued task")))
+        self.assertTrue(service.handle_update(update(2, "СтОп")))
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        self.assertEqual(
+            service.state.provider_jobs_for_topic(topic.topic_id)[0].status, "cancelled"
+        )
+        self.assertFalse(service.run_embedded_queue_cycle())
+        self.assertEqual(client.turn_threads, [])
+        self.assertTrue(any("отменено задач в очереди: 1" in item for item in telegram.sent))
         service.close()
 
     def test_queued_work_survives_recreation_and_commands_do_not_enqueue(self) -> None:

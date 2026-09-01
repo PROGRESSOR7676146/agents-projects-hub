@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-LATEST_SCHEMA_VERSION = 12
+LATEST_SCHEMA_VERSION = 14
 
 
 MIGRATION_1 = """
@@ -382,6 +382,81 @@ ON runtime_health(agent_id, heartbeat_at);
 """
 
 
+MIGRATION_13 = """
+CREATE TABLE IF NOT EXISTS provider_job_inputs (
+    job_id TEXT NOT NULL REFERENCES provider_jobs(job_id),
+    chat_id INTEGER NOT NULL CHECK(chat_id != 0),
+    message_id INTEGER NOT NULL CHECK(message_id > 0),
+    part_index INTEGER NOT NULL CHECK(part_index > 0),
+    input_text TEXT NOT NULL CHECK(length(input_text) BETWEEN 1 AND 20000),
+    received_at TEXT NOT NULL,
+    PRIMARY KEY(chat_id, message_id),
+    UNIQUE(job_id, part_index)
+);
+INSERT OR IGNORE INTO provider_job_inputs (
+    job_id, chat_id, message_id, part_index, input_text, received_at
+)
+SELECT job_id, chat_id, message_id, 1, payload_text, created_at
+FROM provider_jobs;
+CREATE INDEX IF NOT EXISTS provider_job_inputs_job
+ON provider_job_inputs(job_id, part_index);
+CREATE TABLE IF NOT EXISTS provider_stop_requests (
+    request_id TEXT PRIMARY KEY CHECK(length(request_id) BETWEEN 1 AND 128),
+    topic_id INTEGER NOT NULL REFERENCES topics(topic_id),
+    chat_id INTEGER NOT NULL CHECK(chat_id != 0),
+    message_id INTEGER NOT NULL CHECK(message_id > 0),
+    target_agent_id TEXT NOT NULL CHECK(length(target_agent_id) BETWEEN 1 AND 64),
+    status TEXT NOT NULL CHECK(status IN ('pending', 'completed')),
+    cancelled_queued_count INTEGER NOT NULL DEFAULT 0 CHECK(cancelled_queued_count >= 0),
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    UNIQUE(chat_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS provider_stop_requests_pending
+ON provider_stop_requests(topic_id, target_agent_id, status, created_at);
+CREATE TABLE IF NOT EXISTS provider_job_absorptions (
+    child_job_id TEXT PRIMARY KEY REFERENCES provider_jobs(job_id),
+    parent_job_id TEXT NOT NULL REFERENCES provider_jobs(job_id),
+    provider_turn_id TEXT NOT NULL CHECK(length(provider_turn_id) BETWEEN 1 AND 256),
+    created_at TEXT NOT NULL,
+    CHECK(child_job_id != parent_job_id)
+);
+CREATE INDEX IF NOT EXISTS provider_job_absorptions_parent
+ON provider_job_absorptions(parent_job_id, created_at);
+"""
+
+
+# Version 13 reached one live deployment after provider_job_inputs was added but
+# before the stop/absorption tables were appended to MIGRATION_13.  Migration 14
+# intentionally repeats the idempotent CREATE statements so upgraded databases
+# converge with clean installations.
+MIGRATION_14 = """
+CREATE TABLE IF NOT EXISTS provider_stop_requests (
+    request_id TEXT PRIMARY KEY CHECK(length(request_id) BETWEEN 1 AND 128),
+    topic_id INTEGER NOT NULL REFERENCES topics(topic_id),
+    chat_id INTEGER NOT NULL CHECK(chat_id != 0),
+    message_id INTEGER NOT NULL CHECK(message_id > 0),
+    target_agent_id TEXT NOT NULL CHECK(length(target_agent_id) BETWEEN 1 AND 64),
+    status TEXT NOT NULL CHECK(status IN ('pending', 'completed')),
+    cancelled_queued_count INTEGER NOT NULL DEFAULT 0 CHECK(cancelled_queued_count >= 0),
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    UNIQUE(chat_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS provider_stop_requests_pending
+ON provider_stop_requests(topic_id, target_agent_id, status, created_at);
+CREATE TABLE IF NOT EXISTS provider_job_absorptions (
+    child_job_id TEXT PRIMARY KEY REFERENCES provider_jobs(job_id),
+    parent_job_id TEXT NOT NULL REFERENCES provider_jobs(job_id),
+    provider_turn_id TEXT NOT NULL CHECK(length(provider_turn_id) BETWEEN 1 AND 256),
+    created_at TEXT NOT NULL,
+    CHECK(child_job_id != parent_job_id)
+);
+CREATE INDEX IF NOT EXISTS provider_job_absorptions_parent
+ON provider_job_absorptions(parent_job_id, created_at);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -482,6 +557,12 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     if previous < 12:
         connection.executescript(MIGRATION_12)
         connection.execute("PRAGMA user_version = 12")
+    if previous < 13:
+        connection.executescript(MIGRATION_13)
+        connection.execute("PRAGMA user_version = 13")
+    if previous < 14:
+        connection.executescript(MIGRATION_14)
+        connection.execute("PRAGMA user_version = 14")
     connection.commit()
     current = int(connection.execute("PRAGMA user_version").fetchone()[0])
     return previous, current

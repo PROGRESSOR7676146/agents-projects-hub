@@ -93,6 +93,32 @@ class CodexAppServerTests(unittest.TestCase):
         self.assertEqual(params["input"], [{"type": "text", "text": "inspect; touch /tmp/no"}])
         self.assertEqual(params["effort"], "high")
 
+    def test_turn_steer_and_interrupt_use_active_turn_preconditions(self) -> None:
+        transport = FakeTransport(
+            [
+                {"id": 1, "result": {"turnId": "turn-9"}},
+                {"id": 2, "result": {}},
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True)
+
+        returned = client.steer_turn(
+            thread_id="thread-123",
+            turn_id="turn-9",
+            text="new direction",
+            client_user_message_id="telegram-message-2",
+        )
+        client.interrupt_turn(thread_id="thread-123", turn_id="turn-9")
+
+        self.assertEqual(returned, "turn-9")
+        self.assertEqual(transport.sent[0]["method"], "turn/steer")
+        self.assertEqual(transport.sent[0]["params"]["expectedTurnId"], "turn-9")
+        self.assertEqual(
+            transport.sent[0]["params"]["input"],
+            [{"type": "text", "text": "new direction"}],
+        )
+        self.assertEqual(transport.sent[1]["method"], "turn/interrupt")
+
     def test_resume_thread_reasserts_safe_policy(self) -> None:
         transport = FakeTransport(
             [

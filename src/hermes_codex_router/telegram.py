@@ -21,6 +21,7 @@ class TopicMessage:
     sender_id: int
     text: str
     reply_to_username: str | None = None
+    is_forwarded: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +43,15 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
     text = message.get("text")
     raw_thread_id = message.get("message_thread_id")
     reply_to_username = None
+    is_forwarded = isinstance(message.get("forward_origin"), dict) or any(
+        key in message
+        for key in (
+            "forward_from",
+            "forward_from_chat",
+            "forward_sender_name",
+            "forward_date",
+        )
+    )
     reply = message.get("reply_to_message")
     # A manually selected Telegram quote is commentary for the active agent,
     # while a plain Reply is direct addressing of the original bot author.
@@ -74,6 +84,7 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
         sender_id=int(sender["id"]),
         text=text,
         reply_to_username=reply_to_username,
+        is_forwarded=is_forwarded,
     )
 
 
@@ -104,6 +115,16 @@ def parse_direct_message(update: dict[str, Any]) -> TopicMessage | None:
         chat_title="Direct",
         sender_id=int(sender["id"]),
         text=text,
+        is_forwarded=isinstance(message.get("forward_origin"), dict)
+        or any(
+            key in message
+            for key in (
+                "forward_from",
+                "forward_from_chat",
+                "forward_sender_name",
+                "forward_date",
+            )
+        ),
     )
 
 
@@ -240,6 +261,23 @@ class TelegramBotApi:
             params["message_thread_id"] = thread_id
         if self._call_with_timeout("sendChatAction", request_timeout=2, **params) is not True:
             raise TelegramError("sendChatAction returned an invalid result")
+
+    def send_message_draft(
+        self, chat_id: int, thread_id: int, *, draft_id: int, text: str = ""
+    ) -> None:
+        if chat_id <= 0:
+            raise TelegramError("message drafts require a private chat")
+        if draft_id == 0:
+            raise TelegramError("message draft id must be non-zero")
+        params: dict[str, Any] = {
+            "chat_id": chat_id,
+            "draft_id": draft_id,
+            "text": text[:4096],
+        }
+        if thread_id != 1:
+            params["message_thread_id"] = thread_id
+        if self._call_with_timeout("sendMessageDraft", request_timeout=2, **params) is not True:
+            raise TelegramError("sendMessageDraft returned an invalid result")
 
     def answer_callback(self, callback_id: str, text: str = "") -> None:
         params: dict[str, Any] = {"callback_query_id": callback_id}

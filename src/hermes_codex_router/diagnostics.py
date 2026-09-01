@@ -12,7 +12,8 @@ from .codex_proxy_health import probe_codex_runtime_proxy
 from .hermes_health import probe_gateway_heartbeat, probe_hermes_group_policy
 from .hub_config import HubConfig
 from .migrations import LATEST_SCHEMA_VERSION
-from .recovery_plane import RecoveryPlaneProbe, probe_recovery_plane
+from .provider_telemetry import probe_antigravity_telemetry
+from .recovery_plane import RecoveryPlaneProbe, probe_recovery_plane, probe_tlive_runtime
 from .registry import load_registry
 from .state import HubState
 from .terminal_runtime import TerminalRuntime
@@ -111,6 +112,16 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
                 )
             else:
                 checks.append(_command(executable))
+    for agent_id, settings in config.provider_telemetry.items():
+        telemetry = probe_antigravity_telemetry(settings)
+        checks.append(
+            Check(
+                f"provider_telemetry:{agent_id}",
+                telemetry.ok,
+                telemetry.detail,
+                required=False,
+            )
+        )
     terminal = TerminalRuntime(
         socket_path=config.codex_socket_path,
         backend=config.terminal.backend,
@@ -161,22 +172,24 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
     if config.recovery_plane.enabled:
         assert config.recovery_plane.hermes_config_path is not None
         assert config.recovery_plane.tlive_config_path is not None
+        heartbeat = probe_gateway_heartbeat(
+            config.recovery_plane.hermes_config_path.parent / "state" / "gateway.heartbeat"
+        )
         recovery = probe_recovery_plane(
             RecoveryPlaneProbe(
                 hermes_service=config.recovery_plane.hermes_service,
                 tlive_service=config.recovery_plane.tlive_service,
                 hermes_config_path=config.recovery_plane.hermes_config_path,
                 tlive_config_path=config.recovery_plane.tlive_config_path,
-            )
+            ),
+            hermes_liveness=heartbeat.ok,
+            tlive_liveness=probe_tlive_runtime(),
         )
         recovery_available = recovery.available
         expected_chats = tuple(
             item.telegram_chat_id for item in config.projects if item.telegram_chat_id is not None
         )
         hermes_policy = probe_hermes_group_policy(expected_chats)
-        heartbeat = probe_gateway_heartbeat(
-            config.recovery_plane.hermes_config_path.parent / "state" / "gateway.heartbeat"
-        )
         checks.extend(
             (
                 Check(

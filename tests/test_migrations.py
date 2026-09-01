@@ -153,6 +153,9 @@ class MigrationTests(unittest.TestCase):
                         "topic_queue_counters",
                         "turn_dispatches",
                         "runtime_health",
+                        "provider_job_inputs",
+                        "provider_stop_requests",
+                        "provider_job_absorptions",
                     }.issubset(tables)
                 )
                 self.assertIsNotNone(
@@ -162,6 +165,37 @@ class MigrationTests(unittest.TestCase):
                              AND name = 'provider_jobs_context_watermark_topic'"""
                     ).fetchone()
                 )
+            finally:
+                migrated.close()
+
+    def test_version_14_repairs_early_version_13_database(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            migrate_database(path, create_backup=False)
+            connection = sqlite3.connect(path)
+            try:
+                connection.executescript(
+                    """DROP TABLE provider_job_absorptions;
+                       DROP TABLE provider_stop_requests;
+                       PRAGMA user_version = 13;"""
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            result = migrate_database(path, create_backup=False)
+
+            self.assertEqual((result.previous_version, result.current_version), (13, 14))
+            migrated = sqlite3.connect(path)
+            try:
+                tables = {
+                    row[0]
+                    for row in migrated.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+                self.assertIn("provider_stop_requests", tables)
+                self.assertIn("provider_job_absorptions", tables)
             finally:
                 migrated.close()
 

@@ -5,8 +5,22 @@ import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TypedDict
 
 from hermes_codex_router.state import HubState, StateError
+
+
+class BurstJobCommon(TypedDict):
+    chat_id: int
+    topic_id: int
+    agent_id: str
+    session_id: str
+    session_generation: int
+    model: str
+    effort: str
+    context_watermark: int | None
+    quiet_ms: int
+    max_ms: int
 
 
 class ProviderJobQueueTests(unittest.TestCase):
@@ -86,6 +100,181 @@ class ProviderJobQueueTests(unittest.TestCase):
                 (self.topic.chat_id, 501),
             ).fetchone()[0],
             1,
+        )
+        self.assertEqual(
+            [
+                tuple(row)
+                for row in self.state._connection.execute(
+                    "SELECT part_index FROM provider_job_inputs WHERE job_id = ?",
+                    (first.job_id,),
+                ).fetchall()
+            ],
+            [(1,)],
+        )
+
+    def test_burst_inputs_append_to_one_delayed_job_and_remain_idempotent(self) -> None:
+        common: BurstJobCommon = {
+            "chat_id": self.topic.chat_id,
+            "topic_id": self.topic.topic_id,
+            "agent_id": "codex",
+            "session_id": self.codex.session_id,
+            "session_generation": self.codex.generation,
+            "model": "gpt-example",
+            "effort": "high",
+            "context_watermark": self.context_turn_id,
+            "quiet_ms": 1500,
+            "max_ms": 8000,
+        }
+        first, first_accepted = self.state.enqueue_or_append_provider_job(
+            **common,
+            idempotency_key="telegram:burst:601",
+            message_id=601,
+            payload_text="context wrapper\nCURRENT USER MESSAGE:\nfirst",
+            appended_user_text="first",
+        )
+        second, second_accepted = self.state.enqueue_or_append_provider_job(
+            **common,
+            idempotency_key="telegram:burst:602",
+            message_id=602,
+            payload_text="duplicated context must not be used",
+            appended_user_text="second",
+        )
+        duplicate, duplicate_accepted = self.state.enqueue_or_append_provider_job(
+            **common,
+            idempotency_key="telegram:burst:602",
+            message_id=602,
+            payload_text="ignored duplicate",
+            appended_user_text="second",
+        )
+
+        self.assertTrue(first_accepted)
+        self.assertTrue(second_accepted)
+        self.assertFalse(duplicate_accepted)
+        self.assertEqual(first.job_id, second.job_id)
+        self.assertEqual(second.job_id, duplicate.job_id)
+        self.assertIn("CURRENT USER MESSAGE:\nfirst", second.payload_text)
+        self.assertIn("FOLLOW-UP USER MESSAGE (same Telegram burst):\nsecond", second.payload_text)
+        self.assertNotIn("duplicated context", second.payload_text)
+        self.assertIsNotNone(second.next_attempt_at)
+        self.assertEqual(
+            [
+                tuple(row)
+                for row in self.state._connection.execute(
+                    """SELECT message_id, part_index, input_text
+                       FROM provider_job_inputs WHERE job_id = ? ORDER BY part_index""",
+                    (first.job_id,),
+                ).fetchall()
+            ],
+            [(601, 1, "context wrapper\nCURRENT USER MESSAGE:\nfirst"), (602, 2, "second")],
+        )
+        self.assertIsNone(self.state.lease_provider_job("codex", "worker-now"))
+        assert second.next_attempt_at is not None
+        ready = datetime.fromisoformat(second.next_attempt_at) + timedelta(milliseconds=1)
+        leased = self.state.lease_provider_job("codex", "worker-later", now=ready)
+        self.assertIsNotNone(leased)
+        assert leased is not None
+        self.assertEqual(leased.job_id, first.job_id)
+
+    def test_burst_does_not_append_across_an_intervening_topic_job(self) -> None:
+        first, _ = self.state.enqueue_or_append_provider_job(
+            idempotency_key="telegram:burst:630",
+            chat_id=self.topic.chat_id,
+            message_id=630,
+            topic_id=self.topic.topic_id,
+            agent_id="codex",
+            session_id=self.codex.session_id,
+            session_generation=self.codex.generation,
+            model=self.codex.model,
+            effort=self.codex.effort,
+            payload_text="first",
+            appended_user_text="first",
+            quiet_ms=1500,
+            max_ms=8000,
+        )
+        other = self.state.ensure_satellite(
+            self.topic.topic_id, "opencode", "provider-selected", "high"
+        )
+        self.state.enqueue_provider_job(
+            idempotency_key="telegram:burst:631",
+            chat_id=self.topic.chat_id,
+            message_id=631,
+            topic_id=self.topic.topic_id,
+            agent_id="opencode",
+            session_id=other.session_id,
+            session_generation=other.generation,
+            model=other.model,
+            effort=other.effort,
+            payload_text="intervening",
+        )
+        last, _ = self.state.enqueue_or_append_provider_job(
+            idempotency_key="telegram:burst:632",
+            chat_id=self.topic.chat_id,
+            message_id=632,
+            topic_id=self.topic.topic_id,
+            agent_id="codex",
+            session_id=self.codex.session_id,
+            session_generation=self.codex.generation,
+            model=self.codex.model,
+            effort=self.codex.effort,
+            payload_text="last",
+            appended_user_text="last",
+            quiet_ms=1500,
+            max_ms=8000,
+        )
+        self.assertNotEqual(first.job_id, last.job_id)
+        self.assertEqual(last.topic_sequence, 3)
+
+    def test_emergency_stop_cancels_queue_and_remains_pending_for_active_job(self) -> None:
+        active, _ = self.enqueue(610)
+        queued, _ = self.enqueue(611)
+        leased = self.state.lease_provider_job("codex", "worker")
+        assert leased is not None and leased.lease_token is not None
+        executing = self.state.mark_provider_job_executing(leased.job_id, leased.lease_token)
+
+        request_id, cancelled, pending = self.state.request_emergency_stop(
+            topic_id=self.topic.topic_id,
+            chat_id=self.topic.chat_id,
+            message_id=612,
+            target_agent_id="codex",
+        )
+
+        self.assertEqual(executing.job_id, active.job_id)
+        self.assertEqual(cancelled, 1)
+        self.assertTrue(pending)
+        self.assertEqual(self.state.get_provider_job(queued.job_id).status, "cancelled")
+        self.assertEqual(
+            self.state.pending_emergency_stop(self.topic.topic_id, "codex"), request_id
+        )
+        self.state.cancel_active_provider_job(executing.job_id, leased.lease_token)
+        self.state.complete_emergency_stop(request_id)
+        self.assertEqual(self.state.get_provider_job(active.job_id).status, "cancelled")
+        self.assertIsNone(self.state.pending_emergency_stop(self.topic.topic_id, "codex"))
+
+    def test_compatible_fifo_successor_can_be_absorbed_into_active_turn(self) -> None:
+        parent, _ = self.enqueue(620)
+        child, _ = self.enqueue(621)
+        parent_lease = self.state.lease_provider_job("codex", "worker")
+        assert parent_lease is not None and parent_lease.lease_token is not None
+        self.state.mark_provider_job_executing(parent.job_id, parent_lease.lease_token)
+
+        followup = self.state.lease_steer_followup(parent.job_id, "steer-worker")
+        assert followup is not None and followup.lease_token is not None
+        self.assertEqual(followup.job_id, child.job_id)
+        self.state.mark_provider_job_executing(followup.job_id, followup.lease_token)
+        self.state.complete_steered_job(
+            followup.job_id,
+            followup.lease_token,
+            parent_job_id=parent.job_id,
+            provider_turn_id="turn-example",
+        )
+
+        self.assertEqual(self.state.get_provider_job(child.job_id).status, "completed")
+        self.assertEqual(
+            self.state._connection.execute(
+                "SELECT parent_job_id FROM provider_job_absorptions WHERE child_job_id = ?",
+                (child.job_id,),
+            ).fetchone()[0],
+            parent.job_id,
         )
 
     def test_enqueue_rejects_oversized_or_mismatched_snapshot(self) -> None:

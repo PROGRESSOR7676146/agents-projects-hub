@@ -17,6 +17,10 @@ class RpcError(RuntimeError):
     pass
 
 
+class RpcRejectedError(RpcError):
+    """The app-server returned an explicit JSON-RPC rejection."""
+
+
 class MessageTransport(Protocol):
     def send(self, message: dict[str, Any]) -> None: ...
 
@@ -257,7 +261,7 @@ class CodexAppServerClient:
             if message.get("id") == request_id:
                 if "error" in message:
                     error = message.get("error") or {}
-                    raise RpcError(str(error.get("message") or "Codex RPC error"))
+                    raise RpcRejectedError(str(error.get("message") or "Codex RPC error"))
                 if "result" not in message:
                     raise RpcError(f"Codex RPC response for {method} has no result")
                 return message["result"]
@@ -393,6 +397,36 @@ class CodexAppServerClient:
         if not isinstance(turn_id, str) or not turn_id:
             raise RpcError("turn/start did not return a turn id")
         return turn_id
+
+    def interrupt_turn(self, *, thread_id: str, turn_id: str) -> None:
+        result = self._request(
+            "turn/interrupt",
+            {"threadId": thread_id, "turnId": turn_id},
+        )
+        if result is not None and not isinstance(result, dict):
+            raise RpcError("turn/interrupt returned an invalid result")
+
+    def steer_turn(
+        self,
+        *,
+        thread_id: str,
+        turn_id: str,
+        text: str,
+        client_user_message_id: str,
+    ) -> str:
+        result = self._request(
+            "turn/steer",
+            {
+                "threadId": thread_id,
+                "expectedTurnId": turn_id,
+                "clientUserMessageId": client_user_message_id,
+                "input": [{"type": "text", "text": text}],
+            },
+        )
+        returned_turn = result.get("turnId") if isinstance(result, dict) else None
+        if not isinstance(returned_turn, str) or not returned_turn:
+            raise RpcError("turn/steer did not return a turn id")
+        return returned_turn
 
     def wait_for_turn(self, turn_id: str) -> TurnResult:
         """Wait for one turn while excluding hidden reasoning from the result."""

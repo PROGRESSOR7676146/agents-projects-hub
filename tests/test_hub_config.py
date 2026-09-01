@@ -327,6 +327,14 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(load_hub_config(self.write_config()).dispatch_mode, "inline")
         self.assertEqual(load_hub_config(self.write_config()).queue_runtime, "embedded")
         self.assertEqual(load_hub_config(self.write_config()).outbox_runtime, "controller")
+        self.assertEqual(load_hub_config(self.write_config()).message_batch_quiet_ms, 0)
+        self.assertEqual(load_hub_config(self.write_config()).message_batch_max_ms, 8000)
+        batched = load_hub_config(
+            self.write_config(message_batch_quiet_ms=1500, message_batch_max_ms=9000)
+        )
+        self.assertEqual(
+            (batched.message_batch_quiet_ms, batched.message_batch_max_ms), (1500, 9000)
+        )
         self.assertEqual(
             load_hub_config(self.write_config(dispatch_mode="queue")).dispatch_mode,
             "queue",
@@ -357,6 +365,12 @@ class HubConfigTests(unittest.TestCase):
             load_hub_config(self.write_config(outbox_runtime="remote"))
         with self.assertRaisesRegex(HubConfigError, "external queue runtime"):
             load_hub_config(self.write_config(outbox_runtime="external"))
+        with self.assertRaisesRegex(HubConfigError, "message_batch_quiet_ms"):
+            load_hub_config(self.write_config(message_batch_quiet_ms=6000))
+        with self.assertRaisesRegex(HubConfigError, "must not exceed"):
+            load_hub_config(
+                self.write_config(message_batch_quiet_ms=2000, message_batch_max_ms=1000)
+            )
 
     def test_rejects_inline_hub_bot_token(self) -> None:
         with self.assertRaisesRegex(HubConfigError, "inline token"):

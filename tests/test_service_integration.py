@@ -421,6 +421,70 @@ class ServiceIntegrationTests(unittest.TestCase):
         self.assertIn("understood, connection works", client.prompts[0])
         self.assertIn("Now continue the project", client.prompts[0])
 
+    def test_forwarded_command_is_passive_quote_for_the_next_user_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project_root = base / "Project"
+            (project_root / ".git").mkdir(parents=True)
+            state_path = base / "state.db"
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(42,),
+                registry_path=base / "projects.json",
+                state_path=state_path,
+                codex_socket_path=base / "codex.sock",
+                manage_codex_server=False,
+                terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+                projects=(ProjectBinding("project", -1001234567890),),
+                agents=(
+                    AgentDefinition(
+                        "codex",
+                        "Codex",
+                        "project_codex_bot",
+                        "codex",
+                        None,
+                        True,
+                        False,
+                        "gpt-5.6-sol",
+                        "high",
+                    ),
+                ),
+            )
+            registry = ProjectRegistry(
+                1, (base,), (Project("project", "Project", "Project", project_root),)
+            )
+            client = FakeClient()
+            telegram = FakeTelegram()
+            value = ProjectHubService.__new__(ProjectHubService)
+            value.config = config
+            value.registry = registry
+            value.state = HubState.open(state_path)
+            value.agent = config.agents[0]
+            value.telegram = cast(Any, telegram)
+            value.supervisor = cast(Any, FakeSupervisor(client))
+            value._codex_client = None
+            value.usernames = {"codex": "project_codex_bot"}
+            forwarded = update(18, "/stop")
+            cast(dict[str, Any], forwarded["message"])["forward_origin"] = {
+                "type": "user",
+                "sender_user": {"id": 9000000000, "is_bot": True},
+                "date": 1788220000,
+            }
+
+            self.assertTrue(value.handle_update(forwarded))
+            self.assertEqual(client.prompts, [])
+            self.assertEqual(telegram.sent, [])
+            topic = value.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            self.assertIsNone(value.state.pending_emergency_stop(topic.topic_id, "codex"))
+            self.assertTrue(value.handle_update(update(19, "What does that quote mean?")))
+            value.state.close()
+
+        self.assertEqual(len(client.prompts), 1)
+        self.assertIn("FORWARDED-QUOTE/TELEGRAM/QUOTED-CONTEXT", client.prompts[0])
+        self.assertIn("/stop", client.prompts[0])
+        self.assertIn("What does that quote mean?", client.prompts[0])
+
     def test_central_ingress_dispatches_reply_to_external_agent_without_codex_turn(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

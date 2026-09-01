@@ -137,7 +137,9 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         try:
             self.assertTrue(worker.run_cycle())
             self.assertFalse(worker.run_cycle())
-            self.assertEqual(adapter.calls, ["durable request"])
+            self.assertEqual(len(adapter.calls), 1)
+            self.assertIn("TELEGRAM INTERACTION CONTRACT v1", adapter.calls[0])
+            self.assertTrue(adapter.calls[0].endswith("CURRENT USER TURN:\ndurable request"))
             self.assertEqual(worker.state.get_provider_job(original.job_id).status, "result_ready")
             self.assertEqual(
                 worker.state.get_telegram_outbox_for_job(original.job_id).status,
@@ -167,7 +169,13 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         replacement = self.harness.worker("opencode", recovered_adapter)
         try:
             self.assertTrue(replacement.run_cycle())
-            self.assertEqual(recovered_adapter.calls, ["recover pre-execution lease"])
+            self.assertEqual(len(recovered_adapter.calls), 1)
+            self.assertIn("TELEGRAM INTERACTION CONTRACT v1", recovered_adapter.calls[0])
+            self.assertTrue(
+                recovered_adapter.calls[0].endswith(
+                    "CURRENT USER TURN:\nrecover pre-execution lease"
+                )
+            )
         finally:
             replacement.close()
 

@@ -186,9 +186,15 @@ class TelegramOutboxSender:
             if current < self._chat_action_due.get(key, 0.0):
                 continue
             try:
-                self.telegram_bots[activity.agent_id].send_chat_action(
-                    activity.chat_id, activity.thread_id
-                )
+                telegram = self.telegram_bots[activity.agent_id]
+                if activity.chat_id > 0:
+                    telegram.send_message_draft(
+                        activity.chat_id,
+                        activity.thread_id,
+                        draft_id=activity.message_id,
+                    )
+                else:
+                    telegram.send_chat_action(activity.chat_id, activity.thread_id)
             except Exception as exc:
                 if key not in self._chat_action_failures:
                     self._record_event(

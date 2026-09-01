@@ -5,7 +5,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Callable
 
 from .codex_appserver import (
     CodexAppServerClient,
@@ -34,12 +34,14 @@ class CodexAppServerSupervisor:
         *,
         manage_process: bool = True,
         stdio_executable: Path | None = None,
+        shared_socket_health: Callable[[], bool] | None = None,
     ) -> None:
         self.socket_path = socket_path.expanduser().resolve()
         self.manage_process = manage_process
         self.stdio_executable = (
             stdio_executable.expanduser().resolve(strict=True) if stdio_executable else None
         )
+        self.shared_socket_health = shared_socket_health
         self.process: subprocess.Popen[bytes] | None = None
         self.transport_mode: str | None = None
         self._ownership_file: BinaryIO | None = None
@@ -85,6 +87,11 @@ class CodexAppServerSupervisor:
 
     def start(self, *, timeout: float = 15.0) -> None:
         if not self.manage_process and self.socket_path.is_socket():
+            if self.shared_socket_health is not None and not self.shared_socket_health():
+                if self.stdio_executable is None:
+                    raise AppServerError("shared Codex app-server upstream is unavailable")
+                self.transport_mode = "stdio-fallback"
+                return
             self.transport_mode = "socket"
             return
         if self.stdio_executable is not None:
@@ -123,6 +130,17 @@ class CodexAppServerSupervisor:
             time.sleep(0.05)
         self.stop()
         raise AppServerError("Codex app-server socket did not appear")
+
+    def ensure_shared_socket_health(self) -> bool:
+        """Return false after moving an existing shared client to safe fallback."""
+        if self.transport_mode != "socket" or self.shared_socket_health is None:
+            return True
+        if self.shared_socket_health():
+            return True
+        if self.stdio_executable is None:
+            raise AppServerError("shared Codex app-server upstream is unavailable")
+        self.transport_mode = "stdio-fallback"
+        return False
 
     def client(self) -> CodexAppServerClient:
         if self.transport_mode is None:

@@ -38,6 +38,25 @@ class TelegramUpdateTests(unittest.TestCase):
             ],
         )
 
+    def test_thinking_draft_targets_private_chat_and_topic(self) -> None:
+        telegram = TelegramBotApi("123456:example")
+        with patch.object(telegram, "_call_with_timeout", return_value=True) as api_call:
+            telegram.send_message_draft(123456789, 77, draft_id=42)
+
+        api_call.assert_called_once_with(
+            "sendMessageDraft",
+            request_timeout=2,
+            chat_id=123456789,
+            draft_id=42,
+            text="",
+            message_thread_id=77,
+        )
+
+    def test_thinking_draft_rejects_group_chat(self) -> None:
+        telegram = TelegramBotApi("123456:example")
+        with self.assertRaisesRegex(Exception, "private"):
+            telegram.send_message_draft(-1001234567890, 1, draft_id=42)
+
     def test_long_poll_adds_only_a_bounded_transport_margin(self) -> None:
         telegram = TelegramBotApi("123456:example")
         with patch.object(telegram, "_call_with_timeout", return_value=[]) as call:
@@ -250,6 +269,52 @@ class TelegramUpdateTests(unittest.TestCase):
         self.assertIsNotNone(parsed)
         assert parsed is not None
         self.assertIsNone(parsed.reply_to_username)
+
+    def test_marks_modern_and_legacy_forwards_as_quoted_context(self) -> None:
+        modern = {
+            "update_id": 16,
+            "message": {
+                "message_id": 25,
+                "chat": {
+                    "id": -1001234567890,
+                    "type": "supergroup",
+                    "title": "Example Project Beta",
+                    "is_forum": True,
+                },
+                "from": {"id": 123456789, "is_bot": False},
+                "text": "/stop",
+                "forward_origin": {
+                    "type": "user",
+                    "sender_user": {"id": 8752263516, "is_bot": True},
+                    "date": 1788220000,
+                },
+            },
+        }
+        legacy = {
+            "update_id": 17,
+            "message": {
+                "message_id": 26,
+                "chat": {
+                    "id": -1001234567890,
+                    "type": "supergroup",
+                    "title": "Example Project Beta",
+                    "is_forum": True,
+                },
+                "from": {"id": 123456789, "is_bot": False},
+                "text": "/model",
+                "forward_sender_name": "Example Bot",
+                "forward_date": 1788220000,
+            },
+        }
+
+        parsed_modern = parse_topic_message(modern)
+        parsed_legacy = parse_topic_message(legacy)
+
+        self.assertIsNotNone(parsed_modern)
+        self.assertIsNotNone(parsed_legacy)
+        assert parsed_modern is not None and parsed_legacy is not None
+        self.assertTrue(parsed_modern.is_forwarded)
+        self.assertTrue(parsed_legacy.is_forwarded)
 
     def test_parses_inline_model_callback(self) -> None:
         parsed = parse_topic_callback(

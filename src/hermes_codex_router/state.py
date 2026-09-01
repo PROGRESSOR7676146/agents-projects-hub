@@ -127,6 +127,7 @@ class ProviderChatActivity:
     agent_id: str
     chat_id: int
     thread_id: int
+    message_id: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -697,7 +698,7 @@ class HubState:
             return ()
         placeholders = ", ".join("?" for _ in bounded_ids)
         rows = self._connection.execute(
-            f"""SELECT current.agent_id, current.chat_id, topics.thread_id
+            f"""SELECT current.agent_id, current.chat_id, current.message_id, topics.thread_id
                 FROM provider_jobs current
                 JOIN topics ON topics.topic_id = current.topic_id
                 WHERE current.agent_id IN ({placeholders})
@@ -718,6 +719,7 @@ class HubState:
                 agent_id=str(row["agent_id"]),
                 chat_id=int(row["chat_id"]),
                 thread_id=int(row["thread_id"]),
+                message_id=int(row["message_id"]),
             )
             for row in rows
         )
@@ -740,6 +742,7 @@ class HubState:
         handoff_id: str | None = None,
         max_attempts: int = 5,
         take_local_writer: bool = False,
+        available_at: datetime | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
         """Atomically accept one bounded provider request.
 
@@ -851,6 +854,7 @@ class HubState:
                     raise StateError("local writer ownership changed during provider admission")
 
             now = _now()
+            ready_at = _timestamp(available_at) if available_at is not None else None
             self._connection.execute(
                 """INSERT OR IGNORE INTO observed_messages
                    (chat_id, message_id, observer_agent_id, observed_at)
@@ -884,9 +888,9 @@ class HubState:
                          topic_sequence, agent_id, session_id, session_generation,
                          provider_session_id, model, effort, payload_text,
                          context_watermark, handoff_id, status, attempt_count,
-                         max_attempts, created_at, updated_at
+                         max_attempts, next_attempt_at, created_at, updated_at
                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                 'queued', 0, ?, ?, ?)""",
+                                 'queued', 0, ?, ?, ?, ?)""",
                     (
                         job_id,
                         key,
@@ -904,9 +908,16 @@ class HubState:
                         context_watermark,
                         handoff,
                         max_attempts,
+                        ready_at,
                         now,
                         now,
                     ),
+                )
+                self._connection.execute(
+                    """INSERT INTO provider_job_inputs (
+                           job_id, chat_id, message_id, part_index, input_text, received_at
+                       ) VALUES (?, ?, ?, 1, ?, ?)""",
+                    (job_id, chat_id, message_id, payload, now),
                 )
             except sqlite3.IntegrityError as exc:
                 duplicate = self._connection.execute(
@@ -928,6 +939,143 @@ class HubState:
             job = self._provider_job(row)
         return job, created
 
+    def enqueue_or_append_provider_job(
+        self,
+        *,
+        idempotency_key: str,
+        chat_id: int,
+        message_id: int,
+        topic_id: int,
+        agent_id: str,
+        session_id: str,
+        session_generation: int,
+        model: str,
+        effort: str,
+        payload_text: str,
+        appended_user_text: str,
+        provider_session_id: str | None = None,
+        context_watermark: int | None = None,
+        handoff_id: str | None = None,
+        quiet_ms: int,
+        max_ms: int,
+    ) -> tuple[ProviderJobRecord, bool]:
+        """Durably collect one compatible Telegram burst into one queued turn.
+
+        Every Telegram message remains independently idempotent in
+        ``provider_job_inputs``.  Only an unleased job inside both the quiet and
+        absolute batch windows can be extended; otherwise a new FIFO job is
+        created.  Provider context/handoffs belong to the first part only.
+        """
+        if quiet_ms <= 0:
+            return self.enqueue_provider_job(
+                idempotency_key=idempotency_key,
+                chat_id=chat_id,
+                message_id=message_id,
+                topic_id=topic_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                session_generation=session_generation,
+                provider_session_id=provider_session_id,
+                model=model,
+                effort=effort,
+                payload_text=payload_text,
+                context_watermark=context_watermark,
+                handoff_id=handoff_id,
+            )
+        user_text = _bounded(appended_user_text, name="batch input", maximum=20000)
+        current = datetime.now(timezone.utc)
+        timestamp = _timestamp(current)
+        quiet_until = current + timedelta(milliseconds=quiet_ms)
+        absolute_floor = _timestamp(current - timedelta(milliseconds=max_ms))
+        separator = "\n\nFOLLOW-UP USER MESSAGE (same Telegram burst):\n"
+        with self._immediate_transaction():
+            existing = self._connection.execute(
+                """SELECT jobs.* FROM provider_job_inputs inputs
+                   JOIN provider_jobs jobs ON jobs.job_id = inputs.job_id
+                   WHERE inputs.chat_id = ? AND inputs.message_id = ?""",
+                (chat_id, message_id),
+            ).fetchone()
+            if existing is not None:
+                return self._provider_job(existing), False
+            candidate = self._connection.execute(
+                """SELECT * FROM provider_jobs
+                   WHERE topic_id = ? AND agent_id = ? AND session_id = ?
+                     AND session_generation = ? AND model = ? AND effort = ?
+                     AND status = 'queued' AND next_attempt_at > ?
+                     AND created_at >= ?
+                     AND topic_sequence = (
+                         SELECT MAX(tail.topic_sequence) FROM provider_jobs tail
+                         WHERE tail.topic_id = provider_jobs.topic_id
+                     )
+                   ORDER BY topic_sequence DESC LIMIT 1""",
+                (
+                    topic_id,
+                    agent_id,
+                    session_id,
+                    session_generation,
+                    model,
+                    effort,
+                    timestamp,
+                    absolute_floor,
+                ),
+            ).fetchone()
+            if candidate is not None:
+                combined = str(candidate["payload_text"]) + separator + user_text
+                if len(combined) <= 20000:
+                    part = (
+                        int(
+                            self._connection.execute(
+                                "SELECT COUNT(*) FROM provider_job_inputs WHERE job_id = ?",
+                                (candidate["job_id"],),
+                            ).fetchone()[0]
+                        )
+                        + 1
+                    )
+                    hard_deadline = datetime.fromisoformat(
+                        str(candidate["created_at"])
+                    ) + timedelta(milliseconds=max_ms)
+                    next_attempt = min(quiet_until, hard_deadline)
+                    self._connection.execute(
+                        """INSERT INTO observed_messages
+                           (chat_id, message_id, observer_agent_id, observed_at)
+                           VALUES (?, ?, 'hub', ?)""",
+                        (chat_id, message_id, timestamp),
+                    )
+                    self._connection.execute(
+                        """INSERT INTO provider_job_inputs
+                           (job_id, chat_id, message_id, part_index, input_text, received_at)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (candidate["job_id"], chat_id, message_id, part, user_text, timestamp),
+                    )
+                    self._connection.execute(
+                        """UPDATE provider_jobs
+                           SET payload_text = ?, next_attempt_at = ?, updated_at = ?
+                           WHERE job_id = ? AND status = 'queued'""",
+                        (
+                            combined,
+                            _timestamp(next_attempt),
+                            timestamp,
+                            candidate["job_id"],
+                        ),
+                    )
+                    return self.get_provider_job(str(candidate["job_id"])), True
+        return self.enqueue_provider_job(
+            idempotency_key=idempotency_key,
+            chat_id=chat_id,
+            message_id=message_id,
+            topic_id=topic_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            session_generation=session_generation,
+            provider_session_id=provider_session_id,
+            model=model,
+            effort=effort,
+            payload_text=payload_text,
+            context_watermark=context_watermark,
+            handoff_id=handoff_id,
+            available_at=quiet_until,
+        )
+
     def get_provider_job(self, job_id: str) -> ProviderJobRecord:
         row = self._connection.execute(
             "SELECT * FROM provider_jobs WHERE job_id = ?", (job_id,)
@@ -942,6 +1090,117 @@ class HubState:
             (topic_id,),
         ).fetchall()
         return tuple(self._provider_job(row) for row in rows)
+
+    def flush_message_batch(self, topic_id: int) -> int:
+        """Make collecting queued inputs eligible before a control boundary."""
+        timestamp = _now()
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs SET next_attempt_at = ?, updated_at = ?
+                   WHERE topic_id = ? AND status = 'queued'
+                     AND next_attempt_at IS NOT NULL AND next_attempt_at > ?""",
+                (timestamp, timestamp, topic_id, timestamp),
+            )
+        return cursor.rowcount
+
+    def request_emergency_stop(
+        self,
+        *,
+        topic_id: int,
+        chat_id: int,
+        message_id: int,
+        target_agent_id: str,
+    ) -> tuple[str, int, bool]:
+        """Persist a stop request and cancel work that has not started."""
+        target = _bounded(target_agent_id, name="agent id", maximum=64)
+        timestamp = _now()
+        with self._immediate_transaction():
+            duplicate = self._connection.execute(
+                """SELECT request_id, cancelled_queued_count, status
+                   FROM provider_stop_requests WHERE chat_id = ? AND message_id = ?""",
+                (chat_id, message_id),
+            ).fetchone()
+            if duplicate is not None:
+                return (
+                    str(duplicate["request_id"]),
+                    int(duplicate["cancelled_queued_count"]),
+                    str(duplicate["status"]) == "pending",
+                )
+            self._connection.execute(
+                """INSERT OR IGNORE INTO observed_messages
+                   (chat_id, message_id, observer_agent_id, observed_at)
+                   VALUES (?, ?, 'hub', ?)""",
+                (chat_id, message_id, timestamp),
+            )
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'cancelled', next_attempt_at = NULL,
+                       error_class = 'user_stop', error_code = 'emergency_stop',
+                       updated_at = ?
+                   WHERE topic_id = ? AND agent_id = ?
+                     AND status IN ('queued', 'retry_wait')""",
+                (timestamp, topic_id, target),
+            )
+            active = self._connection.execute(
+                """SELECT 1 FROM provider_jobs
+                   WHERE topic_id = ? AND agent_id = ?
+                     AND status IN ('leased', 'executing') LIMIT 1""",
+                (topic_id, target),
+            ).fetchone()
+            pending = active is not None
+            request_id = str(uuid.uuid4())
+            self._connection.execute(
+                """INSERT INTO provider_stop_requests (
+                       request_id, topic_id, chat_id, message_id, target_agent_id,
+                       status, cancelled_queued_count, created_at, completed_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    request_id,
+                    topic_id,
+                    chat_id,
+                    message_id,
+                    target,
+                    "pending" if pending else "completed",
+                    cursor.rowcount,
+                    timestamp,
+                    None if pending else timestamp,
+                ),
+            )
+            return request_id, cursor.rowcount, pending
+
+    def pending_emergency_stop(self, topic_id: int, agent_id: str) -> str | None:
+        row = self._connection.execute(
+            """SELECT request_id FROM provider_stop_requests
+               WHERE topic_id = ? AND target_agent_id = ? AND status = 'pending'
+               ORDER BY created_at LIMIT 1""",
+            (topic_id, agent_id),
+        ).fetchone()
+        return None if row is None else str(row["request_id"])
+
+    def complete_emergency_stop(self, request_id: str) -> None:
+        with self._connection:
+            self._connection.execute(
+                """UPDATE provider_stop_requests SET status = 'completed', completed_at = ?
+                   WHERE request_id = ? AND status = 'pending'""",
+                (_now(), request_id),
+            )
+
+    def cancel_active_provider_job(
+        self, job_id: str, lease_token: str, *, error_code: str = "emergency_stop"
+    ) -> None:
+        timestamp = _now()
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'cancelled', lease_owner = NULL, lease_token = NULL,
+                       lease_expires_at = NULL, next_attempt_at = NULL,
+                       error_class = 'user_stop', error_code = ?, updated_at = ?
+                   WHERE job_id = ? AND lease_token = ?
+                     AND status IN ('leased', 'executing')""",
+                (error_code, timestamp, job_id, lease_token),
+            )
+        if cursor.rowcount != 1:
+            raise StateError("active provider job cannot be cancelled")
 
     def lease_provider_job(
         self,
@@ -964,7 +1223,9 @@ class HubState:
                    WHERE candidate.agent_id = ?
                      AND candidate.attempt_count < candidate.max_attempts
                      AND (
-                       candidate.status = 'queued'
+                       (candidate.status = 'queued'
+                           AND (candidate.next_attempt_at IS NULL
+                                OR candidate.next_attempt_at <= ?))
                        OR (candidate.status = 'retry_wait'
                            AND candidate.next_attempt_at IS NOT NULL
                            AND candidate.next_attempt_at <= ?)
@@ -980,7 +1241,7 @@ class HubState:
                    ORDER BY candidate.created_at, candidate.topic_id,
                             candidate.topic_sequence
                    LIMIT 1""",
-                (target_agent, timestamp),
+                (target_agent, timestamp, timestamp),
             ).fetchone()
             if row is None:
                 return None
@@ -1002,6 +1263,138 @@ class HubState:
             if leased is None:
                 raise StateError("leased provider job disappeared")
             return self._provider_job(leased)
+
+    def lease_steer_followup(
+        self,
+        parent_job_id: str,
+        worker_id: str,
+        *,
+        lease_seconds: int = 90,
+        now: datetime | None = None,
+    ) -> ProviderJobRecord | None:
+        """Lease the immediate compatible FIFO successor for same-turn steering."""
+        worker = _bounded(worker_id, name="worker id", maximum=128)
+        current = now or datetime.now(timezone.utc)
+        timestamp = _timestamp(current)
+        expires_at = _timestamp(current + timedelta(seconds=lease_seconds))
+        with self._immediate_transaction():
+            parent = self._connection.execute(
+                "SELECT * FROM provider_jobs WHERE job_id = ? AND status = 'executing'",
+                (parent_job_id,),
+            ).fetchone()
+            if parent is None:
+                return None
+            candidate = self._connection.execute(
+                """SELECT * FROM provider_jobs
+                   WHERE topic_id = ? AND topic_sequence = (
+                       SELECT MIN(topic_sequence) FROM provider_jobs
+                       WHERE topic_id = ? AND topic_sequence > ?
+                         AND status NOT IN ('completed', 'failed', 'cancelled', 'indeterminate')
+                   )""",
+                (parent["topic_id"], parent["topic_id"], parent["topic_sequence"]),
+            ).fetchone()
+            if candidate is None or any(
+                candidate[field] != parent[field]
+                for field in ("agent_id", "session_id", "session_generation", "model", "effort")
+            ):
+                return None
+            if str(candidate["status"]) != "queued":
+                return None
+            available = candidate["next_attempt_at"]
+            if available is not None and str(available) > timestamp:
+                return None
+            token = str(uuid.uuid4())
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'leased', lease_owner = ?, lease_token = ?,
+                       lease_expires_at = ?, next_attempt_at = NULL, updated_at = ?
+                   WHERE job_id = ? AND status = 'queued'""",
+                (worker, token, expires_at, timestamp, candidate["job_id"]),
+            )
+            if cursor.rowcount != 1:
+                return None
+            return self.get_provider_job(str(candidate["job_id"]))
+
+    def reject_unaccepted_steer(self, job_id: str, lease_token: str) -> None:
+        """Requeue a steer only after app-server proved it was not accepted."""
+        timestamp = _now()
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'queued', attempt_count = MAX(0, attempt_count - 1),
+                       provider_started_at = NULL, lease_owner = NULL, lease_token = NULL,
+                       lease_expires_at = NULL, updated_at = ?
+                   WHERE job_id = ? AND status = 'executing' AND lease_token = ?""",
+                (timestamp, job_id, lease_token),
+            )
+        if cursor.rowcount != 1:
+            raise StateError("rejected steer job lease is missing or invalid")
+
+    def complete_steered_job(
+        self,
+        child_job_id: str,
+        lease_token: str,
+        *,
+        parent_job_id: str,
+        provider_turn_id: str,
+    ) -> None:
+        """Record that one queued input was accepted into an active provider turn."""
+        turn_id = _bounded(provider_turn_id, name="provider turn id", maximum=256)
+        timestamp = _now()
+        with self._immediate_transaction():
+            child = self._connection.execute(
+                """SELECT * FROM provider_jobs WHERE job_id = ? AND status = 'executing'
+                   AND lease_token = ?""",
+                (child_job_id, lease_token),
+            ).fetchone()
+            parent = self._connection.execute(
+                "SELECT * FROM provider_jobs WHERE job_id = ? AND status = 'executing'",
+                (parent_job_id,),
+            ).fetchone()
+            if (
+                child is None
+                or parent is None
+                or any(
+                    child[field] != parent[field]
+                    for field in ("topic_id", "agent_id", "session_id", "session_generation")
+                )
+            ):
+                raise StateError("steered job does not match its active parent")
+            self._connection.execute(
+                """INSERT INTO provider_job_absorptions
+                   (child_job_id, parent_job_id, provider_turn_id, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (child_job_id, parent_job_id, turn_id, timestamp),
+            )
+            if child["context_watermark"] is not None:
+                self._connection.execute(
+                    """INSERT INTO visible_context_cursors
+                       (topic_id, observer_agent_id, last_turn_id, updated_at)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(topic_id, observer_agent_id) DO UPDATE SET
+                         last_turn_id = MAX(last_turn_id, excluded.last_turn_id),
+                         updated_at = excluded.updated_at""",
+                    (
+                        child["topic_id"],
+                        child["agent_id"],
+                        child["context_watermark"],
+                        timestamp,
+                    ),
+                )
+            if child["handoff_id"] is not None:
+                self._connection.execute(
+                    "DELETE FROM pending_handoffs WHERE handoff_id = ?",
+                    (child["handoff_id"],),
+                )
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'completed', lease_owner = NULL, lease_token = NULL,
+                       lease_expires_at = NULL, updated_at = ?
+                   WHERE job_id = ? AND status = 'executing' AND lease_token = ?""",
+                (timestamp, child_job_id, lease_token),
+            )
+            if cursor.rowcount != 1:
+                raise StateError("steered job lease changed during completion")
 
     def mark_provider_job_executing(
         self,
@@ -1299,7 +1692,17 @@ class HubState:
                 )
                 if cursor.rowcount != 1:
                     raise StateError("provider job session generation changed")
-            visible_user_excerpt = excerpt or _visible_excerpt(str(job_row["payload_text"]))
+            absorbed_payloads = [
+                str(row["payload_text"])
+                for row in self._connection.execute(
+                    """SELECT child.payload_text FROM provider_job_absorptions absorption
+                       JOIN provider_jobs child ON child.job_id = absorption.child_job_id
+                       WHERE absorption.parent_job_id = ? ORDER BY absorption.created_at""",
+                    (job_id,),
+                ).fetchall()
+            ]
+            combined_excerpt = "\n\n".join([str(job_row["payload_text"]), *absorbed_payloads])
+            visible_user_excerpt = excerpt or _visible_excerpt(combined_excerpt)
             self._connection.execute(
                 """INSERT INTO external_turn_excerpts
                    (topic_id, agent_id, provider_session_id, model, provider,
@@ -1905,6 +2308,48 @@ class HubState:
                 self._connection.execute(
                     "INSERT INTO observed_messages VALUES (?, ?, ?, ?)",
                     (chat_id, message_id, observer_agent_id, _now()),
+                )
+        except sqlite3.IntegrityError:
+            return False
+        return True
+
+    def record_forwarded_quote(
+        self,
+        *,
+        topic_id: int,
+        chat_id: int,
+        message_id: int,
+        observer_agent_id: str,
+        text: str,
+    ) -> bool:
+        """Persist a Telegram forward as passive visible context, never as work."""
+        quote = _bounded(text, name="forwarded quote", maximum=4000)
+        observer = _bounded(observer_agent_id, name="observer agent id", maximum=64)
+        topic = self.get_topic(topic_id)
+        if topic.chat_id != chat_id or message_id <= 0:
+            raise StateError("forwarded quote does not match topic")
+        timestamp = _now()
+        try:
+            with self._immediate_transaction():
+                self._connection.execute(
+                    "INSERT INTO observed_messages VALUES (?, ?, ?, ?)",
+                    (chat_id, message_id, observer, timestamp),
+                )
+                self._connection.execute(
+                    """INSERT INTO external_turn_excerpts
+                       (topic_id, agent_id, provider_session_id, model, provider,
+                        user_excerpt, response_excerpt, created_at)
+                       VALUES (?, 'forwarded-quote', '', 'quoted-context', 'telegram',
+                               'Forwarded message', ?, ?)""",
+                    (topic_id, quote, timestamp),
+                )
+                self._connection.execute(
+                    """DELETE FROM external_turn_excerpts
+                       WHERE topic_id = ? AND turn_id NOT IN (
+                         SELECT turn_id FROM external_turn_excerpts
+                         WHERE topic_id = ? ORDER BY turn_id DESC LIMIT 100
+                       )""",
+                    (topic_id, topic_id),
                 )
         except sqlite3.IntegrityError:
             return False

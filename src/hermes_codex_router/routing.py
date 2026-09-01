@@ -12,6 +12,15 @@ class Command:
 
 
 COMMAND = re.compile(r"^/([A-Za-z][A-Za-z0-9_]*)(?:@[A-Za-z][A-Za-z0-9_]*)?(?:\s+(.*))?$")
+EMERGENCY_STOP = frozenset({"stop", "halt", "стоп", "стой", "остановись", "прекрати"})
+
+
+def is_emergency_stop(text: str) -> bool:
+    """Match only a whole emergency utterance; never scan normal prose."""
+    normalized = " ".join(text.strip().casefold().split()).rstrip(".!！。")
+    if normalized.startswith("/"):
+        normalized = normalized[1:].split("@", 1)[0]
+    return normalized in EMERGENCY_STOP
 
 
 def parse_command(text: str) -> Command | None:

@@ -10,6 +10,7 @@ from .external_admission import (
     peek_pending_handoff,
     peek_unseen_visible_context,
 )
+from .telegram_interaction import telegram_turn_prompt
 
 DEFAULT_STATE_PATH = Path.home() / ".local/state/agents-projects-hub/state.db"
 
@@ -75,6 +76,7 @@ async def _dispatch_active_text(
             f"HANDOFF FROM {handoff.source_agent_id}:\n{handoff.text}\n\n"
             f"CURRENT TURN:\n{event.text}"
         )
+    event.text = telegram_turn_prompt(event.text, runtime="hermes", new_session=False)
     await adapter._cache_replied_media(message, event)
     event = adapter._apply_telegram_group_observe_attribution(event)
     adapter._enqueue_text_event(event)

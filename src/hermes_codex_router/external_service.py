@@ -31,6 +31,8 @@ from .telegram import (
     parse_direct_message,
     parse_topic_message,
 )
+from .telegram_activity import telegram_activity
+from .telegram_interaction import telegram_turn_prompt
 
 
 class ExternalAgentService:
@@ -310,11 +312,13 @@ class ExternalAgentService:
             session_id=session.provider_session_id,
             model=session.model if session.model != "provider-selected" else None,
             effort=session.effort,
-            prompt=(
+            prompt=telegram_turn_prompt(
                 "Summarize only the work completed through the local CLI since Telegram "
                 "handed this session over. Do not use tools. Do not include hidden reasoning, "
                 "credentials, raw terminal output, or unrelated history. Return at most 1200 "
-                "characters with three headings: Completed, Verified, Next."
+                "characters with three headings: Completed, Verified, Next.",
+                runtime=self.agent.runtime,
+                new_session=False,
             ),
         )
         if result.provider_session_id and result.provider_session_id != session.provider_session_id:
@@ -374,6 +378,22 @@ class ExternalAgentService:
                     f"chat_id={message.chat_id}; title={title}",
                 )
                 return False
+        if message.is_forwarded:
+            topic = self.state.find_topic(message.chat_id, message.thread_id)
+            if topic is None:
+                topic = self.state.observe_topic(
+                    project_id=binding.project_id,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    title="General" if message.thread_id == 1 else f"Topic {message.thread_id}",
+                )
+            return self.state.record_forwarded_quote(
+                topic_id=topic.topic_id,
+                chat_id=message.chat_id,
+                message_id=message.message_id,
+                observer_agent_id=self.agent.agent_id,
+                text=message.text,
+            )
         command = parse_command(message.text)
         if command is not None:
             if not self.direct_messages_only:
@@ -524,13 +544,23 @@ class ExternalAgentService:
             agent_id=self.agent.agent_id,
         )
         try:
-            result = self.adapter.run_turn(
-                cwd=project.root,
-                prompt=prompt,
-                session_id=session.provider_session_id,
-                model=session.model if session.model != "provider-selected" else None,
-                effort=session.effort,
-            )
+            with telegram_activity(
+                self.telegram,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                message_id=message.message_id,
+            ):
+                result = self.adapter.run_turn(
+                    cwd=project.root,
+                    prompt=telegram_turn_prompt(
+                        prompt,
+                        runtime=self.agent.runtime,
+                        new_session=session.provider_session_id is None,
+                    ),
+                    session_id=session.provider_session_id,
+                    model=session.model if session.model != "provider-selected" else None,
+                    effort=session.effort,
+                )
         except Exception as exc:
             self.state.finish_dispatch(dispatch_id, success=False, error_code=type(exc).__name__)
             if isinstance(exc, ProviderLimitError):

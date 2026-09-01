@@ -4,7 +4,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,11 +45,40 @@ def _private_file(path: Path) -> bool:
         return False
 
 
+def probe_tlive_runtime(
+    *,
+    run: Callable[..., Any] = subprocess.run,
+) -> bool:
+    """Read only bounded health markers; never surface tlive's token-bearing URL."""
+    try:
+        completed = run(
+            ("tlive", "status"),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    lines = tuple(str(completed.stdout).splitlines())
+    daemon_running = any(
+        line.startswith("daemon:") and "running" in line.casefold() for line in lines
+    )
+    telegram_channel = any(
+        line.startswith("channels:") and "telegram" in line.casefold() for line in lines
+    )
+    return daemon_running and telegram_channel
+
+
 def probe_recovery_plane(
     probe: RecoveryPlaneProbe,
     *,
     service_active: Callable[[tuple[str, ...]], bool] = _service_active,
     command_available: Callable[[str], bool] = lambda command: shutil.which(command) is not None,
+    hermes_liveness: bool = False,
+    tlive_liveness: bool = False,
 ) -> RecoveryPlaneStatus:
     hermes_command = command_available("hermes")
     tlive_command = command_available("tlive")
@@ -61,8 +90,9 @@ def probe_recovery_plane(
     tlive_service = service_active(
         ("systemctl", "--user", "is-active", "--quiet", probe.tlive_service)
     )
-    hermes_ok = hermes_command and hermes_config and hermes_service
-    tlive_ok = tlive_command and tlive_config and tlive_service
+    tlive_runtime = tlive_command and tlive_liveness
+    hermes_ok = hermes_command and hermes_config and (hermes_service or hermes_liveness)
+    tlive_ok = tlive_command and tlive_config and (tlive_service or tlive_runtime)
     return RecoveryPlaneStatus(
         hermes_ok=hermes_ok,
         tlive_ok=tlive_ok,
@@ -71,12 +101,14 @@ def probe_recovery_plane(
             "hermes": (
                 f"command={'ok' if hermes_command else 'missing'}, "
                 f"config={'private' if hermes_config else 'missing-or-unsafe'}, "
-                f"service={'active' if hermes_service else 'inactive'}"
+                f"service={'active' if hermes_service else 'inactive'}, "
+                f"heartbeat={'healthy' if hermes_liveness else 'unavailable'}"
             ),
             "tlive": (
                 f"command={'ok' if tlive_command else 'missing'}, "
                 f"config={'private' if tlive_config else 'missing-or-unsafe'}, "
-                f"service={'active' if tlive_service else 'inactive'}"
+                f"service={'active' if tlive_service else 'inactive'}, "
+                f"runtime={'healthy' if tlive_runtime else 'unavailable'}"
             ),
         },
     )

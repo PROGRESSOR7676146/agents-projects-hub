@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -103,7 +104,12 @@ class CodexQueueWorkerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
-    def enqueue(self) -> str:
+    def enqueue(
+        self,
+        message_id: int = 1,
+        payload: str = "durable task",
+        provider_session_id: str | None = None,
+    ) -> str:
         state = HubState.open(self.config.state_path)
         try:
             topic = state.observe_topic(
@@ -113,24 +119,301 @@ class CodexQueueWorkerTests(unittest.TestCase):
                 title="Example",
             )
             session = state.activate_agent(topic.topic_id, "codex", "gpt-5.6-sol", "high")
+            if provider_session_id is not None:
+                session = state.bind_provider_session(session.session_id, provider_session_id, None)
             job, _ = state.enqueue_provider_job(
-                idempotency_key="telegram:-1001234567890:1",
+                idempotency_key=f"telegram:-1001234567890:{message_id}",
                 chat_id=-1001234567890,
-                message_id=1,
+                message_id=message_id,
                 topic_id=topic.topic_id,
                 agent_id="codex",
                 session_id=session.session_id,
                 session_generation=session.generation,
-                provider_session_id=None,
+                provider_session_id=provider_session_id,
                 model=session.model,
                 effort=session.effort,
-                payload_text="durable task",
+                payload_text=payload,
                 context_watermark=None,
                 handoff_id=None,
             )
             return job.job_id
         finally:
             state.close()
+
+    def test_stdio_fallback_starts_a_new_thread_with_bounded_visible_context(self) -> None:
+        state = HubState.open(self.config.state_path)
+        try:
+            topic = state.observe_topic(
+                project_id="example-project",
+                chat_id=-1001234567890,
+                thread_id=77,
+                title="Example",
+            )
+            state.record_visible_turn(
+                topic.topic_id,
+                agent_id="codex",
+                provider="codex",
+                model="gpt-5.6-sol",
+                user_excerpt="Earlier question",
+                response_excerpt="Earlier answer",
+                provider_session_id="shared-thread",
+            )
+        finally:
+            state.close()
+        job_id = self.enqueue(1, "Current question", provider_session_id="shared-thread")
+        started: list[str] = []
+        prompts: list[str] = []
+
+        class Client(WorkerClient):
+            def start_thread(self, **kwargs: object) -> CodexThread:
+                started.append("new")
+                return super().start_thread(**kwargs)
+
+            def resume_thread(self, **_kwargs: object) -> CodexThread:
+                raise AssertionError("fallback must not resume a shared-socket thread")
+
+            def start_turn(self, **kwargs: object) -> str:
+                prompts.append(str(kwargs["text"]))
+                return super().start_turn(**kwargs)
+
+        class Supervisor(WorkerSupervisor):
+            transport_mode = "stdio-fallback"
+
+        worker = CodexQueueWorker(
+            self.config,
+            registry=self.registry,
+            supervisor=cast(Any, Supervisor(Client())),
+            worker_id="test-codex-worker",
+        )
+        try:
+            self.assertTrue(worker.run_cycle())
+            self.assertEqual(worker.state.get_provider_job(job_id).status, "result_ready")
+            self.assertEqual(started, ["new"])
+            self.assertIn("Earlier question", prompts[0])
+            self.assertIn("Earlier answer", prompts[0])
+            self.assertTrue(prompts[0].endswith("CURRENT USER MESSAGE:\nCurrent question"))
+        finally:
+            worker.close()
+
+    def test_running_codex_turn_absorbs_ready_followup_via_turn_steer(self) -> None:
+        parent_id = self.enqueue(1, "first")
+        entered = threading.Event()
+        release = threading.Event()
+        steered: list[str] = []
+
+        class MainClient(WorkerClient):
+            def wait_for_turn(self, _turn_id: str) -> TurnResult:
+                entered.set()
+                self.release = release
+                release.wait(3)
+                return TurnResult("Combined answer", 1000, 100)
+
+        class ControlClient:
+            def steer_turn(self, **kwargs: object) -> str:
+                steered.append(str(kwargs["text"]))
+                release.set()
+                return str(kwargs["turn_id"])
+
+            def close(self) -> None:
+                pass
+
+        class Supervisor:
+            transport_mode = "socket"
+
+            def __init__(self) -> None:
+                self.main = MainClient()
+                self.calls = 0
+
+            def start(self) -> None:
+                pass
+
+            def client(self) -> object:
+                self.calls += 1
+                return self.main if self.calls == 1 else ControlClient()
+
+            def stop(self) -> None:
+                pass
+
+        supervisor = Supervisor()
+        worker = CodexQueueWorker(
+            self.config,
+            registry=self.registry,
+            supervisor=cast(Any, supervisor),
+            worker_id="test-codex-worker",
+        )
+        child_ids: list[str] = []
+
+        def send_followup() -> None:
+            if entered.wait(1):
+                child_ids.append(self.enqueue(2, "follow up now"))
+
+        sender = threading.Thread(target=send_followup)
+        try:
+            sender.start()
+            self.assertTrue(worker.run_cycle())
+            sender.join(2)
+            self.assertEqual(len(child_ids), 1)
+            child_id = child_ids[0]
+            self.assertEqual(steered, ["follow up now"])
+            self.assertEqual(worker.state.get_provider_job(parent_id).status, "result_ready")
+            self.assertEqual(worker.state.get_provider_job(child_id).status, "completed")
+        finally:
+            release.set()
+            sender.join(1)
+            worker.close()
+
+    def test_emergency_stop_interrupts_running_codex_turn_without_model_analysis(self) -> None:
+        job_id = self.enqueue()
+        entered = threading.Event()
+        release = threading.Event()
+        interrupted = threading.Event()
+
+        class MainClient(WorkerClient):
+            def wait_for_turn(self, _turn_id: str) -> TurnResult:
+                entered.set()
+                release.wait(3)
+                raise RuntimeError("interrupted transport")
+
+        class ControlClient:
+            def interrupt_turn(self, **_kwargs: object) -> None:
+                interrupted.set()
+                release.set()
+
+            def close(self) -> None:
+                pass
+
+        class Supervisor:
+            transport_mode = "socket"
+
+            def __init__(self) -> None:
+                self.main = MainClient()
+                self.calls = 0
+
+            def start(self) -> None:
+                pass
+
+            def client(self) -> object:
+                self.calls += 1
+                return self.main if self.calls == 1 else ControlClient()
+
+            def stop(self) -> None:
+                pass
+
+        worker = CodexQueueWorker(
+            self.config,
+            registry=self.registry,
+            supervisor=cast(Any, Supervisor()),
+            worker_id="test-codex-worker",
+        )
+        requested = threading.Event()
+
+        def request_stop() -> None:
+            if not entered.wait(1):
+                return
+            state = HubState.open(self.config.state_path)
+            try:
+                topic = state.find_topic(-1001234567890, 77)
+                assert topic is not None
+                state.request_emergency_stop(
+                    topic_id=topic.topic_id,
+                    chat_id=-1001234567890,
+                    message_id=99,
+                    target_agent_id="codex",
+                )
+                requested.set()
+            finally:
+                state.close()
+
+        sender = threading.Thread(target=request_stop)
+        try:
+            sender.start()
+            self.assertTrue(worker.run_cycle())
+            self.assertTrue(requested.wait(1))
+            topic = worker.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            self.assertTrue(interrupted.wait(2))
+            self.assertEqual(worker.state.get_provider_job(job_id).status, "cancelled")
+            self.assertIsNone(worker.state.pending_emergency_stop(topic.topic_id, "codex"))
+        finally:
+            release.set()
+            sender.join(1)
+            worker.close()
+
+    def test_stdio_stop_wins_race_with_transport_eof(self) -> None:
+        job_id = self.enqueue()
+        entered = threading.Event()
+        closed = threading.Event()
+        clients: list[WorkerClient] = []
+
+        class Client(WorkerClient):
+            def wait_for_turn(self, _turn_id: str) -> TurnResult:
+                entered.set()
+                closed.wait(3)
+                raise EOFError("private stdio app-server closed")
+
+            def close(self) -> None:
+                closed.set()
+                # Let wait_for_turn observe EOF before the monitor records that
+                # close was caused by the durable stop request.
+                threading.Event().wait(0.05)
+
+        class Supervisor:
+            transport_mode = "stdio-fallback"
+
+            def start(self) -> None:
+                pass
+
+            def client(self) -> WorkerClient:
+                client: WorkerClient = Client() if not clients else WorkerClient()
+                clients.append(client)
+                return client
+
+            def stop(self) -> None:
+                pass
+
+        worker = CodexQueueWorker(
+            self.config,
+            registry=self.registry,
+            supervisor=cast(Any, Supervisor()),
+            worker_id="test-codex-worker",
+        )
+
+        def request_stop() -> None:
+            if not entered.wait(1):
+                return
+            state = HubState.open(self.config.state_path)
+            try:
+                topic = state.find_topic(-1001234567890, 77)
+                assert topic is not None
+                state.request_emergency_stop(
+                    topic_id=topic.topic_id,
+                    chat_id=-1001234567890,
+                    message_id=100,
+                    target_agent_id="codex",
+                )
+            finally:
+                state.close()
+
+        sender = threading.Thread(target=request_stop)
+        try:
+            sender.start()
+            self.assertTrue(worker.run_cycle())
+            sender.join(1)
+            topic = worker.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            self.assertEqual(worker.state.get_provider_job(job_id).status, "cancelled")
+            self.assertIsNone(worker.state.pending_emergency_stop(topic.topic_id, "codex"))
+            next_job_id = self.enqueue(message_id=101, payload="after stop")
+            self.assertTrue(worker.run_cycle())
+            self.assertEqual(
+                worker.state.get_provider_job(next_job_id).status,
+                "result_ready",
+            )
+            self.assertEqual(len(clients), 2)
+        finally:
+            closed.set()
+            sender.join(1)
+            worker.close()
 
     def worker(self, client: WorkerClient) -> CodexQueueWorker:
         return CodexQueueWorker(

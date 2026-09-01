@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -22,6 +24,10 @@ class ProviderLimitError(ExternalRuntimeError):
             f"{limit.provider} {limit.window} limit exhausted; reset telemetry recorded"
         )
         self.limit = limit
+
+
+class ExternalTurnInterrupted(ExternalRuntimeError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +74,33 @@ class ExternalCliAdapter:
         self.executable = executable or ("agy" if runtime == "antigravity" else runtime)
         self.runtime_home = runtime_home.expanduser().resolve(strict=True) if runtime_home else None
         self._run = run
+        self._uses_default_runner = run is subprocess.run
+        self._process_lock = threading.Lock()
+        self._active_process: subprocess.Popen[str] | None = None
+        self._interrupt_requested = threading.Event()
+
+    def interrupt(self) -> bool:
+        """Terminate only this adapter's active provider process group."""
+        self._interrupt_requested.set()
+        with self._process_lock:
+            process = self._active_process
+        if process is None or process.poll() is not None:
+            return False
+        try:
+            # This path is reserved for the user's emergency stop.  A provider
+            # may ignore SIGTERM while it is inside its own model/runtime loop,
+            # so terminate the isolated process group deterministically.
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return False
+        return True
+
+    def prepare_interruptible_turn(self) -> None:
+        """Clear a prior interrupt before a worker starts its monitor."""
+        with self._process_lock:
+            if self._active_process is not None and self._active_process.poll() is None:
+                raise ExternalRuntimeError("provider process is already active")
+            self._interrupt_requested.clear()
 
     def build_argv(
         self,
@@ -143,6 +176,7 @@ class ExternalCliAdapter:
         model: str | None = None,
         effort: str | None = None,
         timeout: float = 900,
+        interrupt_prepared: bool = False,
     ) -> ExternalTurnResult:
         argv = self.build_argv(
             cwd=cwd,
@@ -154,15 +188,49 @@ class ExternalCliAdapter:
         environment = os.environ.copy()
         if self.runtime == "gemini" and self.runtime_home is not None:
             environment["GEMINI_CLI_HOME"] = str(self.runtime_home)
-        result = self._run(
-            argv,
-            cwd=cwd,
-            env=environment,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        if not interrupt_prepared:
+            self.prepare_interruptible_turn()
+        if self._uses_default_runner:
+            process = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+            with self._process_lock:
+                self._active_process = process
+            try:
+                try:
+                    stdout, stderr = process.communicate(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGTERM)
+                    try:
+                        stdout, stderr = process.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        stdout, stderr = process.communicate(timeout=5)
+                    raise ExternalRuntimeError(f"{self.runtime} timed out safely")
+                result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+            finally:
+                with self._process_lock:
+                    if self._active_process is process:
+                        self._active_process = None
+        else:
+            result = self._run(
+                argv,
+                cwd=cwd,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        if self._interrupt_requested.is_set():
+            raise ExternalTurnInterrupted(f"{self.runtime} turn interrupted by user")
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()[:1000]
             if self.runtime == "opencode" and (limit := parse_opencode_limit(detail)):

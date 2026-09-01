@@ -1,14 +1,68 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
-from hermes_codex_router.external_runtime import ExternalCliAdapter
+from hermes_codex_router.external_runtime import ExternalCliAdapter, ExternalTurnInterrupted
 
 
 class ExternalRuntimeTests(unittest.TestCase):
+    def test_interrupt_kills_a_provider_that_ignores_sigterm(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "provider"
+            ready = root / "ready"
+            executable.write_text(
+                f"#!{sys.executable}\n"
+                "import pathlib, signal, time\n"
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                f"pathlib.Path({str(ready)!r}).touch()\n"
+                "time.sleep(30)\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o700)
+            adapter = ExternalCliAdapter("antigravity", executable=str(executable))
+            errors: list[BaseException] = []
+
+            def run() -> None:
+                try:
+                    adapter.run_turn(cwd=root, prompt="work", timeout=1)
+                except BaseException as exc:
+                    errors.append(exc)
+
+            thread = threading.Thread(target=run)
+            thread.start()
+            deadline = time.monotonic() + 0.5
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(ready.exists())
+            self.assertTrue(adapter.interrupt())
+            thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], ExternalTurnInterrupted)
+
+    def test_interrupt_requested_during_startup_is_not_lost(self) -> None:
+        def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(argv, 0, '{"response":"must not surface"}', "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = ExternalCliAdapter("opencode", run=fake_run)
+            adapter.prepare_interruptible_turn()
+            adapter.interrupt()
+            with self.assertRaises(ExternalTurnInterrupted):
+                adapter.run_turn(
+                    cwd=Path(directory),
+                    prompt="work",
+                    interrupt_prepared=True,
+                )
+
     def test_gemini_uses_structured_safe_non_yolo_mode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             adapter = ExternalCliAdapter("gemini")

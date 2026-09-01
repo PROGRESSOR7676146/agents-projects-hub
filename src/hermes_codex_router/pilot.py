@@ -8,6 +8,7 @@ from .registry import load_registry
 from .state import HubState
 from .supervisor import CodexAppServerSupervisor
 from .telegram import TelegramBotApi
+from .telegram_interaction import telegram_turn_prompt
 from .terminal import terminal_session_name
 
 
@@ -70,10 +71,12 @@ def run_codex_pilot(
         turn_id = client.start_turn(
             thread_id=thread.thread_id,
             cwd=project.root,
-            text=(
+            text=telegram_turn_prompt(
                 "Connectivity pilot for Agents Projects Hub. Do not use tools and do not modify "
                 "files. Reply briefly that the Codex session for the requested topic "
-                f"'{topic.title}' is connected and ready."
+                f"'{topic.title}' is connected and ready.",
+                runtime="codex",
+                new_session=True,
             ),
             model=session.model,
             effort=session.effort,

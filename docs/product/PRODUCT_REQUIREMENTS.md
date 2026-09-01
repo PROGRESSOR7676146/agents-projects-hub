@@ -38,8 +38,9 @@ model spend.
 3. **Provider identity remains visible.** Codex, Hermes, OpenCode, and
    Antigravity remain directly addressable identities with provider-owned
    sessions and credentials.
-4. **One productive request, one provider turn by default.** Passive observation
-   MUST NOT invoke paid models.
+4. **One coherent user input, one provider turn by default.** A short burst of
+   consecutive compatible Telegram messages is one coherent input. Passive
+   observation MUST NOT invoke paid models.
 5. **One writer.** A provider session MUST NOT accept concurrent Telegram and
    local writers.
 6. **Local authority.** Telegram may select only registered identities and MUST
@@ -79,8 +80,10 @@ model spend.
 - Remote selection of arbitrary directories, credentials, commands, or policy.
 - Automatic approvals, approval by Hermes, or approval on timeout/failure.
 - Forwarding hidden chain-of-thought, raw terminal output, or secret material.
-- Full message-by-message synchronization between Telegram and every native CLI.
+- Full transcript mirroring between Telegram and every native CLI. Productive
+  Telegram inputs are still delivered durably to their selected provider.
 - Screen scraping provider TUIs or automatic OS terminal/PID orchestration.
+- Automatic GIF selection or delivery.
 - Guaranteed portability of an in-flight turn after process or machine loss.
 - A bot for every model or account; bot identity represents an agent runtime.
 - Treating tlive as semantic integration for unsupported providers.
@@ -177,10 +180,14 @@ Routing precedence is deterministic:
    message routes exclusively to that author agent.
 2. **Explicit mention — Implemented.** An explicit provider bot mention routes
    to that provider.
-3. **Selected/pasted quote — Implemented.** A manually selected Telegram quote
+3. **Forwarded message — Implemented.** A Telegram message carrying modern or
+   legacy forward metadata is persisted as passive visible quoted context. Its
+   text never enters command, emergency-stop, mention, or productive-turn
+   parsing; the next explicitly productive user message may refer to it.
+4. **Selected/pasted quote — Implemented.** A manually selected Telegram quote
    or pasted quotation is context for the active agent; it is not Reply
    addressing.
-4. **Ordinary message — Implemented.** All other admitted text routes only to
+5. **Ordinary message — Implemented.** All other admitted text routes only to
    the topic's active agent.
 
 - **REQ-ROUTE-006 (Implemented):** Non-target provider runtimes MUST NOT be
@@ -191,6 +198,63 @@ Routing precedence is deterministic:
   MUST NOT be toggled on agent switches. The central ingress must be able to see
   ordinary human group messages; satellite identities SHOULD retain privacy
   when they do not poll groups.
+- **REQ-ROUTE-009 (Implemented behind queue mode):** Consecutive productive
+  messages from one admitted user with the same numeric topic, target agent,
+  provider session, model, and effort MUST be persisted independently but MAY
+  be collected into one provider turn during a bounded quiet window. A command,
+  routing change, maximum batch window, or payload bound closes the batch.
+- **REQ-ROUTE-010 (Implemented for socket-backed Codex; deterministic fallback
+  elsewhere):** Input arriving after a normal Codex turn starts SHOULD use
+  provider-native `turn/steer`. Explicit rejection returns it to FIFO; an
+  ambiguous steering outcome becomes `indeterminate`. A runtime without safe
+  same-turn steering MUST receive the input as one subsequent FIFO turn rather
+  than dropping, simulating, or screen-scraping it.
+
+### Telegram interaction contract
+
+- **REQ-UX-001 (Implemented):** Every productive provider turn MUST identify
+  Telegram as its user-facing transport. A new provider-native session receives
+  the versioned full interaction contract; an existing session receives a
+  bounded reminder so sessions predating a rollout converge without repeating
+  the full prompt on every turn.
+- **REQ-UX-002 (Implemented):** The shared contract MUST prefer concise,
+  outcome-first conversational replies, focused clarification when missing
+  context materially affects the result, separate copyable blocks, restrained
+  emoji, and visible progress without exposing hidden reasoning. Runtime notes
+  MAY refine presentation but MUST NOT change safety or approval authority.
+- **REQ-UX-003 (Implemented for private-chat admission and external queue
+  refresh):** Private chats SHOULD show Telegram's native ephemeral `Thinking…`
+  draft while productive work is pending. The same draft ID MUST be refreshed
+  rather than creating transcript messages. Forum groups continue to use the
+  bounded `typing` chat action; group drafts remain planned until Telegram
+  exposes equivalent Bot API support.
+- **REQ-UX-003A (Accepted platform boundary):** Receipt ticks are owned by
+  Telegram. Ordinary bots have no Bot API method to force a read receipt;
+  `readBusinessMessage` applies only to connected business accounts. The Hub
+  MUST NOT imitate a receipt with an emoji reaction.
+- **REQ-UX-004 (Planned):** Long visible output MUST be delivered as ordered,
+  replyable Telegram messages without truncation. Code or text intended for
+  copying MUST occupy a separate copyable block. Durable multipart delivery
+  MUST retry only the undelivered part.
+- **REQ-UX-005 (Planned):** Generated user-facing artifacts MUST be published as
+  Telegram attachments from a per-job, project-contained staging directory.
+  Canonical-path, regular-file, size, count, extension, and secret-name checks
+  MUST run before upload; natural-language path mentions MUST NOT authorize an
+  attachment.
+- **REQ-UX-006 (Planned):** Small closed decisions MAY render as bounded inline
+  buttons whose opaque callbacks are persisted and scoped to the originating
+  topic, provider session, and owner. Model-provided callback commands MUST
+  never execute directly.
+- **REQ-UX-007 (Planned):** A complex reversible task MAY enter a durable grace
+  period after publishing its interpretation and intended approach. The default
+  grace period is 60 seconds with Start, Clarify, and Cancel controls. Simple
+  tasks start immediately; destructive work or new authority never starts only
+  because a timer expired. Restart, free-text correction, and emergency stop
+  MUST preserve deterministic behavior.
+- **REQ-UX-008 (Accepted):** Telegram UI effects are transport capabilities, not
+  model claims. The Hub owns files, reactions, buttons, message
+  splitting, progress placeholders, and delivery confirmation. Providers own
+  meaning, task execution, and the wording of visible results.
 
 ## 8. Shared visible context and spend policy
 
@@ -251,7 +315,11 @@ or response metadata when the provider exposes it.
   thread and exposing bounded quota/account health without tokens.
 - **REQ-AUTH-004 (Implemented):** When multi-auth is unavailable, Hub MUST be
   able to use the official Codex stdio app-server rather than fail the entire
-  Project Hub.
+  Project Hub. Socket presence alone is insufficient health evidence: when the
+  app-server's advertised multi-auth runtime proxy is unreachable, a configured
+  official stdio transport MUST be selected before starting a turn. Because a
+  shared app-server may retain the old thread's writer lease, fallback starts a
+  new official thread and prepends only bounded persisted visible context.
 - **REQ-AUTH-005 (Implemented):** Account changes and quota state MUST remain
   visible to the owner; switching MUST NOT be silent.
 - **REQ-AUTH-006 (Accepted):** Hermes MAY guide a mode-aware manual device-login
@@ -284,12 +352,16 @@ or response metadata when the provider exposes it.
   model, or account helper. Other providers MAY declare short masked account
   prefixes in private configuration; unknown limits remain explicitly unknown,
   while a provider-reported exhaustion is shown for the current unknown account.
+  A configured private Antigravity status cache MAY supply structured current
+  account, per-model quota, reset time, current model/effort, and matching-session
+  context without ANSI parsing or a provider/model invocation. Stale, mismatched,
+  oversized, or non-private cache files MUST degrade to unknown.
 - **REQ-CMD-004 (Implemented):** `/new` requires an owner callback confirmation
   and resets only the active provider session; mass reset behavior is removed.
   `/local` transfers writer ownership; `/return` returns ownership and
   publishes a bounded safe summary of the local interval.
 - **REQ-CMD-005 (Implemented):** The public Telegram command menu contains only
-  `/status`, `/model`, `/accounts`, `/new`, `/local`, and `/return`. Legacy
+  `/status`, `/model`, `/accounts`, `/new`, `/local`, `/return`, and `/stop`. Legacy
   maintenance commands may remain locally callable for compatibility but are
   not part of the normal mobile interface. In registered project groups only
   the central router bot publishes this universal menu; provider bots publish
@@ -301,6 +373,16 @@ or response metadata when the provider exposes it.
   active choice and use Telegram's success style where supported. Account and
   quota summaries use portable green/yellow/red status symbols because message
   text itself has no reliable cross-client color API.
+- **REQ-CMD-007 (Implemented for queued project-group providers):** `/stop` and
+  an exact case-insensitive emergency utterance (`stop`, `halt`, `стоп`, `стой`,
+  `остановись`, or `прекрати`) MUST bypass model analysis. Hub cancels the
+  selected active provider's not-yet-started FIFO tail and interrupts its active
+  turn through provider-native control or its owned process. Matching applies
+  to the complete normalized message only, never to a word embedded in prose.
+  An owned external CLI process group MUST be force-stoppable even when the
+  provider ignores graceful termination.
+  Legacy inline OpenCode/Antigravity direct-message endpoints do not advertise
+  this command until they move behind an interruptible worker boundary.
 
 ## 11. Frontends, writer lease, and local transfer
 
@@ -377,7 +459,11 @@ more specific and consistent with this baseline.
   health without invoking a model merely to check health.
 - **REQ-OPS-005 (Implemented):** Hermes Gateway and tlive MUST be monitored as
   independent recovery channels. Failure of one is degraded service; neither is
-  a mandatory dependency of Project Hub.
+  a mandatory dependency of Project Hub. A fresh authenticated local Gateway
+  heartbeat is valid liveness evidence when Hermes is intentionally managed
+  outside the configured systemd unit. Bounded `tlive status` health markers
+  provide the equivalent evidence for tlive without logging its dashboard URL
+  or token. Diagnostics still report both configured unit states.
 - **REQ-OPS-006 (Implemented):** General operational alerts are bounded,
   deduplicated, and delivered
   only to one explicitly configured Hub Operations/Alerts topic. Codex is the
@@ -477,9 +563,15 @@ recreate unsaved provider context or a partially executed turn.
 - **REQ-QUEUE-008 (Implemented):** While the head job of a Telegram topic is
   queued, leased, executing, or awaiting outbox delivery, the standalone sender
   SHOULD refresh Telegram's `typing` chat action through the target provider bot
-  identity. This acknowledgement MUST be derived only from durable local state,
-  MUST NOT invoke a model or idle provider, and MUST remain best-effort so a chat
-  action failure cannot block execution or result delivery.
+  identity. Immediately after durable admission, ingress MUST also make a
+  best-effort initial `typing` call so the user does not wait for the sender's
+  first refresh cycle. These acknowledgements MUST NOT invoke a model or idle
+  provider, and a chat-action failure cannot block execution or result delivery.
+- **REQ-QUEUE-009 (Implemented):** Durable input membership MUST retain every
+  Telegram `(chat_id, message_id)` exactly once even when several inputs form
+  one provider turn or a later Codex input is absorbed through same-turn
+  steering. A crash after an ambiguous provider acceptance MUST NOT replay that
+  input automatically.
 
 The detailed state machine, retry proof rule, reconciliation, and required
 fault acceptance are normative in [ADR 0001](../decisions/0001-durable-provider-job-queue.md).
@@ -510,7 +602,8 @@ necessary but not sufficient for items marked live.
 - **AC-F-002 (REQ-ROUTE-001..008):** In an acceptance topic, an ordinary
   owner message invokes only the active agent; a mention invokes only the named
   satellite; a real Reply returns to the response author; a selected/pasted
-  quote remains with the active agent.
+  quote remains with the active agent; and a forwarded message is stored as
+  passive context without executing forwarded commands.
 - **AC-F-003 (REQ-CTX-001..007):** After a satellite exchange, the
   main agent receives the unseen visible delta on its next productive turn,
   understands its addressee, and does not answer the old message as a new task.

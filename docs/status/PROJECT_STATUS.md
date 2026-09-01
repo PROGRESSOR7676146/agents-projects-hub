@@ -46,9 +46,18 @@ operator deployment inventory or live conversation evidence.
   probing their provider. General notifications retain the single configured Hub
   Operations destination.
 - Central Telegram ingress with deterministic ordinary, Reply, mention, and
-  quote routing; non-target providers are not invoked merely to observe. An
+  quote routing; forwarded messages are passive durable context and bypass all
+  command/stop/provider parsing. Non-target providers are not invoked merely to observe. An
   explicit Codex mention while another provider is active uses a satellite
   Codex session and does not silently change the active provider.
+- Versioned provider-neutral Telegram interaction instructions now seed new
+  Codex, OpenCode, Antigravity, Gemini-compatible, and Hermes sessions, while a
+  compact reminder converges existing sessions. Provider-specific notes tune
+  presentation without changing safety authority. Private-chat queue admission
+  and external sender refresh use Telegram's native ephemeral `Thinking…`
+  draft; project groups retain the bounded `typing` action because Bot API
+  drafts are private-chat only. Receipt ticks remain Telegram-owned and are not
+  imitated with reactions.
 - Providers declared `managed_externally` retain their native admission path
   and are never enqueued into the local worker queue, preventing accepted jobs
   without an eligible consumer. All-external productive routes remain unclaimed
@@ -78,6 +87,11 @@ operator deployment inventory or live conversation evidence.
   live services.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity
   adapters with isolated failure boundaries.
+- Codex worker admission probes the multi-auth runtime proxy behind a shared
+  app-server socket and selects the official stdio fallback before `turn/start`
+  when the socket is alive but its model upstream is not. Transport transfer
+  starts a new thread with bounded visible context instead of attempting to
+  resume a thread still writer-locked by the shared server.
 - Compact `/status`, `/accounts`, cached and paginated `/model`, confirmed
   single-session `/new`, `/local`, and `/return` controls.
 - Private last-known-good provider catalogs with bounded callback keys and
@@ -88,6 +102,20 @@ operator deployment inventory or live conversation evidence.
   plus private masked account hints and honest unknown-limit display for other
   providers.
 - Declarative Telegram command-menu synchronization.
+- Durable bounded Telegram burst collection, socket-backed Codex same-turn
+  steering, deterministic queued follow-up for runtimes without steering, and
+  exact-utterance emergency stop with provider/process interruption.
+- Schema version 14 repairs early version-13 deployments that had durable input
+  membership but had not yet created stop-request and turn-absorption tables;
+  the upgrade creates a private SQLite-consistent backup first.
+- Optional read-only Antigravity structured status/quota cache integration for
+  compact `/status` and `/accounts`; private-file and freshness checks fail to
+  unknown without invoking a model, and `doctor` reports each cache as fresh,
+  stale, missing, malformed, oversized, or permission-unsafe.
+- Recovery diagnostics accept the independently managed Hermes Gateway's fresh
+  local heartbeat and bounded tlive status markers as liveness evidence while
+  continuing to expose inactive configured service units. Token-bearing tlive
+  dashboard URLs are neither returned nor logged by the probe.
 - Sandboxed Antigravity `accept-edits` mode; dangerous permission bypass is
   rejected.
 - Optional `codex-multi-auth` with official Codex stdio fallback.
