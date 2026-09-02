@@ -45,14 +45,18 @@ def decide_targets(
         for agent_id, username in usernames.items():
             if username.removeprefix("@").casefold() == replied:
                 return (agent_id,)
+    mentioned = mentioned_targets(text, usernames=usernames)
+    return mentioned or (active_agent,)
+
+
+def mentioned_targets(text: str, *, usernames: Mapping[str, str]) -> tuple[str, ...]:
+    """Return only explicit provider mentions, preserving their text order."""
     positions: list[tuple[int, str]] = []
     for agent_id, username in usernames.items():
         pattern = re.compile(rf"(?<![A-Za-z0-9_])@{re.escape(username)}\b", re.IGNORECASE)
         match = pattern.search(text)
         if match:
             positions.append((match.start(), agent_id))
-    if not positions:
-        return (active_agent,)
     positions.sort()
     seen: set[str] = set()
     targets: list[str] = []

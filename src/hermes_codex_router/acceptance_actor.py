@@ -305,20 +305,19 @@ async def _run_check(
             "response received" if ok else "forward was not visible as quoted context",
         )
     if check == "burst_route":
-        sent = await asyncio.gather(
-            *(
-                client.send_message(
+        sent = []
+        for text in (
+            f"@{target} Reply with exactly",
+            "BURST_E2E_OK",
+            "after reading all three messages together. Use no tools.",
+        ):
+            sent.append(
+                await client.send_message(
                     config.telegram_chat_id,
                     text,
                     reply_to=config.telegram_thread_id,
                 )
-                for text in (
-                    f"@{target} Reply with exactly",
-                    "BURST_E2E_OK",
-                    "after reading all three messages together. Use no tools.",
-                )
             )
-        )
         try:
             response = await _wait_for_response(
                 client,
@@ -525,7 +524,7 @@ def _targets_for_check(config: AcceptanceActorConfig, check: str) -> tuple[str, 
 
 async def _forward_to_topic(client: Any, config: AcceptanceActorConfig, source: Any) -> int:
     try:
-        from telethon import functions, utils
+        from telethon import functions, helpers
     except ImportError as exc:
         raise AcceptanceActorError("install the project with the 'e2e' extra") from exc
     peer = await client.get_input_entity(config.telegram_chat_id)
@@ -534,7 +533,7 @@ async def _forward_to_topic(client: Any, config: AcceptanceActorConfig, source: 
             from_peer=peer,
             id=[int(source.id)],
             to_peer=peer,
-            random_id=[utils.generate_random_long()],
+            random_id=[helpers.generate_random_long()],
             top_msg_id=config.telegram_thread_id,
         )
     )

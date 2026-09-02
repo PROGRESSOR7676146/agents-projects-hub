@@ -55,7 +55,11 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
     reply = message.get("reply_to_message")
     # A manually selected Telegram quote is commentary for the active agent,
     # while a plain Reply is direct addressing of the original bot author.
-    if isinstance(reply, dict) and not isinstance(message.get("quote"), dict):
+    if (
+        isinstance(reply, dict)
+        and not isinstance(message.get("quote"), dict)
+        and reply.get("message_id") != raw_thread_id
+    ):
         reply_author = reply.get("from")
         if (
             isinstance(reply_author, dict)

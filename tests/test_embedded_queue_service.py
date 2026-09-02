@@ -229,6 +229,43 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         self.assertFalse(service.run_embedded_queue_cycle())
         service.close()
 
+    def test_satellite_mention_keeps_its_target_for_the_rest_of_the_burst(self) -> None:
+        client = QueueClient()
+        service, _ = self.service(client)
+        satellite = AgentDefinition(
+            "antigravity",
+            "Antigravity",
+            "example_antigravity_bot",
+            "antigravity",
+            None,
+            True,
+            False,
+            "gemini-example",
+            "high",
+        )
+        service.config = replace(
+            service.config,
+            agents=service.config.agents + (satellite,),
+            external_worker_agent_ids=("codex", "antigravity"),
+            message_batch_quiet_ms=3000,
+            message_batch_max_ms=8000,
+        )
+        service.usernames = {
+            "codex": "example_codex_bot",
+            "antigravity": "example_antigravity_bot",
+        }
+
+        self.assertTrue(service.handle_update(update(1, "@example_antigravity_bot do this")))
+        self.assertTrue(service.handle_update(update(2, "using this second part")))
+
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        jobs = service.state.provider_jobs_for_topic(topic.topic_id)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].agent_id, "antigravity")
+        self.assertIn("FOLLOW-UP USER MESSAGE", jobs[0].payload_text)
+        service.close()
+
     def test_plain_emergency_word_cancels_queued_work_without_provider_call(self) -> None:
         client = QueueClient()
         service, telegram = self.service(client)

@@ -35,7 +35,7 @@ from .provider_catalog_cache import CatalogSnapshot, ProviderCatalogCache
 from .provider_limits import ProviderLimit, decode_provider_limit
 from .provider_telemetry import load_antigravity_telemetry
 from .registry import Project, load_registry
-from .routing import decide_targets, is_emergency_stop, parse_command
+from .routing import decide_targets, is_emergency_stop, mentioned_targets, parse_command
 from .runtime_health import CONTROLLER_INSTANCE_ID
 from .state import HubState, SessionRecord, TopicRecord
 from .status_view import cached_codex_rate_limits, format_accounts, format_session_status
@@ -2090,6 +2090,12 @@ class ProjectHubService:
                 "",
                 routing_text,
             ).strip()
+        if message.reply_to_username is None and not mentioned_targets(
+            routing_text, usernames=self.usernames
+        ):
+            pending_batch_agent = self.state.pending_message_batch_agent(topic.topic_id)
+            if pending_batch_agent is not None and self._queue_enabled(pending_batch_agent):
+                active_agent = pending_batch_agent
         targets = decide_targets(
             routing_text,
             active_agent=active_agent,

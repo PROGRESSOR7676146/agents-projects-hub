@@ -5,11 +5,13 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from hermes_codex_router.acceptance_actor import (
     AcceptanceActorConfig,
     AcceptanceActorError,
+    _forward_to_topic,
     _run_check,
     _targets_for_check,
     load_acceptance_actor_config,
@@ -44,6 +46,19 @@ class FakeClient:
     async def send_message(self, *_args: object, **_kwargs: object) -> FakeMessage:
         self.sent.append((_args, _kwargs))
         return FakeMessage(len(self.sent))
+
+
+class FakeRawClient:
+    def __init__(self) -> None:
+        self.request: object | None = None
+
+    async def get_input_entity(self, entity: object) -> str:
+        return f"peer:{entity}"
+
+    async def __call__(self, request: object) -> object:
+        self.request = request
+        message = SimpleNamespace(id=91)
+        return SimpleNamespace(updates=[SimpleNamespace(message=message)])
 
 
 class AcceptanceActorConfigTests(unittest.TestCase):
@@ -344,6 +359,19 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         forward.assert_awaited_once_with(client, config, source)
         self.assertEqual(wait.await_args_list[1].kwargs["timeout_seconds"], 5)
         self.assertIn("FORWARD_CONTEXT_OK", str(client.sent[-1][0][1]))
+
+    def test_raw_forward_targets_the_canary_forum_topic(self) -> None:
+        config = load_acceptance_actor_config(self.write_config())
+        client = FakeRawClient()
+
+        message_id = asyncio.run(
+            _forward_to_topic(client, config, FakeMessage(44, "FORWARD_SOURCE_OK"))
+        )
+
+        self.assertEqual(message_id, 91)
+        self.assertIsNotNone(client.request)
+        self.assertEqual(getattr(client.request, "top_msg_id"), 77)
+        self.assertEqual(getattr(client.request, "id"), [44])
 
 
 if __name__ == "__main__":

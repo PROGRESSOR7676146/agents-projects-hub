@@ -214,6 +214,39 @@ class TelegramUpdateTests(unittest.TestCase):
         assert parsed is not None
         self.assertEqual(parsed.reply_to_username, "example_antigravity_bot")
 
+    def test_forum_topic_anchor_is_not_treated_as_a_reply_to_its_bot_author(self) -> None:
+        parsed = parse_topic_message(
+            {
+                "update_id": 131,
+                "message": {
+                    "message_id": 23,
+                    "message_thread_id": 77,
+                    "is_topic_message": True,
+                    "chat": {
+                        "id": -1001234567890,
+                        "type": "supergroup",
+                        "title": "Example Project Beta",
+                        "is_forum": True,
+                    },
+                    "from": {"id": 123456789, "is_bot": False},
+                    "text": "second part of a burst",
+                    "reply_to_message": {
+                        "message_id": 77,
+                        "from": {
+                            "id": 8752263516,
+                            "is_bot": True,
+                            "username": "example_codex_bot",
+                        },
+                        "text": "topic created",
+                    },
+                },
+            }
+        )
+
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertIsNone(parsed.reply_to_username)
+
     def test_text_quote_is_not_mistaken_for_telegram_reply(self) -> None:
         parsed = parse_topic_message(
             {

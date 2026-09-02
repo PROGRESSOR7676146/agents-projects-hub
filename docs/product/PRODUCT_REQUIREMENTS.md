@@ -177,7 +177,9 @@ and MUST NOT be recorded in this repository.
 Routing precedence is deterministic:
 
 1. **Real Reply — Implemented.** A Telegram Reply to a known bot-authored
-   message routes exclusively to that author agent.
+   message routes exclusively to that author agent. A protocol-level reply to
+   the forum topic root is only a topic anchor and MUST NOT be interpreted as
+   user-selected Reply addressing.
 2. **Explicit mention — Implemented.** An explicit provider bot mention routes
    to that provider.
 3. **Forwarded message — Implemented.** A Telegram message carrying modern or
@@ -202,7 +204,10 @@ Routing precedence is deterministic:
   messages from one admitted user with the same numeric topic, target agent,
   provider session, model, and effort MUST be persisted independently but MAY
   be collected into one provider turn during a bounded quiet window. A command,
-  routing change, maximum batch window, or payload bound closes the batch.
+  explicit Reply/mention routing change, maximum batch window, or payload bound
+  closes the batch. An unaddressed continuation inside the quiet window inherits
+  the open batch target, including when the first part addressed a satellite
+  provider rather than changing the topic's active provider.
 - **REQ-ROUTE-010 (Implemented for socket-backed Codex; deterministic fallback
   elsewhere):** Input arriving after a normal Codex turn starts SHOULD use
   provider-native `turn/steer`. Explicit rejection returns it to FIFO; an

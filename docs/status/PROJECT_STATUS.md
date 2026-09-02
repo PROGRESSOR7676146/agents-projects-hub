@@ -122,9 +122,11 @@ operator deployment inventory or live conversation evidence.
   precondition without exposing raw logs, and reports the safe cause promptly;
   unknown post-invocation failures remain non-retryable and visibly uncertain.
 - Declarative Telegram command-menu synchronization.
-- Durable bounded Telegram burst collection, socket-backed Codex same-turn
-  steering, deterministic queued follow-up for runtimes without steering, and
-  exact-utterance emergency stop with provider/process interruption.
+- Durable bounded Telegram burst collection keeps an unaddressed continuation
+  with the first part's provider, including a satellite provider; socket-backed
+  Codex same-turn steering, deterministic queued follow-up for runtimes without
+  steering, and exact-utterance emergency stop with provider/process
+  interruption are also implemented.
 - Schema version 14 repairs early version-13 deployments that had durable input
   membership but had not yet created stop-request and turn-absorption tables;
   the upgrade creates a private SQLite-consistent backup first.

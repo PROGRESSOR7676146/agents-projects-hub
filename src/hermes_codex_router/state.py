@@ -1076,6 +1076,23 @@ class HubState:
             available_at=quiet_until,
         )
 
+    def pending_message_batch_agent(
+        self, topic_id: int, *, now: datetime | None = None
+    ) -> str | None:
+        """Return the target of the still-open tail burst, if one exists."""
+        timestamp = _timestamp(now)
+        row = self._connection.execute(
+            """SELECT agent_id FROM provider_jobs
+               WHERE topic_id = ? AND status = 'queued' AND next_attempt_at > ?
+                 AND topic_sequence = (
+                   SELECT MAX(tail.topic_sequence) FROM provider_jobs tail
+                   WHERE tail.topic_id = provider_jobs.topic_id
+                 )
+               LIMIT 1""",
+            (topic_id, timestamp),
+        ).fetchone()
+        return str(row["agent_id"]) if row is not None else None
+
     def get_provider_job(self, job_id: str) -> ProviderJobRecord:
         row = self._connection.execute(
             "SELECT * FROM provider_jobs WHERE job_id = ?", (job_id,)
