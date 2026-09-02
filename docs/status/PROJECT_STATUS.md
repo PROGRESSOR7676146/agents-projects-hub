@@ -106,7 +106,8 @@ operator deployment inventory or live conversation evidence.
   plus private masked account hints and honest unknown-limit display for other
   providers. Cached quota and live worker availability remain separate signals:
   `/status` and `/accounts` surface a known provider/network failure in red even
-  when a telemetry cache still reports unused quota.
+  when a telemetry cache still reports unused quota; a newly started worker
+  remains yellow/unknown until a provider turn proves availability.
 - Provider replies share one compact Telegram identity line: session and agent
   are not duplicated, model and effort use one label, and runtime implementation
   details are hidden. Available context and quota telemetry uses short follow-up

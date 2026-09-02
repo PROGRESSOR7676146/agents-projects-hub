@@ -25,6 +25,8 @@ def _health(remaining: int | None, *, warning: int = 20) -> str:
 
 
 def _provider_problem(state: str | None, error_code: str | None) -> str | None:
+    if state == "unknown":
+        return "🟡 Provider availability unknown"
     if state == "unavailable":
         if error_code == "unsupported_network_location":
             return "🔴 Current network location unsupported"
@@ -197,6 +199,8 @@ def format_accounts(
                 marker = (
                     "🔴"
                     if state in {"unavailable", "limited", "exhausted"}
+                    else "🟡"
+                    if state == "unknown"
                     else _health(limit.remaining_percent)
                 )
                 lines.append(

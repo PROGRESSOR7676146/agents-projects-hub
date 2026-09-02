@@ -169,3 +169,20 @@ class StatusViewTests(unittest.TestCase):
 
         self.assertIn("🔴 Current network location unsupported", text)
         self.assertIn("🔴 ✓ abc… · quota 100%", text)
+
+    def test_accounts_marks_fresh_worker_with_unknown_provider_state_yellow(self) -> None:
+        pool = CodexPoolStatus(False, False, (), None, 0, "not configured")
+        text = format_accounts(
+            pool,
+            include_opencode_go=False,
+            provider_account_hints={"antigravity": ("abc",)},
+            provider_limits={
+                "antigravity": ProviderLimit("antigravity", "model", 100, 2_000_000_000)
+            },
+            provider_current_accounts={"antigravity": "abc…"},
+            provider_states={"antigravity": "unknown"},
+            timezone_name="UTC",
+        )
+
+        self.assertIn("🟡 Provider availability unknown", text)
+        self.assertIn("🟡 ✓ abc… · quota 100%", text)
