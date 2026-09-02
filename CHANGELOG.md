@@ -36,7 +36,8 @@ and releases use semantic versioning while the public API is still evolving.
 ### Fixed
 
 - Fail scoped Telegram acceptance checks promptly when unrelated traffic enters
-  the dedicated canary topic instead of waiting on a contaminated transcript.
+  the dedicated canary topic, and stop after the first failed scenario instead
+  of accumulating later work behind an unhealthy provider.
 - Prevent a provider/RPC failure from terminating central Telegram ingress or
   cascading into unrelated providers.
 - Distinguish a forum topic's protocol reply anchor from a user-selected Reply,

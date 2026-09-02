@@ -75,6 +75,8 @@ Treat the canary topic as exclusive for the duration of a run. The runner fails
 fast when it observes in-topic traffic from a sender outside the pinned actor,
 Hub identity, and configured provider identities. Re-run only after the topic is
 quiet; an interrupted or contaminated artifact is not acceptance evidence.
+The runner stops after its first failed check; diagnose and drain that bounded
+scenario before starting another run.
 
 The `model_menu` check follows the complete callback ladder in the dedicated
 topic: it selects the first provider, first model, and first effort exposed by

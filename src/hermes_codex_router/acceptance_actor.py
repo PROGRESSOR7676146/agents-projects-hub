@@ -485,6 +485,20 @@ async def login_acceptance_actor(config: AcceptanceActorConfig) -> dict[str, obj
     return {"ok": True, "authorized": True, "user_id": user_id}
 
 
+async def _run_configured_checks(
+    client: Any, config: AcceptanceActorConfig
+) -> list[AcceptanceCheckResult]:
+    results: list[AcceptanceCheckResult] = []
+    for check in config.checks:
+        targets = _targets_for_check(config, check)
+        for target in targets:
+            result = await _run_check(client, config, check, target)
+            results.append(result)
+            if not result.ok:
+                return results
+    return results
+
+
 async def run_acceptance_checks(config: AcceptanceActorConfig) -> dict[str, object]:
     try:
         from telethon import TelegramClient
@@ -503,10 +517,7 @@ async def run_acceptance_checks(config: AcceptanceActorConfig) -> dict[str, obje
             raise AcceptanceActorError(
                 "authorized Telegram account does not match expected_user_id"
             )
-        for check in config.checks:
-            targets = _targets_for_check(config, check)
-            for target in targets:
-                results.append(await _run_check(client, config, check, target))
+        results = await _run_configured_checks(client, config)
     finally:
         await client.disconnect()
 

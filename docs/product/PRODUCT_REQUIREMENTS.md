@@ -647,7 +647,9 @@ necessary but not sufficient for items marked live.
   credentials/session/evidence outside Git, and never be treated as a global
   owner. Traffic from any sender outside the pinned actor, Hub, and configured
   provider identities MUST invalidate the affected canary check rather than be
-  mistaken for test output. Bot identities MUST NOT be used to impersonate the operator because
+  mistaken for test output. The runner MUST stop after the first failed check so
+  it cannot enqueue unrelated later scenarios behind unhealthy provider work.
+  Bot identities MUST NOT be used to impersonate the operator because
   Telegram does not deliver bot-authored messages to other bots.
 
 ## 16. Non-functional acceptance criteria

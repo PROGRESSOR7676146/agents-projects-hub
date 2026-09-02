@@ -89,7 +89,8 @@ operator deployment inventory or live conversation evidence.
   commands, full model selection, provider connectivity, Reply provenance,
   passive forwarded quotes, rapid multi-message bursts, and bounded
   emergency-stop recovery. It accepts no arbitrary prompt from configuration
-  and fails fast when unrelated senders contaminate the dedicated canary topic.
+  and fails fast on the first failed scenario or when unrelated senders
+  contaminate the dedicated canary topic.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity
   adapters with isolated failure boundaries.
 - Codex worker admission probes the multi-auth runtime proxy behind a shared

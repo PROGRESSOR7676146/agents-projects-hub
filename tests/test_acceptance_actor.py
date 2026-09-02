@@ -6,13 +6,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 from hermes_codex_router.acceptance_actor import (
     AcceptanceActorConfig,
     AcceptanceActorError,
     _forward_to_topic,
     _run_check,
+    _run_configured_checks,
     _targets_for_check,
     _wait_for_response,
     load_acceptance_actor_config,
@@ -284,6 +285,26 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         )
 
         self.assertIs(received, response)
+
+    def test_configured_checks_stop_after_first_failure(self) -> None:
+        config = load_acceptance_actor_config(
+            self.write_config(checks=["provider_ping", "reply_route"])
+        )
+        failed = SimpleNamespace(ok=False)
+
+        with patch(
+            "hermes_codex_router.acceptance_actor._run_check",
+            new=AsyncMock(return_value=failed),
+        ) as run_check:
+            results = asyncio.run(_run_configured_checks(FakeClient(), config))
+
+        self.assertEqual(results, [failed])
+        run_check.assert_awaited_once_with(
+            ANY,
+            config,
+            "provider_ping",
+            "example_provider_bot",
+        )
 
     def test_reply_route_targets_the_author_without_a_second_mention(self) -> None:
         config = AcceptanceActorConfig(

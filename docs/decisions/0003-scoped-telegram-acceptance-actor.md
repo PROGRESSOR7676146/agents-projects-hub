@@ -42,7 +42,9 @@ While waiting for each expected response it fails the affected check immediately
 if the dedicated topic receives a message from any sender other than the pinned
 acceptance user, Hub identity, or explicitly configured provider identities.
 This prevents ordinary use of the canary topic from being reported as a product
-failure or silently contaminating later checks.
+failure or silently contaminating later checks. Any failed check also ends the
+run immediately so later scenarios cannot accumulate behind a slow or failed
+provider turn.
 Exact results are written as private mode-`0600` artifacts. Public project
 status may record only aggregate pass/fail state.
 
