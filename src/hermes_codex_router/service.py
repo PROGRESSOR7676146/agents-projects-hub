@@ -1770,6 +1770,14 @@ class ProjectHubService:
                 status_effort = active.effort
                 status_context = active.context_remaining_percent
                 status_account = current_account.identity_hint if current_account else None
+                worker_health = next(
+                    (
+                        item
+                        for item in self.state.list_runtime_health()
+                        if item.component == "provider_worker" and item.agent_id == agent.agent_id
+                    ),
+                    None,
+                )
                 telemetry_settings = self.config.provider_telemetry.get(active.agent_id)
                 if telemetry_settings is not None and agent.runtime == "antigravity":
                     telemetry = load_antigravity_telemetry(
@@ -1803,6 +1811,12 @@ class ProjectHubService:
                     limits=limits,
                     timezone_name="Europe/Moscow",
                     limits_stale=current_account.quota_stale if current_account else False,
+                    provider_state=(
+                        worker_health.provider_state if worker_health is not None else None
+                    ),
+                    provider_error_code=(
+                        worker_health.error_code if worker_health is not None else None
+                    ),
                 )
             if active is None:
                 self._send_text(message, detail)
@@ -1820,6 +1834,11 @@ class ProjectHubService:
                 opencode_limit = None
             provider_limits = {}
             provider_current_accounts = {}
+            worker_health = {
+                item.agent_id: item
+                for item in self.state.list_runtime_health()
+                if item.component == "provider_worker" and item.agent_id is not None
+            }
             for agent_id in self.config.provider_account_hints:
                 limit_event = self.state.latest_runtime_event(agent_id, "provider_limit")
                 if limit_event is None:
@@ -1850,6 +1869,14 @@ class ProjectHubService:
                 provider_account_hints=self.config.provider_account_hints,
                 provider_limits=provider_limits,
                 provider_current_accounts=provider_current_accounts,
+                provider_states={
+                    agent_id: item.provider_state for agent_id, item in worker_health.items()
+                },
+                provider_error_codes={
+                    agent_id: item.error_code
+                    for agent_id, item in worker_health.items()
+                    if item.error_code is not None
+                },
             )
             self._send_text(message, detail or "No provider accounts are configured.")
             return True

@@ -24,6 +24,16 @@ def _health(remaining: int | None, *, warning: int = 20) -> str:
     return "🟢"
 
 
+def _provider_problem(state: str | None, error_code: str | None) -> str | None:
+    if state == "unavailable":
+        if error_code == "unsupported_network_location":
+            return "🔴 Current network location unsupported"
+        return "🔴 Provider unavailable"
+    if state in {"limited", "exhausted"}:
+        return "🔴 Provider limit reached"
+    return None
+
+
 def _window(
     label: str,
     window: LimitWindow | None,
@@ -71,6 +81,8 @@ def format_session_status(
     limits: RateLimits,
     timezone_name: str,
     limits_stale: bool = False,
+    provider_state: str | None = None,
+    provider_error_code: str | None = None,
 ) -> str:
     headline = f"{agent} · {_name(model)} · {effort.title()}"
     if writer != "telegram":
@@ -83,6 +95,8 @@ def format_session_status(
     lines = [headline]
     if detail:
         lines.append(" · ".join(detail))
+    if problem := _provider_problem(provider_state, provider_error_code):
+        lines.append(problem)
     timezone = ZoneInfo(timezone_name)
     windows = [
         value
@@ -104,6 +118,8 @@ def format_accounts(
     provider_account_hints: dict[str, tuple[str, ...]] | None = None,
     provider_limits: dict[str, ProviderLimit] | None = None,
     provider_current_accounts: dict[str, str] | None = None,
+    provider_states: dict[str, str] | None = None,
+    provider_error_codes: dict[str, str] | None = None,
     timezone_name: str = "Europe/Moscow",
 ) -> str:
     lines: list[str] = []
@@ -167,6 +183,10 @@ def format_accounts(
         if lines:
             lines.append("")
         lines.append(provider.replace("_", " ").replace("-", " ").title())
+        state = (provider_states or {}).get(provider)
+        problem = _provider_problem(state, (provider_error_codes or {}).get(provider))
+        if problem:
+            lines.append(problem)
         limit = (provider_limits or {}).get(provider)
         current = (provider_current_accounts or {}).get(provider)
         matched = False
@@ -174,8 +194,13 @@ def format_accounts(
             display_hint = hint if hint.endswith("…") else f"{hint}…"
             if limit is not None and current is not None and current.startswith(hint):
                 reset = datetime.fromtimestamp(limit.resets_at, ZoneInfo(timezone_name))
+                marker = (
+                    "🔴"
+                    if state in {"unavailable", "limited", "exhausted"}
+                    else _health(limit.remaining_percent)
+                )
                 lines.append(
-                    f"{_health(limit.remaining_percent)} ✓ {display_hint} · quota "
+                    f"{marker} ✓ {display_hint} · quota "
                     f"{limit.remaining_percent}% ↻ {reset:%d.%m %H:%M}"
                 )
                 matched = True

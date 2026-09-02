@@ -104,7 +104,9 @@ operator deployment inventory or live conversation evidence.
   failure instead of waiting for the general turn timeout.
 - Durable masked Codex account snapshots for provider-free Controller status,
   plus private masked account hints and honest unknown-limit display for other
-  providers.
+  providers. Cached quota and live worker availability remain separate signals:
+  `/status` and `/accounts` surface a known provider/network failure in red even
+  when a telemetry cache still reports unused quota.
 - Provider replies share one compact Telegram identity line: session and agent
   are not duplicated, model and effort use one label, and runtime implementation
   details are hidden. Available context and quota telemetry uses short follow-up

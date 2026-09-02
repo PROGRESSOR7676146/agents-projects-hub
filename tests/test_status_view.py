@@ -76,6 +76,23 @@ class StatusViewTests(unittest.TestCase):
         self.assertIn("🟢 5h", text)
         self.assertNotIn("provider", text.lower())
 
+    def test_status_surfaces_known_network_unavailability_compactly(self) -> None:
+        text = format_session_status(
+            agent="Antigravity",
+            model="gemini-3.7-flash",
+            effort="high",
+            writer="telegram",
+            context_remaining=100,
+            account_hint="abc…",
+            limits=RateLimits(LimitWindow(100, 2_000_000_000, None), None),
+            timezone_name="UTC",
+            provider_state="unavailable",
+            provider_error_code="unsupported_network_location",
+        )
+
+        self.assertIn("🔴 Current network location unsupported", text)
+        self.assertIn("🟢 5h 100%", text)
+
     def test_accounts_lists_codex_and_opencode_go_capabilities(self) -> None:
         pool = CodexPoolStatus(
             True,
@@ -134,3 +151,21 @@ class StatusViewTests(unittest.TestCase):
         self.assertIn("🟢 ✓ abc… · quota 73%", text)
         self.assertIn("🟡 xyz… · limits unknown", text)
         self.assertNotIn("current account unknown", text)
+
+    def test_accounts_does_not_present_quota_as_provider_availability(self) -> None:
+        pool = CodexPoolStatus(False, False, (), None, 0, "not configured")
+        text = format_accounts(
+            pool,
+            include_opencode_go=False,
+            provider_account_hints={"antigravity": ("abc", "xyz")},
+            provider_limits={
+                "antigravity": ProviderLimit("antigravity", "model", 100, 2_000_000_000)
+            },
+            provider_current_accounts={"antigravity": "abc…"},
+            provider_states={"antigravity": "unavailable"},
+            provider_error_codes={"antigravity": "unsupported_network_location"},
+            timezone_name="UTC",
+        )
+
+        self.assertIn("🔴 Current network location unsupported", text)
+        self.assertIn("🔴 ✓ abc… · quota 100%", text)
