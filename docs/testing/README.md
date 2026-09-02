@@ -75,3 +75,6 @@ The `model_menu` check follows the complete callback ladder in the dedicated
 topic: it selects the first provider, first model, and first effort exposed by
 the Hub, then requires the deterministic final confirmation. This changes only
 the canary topic's active session and never sends a productive model prompt.
+The `reply_route` check first obtains a response through an explicit provider
+mention, then sends a real Telegram Reply without another mention and requires
+the response to come from the original provider identity.

@@ -134,9 +134,10 @@ The bounded baseline may be driven by the dedicated MTProto acceptance user
 defined in [ADR 0003](../decisions/0003-scoped-telegram-acceptance-actor.md).
 Validate its private configuration before the run and confirm its exact
 user/chat/topic scope in the active Hub configuration. Its fixed checks cover
-steps 1 and the harmless provider connectivity part of step 2. The remaining
-routing, failure, restart, and recovery tests below are still explicit
-operator-controlled operations.
+step 1, the harmless provider connectivity part of step 2, the complete
+provider/model/effort callback ladder, and real Reply provenance for allowlisted
+providers. The remaining quote, failure, restart, and recovery tests below are
+still explicit operator-controlled operations.
 
 1. Run `/status` and `/accounts`. They must remain compact and responsive
    without a productive model turn.

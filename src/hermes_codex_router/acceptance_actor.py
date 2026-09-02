@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
-SUPPORTED_CHECKS = ("status", "accounts", "model_menu", "provider_ping")
+SUPPORTED_CHECKS = ("status", "accounts", "model_menu", "provider_ping", "reply_route")
 
 
 class AcceptanceActorError(RuntimeError):
@@ -136,8 +136,8 @@ def load_acceptance_actor_config(
     ):
         raise AcceptanceActorError("checks must be a unique non-empty list of supported checks")
     checks = tuple(raw_checks)
-    if "provider_ping" in checks and not providers:
-        raise AcceptanceActorError("provider_ping requires provider_usernames")
+    if any(check in {"provider_ping", "reply_route"} for check in checks) and not providers:
+        raise AcceptanceActorError("provider checks require provider_usernames")
 
     return AcceptanceActorConfig(
         api_id=api_id,
@@ -230,6 +230,12 @@ async def _run_check(
     if check == "provider_ping":
         text = f"@{target} Reply with exactly E2E_OK. This is a connectivity check; use no tools."
         require_buttons = False
+    elif check == "reply_route":
+        text = (
+            f"@{target} Reply with exactly REPLY_PARENT_OK. "
+            "This is a reply-routing check; use no tools."
+        )
+        require_buttons = False
     else:
         command = {"status": "status", "accounts": "accounts", "model_menu": "model"}[check]
         text = f"/{command}@{target}"
@@ -258,6 +264,26 @@ async def _run_check(
             return AcceptanceCheckResult(check, target, False, None, str(exc))
         response_text = str(getattr(response, "raw_text", "")).strip()
         ok = "will start on the next message" in response_text or "already active" in response_text
+    if check == "reply_route":
+        if "REPLY_PARENT_OK" not in response_text:
+            ok = False
+        else:
+            follow_up = await client.send_message(
+                config.telegram_chat_id,
+                "Reply with exactly REPLY_CHILD_OK. Use no tools.",
+                reply_to=int(response.id),
+            )
+            try:
+                response = await _wait_for_response(
+                    client,
+                    config,
+                    after_id=int(follow_up.id),
+                    username=target,
+                )
+            except AcceptanceActorError as exc:
+                return AcceptanceCheckResult(check, target, False, None, str(exc))
+            response_text = str(getattr(response, "raw_text", "")).strip()
+            ok = "REPLY_CHILD_OK" in response_text
     if check == "provider_ping":
         ok = "E2E_OK" in response_text
     return AcceptanceCheckResult(
@@ -309,7 +335,9 @@ async def run_acceptance_checks(config: AcceptanceActorConfig) -> dict[str, obje
             )
         for check in config.checks:
             targets = (
-                config.provider_usernames if check == "provider_ping" else (config.hub_username,)
+                config.provider_usernames
+                if check in {"provider_ping", "reply_route"}
+                else (config.hub_username,)
             )
             for target in targets:
                 results.append(await _run_check(client, config, check, target))

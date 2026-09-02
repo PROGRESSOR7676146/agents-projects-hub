@@ -37,8 +37,12 @@ class FakeMessage:
 
 
 class FakeClient:
+    def __init__(self) -> None:
+        self.sent: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
     async def send_message(self, *_args: object, **_kwargs: object) -> FakeMessage:
-        return FakeMessage(1)
+        self.sent.append((_args, _kwargs))
+        return FakeMessage(len(self.sent))
 
 
 class AcceptanceActorConfigTests(unittest.TestCase):
@@ -70,7 +74,13 @@ class AcceptanceActorConfigTests(unittest.TestCase):
             "telegram_thread_id": 77,
             "hub_username": "example_hub_bot",
             "provider_usernames": ["example_provider_bot"],
-            "checks": ["status", "accounts", "model_menu", "provider_ping"],
+            "checks": [
+                "status",
+                "accounts",
+                "model_menu",
+                "provider_ping",
+                "reply_route",
+            ],
             "timeout_seconds": 15,
             "artifacts_dir": str(self.artifacts),
         }
@@ -84,7 +94,10 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         config = load_acceptance_actor_config(self.write_config())
 
         self.assertEqual(config.telegram_thread_id, 77)
-        self.assertEqual(config.checks, ("status", "accounts", "model_menu", "provider_ping"))
+        self.assertEqual(
+            config.checks,
+            ("status", "accounts", "model_menu", "provider_ping", "reply_route"),
+        )
         self.assertEqual(config.provider_usernames, ("example_provider_bot",))
 
     def test_rejects_world_readable_config_or_secret(self) -> None:
@@ -121,6 +134,12 @@ class AcceptanceActorConfigTests(unittest.TestCase):
     def test_provider_ping_requires_a_provider_allowlist(self) -> None:
         with self.assertRaisesRegex(AcceptanceActorError, "provider_usernames"):
             load_acceptance_actor_config(self.write_config(provider_usernames=[]))
+
+    def test_reply_route_requires_a_provider_allowlist(self) -> None:
+        with self.assertRaisesRegex(AcceptanceActorError, "provider_usernames"):
+            load_acceptance_actor_config(
+                self.write_config(checks=["reply_route"], provider_usernames=[])
+            )
 
     def test_login_bootstrap_may_load_without_expected_identity(self) -> None:
         path = self.write_config()
@@ -166,6 +185,35 @@ class AcceptanceActorConfigTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertTrue(all(button.clicked for button in (provider, model, effort)))
+
+    def test_reply_route_targets_the_author_without_a_second_mention(self) -> None:
+        config = AcceptanceActorConfig(
+            api_id=1,
+            api_hash_file=self.secret,
+            session_path=self.base / "acceptance.session",
+            expected_user_id=1,
+            telegram_chat_id=-1001234567890,
+            telegram_thread_id=77,
+            hub_username="example_hub_bot",
+            provider_usernames=("example_provider_bot",),
+            checks=("reply_route",),
+            timeout_seconds=15,
+            artifacts_dir=self.artifacts,
+        )
+        client = FakeClient()
+        responses = (
+            FakeMessage(10, "REPLY_PARENT_OK"),
+            FakeMessage(12, "REPLY_CHILD_OK"),
+        )
+        with patch(
+            "hermes_codex_router.acceptance_actor._wait_for_response",
+            new=AsyncMock(side_effect=responses),
+        ):
+            result = asyncio.run(_run_check(client, config, "reply_route", "example_provider_bot"))
+
+        self.assertTrue(result.ok)
+        self.assertEqual(client.sent[1][1]["reply_to"], 10)
+        self.assertNotIn("@example_provider_bot", str(client.sent[1][0][1]))
 
 
 if __name__ == "__main__":
