@@ -85,6 +85,10 @@ operator deployment inventory or live conversation evidence.
   retry, concurrent provider isolation, responsive cached Controller status,
   and distinct Hub/provider polling offsets without network, credentials, or
   live services.
+- The scoped MTProto acceptance actor has fixed checks for deterministic
+  commands, full model selection, provider connectivity, Reply provenance,
+  passive forwarded quotes, rapid multi-message bursts, and bounded
+  emergency-stop recovery. It accepts no arbitrary prompt from configuration.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity
   adapters with isolated failure boundaries.
 - Codex worker admission probes the multi-auth runtime proxy behind a shared
@@ -142,8 +146,8 @@ operator deployment inventory or live conversation evidence.
 ## Acceptance still required per deployment
 
 - Dedicated-user bounded Telegram baseline after deployment-local MTProto
-  authorization. Its model-menu check performs the complete provider/model/effort
-  callback ladder in the isolated canary topic without invoking a model.
+  authorization. Repository checks define the safe scenarios; each deployment
+  must still produce its own private live evidence.
 - Natural or controlled Codex quota transition.
 - Telegram privacy/admin policy, restart continuity, and reply provenance after
   any material provider or routing upgrade.

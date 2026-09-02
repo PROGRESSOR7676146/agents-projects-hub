@@ -135,9 +135,11 @@ defined in [ADR 0003](../decisions/0003-scoped-telegram-acceptance-actor.md).
 Validate its private configuration before the run and confirm its exact
 user/chat/topic scope in the active Hub configuration. Its fixed checks cover
 step 1, the harmless provider connectivity part of step 2, the complete
-provider/model/effort callback ladder, and real Reply provenance for allowlisted
-providers. The remaining quote, failure, restart, and recovery tests below are
-still explicit operator-controlled operations.
+provider/model/effort callback ladder, real Reply provenance, and passive
+forwarded-quote semantics for allowlisted providers. It also covers a rapid
+three-message burst and a bounded stop/recovery cycle for the first selected
+provider. The remaining manually selected quote, failure, restart, and recovery
+tests below are still explicit operator-controlled operations.
 
 1. Run `/status` and `/accounts`. They must remain compact and responsive
    without a productive model turn.

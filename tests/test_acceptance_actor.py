@@ -11,6 +11,7 @@ from hermes_codex_router.acceptance_actor import (
     AcceptanceActorConfig,
     AcceptanceActorError,
     _run_check,
+    _targets_for_check,
     load_acceptance_actor_config,
 )
 
@@ -141,6 +142,34 @@ class AcceptanceActorConfigTests(unittest.TestCase):
                 self.write_config(checks=["reply_route"], provider_usernames=[])
             )
 
+    def test_burst_and_stop_routes_require_a_provider_allowlist(self) -> None:
+        for check in ("burst_route", "stop_route", "forwarded_quote"):
+            with (
+                self.subTest(check=check),
+                self.assertRaisesRegex(AcceptanceActorError, "provider_usernames"),
+            ):
+                load_acceptance_actor_config(
+                    self.write_config(checks=[check], provider_usernames=[])
+                )
+
+    def test_stop_route_requires_model_selection_first(self) -> None:
+        with self.assertRaisesRegex(AcceptanceActorError, "model_menu must run before"):
+            load_acceptance_actor_config(self.write_config(checks=["stop_route", "model_menu"]))
+
+    def test_stop_route_targets_only_the_provider_selected_by_model_menu(self) -> None:
+        config = load_acceptance_actor_config(
+            self.write_config(
+                provider_usernames=["first_provider_bot", "second_provider_bot"],
+                checks=["model_menu", "stop_route"],
+            )
+        )
+
+        self.assertEqual(_targets_for_check(config, "stop_route"), ("first_provider_bot",))
+        self.assertEqual(
+            _targets_for_check(config, "provider_ping"),
+            ("first_provider_bot", "second_provider_bot"),
+        )
+
     def test_login_bootstrap_may_load_without_expected_identity(self) -> None:
         path = self.write_config()
         document = json.loads(path.read_text(encoding="utf-8"))
@@ -214,6 +243,107 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(client.sent[1][1]["reply_to"], 10)
         self.assertNotIn("@example_provider_bot", str(client.sent[1][0][1]))
+
+    def test_burst_route_sends_one_instruction_as_three_immediate_messages(self) -> None:
+        config = AcceptanceActorConfig(
+            api_id=1,
+            api_hash_file=self.secret,
+            session_path=self.base / "acceptance.session",
+            expected_user_id=1,
+            telegram_chat_id=-1001234567890,
+            telegram_thread_id=77,
+            hub_username="example_hub_bot",
+            provider_usernames=("example_provider_bot",),
+            checks=("burst_route",),
+            timeout_seconds=15,
+            artifacts_dir=self.artifacts,
+        )
+        client = FakeClient()
+        with patch(
+            "hermes_codex_router.acceptance_actor._wait_for_response",
+            new=AsyncMock(return_value=FakeMessage(10, "BURST_E2E_OK")),
+        ) as wait:
+            result = asyncio.run(_run_check(client, config, "burst_route", "example_provider_bot"))
+
+        self.assertTrue(result.ok)
+        self.assertEqual(len(client.sent), 3)
+        self.assertIn("@example_provider_bot", str(client.sent[0][0][1]))
+        self.assertNotIn("@example_provider_bot", str(client.sent[1][0][1]))
+        call = wait.await_args
+        assert call is not None
+        self.assertEqual(call.kwargs["after_id"], 3)
+
+    def test_stop_route_recovers_after_deterministic_emergency_stop(self) -> None:
+        config = AcceptanceActorConfig(
+            api_id=1,
+            api_hash_file=self.secret,
+            session_path=self.base / "acceptance.session",
+            expected_user_id=1,
+            telegram_chat_id=-1001234567890,
+            telegram_thread_id=77,
+            hub_username="example_hub_bot",
+            provider_usernames=("example_provider_bot",),
+            checks=("stop_route",),
+            timeout_seconds=15,
+            artifacts_dir=self.artifacts,
+        )
+        client = FakeClient()
+        responses = (
+            FakeMessage(10, "Останавливаю активную работу."),
+            FakeMessage(12, "AFTER_STOP_E2E_OK"),
+        )
+        with (
+            patch(
+                "hermes_codex_router.acceptance_actor._wait_for_response",
+                new=AsyncMock(side_effect=responses),
+            ),
+            patch("hermes_codex_router.acceptance_actor.asyncio.sleep", new=AsyncMock()),
+        ):
+            result = asyncio.run(_run_check(client, config, "stop_route", "example_provider_bot"))
+
+        self.assertTrue(result.ok)
+        self.assertEqual(client.sent[1][0][1], "stop")
+        self.assertIn("AFTER_STOP_E2E_OK", str(client.sent[2][0][1]))
+
+    def test_forwarded_quote_is_passive_then_visible_as_context(self) -> None:
+        config = AcceptanceActorConfig(
+            api_id=1,
+            api_hash_file=self.secret,
+            session_path=self.base / "acceptance.session",
+            expected_user_id=1,
+            telegram_chat_id=-1001234567890,
+            telegram_thread_id=77,
+            hub_username="example_hub_bot",
+            provider_usernames=("example_provider_bot",),
+            checks=("forwarded_quote",),
+            timeout_seconds=15,
+            artifacts_dir=self.artifacts,
+        )
+        client = FakeClient()
+        source = FakeMessage(10, "FORWARD_SOURCE_OK")
+        responses = (
+            source,
+            AcceptanceActorError("timed out as expected"),
+            FakeMessage(13, "FORWARD_CONTEXT_OK"),
+        )
+        with (
+            patch(
+                "hermes_codex_router.acceptance_actor._wait_for_response",
+                new=AsyncMock(side_effect=responses),
+            ) as wait,
+            patch(
+                "hermes_codex_router.acceptance_actor._forward_to_topic",
+                new=AsyncMock(return_value=11),
+            ) as forward,
+        ):
+            result = asyncio.run(
+                _run_check(client, config, "forwarded_quote", "example_provider_bot")
+            )
+
+        self.assertTrue(result.ok)
+        forward.assert_awaited_once_with(client, config, source)
+        self.assertEqual(wait.await_args_list[1].kwargs["timeout_seconds"], 5)
+        self.assertIn("FORWARD_CONTEXT_OK", str(client.sent[-1][0][1]))
 
 
 if __name__ == "__main__":

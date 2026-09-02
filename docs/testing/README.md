@@ -78,3 +78,12 @@ the canary topic's active session and never sends a productive model prompt.
 The `reply_route` check first obtains a response through an explicit provider
 mention, then sends a real Telegram Reply without another mention and requires
 the response to come from the original provider identity.
+The `forwarded_quote` check forwards a harmless provider marker back into the
+topic, verifies that the forward alone receives no provider answer, then checks
+that it is visible to the next explicit turn as quoted context.
+
+The `burst_route` check sends one harmless instruction as three concurrent
+Telegram API requests and requires one coherent provider answer. The
+`stop_route` check must appear after `model_menu`: it targets only the first
+provider selected there, starts a harmless wait, sends deterministic `stop`,
+requires the Hub acknowledgement, and proves that a new turn works afterward.

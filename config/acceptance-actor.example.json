@@ -15,7 +15,10 @@
     "accounts",
     "model_menu",
     "provider_ping",
-    "reply_route"
+    "reply_route",
+    "forwarded_quote",
+    "burst_route",
+    "stop_route"
   ],
   "timeout_seconds": 30,
   "artifacts_dir": "/var/lib/agents-projects-hub/private/acceptance-results"

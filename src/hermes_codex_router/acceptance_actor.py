@@ -10,7 +10,16 @@ from pathlib import Path
 from typing import Any
 
 USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
-SUPPORTED_CHECKS = ("status", "accounts", "model_menu", "provider_ping", "reply_route")
+SUPPORTED_CHECKS = (
+    "status",
+    "accounts",
+    "model_menu",
+    "provider_ping",
+    "reply_route",
+    "burst_route",
+    "stop_route",
+    "forwarded_quote",
+)
 
 
 class AcceptanceActorError(RuntimeError):
@@ -136,8 +145,19 @@ def load_acceptance_actor_config(
     ):
         raise AcceptanceActorError("checks must be a unique non-empty list of supported checks")
     checks = tuple(raw_checks)
-    if any(check in {"provider_ping", "reply_route"} for check in checks) and not providers:
+    if (
+        any(
+            check
+            in {"provider_ping", "reply_route", "burst_route", "stop_route", "forwarded_quote"}
+            for check in checks
+        )
+        and not providers
+    ):
         raise AcceptanceActorError("provider checks require provider_usernames")
+    if "stop_route" in checks and (
+        "model_menu" not in checks or checks.index("model_menu") > checks.index("stop_route")
+    ):
+        raise AcceptanceActorError("model_menu must run before stop_route")
 
     return AcceptanceActorConfig(
         api_id=api_id,
@@ -176,8 +196,11 @@ async def _wait_for_response(
     after_id: int,
     username: str,
     require_buttons: bool = False,
+    timeout_seconds: int | None = None,
 ) -> Any:
-    deadline = asyncio.get_running_loop().time() + config.timeout_seconds
+    deadline = asyncio.get_running_loop().time() + (
+        config.timeout_seconds if timeout_seconds is None else timeout_seconds
+    )
     while asyncio.get_running_loop().time() < deadline:
         async for message in client.iter_messages(
             config.telegram_chat_id, min_id=after_id, reverse=True
@@ -227,6 +250,138 @@ async def _complete_model_selection(
 async def _run_check(
     client: Any, config: AcceptanceActorConfig, check: str, target: str
 ) -> AcceptanceCheckResult:
+    if check == "forwarded_quote":
+        sent = await client.send_message(
+            config.telegram_chat_id,
+            f"@{target} Reply with exactly FORWARD_SOURCE_OK. Use no tools.",
+            reply_to=config.telegram_thread_id,
+        )
+        try:
+            source = await _wait_for_response(
+                client, config, after_id=int(sent.id), username=target
+            )
+            if "FORWARD_SOURCE_OK" not in str(getattr(source, "raw_text", "")):
+                return AcceptanceCheckResult(
+                    check, target, False, int(source.id), "unexpected source response"
+                )
+            forwarded_id = await _forward_to_topic(client, config, source)
+            try:
+                unexpected = await _wait_for_response(
+                    client,
+                    config,
+                    after_id=forwarded_id,
+                    username=target,
+                    timeout_seconds=5,
+                )
+            except AcceptanceActorError:
+                unexpected = None
+            if unexpected is not None:
+                return AcceptanceCheckResult(
+                    check,
+                    target,
+                    False,
+                    int(unexpected.id),
+                    "provider answered a passive forward",
+                )
+            follow_up = await client.send_message(
+                config.telegram_chat_id,
+                (
+                    f"@{target} Reply with exactly FORWARD_CONTEXT_OK if the immediately "
+                    "preceding forwarded message was shown only as quoted context. Use no tools."
+                ),
+                reply_to=config.telegram_thread_id,
+            )
+            response = await _wait_for_response(
+                client, config, after_id=int(follow_up.id), username=target
+            )
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        ok = "FORWARD_CONTEXT_OK" in str(getattr(response, "raw_text", ""))
+        return AcceptanceCheckResult(
+            check,
+            target,
+            ok,
+            int(response.id),
+            "response received" if ok else "forward was not visible as quoted context",
+        )
+    if check == "burst_route":
+        sent = await asyncio.gather(
+            *(
+                client.send_message(
+                    config.telegram_chat_id,
+                    text,
+                    reply_to=config.telegram_thread_id,
+                )
+                for text in (
+                    f"@{target} Reply with exactly",
+                    "BURST_E2E_OK",
+                    "after reading all three messages together. Use no tools.",
+                )
+            )
+        )
+        try:
+            response = await _wait_for_response(
+                client,
+                config,
+                after_id=max(int(message.id) for message in sent),
+                username=target,
+            )
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        response_text = str(getattr(response, "raw_text", "")).strip()
+        ok = "BURST_E2E_OK" in response_text
+        return AcceptanceCheckResult(
+            check,
+            target,
+            ok,
+            int(response.id),
+            "response received" if ok else "unexpected response",
+        )
+    if check == "stop_route":
+        await client.send_message(
+            config.telegram_chat_id,
+            f"@{target} Run the harmless command `sleep 60`, then reply STOP_TOO_LATE.",
+            reply_to=config.telegram_thread_id,
+        )
+        await asyncio.sleep(3)
+        stopped = await client.send_message(
+            config.telegram_chat_id,
+            "stop",
+            reply_to=config.telegram_thread_id,
+        )
+        try:
+            stop_response = await _wait_for_response(
+                client,
+                config,
+                after_id=int(stopped.id),
+                username=config.hub_username,
+            )
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        stop_text = str(getattr(stop_response, "raw_text", "")).strip()
+        recovery = await client.send_message(
+            config.telegram_chat_id,
+            f"@{target} Reply with exactly AFTER_STOP_E2E_OK. Use no tools.",
+            reply_to=config.telegram_thread_id,
+        )
+        try:
+            response = await _wait_for_response(
+                client,
+                config,
+                after_id=int(recovery.id),
+                username=target,
+            )
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        response_text = str(getattr(response, "raw_text", "")).strip()
+        ok = "Останавливаю активную работу" in stop_text and "AFTER_STOP_E2E_OK" in response_text
+        return AcceptanceCheckResult(
+            check,
+            target,
+            ok,
+            int(response.id),
+            "response received" if ok else "unexpected response",
+        )
     if check == "provider_ping":
         text = f"@{target} Reply with exactly E2E_OK. This is a connectivity check; use no tools."
         require_buttons = False
@@ -334,11 +489,7 @@ async def run_acceptance_checks(config: AcceptanceActorConfig) -> dict[str, obje
                 "authorized Telegram account does not match expected_user_id"
             )
         for check in config.checks:
-            targets = (
-                config.provider_usernames
-                if check in {"provider_ping", "reply_route"}
-                else (config.hub_username,)
-            )
+            targets = _targets_for_check(config, check)
             for target in targets:
                 results.append(await _run_check(client, config, check, target))
     finally:
@@ -362,3 +513,36 @@ async def run_acceptance_checks(config: AcceptanceActorConfig) -> dict[str, obje
         "passed": sum(item.ok for item in results),
         "artifact": str(destination),
     }
+
+
+def _targets_for_check(config: AcceptanceActorConfig, check: str) -> tuple[str, ...]:
+    if check == "stop_route":
+        return config.provider_usernames[:1]
+    if check in {"provider_ping", "reply_route", "burst_route", "forwarded_quote"}:
+        return config.provider_usernames
+    return (config.hub_username,)
+
+
+async def _forward_to_topic(client: Any, config: AcceptanceActorConfig, source: Any) -> int:
+    try:
+        from telethon import functions, utils
+    except ImportError as exc:
+        raise AcceptanceActorError("install the project with the 'e2e' extra") from exc
+    peer = await client.get_input_entity(config.telegram_chat_id)
+    result = await client(
+        functions.messages.ForwardMessagesRequest(
+            from_peer=peer,
+            id=[int(source.id)],
+            to_peer=peer,
+            random_id=[utils.generate_random_long()],
+            top_msg_id=config.telegram_thread_id,
+        )
+    )
+    message_ids = [
+        int(update.message.id)
+        for update in getattr(result, "updates", ())
+        if getattr(update, "message", None) is not None
+    ]
+    if not message_ids:
+        raise AcceptanceActorError("Telegram did not confirm the forwarded message")
+    return max(message_ids)

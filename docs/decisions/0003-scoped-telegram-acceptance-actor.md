@@ -27,9 +27,15 @@ API hash, and session file, plus its mode-`0700` result directory, live outside
 Git. The checked-in runner exposes only a fixed set of bounded checks:
 
 - deterministic `/status` and `/accounts` commands;
-- `/model` keyboard presence without changing the selection;
+- the complete `/model` provider/model/effort selection using the first offered
+  option at each step;
 - an optional fixed no-tools connectivity prompt to explicitly allowlisted
-  provider usernames.
+  provider usernames;
+- a three-part burst that proves a rapidly sent instruction is handled as one
+  conversational turn;
+- real Telegram Reply provenance and passive forwarded-quote semantics; and
+- a bounded emergency-stop and immediate recovery check against only the first
+  provider selected by the preceding `model_menu` check.
 
 The runner cannot accept arbitrary commands or prompt text from its config.
 Exact results are written as private mode-`0600` artifacts. Public project
@@ -42,7 +48,7 @@ status may record only aggregate pass/fail state.
 - Obtaining an application API ID/hash and performing one interactive account
   authorization remain deployment-local prerequisites.
 - The bounded actor supplements synthetic and operator tests; destructive
-  commands, account rotation, restart faults, Reply/quote semantics, and writer
+  commands, account rotation, restart faults, quote semantics, and writer
   transfer still require separately controlled acceptance procedures.
 - Compromise of the test account is constrained to its configured canary topic,
   but the account must still be removed or its session revoked when unused.
