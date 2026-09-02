@@ -43,6 +43,9 @@ and releases use semantic versioning while the public API is still evolving.
   terminate OpenCode quota-exhausted turns without leaving hung CLI processes.
 - Recover sender health after idle cycles and fall back from an unhealthy
   optional Codex multi-auth upstream to the official stdio app-server.
+- Prevent the isolated Codex stdio fallback from deadlocking on an approval
+  request that no tlive companion connection can receive; escalation now fails
+  closed while `workspace-write` remains enforced.
 
 ## [0.5.1] - 2026-08-30
 

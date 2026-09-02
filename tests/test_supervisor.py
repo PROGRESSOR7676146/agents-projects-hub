@@ -95,13 +95,18 @@ class SupervisorFallbackTests(unittest.TestCase):
                 "hermes_codex_router.supervisor.StdioJsonLineTransport.start",
                 return_value=object(),
             ),
-            patch("hermes_codex_router.supervisor.CodexAppServerClient", return_value=FakeClient()),
+            patch(
+                "hermes_codex_router.supervisor.CodexAppServerClient",
+                return_value=FakeClient(),
+            ) as client_factory,
         ):
             supervisor.start()
             client = supervisor.client()
 
         self.assertIsInstance(client, FakeClient)
         self.assertEqual(supervisor.transport_mode, "stdio-fallback")
+        calls = client_factory.call_args_list
+        self.assertEqual(calls[-1].kwargs["approval_policy"], "never")
 
     def test_managed_server_never_unlinks_an_unowned_existing_socket_path(self) -> None:
         socket_path = self.base / "codex.sock"

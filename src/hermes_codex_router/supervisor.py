@@ -147,7 +147,10 @@ class CodexAppServerSupervisor:
             self.start()
         if self.transport_mode == "stdio-fallback":
             assert self.stdio_executable is not None
-            client = CodexAppServerClient(StdioJsonLineTransport.start(str(self.stdio_executable)))
+            client = CodexAppServerClient(
+                StdioJsonLineTransport.start(str(self.stdio_executable)),
+                approval_policy="never",
+            )
             client.initialize()
             return client
         if self.transport_mode == "managed-socket" and (
@@ -165,7 +168,8 @@ class CodexAppServerSupervisor:
                 raise
             self.transport_mode = "stdio-fallback"
             fallback = CodexAppServerClient(
-                StdioJsonLineTransport.start(str(self.stdio_executable))
+                StdioJsonLineTransport.start(str(self.stdio_executable)),
+                approval_policy="never",
             )
             fallback.initialize()
             return fallback

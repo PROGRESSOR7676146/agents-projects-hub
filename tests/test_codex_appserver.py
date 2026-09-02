@@ -243,6 +243,53 @@ class CodexAppServerTests(unittest.TestCase):
         client.wait_for_turn("turn-9")
         self.assertEqual(transport.sent, [])
 
+    def test_stdio_fallback_declines_unexpected_approval_instead_of_deadlocking(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "id": 81,
+                    "method": "item/commandExecution/requestApproval",
+                    "params": {"threadId": "thread-123", "turnId": "turn-9"},
+                },
+                {
+                    "method": "turn/completed",
+                    "params": {"threadId": "thread-123", "turn": {"id": "turn-9"}},
+                },
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True, approval_policy="never")
+
+        client.wait_for_turn("turn-9")
+
+        self.assertEqual(
+            transport.sent,
+            [{"id": 81, "result": {"decision": "decline"}}],
+        )
+
+    def test_never_policy_is_pinned_with_workspace_sandbox(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "id": 1,
+                    "result": {
+                        "thread": {"id": "thread-123"},
+                        "cwd": str(self.cwd),
+                        "model": "gpt-5.6-sol",
+                        "modelProvider": "openai",
+                        "approvalPolicy": "never",
+                        "sandbox": "workspace-write",
+                    },
+                }
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True, approval_policy="never")
+
+        client.start_thread(cwd=self.cwd, model="gpt-5.6-sol", project_id="alpha")
+
+        params = transport.sent[0]["params"]
+        self.assertEqual(params["approvalPolicy"], "never")
+        self.assertNotIn("approvalsReviewer", params)
+
     def test_wait_for_turn_uses_nested_terminal_error_message(self) -> None:
         transport = FakeTransport(
             [

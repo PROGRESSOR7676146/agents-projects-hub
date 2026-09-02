@@ -298,7 +298,7 @@ Current provider status:
 
 | Provider | Status | Product boundary |
 | --- | --- | --- |
-| Codex | Implemented | Persistent app-server thread; `workspace-write` + `on-request`; metadata and usage status. |
+| Codex | Implemented | Persistent app-server thread; `workspace-write`; shared sockets use `on-request`, isolated stdio fallback denies escalation; metadata and usage status. |
 | Hermes | Implemented integration | Native Gateway owns Telegram/session; Hub plugin/hook owns fail-closed project admission and bounded visible exchange. |
 | OpenCode | Implemented adapter | Go-authenticated provider-owned session through structured CLI output; centrally routed bot identity. |
 | Antigravity | Implemented adapter | `agy` conversation in sandboxed `accept-edits` work mode; no dangerous permission bypass. |
@@ -430,9 +430,12 @@ separate native capability check.
 
 ## 12. Approval, sandbox, and secret requirements
 
-- **REQ-SEC-001 (Implemented):** Default Codex policy MUST be
-  `workspace-write` plus `on-request`; `danger-full-access`, dangerous provider
-  bypass flags, and automatic approval MUST be rejected.
+- **REQ-SEC-001 (Implemented):** Codex MUST remain `workspace-write`.
+  Companion-capable shared sockets use `on-request`; an isolated headless stdio
+  fallback uses `never` so sandboxed work may proceed but escalation cannot be
+  requested. Any unexpected server approval request on that fallback MUST be
+  explicitly declined. `danger-full-access`, dangerous provider bypass flags,
+  and automatic approval MUST be rejected.
 - **REQ-SEC-002 (Implemented):** Hermes and Hub are not approval authorities.
   Codex/tlive retains approval ownership and first-valid-answer-wins behavior.
 - **REQ-SEC-003 (Accepted):** Timeout, restart, ambiguity, missing state, and

@@ -38,7 +38,8 @@ filesystem path, weaken the sandbox, or approve an action on the user's behalf.
   compete for the same incoming message.
 - Transfer useful context without forwarding hidden reasoning, environment
   dumps, terminal buffers, or secrets.
-- Preserve Codex's `workspace-write` sandbox and `on-request` approval policy.
+- Preserve Codex's `workspace-write` sandbox. Shared app-server sessions use
+  `on-request`; isolated headless fallback denies escalation without prompting.
 - Make local interactive takeover explicit and race-free.
 
 ## How it works
@@ -285,7 +286,11 @@ official stdio app-server when that socket is absent. Multi-auth is therefore an
 optional accelerator, not a service dependency. Hub resumes the same persisted
 provider thread ID in either mode and exposes only redacted account numbers and
 cached quota health in `/status` and `/accounts`; OAuth tokens and account emails
-are never returned. In an external-worker deployment the monitor publishes a
+are never returned. The isolated stdio fallback cannot expose an approval to a
+tlive companion connection, so it pins `approvalPolicy: never` inside the same
+`workspace-write` sandbox: sandboxed work proceeds, escalation is unavailable,
+and any unexpected approval request is explicitly declined instead of hanging.
+In an external-worker deployment the monitor publishes a
 bounded masked snapshot to local durable state, so `/accounts` remains a local
 Controller command and never spends model tokens. A snapshot older than thirty
 minutes is displayed as stale.

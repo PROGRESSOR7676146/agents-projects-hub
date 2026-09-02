@@ -96,6 +96,10 @@ operator deployment inventory or live conversation evidence.
   when the socket is alive but its model upstream is not. Transport transfer
   starts a new thread with bounded visible context instead of attempting to
   resume a thread still writer-locked by the shared server.
+- Shared Codex sockets retain `on-request` approvals for their companion client.
+  The isolated stdio fallback uses `never` inside `workspace-write` and
+  explicitly declines any unexpected server approval request, preventing a
+  headless turn from waiting forever on a companion that cannot reach it.
 - Compact `/status`, `/accounts`, cached and paginated `/model`, confirmed
   single-session `/new`, `/local`, and `/return` controls.
 - Private last-known-good provider catalogs with bounded callback keys and

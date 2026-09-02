@@ -238,14 +238,59 @@ class TurnResult:
 class CodexAppServerClient:
     """Small typed client for the stable v2 methods Project Hub needs."""
 
-    def __init__(self, transport: MessageTransport, *, initialized: bool = False) -> None:
+    def __init__(
+        self,
+        transport: MessageTransport,
+        *,
+        initialized: bool = False,
+        approval_policy: str = "on-request",
+    ) -> None:
+        if approval_policy not in {"on-request", "never"}:
+            raise ValueError("unsupported Codex approval policy")
         self._transport = transport
         self._initialized = initialized
+        self._approval_policy = approval_policy
         self._next_request_id = 1
         self.notifications: list[dict[str, Any]] = []
 
     def close(self) -> None:
         self._transport.close()
+
+    def _approval_params(self) -> dict[str, str]:
+        params = {"approvalPolicy": self._approval_policy}
+        if self._approval_policy == "on-request":
+            params["approvalsReviewer"] = "user"
+        return params
+
+    def _handle_server_request(self, message: dict[str, Any]) -> bool:
+        if self._approval_policy != "never":
+            return False
+        request_id = message.get("id")
+        method = message.get("method")
+        if request_id is None or not isinstance(method, str):
+            return False
+        if method in {
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+        }:
+            result: dict[str, Any] = {"decision": "decline"}
+        elif method == "item/permissions/requestApproval":
+            result = {"permissions": [], "scope": "turn"}
+        elif method == "mcpServer/elicitation/request":
+            result = {"action": "decline", "content": None}
+        else:
+            self._transport.send(
+                {
+                    "id": request_id,
+                    "error": {
+                        "code": -32601,
+                        "message": "server request unavailable in headless stdio fallback",
+                    },
+                }
+            )
+            return True
+        self._transport.send({"id": request_id, "result": result})
+        return True
 
     def _request(self, method: str, params: dict[str, Any]) -> Any:
         request_id = self._next_request_id
@@ -257,6 +302,7 @@ class CodexAppServerClient:
                 # A companion client such as tlive owns remote approval. Do
                 # not answer from this headless bridge and never auto-allow.
                 # If nobody answers, Codex remains blocked (fail-closed).
+                self._handle_server_request(message)
                 continue
             if message.get("id") == request_id:
                 if "error" in message:
@@ -299,8 +345,7 @@ class CodexAppServerClient:
                 "cwd": str(canonical_cwd),
                 "model": model,
                 "sandbox": "workspace-write",
-                "approvalPolicy": "on-request",
-                "approvalsReviewer": "user",
+                **self._approval_params(),
                 "experimentalRawEvents": False,
             },
         )
@@ -309,7 +354,7 @@ class CodexAppServerClient:
         returned_cwd = Path(str(result.get("cwd"))).resolve(strict=True)
         if returned_cwd != canonical_cwd:
             raise RpcError("thread/start returned a different cwd")
-        if result.get("approvalPolicy") != "on-request":
+        if result.get("approvalPolicy") != self._approval_policy:
             raise RpcError("thread/start returned an unsafe approval policy")
         sandbox = result.get("sandbox")
         sandbox_is_safe = sandbox == "workspace-write" or (
@@ -338,8 +383,7 @@ class CodexAppServerClient:
                 "cwd": str(canonical_cwd),
                 "model": model,
                 "sandbox": "workspace-write",
-                "approvalPolicy": "on-request",
-                "approvalsReviewer": "user",
+                **self._approval_params(),
                 "excludeTurns": True,
             },
         )
@@ -350,7 +394,7 @@ class CodexAppServerClient:
             raise RpcError("thread/resume returned a different thread id")
         if Path(str(returned_cwd)).resolve(strict=True) != canonical_cwd:
             raise RpcError("thread/resume returned a different cwd")
-        if result.get("approvalPolicy") != "on-request":
+        if result.get("approvalPolicy") != self._approval_policy:
             raise RpcError("thread/resume returned an unsafe approval policy")
         sandbox = result.get("sandbox")
         if not (
@@ -383,8 +427,7 @@ class CodexAppServerClient:
                 "input": [{"type": "text", "text": text}],
                 "model": model,
                 "effort": effort,
-                "approvalPolicy": "on-request",
-                "approvalsReviewer": "user",
+                **self._approval_params(),
                 "sandboxPolicy": {
                     "type": "workspaceWrite",
                     "writableRoots": [str(canonical_cwd)],
@@ -442,6 +485,7 @@ class CodexAppServerClient:
             if method and "id" in message:
                 # tlive answers approvals on its companion connection.
                 # This client deliberately neither allows nor denies.
+                self._handle_server_request(message)
                 continue
             params = message.get("params")
             if not isinstance(params, dict):
