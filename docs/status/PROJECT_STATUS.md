@@ -141,7 +141,8 @@ operator deployment inventory or live conversation evidence.
 ## Acceptance still required per deployment
 
 - Dedicated-user bounded Telegram baseline after deployment-local MTProto
-  authorization; model/effort selection still needs owner-driven click-through.
+  authorization. Its model-menu check performs the complete provider/model/effort
+  callback ladder in the isolated canary topic without invoking a model.
 - Natural or controlled Codex quota transition.
 - Telegram privacy/admin policy, restart continuity, and reply provenance after
   any material provider or routing upgrade.

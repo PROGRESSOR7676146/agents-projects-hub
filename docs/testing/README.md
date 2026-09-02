@@ -70,3 +70,8 @@ For the first login only, `expected_user_id` may be omitted. `e2e-login` prints
 the authenticated numeric user ID locally; immediately add it to both the actor
 config and the matching Hub `acceptance_actors` entry. `e2e-validate` and
 `e2e-run` fail closed until that identity is pinned.
+
+The `model_menu` check follows the complete callback ladder in the dedicated
+topic: it selects the first provider, first model, and first effort exposed by
+the Hub, then requires the deterministic final confirmation. This changes only
+the canary topic's active session and never sends a productive model prompt.

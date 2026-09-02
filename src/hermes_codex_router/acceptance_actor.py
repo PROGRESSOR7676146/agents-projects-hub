@@ -194,6 +194,36 @@ async def _wait_for_response(
     raise AcceptanceActorError(f"timed out waiting for @{username}")
 
 
+async def _click_callback_prefix(message: Any, prefix: bytes) -> None:
+    for row in getattr(message, "buttons", None) or ():
+        for button in row:
+            data = getattr(button, "data", None)
+            if isinstance(data, bytes) and data.startswith(prefix):
+                await button.click()
+                return
+    raise AcceptanceActorError(
+        f"model menu has no {prefix.decode('ascii', errors='replace')} callback"
+    )
+
+
+async def _complete_model_selection(
+    client: Any,
+    config: AcceptanceActorConfig,
+    menu: Any,
+) -> Any:
+    current = menu
+    for prefix in (b"provider:", b"choose:", b"use:"):
+        await _click_callback_prefix(current, prefix)
+        current = await _wait_for_response(
+            client,
+            config,
+            after_id=int(current.id),
+            username=config.hub_username,
+            require_buttons=prefix != b"use:",
+        )
+    return current
+
+
 async def _run_check(
     client: Any, config: AcceptanceActorConfig, check: str, target: str
 ) -> AcceptanceCheckResult:
@@ -221,6 +251,13 @@ async def _run_check(
         return AcceptanceCheckResult(check, target, False, None, str(exc))
     response_text = str(getattr(response, "raw_text", "")).strip()
     ok = bool(response_text) or require_buttons
+    if check == "model_menu":
+        try:
+            response = await _complete_model_selection(client, config, response)
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        response_text = str(getattr(response, "raw_text", "")).strip()
+        ok = "will start on the next message" in response_text or "already active" in response_text
     if check == "provider_ping":
         ok = "E2E_OK" in response_text
     return AcceptanceCheckResult(

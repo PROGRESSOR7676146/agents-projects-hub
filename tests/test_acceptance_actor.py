@@ -1,15 +1,44 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from hermes_codex_router.acceptance_actor import (
+    AcceptanceActorConfig,
     AcceptanceActorError,
+    _run_check,
     load_acceptance_actor_config,
 )
+
+
+class FakeButton:
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+        self.clicked = False
+
+    async def click(self) -> None:
+        self.clicked = True
+
+
+class FakeMessage:
+    def __init__(
+        self,
+        message_id: int,
+        text: str = "",
+        button: FakeButton | None = None,
+    ) -> None:
+        self.id = message_id
+        self.raw_text = text
+        self.buttons = [[button]] if button is not None else None
+
+
+class FakeClient:
+    async def send_message(self, *_args: object, **_kwargs: object) -> FakeMessage:
+        return FakeMessage(1)
 
 
 class AcceptanceActorConfigTests(unittest.TestCase):
@@ -103,6 +132,40 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         self.assertIsNone(config.expected_user_id)
         with self.assertRaisesRegex(AcceptanceActorError, "expected_user_id"):
             load_acceptance_actor_config(path)
+
+    def test_model_menu_check_clicks_provider_model_and_effort(self) -> None:
+        provider = FakeButton(b"provider:codex")
+        model = FakeButton(b"choose:codex:model")
+        effort = FakeButton(b"use:codex:model:high")
+        responses = (
+            FakeMessage(2, button=provider),
+            FakeMessage(3, button=model),
+            FakeMessage(4, button=effort),
+            FakeMessage(5, "Codex will start on the next message."),
+        )
+        config = AcceptanceActorConfig(
+            api_id=1,
+            api_hash_file=self.secret,
+            session_path=self.base / "acceptance.session",
+            expected_user_id=1,
+            telegram_chat_id=-1001234567890,
+            telegram_thread_id=77,
+            hub_username="example_hub_bot",
+            provider_usernames=("example_provider_bot",),
+            checks=("model_menu",),
+            timeout_seconds=15,
+            artifacts_dir=self.artifacts,
+        )
+        with patch(
+            "hermes_codex_router.acceptance_actor._wait_for_response",
+            new=AsyncMock(side_effect=responses),
+        ):
+            result = asyncio.run(
+                _run_check(FakeClient(), config, "model_menu", config.hub_username)
+            )
+
+        self.assertTrue(result.ok)
+        self.assertTrue(all(button.clicked for button in (provider, model, effort)))
 
 
 if __name__ == "__main__":

@@ -5,8 +5,8 @@ Roadmap содержит только переносимые продуктов�
 
 ## Ближайшие задачи
 
-1. Завершить owner-driven E2E для выбора provider/model/effort и естественного
-   исчерпания лимита Codex.
+1. Завершить E2E естественного исчерпания лимита Codex; выбор
+   provider/model/effort уже покрыт выделенным Telegram acceptance actor.
 2. Сохранять стабильные contract tests для Codex, Hermes, OpenCode и
    Antigravity при обновлении их CLI/API.
 3. Реализовать автоматическую ротацию Antigravity только после появления
