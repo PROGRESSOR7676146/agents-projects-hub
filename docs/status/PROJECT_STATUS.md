@@ -1,7 +1,7 @@
 # Project status
 
 Status: active alpha
-Release: v0.5.0
+Release: v0.5.1
 
 This file describes repository capabilities only. It intentionally contains no
 operator deployment inventory or live conversation evidence.

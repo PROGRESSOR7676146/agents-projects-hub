@@ -708,6 +708,9 @@ necessary but not sufficient for items marked live.
   account-pool interface.
 - The current recovery plane handles component/service failure on the existing
   machine, not complete machine loss; machine-loss tooling is not in scope.
+- Each locally managed provider currently has one execution slot across all
+  projects. A long turn can delay that same provider in another topic, while
+  deterministic Hub commands and unrelated providers remain available.
 - Topic creation depends on the deployment bot's Telegram Manage Topics
   permission.
 

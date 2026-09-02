@@ -12,6 +12,37 @@ and releases use semantic versioning while the public API is still evolving.
   Codex as the default provider and preserving provider response/outbox and
   direct-message identity boundaries. Legacy configurations without `hub_bot`
   continue to use Codex ingress.
+- Add durable provider jobs, isolated Codex/OpenCode/Antigravity workers, a
+  standalone Telegram outbox sender, runtime-health snapshots, and bounded
+  fault-injection coverage for crash and retry boundaries.
+- Add a scoped MTProto acceptance actor with fixed checks for commands, complete
+  model selection, provider connectivity, Reply provenance, passive forwards,
+  multi-message bursts, and emergency-stop recovery.
+- Add the shared Telegram interaction contract, native private-chat
+  `Thinking…` drafts, group typing refresh, bounded burst collection,
+  same-turn Codex steering, and deterministic emergency stop.
+- Add optional Antigravity status-line telemetry and provider-neutral cached
+  account/limit presentation.
+
+### Changed
+
+- Keep provider availability separate from cached quota: known runtime or
+  network failures now remain visibly unavailable even when cached quota exists.
+- Deliver provider failures through the durable outbox and compact all provider
+  reply/status metadata for mobile Telegram use.
+- Keep unaddressed burst continuations on the provider selected by the first
+  part, including satellite providers that are not active for the topic.
+
+### Fixed
+
+- Prevent a provider/RPC failure from terminating central Telegram ingress or
+  cascading into unrelated providers.
+- Distinguish a forum topic's protocol reply anchor from a user-selected Reply,
+  preserving correct routing and burst collection.
+- Detect Antigravity unsupported-network failures from private per-turn logs and
+  terminate OpenCode quota-exhausted turns without leaving hung CLI processes.
+- Recover sender health after idle cycles and fall back from an unhealthy
+  optional Codex multi-auth upstream to the official stdio app-server.
 
 ## [0.5.1] - 2026-08-30
 
