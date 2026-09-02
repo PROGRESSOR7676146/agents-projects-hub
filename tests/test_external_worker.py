@@ -9,7 +9,11 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from hermes_codex_router.cli import main
-from hermes_codex_router.external_runtime import ExternalTurnResult, ProviderLimitError
+from hermes_codex_router.external_runtime import (
+    ExternalTurnResult,
+    ProviderLimitError,
+    ProviderUnavailableError,
+)
 from hermes_codex_router.external_worker import ExternalQueueWorker
 from hermes_codex_router.hub_config import (
     AgentDefinition,
@@ -25,9 +29,17 @@ from hermes_codex_router.telegram import TopicMessage
 
 
 class Adapter:
-    def __init__(self, runtime: str, *, limit: bool = False, session_id: bool = True) -> None:
+    def __init__(
+        self,
+        runtime: str,
+        *,
+        limit: bool = False,
+        unavailable: bool = False,
+        session_id: bool = True,
+    ) -> None:
         self.runtime = runtime
         self.limit = limit
+        self.unavailable = unavailable
         self.session_id = session_id
         self.calls = 0
 
@@ -35,6 +47,11 @@ class Adapter:
         self.calls += 1
         if self.limit:
             raise ProviderLimitError(ProviderLimit(self.runtime, "weekly", 0, 1))
+        if self.unavailable:
+            raise ProviderUnavailableError(
+                "unsupported_network_location",
+                "Antigravity is unavailable from the computer's current network location.",
+            )
         return ExternalTurnResult(
             self.runtime,
             f"{self.runtime} answer",
@@ -149,6 +166,10 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             self.assertTrue(opencode.run_cycle())
             self.assertTrue(antigravity.run_cycle())
             self.assertEqual(opencode.state.get_provider_job(open_job).status, "failed")
+            self.assertIn(
+                "limit reached",
+                opencode.state.get_telegram_outbox_for_job(open_job).telegram_html,
+            )
             self.assertEqual(antigravity.state.get_provider_job(agy_job).status, "result_ready")
             open_health = opencode.state.get_runtime_health("provider_worker", "test-opencode")
             agy_health = antigravity.state.get_runtime_health("provider_worker", "test-antigravity")
@@ -170,6 +191,27 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         finally:
             opencode.close()
             antigravity.close()
+
+    def test_known_provider_unavailability_fails_with_a_visible_notice(self) -> None:
+        job_id = self.enqueue("antigravity", 31)
+        worker = self.worker("antigravity", Adapter("antigravity", unavailable=True))
+        try:
+            self.assertTrue(worker.run_cycle())
+            job = worker.state.get_provider_job(job_id)
+            self.assertEqual((job.status, job.error_class), ("failed", "provider_unavailable"))
+            outbox = worker.state.get_telegram_outbox_for_job(job_id)
+            self.assertEqual(outbox.status, "pending")
+            self.assertIn("current network location", outbox.telegram_html)
+            leased = worker.state.lease_telegram_outbox("antigravity", "test-sender")
+            assert leased is not None and leased.lease_token is not None
+            worker.state.mark_telegram_outbox_delivered(
+                leased.outbox_id,
+                leased.lease_token,
+                telegram_message_id=123,
+            )
+            self.assertEqual(worker.state.get_provider_job(job_id).status, "failed")
+        finally:
+            worker.close()
 
     def test_stop_after_provider_lease_returns_unstarted_job_to_queue(self) -> None:
         job_id = self.enqueue("opencode", 30)
@@ -228,6 +270,10 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         try:
             self.assertTrue(worker.run_cycle())
             self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
+            self.assertIn(
+                "did not retry",
+                worker.state.get_telegram_outbox_for_job(job_id).telegram_html,
+            )
         finally:
             worker.close()
 

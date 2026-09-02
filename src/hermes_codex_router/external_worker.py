@@ -12,6 +12,7 @@ from .external_runtime import (
     ExternalRuntimeError,
     ExternalTurnInterrupted,
     ProviderLimitError,
+    ProviderUnavailableError,
 )
 from .hub_config import HubConfig
 from .metadata import format_agent_response, format_telegram_response
@@ -271,13 +272,32 @@ class ExternalQueueWorker:
                     self._provider_state = "limited"
                     self._quota_remaining_percent = float(exc.limit.remaining_percent)
                     self._quota_reset_at = datetime.fromtimestamp(exc.limit.resets_at, timezone.utc)
-                    self.state.fail_provider_job(
+                    self.state.terminate_provider_job_with_notice(
                         executing.job_id,
                         token,
+                        status="failed",
                         error_class="quota",
                         error_code=type(exc).__name__,
+                        sender_agent_id=self.agent.agent_id,
+                        telegram_html=(
+                            f"{self.agent.display_name} limit reached. Reset telemetry was "
+                            "recorded; use /accounts for the current status."
+                        ),
                     )
                     self._record_event("warning", "provider_limit", exc.limit.to_json())
+                elif isinstance(exc, ProviderUnavailableError):
+                    self._last_error_code = exc.code
+                    self._provider_state = "unavailable"
+                    self.state.terminate_provider_job_with_notice(
+                        executing.job_id,
+                        token,
+                        status="failed",
+                        error_class="provider_unavailable",
+                        error_code=exc.code,
+                        sender_agent_id=self.agent.agent_id,
+                        telegram_html=exc.public_message,
+                    )
+                    self._record_event("warning", "provider_unavailable", exc.code)
                 else:
                     self._last_error_code = type(exc).__name__[:128]
                     self._provider_state = "unavailable"
@@ -287,11 +307,19 @@ class ExternalQueueWorker:
                     error_detail = " ".join(str(exc).split())[:1000] or None
                     # Invocation has been marked executing; no automatic replay
                     # is safe without runtime-specific proof that it never began.
-                    self.state.mark_provider_job_indeterminate(
+                    self.state.terminate_provider_job_with_notice(
                         executing.job_id,
                         token,
+                        status="indeterminate",
+                        error_class="ambiguous_execution",
                         error_code=type(exc).__name__,
                         error_detail=error_detail,
+                        sender_agent_id=self.agent.agent_id,
+                        telegram_html=(
+                            f"{self.agent.display_name} stopped before producing a visible "
+                            "result. The outcome is uncertain, so Hub did not retry it "
+                            "automatically."
+                        ),
                     )
                     self._record_event(
                         "warning",

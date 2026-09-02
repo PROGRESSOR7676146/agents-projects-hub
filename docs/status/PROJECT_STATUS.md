@@ -109,6 +109,11 @@ operator deployment inventory or live conversation evidence.
   are not duplicated, model and effort use one label, and runtime implementation
   details are hidden. Available context and quota telemetry uses short follow-up
   lines with mobile-friendly reset timestamps; unavailable fields are omitted.
+- Provider failure notices use the same durable Telegram outbox without being
+  misclassified as successful model results. Antigravity consumes only a
+  per-turn private diagnostic log, recognizes the provider's unsupported-network
+  precondition without exposing raw logs, and reports the safe cause promptly;
+  unknown post-invocation failures remain non-retryable and visibly uncertain.
 - Declarative Telegram command-menu synchronization.
 - Durable bounded Telegram burst collection, socket-backed Codex same-turn
   steering, deterministic queued follow-up for runtimes without steering, and

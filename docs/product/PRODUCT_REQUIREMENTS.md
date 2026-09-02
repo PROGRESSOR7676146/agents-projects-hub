@@ -535,7 +535,10 @@ recreate unsaved provider context or a partially executed turn.
 - **REQ-QUEUE-004 (Implemented for the embedded compatibility consumer):** A durable job state machine MUST distinguish work
   not yet invoked from `executing`, result delivery, terminal failure, and
   `indeterminate` execution. An unproven in-flight turn MUST NOT be retried
-  automatically.
+  automatically. A terminal provider failure or indeterminate outcome MUST
+  enqueue one bounded user-visible notice through the provider bot identity;
+  delivering that notice MUST NOT convert the terminal job into a successful
+  provider result.
 - **REQ-QUEUE-005 (Implemented for embedded compatibility and the external sender):** Provider result persistence and Telegram delivery
   MUST use a durable outbox. Telegram delivery retry MUST NOT create another
   provider turn, and visible-context acknowledgement MUST occur only after a

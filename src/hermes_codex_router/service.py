@@ -18,7 +18,7 @@ from .codex_accounts import (
 )
 from .codex_appserver import CodexAppServerClient, LimitWindow, RateLimits, RpcError
 from .external_admission import consume_pending_handoff, peek_pending_handoff
-from .external_runtime import ProviderLimitError
+from .external_runtime import ProviderLimitError, ProviderUnavailableError
 from .external_service import ExternalAgentService
 from .hub_config import HubConfig, read_telegram_token
 from .local_transfer import LocalTransferError, local_resume_command
@@ -708,15 +708,41 @@ class ProjectHubService:
             error_class = "quota" if isinstance(exc, ProviderLimitError) else "ambiguous_execution"
             try:
                 if isinstance(exc, ProviderLimitError):
-                    queue_state.fail_provider_job(
+                    queue_state.terminate_provider_job_with_notice(
                         executing.job_id,
                         token,
+                        status="failed",
                         error_class=error_class,
                         error_code=type(exc).__name__,
+                        sender_agent_id=agent.agent_id,
+                        telegram_html=(
+                            f"{agent.display_name} limit reached. Reset telemetry was "
+                            "recorded; use /accounts for the current status."
+                        ),
+                    )
+                elif isinstance(exc, ProviderUnavailableError):
+                    error_class = "provider_unavailable"
+                    queue_state.terminate_provider_job_with_notice(
+                        executing.job_id,
+                        token,
+                        status="failed",
+                        error_class=error_class,
+                        error_code=exc.code,
+                        sender_agent_id=agent.agent_id,
+                        telegram_html=exc.public_message,
                     )
                 else:
-                    queue_state.mark_provider_job_indeterminate(
-                        executing.job_id, token, error_code=type(exc).__name__
+                    queue_state.terminate_provider_job_with_notice(
+                        executing.job_id,
+                        token,
+                        status="indeterminate",
+                        error_class=error_class,
+                        error_code=type(exc).__name__,
+                        sender_agent_id=agent.agent_id,
+                        telegram_html=(
+                            f"{agent.display_name} stopped before producing a visible result. "
+                            "The outcome is uncertain, so Hub did not retry it automatically."
+                        ),
                     )
             except Exception:
                 pass

@@ -1551,6 +1551,78 @@ class HubState:
             raise StateError("provider job lease is missing or invalid")
         return self.get_provider_job(job_id)
 
+    def terminate_provider_job_with_notice(
+        self,
+        job_id: str,
+        lease_token: str,
+        *,
+        status: str,
+        error_class: str,
+        error_code: str,
+        sender_agent_id: str,
+        telegram_html: str,
+        error_detail: str | None = None,
+        now: datetime | None = None,
+    ) -> ProviderJobRecord:
+        """Atomically terminalize invoked work and queue one visible failure notice."""
+        if status not in {"failed", "indeterminate"}:
+            raise StateError("provider failure notice requires a terminal failure status")
+        failure_class = _bounded(error_class, name="error class", maximum=64)
+        code = _bounded(error_code, name="error code", maximum=128)
+        sender = _bounded(sender_agent_id, name="sender agent id", maximum=64)
+        html = _bounded(telegram_html, name="Telegram outbox text", maximum=12000)
+        detail = error_detail.strip()[:1000] if error_detail else None
+        timestamp = _timestamp(now)
+        with self._immediate_transaction():
+            row = self._connection.execute(
+                """SELECT jobs.*, topics.thread_id FROM provider_jobs jobs
+                   JOIN topics ON topics.topic_id = jobs.topic_id
+                   WHERE jobs.job_id = ? AND jobs.status = 'executing'
+                     AND jobs.lease_token = ? AND jobs.lease_expires_at > ?""",
+                (job_id, lease_token, timestamp),
+            ).fetchone()
+            if row is None:
+                raise StateError("provider job lease is missing or invalid")
+            if sender != str(row["agent_id"]):
+                raise StateError("Telegram outbox sender does not match provider job agent")
+            outbox_id = str(uuid.uuid4())
+            self._connection.execute(
+                """INSERT INTO telegram_outbox (
+                     outbox_id, job_id, sender_agent_id, chat_id, thread_id,
+                     telegram_html, status, available_at, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
+                (
+                    outbox_id,
+                    job_id,
+                    sender,
+                    row["chat_id"],
+                    row["thread_id"],
+                    html,
+                    timestamp,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = ?, lease_owner = NULL, lease_token = NULL,
+                       lease_expires_at = NULL, error_class = ?, error_code = ?,
+                       error_detail = ?, updated_at = ?
+                   WHERE job_id = ? AND status = 'executing' AND lease_token = ?""",
+                (
+                    status,
+                    failure_class,
+                    code,
+                    detail,
+                    timestamp,
+                    job_id,
+                    lease_token,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise StateError("provider job lease changed during failure commit")
+        return self.get_provider_job(job_id)
+
     def cancel_provider_job(self, job_id: str) -> ProviderJobRecord:
         with self._connection:
             cursor = self._connection.execute(
@@ -1976,7 +2048,15 @@ class HubState:
                 (timestamp, row["job_id"]),
             )
             if cursor.rowcount != 1:
-                raise StateError("provider job is not ready for Telegram completion")
+                terminal = self._connection.execute(
+                    "SELECT status FROM provider_jobs WHERE job_id = ?",
+                    (row["job_id"],),
+                ).fetchone()
+                if terminal is None or str(terminal["status"]) not in {
+                    "failed",
+                    "indeterminate",
+                }:
+                    raise StateError("provider job is not ready for Telegram completion")
             delivered = self._connection.execute(
                 "SELECT * FROM telegram_outbox WHERE outbox_id = ?", (outbox_id,)
             ).fetchone()

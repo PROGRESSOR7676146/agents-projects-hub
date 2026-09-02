@@ -12,10 +12,40 @@ from hermes_codex_router.external_runtime import (
     ExternalCliAdapter,
     ExternalTurnInterrupted,
     ProviderLimitError,
+    ProviderUnavailableError,
 )
 
 
 class ExternalRuntimeTests(unittest.TestCase):
+    def test_antigravity_surfaces_unsupported_network_location_safely(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "antigravity.log"
+            executable = root / "provider"
+            executable.write_text(
+                f"#!{sys.executable}\n"
+                "import pathlib, sys\n"
+                "p=pathlib.Path(sys.argv[sys.argv.index('--log-file') + 1])\n"
+                "p.write_text('FAILED_PRECONDITION (code 400): User location is not "
+                "supported for the API use.\\n')\n"
+                'print(\'{"status":"ERROR","error":"Agent execution terminated '
+                "due to error.\"}')\n"
+                "raise SystemExit(1)\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o700)
+            adapter = ExternalCliAdapter(
+                "antigravity",
+                executable=str(executable),
+                antigravity_log_path=log,
+            )
+
+            with self.assertRaises(ProviderUnavailableError) as raised:
+                adapter.run_turn(cwd=root, prompt="work", timeout=5)
+
+        self.assertEqual(raised.exception.code, "unsupported_network_location")
+        self.assertNotIn("400", raised.exception.public_message)
+
     def test_opencode_limit_log_interrupts_cli_that_does_not_exit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

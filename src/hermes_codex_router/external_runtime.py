@@ -4,6 +4,7 @@ import json
 import os
 import signal
 import subprocess
+import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,13 @@ class ProviderLimitError(ExternalRuntimeError):
             f"{limit.provider} {limit.window} limit exhausted; reset telemetry recorded"
         )
         self.limit = limit
+
+
+class ProviderUnavailableError(ExternalRuntimeError):
+    def __init__(self, code: str, public_message: str) -> None:
+        super().__init__(public_message)
+        self.code = code
+        self.public_message = public_message
 
 
 class ExternalTurnInterrupted(ExternalRuntimeError):
@@ -67,6 +75,7 @@ class ExternalCliAdapter:
         executable: str | None = None,
         runtime_home: Path | None = None,
         opencode_log_path: Path | None = None,
+        antigravity_log_path: Path | None = None,
         run: Run = subprocess.run,
     ) -> None:
         if runtime not in {"gemini", "antigravity", "opencode"}:
@@ -79,6 +88,11 @@ class ExternalCliAdapter:
             if opencode_log_path is not None
             else Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share")))
             / "opencode/log/opencode.log"
+        )
+        self.antigravity_log_path = (
+            antigravity_log_path.expanduser().resolve(strict=False)
+            if antigravity_log_path is not None
+            else None
         )
         self._run = run
         self._uses_default_runner = run is subprocess.run
@@ -198,7 +212,21 @@ class ExternalCliAdapter:
         if not interrupt_prepared:
             self.prepare_interruptible_turn()
         detected_limit: list[ProviderLimit] = []
+        antigravity_log = ""
+        owned_antigravity_log = False
+        active_antigravity_log_path: Path | None = None
         if self._uses_default_runner:
+            if self.runtime == "antigravity":
+                if self.antigravity_log_path is None:
+                    descriptor, temporary_log = tempfile.mkstemp(prefix="hub-agy-", suffix=".log")
+                    os.close(descriptor)
+                    active_antigravity_log_path = Path(temporary_log)
+                    owned_antigravity_log = True
+                else:
+                    active_antigravity_log_path = self.antigravity_log_path
+                    active_antigravity_log_path.write_text("", encoding="utf-8")
+                    active_antigravity_log_path.chmod(0o600)
+                argv = (*argv, "--log-file", str(active_antigravity_log_path))
             log_offset: int | None = None
             if self.runtime == "opencode":
                 try:
@@ -271,6 +299,19 @@ class ExternalCliAdapter:
             finally:
                 limit_stop.set()
                 limit_monitor.join(timeout=1)
+                if self.runtime == "antigravity" and active_antigravity_log_path is not None:
+                    try:
+                        with active_antigravity_log_path.open("rb") as log:
+                            size = active_antigravity_log_path.stat().st_size
+                            log.seek(max(0, size - 262144))
+                            antigravity_log = log.read(262144).decode("utf-8", errors="replace")
+                    except OSError:
+                        pass
+                    if owned_antigravity_log:
+                        try:
+                            active_antigravity_log_path.unlink()
+                        except OSError:
+                            pass
                 with self._process_lock:
                     if self._active_process is process:
                         self._active_process = None
@@ -294,6 +335,14 @@ class ExternalCliAdapter:
                 raise ProviderLimitError(limit)
             if self.runtime == "antigravity" and (limit := parse_antigravity_limit(detail)):
                 raise ProviderLimitError(limit)
+            if self.runtime == "antigravity":
+                if limit := parse_antigravity_limit(antigravity_log):
+                    raise ProviderLimitError(limit)
+                if "User location is not supported for the API use" in antigravity_log:
+                    raise ProviderUnavailableError(
+                        "unsupported_network_location",
+                        "Antigravity is unavailable from the computer's current network location.",
+                    )
             raise ExternalRuntimeError(f"{self.runtime} failed safely: {detail}")
         values = _json_values(result.stdout)
         if not values:
