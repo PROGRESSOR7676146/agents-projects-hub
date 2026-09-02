@@ -38,6 +38,11 @@ Git. The checked-in runner exposes only a fixed set of bounded checks:
   provider selected by the preceding `model_menu` check.
 
 The runner cannot accept arbitrary commands or prompt text from its config.
+While waiting for each expected response it fails the affected check immediately
+if the dedicated topic receives a message from any sender other than the pinned
+acceptance user, Hub identity, or explicitly configured provider identities.
+This prevents ordinary use of the canary topic from being reported as a product
+failure or silently contaminating later checks.
 Exact results are written as private mode-`0600` artifacts. Public project
 status may record only aggregate pass/fail state.
 

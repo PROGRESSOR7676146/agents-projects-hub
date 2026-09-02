@@ -14,6 +14,7 @@ from hermes_codex_router.acceptance_actor import (
     _forward_to_topic,
     _run_check,
     _targets_for_check,
+    _wait_for_response,
     load_acceptance_actor_config,
 )
 
@@ -59,6 +60,25 @@ class FakeRawClient:
         self.request = request
         message = SimpleNamespace(id=91)
         return SimpleNamespace(updates=[SimpleNamespace(message=message)])
+
+
+class FakeIncomingMessage(FakeMessage):
+    def __init__(self, message_id: int, username: str, *, sender_id: int = 2) -> None:
+        super().__init__(message_id, "message")
+        self.reply_to = SimpleNamespace(reply_to_top_id=77, reply_to_msg_id=77)
+        self._sender = SimpleNamespace(id=sender_id, username=username)
+
+    async def get_sender(self) -> object:
+        return self._sender
+
+
+class FakeIterClient:
+    def __init__(self, messages: list[FakeIncomingMessage]) -> None:
+        self.messages = messages
+
+    async def iter_messages(self, *_args: object, **_kwargs: object):
+        for message in self.messages:
+            yield message
 
 
 class AcceptanceActorConfigTests(unittest.TestCase):
@@ -229,6 +249,41 @@ class AcceptanceActorConfigTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertTrue(all(button.clicked for button in (provider, model, effort)))
+
+    def test_wait_for_response_fails_fast_on_unrelated_canary_traffic(self) -> None:
+        config = load_acceptance_actor_config(self.write_config())
+        client = FakeIterClient([FakeIncomingMessage(2, "unrelated_user", sender_id=42)])
+
+        with self.assertRaisesRegex(AcceptanceActorError, "unrelated traffic"):
+            asyncio.run(
+                _wait_for_response(
+                    client,
+                    config,
+                    after_id=1,
+                    username="example_provider_bot",
+                )
+            )
+
+    def test_wait_for_response_allows_actor_and_configured_bot_senders(self) -> None:
+        config = load_acceptance_actor_config(self.write_config())
+        response = FakeIncomingMessage(3, "example_provider_bot")
+        client = FakeIterClient(
+            [
+                FakeIncomingMessage(2, "acceptance_actor", sender_id=987654321),
+                response,
+            ]
+        )
+
+        received = asyncio.run(
+            _wait_for_response(
+                client,
+                config,
+                after_id=1,
+                username="example_provider_bot",
+            )
+        )
+
+        self.assertIs(received, response)
 
     def test_reply_route_targets_the_author_without_a_second_mention(self) -> None:
         config = AcceptanceActorConfig(

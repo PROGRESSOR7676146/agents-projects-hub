@@ -71,6 +71,11 @@ the authenticated numeric user ID locally; immediately add it to both the actor
 config and the matching Hub `acceptance_actors` entry. `e2e-validate` and
 `e2e-run` fail closed until that identity is pinned.
 
+Treat the canary topic as exclusive for the duration of a run. The runner fails
+fast when it observes in-topic traffic from a sender outside the pinned actor,
+Hub identity, and configured provider identities. Re-run only after the topic is
+quiet; an interrupted or contaminated artifact is not acceptance evidence.
+
 The `model_menu` check follows the complete callback ladder in the dedicated
 topic: it selects the first provider, first model, and first effort exposed by
 the Hub, then requires the deterministic final confirmation. This changes only

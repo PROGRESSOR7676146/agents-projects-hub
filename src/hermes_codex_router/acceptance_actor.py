@@ -189,6 +189,18 @@ def _topic_id(message: Any) -> int | None:
     return reply_id if isinstance(reply_id, int) else None
 
 
+def _allowed_canary_sender(sender: Any, config: AcceptanceActorConfig) -> bool:
+    sender_id = getattr(sender, "id", None)
+    if sender_id == config.expected_user_id:
+        return True
+    username = str(getattr(sender, "username", "")).casefold()
+    allowed_usernames = {
+        config.hub_username.casefold(),
+        *(value.casefold() for value in config.provider_usernames),
+    }
+    return username in allowed_usernames
+
+
 async def _wait_for_response(
     client: Any,
     config: AcceptanceActorConfig,
@@ -208,11 +220,15 @@ async def _wait_for_response(
             if _topic_id(message) != config.telegram_thread_id:
                 continue
             sender = await message.get_sender()
-            if str(getattr(sender, "username", "")).casefold() != username.casefold():
-                continue
-            if require_buttons and not getattr(message, "buttons", None):
-                continue
-            return message
+            sender_username = str(getattr(sender, "username", "")).casefold()
+            if sender_username == username.casefold():
+                if require_buttons and not getattr(message, "buttons", None):
+                    continue
+                return message
+            if not _allowed_canary_sender(sender, config):
+                raise AcceptanceActorError(
+                    "canary topic received unrelated traffic during acceptance"
+                )
         await asyncio.sleep(0.5)
     raise AcceptanceActorError(f"timed out waiting for @{username}")
 
