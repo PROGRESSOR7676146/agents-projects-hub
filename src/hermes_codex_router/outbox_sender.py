@@ -226,8 +226,11 @@ class TelegramOutboxSender:
             force=True,
         )
         try:
+            part = self.state.next_telegram_outbox_part(
+                outbox.outbox_id, outbox.lease_token, now=now
+            )
             message_id = self.telegram_bots[agent_id].send_html(
-                outbox.chat_id, outbox.thread_id, outbox.telegram_html
+                outbox.chat_id, outbox.thread_id, part.telegram_html
             )
             self.state.mark_telegram_outbox_delivered(
                 outbox.outbox_id,

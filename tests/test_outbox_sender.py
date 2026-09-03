@@ -88,7 +88,9 @@ class TelegramOutboxSenderTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
-    def ready_outbox(self, agent_id: str, message_id: int) -> str:
+    def ready_outbox(
+        self, agent_id: str, message_id: int, *, telegram_html: str | None = None
+    ) -> str:
         state = HubState.open(self.config.state_path)
         try:
             topic = state.observe_topic(
@@ -119,9 +121,9 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             state.commit_provider_result(
                 job.job_id,
                 leased.lease_token,
-                visible_response=f"{agent_id} result",
+                visible_response=telegram_html or f"{agent_id} result",
                 sender_agent_id=agent_id,
-                telegram_html=f"<b>{agent_id} result</b>",
+                telegram_html=telegram_html or f"<b>{agent_id} result</b>",
             )
             return job.job_id
         finally:
@@ -224,6 +226,50 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             assert health is not None
             self.assertEqual(health.error_code, "RuntimeError")
             self.assertEqual(health.activity_state, "idle")
+        finally:
+            sender.close()
+
+    def test_multipart_retry_resumes_at_first_undelivered_part(self) -> None:
+        long_html = ("part " * 3999) + "part"
+        job_id = self.ready_outbox("opencode", 12, telegram_html=long_html)
+        state = HubState.open(self.config.state_path)
+        try:
+            outbox = state.get_telegram_outbox_for_job(job_id)
+            self.assertEqual(
+                state.get_provider_result(job_id).visible_response,
+                long_html,
+            )
+            self.assertGreater(len(state.get_telegram_outbox_parts(outbox.outbox_id)), 1)
+        finally:
+            state.close()
+
+        bot = Bot()
+        sender = self.sender(opencode=bot, antigravity=Bot())
+        try:
+            clock = datetime.now(timezone.utc) + timedelta(seconds=1)
+            self.assertTrue(sender.run_cycle(now=clock))
+            after_first = sender.state.get_telegram_outbox_for_job(job_id)
+            self.assertEqual(after_first.status, "pending")
+            self.assertEqual(sender.state.get_provider_job(job_id).status, "result_ready")
+            parts = sender.state.get_telegram_outbox_parts(after_first.outbox_id)
+            self.assertIsNotNone(parts[0].telegram_message_id)
+            self.assertIsNone(parts[1].telegram_message_id)
+
+            bot.fail = True
+            clock += timedelta(seconds=1)
+            self.assertTrue(sender.run_cycle(now=clock))
+            after_failure = sender.state.get_telegram_outbox_for_job(job_id)
+            self.assertEqual(after_failure.status, "pending")
+            self.assertEqual(len(bot.sent), 2)
+
+            bot.fail = False
+            while sender.state.get_provider_job(job_id).status != "completed":
+                clock += timedelta(seconds=2)
+                self.assertTrue(sender.run_cycle(now=clock))
+            self.assertEqual(bot.sent[1], bot.sent[2])
+            self.assertNotEqual(bot.sent[0][2], bot.sent[-1][2])
+            delivered = sender.state.get_telegram_outbox_parts(after_failure.outbox_id)
+            self.assertTrue(all(part.telegram_message_id is not None for part in delivered))
         finally:
             sender.close()
 

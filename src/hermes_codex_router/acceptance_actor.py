@@ -470,7 +470,9 @@ async def login_acceptance_actor(config: AcceptanceActorConfig) -> dict[str, obj
         from telethon import TelegramClient
     except ImportError as exc:
         raise AcceptanceActorError("install the project with the 'e2e' extra") from exc
-    client = TelegramClient(str(config.session_path), config.api_id, _api_hash(config))
+    # Telethon's generated sync/async overloads vary across releases; this
+    # module intentionally uses the runtime async API throughout.
+    client: Any = TelegramClient(str(config.session_path), config.api_id, _api_hash(config))
     try:
         await client.start()
         identity = await client.get_me()
@@ -504,7 +506,7 @@ async def run_acceptance_checks(config: AcceptanceActorConfig) -> dict[str, obje
         from telethon import TelegramClient
     except ImportError as exc:
         raise AcceptanceActorError("install the project with the 'e2e' extra") from exc
-    client = TelegramClient(str(config.session_path), config.api_id, _api_hash(config))
+    client: Any = TelegramClient(str(config.session_path), config.api_id, _api_hash(config))
     results: list[AcceptanceCheckResult] = []
     await client.connect()
     try:

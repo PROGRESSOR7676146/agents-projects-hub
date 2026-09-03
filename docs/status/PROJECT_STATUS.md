@@ -60,6 +60,10 @@ operator deployment inventory or live conversation evidence.
   draft; project groups retain the bounded `typing` action because Bot API
   drafts are private-chat only. Receipt ticks remain Telegram-owned and are not
   imitated with reactions.
+- Long provider results are split into ordered, independently valid Telegram
+  HTML messages instead of being truncated. Queue-backed delivery persists each
+  part and resumes at the first part without a recorded Telegram message ID;
+  provider execution is never repeated for a delivery retry.
 - Providers declared `managed_externally` retain their native admission path
   and are never enqueued into the local worker queue, preventing accepted jobs
   without an eligible consumer. All-external productive routes remain unclaimed
@@ -135,7 +139,8 @@ operator deployment inventory or live conversation evidence.
   Codex same-turn steering, deterministic queued follow-up for runtimes without
   steering, and exact-utterance emergency stop with provider/process
   interruption are also implemented.
-- Schema version 14 repairs early version-13 deployments that had durable input
+- Schema version 15 adds durable per-message Telegram outbox parts. Version 14
+  repairs early version-13 deployments that had durable input
   membership but had not yet created stop-request and turn-absorption tables;
   the upgrade creates a private SQLite-consistent backup first.
 - Optional read-only Antigravity structured status/quota cache integration for

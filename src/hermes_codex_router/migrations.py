@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-LATEST_SCHEMA_VERSION = 14
+LATEST_SCHEMA_VERSION = 15
 
 
 MIGRATION_1 = """
@@ -457,6 +457,67 @@ ON provider_job_absorptions(parent_job_id, created_at);
 """
 
 
+MIGRATION_15 = """
+ALTER TABLE provider_job_results RENAME TO provider_job_results_v14;
+CREATE TABLE provider_job_results (
+    result_id TEXT PRIMARY KEY CHECK(length(result_id) BETWEEN 1 AND 128),
+    job_id TEXT NOT NULL UNIQUE REFERENCES provider_jobs(job_id),
+    visible_response TEXT NOT NULL CHECK(length(visible_response) BETWEEN 1 AND 200000),
+    provider_session_id TEXT CHECK(length(provider_session_id) <= 256),
+    actual_model TEXT CHECK(length(actual_model) <= 200),
+    safe_metadata_json TEXT CHECK(length(safe_metadata_json) <= 4000),
+    context_watermark INTEGER CHECK(context_watermark IS NULL OR context_watermark >= 0),
+    handoff_id TEXT CHECK(length(handoff_id) <= 128),
+    created_at TEXT NOT NULL
+);
+INSERT INTO provider_job_results SELECT * FROM provider_job_results_v14;
+DROP TABLE provider_job_results_v14;
+ALTER TABLE telegram_outbox RENAME TO telegram_outbox_v14;
+CREATE TABLE telegram_outbox (
+    outbox_id TEXT PRIMARY KEY CHECK(length(outbox_id) BETWEEN 1 AND 128),
+    job_id TEXT NOT NULL UNIQUE REFERENCES provider_jobs(job_id),
+    sender_agent_id TEXT NOT NULL CHECK(length(sender_agent_id) BETWEEN 1 AND 64),
+    chat_id INTEGER NOT NULL CHECK(chat_id != 0),
+    thread_id INTEGER NOT NULL CHECK(thread_id > 0),
+    telegram_html TEXT NOT NULL CHECK(length(telegram_html) BETWEEN 1 AND 200000),
+    status TEXT NOT NULL CHECK(status IN ('pending', 'sending', 'delivered', 'failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 20),
+    available_at TEXT NOT NULL,
+    lease_owner TEXT CHECK(length(lease_owner) <= 128),
+    lease_token TEXT CHECK(length(lease_token) <= 128),
+    lease_expires_at TEXT,
+    telegram_message_id INTEGER CHECK(telegram_message_id IS NULL OR telegram_message_id > 0),
+    error_code TEXT CHECK(length(error_code) <= 128),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    delivered_at TEXT,
+    CHECK(
+        (status = 'sending' AND lease_owner IS NOT NULL
+            AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)
+        OR
+        (status != 'sending' AND lease_owner IS NULL
+            AND lease_token IS NULL AND lease_expires_at IS NULL)
+    )
+);
+INSERT INTO telegram_outbox SELECT * FROM telegram_outbox_v14;
+DROP TABLE telegram_outbox_v14;
+CREATE INDEX telegram_outbox_sender_ready
+ON telegram_outbox(sender_agent_id, status, available_at, created_at);
+CREATE INDEX telegram_outbox_stale_lease
+ON telegram_outbox(status, lease_expires_at);
+CREATE TABLE IF NOT EXISTS telegram_outbox_parts (
+    outbox_id TEXT NOT NULL REFERENCES telegram_outbox(outbox_id) ON DELETE CASCADE,
+    part_index INTEGER NOT NULL CHECK(part_index > 0),
+    telegram_html TEXT NOT NULL CHECK(length(telegram_html) BETWEEN 1 AND 4090),
+    telegram_message_id INTEGER CHECK(telegram_message_id IS NULL OR telegram_message_id > 0),
+    delivered_at TEXT,
+    PRIMARY KEY(outbox_id, part_index)
+);
+INSERT OR IGNORE INTO telegram_outbox_parts (outbox_id, part_index, telegram_html)
+SELECT outbox_id, 1, telegram_html FROM telegram_outbox;
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -563,6 +624,9 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     if previous < 14:
         connection.executescript(MIGRATION_14)
         connection.execute("PRAGMA user_version = 14")
+    if previous < 15:
+        connection.executescript(MIGRATION_15)
+        connection.execute("PRAGMA user_version = 15")
     connection.commit()
     current = int(connection.execute("PRAGMA user_version").fetchone()[0])
     return previous, current

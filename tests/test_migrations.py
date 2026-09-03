@@ -116,7 +116,8 @@ class MigrationTests(unittest.TestCase):
                                'completed', 'now', 'now')"""
                 )
                 connection.executescript(
-                    """DROP TABLE telegram_outbox;
+                    """DROP TABLE telegram_outbox_parts;
+                       DROP TABLE telegram_outbox;
                        DROP TABLE provider_job_results;
                        DROP TABLE provider_jobs;
                        DROP TABLE topic_queue_counters;
@@ -175,7 +176,8 @@ class MigrationTests(unittest.TestCase):
             connection = sqlite3.connect(path)
             try:
                 connection.executescript(
-                    """DROP TABLE provider_job_absorptions;
+                    """DROP TABLE telegram_outbox_parts;
+                       DROP TABLE provider_job_absorptions;
                        DROP TABLE provider_stop_requests;
                        PRAGMA user_version = 13;"""
                 )
@@ -185,7 +187,10 @@ class MigrationTests(unittest.TestCase):
 
             result = migrate_database(path, create_backup=False)
 
-            self.assertEqual((result.previous_version, result.current_version), (13, 14))
+            self.assertEqual(
+                (result.previous_version, result.current_version),
+                (13, LATEST_SCHEMA_VERSION),
+            )
             migrated = sqlite3.connect(path)
             try:
                 tables = {
@@ -196,6 +201,7 @@ class MigrationTests(unittest.TestCase):
                 }
                 self.assertIn("provider_stop_requests", tables)
                 self.assertIn("provider_job_absorptions", tables)
+                self.assertIn("telegram_outbox_parts", tables)
             finally:
                 migrated.close()
 

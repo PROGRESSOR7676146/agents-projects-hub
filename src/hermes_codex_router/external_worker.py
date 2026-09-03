@@ -347,9 +347,9 @@ class ExternalQueueWorker:
         self.state.commit_provider_result(
             job.job_id,
             token,
-            visible_response=visible_response[:12000],
+            visible_response=visible_response,
             sender_agent_id=self.agent.agent_id,
-            telegram_html=telegram_html[:4090],
+            telegram_html=telegram_html,
             provider_session_id=provider_session_id,
             actual_model=actual_model,
             user_excerpt=job.payload_text,

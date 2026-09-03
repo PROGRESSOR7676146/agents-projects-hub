@@ -132,6 +132,8 @@ contract is confirmed.
   persistent session IDs, bounded handoffs, and no auto-approval flags.
 - Provider-identity Telegram typing indicators while durable work is accepted,
   executing, or awaiting delivery, without any additional model invocation.
+- Ordered HTML-aware multipart replies without silent truncation; queued turns
+  persist each part and resume delivery at the first unconfirmed part.
 - Explicit terminal writer takeover/release using tmux and `codex resume`.
 - Explicit native-CLI writer transfer for Codex, OpenCode, and Antigravity with
   provider-specific resume commands and fail-closed Telegram turns.

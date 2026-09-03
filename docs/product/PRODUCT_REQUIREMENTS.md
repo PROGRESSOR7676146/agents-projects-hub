@@ -237,10 +237,12 @@ Routing precedence is deterministic:
   Telegram. Ordinary bots have no Bot API method to force a read receipt;
   `readBusinessMessage` applies only to connected business accounts. The Hub
   MUST NOT imitate a receipt with an emoji reaction.
-- **REQ-UX-004 (Planned):** Long visible output MUST be delivered as ordered,
+- **REQ-UX-004 (Implemented):** Long visible output MUST be delivered as ordered,
   replyable Telegram messages without truncation. Code or text intended for
   copying MUST occupy a separate copyable block. Durable multipart delivery
-  MUST retry only the undelivered part.
+  retries from the first undelivered part. Queue-backed project turns persist
+  each bounded HTML part and its Telegram message ID; legacy immediate-delivery
+  paths use the same HTML-aware ordered splitter without queue durability.
 - **REQ-UX-005 (Planned):** Generated user-facing artifacts MUST be published as
   Telegram attachments from a per-job, project-contained staging directory.
   Canonical-path, regular-file, size, count, extension, and secret-name checks

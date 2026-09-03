@@ -23,6 +23,8 @@ and releases use semantic versioning while the public API is still evolving.
   same-turn Codex steering, and deterministic emergency stop.
 - Add optional Antigravity status-line telemetry and provider-neutral cached
   account/limit presentation.
+- Add HTML-aware multipart Telegram replies with per-part durable delivery and
+  retry from the first part that has no recorded Telegram message ID.
 
 ### Changed
 

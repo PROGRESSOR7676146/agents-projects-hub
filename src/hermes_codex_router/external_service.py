@@ -33,6 +33,7 @@ from .telegram import (
 )
 from .telegram_activity import telegram_activity
 from .telegram_interaction import TELEGRAM_CONTRACT_VERSION, telegram_turn_prompt
+from .telegram_multipart import send_telegram_html_parts
 
 
 class ExternalAgentService:
@@ -347,7 +348,7 @@ class ExternalAgentService:
                 "Effort": session.effort,
             },
         )
-        self.telegram.send_html(chat_id, thread_id, response[:4090])
+        send_telegram_html_parts(self.telegram, chat_id, thread_id, response)
 
     def handle_update(self, update: dict[str, object]) -> bool:
         if self.direct_messages_only:
@@ -584,7 +585,9 @@ class ExternalAgentService:
                 )
             else:
                 visible = f"{self.agent.display_name} failed safely ({type(exc).__name__})."
-            self.telegram.send_html(message.chat_id, message.thread_id, html.escape(visible)[:4090])
+            send_telegram_html_parts(
+                self.telegram, message.chat_id, message.thread_id, html.escape(visible)
+            )
             return True
         self.state.finish_dispatch(dispatch_id, success=True)
         self.state.acknowledge_telegram_contract(session.session_id, TELEGRAM_CONTRACT_VERSION)
@@ -621,7 +624,7 @@ class ExternalAgentService:
                 "Usage windows": "unavailable",
             },
         )
-        self.telegram.send_html(message.chat_id, message.thread_id, response[:4090])
+        send_telegram_html_parts(self.telegram, message.chat_id, message.thread_id, response)
         return True
 
     def run_forever(self) -> None:

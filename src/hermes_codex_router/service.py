@@ -52,6 +52,7 @@ from .telegram import (
 )
 from .telegram_activity import telegram_activity
 from .telegram_interaction import TELEGRAM_CONTRACT_VERSION, telegram_turn_prompt
+from .telegram_multipart import send_telegram_html_parts
 from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
 
@@ -664,7 +665,7 @@ class ProjectHubService:
                     session_label=f"{project.display_name} · {topic.title} · {agent.display_name}",
                     limits=limits,
                     timezone_name="Europe/Moscow",
-                )[:4090]
+                )
             else:
                 external = getattr(self, "external_services", {}).get(agent.agent_id)
                 if external is None:
@@ -694,7 +695,7 @@ class ProjectHubService:
                         "Context remaining": "unavailable",
                         "Usage windows": "unavailable",
                     },
-                )[:4090]
+                )
             queue_state.commit_provider_result(
                 executing.job_id,
                 token,
@@ -782,7 +783,8 @@ class ProjectHubService:
         sender = getattr(self, "external_services", {}).get(agent_id)
         telegram = sender.telegram if sender is not None else self._provider_telegram(agent_id)
         try:
-            message_id = telegram.send_html(outbox.chat_id, outbox.thread_id, outbox.telegram_html)
+            part = queue_state.next_telegram_outbox_part(outbox.outbox_id, outbox.lease_token)
+            message_id = telegram.send_html(outbox.chat_id, outbox.thread_id, part.telegram_html)
             queue_state.mark_telegram_outbox_delivered(
                 outbox.outbox_id, outbox.lease_token, telegram_message_id=message_id or 1
             )
@@ -929,8 +931,11 @@ class ProjectHubService:
             limits=limits,
             timezone_name="Europe/Moscow",
         )
-        self._provider_telegram(self.agent.agent_id).send_html(
-            message.chat_id, message.thread_id, response[:4090]
+        send_telegram_html_parts(
+            self._provider_telegram(self.agent.agent_id),
+            message.chat_id,
+            message.thread_id,
+            response,
         )
         return result.text
 
@@ -1659,8 +1664,11 @@ class ProjectHubService:
             limits=limits,
             timezone_name="Europe/Moscow",
         )
-        self._provider_telegram(self.agent.agent_id).send_html(
-            message.chat_id, message.thread_id, response[:4090]
+        send_telegram_html_parts(
+            self._provider_telegram(self.agent.agent_id),
+            message.chat_id,
+            message.thread_id,
+            response,
         )
 
     def handle_update(self, update: dict[str, object]) -> bool:

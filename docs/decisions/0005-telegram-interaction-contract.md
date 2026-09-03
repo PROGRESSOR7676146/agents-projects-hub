@@ -37,6 +37,8 @@ sleep or an independent routing model.
 The common contract is consistent across providers and inexpensive after
 session initialization. Existing sessions adopt the behavior without being
 discarded. UI operations remain testable and retryable independently of model
-output. Automatic GIF behavior is excluded. Multipart replies, artifact delivery, bounded choice callbacks, and the
-60-second reversible-work grace period require separate transport work and are
-therefore tracked explicitly instead of being simulated by prompt prose.
+output. Automatic GIF behavior is excluded. Multipart replies are implemented
+as HTML-aware bounded parts with per-part durable delivery state for queued
+turns. Artifact delivery, bounded choice callbacks, and the 60-second
+reversible-work grace period require separate transport work and are therefore
+tracked explicitly instead of being simulated by prompt prose.
