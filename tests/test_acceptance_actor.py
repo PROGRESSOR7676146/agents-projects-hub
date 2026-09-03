@@ -204,6 +204,19 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(AcceptanceActorError, "model_menu must run before"):
             load_acceptance_actor_config(self.write_config(checks=["stop_route", "model_menu"]))
 
+    def test_context_contract_requires_two_aligned_provider_identities(self) -> None:
+        with self.assertRaisesRegex(AcceptanceActorError, "two aligned providers"):
+            load_acceptance_actor_config(
+                self.write_config(checks=["context_contract"], provider_agent_ids=[])
+            )
+        with self.assertRaisesRegex(AcceptanceActorError, "must align"):
+            load_acceptance_actor_config(
+                self.write_config(
+                    provider_usernames=["first_provider_bot", "second_provider_bot"],
+                    provider_agent_ids=["first"],
+                )
+            )
+
     def test_stop_route_targets_only_the_provider_selected_by_model_menu(self) -> None:
         config = load_acceptance_actor_config(
             self.write_config(
@@ -476,6 +489,63 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         call = wait.await_args
         assert call is not None
         self.assertTrue(call.kwargs["require_document"])
+
+    def test_context_contract_switches_without_handoff_then_requests_history(self) -> None:
+        config = AcceptanceActorConfig(
+            api_id=1,
+            api_hash_file=self.secret,
+            session_path=self.base / "acceptance.session",
+            expected_user_id=1,
+            telegram_chat_id=-1001234567890,
+            telegram_thread_id=77,
+            hub_username="example_hub_bot",
+            provider_usernames=("source_provider_bot", "target_provider_bot"),
+            checks=("context_contract",),
+            timeout_seconds=15,
+            artifacts_dir=self.artifacts,
+            provider_agent_ids=("source", "target"),
+        )
+        source_provider = FakeButton(b"provider:source")
+        source_model = FakeButton(b"choose:source:model")
+        source_effort = FakeButton(b"use:source:model:high")
+        provider = FakeButton(b"provider:target")
+        model = FakeButton(b"choose:target:model")
+        effort = FakeButton(b"use:target:model:high")
+        responses = (
+            FakeMessage(2, button=source_provider),
+            FakeMessage(3, button=source_model),
+            FakeMessage(4, button=source_effort),
+            FakeMessage(5, "Source already active."),
+            FakeMessage(7, "CONTEXT_SOURCE_E2E_7391\n\nSession footer"),
+            FakeMessage(9, button=provider),
+            FakeMessage(10, button=model),
+            FakeMessage(11, button=effort),
+            FakeMessage(12, "Target active. No prior agent history was injected."),
+            FakeMessage(14, "CONTEXT_SWITCH_ISOLATED_OK\n\nSession footer"),
+            FakeMessage(16, "History contains CONTEXT_SOURCE_E2E_7391."),
+        )
+        with patch(
+            "hermes_codex_router.acceptance_actor._wait_for_response",
+            new=AsyncMock(side_effect=responses),
+        ):
+            result = asyncio.run(
+                _run_check(FakeClient(), config, "context_contract", config.hub_username)
+            )
+
+        self.assertTrue(result.ok)
+        self.assertTrue(
+            all(
+                button.clicked
+                for button in (
+                    source_provider,
+                    source_model,
+                    source_effort,
+                    provider,
+                    model,
+                    effort,
+                )
+            )
+        )
 
     def test_raw_forward_targets_the_canary_forum_topic(self) -> None:
         config = load_acceptance_actor_config(self.write_config())

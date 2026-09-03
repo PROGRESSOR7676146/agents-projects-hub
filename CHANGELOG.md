@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Add a fixed two-provider acceptance scenario for switch isolation and explicit
+  bounded `/context` retrieval.
+
 ## [0.6.0] - 2026-09-03
 
 ### Added

@@ -20,6 +20,7 @@ SUPPORTED_CHECKS = (
     "stop_route",
     "forwarded_quote",
     "artifact_delivery",
+    "context_contract",
 )
 
 
@@ -40,6 +41,7 @@ class AcceptanceActorConfig:
     checks: tuple[str, ...]
     timeout_seconds: int
     artifacts_dir: Path
+    provider_agent_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +139,15 @@ def load_acceptance_actor_config(
     )
     if len(set(name.casefold() for name in providers)) != len(providers):
         raise AcceptanceActorError("provider_usernames contains duplicates")
+    raw_agent_ids = raw.get("provider_agent_ids", [])
+    if not isinstance(raw_agent_ids, list) or not all(
+        isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", value)
+        for value in raw_agent_ids
+    ):
+        raise AcceptanceActorError("provider_agent_ids must contain safe agent ids")
+    provider_agent_ids = tuple(raw_agent_ids)
+    if provider_agent_ids and len(provider_agent_ids) != len(providers):
+        raise AcceptanceActorError("provider_agent_ids must align with provider_usernames")
     raw_checks = raw.get("checks", ["status", "accounts", "model_menu"])
     if (
         not isinstance(raw_checks, list)
@@ -156,6 +167,7 @@ def load_acceptance_actor_config(
                 "stop_route",
                 "forwarded_quote",
                 "artifact_delivery",
+                "context_contract",
             }
             for check in checks
         )
@@ -166,6 +178,8 @@ def load_acceptance_actor_config(
         "model_menu" not in checks or checks.index("model_menu") > checks.index("stop_route")
     ):
         raise AcceptanceActorError("model_menu must run before stop_route")
+    if "context_contract" in checks and (len(providers) < 2 or len(provider_agent_ids) < 2):
+        raise AcceptanceActorError("context_contract requires two aligned providers and agent ids")
 
     return AcceptanceActorConfig(
         api_id=api_id,
@@ -179,6 +193,7 @@ def load_acceptance_actor_config(
         checks=checks,
         timeout_seconds=timeout,
         artifacts_dir=artifacts_dir,
+        provider_agent_ids=provider_agent_ids,
     )
 
 
@@ -256,6 +271,17 @@ async def _click_callback_prefix(message: Any, prefix: bytes) -> None:
     )
 
 
+async def _click_callback_exact(message: Any, data: bytes) -> None:
+    for row in getattr(message, "buttons", None) or ():
+        for button in row:
+            if getattr(button, "data", None) == data:
+                await button.click()
+                return
+    raise AcceptanceActorError(
+        f"model menu has no {data.decode('ascii', errors='replace')} callback"
+    )
+
+
 async def _complete_model_selection(
     client: Any,
     config: AcceptanceActorConfig,
@@ -274,9 +300,97 @@ async def _complete_model_selection(
     return current
 
 
+async def _select_provider(client: Any, config: AcceptanceActorConfig, agent_id: str) -> Any:
+    request = await client.send_message(
+        config.telegram_chat_id,
+        f"/model@{config.hub_username}",
+        reply_to=config.telegram_thread_id,
+    )
+    menu = await _wait_for_response(
+        client,
+        config,
+        after_id=int(request.id),
+        username=config.hub_username,
+        require_buttons=True,
+    )
+    await _click_callback_exact(menu, f"provider:{agent_id}".encode())
+    models = await _wait_for_response(
+        client,
+        config,
+        after_id=int(menu.id),
+        username=config.hub_username,
+        require_buttons=True,
+    )
+    await _click_callback_prefix(models, b"choose:")
+    efforts = await _wait_for_response(
+        client,
+        config,
+        after_id=int(models.id),
+        username=config.hub_username,
+        require_buttons=True,
+    )
+    await _click_callback_prefix(efforts, b"use:")
+    return await _wait_for_response(
+        client,
+        config,
+        after_id=int(efforts.id),
+        username=config.hub_username,
+    )
+
+
 async def _run_check(
     client: Any, config: AcceptanceActorConfig, check: str, target: str
 ) -> AcceptanceCheckResult:
+    if check == "context_contract":
+        source_username, target_username = config.provider_usernames[:2]
+        source_agent_id, target_agent_id = config.provider_agent_ids[:2]
+        try:
+            await _select_provider(client, config, source_agent_id)
+            source = await client.send_message(
+                config.telegram_chat_id,
+                f"@{source_username} Reply exactly CONTEXT_SOURCE_E2E_7391. Use no tools.",
+                reply_to=config.telegram_thread_id,
+            )
+            source_reply = await _wait_for_response(
+                client, config, after_id=int(source.id), username=source_username
+            )
+            if "CONTEXT_SOURCE_E2E_7391" not in str(source_reply.raw_text):
+                raise AcceptanceActorError("source marker was not returned")
+
+            applied = await _select_provider(client, config, target_agent_id)
+            if "No prior agent history was injected" not in str(applied.raw_text):
+                raise AcceptanceActorError("model switch did not confirm context isolation")
+
+            isolated = await client.send_message(
+                config.telegram_chat_id,
+                "Reply exactly CONTEXT_SWITCH_ISOLATED_OK. Use no tools.",
+                reply_to=config.telegram_thread_id,
+            )
+            isolated_reply = await _wait_for_response(
+                client, config, after_id=int(isolated.id), username=target_username
+            )
+            if "CONTEXT_SWITCH_ISOLATED_OK" not in str(isolated_reply.raw_text):
+                raise AcceptanceActorError("switched provider did not respond in isolation")
+
+            context = await client.send_message(
+                config.telegram_chat_id,
+                f"/context@{config.hub_username} {source_agent_id} 8",
+                reply_to=config.telegram_thread_id,
+            )
+            context_reply = await _wait_for_response(
+                client, config, after_id=int(context.id), username=target_username
+            )
+            if "CONTEXT_SOURCE_E2E_7391" not in str(context_reply.raw_text):
+                raise AcceptanceActorError("explicit context did not contain the source marker")
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        return AcceptanceCheckResult(
+            check,
+            target,
+            True,
+            int(context_reply.id),
+            "switch isolation and explicit context verified",
+        )
     if check == "artifact_delivery":
         filename = "hub-artifact-e2e.md"
         expected = b"HUB_ARTIFACT_E2E_OK\n"

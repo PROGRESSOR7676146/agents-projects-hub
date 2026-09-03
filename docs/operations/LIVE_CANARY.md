@@ -139,7 +139,9 @@ provider/model/effort callback ladder, real Reply provenance, and passive
 forwarded-quote semantics for allowlisted providers. It also covers a rapid
 three-message burst and a bounded stop/recovery cycle for the first selected
 provider. The fixed artifact check verifies the received document filename and
-exact bytes. The remaining manually selected quote, failure, restart, and
+exact bytes. With two aligned provider usernames and agent IDs, the context
+contract check verifies a context-free switch followed by explicit bounded
+`/context` retrieval. The remaining manually selected quote, failure, restart, and
 recovery tests below are still explicit operator-controlled operations.
 
 1. Run `/status` and `/accounts`. They must remain compact and responsive
