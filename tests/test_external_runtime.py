@@ -17,6 +17,20 @@ from hermes_codex_router.external_runtime import (
 
 
 class ExternalRuntimeTests(unittest.TestCase):
+    def test_each_cli_adapter_fails_closed_on_incompatible_output(self) -> None:
+        def incompatible(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(argv, 0, "human-only output", "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for runtime in ("gemini", "antigravity", "opencode"):
+                with self.subTest(runtime=runtime):
+                    adapter = ExternalCliAdapter(runtime, run=incompatible)
+                    with self.assertRaisesRegex(
+                        RuntimeError, f"{runtime} returned no structured output"
+                    ):
+                        adapter.run_turn(cwd=root, prompt="work")
+
     def test_antigravity_surfaces_unsupported_network_location_safely(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

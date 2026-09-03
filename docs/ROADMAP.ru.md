@@ -7,8 +7,8 @@ Roadmap содержит только переносимые продуктов�
 
 1. Завершить E2E естественного исчерпания лимита Codex; выбор
    provider/model/effort уже покрыт выделенным Telegram acceptance actor.
-2. Сохранять стабильные contract tests для Codex, Hermes, OpenCode и
-   Antigravity при обновлении их CLI/API.
+2. Поддерживать уже добавленные contract tests при обновлении Codex app-server,
+   Hermes Gateway hook, OpenCode/Antigravity CLI и Antigravity statusline.
 3. Реализовать автоматическую ротацию Antigravity только после появления
    поддерживаемого headless account-pool интерфейса.
 4. Расширять terminal backends только argv-безопасными адаптерами.

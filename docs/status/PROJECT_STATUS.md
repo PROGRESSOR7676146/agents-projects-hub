@@ -114,7 +114,10 @@ operator deployment inventory or live conversation evidence.
   and fails fast on the first failed scenario or when unrelated senders
   contaminate the dedicated canary topic.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity
-  adapters with isolated failure boundaries.
+  adapters with isolated failure boundaries. Contract tests pin structured CLI
+  output, safe argv/approval modes, app-server RPC shapes, Hermes hook fields,
+  and Antigravity statusline cache safety; incompatible output fails only the
+  owning adapter/worker.
 - Codex worker admission probes the multi-auth runtime proxy behind a shared
   app-server socket and selects the official stdio fallback before `turn/start`
   when the socket is alive but its model upstream is not. Transport transfer
