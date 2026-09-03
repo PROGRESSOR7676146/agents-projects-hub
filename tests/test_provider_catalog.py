@@ -57,5 +57,13 @@ claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
         )
 
 
+    def test_fallback_includes_gemini_3_8_flash(self) -> None:
+        from hermes_codex_router.provider_catalog import ANTIGRAVITY_FALLBACK, DEFAULT_CATALOG_TTL
+        from datetime import timedelta
+        self.assertEqual(DEFAULT_CATALOG_TTL, timedelta(hours=12))
+        model_ids = [m.model_id for m in ANTIGRAVITY_FALLBACK]
+        self.assertIn("gemini-3.8-flash", model_ids)
+
+
 if __name__ == "__main__":
     unittest.main()

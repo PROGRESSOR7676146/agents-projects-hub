@@ -225,7 +225,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
         try:
             sender._refresh_chat_actions(now_monotonic=10.0)
             self.assertEqual(open_bot.drafts, [(123456789, 1, 44, "")])
-            self.assertEqual(open_bot.actions, [])
+            self.assertEqual(open_bot.actions, [(123456789, 1, "typing")])
         finally:
             sender.close()
 

@@ -8,10 +8,12 @@ from .telegram import TelegramBotApi
 
 
 def _publish(telegram: TelegramBotApi, chat_id: int, thread_id: int, message_id: int) -> None:
+    telegram.send_chat_action(chat_id, thread_id)
     if chat_id > 0:
-        telegram.send_message_draft(chat_id, thread_id, draft_id=message_id)
-    else:
-        telegram.send_chat_action(chat_id, thread_id)
+        try:
+            telegram.send_message_draft(chat_id, thread_id, draft_id=message_id)
+        except Exception:
+            pass
 
 
 @contextmanager
@@ -25,7 +27,7 @@ def telegram_activity(
     """Refresh native Telegram activity while one inline provider turn runs."""
 
     stop = threading.Event()
-    interval = 20.0 if chat_id > 0 else 4.0
+    interval = 4.0
     worker: threading.Thread | None = None
 
     def refresh() -> None:

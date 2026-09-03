@@ -34,6 +34,7 @@ from .metadata import format_agent_response, format_telegram_response
 from .model_selection import ModelSelectionError, available_models
 from .provider_catalog import (
     ANTIGRAVITY_FALLBACK,
+    DEFAULT_CATALOG_TTL,
     ProviderCatalogError,
     ProviderModel,
     antigravity_models,
@@ -1068,7 +1069,13 @@ class ProjectHubService:
             return antigravity_models(agent.executable or "agy")
         return (ProviderModel("provider-selected", "Provider selected", ("high",)),)
 
-    def _provider_catalog(self, agent_id: str, *, refresh: bool) -> CatalogSnapshot:
+    def _provider_catalog(
+        self,
+        agent_id: str,
+        *,
+        refresh: bool = False,
+        max_age: timedelta = DEFAULT_CATALOG_TTL,
+    ) -> CatalogSnapshot:
         cache = self._catalog_cache()
         agent = self.config.require_agent(agent_id)
         if agent.managed_externally:
@@ -1087,9 +1094,10 @@ class ProjectHubService:
                 ),
                 source_version="externally managed fallback",
             )
-        if not refresh and (cached := cache.load(agent_id)) is not None:
+        cached = cache.load(agent_id)
+        if not refresh and cached is not None and not cache.is_stale(agent_id, max_age=max_age):
             return cached
-        if not refresh and self._queue_enabled(agent_id):
+        if not refresh and cached is None and self._queue_enabled(agent_id):
             # Controller callbacks are cache-only in queue mode. A cold cache
             # gets a minimal configured choice without invoking a provider CLI.
             return cache.store(
@@ -1117,7 +1125,7 @@ class ProjectHubService:
             )
         except (OSError, RuntimeError, subprocess.SubprocessError):
             cache.mark_failure(agent_id)
-            if (cached := cache.load(agent_id)) is not None:
+            if cached is not None:
                 return cached
             if agent.runtime == "antigravity":
                 cache.store(
@@ -1265,10 +1273,19 @@ class ProjectHubService:
                 if active and active.agent_id == agent_id and active.model == model.model_id
                 else ""
             )
-            values.append((f"{marker}{model.label}", f"choose:{agent_id}:{model.callback_key}"))
+            is_highlighted = (
+                model.is_new
+                and "🆕" not in model.label
+                and not model.label.lower().endswith("(new)")
+            )
+            new_prefix = "🆕 " if is_highlighted else ""
+            values.append(
+                (f"{marker}{new_prefix}{model.label}", f"choose:{agent_id}:{model.callback_key}")
+            )
         navigation: list[tuple[str, str]] = []
         if page > 0:
             navigation.append(("←", f"models:{agent_id}:{page - 1}"))
+        navigation.append(("🔄 Обновить", f"modelrefresh:{agent_id}:{page}"))
         if page + 1 < page_count:
             navigation.append(("→", f"models:{agent_id}:{page + 1}"))
         agent = self.config.require_agent(agent_id)
@@ -1488,6 +1505,18 @@ class ProjectHubService:
                     agent_id,
                     page=int(raw_page),
                     refresh=False,
+                )
+                return True
+            if callback.data.startswith("modelrefresh:"):
+                _, agent_id, raw_page = callback.data.split(":", 2)
+                self.config.require_agent(agent_id)
+                self.telegram.answer_callback(callback.callback_id, "Refreshing catalog…")
+                self._show_model_menu(
+                    message,
+                    topic,
+                    agent_id,
+                    page=int(raw_page),
+                    refresh=True,
                 )
                 return True
             if callback.data.startswith("choose:"):

@@ -5,6 +5,8 @@ import re
 import threading
 from pathlib import Path
 
+from datetime import timedelta
+
 from .artifact_delivery import deliver_staged_artifacts_immediately
 from .artifacts import create_job_staging
 from .external_admission import record_external_turn
@@ -13,6 +15,7 @@ from .hub_config import HubConfig
 from .metadata import format_agent_response
 from .provider_catalog import (
     ANTIGRAVITY_FALLBACK,
+    DEFAULT_CATALOG_TTL,
     ProviderCatalogError,
     antigravity_models,
     opencode_models,
@@ -118,9 +121,19 @@ class ExternalAgentService:
             self.config.state_path.with_name("provider-model-catalogs.json")
         )
 
-    def _catalog(self, *, refresh: bool) -> CatalogSnapshot:
+    def _catalog(
+        self,
+        *,
+        refresh: bool = False,
+        max_age: timedelta = DEFAULT_CATALOG_TTL,
+    ) -> CatalogSnapshot:
         cache = self._catalog_cache()
-        if not refresh and (cached := cache.load(self.agent.agent_id)) is not None:
+        cached = cache.load(self.agent.agent_id)
+        if (
+            not refresh
+            and cached is not None
+            and not cache.is_stale(self.agent.agent_id, max_age=max_age)
+        ):
             return cached
         try:
             if self.agent.runtime == "opencode":
@@ -130,7 +143,7 @@ class ExternalAgentService:
             return cache.store(self.agent.agent_id, models, source_version="provider CLI")
         except (OSError, RuntimeError, ProviderCatalogError):
             cache.mark_failure(self.agent.agent_id)
-            if (cached := cache.load(self.agent.agent_id)) is not None:
+            if cached is not None:
                 return cached
             if self.agent.runtime == "antigravity":
                 return cache.store(
@@ -157,7 +170,7 @@ class ExternalAgentService:
         *,
         project_id: str,
         page: int = 0,
-        refresh: bool,
+        refresh: bool = False,
     ) -> None:
         topic = self._direct_topic(message.chat_id, message.thread_id, project_id)
         active = self.state.active_session(topic.topic_id)
@@ -172,10 +185,19 @@ class ExternalAgentService:
         values: list[tuple[str, str]] = []
         for model in catalog.models[start : start + self.MODEL_PAGE_SIZE]:
             marker = "✓ " if active is not None and active.model == model.model_id else ""
-            values.append((f"{marker}{model.label}", f"dmchoose:{model.callback_key}"))
+            is_highlighted = (
+                model.is_new
+                and "🆕" not in model.label
+                and not model.label.lower().endswith("(new)")
+            )
+            new_prefix = "🆕 " if is_highlighted else ""
+            values.append(
+                (f"{marker}{new_prefix}{model.label}", f"dmchoose:{model.callback_key}")
+            )
         navigation: list[tuple[str, str]] = []
         if page > 0:
             navigation.append(("←", f"dmmodels:{page - 1}"))
+        navigation.append(("🔄 Обновить", f"dmrefresh:{page}"))
         if page + 1 < page_count:
             navigation.append(("→", f"dmmodels:{page + 1}"))
         keyboard = self._grid(values)["inline_keyboard"]
@@ -219,6 +241,11 @@ class ExternalAgentService:
                 page = int(callback.data.split(":", 1)[1])
                 self.telegram.answer_callback(callback.callback_id, "Choose model")
                 self._show_direct_models(message, project_id=project_id, page=page, refresh=False)
+                return True
+            if callback.data.startswith("dmrefresh:"):
+                page = int(callback.data.split(":", 1)[1])
+                self.telegram.answer_callback(callback.callback_id, "Refreshing catalog…")
+                self._show_direct_models(message, project_id=project_id, page=page, refresh=True)
                 return True
             if callback.data.startswith("dmchoose:"):
                 key = callback.data.split(":", 1)[1]

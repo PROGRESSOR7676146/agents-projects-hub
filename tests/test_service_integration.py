@@ -357,6 +357,11 @@ class ServiceIntegrationTests(unittest.TestCase):
             self.assertTrue(value.handle_update(update(8, "/status")))
             self.assertEqual(len(telegram.sent), codex_message_count)
             self.assertIn("OpenCode", external.telegram.sent[-1][2])
+
+            # Test model refresh callback in topic
+            self.assertTrue(value.handle_update(callback(9, "cb-refresh", "modelrefresh:codex:0")))
+            self.assertIn("Codex: choose model", telegram.sent[-1][2])
+            self.assertIn("modelrefresh:codex:0", callback_values(telegram.markups[-1]))
             value.state.close()
 
     def test_main_receives_other_agent_dialogue_only_on_explicit_context_request(self) -> None:

@@ -6,7 +6,11 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Callable
 
+from datetime import timedelta
+
 Run = Callable[..., subprocess.CompletedProcess[str]]
+
+DEFAULT_CATALOG_TTL = timedelta(hours=12)
 
 
 class ProviderCatalogError(RuntimeError):
@@ -21,6 +25,7 @@ class ProviderModel:
 
 
 ANTIGRAVITY_FALLBACK = (
+    ProviderModel("gemini-3.8-flash", "Gemini 3.8 Flash", ("high", "medium", "low")),
     ProviderModel("gemini-3.7-flash", "Gemini 3.7 Flash", ("high", "medium", "low")),
     ProviderModel("gemini-3.6-flash", "Gemini 3.6 Flash", ("high", "medium", "low")),
     ProviderModel("gemini-3.5-flash", "Gemini 3.5 Flash", ("high", "medium", "low")),

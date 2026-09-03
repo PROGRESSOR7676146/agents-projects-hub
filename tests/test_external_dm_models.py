@@ -156,6 +156,88 @@ class ExternalDirectModelTests(unittest.TestCase):
             )
             service.state.close()
 
+    def test_dmrefresh_refreshes_catalog_and_highlights_new_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(42,),
+                registry_path=base / "projects.json",
+                state_path=base / "state.db",
+                codex_socket_path=base / "codex.sock",
+                manage_codex_server=False,
+                terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+                projects=(ProjectBinding("hub", -1001234567890),),
+                agents=(
+                    AgentDefinition(
+                        "antigravity",
+                        "Antigravity",
+                        "project_antigravity_bot",
+                        "antigravity",
+                        None,
+                        True,
+                        False,
+                        "provider-selected",
+                        "high",
+                    ),
+                ),
+                direct_message_project_id="hub",
+            )
+            now = datetime.now(timezone.utc)
+            snapshot = CatalogSnapshot(
+                "antigravity",
+                (
+                    CachedProviderModel(
+                        "gemini-3.8-flash",
+                        "Gemini 3.8 Flash",
+                        ("high", "medium"),
+                        "abcdef123456",
+                        first_seen_at=now,
+                    ),
+                ),
+                now,
+                "test",
+                None,
+            )
+            service = ExternalAgentService.__new__(ExternalAgentService)
+            service.config = config
+            service.agent = config.agents[0]
+            service.direct_messages_only = True
+            service.state_path = base / "antigravity-dm.db"
+            service.state = HubState.open(service.state_path)
+            telegram = FakeTelegram()
+            service.telegram = cast(Any, telegram)
+
+            with patch.object(ExternalAgentService, "_catalog", return_value=snapshot):
+                self.assertTrue(
+                    service.handle_update(
+                        {
+                            "update_id": 1,
+                            "callback_query": {
+                                "id": "refresh_cb",
+                                "from": {"id": 42},
+                                "data": "dmrefresh:0",
+                                "message": {
+                                    "message_id": 10,
+                                    "chat": {"id": 42, "type": "private"},
+                                },
+                            },
+                        }
+                    )
+                )
+            markup = telegram.markups[-1]
+            assert isinstance(markup, dict)
+            buttons = [
+                b["text"]
+                for row in markup.get("inline_keyboard", [])
+                if isinstance(row, list)
+                for b in row
+                if isinstance(b, dict) and "text" in b
+            ]
+            self.assertIn("🆕 Gemini 3.8 Flash", buttons)
+            self.assertIn("🔄 Обновить", buttons)
+            service.state.close()
+
 
 if __name__ == "__main__":
     unittest.main()

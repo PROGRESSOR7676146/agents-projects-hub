@@ -17,6 +17,24 @@ class CachedProviderModel:
     label: str
     efforts: tuple[str, ...]
     callback_key: str
+    first_seen_at: datetime | None = None
+
+    def is_recently_added(
+        self,
+        *,
+        now: datetime | None = None,
+        max_age: timedelta = timedelta(days=7),
+    ) -> bool:
+        if self.first_seen_at is None:
+            return False
+        evaluated = now or datetime.now(timezone.utc)
+        if evaluated.tzinfo is None:
+            evaluated = evaluated.replace(tzinfo=timezone.utc)
+        return evaluated - self.first_seen_at <= max_age
+
+    @property
+    def is_new(self) -> bool:
+        return self.is_recently_added()
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +107,7 @@ class ProviderCatalogCache:
             label = row.get("label")
             efforts = row.get("efforts")
             callback_key = row.get("callback_key")
+            first_seen_at = _timestamp(row.get("first_seen_at"))
             if (
                 not isinstance(model_id, str)
                 or not isinstance(label, str)
@@ -101,7 +120,15 @@ class ProviderCatalogCache:
             ):
                 return None
             keys.add(callback_key)
-            models.append(CachedProviderModel(model_id, label, tuple(efforts), callback_key))
+            models.append(
+                CachedProviderModel(
+                    model_id,
+                    label,
+                    tuple(efforts),
+                    callback_key,
+                    first_seen_at=first_seen_at,
+                )
+            )
         source_version = raw.get("source_version")
         return CatalogSnapshot(
             agent_id,
@@ -122,6 +149,13 @@ class ProviderCatalogCache:
         now = observed_at or datetime.now(timezone.utc)
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
+
+        existing = self.load(agent_id)
+        existing_first_seen: dict[str, datetime | None] = {}
+        if existing is not None:
+            for item in existing.models:
+                existing_first_seen[item.model_id] = item.first_seen_at
+
         keys: set[str] = set()
         rows: list[dict[str, object]] = []
         for model in models:
@@ -129,12 +163,24 @@ class ProviderCatalogCache:
             if callback_key in keys:
                 raise ValueError("provider catalog callback-key collision")
             keys.add(callback_key)
+
+            if existing is not None:
+                if model.model_id in existing_first_seen:
+                    model_first_seen = existing_first_seen[model.model_id]
+                else:
+                    model_first_seen = now
+            else:
+                model_first_seen = None
+
             rows.append(
                 {
                     "model_id": model.model_id,
                     "label": model.label,
                     "efforts": list(model.efforts),
                     "callback_key": callback_key,
+                    "first_seen_at": (
+                        model_first_seen.isoformat() if model_first_seen is not None else None
+                    ),
                 }
             )
         value = self._read()
@@ -165,6 +211,21 @@ class ProviderCatalogCache:
         raw["last_failure_at"] = now.isoformat()
         self._write(value)
 
+    def is_stale(
+        self,
+        agent_id: str,
+        *,
+        max_age: timedelta = timedelta(hours=12),
+        now: datetime | None = None,
+    ) -> bool:
+        snapshot = self.load(agent_id)
+        if snapshot is None:
+            return True
+        evaluated = now or datetime.now(timezone.utc)
+        if evaluated.tzinfo is None:
+            evaluated = evaluated.replace(tzinfo=timezone.utc)
+        return evaluated - snapshot.updated_at > max_age
+
     def stale_agents(
         self,
         *,
@@ -172,6 +233,8 @@ class ProviderCatalogCache:
         max_age: timedelta = timedelta(hours=24),
     ) -> tuple[str, ...]:
         evaluated = now or datetime.now(timezone.utc)
+        if evaluated.tzinfo is None:
+            evaluated = evaluated.replace(tzinfo=timezone.utc)
         stale: list[str] = []
         providers = self._read().get("providers", {})
         if not isinstance(providers, dict):

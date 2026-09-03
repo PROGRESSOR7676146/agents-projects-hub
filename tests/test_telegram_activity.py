@@ -24,7 +24,7 @@ class TelegramActivityTests(unittest.TestCase):
         with telegram_activity(cast(Any, bot), chat_id=123456789, thread_id=1, message_id=42):
             pass
         self.assertEqual(bot.drafts, [(123456789, 1, 42)])
-        self.assertEqual(bot.actions, [])
+        self.assertEqual(bot.actions, [(123456789, 1)])
 
     def test_group_uses_chat_action(self) -> None:
         bot = Bot()
