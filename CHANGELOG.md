@@ -40,6 +40,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ### Fixed
 
+- Attribute Hub-owned inline callbacks to the Hub ingress identity rather than
+  the default provider identity, keeping callback audit and diagnostics exact.
 - Prevent stale Unix socket inodes after abrupt host or WSL shutdown from
   releasing tlive startup ordering before the rotating Codex app-server accepts
   real connections.

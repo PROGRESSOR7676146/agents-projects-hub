@@ -15,6 +15,7 @@ from hermes_codex_router.hub_config import (
 )
 from hermes_codex_router.service import ProjectHubService, ServiceError
 from hermes_codex_router.state import HubState
+from hermes_codex_router.telegram import TopicCallback
 
 
 class FakeTelegram:
@@ -160,6 +161,31 @@ class ControllerIdentityTests(unittest.TestCase):
             topic = service.state.find_topic(-1001234567890, 77)
             assert topic is not None
             self.assertIsNone(service.state.active_session(topic.topic_id))
+        finally:
+            service.close()
+
+    def test_hub_records_callback_under_controller_identity(self) -> None:
+        config = load_controller_config(self.config_path())
+        with patch("hermes_codex_router.service.TelegramBotApi", FakeTelegram):
+            service = ProjectHubService(config)
+        try:
+            self.assertTrue(
+                service._handle_callback(
+                    TopicCallback(
+                        callback_id="hub-callback",
+                        message_id=1,
+                        chat_id=-1001234567890,
+                        thread_id=77,
+                        sender_id=42,
+                        data="menu:status",
+                    )
+                )
+            )
+            observer = service.state._connection.execute(
+                "SELECT observer_agent_id FROM observed_callbacks WHERE callback_id = ?",
+                ("hub-callback",),
+            ).fetchone()
+            self.assertEqual(observer[0], "hub")
         finally:
             service.close()
 

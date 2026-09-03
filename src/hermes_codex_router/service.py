@@ -1460,7 +1460,8 @@ class ProjectHubService:
                 item for item in self.config.projects if item.project_id == direct_project
             )
         if not self.state.claim_callback(
-            callback.callback_id, observer_agent_id=self.agent.agent_id
+            callback.callback_id,
+            observer_agent_id=getattr(self, "ingress_identity", self.agent.agent_id),
         ):
             self.telegram.answer_callback(callback.callback_id)
             return False
