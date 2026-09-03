@@ -147,6 +147,9 @@ operator deployment inventory or live conversation evidence.
 - Sandboxed Antigravity `accept-edits` mode; dangerous permission bypass is
   rejected.
 - Optional `codex-multi-auth` with official Codex stdio fallback.
+- Optional shared-socket boot integration orders tlive after the rotating Codex
+  app-server and verifies an accepting Unix listener, rejecting stale socket
+  inodes left by abrupt host or WSL shutdown.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
 - Privacy gate that rejects deployment identities, raw histories/session dumps,
   owner-specific paths, Telegram secrets/identifiers, and local runtime files.

@@ -19,6 +19,7 @@ with a new record.
 | Provider identity | One bot identity per runtime, not per model or account. | Product requirements and tests |
 | Codex accounts | Multi-auth is optional; official Codex app-server is the fallback. | Product requirements; `RECOVERY_PLANE.ru.md` |
 | Headless Codex approvals | Shared sockets use companion-backed `on-request`; isolated stdio fallback denies escalation instead of waiting on an unreachable approval channel. | [ADR 0006](0006-headless-codex-fallback-approvals.md) |
+| Shared Codex socket boot | Readiness requires a successful Unix connection; stale socket inodes cannot release tlive ordering. | [ADR 0007](0007-connectable-shared-socket-readiness.md) |
 | Recovery plane | Hermes Gateway and Agent Session Remote/tlive are independent service channels, not project groups or mandatory Hub dependencies. | Product requirements; `RECOVERY_PLANE.ru.md` |
 | Operational alerts | One explicit Hub Operations/Alerts topic; Codex primary, Hermes fallback to the same topic; masked account hints. | Product requirements REQ-OPS-006 |
 | Local frontend | Native CLI is preferred; one-writer lease is mandatory; tmux remains fallback. | Product requirements and tests |

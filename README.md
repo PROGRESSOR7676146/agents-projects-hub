@@ -297,9 +297,12 @@ minutes is displayed as stale.
 
 If tlive and a persistent multi-auth app-server share Codex's default control
 socket, order tlive after the multi-auth unit and make that unit's activation
-wait until the socket exists. Otherwise both boot services can race to bind the
-same socket. This is an ordering constraint only: neither service should be a
-hard requirement of the other, and Hub retains its official Codex fallback.
+wait until the socket accepts a real connection. A Unix socket inode can survive
+an abrupt host or WSL stop, so a file-existence check is not readiness and can
+recreate the ownership race on every reboot. The installed drop-ins use the
+bounded `agents-projects-hub-wait-socket` probe. This is an ordering constraint
+only: neither service is a hard requirement of the other, and Hub retains its
+official Codex fallback.
 
 ### Independent recovery plane
 

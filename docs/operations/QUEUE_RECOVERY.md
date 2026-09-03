@@ -108,6 +108,13 @@ The managed app-server holds an exclusive mode-`0600` sidecar lock containing
 only PID and process-start metadata. Startup refuses to unlink an existing
 socket it cannot prove it owns.
 
+At boot, do not use `[ -S PATH ]` as a readiness check. An abrupt host or WSL
+stop may preserve the socket inode even though no process is listening. When an
+optional rotating app-server and tlive share the default socket, install the
+provided ordering drop-ins and require a successful bounded Unix connection
+before tlive starts. This avoids two app-servers racing for one path without
+adding `Requires=` coupling.
+
 For a stale path, first verify locally that the recorded PID/start marker is
 not a live matching process and that no process accepts the socket. Stop the
 owning unit before any cleanup. If ownership remains uncertain, leave the path

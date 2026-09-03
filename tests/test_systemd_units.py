@@ -35,6 +35,17 @@ class SystemdTopologyTests(unittest.TestCase):
         installer = (self.root / "scripts" / "install.sh").read_text(encoding="utf-8")
         self.assertIn("agents-projects-hub-worker@.service", installer)
         self.assertIn("agents-projects-hub-sender.service", installer)
+        self.assertIn("codex-multi-auth-appserver.service.d/socket-ready.conf", installer)
+        self.assertIn("tlive.service.d/multi-auth-order.conf", installer)
+
+    def test_shared_codex_socket_order_waits_for_a_connectable_listener(self) -> None:
+        readiness = self.unit("codex-multi-auth-appserver.service.d/socket-ready.conf")
+        ordering = self.unit("tlive.service.d/multi-auth-order.conf")
+
+        self.assertIn("agents-projects-hub-wait-socket", readiness)
+        self.assertNotIn("[ -S ", readiness)
+        self.assertIn("After=codex-multi-auth-appserver.service", ordering)
+        self.assertNotIn("Requires=", ordering)
 
     def test_monitor_timer_schedules_from_each_activation(self) -> None:
         timer = self.unit("agents-projects-hub-monitor.timer")

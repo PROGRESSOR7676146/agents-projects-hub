@@ -333,6 +333,10 @@ or response metadata when the provider exposes it.
 - **REQ-AUTH-007 (Planned acceptance):** A natural or controlled quota-exhaustion
   test must demonstrate one response, the same persisted thread, bounded retry,
   and a visible account transition.
+- **REQ-AUTH-008 (Implemented):** When tlive and the optional rotating app-server
+  share a Unix control socket, boot ordering MUST wait for a successful socket
+  connection rather than the presence of a socket inode. The ordering MUST NOT
+  make either recovery channel a hard requirement of the other.
 
 ### Compact control surface
 

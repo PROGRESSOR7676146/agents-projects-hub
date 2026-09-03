@@ -11,7 +11,11 @@ python3 -m venv "$data_root/venv"
 "$data_root/venv/bin/python" -m pip install --upgrade pip
 "$data_root/venv/bin/python" -m pip install "$repo_root"
 
-install -d -m 700 "$config_root" "$systemd_root/hermes-gateway.service.d"
+install -d -m 700 \
+  "$config_root" \
+  "$systemd_root/hermes-gateway.service.d" \
+  "$systemd_root/codex-multi-auth-appserver.service.d" \
+  "$systemd_root/tlive.service.d"
 if [[ ! -e "$config_root/hub.json" ]]; then
   install -m 600 "$repo_root/config/hub.example.json" "$config_root/hub.json"
 fi
@@ -39,6 +43,11 @@ if [[ ! -e "$systemd_root/tlive.service" ]]; then
 fi
 install -m 644 "$repo_root/systemd/hermes-gateway.service.d/20-agents-projects-hub.conf" \
   "$systemd_root/hermes-gateway.service.d/20-agents-projects-hub.conf"
+install -m 644 \
+  "$repo_root/systemd/codex-multi-auth-appserver.service.d/socket-ready.conf" \
+  "$systemd_root/codex-multi-auth-appserver.service.d/socket-ready.conf"
+install -m 644 "$repo_root/systemd/tlive.service.d/multi-auth-order.conf" \
+  "$systemd_root/tlive.service.d/multi-auth-order.conf"
 
 install -d -m 700 \
   "$hermes_root/plugins/hermes-project-hub" \
