@@ -31,7 +31,10 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
 
     def spawn(self, mode: str, *arguments: object) -> subprocess.Popen[str]:
         environment = dict(os.environ)
-        environment["PYTHONPATH"] = os.pathsep.join((str(ROOT / "src"), str(ROOT)))
+        paths = [str(ROOT / "src"), str(ROOT)]
+        if "PYTHONPATH" in os.environ:
+            paths.append(os.environ["PYTHONPATH"])
+        environment["PYTHONPATH"] = os.pathsep.join(paths)
         child = subprocess.Popen(
             [sys.executable, str(ACTOR), mode, str(self.base), *(str(arg) for arg in arguments)],
             cwd=ROOT,

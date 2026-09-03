@@ -205,6 +205,66 @@ class MigrationTests(unittest.TestCase):
             finally:
                 migrated.close()
 
+    def test_artifact_part_schema_rejects_incomplete_document_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            migrate_database(path, create_backup=False)
+            connection = sqlite3.connect(path)
+            try:
+                connection.executescript(
+                    """INSERT INTO topics
+                       (project_id, chat_id, thread_id, title, created_at, updated_at)
+                       VALUES ('example-project', -1001234567890, 7, 'Topic', 'now', 'now');
+                       INSERT INTO agent_sessions
+                       (session_id, topic_id, agent_id, generation, status, model, effort,
+                        created_at, updated_at)
+                       VALUES ('session', 1, 'codex', 1, 'active', 'model', 'high',
+                               'now', 'now');
+                       INSERT INTO provider_jobs
+                       (job_id, idempotency_key, chat_id, message_id, topic_id,
+                        topic_sequence, agent_id, session_id, session_generation, model,
+                        effort, payload_text, status, created_at, updated_at)
+                       VALUES ('job', 'key', -1001234567890, 1, 1, 1, 'codex',
+                               'session', 1, 'model', 'high', 'hello', 'result_ready',
+                               'now', 'now');
+                       INSERT INTO telegram_outbox
+                       (outbox_id, job_id, sender_agent_id, chat_id, thread_id,
+                        telegram_html, status, available_at, created_at, updated_at)
+                       VALUES ('outbox', 'job', 'codex', -1001234567890, 7,
+                               'done', 'pending', 'now', 'now', 'now');"""
+                )
+                with self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        """INSERT INTO telegram_outbox_parts
+                           (outbox_id, part_index, telegram_html, part_type, file_path,
+                            file_name, file_size, file_sha256)
+                           VALUES ('outbox', 1, 'file', 'document', '/tmp/file',
+                                   'file.md', NULL, NULL)"""
+                    )
+            finally:
+                connection.close()
+
+    def test_latest_schema_rejects_pending_handoffs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            migrate_database(path, create_backup=False)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute(
+                    """INSERT INTO topics
+                       (project_id, chat_id, thread_id, title, created_at, updated_at)
+                       VALUES ('example-project', -1001234567890, 7, 'Topic', 'now', 'now')"""
+                )
+                with self.assertRaisesRegex(sqlite3.IntegrityError, "handoff is disabled"):
+                    connection.execute(
+                        """INSERT INTO pending_handoffs
+                           (handoff_id, topic_id, target_agent_id, source_agent_id,
+                            text, created_at)
+                           VALUES ('handoff', 1, 'codex', 'hermes', 'context', 'now')"""
+                    )
+            finally:
+                connection.close()
+
 
 if __name__ == "__main__":
     unittest.main()

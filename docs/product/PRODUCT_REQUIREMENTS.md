@@ -243,11 +243,18 @@ Routing precedence is deterministic:
   retries from the first undelivered part. Queue-backed project turns persist
   each bounded HTML part and its Telegram message ID; legacy immediate-delivery
   paths use the same HTML-aware ordered splitter without queue durability.
-- **REQ-UX-005 (Planned):** Generated user-facing artifacts MUST be published as
-  Telegram attachments from a per-job, project-contained staging directory.
-  Canonical-path, regular-file, size, count, extension, and secret-name checks
-  MUST run before upload; natural-language path mentions MUST NOT authorize an
-  attachment.
+- **REQ-UX-005 (Implemented for Hub-owned project and direct-message turns):**
+  Generated user-facing artifacts MUST be published as
+  Telegram attachments only from the exact project-contained staging directory
+  `.hub/staging/<job_id>`. Hub MUST validate canonical path, regular-file status,
+  per-file and aggregate size, extension, filename safety, and secret-like names,
+  then copy each accepted file into a private immutable delivery spool. A fixed
+  attachment-count cutoff MUST NOT silently discard otherwise valid work. Outbox records MUST bind
+  the spool path, size, SHA-256 digest, and display name; delivery MUST revalidate
+  those fields and remove the spool copy only after Telegram acceptance. Shared
+  staging directories, archive formats, symlinks, and natural-language path
+  mentions MUST NOT authorize an attachment. Rejected staged files MUST produce
+  a bounded visible notice.
 - **REQ-UX-006 (Planned):** Small closed decisions MAY render as bounded inline
   buttons whose opaque callbacks are persisted and scoped to the originating
   topic, provider session, and owner. Model-provided callback commands MUST
@@ -267,17 +274,24 @@ Routing precedence is deterministic:
 
 - **REQ-CTX-001 (Implemented):** Completed visible user/agent turns MUST be
   recorded in a bounded per-topic journal for active and satellite agents.
-- **REQ-CTX-002 (Implemented):** On another agent's next productive turn, its
-  unseen journal delta MUST be injected with explicit speaker/addressee framing.
-- **REQ-CTX-003 (Implemented):** The delta MUST be acknowledged only after a
-  successful productive turn, so failure does not silently lose context.
+- **REQ-CTX-002 (Implemented; supersedes automatic handoff):** Ordinary turns
+  MUST NOT receive another agent's journal automatically. `/context [agent_id]
+  [1..20]` is an advanced, deliberately unadvertised command that invokes the
+  selected provider with a bounded repeatable snapshot from the current numeric
+  topic. Omitting `agent_id` selects prior turns from all other agents.
+- **REQ-CTX-003 (Implemented):** Provider/model switches MUST only change local
+  routing and session state. They MUST NOT invoke a model to summarize history,
+  stage a handoff, advance a journal cursor, or spend provider tokens.
 - **REQ-CTX-004 (Implemented):** Passive observation MUST NOT call a provider,
   force a response, or independently spend model tokens.
 - **REQ-CTX-005 (Implemented):** Shared context MUST exclude hidden reasoning,
   raw tool output, raw terminal screens, credentials, private invite links, and
   environment dumps.
-- **REQ-CTX-006 (Accepted):** The active agent SHOULD understand dialogue with
-  satellites without interpreting old satellite-addressed messages as new tasks.
+- **REQ-CTX-006 (Implemented):** When the user explicitly requests prior
+  dialogue, the Hub MUST label it as lower-priority conversation context and
+  preserve speaker/addressee attribution. Passive forwarded quotes remain a
+  separate user-intent mechanism: they are delivered to the next addressed
+  productive turn as quotes, never parsed as commands.
 - **REQ-CTX-007 (Accepted):** A single user request SHOULD produce one provider
   turn unless the owner explicitly addresses multiple agents.
 
@@ -483,11 +497,16 @@ more specific and consistent with this baseline.
   only to one explicitly configured Hub Operations/Alerts topic. Codex is the
   primary sender; Hermes may fall back only to that same topic. Quota alerts
   include a recognizable masked account hint and never expose a full identity.
+  Stale quota may remain visible as cached status but MUST NOT alert. Fresh
+  Codex quota warns once per ≤5% episode and re-arms only after recovery above
+  5%; a cooldown MUST NOT repeat unchanged quota information.
 - **REQ-OPS-007 (Implemented):** Codex rotation reacts to the upstream provider
   `429` handled by the optional multi-auth proxy, never to a forecast threshold.
   The transition is always reported to Hub Operations with masked source/target
   identity. It is also reported to the work topic only when exactly one Codex
-  topic is active; multiple work topics are never spammed.
+  topic is active; multiple work topics are never spammed. Observability reports
+  a quota-driven pre-`429` account transition without initiating it and includes
+  the replacement account's fresh status.
 - **REQ-OPS-008 (Accepted):** On replacement hardware, stale writer leases from
   the lost host MUST be reset safely after verifying the old processes cannot
   exist.
@@ -688,7 +707,8 @@ necessary but not sufficient for items marked live.
 | Numeric project/topic isolation | Implemented | Automated multi-project isolation tests. |
 | Central Telegram group ingress | Implemented | External provider group pollers disabled by design. |
 | Reply/mention/quote/ordinary semantics | Implemented | Automated routing coverage; live acceptance is deployment-local. |
-| Bounded shared visible context | Implemented | Codex, OpenCode, Antigravity, and Hermes paths covered. |
+| Explicit bounded visible context | Implemented | No automatic handoff; `/context [agent_id] [1..20]` reads only the current topic on explicit user request. |
+| Artifact staging and attachment delivery | Implemented for Hub-owned transports | Exact per-job staging, private immutable spool, path/size/digest validation, bounded rejection notice, durable ordered queue delivery, immediate legacy/DM delivery, and post-acceptance cleanup. Hermes retains its independent native transport. |
 | Codex persistent sessions and metadata | Implemented | App-server integration and restart persistence covered. |
 | Hermes project integration | Implemented | Native Gateway plus fail-closed plugin/hook boundary. |
 | OpenCode and Antigravity adapters | Implemented | Contract tests; live provider acceptance is deployment-local. |
@@ -704,7 +724,7 @@ necessary but not sufficient for items marked live.
 | Automatic Antigravity account rotation | Deferred | Await stable supported headless account-pool capability. |
 | Universal provider-neutral Session Bridge | Deferred | Add only if real adapters/companions cannot meet needs. |
 | Automatic OS terminal window/PID management | Rejected | Explicit resume commands and writer leases are simpler and safer. |
-| Message-by-message CLI transcript mirroring | Rejected | Provider session plus bounded publish/handoff is sufficient. |
+| Message-by-message CLI transcript mirroring | Rejected | Provider sessions plus explicit bounded history retrieval are sufficient. |
 | Automatic approval or security relaxation | Rejected | Violates the trust model. |
 | New provider expansion now | Rejected | Current providers must pass E2E first. |
 

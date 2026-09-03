@@ -24,6 +24,7 @@ class Bot:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.sent: list[tuple[int, int, str]] = []
+        self.documents: list[tuple[int, int, Path, str | None]] = []
         self.actions: list[tuple[int, int, str]] = []
         self.drafts: list[tuple[int, int, int, str]] = []
 
@@ -34,7 +35,23 @@ class Bot:
         self.sent.append((chat_id, thread_id, html))
         if self.fail:
             raise RuntimeError("transport unavailable")
-        return len(self.sent)
+        return len(self.sent) + len(self.documents)
+
+    def send_document(
+        self,
+        chat_id: int,
+        thread_id: int,
+        document_path: Path,
+        *,
+        caption: str | None = None,
+        reply_markup: dict[str, Any] | None = None,
+        file_name: str | None = None,
+        mime_type: str | None = None,
+    ) -> int:
+        self.documents.append((chat_id, thread_id, document_path, caption))
+        if self.fail:
+            raise RuntimeError("transport unavailable")
+        return len(self.sent) + len(self.documents)
 
     def send_message_draft(
         self, chat_id: int, thread_id: int, *, draft_id: int, text: str = ""
@@ -561,6 +578,136 @@ class TelegramOutboxSenderTests(unittest.TestCase):
         sender_type.assert_called_once_with(self.config)
         sender_type.return_value.run_forever.assert_called_once_with(poll_seconds=0.5)
         sender_type.return_value.close.assert_called_once_with()
+
+    def test_outbox_delivers_artifact_documents_in_order(self) -> None:
+        from hermes_codex_router.artifacts import artifact_spool_root, spool_staged_artifacts
+
+        staging = Path(self.tempdir.name) / ".hub" / "staging" / "artifact-test"
+        staging.mkdir(parents=True)
+        (staging / "test_report.md").write_text("# Test Report", encoding="utf-8")
+        artifact = spool_staged_artifacts(
+            Path(self.tempdir.name),
+            "artifact-test",
+            artifact_spool_root(self.config.state_path),
+        )[0]
+
+        state = HubState.open(self.config.state_path)
+        try:
+            topic = state.observe_topic(
+                project_id="example-project",
+                chat_id=-1001234567890,
+                thread_id=88,
+                title="Example",
+            )
+            session = state.activate_agent(topic.topic_id, "antigravity", "gpt-5.6-sol", "high")
+            job, _ = state.enqueue_provider_job(
+                idempotency_key="telegram:-1001234567890:88",
+                chat_id=-1001234567890,
+                message_id=88,
+                topic_id=topic.topic_id,
+                agent_id="antigravity",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                provider_session_id=None,
+                model="gpt-5.6-sol",
+                effort="high",
+                payload_text="generate report",
+            )
+            leased_job = state.lease_provider_job("antigravity", "worker-1")
+            assert leased_job is not None and leased_job.lease_token is not None
+            state.mark_provider_job_executing(leased_job.job_id, leased_job.lease_token)
+            state.commit_provider_result(
+                leased_job.job_id,
+                leased_job.lease_token,
+                visible_response="Done!",
+                sender_agent_id="antigravity",
+                telegram_html="Done!",
+                artifacts=(artifact,),
+            )
+        finally:
+            state.close()
+
+        bots = {"opencode": Bot(), "antigravity": Bot()}
+        sender = TelegramOutboxSender(self.config, telegram_bots=bots)
+        try:
+            # Deliver text part
+            self.assertTrue(sender.run_cycle())
+            self.assertEqual(len(bots["antigravity"].sent), 1)
+            self.assertEqual(len(bots["antigravity"].documents), 0)
+
+            # Deliver document part
+            self.assertTrue(sender.run_cycle())
+            self.assertEqual(len(bots["antigravity"].documents), 1)
+            self.assertEqual(bots["antigravity"].documents[0][2], artifact.path)
+            self.assertFalse(artifact.path.exists())
+
+            # No more parts to deliver
+            self.assertFalse(sender.run_cycle())
+        finally:
+            sender.close()
+
+    def test_outbox_rejects_spool_content_changed_after_commit(self) -> None:
+        from hermes_codex_router.artifacts import artifact_spool_root, spool_staged_artifacts
+
+        staging = Path(self.tempdir.name) / ".hub" / "staging" / "tamper-test"
+        staging.mkdir(parents=True)
+        (staging / "report.md").write_text("original", encoding="utf-8")
+        artifact = spool_staged_artifacts(
+            Path(self.tempdir.name),
+            "tamper-test",
+            artifact_spool_root(self.config.state_path),
+        )[0]
+        state = HubState.open(self.config.state_path)
+        try:
+            topic = state.observe_topic(
+                project_id="example-project",
+                chat_id=-1001234567890,
+                thread_id=89,
+                title="Example",
+            )
+            session = state.activate_agent(topic.topic_id, "antigravity", "model", "high")
+            job, _ = state.enqueue_provider_job(
+                idempotency_key="telegram:-1001234567890:89",
+                chat_id=-1001234567890,
+                message_id=89,
+                topic_id=topic.topic_id,
+                agent_id="antigravity",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                provider_session_id=None,
+                model="model",
+                effort="high",
+                payload_text="generate report",
+            )
+            leased = state.lease_provider_job("antigravity", "worker-1")
+            assert leased is not None and leased.lease_token is not None
+            state.mark_provider_job_executing(job.job_id, leased.lease_token)
+            state.commit_provider_result(
+                job.job_id,
+                leased.lease_token,
+                visible_response="Done",
+                sender_agent_id="antigravity",
+                telegram_html="Done",
+                artifacts=(artifact,),
+            )
+        finally:
+            state.close()
+
+        artifact.path.write_text("tampered", encoding="utf-8")
+        bot = Bot()
+        sender = TelegramOutboxSender(
+            self.config,
+            telegram_bots={"opencode": Bot(), "antigravity": bot},
+        )
+        try:
+            self.assertTrue(sender.run_cycle())  # text
+            self.assertTrue(sender.run_cycle())  # rejected document attempt
+            self.assertEqual(bot.documents, [])
+            outbox = sender.state.get_telegram_outbox_for_job(job.job_id)
+            self.assertEqual(outbox.status, "pending")
+            self.assertEqual(outbox.error_code, "ArtifactSecurityError")
+        finally:
+            sender.close()
 
 
 if __name__ == "__main__":

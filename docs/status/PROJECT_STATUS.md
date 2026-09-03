@@ -1,7 +1,7 @@
 # Project status
 
 Status: active alpha
-Release: v0.5.1
+Release: v0.6.0
 
 This file describes repository capabilities only. It intentionally contains no
 operator deployment inventory or live conversation evidence.
@@ -64,6 +64,16 @@ operator deployment inventory or live conversation evidence.
   HTML messages instead of being truncated. Queue-backed delivery persists each
   part and resumes at the first part without a recorded Telegram message ID;
   provider execution is never repeated for a delivery retry.
+- Queue-backed project turns accept deliberate artifacts only from the exact
+  per-job staging directory. Accepted files are copied into a private Hub-owned
+  spool and bound to the durable outbox by size and SHA-256; the sender verifies
+  the snapshot again immediately before upload and removes it only after Telegram
+  acceptance. Valid files are bounded by aggregate bytes rather than an arbitrary
+  attachment count. Shared stale files, symlinks, unsafe filenames, archives, and
+  secret-like names are rejected with a bounded visible notice. Hub-owned
+  direct-message and legacy inline turns use the same isolated staging,
+  validation, and immutable spool boundary with immediate delivery. Hermes retains
+  its independent native Gateway transport rather than sharing Hub credentials.
 - Providers declared `managed_externally` retain their native admission path
   and are never enqueued into the local worker queue, preventing accepted jobs
   without an eligible consumer. All-external productive routes remain unclaimed
@@ -83,7 +93,7 @@ operator deployment inventory or live conversation evidence.
   operational timer schedules its first run relative to activation and every
   later run relative to the monitored unit, including a post-cutover start.
 - A reusable fictional subprocess fault matrix exercises Controller admission,
-  durable SQLite handoff, isolated external workers, and standalone outbox
+  durable SQLite jobs, isolated external workers, and standalone outbox
   delivery together. Parent tests terminate child actors after enqueue but
   before offset persistence, during provider invocation, and after Telegram
   acceptance but before delivery persistence. It proves redelivery
@@ -91,6 +101,12 @@ operator deployment inventory or live conversation evidence.
   retry, concurrent provider isolation, responsive cached Controller status,
   and distinct Hub/provider polling offsets without network, credentials, or
   live services.
+- Automatic inter-agent handoff and unseen-dialogue injection are disabled at
+  both routing and SQLite boundaries. Provider/model switches are deterministic
+  local state changes. The bounded topic journal remains available only through
+  the explicit advanced `/context [agent_id] [1..20]` request; it is intentionally
+  absent from the compact Telegram command menu. User-forwarded messages retain
+  their separate passive-quote semantics for the next productive turn.
 - The scoped MTProto acceptance actor has fixed checks for deterministic
   commands, full model selection, provider connectivity, Reply provenance,
   passive forwarded quotes, rapid multi-message bursts, and bounded
@@ -118,12 +134,18 @@ operator deployment inventory or live conversation evidence.
   usage-limit/reset phrase even when the CLI omits HTTP status, terminates a CLI
   that otherwise remains alive, and releases topic FIFO with a cached quota
   failure instead of waiting for the general turn timeout.
+- Codex quota monitoring uses bounded live account probes outside the Controller,
+  warns once when a fresh window first reaches 5% remaining, re-arms only after
+  confirmed recovery, and reports provider-driven or quota-driven account
+  transitions with the replacement account's fresh status. Ordinary account
+  selection changes are not mislabeled as quota rotation.
 - Durable masked Codex account snapshots for provider-free Controller status,
   plus private masked account hints and honest unknown-limit display for other
   providers. Cached quota and live worker availability remain separate signals:
   `/status` and `/accounts` surface a known provider/network failure in red even
   when a telemetry cache still reports unused quota; a newly started worker
-  remains yellow/unknown until a provider turn proves availability.
+  remains yellow/unknown until a provider turn proves availability. Stale quota
+  values remain labeled as cached and cannot trigger low-quota alerts.
 - Provider replies share one compact Telegram identity line: session and agent
   are not duplicated, model and effort use one label, and runtime implementation
   details are hidden. Available context and quota telemetry uses short follow-up
@@ -157,6 +179,10 @@ operator deployment inventory or live conversation evidence.
 - Optional shared-socket boot integration orders tlive after the rotating Codex
   app-server and verifies an accepting Unix listener, rejecting stale socket
   inodes left by abrupt host or WSL shutdown.
+- The resident multi-auth app-server drop-in delegates proxy-helper lifetime to
+  the systemd cgroup instead of CLI-oriented detached and maximum-lifetime
+  reapers. Runtime-proxy monitoring remains independent and never restarts a
+  shared app-server underneath an active Codex or tlive session.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
 - Privacy gate that rejects deployment identities, raw histories/session dumps,
   owner-specific paths, Telegram secrets/identifiers, and local runtime files.

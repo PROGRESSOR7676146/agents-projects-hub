@@ -198,6 +198,7 @@ class ExternalCliAdapter:
         effort: str | None = None,
         timeout: float = 900,
         interrupt_prepared: bool = False,
+        staging_dir: Path | None = None,
     ) -> ExternalTurnResult:
         argv = self.build_argv(
             cwd=cwd,
@@ -207,6 +208,9 @@ class ExternalCliAdapter:
             effort=effort,
         )
         environment = os.environ.copy()
+        if staging_dir is not None:
+            environment["HUB_STAGING_DIR"] = str(staging_dir)
+            environment["HUB_ARTIFACTS_DIR"] = str(staging_dir)
         if self.runtime == "gemini" and self.runtime_home is not None:
             environment["GEMINI_CLI_HOME"] = str(self.runtime_home)
         if not interrupt_prepared:

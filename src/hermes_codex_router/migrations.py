@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-LATEST_SCHEMA_VERSION = 15
+LATEST_SCHEMA_VERSION = 18
 
 
 MIGRATION_1 = """
@@ -518,6 +518,63 @@ SELECT outbox_id, 1, telegram_html FROM telegram_outbox;
 """
 
 
+MIGRATION_16 = """
+ALTER TABLE telegram_outbox_parts ADD COLUMN part_type TEXT NOT NULL DEFAULT 'text';
+ALTER TABLE telegram_outbox_parts ADD COLUMN file_path TEXT;
+ALTER TABLE telegram_outbox_parts ADD COLUMN file_name TEXT;
+"""
+
+
+MIGRATION_17 = """
+ALTER TABLE telegram_outbox_parts ADD COLUMN file_size INTEGER;
+ALTER TABLE telegram_outbox_parts ADD COLUMN file_sha256 TEXT;
+CREATE TRIGGER telegram_outbox_parts_artifact_insert
+BEFORE INSERT ON telegram_outbox_parts
+WHEN NOT COALESCE((
+    (NEW.part_type = 'text' AND NEW.file_path IS NULL AND NEW.file_name IS NULL
+        AND NEW.file_size IS NULL AND NEW.file_sha256 IS NULL)
+    OR
+    (NEW.part_type = 'document' AND length(NEW.file_path) BETWEEN 1 AND 4096
+        AND length(NEW.file_name) BETWEEN 1 AND 255
+        AND NEW.file_size BETWEEN 1 AND 52428800
+        AND length(NEW.file_sha256) = 64)
+), 0)
+BEGIN
+    SELECT RAISE(ABORT, 'invalid telegram outbox part');
+END;
+CREATE TRIGGER telegram_outbox_parts_artifact_update
+BEFORE UPDATE OF part_type, file_path, file_name, file_size, file_sha256
+ON telegram_outbox_parts
+WHEN NOT COALESCE((
+    (NEW.part_type = 'text' AND NEW.file_path IS NULL AND NEW.file_name IS NULL
+        AND NEW.file_size IS NULL AND NEW.file_sha256 IS NULL)
+    OR
+    (NEW.part_type = 'document' AND length(NEW.file_path) BETWEEN 1 AND 4096
+        AND length(NEW.file_name) BETWEEN 1 AND 255
+        AND NEW.file_size BETWEEN 1 AND 52428800
+        AND length(NEW.file_sha256) = 64)
+), 0)
+BEGIN
+    SELECT RAISE(ABORT, 'invalid telegram outbox part');
+END;
+"""
+
+
+MIGRATION_18 = """
+DELETE FROM pending_handoffs;
+CREATE TRIGGER IF NOT EXISTS pending_handoffs_disabled_insert
+BEFORE INSERT ON pending_handoffs
+BEGIN
+    SELECT RAISE(ABORT, 'automatic handoff is disabled');
+END;
+CREATE TRIGGER IF NOT EXISTS pending_handoffs_disabled_update
+BEFORE UPDATE ON pending_handoffs
+BEGIN
+    SELECT RAISE(ABORT, 'automatic handoff is disabled');
+END;
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -627,6 +684,15 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     if previous < 15:
         connection.executescript(MIGRATION_15)
         connection.execute("PRAGMA user_version = 15")
+    if previous < 16:
+        connection.executescript(MIGRATION_16)
+        connection.execute("PRAGMA user_version = 16")
+    if previous < 17:
+        connection.executescript(MIGRATION_17)
+        connection.execute("PRAGMA user_version = 17")
+    if previous < 18:
+        connection.executescript(MIGRATION_18)
+        connection.execute("PRAGMA user_version = 18")
     connection.commit()
     current = int(connection.execute("PRAGMA user_version").fetchone()[0])
     return previous, current

@@ -359,7 +359,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             self.assertIn("OpenCode", external.telegram.sent[-1][2])
             value.state.close()
 
-    def test_main_receives_unseen_satellite_dialogue_on_next_productive_turn(self) -> None:
+    def test_main_receives_other_agent_dialogue_only_on_explicit_context_request(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project"
@@ -414,12 +414,14 @@ class ServiceIntegrationTests(unittest.TestCase):
             )
 
             self.assertTrue(value.handle_update(update(8, "Now continue the project")))
+            self.assertNotIn("relax, this is a connection test", client.prompts[0])
+            self.assertTrue(value.handle_update(update(9, "/context antigravity 8")))
             value.state.close()
 
-        self.assertEqual(len(client.prompts), 1)
-        self.assertIn("relax, this is a connection test", client.prompts[0])
-        self.assertIn("understood, connection works", client.prompts[0])
-        self.assertIn("Now continue the project", client.prompts[0])
+        self.assertEqual(len(client.prompts), 2)
+        self.assertIn("relax, this is a connection test", client.prompts[1])
+        self.assertIn("understood, connection works", client.prompts[1])
+        self.assertIn("CURRENT USER COMMAND:\n/context antigravity 8", client.prompts[1])
 
     def test_forwarded_command_is_passive_quote_for_the_next_user_turn(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

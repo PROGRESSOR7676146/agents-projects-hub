@@ -147,21 +147,14 @@ class HubStateTests(unittest.TestCase):
         self.assertTrue(self.state.claim_callback("cb-1", observer_agent_id="codex"))
         self.assertFalse(self.state.claim_callback("cb-1", observer_agent_id="codex"))
 
-    def test_handoff_is_bounded_and_replaced_per_target(self) -> None:
-        first = self.state.stage_handoff(
-            self.topic.topic_id,
-            target_agent_id="hermes",
-            source_agent_id="codex",
-            text="first",
-        )
-        second = self.state.stage_handoff(
-            self.topic.topic_id,
-            target_agent_id="hermes",
-            source_agent_id="codex",
-            text="x" * 25000,
-        )
-        self.assertNotEqual(first.handoff_id, second.handoff_id)
-        self.assertEqual(len(second.text), 20000)
+    def test_automatic_handoff_is_disabled(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "automatic handoff is disabled"):
+            self.state.stage_handoff(
+                self.topic.topic_id,
+                target_agent_id="hermes",
+                source_agent_id="codex",
+                text="context",
+            )
 
     def test_recent_external_context_is_chronological_and_bounded(self) -> None:
         with self.state._connection:
@@ -218,6 +211,32 @@ class HubStateTests(unittest.TestCase):
             (None, None),
         )
 
+    def test_explicit_context_snapshot_is_repeatable_and_source_scoped(self) -> None:
+        self.state.record_visible_turn(
+            self.topic.topic_id,
+            agent_id="antigravity",
+            provider="antigravity",
+            model="example-model",
+            user_excerpt="other question",
+            response_excerpt="other answer",
+        )
+        context = self.state.visible_context_snapshot(
+            self.topic.topic_id,
+            "codex",
+            source_agent_id="antigravity",
+            limit=8,
+        )
+        self.assertIsNotNone(context)
+        self.assertEqual(
+            context,
+            self.state.visible_context_snapshot(
+                self.topic.topic_id,
+                "codex",
+                source_agent_id="antigravity",
+                limit=8,
+            ),
+        )
+
     def test_dispatch_health_tracks_running_and_completed_turns(self) -> None:
         dispatch_id = self.state.start_dispatch(
             chat_id=self.topic.chat_id,
@@ -262,6 +281,12 @@ class HubStateTests(unittest.TestCase):
         self.state.release_alert_delivery("codex:quota")
         self.assertTrue(self.state.claim_alert_delivery("codex:quota", cooldown_seconds=3600))
 
+    def test_alert_transition_is_claimed_once_until_released(self) -> None:
+        self.assertTrue(self.state.claim_alert_transition("codex:quota-band"))
+        self.assertFalse(self.state.claim_alert_transition("codex:quota-band"))
+        self.state.release_alert_delivery("codex:quota-band")
+        self.assertTrue(self.state.claim_alert_transition("codex:quota-band"))
+
     def test_concurrent_alert_delivery_has_exactly_one_winner(self) -> None:
         barrier = threading.Barrier(2)
 
@@ -282,6 +307,11 @@ class HubStateTests(unittest.TestCase):
         self.assertIsNone(self.state.observe_runtime_counter("codex:429", 4))
         self.assertEqual(self.state.observe_runtime_counter("codex:429", 6), 4)
         self.assertEqual(self.state.observe_runtime_counter("codex:429", 5), 6)
+
+    def test_runtime_counter_can_be_rebaselined_after_process_restart(self) -> None:
+        self.state.set_runtime_counter("codex:429", 8)
+        self.state.replace_runtime_counter("codex:429", 0)
+        self.assertEqual(self.state.runtime_counter("codex:429"), 0)
 
     def test_lists_only_topics_where_agent_is_active(self) -> None:
         self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")

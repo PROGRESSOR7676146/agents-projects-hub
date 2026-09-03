@@ -6,8 +6,8 @@ import time
 from dataclasses import asdict
 from typing import Any, Callable
 
-from .alerts import OperationalAlert, evaluate_operational_alerts
-from .codex_accounts import encode_codex_pool_snapshot, read_codex_pool_status
+from .alerts import DEFAULT_LOW_QUOTA_PERCENT, OperationalAlert, evaluate_operational_alerts
+from .codex_accounts import CodexPoolStatus, encode_codex_pool_snapshot, read_codex_pool_status
 from .diagnostics import run_doctor
 from .hermes_health import (
     HermesBotApiHealth,
@@ -23,6 +23,7 @@ from .hub_config import HubConfig, OperationalAlertSettings
 from .provider_catalog_cache import ProviderCatalogCache
 from .provider_events import (
     codex_rotation_targets,
+    detect_codex_rotation,
     format_codex_rotation_event,
     read_codex_runtime_snapshot,
 )
@@ -42,6 +43,30 @@ def _destination(settings: OperationalAlertSettings) -> tuple[int, int] | None:
     if settings.telegram_chat_id is None or settings.telegram_thread_id is None:
         return None
     return settings.telegram_chat_id, settings.telegram_thread_id
+
+
+_QUOTA_ALERT_CODES = {"codex_5h_low", "codex_weekly_low"}
+
+
+def _claim_operational_alert(
+    state: HubState, alert: OperationalAlert, *, cooldown_seconds: int
+) -> bool:
+    if alert.code in _QUOTA_ALERT_CODES:
+        return state.claim_alert_transition(f"{alert.key}:operations")
+    return state.claim_alert_delivery(f"{alert.key}:operations", cooldown_seconds=cooldown_seconds)
+
+
+def _release_recovered_quota_alerts(state: HubState, pool: CodexPoolStatus) -> None:
+    for account in pool.accounts:
+        if account.quota_stale:
+            continue
+        windows = (
+            ("5h-low", account.five_hour_remaining),
+            ("week-low", account.weekly_remaining),
+        )
+        for suffix, remaining in windows:
+            if remaining is not None and remaining > DEFAULT_LOW_QUOTA_PERCENT:
+                state.release_alert_delivery(f"codex:account:{account.index}:{suffix}:operations")
 
 
 def _send_hermes(
@@ -157,6 +182,8 @@ def run_monitor_once(
                     else "codex-multi-auth"
                 ),
                 identity_hints=config.codex_account_hints,
+                live=True,
+                timezone_name="Europe/Moscow",
             )
             if config.codex_multi_auth_dir is not None
             else None
@@ -176,19 +203,46 @@ def run_monitor_once(
                 or str(previous_pool_snapshot["detail"]) != pool_snapshot
             ):
                 state.record_runtime_event("codex", "info", "account_pool_snapshot", pool_snapshot)
-        provider_limit_count = 0
+        rotation_observation = None
         runtime_snapshot = (
             read_codex_runtime_snapshot(config.codex_multi_auth_dir)
             if config.codex_multi_auth_dir is not None
             else None
         )
         if runtime_snapshot is not None:
-            current_429 = runtime_snapshot.rate_limited_responses
             previous_429 = state.runtime_counter("codex:provider-429")
-            if previous_429 is None:
-                state.set_runtime_counter("codex:provider-429", current_429)
-            elif current_429 > previous_429:
-                provider_limit_count = current_429 - previous_429
+            previous_rotations = state.runtime_counter("codex:account-rotations")
+            previous_account = state.runtime_counter("codex:active-account")
+            if previous_429 is None or previous_rotations is None or previous_account is None:
+                state.replace_runtime_counter(
+                    "codex:provider-429", runtime_snapshot.rate_limited_responses
+                )
+                state.replace_runtime_counter(
+                    "codex:account-rotations", runtime_snapshot.account_rotations
+                )
+                if runtime_snapshot.active_account_index is not None:
+                    state.replace_runtime_counter(
+                        "codex:active-account", runtime_snapshot.active_account_index
+                    )
+            else:
+                rotation_observation = detect_codex_rotation(
+                    runtime_snapshot,
+                    pool=pool,
+                    previous_rate_limits=previous_429,
+                    previous_rotations=previous_rotations,
+                    previous_account_index=previous_account,
+                )
+                if rotation_observation is None:
+                    state.replace_runtime_counter(
+                        "codex:provider-429", runtime_snapshot.rate_limited_responses
+                    )
+                    state.replace_runtime_counter(
+                        "codex:account-rotations", runtime_snapshot.account_rotations
+                    )
+                    if runtime_snapshot.active_account_index is not None:
+                        state.replace_runtime_counter(
+                            "codex:active-account", runtime_snapshot.active_account_index
+                        )
         doctor = run_doctor(config)
         raw_checks = doctor.get("checks")
         doctor_checks = raw_checks if isinstance(raw_checks, list) else []
@@ -250,7 +304,7 @@ def run_monitor_once(
             for agent_id in stale_catalogs
         )
         delivered: list[str] = []
-        if notify and provider_limit_count:
+        if notify and rotation_observation is not None:
             destination = _destination(config.operational_alerts)
             targets = codex_rotation_targets(state, destination)
             if targets:
@@ -258,7 +312,7 @@ def run_monitor_once(
                 if agent.token_file is None:
                     raise RuntimeError("managed Codex bot token is unavailable")
                 telegram = TelegramBotApi(agent.token_file.read_text(encoding="utf-8").strip())
-                event_text = format_codex_rotation_event(pool, provider_limit_count)
+                event_text = format_codex_rotation_event(pool, rotation_observation)
                 operations_sent = False
                 for target in targets:
                     try:
@@ -274,26 +328,33 @@ def run_monitor_once(
                             f"telegram:{target[0]}:{target[1]}",
                             event_text,
                         )
-                        delivered.append("codex_provider_limit:hermes-fallback")
+                        delivered.append("codex_rotation:hermes-fallback")
                         operations_sent = True
                     else:
-                        delivered.append("codex_provider_limit:codex")
+                        delivered.append("codex_rotation:codex")
                         if target == destination:
                             operations_sent = True
                 if operations_sent or destination is None:
                     assert runtime_snapshot is not None
-                    state.set_runtime_counter(
+                    state.replace_runtime_counter(
                         "codex:provider-429", runtime_snapshot.rate_limited_responses
                     )
+                    state.replace_runtime_counter(
+                        "codex:account-rotations", runtime_snapshot.account_rotations
+                    )
+                    if runtime_snapshot.active_account_index is not None:
+                        state.replace_runtime_counter(
+                            "codex:active-account", runtime_snapshot.active_account_index
+                        )
+        if notify:
+            _release_recovered_quota_alerts(state, pool)
         if notify and alerts:
             destination = _destination(config.operational_alerts)
             operations_due = tuple(
                 alert
                 for alert in alerts
                 if destination is not None
-                and state.claim_alert_delivery(
-                    f"{alert.key}:operations", cooldown_seconds=cooldown_seconds
-                )
+                and _claim_operational_alert(state, alert, cooldown_seconds=cooldown_seconds)
             )
             if operations_due and destination is not None:
                 chat_id, thread_id = destination

@@ -19,6 +19,7 @@ SUPPORTED_CHECKS = (
     "burst_route",
     "stop_route",
     "forwarded_quote",
+    "artifact_delivery",
 )
 
 
@@ -148,7 +149,14 @@ def load_acceptance_actor_config(
     if (
         any(
             check
-            in {"provider_ping", "reply_route", "burst_route", "stop_route", "forwarded_quote"}
+            in {
+                "provider_ping",
+                "reply_route",
+                "burst_route",
+                "stop_route",
+                "forwarded_quote",
+                "artifact_delivery",
+            }
             for check in checks
         )
         and not providers
@@ -208,6 +216,7 @@ async def _wait_for_response(
     after_id: int,
     username: str,
     require_buttons: bool = False,
+    require_document: bool = False,
     timeout_seconds: int | None = None,
 ) -> Any:
     deadline = asyncio.get_running_loop().time() + (
@@ -223,6 +232,8 @@ async def _wait_for_response(
             sender_username = str(getattr(sender, "username", "")).casefold()
             if sender_username == username.casefold():
                 if require_buttons and not getattr(message, "buttons", None):
+                    continue
+                if require_document and getattr(message, "document", None) is None:
                     continue
                 return message
             if not _allowed_canary_sender(sender, config):
@@ -266,6 +277,38 @@ async def _complete_model_selection(
 async def _run_check(
     client: Any, config: AcceptanceActorConfig, check: str, target: str
 ) -> AcceptanceCheckResult:
+    if check == "artifact_delivery":
+        filename = "hub-artifact-e2e.md"
+        expected = b"HUB_ARTIFACT_E2E_OK\n"
+        sent = await client.send_message(
+            config.telegram_chat_id,
+            (
+                f"@{target} Create {filename} in the exact Hub artifact delivery directory "
+                "for this turn. Its complete UTF-8 content must be HUB_ARTIFACT_E2E_OK "
+                "followed by one newline. Reply briefly; do no other work."
+            ),
+            reply_to=config.telegram_thread_id,
+        )
+        try:
+            response = await _wait_for_response(
+                client,
+                config,
+                after_id=int(sent.id),
+                username=target,
+                require_document=True,
+            )
+            received_name = str(getattr(getattr(response, "file", None), "name", ""))
+            payload = await response.download_media(file=bytes)
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        ok = received_name == filename and payload == expected
+        return AcceptanceCheckResult(
+            check,
+            target,
+            ok,
+            int(response.id),
+            "document filename and content verified" if ok else "unexpected document",
+        )
     if check == "forwarded_quote":
         sent = await client.send_message(
             config.telegram_chat_id,
@@ -544,7 +587,7 @@ async def run_acceptance_checks(config: AcceptanceActorConfig) -> dict[str, obje
 
 
 def _targets_for_check(config: AcceptanceActorConfig, check: str) -> tuple[str, ...]:
-    if check == "stop_route":
+    if check in {"stop_route", "artifact_delivery"}:
         return config.provider_usernames[:1]
     if check in {"provider_ping", "reply_route", "burst_route", "forwarded_quote"}:
         return config.provider_usernames

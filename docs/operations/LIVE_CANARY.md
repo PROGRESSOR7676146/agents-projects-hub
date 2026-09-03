@@ -138,8 +138,9 @@ step 1, the harmless provider connectivity part of step 2, the complete
 provider/model/effort callback ladder, real Reply provenance, and passive
 forwarded-quote semantics for allowlisted providers. It also covers a rapid
 three-message burst and a bounded stop/recovery cycle for the first selected
-provider. The remaining manually selected quote, failure, restart, and recovery
-tests below are still explicit operator-controlled operations.
+provider. The fixed artifact check verifies the received document filename and
+exact bytes. The remaining manually selected quote, failure, restart, and
+recovery tests below are still explicit operator-controlled operations.
 
 1. Run `/status` and `/accounts`. They must remain compact and responsive
    without a productive model turn.

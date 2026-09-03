@@ -13,6 +13,11 @@ class Command:
 
 COMMAND = re.compile(r"^/([A-Za-z][A-Za-z0-9_]*)(?:@[A-Za-z][A-Za-z0-9_]*)?(?:\s+(.*))?$")
 EMERGENCY_STOP = frozenset({"stop", "halt", "стоп", "стой", "остановись", "прекрати"})
+CONTEXT_REQUEST = re.compile(
+    r"^/context(?:@[A-Za-z][A-Za-z0-9_]*)?(?:\s+([A-Za-z0-9_-]+))?"
+    r"(?:\s+([1-9]|1[0-9]|20))?$",
+    re.IGNORECASE,
+)
 
 
 def is_emergency_stop(text: str) -> bool:
@@ -30,6 +35,15 @@ def parse_command(text: str) -> Command | None:
     raw_arguments = match.group(2) or ""
     arguments = tuple(piece.casefold() for piece in raw_arguments.split())
     return Command(match.group(1).casefold(), arguments)
+
+
+def parse_context_request(text: str) -> tuple[str | None, int] | None:
+    """Parse the advanced explicit-history command without advertising it in menus."""
+    match = CONTEXT_REQUEST.fullmatch(text.strip())
+    if match is None:
+        return None
+    source = match.group(1)
+    return (source.casefold() if source else None, int(match.group(2) or "8"))
 
 
 def decide_targets(

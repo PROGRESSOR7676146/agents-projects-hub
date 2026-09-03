@@ -15,11 +15,12 @@ with a new record.
 | Product identity | Agents Projects Hub; internal `hermes_codex_router` remains for compatibility. | Product requirements |
 | Project topology | One private forum group per registered local project; numeric topic identity. | Product requirements and tests |
 | Routing | One central ingress; ordinary → active, Reply → author, mention → target, selected/pasted quote → active. | Product requirements; tests and commit history |
-| Context | Bounded completed visible turns are delivered on the next productive turn; passive observation does not call models. | Product requirements; tests and commit history |
+| Context | No automatic handoff or unseen-dialogue injection; bounded visible history is supplied only by explicit user request. | [ADR 0009](0009-explicit-context-no-automatic-handoff.md) |
 | Provider identity | One bot identity per runtime, not per model or account. | Product requirements and tests |
 | Codex accounts | Multi-auth is optional; official Codex app-server is the fallback. | Product requirements; `RECOVERY_PLANE.ru.md` |
 | Headless Codex approvals | Shared sockets use companion-backed `on-request`; isolated stdio fallback denies escalation instead of waiting on an unreachable approval channel. | [ADR 0006](0006-headless-codex-fallback-approvals.md) |
 | Shared Codex socket boot | Readiness requires a successful Unix connection; stale socket inodes cannot release tlive ordering. | [ADR 0007](0007-connectable-shared-socket-readiness.md) |
+| Resident Codex proxy lifetime | systemd owns resident helper cleanup; CLI-oriented proxy reapers are disabled for the service launch. | [ADR 0008](0008-resident-codex-proxy-lifetime.md) |
 | Recovery plane | Hermes Gateway and Agent Session Remote/tlive are independent service channels, not project groups or mandatory Hub dependencies. | Product requirements; `RECOVERY_PLANE.ru.md` |
 | Operational alerts | One explicit Hub Operations/Alerts topic; Codex primary, Hermes fallback to the same topic; masked account hints. | Product requirements REQ-OPS-006 |
 | Local frontend | Native CLI is preferred; one-writer lease is mandatory; tmux remains fallback. | Product requirements and tests |

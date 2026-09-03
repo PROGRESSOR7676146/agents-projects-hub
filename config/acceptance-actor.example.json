@@ -17,6 +17,7 @@
     "provider_ping",
     "reply_route",
     "forwarded_quote",
+    "artifact_delivery",
     "burst_route",
     "stop_route"
   ],

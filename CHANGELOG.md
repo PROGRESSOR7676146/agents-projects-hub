@@ -5,6 +5,8 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-03
+
 ### Added
 
 - Activate the optional separate Hub Telegram controller identity with its own
@@ -40,6 +42,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ### Fixed
 
+- Stop discarding valid staged artifacts merely because they appear after a
+  fixed attachment-count cutoff; retain per-file and aggregate byte bounds.
+- Deliver validated artifacts from Hub-owned direct-message and legacy inline
+  turns while keeping Hermes's native Gateway transport independent.
 - Attribute Hub-owned inline callbacks to the Hub ingress identity rather than
   the default provider identity, keeping callback audit and diagnostics exact.
 - Prevent stale Unix socket inodes after abrupt host or WSL shutdown from

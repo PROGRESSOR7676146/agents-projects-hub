@@ -41,6 +41,18 @@ class FakeMessage:
         self.buttons = [[button]] if button is not None else None
 
 
+class FakeDocumentMessage(FakeMessage):
+    def __init__(self, message_id: int, name: str, payload: bytes) -> None:
+        super().__init__(message_id, "Done")
+        self.document = object()
+        self.file = SimpleNamespace(name=name)
+        self.payload = payload
+
+    async def download_media(self, *, file: object) -> bytes:
+        assert file is bytes
+        return self.payload
+
+
 class FakeClient:
     def __init__(self) -> None:
         self.sent: list[tuple[tuple[object, ...], dict[str, object]]] = []
@@ -435,6 +447,35 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         forward.assert_awaited_once_with(client, config, source)
         self.assertEqual(wait.await_args_list[1].kwargs["timeout_seconds"], 5)
         self.assertIn("FORWARD_CONTEXT_OK", str(client.sent[-1][0][1]))
+
+    def test_artifact_delivery_verifies_filename_and_exact_content(self) -> None:
+        config = AcceptanceActorConfig(
+            api_id=1,
+            api_hash_file=self.secret,
+            session_path=self.base / "acceptance.session",
+            expected_user_id=1,
+            telegram_chat_id=-1001234567890,
+            telegram_thread_id=77,
+            hub_username="example_hub_bot",
+            provider_usernames=("example_provider_bot",),
+            checks=("artifact_delivery",),
+            timeout_seconds=15,
+            artifacts_dir=self.artifacts,
+        )
+        client = FakeClient()
+        response = FakeDocumentMessage(10, "hub-artifact-e2e.md", b"HUB_ARTIFACT_E2E_OK\n")
+        with patch(
+            "hermes_codex_router.acceptance_actor._wait_for_response",
+            new=AsyncMock(return_value=response),
+        ) as wait:
+            result = asyncio.run(
+                _run_check(client, config, "artifact_delivery", "example_provider_bot")
+            )
+
+        self.assertTrue(result.ok)
+        call = wait.await_args
+        assert call is not None
+        self.assertTrue(call.kwargs["require_document"])
 
     def test_raw_forward_targets_the_canary_forum_topic(self) -> None:
         config = load_acceptance_actor_config(self.write_config())

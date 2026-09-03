@@ -41,6 +41,7 @@ class Adapter:
         self.limit = limit
         self.unavailable = unavailable
         self.session_id = session_id
+        self.generate_artifact = False
         self.calls = 0
         self.last_prompt = ""
 
@@ -54,6 +55,9 @@ class Adapter:
                 "unsupported_network_location",
                 "Antigravity is unavailable from the computer's current network location.",
             )
+        if self.generate_artifact and kwargs.get("staging_dir"):
+            staging = Path(str(kwargs["staging_dir"]))
+            (staging / "diagram.png").write_bytes(b"\x89PNG\r\n\x1a\nfake-data")
         return ExternalTurnResult(
             self.runtime,
             f"{self.runtime} answer",
@@ -816,5 +820,29 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             self.assertEqual(main(["worker", str(config_path), "--agent", "opencode"]), 0)
         assert FakeWorker.instance is not None
         self.assertEqual(FakeWorker.instance.agent_id, "opencode")
+        self.assertEqual(FakeWorker.instance.poll_seconds, 0.2)
         self.assertTrue(FakeWorker.instance.closed)
         self.assertEqual(main(["worker", str(config_path), "--agent", "missing"]), 2)
+
+    def test_worker_collects_and_commits_staged_artifacts(self) -> None:
+        job_id = self.enqueue("antigravity", 55)
+        adapter = Adapter("antigravity")
+        adapter.generate_artifact = True
+        worker = self.worker("antigravity", adapter)
+        try:
+            self.assertTrue(worker.run_cycle())
+            job = worker.state.get_provider_job(job_id)
+            self.assertEqual(job.status, "result_ready")
+            outbox = worker.state.get_telegram_outbox_for_job(job_id)
+            parts = worker.state.get_telegram_outbox_parts(outbox.outbox_id)
+            self.assertEqual(len(parts), 2)
+            self.assertEqual(parts[0].part_type, "text")
+            self.assertEqual(parts[1].part_type, "document")
+            self.assertEqual(parts[1].file_name, "diagram.png")
+            self.assertIsNotNone(parts[1].file_path)
+            assert parts[1].file_path is not None
+            self.assertTrue(Path(parts[1].file_path).is_file())
+            self.assertIsNotNone(parts[1].file_size)
+            self.assertIsNotNone(parts[1].file_sha256)
+        finally:
+            worker.close()

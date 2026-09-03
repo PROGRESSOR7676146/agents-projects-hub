@@ -1,11 +1,11 @@
 # Agents Projects Hub
 
 Privacy-first orchestration hub connecting Telegram project topics to persistent
-Codex, Hermes, and other agent sessions with context handoffs, model switching,
-approvals, and terminal takeover.
+Codex, Hermes, and other agent sessions with explicit context retrieval, model
+switching, approvals, and terminal takeover.
 
 > **Status:** v0.5 alpha. Core multi-provider routing, persistent sessions,
-> compact controls, privacy-preserving context handoff, and recovery monitoring
+> compact controls, privacy-preserving explicit context, and recovery monitoring
 > are implemented and covered by the repository test gate.
 
 New contributors and agents should start with the
@@ -22,7 +22,8 @@ control plane:
 - one allowlisted Telegram supergroup maps to one local project;
 - every numeric forum topic gets its own persistent provider sessions;
 - ordinary messages go only to the agent currently active in that topic;
-- switching agents or models carries forward a bounded, visible context handoff;
+- switching agents or models is a deterministic local operation; context is
+  shared only when the user explicitly requests a bounded topic excerpt;
 - the same Codex thread can move safely between Telegram and a local terminal;
 - local configuration, sandboxing, and human approvals remain authoritative.
 
@@ -61,18 +62,18 @@ Agents Projects Hub ─── local registry + SQLite state
 Topic identity is the numeric pair `(chat_id, message_thread_id)`; topic titles
 are display metadata and may be renamed safely. Project roots come exclusively
 from a local allowlist. Runtime state—including topic bindings, provider session
-IDs, writer leases, deduplication receipts, and bounded handoffs—is stored in a
+IDs, writer leases, deduplication receipts, and bounded topic journals—is stored in a
 private SQLite database.
 
-### Routing and handoff
+### Routing and explicit context
 
 Each topic has one active agent. A single hub poller receives allowlisted group
 updates and deterministically dispatches them; provider bot identities send
 their own replies but do not run competing group pollers. Normal text is
 admitted only by the active agent; a real Telegram Reply goes to the author bot,
 and explicit mentions can address another runtime without silently changing the
-active route. `/agent` changes the active runtime and creates a provider session
-with a one-time handoff:
+active route. `/agent` changes the active runtime deterministically. It does not
+summarize prior dialogue, inject unseen messages, or invoke another provider.
 
 Private bot chats are opt-in through `direct_message_project_id`. Codex polls
 its private chat in the main router, while external provider services run
@@ -81,16 +82,12 @@ discard group updates, so they cannot duplicate the central group route. A DM
 can therefore use only the explicitly registered project root and cannot select
 an arbitrary filesystem path.
 
-- Codex → Hermes uses a bounded summary;
-- Hermes → Codex uses bounded excerpts of visible user/assistant turns;
-- hidden reasoning, tool output, credentials, and raw terminal content are
-  excluded.
-
-Completed visible turns are also kept in a bounded topic journal. On the next
-productive turn of another agent, its unseen journal delta is added as shared
-conversation context. Merely observing a satellite exchange does not start a
-provider turn or spend model tokens, and the prompt explicitly marks who the
-old messages addressed so the active agent does not answer them as new requests.
+Completed visible turns are kept in a bounded topic journal. The advanced
+`/context [agent_id] [1..20]` command exposes a bounded excerpt from the current
+topic only when the user asks for it; the command is intentionally absent from
+the compact menu. Hidden reasoning, tool output, credentials, and raw terminal
+content are excluded. Merely observing another provider's exchange never starts
+a turn or spends model tokens.
 
 The Hermes integration is a native gateway plugin and turn-export hook. Hermes
 continues to own its Telegram token and topic sessions, so the hub does not run
@@ -127,9 +124,9 @@ contract is confirmed.
   usage-window information read from structured app-server events.
 - `/pilot`, normal text, confirmed `/new`, `/model`, `/agent`, `/terminal`,
   `/release`, `/local`, and `/return` flows, plus `/status` diagnostics.
-- Bidirectional Codex ↔ Hermes handoff with fail-closed Hermes admission.
+- Fail-closed Hermes admission without automatic cross-provider handoff.
 - Locally managed OpenCode and Antigravity headless adapters with structured output,
-  persistent session IDs, bounded handoffs, and no auto-approval flags.
+  persistent session IDs, explicit bounded context, and no auto-approval flags.
 - Provider-identity Telegram typing indicators while durable work is accepted,
   executing, or awaiting delivery, without any additional model invocation.
 - Ordered HTML-aware multipart replies without silent truncation; queued turns
@@ -144,9 +141,12 @@ contract is confirmed.
   availability/quota, and stuck dispatches, with a systemd timer template. They
   go only to the explicitly configured Hub Operations/Alerts topic; quota alerts
   include a masked account hint such as `ac***@***.com`. Hermes is a fallback
-  sender to that same topic, not a second alert destination.
-- Hermes's native runtime footer and a public `agent:end` hook that exports only
-  bounded visible turns for handoff.
+  sender to that same topic, not a second alert destination. Stale cached quota
+  values stay visible but do not page as current low-quota events. Fresh Codex
+  quota enters the warning band at 5%; that warning is sent once until recovery,
+  and a quota-driven account transition reports the replacement's status.
+- Hermes's native runtime footer and a public `agent:end` hook that can export
+  bounded visible turns without injecting them into another provider.
 - User-level service templates, installer, doctor, CI, CodeQL, and Dependabot.
 
 See the [product requirements](docs/product/PRODUCT_REQUIREMENTS.md) for accepted
@@ -380,7 +380,7 @@ derived worktree, retains the Git branch, and records completion in state.
 
 The publishable integration sources live in:
 
-- `integrations/hermes-project-hub/` — admission and handoff plugin;
+- `integrations/hermes-project-hub/` — fail-closed admission plugin;
 - `integrations/hermes-project-hub-hook/` — bounded visible-turn exporter.
 
 Install them using the Hermes user-plugin/hook mechanism, and provide:

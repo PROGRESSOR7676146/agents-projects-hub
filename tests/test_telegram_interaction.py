@@ -28,6 +28,16 @@ class TelegramInteractionPromptTests(unittest.TestCase):
         self.assertIn("Never claim that a file, button, or reaction was sent", prompt)
         self.assertIn("Do not expose hidden reasoning", prompt)
 
+    def test_turn_can_name_one_exact_artifact_staging_directory(self) -> None:
+        prompt = telegram_turn_prompt(
+            "Create a report.",
+            runtime="codex",
+            new_session=False,
+            staging_dir="/home/example/project/.hub/staging/example-job",
+        )
+        self.assertIn("/home/example/project/.hub/staging/example-job", prompt)
+        self.assertIn("Files elsewhere are not attached", prompt)
+
     def test_rejects_empty_user_turn(self) -> None:
         with self.assertRaises(ValueError):
             telegram_turn_prompt("   ", runtime="codex", new_session=True)

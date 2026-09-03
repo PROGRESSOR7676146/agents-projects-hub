@@ -212,6 +212,65 @@ def peek_unseen_visible_context(
             state.close()
 
 
+def peek_unseen_forwarded_context(
+    state_path: Path,
+    chat_id: int,
+    thread_id: int,
+    *,
+    observer_agent_id: str,
+) -> VisibleContext | None:
+    path = state_path.expanduser().resolve()
+    if not path.is_file() or not observer_agent_id:
+        return None
+    state: HubState | None = None
+    try:
+        state = HubState.open(path)
+        topic = state.find_topic(chat_id, thread_id)
+        if topic is None:
+            return None
+        text, last_turn_id = state.unseen_forwarded_context(topic.topic_id, observer_agent_id)
+        if text is None or last_turn_id is None:
+            return None
+        return VisibleContext(text, last_turn_id)
+    except (OSError, sqlite3.Error, StateError):
+        return None
+    finally:
+        if state is not None:
+            state.close()
+
+
+def read_visible_context_snapshot(
+    state_path: Path,
+    chat_id: int,
+    thread_id: int,
+    *,
+    observer_agent_id: str,
+    source_agent_id: str | None = None,
+    limit: int = 8,
+) -> str | None:
+    """Read bounded topic history only for an explicit user-issued request."""
+    path = state_path.expanduser().resolve()
+    if not path.is_file() or not observer_agent_id or not 1 <= limit <= 20:
+        return None
+    state: HubState | None = None
+    try:
+        state = HubState.open(path)
+        topic = state.find_topic(chat_id, thread_id)
+        if topic is None:
+            return None
+        return state.visible_context_snapshot(
+            topic.topic_id,
+            observer_agent_id,
+            source_agent_id=source_agent_id,
+            limit=limit,
+        )
+    except (OSError, sqlite3.Error, StateError):
+        return None
+    finally:
+        if state is not None:
+            state.close()
+
+
 def acknowledge_unseen_visible_context(
     state_path: Path,
     chat_id: int,
@@ -234,6 +293,30 @@ def acknowledge_unseen_visible_context(
         if topic is None:
             return False
         state.acknowledge_visible_context(topic.topic_id, observer_agent_id, visible.last_turn_id)
+        return True
+    except (OSError, sqlite3.Error, StateError):
+        return False
+    finally:
+        if state is not None:
+            state.close()
+
+
+def acknowledge_visible_context_through(
+    state_path: Path,
+    chat_id: int,
+    thread_id: int,
+    *,
+    observer_agent_id: str,
+    last_turn_id: int,
+) -> bool:
+    """Advance a cursor only through the exact context already enqueued."""
+    state: HubState | None = None
+    try:
+        state = HubState.open(state_path)
+        topic = state.find_topic(chat_id, thread_id)
+        if topic is None:
+            return False
+        state.acknowledge_visible_context(topic.topic_id, observer_agent_id, last_turn_id)
         return True
     except (OSError, sqlite3.Error, StateError):
         return False

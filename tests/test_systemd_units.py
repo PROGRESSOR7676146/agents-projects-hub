@@ -43,6 +43,9 @@ class SystemdTopologyTests(unittest.TestCase):
         ordering = self.unit("tlive.service.d/multi-auth-order.conf")
 
         self.assertIn("agents-projects-hub-wait-socket", readiness)
+        self.assertIn("CODEX_MULTI_AUTH_APP_ROTATION_DETACHED_IDLE_MS=0", readiness)
+        self.assertIn("CODEX_MULTI_AUTH_APP_ROTATION_MAX_LIFETIME_MS=0", readiness)
+        self.assertIn("CODEX_MULTI_AUTH_APP_ROTATION_IDLE_MS=315360000000", readiness)
         self.assertNotIn("[ -S ", readiness)
         self.assertIn("After=codex-multi-auth-appserver.service", ordering)
         self.assertNotIn("Requires=", ordering)

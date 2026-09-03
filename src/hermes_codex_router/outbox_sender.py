@@ -4,8 +4,16 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Protocol
 
+from .artifacts import (
+    artifact_spool_root,
+    remove_spooled_artifact,
+    verify_spooled_artifact,
+)
 from .hub_config import HubConfig
 from .state import HubState
 from .telegram import TelegramBotApi
@@ -13,6 +21,25 @@ from .telegram import TelegramBotApi
 
 class TelegramOutboxSenderError(RuntimeError):
     pass
+
+
+class TelegramSender(Protocol):
+    def send_chat_action(self, chat_id: int, thread_id: int, action: str = "typing") -> None: ...
+    def send_html(self, chat_id: int, thread_id: int, html: str) -> int: ...
+    def send_document(
+        self,
+        chat_id: int,
+        thread_id: int,
+        document_path: Path,
+        *,
+        caption: str | None = None,
+        reply_markup: dict[str, Any] | None = None,
+        file_name: str | None = None,
+        mime_type: str | None = None,
+    ) -> int: ...
+    def send_message_draft(
+        self, chat_id: int, thread_id: int, *, draft_id: int, text: str = ""
+    ) -> None: ...
 
 
 class TelegramOutboxSender:
@@ -25,7 +52,7 @@ class TelegramOutboxSender:
         self,
         config: HubConfig,
         *,
-        telegram_bots: dict[str, TelegramBotApi] | None = None,
+        telegram_bots: Mapping[str, TelegramSender] | None = None,
         sender_id: str = "telegram-outbox-sender",
     ) -> None:
         if (
@@ -48,7 +75,7 @@ class TelegramOutboxSender:
         if not self.agent_ids:
             raise TelegramOutboxSenderError("external outbox has no locally managed agents")
         if telegram_bots is None:
-            bots: dict[str, TelegramBotApi] = {}
+            bots: dict[str, TelegramSender] = {}
             for agent_id in self.agent_ids:
                 agent = config.require_agent(agent_id)
                 if agent.token_file is None:
@@ -68,7 +95,7 @@ class TelegramOutboxSender:
                 f"missing Telegram sender identity for agent: {missing[0]}"
             )
         self.config = config
-        self.telegram_bots = telegram_bots
+        self.telegram_bots = dict(telegram_bots)
         self.sender_id = sender_id
         self.state = HubState.open(config.state_path)
         self._cursor = 0
@@ -229,15 +256,48 @@ class TelegramOutboxSender:
             part = self.state.next_telegram_outbox_part(
                 outbox.outbox_id, outbox.lease_token, now=now
             )
-            message_id = self.telegram_bots[agent_id].send_html(
-                outbox.chat_id, outbox.thread_id, part.telegram_html
-            )
+            delivered_file: Path | None = None
+            if part.part_type == "document":
+                if (
+                    not part.file_path
+                    or not part.file_name
+                    or part.file_size is None
+                    or part.file_sha256 is None
+                ):
+                    raise TelegramOutboxSenderError("artifact outbox metadata is incomplete")
+                file_path = Path(part.file_path)
+                spool_root = artifact_spool_root(self.config.state_path)
+                verify_spooled_artifact(
+                    file_path,
+                    spool_root,
+                    expected_size=part.file_size,
+                    expected_sha256=part.file_sha256,
+                )
+                message_id = self.telegram_bots[agent_id].send_document(
+                    outbox.chat_id,
+                    outbox.thread_id,
+                    file_path,
+                    caption=part.telegram_html or None,
+                    file_name=part.file_name,
+                )
+                delivered_file = file_path
+            else:
+                message_id = self.telegram_bots[agent_id].send_html(
+                    outbox.chat_id, outbox.thread_id, part.telegram_html
+                )
             self.state.mark_telegram_outbox_delivered(
                 outbox.outbox_id,
                 outbox.lease_token,
                 telegram_message_id=message_id or 1,
                 now=now,
             )
+            if delivered_file is not None:
+                try:
+                    remove_spooled_artifact(
+                        delivered_file, artifact_spool_root(self.config.state_path)
+                    )
+                except Exception as exc:
+                    self._record_event("warning", "artifact_cleanup_error", type(exc).__name__)
             self._last_success_at = datetime.now(timezone.utc)
             self._last_error_code = None
         except Exception as exc:

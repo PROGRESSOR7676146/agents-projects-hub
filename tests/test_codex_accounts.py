@@ -4,7 +4,9 @@ import json
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from hermes_codex_router.codex_accounts import (
     CodexAccountStatus,
@@ -99,6 +101,71 @@ class CodexAccountStatusTests(unittest.TestCase):
 
         self.assertFalse(status.available)
         self.assertEqual(status.error, "TimeoutExpired")
+
+    def test_live_report_overrides_stale_cache_and_uses_selected_account(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "settings.json").write_text(
+                json.dumps({"pluginConfig": {"codexRuntimeRotationProxy": True}})
+            )
+            (root / "quota-cache.json").write_text(json.dumps({"byAccountId": {}}))
+            report = {
+                "generatedAt": "2026-09-03T18:03:24+00:00",
+                "forecast": {
+                    "recommendation": {"recommendedIndex": 1},
+                    "accounts": [
+                        {
+                            "index": 0,
+                            "label": "Account 1 [id:ABC123]",
+                            "isCurrent": True,
+                            "selected": False,
+                            "availability": "delayed",
+                            "riskLevel": "medium",
+                            "liveQuota": {
+                                "summary": "5h 0% left (resets 00:33 on Sep 04), "
+                                "7d 84% left (resets 19:33 on Sep 10), plan:plus"
+                            },
+                        },
+                        {
+                            "index": 1,
+                            "label": "Account 2 [id:XYZ789]",
+                            "isCurrent": False,
+                            "selected": True,
+                            "availability": "ready",
+                            "riskLevel": "low",
+                            "liveQuota": {
+                                "summary": "5h 86% left (resets 21:09), "
+                                "7d 17% left (resets 08:34 on Sep 07), plan:plus"
+                            },
+                        },
+                    ],
+                },
+                "runtime": {"runtimeMetrics": {"accountRotations": 1}},
+            }
+            calls: list[tuple[str, ...]] = []
+
+            def runner(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+                calls.append(argv)
+                return subprocess.CompletedProcess([], 0, json.dumps(report), "")
+
+            status = read_codex_pool_status(
+                root,
+                runner=runner,
+                live=True,
+                timezone_name="Europe/Moscow",
+                identity_hints={1: "one", 2: "two"},
+            )
+
+        self.assertIn("--live", calls[0])
+        self.assertFalse(status.accounts[0].active)
+        self.assertTrue(status.accounts[1].active)
+        self.assertEqual(status.accounts[0].five_hour_remaining, 0)
+        self.assertEqual(status.accounts[1].weekly_remaining, 17)
+        self.assertFalse(status.accounts[1].quota_stale)
+        self.assertEqual(
+            status.accounts[1].five_hour_resets_at,
+            int(datetime(2026, 9, 3, 21, 9, tzinfo=ZoneInfo("Europe/Moscow")).timestamp()),
+        )
 
 
 if __name__ == "__main__":

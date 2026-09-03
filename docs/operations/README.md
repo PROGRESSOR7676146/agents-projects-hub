@@ -28,6 +28,10 @@ Operational truth is split by purpose:
   until that sender is ready. In external mode, the sender is the only process
   that delivers shared project-group outbox rows for all locally managed queue
   providers, including providers whose execution remains embedded.
+  Attachment payloads are private immutable files under `artifact-spool` beside
+  the configured state database. Do not relocate, edit, or clean a queued spool
+  file manually; successful Telegram delivery removes it. Investigate retained
+  files together with pending or failed outbox rows before reclaiming space.
 - Optional Hub ingress: when `hub_bot` is configured, `agents-projects-hub
   controller HUB_CONFIG` polls project groups as Hub and stores its Telegram offset
   separately from Codex. Controller startup reads only that ingress token;
@@ -49,6 +53,11 @@ Operational truth is split by purpose:
   provider sessions outside Git with restrictive permissions.
 - Repair only the failed component. Do not make Hub, Hermes, tlive, or optional
   multi-auth mandatory dependencies of each other.
+- A systemd-managed multi-auth app-server owns its runtime proxy for the whole
+  unit lifetime. Keep the installed resident-helper lifetime overrides; if the
+  proxy is already unavailable, install/reload first and coordinate a later
+  restart from an independent recovery channel rather than disconnecting an
+  active Codex/tlive session.
 - Back up SQLite consistently before migration and verify recovery artifacts.
 - Do not restart services, alter bot/privacy settings, or run live Telegram E2E
   as part of a documentation-only task.

@@ -3,8 +3,17 @@ from __future__ import annotations
 import os
 import threading
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
+from .artifacts import (
+    ValidatedArtifact,
+    artifact_spool_root,
+    cleanup_job_staging,
+    remove_spooled_artifact,
+    spool_staged_artifacts,
+)
 from .codex_appserver import CodexAppServerClient, RateLimits, RpcRejectedError
 from .codex_proxy_health import probe_codex_runtime_proxy
 from .external_runtime import (
@@ -343,20 +352,45 @@ class ExternalQueueWorker:
         provider_session_id: str | None,
         actual_model: str | None,
         telegram_html: str,
+        artifacts: tuple[ValidatedArtifact, ...] = (),
     ) -> None:
-        self.state.commit_provider_result(
-            job.job_id,
-            token,
-            visible_response=visible_response,
-            sender_agent_id=self.agent.agent_id,
-            telegram_html=telegram_html,
-            provider_session_id=provider_session_id,
-            actual_model=actual_model,
-            user_excerpt=job.payload_text,
-            acknowledge_context=job.context_watermark is not None,
-            acknowledge_handoff=job.handoff_id is not None,
-            telegram_contract_version=TELEGRAM_CONTRACT_VERSION,
-        )
+        try:
+            self.state.commit_provider_result(
+                job.job_id,
+                token,
+                visible_response=visible_response,
+                sender_agent_id=self.agent.agent_id,
+                telegram_html=telegram_html,
+                provider_session_id=provider_session_id,
+                actual_model=actual_model,
+                user_excerpt=job.payload_text,
+                acknowledge_context=job.context_watermark is not None,
+                acknowledge_handoff=job.handoff_id is not None,
+                telegram_contract_version=TELEGRAM_CONTRACT_VERSION,
+                artifacts=artifacts,
+            )
+        except BaseException:
+            spool_root = artifact_spool_root(self.config.state_path)
+            for artifact in artifacts:
+                try:
+                    remove_spooled_artifact(artifact.path, spool_root)
+                except Exception:
+                    pass
+            raise
+
+    @staticmethod
+    def _artifact_notice(rejections: list[str]) -> str:
+        if not rejections:
+            return ""
+        shown = rejections[:3]
+        suffix = "" if len(rejections) <= 3 else f"; and {len(rejections) - 3} more"
+        return "\n\n⚠️ Not attached: " + "; ".join(shown) + suffix
+
+    def _cleanup_artifact_staging(self, project_root: Path, job_id: str) -> None:
+        try:
+            cleanup_job_staging(project_root, job_id)
+        except Exception as exc:
+            self._record_event("warning", "artifact_staging_cleanup_error", type(exc).__name__)
 
     def _needs_full_telegram_contract(self, job: ProviderJobRecord) -> bool:
         return (
@@ -392,10 +426,13 @@ class ExternalQueueWorker:
                     f"PREVIOUS VISIBLE CONTEXT:\n{visible_context[-12000:]}\n\n"
                     f"CURRENT USER MESSAGE:\n{job.payload_text}"
                 )
+        staging_dir = Path(project.root) / ".hub" / "staging" / job.job_id
+        staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         turn_text = telegram_turn_prompt(
             turn_text,
             runtime="codex",
             new_session=self._needs_full_telegram_contract(job) or fallback_transfer,
+            staging_dir=staging_dir,
         )
         if job.provider_session_id and not fallback_transfer:
             thread = client.resume_thread(
@@ -521,6 +558,15 @@ class ExternalQueueWorker:
             limits = client.read_rate_limits()
         except Exception:
             limits = RateLimits(None, None)
+        rejections: list[str] = []
+        artifacts = spool_staged_artifacts(
+            Path(project.root),
+            job.job_id,
+            artifact_spool_root(self.config.state_path),
+            rejection_sink=rejections,
+        )
+        artifact_notice = self._artifact_notice(rejections)
+        visible_response += artifact_notice
         self._commit(
             job,
             token,
@@ -528,7 +574,7 @@ class ExternalQueueWorker:
             provider_session_id=thread.thread_id,
             actual_model=thread.model,
             telegram_html=format_telegram_response(
-                result=result,
+                result=replace(result, text=(result.text + artifact_notice)),
                 agent=self.agent.display_name,
                 model=thread.model,
                 effort=job.effort,
@@ -536,7 +582,9 @@ class ExternalQueueWorker:
                 limits=limits,
                 timezone_name="Europe/Moscow",
             ),
+            artifacts=artifacts,
         )
+        self._cleanup_artifact_staging(Path(project.root), job.job_id)
 
     def _execute_external(
         self, job: ProviderJobRecord, token: str, project: object, topic: object
@@ -548,6 +596,8 @@ class ExternalQueueWorker:
         assert isinstance(topic, TopicRecord)
         assert self.adapter is not None
         adapter = self.adapter
+        staging_dir = Path(project.root) / ".hub" / "staging" / job.job_id
+        staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         prepare_interrupt = getattr(adapter, "prepare_interruptible_turn", None)
         interrupt_prepared = callable(prepare_interrupt)
         if interrupt_prepared:
@@ -583,11 +633,13 @@ class ExternalQueueWorker:
                     job.payload_text,
                     runtime=self.agent.runtime,
                     new_session=self._needs_full_telegram_contract(job),
+                    staging_dir=staging_dir,
                 ),
                 session_id=job.provider_session_id,
                 model=job.model if job.model != "provider-selected" else None,
                 effort=job.effort,
                 interrupt_prepared=interrupt_prepared,
+                staging_dir=staging_dir,
             )
         except ExternalTurnInterrupted:
             if interrupted_request:
@@ -606,6 +658,15 @@ class ExternalQueueWorker:
                 f"{self.agent.runtime} did not return a provider session id for a new turn"
             )
         visible_response = result.text.strip()
+        rejections = []
+        artifacts = spool_staged_artifacts(
+            Path(project.root),
+            job.job_id,
+            artifact_spool_root(self.config.state_path),
+            rejection_sink=rejections,
+        )
+        artifact_notice = self._artifact_notice(rejections)
+        visible_response += artifact_notice
         self._commit(
             job,
             token,
@@ -624,4 +685,6 @@ class ExternalQueueWorker:
                     "Usage windows": "unavailable",
                 },
             ),
+            artifacts=artifacts,
         )
+        self._cleanup_artifact_staging(Path(project.root), job.job_id)

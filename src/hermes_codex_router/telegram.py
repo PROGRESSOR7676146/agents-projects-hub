@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 
@@ -288,3 +291,94 @@ class TelegramBotApi:
         if text:
             params["text"] = text[:200]
         self.call("answerCallbackQuery", **params)
+
+    def _call_multipart(
+        self,
+        method: str,
+        *,
+        fields: dict[str, str],
+        files: dict[str, tuple[str, bytes, str]],
+        request_timeout: float = 60.0,
+    ) -> Any:
+        boundary = uuid.uuid4().hex
+        crlf = b"\r\n"
+        body = bytearray()
+        for key, value in fields.items():
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"))
+            body.extend(value.encode("utf-8"))
+            body.extend(crlf)
+        for field_name, (filename, content, content_type) in files.items():
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(
+                f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'.encode(
+                    "utf-8"
+                )
+            )
+            body.extend(f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"))
+            body.extend(content)
+            body.extend(crlf)
+        body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+        headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+        request = urllib.request.Request(
+            self._base + method,
+            data=bytes(body),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with self._opener(request, timeout=request_timeout) as response:
+                document = json.load(response)
+        except Exception as exc:
+            raise TelegramError(f"Telegram request failed: {type(exc).__name__}") from exc
+        if not isinstance(document, dict) or not document.get("ok"):
+            raise TelegramError("Telegram API rejected the request")
+        return document.get("result")
+
+    def send_document(
+        self,
+        chat_id: int,
+        thread_id: int,
+        document_path: Path,
+        *,
+        caption: str | None = None,
+        reply_markup: dict[str, Any] | None = None,
+        file_name: str | None = None,
+        mime_type: str | None = None,
+    ) -> int:
+        resolved = document_path.expanduser().resolve(strict=True)
+        if not resolved.is_file():
+            raise TelegramError(f"document does not exist: {resolved}")
+        content = resolved.read_bytes()
+        fields: dict[str, str] = {"chat_id": str(chat_id)}
+        if thread_id != 1:
+            fields["message_thread_id"] = str(thread_id)
+        if caption:
+            fields["caption"] = caption[:1024]
+            fields["parse_mode"] = "HTML"
+        if reply_markup is not None:
+            fields["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+
+        upload_name = file_name or resolved.name
+        if (
+            not upload_name
+            or Path(upload_name).name != upload_name
+            or '"' in upload_name
+            or "\\" in upload_name
+            or any(ord(character) < 32 or ord(character) == 127 for character in upload_name)
+        ):
+            raise TelegramError("document filename is unsafe")
+        detected_mime_type, _ = mimetypes.guess_type(upload_name)
+        files = {
+            "document": (
+                upload_name,
+                content,
+                mime_type or detected_mime_type or "application/octet-stream",
+            )
+        }
+        result = self._call_multipart(
+            "sendDocument", fields=fields, files=files, request_timeout=60.0
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("message_id"), int):
+            raise TelegramError("sendDocument returned an invalid result")
+        return result["message_id"]

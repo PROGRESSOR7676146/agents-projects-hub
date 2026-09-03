@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import os
 import sqlite3
 import uuid
@@ -9,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator, Sequence
 
+from .artifacts import ValidatedArtifact
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
 from .telegram_multipart import split_telegram_html
 
@@ -124,8 +126,13 @@ class TelegramOutboxPartRecord:
     outbox_id: str
     part_index: int
     telegram_html: str
-    telegram_message_id: int | None
-    delivered_at: str | None
+    part_type: str = "text"
+    file_path: str | None = None
+    file_name: str | None = None
+    file_size: int | None = None
+    file_sha256: str | None = None
+    telegram_message_id: int | None = None
+    delivered_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -543,20 +550,69 @@ class HubState:
 
     @staticmethod
     def _telegram_outbox_part(row: sqlite3.Row) -> TelegramOutboxPartRecord:
+        keys = row.keys() if hasattr(row, "keys") else ()
         return TelegramOutboxPartRecord(
             outbox_id=str(row["outbox_id"]),
             part_index=int(row["part_index"]),
             telegram_html=str(row["telegram_html"]),
+            part_type=str(row["part_type"]) if "part_type" in keys else "text",
+            file_path=(
+                str(row["file_path"])
+                if "file_path" in keys and row["file_path"] is not None
+                else None
+            ),
+            file_name=(
+                str(row["file_name"])
+                if "file_name" in keys and row["file_name"] is not None
+                else None
+            ),
+            file_size=(
+                int(row["file_size"])
+                if "file_size" in keys and row["file_size"] is not None
+                else None
+            ),
+            file_sha256=(
+                str(row["file_sha256"])
+                if "file_sha256" in keys and row["file_sha256"] is not None
+                else None
+            ),
             telegram_message_id=row["telegram_message_id"],
             delivered_at=row["delivered_at"],
         )
 
-    def _insert_telegram_outbox_parts(self, outbox_id: str, telegram_html: str) -> None:
-        for part_index, part in enumerate(split_telegram_html(telegram_html), start=1):
+    def _insert_telegram_outbox_parts(
+        self,
+        outbox_id: str,
+        telegram_html: str,
+        artifacts: tuple[ValidatedArtifact, ...] = (),
+    ) -> None:
+        parts = split_telegram_html(telegram_html)
+        for part_index, part in enumerate(parts, start=1):
             self._connection.execute(
                 """INSERT INTO telegram_outbox_parts
-                   (outbox_id, part_index, telegram_html) VALUES (?, ?, ?)""",
+                   (outbox_id, part_index, telegram_html, part_type, file_path, file_name,
+                    file_size, file_sha256)
+                   VALUES (?, ?, ?, 'text', NULL, NULL, NULL, NULL)""",
                 (outbox_id, part_index, part),
+            )
+        start_index = len(parts) + 1
+        for offset, artifact in enumerate(artifacts):
+            idx = start_index + offset
+            caption = f"📄 <b>{html.escape(artifact.name)}</b>"
+            self._connection.execute(
+                """INSERT INTO telegram_outbox_parts
+                   (outbox_id, part_index, telegram_html, part_type, file_path, file_name,
+                    file_size, file_sha256)
+                   VALUES (?, ?, ?, 'document', ?, ?, ?, ?)""",
+                (
+                    outbox_id,
+                    idx,
+                    caption,
+                    str(artifact.path),
+                    artifact.name,
+                    artifact.size,
+                    artifact.sha256,
+                ),
             )
 
     def observe_topic(
@@ -1770,6 +1826,7 @@ class HubState:
         acknowledge_context: bool = False,
         acknowledge_handoff: bool = False,
         telegram_contract_version: int | None = None,
+        artifacts: tuple[ValidatedArtifact, ...] = (),
         now: datetime | None = None,
     ) -> ProviderJobResultRecord:
         """Commit result, acknowledgements, and outbox without a network call."""
@@ -1935,7 +1992,7 @@ class HubState:
                     timestamp,
                 ),
             )
-            self._insert_telegram_outbox_parts(outbox_id, html)
+            self._insert_telegram_outbox_parts(outbox_id, html, artifacts=artifacts)
             cursor = self._connection.execute(
                 """UPDATE provider_jobs
                    SET status = 'result_ready', lease_owner = NULL,
@@ -2283,31 +2340,7 @@ class HubState:
         source_agent_id: str,
         text: str,
     ) -> HandoffRecord:
-        self.get_topic(topic_id)
-        bounded = text.strip()[:20000]
-        if not target_agent_id or not source_agent_id or not bounded:
-            raise StateError("invalid handoff")
-        handoff_id = str(uuid.uuid4())
-        with self._connection:
-            self._connection.execute(
-                """INSERT INTO pending_handoffs
-                   (handoff_id, topic_id, target_agent_id, source_agent_id, text, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(topic_id, target_agent_id) DO UPDATE SET
-                     handoff_id = excluded.handoff_id,
-                     source_agent_id = excluded.source_agent_id,
-                     text = excluded.text,
-                     created_at = excluded.created_at""",
-                (
-                    handoff_id,
-                    topic_id,
-                    target_agent_id,
-                    source_agent_id,
-                    bounded,
-                    _now(),
-                ),
-            )
-        return HandoffRecord(handoff_id, topic_id, target_agent_id, source_agent_id, bounded)
+        raise StateError("automatic handoff is disabled; use an explicit bounded context request")
 
     def recent_external_context(
         self, topic_id: int, agent_id: str, *, limit: int = 8
@@ -2405,6 +2438,74 @@ class HubState:
                 f"{label.upper()}: {row['response_excerpt']}"
             )
         return "\n\n".join(parts), max(int(row["turn_id"]) for row in rows)
+
+    def visible_context_snapshot(
+        self,
+        topic_id: int,
+        observer_agent_id: str,
+        *,
+        source_agent_id: str | None = None,
+        limit: int = 8,
+    ) -> str | None:
+        """Return bounded prior dialogue only after an explicit user request."""
+        if not observer_agent_id or limit <= 0 or limit > 20:
+            raise StateError("invalid visible context request")
+        if source_agent_id is not None and not source_agent_id:
+            raise StateError("invalid visible context source")
+        clauses = ["topic_id = ?"]
+        parameters: list[object] = [topic_id]
+        if source_agent_id is None:
+            clauses.append("agent_id != ?")
+            parameters.append(observer_agent_id)
+        else:
+            clauses.append("agent_id = ?")
+            parameters.append(source_agent_id)
+        parameters.append(limit)
+        rows = self._connection.execute(
+            f"""SELECT turn_id, agent_id, user_excerpt, response_excerpt, model, provider
+                FROM external_turn_excerpts
+                WHERE {" AND ".join(clauses)}
+                ORDER BY turn_id DESC LIMIT ?""",
+            parameters,
+        ).fetchall()
+        if not rows:
+            return None
+        parts: list[str] = []
+        for row in reversed(rows):
+            label = "/".join(
+                value for value in (row["agent_id"], row["provider"], row["model"]) if value
+            )
+            parts.append(
+                f"USER → {row['agent_id']}: {row['user_excerpt']}\n"
+                f"{label.upper()}: {row['response_excerpt']}"
+            )
+        return "\n\n".join(parts)
+
+    def unseen_forwarded_context(
+        self, topic_id: int, observer_agent_id: str, *, limit: int = 8
+    ) -> tuple[str | None, int | None]:
+        """Return passive user-forwarded quotes, excluding ordinary agent dialogue."""
+        if not observer_agent_id or not 1 <= limit <= 20:
+            raise StateError("invalid forwarded context request")
+        cursor = self._connection.execute(
+            """SELECT last_turn_id FROM visible_context_cursors
+               WHERE topic_id = ? AND observer_agent_id = ?""",
+            (topic_id, observer_agent_id),
+        ).fetchone()
+        last_turn_id = int(cursor["last_turn_id"]) if cursor is not None else 0
+        rows = self._connection.execute(
+            """SELECT turn_id, response_excerpt FROM external_turn_excerpts
+               WHERE topic_id = ? AND agent_id = 'forwarded-quote' AND turn_id > ?
+               ORDER BY turn_id DESC LIMIT ?""",
+            (topic_id, last_turn_id, limit),
+        ).fetchall()
+        if not rows:
+            return None, None
+        text = "\n\n".join(
+            f"FORWARDED-QUOTE/TELEGRAM/QUOTED-CONTEXT:\n{row['response_excerpt']}"
+            for row in reversed(rows)
+        )
+        return text, max(int(row["turn_id"]) for row in rows)
 
     def acknowledge_visible_context(
         self, topic_id: int, observer_agent_id: str, last_turn_id: int
@@ -2746,6 +2847,19 @@ class HubState:
     def set_runtime_counter(self, key: str, value: int) -> None:
         self.observe_runtime_counter(key, value)
 
+    def replace_runtime_counter(self, key: str, value: int) -> None:
+        if not key.strip() or value < 0:
+            raise StateError("invalid runtime counter")
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO runtime_checkpoints
+                   (checkpoint_key, integer_value, updated_at) VALUES (?, ?, ?)
+                   ON CONFLICT(checkpoint_key) DO UPDATE SET
+                     integer_value = excluded.integer_value,
+                     updated_at = excluded.updated_at""",
+                (key[:128], value, _now()),
+            )
+
     def active_topics_for_agent(self, agent_id: str) -> tuple[TopicRecord, ...]:
         rows = self._connection.execute(
             """SELECT t.* FROM topics t
@@ -2781,6 +2895,16 @@ class HubState:
                 (key, now.isoformat()),
             )
         return True
+
+    def claim_alert_transition(self, alert_key: str) -> bool:
+        """Claim a state-transition alert once until its condition clears."""
+        key = _bounded(alert_key, name="alert delivery key", maximum=256)
+        with self._immediate_transaction():
+            cursor = self._connection.execute(
+                "INSERT OR IGNORE INTO alert_deliveries(alert_key, last_sent_at) VALUES (?, ?)",
+                (key, _now()),
+            )
+        return cursor.rowcount == 1
 
     def release_alert_delivery(self, alert_key: str) -> None:
         with self._connection:

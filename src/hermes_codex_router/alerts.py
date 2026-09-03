@@ -6,6 +6,8 @@ from typing import Mapping
 
 from .codex_accounts import CodexPoolStatus
 
+DEFAULT_LOW_QUOTA_PERCENT = 5
+
 
 @dataclass(frozen=True, slots=True)
 class OperationalAlert:
@@ -35,7 +37,7 @@ def evaluate_operational_alerts(
     hermes_telegram: Mapping[str, object] | None = None,
     runtime_health: Mapping[str, object] | None = None,
     now: datetime | None = None,
-    low_quota_percent: int = 10,
+    low_quota_percent: int = DEFAULT_LOW_QUOTA_PERCENT,
     stuck_after_seconds: int = 15 * 60,
 ) -> tuple[OperationalAlert, ...]:
     evaluated_at = now or datetime.now(timezone.utc)
@@ -186,7 +188,8 @@ def evaluate_operational_alerts(
                     )
                 )
             if (
-                account.five_hour_remaining is not None
+                not account.quota_stale
+                and account.five_hour_remaining is not None
                 and account.five_hour_remaining <= low_quota_percent
             ):
                 alerts.append(
@@ -198,7 +201,8 @@ def evaluate_operational_alerts(
                     )
                 )
             if (
-                account.weekly_remaining is not None
+                not account.quota_stale
+                and account.weekly_remaining is not None
                 and account.weekly_remaining <= low_quota_percent
             ):
                 alerts.append(

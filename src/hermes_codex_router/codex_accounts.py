@@ -5,13 +5,24 @@ import re
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 _ID_SUFFIX = re.compile(r"\[id:([^\]]+)\]")
 _EMAIL = re.compile(r"([A-Za-z0-9][A-Za-z0-9.*_-]*)@([A-Za-z0-9.*_-]+(?:\.[A-Za-z0-9_-]+)+)")
+_LIVE_QUOTA = re.compile(
+    r"5h\s+(\d+)% left \(resets ([^)]+)\),\s*"
+    r"7d\s+(\d+)% left \(resets ([^)]+)\)"
+)
+_MONTHS = {
+    name: index
+    for index, name in enumerate(
+        ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"),
+        1,
+    )
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,22 +178,76 @@ def _masked_identity_hint(label: str) -> str | None:
     return f"{visible}***@***.{suffix}"
 
 
+def _live_reset_at(value: str, *, observed_at: datetime, timezone_name: str) -> int | None:
+    local = observed_at.astimezone(ZoneInfo(timezone_name))
+    match = re.fullmatch(r"(\d{2}):(\d{2})(?: on ([A-Z][a-z]{2}) (\d{2}))?", value)
+    if match is None:
+        return None
+    hour, minute = int(match.group(1)), int(match.group(2))
+    month_name, day_text = match.group(3), match.group(4)
+    try:
+        if month_name is None or day_text is None:
+            candidate = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if candidate < local - timedelta(minutes=5):
+                candidate += timedelta(days=1)
+        else:
+            candidate = local.replace(
+                month=_MONTHS[month_name],
+                day=int(day_text),
+                hour=hour,
+                minute=minute,
+                second=0,
+                microsecond=0,
+            )
+            if candidate < local - timedelta(days=1):
+                candidate = candidate.replace(year=candidate.year + 1)
+    except (KeyError, ValueError):
+        return None
+    return int(candidate.timestamp())
+
+
+def _live_quota_values(
+    row: dict[str, Any], *, observed_at: datetime, timezone_name: str
+) -> tuple[int, int, int | None, int | None] | None:
+    live = _object(row.get("liveQuota"))
+    summary = live.get("summary")
+    if not isinstance(summary, str) or (match := _LIVE_QUOTA.search(summary)) is None:
+        return None
+    return (
+        int(match.group(1)),
+        int(match.group(3)),
+        _live_reset_at(match.group(2), observed_at=observed_at, timezone_name=timezone_name),
+        _live_reset_at(match.group(4), observed_at=observed_at, timezone_name=timezone_name),
+    )
+
+
 def read_codex_pool_status(
     root: Path,
     *,
     executable: str = "codex-multi-auth",
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     identity_hints: dict[int, str] | None = None,
+    live: bool = False,
+    timezone_name: str = "UTC",
 ) -> CodexPoolStatus:
     """Read a redacted pool snapshot; credentials never enter this process."""
     try:
-        completed = runner(
-            (executable, "auth", "report", "--json"),
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        argv = (executable, "auth", "report", "--json", *(("--live",) if live else ()))
+        try:
+            completed = runner(
+                argv, check=True, capture_output=True, text=True, timeout=30 if live else 10
+            )
+        except (OSError, subprocess.SubprocessError):
+            if not live:
+                raise
+            live = False
+            completed = runner(
+                (executable, "auth", "report", "--json"),
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
         report = json.loads(completed.stdout)
         if not isinstance(report, dict):
             raise ValueError("multi-auth report is not an object")
@@ -195,6 +260,14 @@ def read_codex_pool_status(
     forecast = _object(report.get("forecast"))
     recommendation = _object(forecast.get("recommendation"))
     rows = forecast.get("accounts")
+    selected_is_explicit = isinstance(rows, list) and any(
+        _object(item).get("selected") is True for item in rows
+    )
+    generated_at = report.get("generatedAt")
+    try:
+        observed_at = datetime.fromisoformat(str(generated_at).replace("Z", "+00:00"))
+    except ValueError:
+        observed_at = datetime.now().astimezone()
     accounts: list[CodexAccountStatus] = []
     if isinstance(rows, list):
         for position, raw_row in enumerate(rows):
@@ -225,26 +298,45 @@ def read_codex_pool_status(
             secondary = _object(account_quota.get("secondary"))
             updated_ms = _integer(account_quota.get("updatedAt"))
             updated_at = updated_ms // 1000 if updated_ms is not None else None
+            live_values = (
+                _live_quota_values(row, observed_at=observed_at, timezone_name=timezone_name)
+                if live
+                else None
+            )
+            if live_values is not None:
+                five_hour_remaining, weekly_remaining, five_hour_reset, weekly_reset = live_values
+                updated_at = int(observed_at.timestamp())
+            else:
+                five_hour_remaining, weekly_remaining = _remaining(primary), _remaining(secondary)
+                five_hour_reset = (
+                    value // 1000
+                    if (value := _integer(primary.get("resetAtMs"))) is not None
+                    else None
+                )
+                weekly_reset = (
+                    value // 1000
+                    if (value := _integer(secondary.get("resetAtMs"))) is not None
+                    else None
+                )
             accounts.append(
                 CodexAccountStatus(
                     index=index + 1,
-                    active=row.get("isCurrent") is True,
+                    active=(
+                        row.get("selected") is True
+                        if selected_is_explicit
+                        else row.get("isCurrent") is True
+                    ),
                     availability=availability,
                     risk=risk,
-                    five_hour_remaining=_remaining(primary),
-                    weekly_remaining=_remaining(secondary),
-                    five_hour_resets_at=(
-                        value // 1000
-                        if (value := _integer(primary.get("resetAtMs"))) is not None
-                        else None
-                    ),
-                    weekly_resets_at=(
-                        value // 1000
-                        if (value := _integer(secondary.get("resetAtMs"))) is not None
-                        else None
-                    ),
+                    five_hour_remaining=five_hour_remaining,
+                    weekly_remaining=weekly_remaining,
+                    five_hour_resets_at=five_hour_reset,
+                    weekly_resets_at=weekly_reset,
                     quota_updated_at=updated_at,
-                    quota_stale=updated_at is None or time.time() - updated_at > 30 * 60,
+                    quota_stale=(
+                        live_values is None
+                        and (updated_at is None or time.time() - updated_at > 30 * 60)
+                    ),
                     identity_hint=(
                         f"{identity_hints[index + 1]}…"
                         if identity_hints and index + 1 in identity_hints

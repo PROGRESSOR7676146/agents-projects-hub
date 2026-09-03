@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from hermes_codex_router.alerts import evaluate_operational_alerts
 from hermes_codex_router.codex_accounts import CodexAccountStatus, CodexPoolStatus
 from hermes_codex_router.hub_config import OperationalAlertSettings
-from hermes_codex_router.monitoring import _destination, _send_hermes
+from hermes_codex_router.monitoring import (
+    _claim_operational_alert,
+    _destination,
+    _release_recovered_quota_alerts,
+    _send_hermes,
+)
+from hermes_codex_router.state import HubState
 
 
 class OperationalAlertTests(unittest.TestCase):
@@ -20,7 +28,7 @@ class OperationalAlertTests(unittest.TestCase):
                     True,
                     "ready",
                     "low",
-                    8,
+                    5,
                     53,
                     None,
                     None,
@@ -80,6 +88,86 @@ class OperationalAlertTests(unittest.TestCase):
             now=datetime(2026, 8, 29, 6, 30, tzinfo=timezone.utc),
         )
         self.assertEqual(alerts, ())
+
+    def test_stale_quota_does_not_page_as_if_it_were_current(self) -> None:
+        pool = CodexPoolStatus(
+            available=True,
+            rotation_enabled=True,
+            accounts=(
+                CodexAccountStatus(
+                    1,
+                    True,
+                    "ready",
+                    "low",
+                    0,
+                    1,
+                    None,
+                    None,
+                    1,
+                    True,
+                    "ac…",
+                ),
+            ),
+            recommended_account=1,
+            account_rotations=0,
+        )
+
+        alerts = evaluate_operational_alerts(
+            pool=pool,
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+        )
+
+        self.assertEqual(alerts, ())
+
+    def test_default_low_quota_band_starts_at_five_percent(self) -> None:
+        def pool(remaining: int) -> CodexPoolStatus:
+            return CodexPoolStatus(
+                True,
+                True,
+                (CodexAccountStatus(1, True, "ready", "low", remaining, 80, None, None, 1, False),),
+                1,
+                0,
+            )
+
+        six = evaluate_operational_alerts(
+            pool=pool(6), state_snapshot={"pending_dispatches": []}, doctor_ok=True
+        )
+        five = evaluate_operational_alerts(
+            pool=pool(5), state_snapshot={"pending_dispatches": []}, doctor_ok=True
+        )
+
+        self.assertEqual(six, ())
+        self.assertEqual([item.code for item in five], ["codex_5h_low"])
+
+    def test_quota_warning_is_once_per_low_band_and_rearms_after_recovery(self) -> None:
+        alert = evaluate_operational_alerts(
+            pool=CodexPoolStatus(
+                True,
+                True,
+                (CodexAccountStatus(1, True, "ready", "low", 5, 80, None, None, 1, False),),
+                1,
+                0,
+            ),
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+        )[0]
+        with TemporaryDirectory() as directory:
+            state = HubState.open(Path(directory) / "state.db")
+            self.assertTrue(_claim_operational_alert(state, alert, cooldown_seconds=0))
+            self.assertFalse(_claim_operational_alert(state, alert, cooldown_seconds=0))
+            _release_recovered_quota_alerts(
+                state,
+                CodexPoolStatus(
+                    True,
+                    True,
+                    (CodexAccountStatus(1, True, "ready", "low", 80, 80, None, None, 2, False),),
+                    1,
+                    0,
+                ),
+            )
+            self.assertTrue(_claim_operational_alert(state, alert, cooldown_seconds=0))
+            state.close()
 
     def test_monitor_uses_only_configured_hub_operations_topic(self) -> None:
         settings = OperationalAlertSettings(-1000000000001, 41)

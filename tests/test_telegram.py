@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from hermes_codex_router.telegram import (
     TelegramBotApi,
+    TelegramError,
     parse_direct_callback,
     parse_direct_message,
     parse_topic_callback,
@@ -369,6 +370,47 @@ class TelegramUpdateTests(unittest.TestCase):
         assert parsed is not None
         self.assertEqual(parsed.data, "model:gpt-5.6-sol")
         self.assertEqual(parsed.thread_id, 73)
+
+    def test_send_document_multipart(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            file_path = Path(tempdir) / "output.md"
+            file_path.write_text("# Title\nData", encoding="utf-8")
+
+            telegram = TelegramBotApi("123456:example")
+            with patch.object(
+                telegram, "_call_multipart", return_value={"message_id": 999}
+            ) as api_call:
+                message_id = telegram.send_document(
+                    -1001234567890, 77, file_path, caption="<b>Artifact</b>"
+                )
+                self.assertEqual(message_id, 999)
+                api_call.assert_called_once()
+                call_args = api_call.call_args
+                self.assertEqual(call_args[0][0], "sendDocument")
+                self.assertEqual(call_args[1]["fields"]["chat_id"], "-1001234567890")
+                self.assertEqual(call_args[1]["fields"]["message_thread_id"], "77")
+                self.assertEqual(call_args[1]["fields"]["caption"], "<b>Artifact</b>")
+                self.assertIn("document", call_args[1]["files"])
+                self.assertEqual(call_args[1]["files"]["document"][0], "output.md")
+
+    def test_send_document_rejects_unsafe_upload_filename(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            file_path = Path(tempdir) / "safe.md"
+            file_path.write_text("safe", encoding="utf-8")
+            telegram = TelegramBotApi("123456:example")
+            with self.assertRaises(TelegramError):
+                telegram.send_document(
+                    -1001234567890,
+                    77,
+                    file_path,
+                    file_name='unsafe"\r\nInjected.md',
+                )
 
 
 if __name__ == "__main__":

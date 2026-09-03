@@ -12,7 +12,7 @@ You are communicating with the user through Telegram, often from a phone.
 - Ask focused clarification questions when missing or ambiguous context can materially change the result. Do not ask questions merely to sustain conversation.
 - Several short, self-contained messages are preferable to one wall of text when the transport supports incremental messages. Keep related code or copyable text in its own fenced block.
 - Use emoji sparingly and naturally. Do not add decorative emoji to every message.
-- When the result is a document, Markdown file, table, diagram, image, or other artifact, create the real artifact in the project and clearly identify it for the Hub attachment mechanism.
+- When the result is a document, Markdown file, table, diagram, image, or other artifact, create the real artifact in the exact per-turn directory supplied as $HUB_STAGING_DIR or in the ARTIFACT DELIVERY DIRECTORY section. Do not use a shared staging directory. The Hub validates and delivers eligible files as Telegram attachments.
 - For a small closed choice, state concise option labels suitable for Telegram inline buttons.
 - Never claim that a file, button, or reaction was sent unless the transport confirms it. The Hub, not you, owns Telegram UI delivery.
 - Do not expose hidden reasoning, secrets, raw terminal screens, or unfiltered tool output. Visible progress should describe actions and outcomes, not private chain-of-thought.
@@ -20,7 +20,7 @@ You are communicating with the user through Telegram, often from a phone.
 """
 
 _REMINDER = """TELEGRAM TRANSPORT REMINDER v1
-Reply for a Telegram conversation: concise, conversational, and outcome-first. Ask only materially useful clarification questions. Put copyable text in a separate fenced block and identify real deliverable files. Never claim Telegram UI actions that the Hub has not confirmed. Do not expose hidden reasoning.
+Reply for a Telegram conversation: concise, conversational, and outcome-first. Ask only materially useful clarification questions. Put copyable text in a separate fenced block and stage deliverable files only in the exact per-turn directory supplied by the Hub. Never claim Telegram UI actions that the Hub has not confirmed. Do not expose hidden reasoning.
 """
 
 _RUNTIME_NOTES = {
@@ -47,7 +47,13 @@ _RUNTIME_NOTES = {
 }
 
 
-def telegram_turn_prompt(user_turn: str, *, runtime: str, new_session: bool) -> str:
+def telegram_turn_prompt(
+    user_turn: str,
+    *,
+    runtime: str,
+    new_session: bool,
+    staging_dir: object | None = None,
+) -> str:
     """Wrap one productive turn with bounded Telegram-specific instructions.
 
     The caller requests the full contract for a new provider-native session or
@@ -63,5 +69,12 @@ def telegram_turn_prompt(user_turn: str, *, runtime: str, new_session: bool) -> 
     sections = [contract.strip()]
     if runtime_note is not None:
         sections.append(runtime_note)
+    if staging_dir is not None:
+        sections.append(
+            "ARTIFACT DELIVERY DIRECTORY FOR THIS TURN:\n"
+            f"{staging_dir}\n"
+            "Place only deliberate user-facing deliverables there. Files elsewhere are not "
+            "attached, and files left by other turns are never reused."
+        )
     sections.append(f"CURRENT USER TURN:\n{clean}")
     return "\n\n".join(sections)
