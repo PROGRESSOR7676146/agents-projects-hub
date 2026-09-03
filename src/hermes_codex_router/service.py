@@ -51,7 +51,7 @@ from .telegram import (
     parse_topic_message,
 )
 from .telegram_activity import telegram_activity
-from .telegram_interaction import telegram_turn_prompt
+from .telegram_interaction import TELEGRAM_CONTRACT_VERSION, telegram_turn_prompt
 from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
 
@@ -606,6 +606,11 @@ class ProjectHubService:
         )
         heartbeat.start()
         try:
+            full_contract = (
+                executing.provider_session_id is None
+                or queue_state.telegram_contract_version(executing.session_id)
+                < TELEGRAM_CONTRACT_VERSION
+            )
             if agent.runtime == "codex":
                 client = self._client()
                 if executing.provider_session_id:
@@ -626,7 +631,7 @@ class ProjectHubService:
                     text=telegram_turn_prompt(
                         executing.payload_text,
                         runtime=agent.runtime,
-                        new_session=executing.provider_session_id is None,
+                        new_session=full_contract,
                     ),
                     model=executing.model,
                     effort=executing.effort,
@@ -669,7 +674,7 @@ class ProjectHubService:
                     prompt=telegram_turn_prompt(
                         executing.payload_text,
                         runtime=agent.runtime,
-                        new_session=executing.provider_session_id is None,
+                        new_session=full_contract,
                     ),
                     session_id=executing.provider_session_id,
                     model=executing.model if executing.model != "provider-selected" else None,
@@ -701,6 +706,7 @@ class ProjectHubService:
                 user_excerpt=executing.payload_text,
                 acknowledge_context=executing.context_watermark is not None,
                 acknowledge_handoff=executing.handoff_id is not None,
+                telegram_contract_version=TELEGRAM_CONTRACT_VERSION,
             )
         except Exception as exc:
             # The provider call may have started.  Do not retry it without
@@ -871,7 +877,10 @@ class ProjectHubService:
         message: TopicMessage,
     ) -> str:
         client = self._client()
-        new_session = session.provider_session_id is None
+        new_session = (
+            session.provider_session_id is None
+            or self.state.telegram_contract_version(session.session_id) < TELEGRAM_CONTRACT_VERSION
+        )
         if session.provider_session_id:
             thread = client.resume_thread(
                 thread_id=session.provider_session_id,
@@ -904,6 +913,7 @@ class ProjectHubService:
                 effort=session.effort,
             )
             result = client.wait_for_turn(turn_id)
+        self.state.acknowledge_telegram_contract(session.session_id, TELEGRAM_CONTRACT_VERSION)
         if result.context_window and result.context_tokens_used is not None:
             remaining = max(0, result.context_window - result.context_tokens_used)
             session = self.state.set_context_remaining(
@@ -1638,6 +1648,7 @@ class ProjectHubService:
             effort=effort,
         )
         result = client.wait_for_turn(seed_turn)
+        self.state.acknowledge_telegram_contract(replacement.session_id, TELEGRAM_CONTRACT_VERSION)
         limits = client.read_rate_limits()
         response = format_telegram_response(
             result=result,

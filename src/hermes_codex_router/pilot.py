@@ -8,7 +8,7 @@ from .registry import load_registry
 from .state import HubState
 from .supervisor import CodexAppServerSupervisor
 from .telegram import TelegramBotApi
-from .telegram_interaction import telegram_turn_prompt
+from .telegram_interaction import TELEGRAM_CONTRACT_VERSION, telegram_turn_prompt
 from .terminal import terminal_session_name
 
 
@@ -82,6 +82,7 @@ def run_codex_pilot(
             effort=session.effort,
         )
         result = client.wait_for_turn(turn_id)
+        state.acknowledge_telegram_contract(session.session_id, TELEGRAM_CONTRACT_VERSION)
         limits = client.read_rate_limits()
         html = format_telegram_response(
             result=result,

@@ -218,10 +218,10 @@ Routing precedence is deterministic:
 ### Telegram interaction contract
 
 - **REQ-UX-001 (Implemented):** Every productive provider turn MUST identify
-  Telegram as its user-facing transport. A new provider-native session receives
-  the versioned full interaction contract; an existing session receives a
-  bounded reminder so sessions predating a rollout converge without repeating
-  the full prompt on every turn.
+  Telegram as its user-facing transport. A new provider-native session, or any
+  existing session that has not acknowledged the current contract version,
+  receives the full interaction contract. The version is acknowledged only
+  after a successful provider turn; later turns receive a bounded reminder.
 - **REQ-UX-002 (Implemented):** The shared contract MUST prefer concise,
   outcome-first conversational replies, focused clarification when missing
   context materially affects the result, separate copyable blocks, restrained

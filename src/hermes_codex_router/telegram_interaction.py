@@ -50,9 +50,9 @@ _RUNTIME_NOTES = {
 def telegram_turn_prompt(user_turn: str, *, runtime: str, new_session: bool) -> str:
     """Wrap one productive turn with bounded Telegram-specific instructions.
 
-    The full contract seeds a new provider-native session. Existing sessions get
-    a compact reminder so sessions created before a contract rollout converge
-    without paying the full prompt cost on every turn.
+    The caller requests the full contract for a new provider-native session or
+    an existing session that has not acknowledged this contract version. After
+    successful acknowledgement, later turns use the compact reminder.
     """
 
     clean = user_turn.strip()

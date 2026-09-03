@@ -652,6 +652,28 @@ class HubState:
             raise StateError(f"unknown session_id: {session_id}")
         return self.get_session(session_id)
 
+    def telegram_contract_version(self, session_id: str) -> int:
+        self.get_session(session_id)
+        row = self._connection.execute(
+            "SELECT integer_value FROM runtime_checkpoints WHERE checkpoint_key = ?",
+            (f"telegram-contract:{session_id}",),
+        ).fetchone()
+        return 0 if row is None else max(0, int(row["integer_value"]))
+
+    def acknowledge_telegram_contract(self, session_id: str, version: int) -> None:
+        if version <= 0:
+            raise StateError("Telegram contract version must be positive")
+        self.get_session(session_id)
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO runtime_checkpoints
+                   (checkpoint_key, integer_value, updated_at) VALUES (?, ?, ?)
+                   ON CONFLICT(checkpoint_key) DO UPDATE SET
+                     integer_value = MAX(integer_value, excluded.integer_value),
+                     updated_at = excluded.updated_at""",
+                (f"telegram-contract:{session_id}", version, _now()),
+            )
+
     def topic_has_running_dispatch(self, topic_id: int) -> bool:
         row = self._connection.execute(
             "SELECT 1 FROM turn_dispatches WHERE topic_id = ? AND status = 'running' LIMIT 1",
@@ -1712,6 +1734,7 @@ class HubState:
         user_excerpt: str | None = None,
         acknowledge_context: bool = False,
         acknowledge_handoff: bool = False,
+        telegram_contract_version: int | None = None,
         now: datetime | None = None,
     ) -> ProviderJobResultRecord:
         """Commit result, acknowledgements, and outbox without a network call."""
@@ -1732,6 +1755,8 @@ class HubState:
         if metadata is not None and len(metadata) > 4000:
             raise StateError("invalid safe metadata")
         excerpt = _visible_excerpt(user_excerpt) if user_excerpt is not None else None
+        if telegram_contract_version is not None and telegram_contract_version <= 0:
+            raise StateError("Telegram contract version must be positive")
         timestamp = _timestamp(now)
         with self._immediate_transaction():
             job_row = self._connection.execute(
@@ -1835,6 +1860,19 @@ class HubState:
                 self._connection.execute(
                     "DELETE FROM pending_handoffs WHERE handoff_id = ?",
                     (job_row["handoff_id"],),
+                )
+            if telegram_contract_version is not None:
+                self._connection.execute(
+                    """INSERT INTO runtime_checkpoints
+                       (checkpoint_key, integer_value, updated_at) VALUES (?, ?, ?)
+                       ON CONFLICT(checkpoint_key) DO UPDATE SET
+                         integer_value = MAX(integer_value, excluded.integer_value),
+                         updated_at = excluded.updated_at""",
+                    (
+                        f"telegram-contract:{job_row['session_id']}",
+                        telegram_contract_version,
+                        timestamp,
+                    ),
                 )
             outbox_id = str(uuid.uuid4())
             self._connection.execute(

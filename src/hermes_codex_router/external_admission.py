@@ -20,6 +20,94 @@ class VisibleContext:
     last_turn_id: int
 
 
+def _topic_agent_session(
+    connection: sqlite3.Connection,
+    chat_id: int,
+    thread_id: int,
+    agent_id: str,
+) -> str | None:
+    row = connection.execute(
+        """SELECT s.session_id FROM agent_sessions s
+           JOIN topics t ON t.topic_id = s.topic_id
+           WHERE t.chat_id = ? AND t.thread_id = ? AND s.agent_id = ?
+             AND s.status IN ('active', 'satellite')
+           ORDER BY s.generation DESC LIMIT 1""",
+        (chat_id, thread_id, agent_id),
+    ).fetchone()
+    return None if row is None else str(row[0])
+
+
+def telegram_contract_required(
+    state_path: Path,
+    chat_id: int,
+    thread_id: int,
+    *,
+    agent_id: str,
+    version: int,
+) -> bool:
+    """Whether an external provider session still needs the full contract."""
+    if version <= 0 or not agent_id:
+        return True
+    path = state_path.expanduser().resolve()
+    if not path.is_file():
+        return True
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.2)
+        session_id = _topic_agent_session(connection, chat_id, thread_id, agent_id)
+        if session_id is None:
+            return True
+        row = connection.execute(
+            "SELECT integer_value FROM runtime_checkpoints WHERE checkpoint_key = ?",
+            (f"telegram-contract:{session_id}",),
+        ).fetchone()
+        current = 0 if row is None else max(0, int(row[0]))
+        return current < version
+    except (OSError, sqlite3.Error, ValueError):
+        return True
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def acknowledge_telegram_contract_for_topic(
+    state_path: Path,
+    chat_id: int,
+    thread_id: int,
+    *,
+    agent_id: str,
+    version: int,
+) -> bool:
+    """Acknowledge a contract only after an external provider completed."""
+    if version <= 0 or not agent_id:
+        return False
+    path = state_path.expanduser().resolve()
+    if not path.is_file():
+        return False
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(path, timeout=0.5)
+        with connection:
+            session_id = _topic_agent_session(connection, chat_id, thread_id, agent_id)
+            if session_id is None:
+                return False
+            connection.execute(
+                """INSERT INTO runtime_checkpoints
+                   (checkpoint_key, integer_value, updated_at)
+                   VALUES (?, ?, datetime('now'))
+                   ON CONFLICT(checkpoint_key) DO UPDATE SET
+                     integer_value = MAX(integer_value, excluded.integer_value),
+                     updated_at = excluded.updated_at""",
+                (f"telegram-contract:{session_id}", version),
+            )
+        return True
+    except (OSError, sqlite3.Error):
+        return False
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 def is_active_agent(
     state_path: Path,
     chat_id: int,

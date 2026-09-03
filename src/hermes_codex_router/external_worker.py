@@ -19,7 +19,7 @@ from .metadata import format_agent_response, format_telegram_response
 from .registry import ProjectRegistry, load_registry
 from .state import HubState, ProviderJobRecord
 from .supervisor import CodexAppServerSupervisor
-from .telegram_interaction import telegram_turn_prompt
+from .telegram_interaction import TELEGRAM_CONTRACT_VERSION, telegram_turn_prompt
 
 
 class ExternalQueueWorkerError(RuntimeError):
@@ -355,6 +355,13 @@ class ExternalQueueWorker:
             user_excerpt=job.payload_text,
             acknowledge_context=job.context_watermark is not None,
             acknowledge_handoff=job.handoff_id is not None,
+            telegram_contract_version=TELEGRAM_CONTRACT_VERSION,
+        )
+
+    def _needs_full_telegram_contract(self, job: ProviderJobRecord) -> bool:
+        return (
+            job.provider_session_id is None
+            or self.state.telegram_contract_version(job.session_id) < TELEGRAM_CONTRACT_VERSION
         )
 
     def _execute_codex(
@@ -388,7 +395,7 @@ class ExternalQueueWorker:
         turn_text = telegram_turn_prompt(
             turn_text,
             runtime="codex",
-            new_session=job.provider_session_id is None or fallback_transfer,
+            new_session=self._needs_full_telegram_contract(job) or fallback_transfer,
         )
         if job.provider_session_id and not fallback_transfer:
             thread = client.resume_thread(
@@ -575,7 +582,7 @@ class ExternalQueueWorker:
                 prompt=telegram_turn_prompt(
                     job.payload_text,
                     runtime=self.agent.runtime,
-                    new_session=job.provider_session_id is None,
+                    new_session=self._needs_full_telegram_contract(job),
                 ),
                 session_id=job.provider_session_id,
                 model=job.model if job.model != "provider-selected" else None,

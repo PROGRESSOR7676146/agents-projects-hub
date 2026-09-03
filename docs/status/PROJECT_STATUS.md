@@ -51,8 +51,10 @@ operator deployment inventory or live conversation evidence.
   explicit Codex mention while another provider is active uses a satellite
   Codex session and does not silently change the active provider.
 - Versioned provider-neutral Telegram interaction instructions now seed new
-  Codex, OpenCode, Antigravity, Gemini-compatible, and Hermes sessions, while a
-  compact reminder converges existing sessions. Provider-specific notes tune
+  Codex, OpenCode, Antigravity, Gemini-compatible, and Hermes sessions. Existing
+  sessions receive the full current contract once after rollout; its version is
+  acknowledged only after a successful provider turn, then compact reminders
+  avoid paying the full prompt cost repeatedly. Provider-specific notes tune
   presentation without changing safety authority. Private-chat queue admission
   and external sender refresh use Telegram's native ephemeral `Thinking…`
   draft; project groups retain the bounded `typing` action because Bot API

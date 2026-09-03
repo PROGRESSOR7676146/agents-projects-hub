@@ -26,6 +26,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ### Changed
 
+- Deliver the full current Telegram interaction contract once to existing
+  provider sessions after rollout, acknowledge it only after successful work,
+  and use the compact reminder on later turns.
 - Keep provider availability separate from cached quota: known runtime or
   network failures now remain visibly unavailable even when cached quota exists.
 - Deliver provider failures through the durable outbox and compact all provider
@@ -35,6 +38,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ### Fixed
 
+- Prevent stale Unix socket inodes after abrupt host or WSL shutdown from
+  releasing tlive startup ordering before the rotating Codex app-server accepts
+  real connections.
 - Fail scoped Telegram acceptance checks promptly when unrelated traffic enters
   the dedicated canary topic, and stop after the first failed scenario instead
   of accumulating later work behind an unhealthy provider.

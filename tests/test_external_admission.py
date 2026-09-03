@@ -5,12 +5,14 @@ import unittest
 from pathlib import Path
 
 from hermes_codex_router.external_admission import (
+    acknowledge_telegram_contract_for_topic,
     acknowledge_unseen_visible_context,
     consume_pending_handoff,
     is_active_agent,
     peek_pending_handoff,
     peek_unseen_visible_context,
     record_external_turn,
+    telegram_contract_required,
 )
 from hermes_codex_router.state import HubState
 
@@ -134,6 +136,44 @@ class ExternalAdmissionTests(unittest.TestCase):
         )
         self.assertIsNone(
             peek_unseen_visible_context(self.path, -1001234567890, 73, observer_agent_id="hermes")
+        )
+
+    def test_external_agent_receives_each_contract_version_once(self) -> None:
+        self.assertTrue(
+            telegram_contract_required(
+                self.path,
+                -1001234567890,
+                73,
+                agent_id="hermes",
+                version=1,
+            )
+        )
+        self.assertTrue(
+            acknowledge_telegram_contract_for_topic(
+                self.path,
+                -1001234567890,
+                73,
+                agent_id="hermes",
+                version=1,
+            )
+        )
+        self.assertFalse(
+            telegram_contract_required(
+                self.path,
+                -1001234567890,
+                73,
+                agent_id="hermes",
+                version=1,
+            )
+        )
+        self.assertTrue(
+            telegram_contract_required(
+                self.path,
+                -1001234567890,
+                73,
+                agent_id="hermes",
+                version=2,
+            )
         )
 
 

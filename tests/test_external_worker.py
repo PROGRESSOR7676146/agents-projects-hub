@@ -42,9 +42,11 @@ class Adapter:
         self.unavailable = unavailable
         self.session_id = session_id
         self.calls = 0
+        self.last_prompt = ""
 
-    def run_turn(self, **_kwargs: object) -> ExternalTurnResult:
+    def run_turn(self, **kwargs: object) -> ExternalTurnResult:
         self.calls += 1
+        self.last_prompt = str(kwargs.get("prompt") or "")
         if self.limit:
             raise ProviderLimitError(ProviderLimit(self.runtime, "weekly", 0, 1))
         if self.unavailable:
@@ -112,7 +114,9 @@ class ExternalQueueWorkerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
-    def enqueue(self, agent_id: str, message_id: int) -> str:
+    def enqueue(
+        self, agent_id: str, message_id: int, *, provider_session_id: str | None = None
+    ) -> str:
         state = HubState.open(self.config.state_path)
         try:
             topic = state.observe_topic(
@@ -125,6 +129,8 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             session = state.activate_agent(
                 topic.topic_id, agent_id, agent.default_model, agent.default_effort
             )
+            if provider_session_id is not None:
+                session = state.bind_provider_session(session.session_id, provider_session_id, None)
             job, _ = state.enqueue_provider_job(
                 idempotency_key=f"telegram:-1001234567890:{message_id}",
                 chat_id=-1001234567890,
@@ -133,7 +139,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
                 agent_id=agent_id,
                 session_id=session.session_id,
                 session_generation=session.generation,
-                provider_session_id=None,
+                provider_session_id=session.provider_session_id,
                 model=session.model,
                 effort=session.effort,
                 payload_text="durable task",
@@ -191,6 +197,42 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         finally:
             opencode.close()
             antigravity.close()
+
+    def test_existing_session_receives_full_contract_once_after_contract_rollout(self) -> None:
+        job_id = self.enqueue("opencode", 40, provider_session_id="existing-session")
+        adapter = Adapter("opencode")
+        worker = self.worker("opencode", adapter)
+        try:
+            self.assertTrue(worker.run_cycle())
+            self.assertIn("TELEGRAM INTERACTION CONTRACT v1", adapter.last_prompt)
+            job = worker.state.get_provider_job(job_id)
+            self.assertEqual(worker.state.telegram_contract_version(job.session_id), 1)
+
+            outbox = worker.state.lease_telegram_outbox("opencode", "sender")
+            assert outbox is not None and outbox.lease_token is not None
+            worker.state.mark_telegram_outbox_delivered(
+                outbox.outbox_id, outbox.lease_token, telegram_message_id=400
+            )
+            session = worker.state.get_session(job.session_id)
+            second, _ = worker.state.enqueue_provider_job(
+                idempotency_key="telegram:-1001234567890:41",
+                chat_id=-1001234567890,
+                message_id=41,
+                topic_id=job.topic_id,
+                agent_id="opencode",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                provider_session_id=session.provider_session_id,
+                model=session.model,
+                effort=session.effort,
+                payload_text="next durable task",
+            )
+            self.assertTrue(worker.run_cycle())
+            self.assertIn("TELEGRAM TRANSPORT REMINDER v1", adapter.last_prompt)
+            self.assertNotIn("TELEGRAM INTERACTION CONTRACT v1", adapter.last_prompt)
+            self.assertEqual(worker.state.get_provider_job(second.job_id).status, "result_ready")
+        finally:
+            worker.close()
 
     def test_known_provider_unavailability_fails_with_a_visible_notice(self) -> None:
         job_id = self.enqueue("antigravity", 31)

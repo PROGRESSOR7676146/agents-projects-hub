@@ -32,7 +32,7 @@ from .telegram import (
     parse_topic_message,
 )
 from .telegram_activity import telegram_activity
-from .telegram_interaction import telegram_turn_prompt
+from .telegram_interaction import TELEGRAM_CONTRACT_VERSION, telegram_turn_prompt
 
 
 class ExternalAgentService:
@@ -318,9 +318,13 @@ class ExternalAgentService:
                 "credentials, raw terminal output, or unrelated history. Return at most 1200 "
                 "characters with three headings: Completed, Verified, Next.",
                 runtime=self.agent.runtime,
-                new_session=False,
+                new_session=(
+                    self.state.telegram_contract_version(session.session_id)
+                    < TELEGRAM_CONTRACT_VERSION
+                ),
             ),
         )
+        self.state.acknowledge_telegram_contract(session.session_id, TELEGRAM_CONTRACT_VERSION)
         if result.provider_session_id and result.provider_session_id != session.provider_session_id:
             session = self.state.bind_provider_session(
                 session.session_id, result.provider_session_id, None
@@ -555,7 +559,11 @@ class ExternalAgentService:
                     prompt=telegram_turn_prompt(
                         prompt,
                         runtime=self.agent.runtime,
-                        new_session=session.provider_session_id is None,
+                        new_session=(
+                            session.provider_session_id is None
+                            or self.state.telegram_contract_version(session.session_id)
+                            < TELEGRAM_CONTRACT_VERSION
+                        ),
                     ),
                     session_id=session.provider_session_id,
                     model=session.model if session.model != "provider-selected" else None,
@@ -579,6 +587,7 @@ class ExternalAgentService:
             self.telegram.send_html(message.chat_id, message.thread_id, html.escape(visible)[:4090])
             return True
         self.state.finish_dispatch(dispatch_id, success=True)
+        self.state.acknowledge_telegram_contract(session.session_id, TELEGRAM_CONTRACT_VERSION)
         if result.provider_session_id and result.provider_session_id != session.provider_session_id:
             session = self.state.bind_provider_session(
                 session.session_id, result.provider_session_id, None

@@ -12,9 +12,11 @@ if _SOURCE_ROOT not in sys.path:
     sys.path.insert(0, _SOURCE_ROOT)
 
 from hermes_codex_router.external_admission import (  # noqa: E402
+    acknowledge_telegram_contract_for_topic,
     acknowledge_unseen_visible_context,
     record_external_turn,
 )
+from hermes_codex_router.telegram_interaction import TELEGRAM_CONTRACT_VERSION  # noqa: E402
 
 _STATE_PATH = Path(
     os.getenv(
@@ -51,6 +53,13 @@ async def handle(event_type: str, context: dict[str, Any]) -> None:
         response_excerpt=str(context.get("response") or ""),
     )
     if recorded:
+        acknowledge_telegram_contract_for_topic(
+            _STATE_PATH,
+            chat_id,
+            thread_id,
+            agent_id="hermes",
+            version=TELEGRAM_CONTRACT_VERSION,
+        )
         acknowledge_unseen_visible_context(
             _STATE_PATH,
             chat_id,
