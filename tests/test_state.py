@@ -287,6 +287,19 @@ class HubStateTests(unittest.TestCase):
         self.state.release_alert_delivery("codex:quota-band")
         self.assertTrue(self.state.claim_alert_transition("codex:quota-band"))
 
+    def test_reconcile_alert_transitions_rearms_only_resolved_conditions(self) -> None:
+        self.assertTrue(self.state.claim_alert_transition("catalog:codex:stale:operations"))
+        self.assertTrue(self.state.claim_alert_transition("runtime:sender:operations"))
+        self.state.claim_alert_delivery("repair:hermes", cooldown_seconds=3600)
+
+        self.state.reconcile_alert_transitions(
+            active_keys=("runtime:sender:operations",), suffix=":operations"
+        )
+
+        self.assertTrue(self.state.claim_alert_transition("catalog:codex:stale:operations"))
+        self.assertFalse(self.state.claim_alert_transition("runtime:sender:operations"))
+        self.assertFalse(self.state.claim_alert_delivery("repair:hermes", cooldown_seconds=3600))
+
     def test_concurrent_alert_delivery_has_exactly_one_winner(self) -> None:
         barrier = threading.Barrier(2)
 

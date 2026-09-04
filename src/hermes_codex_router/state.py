@@ -2913,6 +2913,24 @@ class HubState:
                 (alert_key[:256],),
             )
 
+    def reconcile_alert_transitions(self, *, active_keys: tuple[str, ...], suffix: str) -> None:
+        """Re-arm resolved transition alerts while leaving cooldown claims alone."""
+        if not suffix or len(suffix) > 64:
+            raise StateError("invalid alert transition suffix")
+        active = {key[:256] for key in active_keys}
+        with self._immediate_transaction():
+            rows = self._connection.execute(
+                "SELECT alert_key FROM alert_deliveries WHERE alert_key LIKE ?",
+                (f"%{suffix}",),
+            ).fetchall()
+            resolved = [
+                str(row["alert_key"]) for row in rows if str(row["alert_key"]) not in active
+            ]
+            self._connection.executemany(
+                "DELETE FROM alert_deliveries WHERE alert_key = ?",
+                ((key,) for key in resolved),
+            )
+
     def register_lane(
         self,
         *,

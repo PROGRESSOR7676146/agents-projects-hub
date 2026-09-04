@@ -144,6 +144,10 @@ operator deployment inventory or live conversation evidence.
   confirmed recovery, and reports provider-driven or quota-driven account
   transitions with the replacement account's fresh status. Ordinary account
   selection changes are not mislabeled as quota rotation.
+- Operational notifications are edge-triggered: unchanged deployment, catalog,
+  provider, and account conditions are sent once and re-arm only after recovery.
+  Exhausted inactive accounts remain status data after a successful rotation;
+  they are not reported as authentication failures while a replacement is ready.
 - Durable masked Codex account snapshots for provider-free Controller status,
   plus private masked account hints and honest unknown-limit display for other
   providers. Cached quota and live worker availability remain separate signals:

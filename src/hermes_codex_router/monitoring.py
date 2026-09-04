@@ -45,15 +45,11 @@ def _destination(settings: OperationalAlertSettings) -> tuple[int, int] | None:
     return settings.telegram_chat_id, settings.telegram_thread_id
 
 
-_QUOTA_ALERT_CODES = {"codex_5h_low", "codex_weekly_low"}
-
-
 def _claim_operational_alert(
     state: HubState, alert: OperationalAlert, *, cooldown_seconds: int
 ) -> bool:
-    if alert.code in _QUOTA_ALERT_CODES:
-        return state.claim_alert_transition(f"{alert.key}:operations")
-    return state.claim_alert_delivery(f"{alert.key}:operations", cooldown_seconds=cooldown_seconds)
+    del cooldown_seconds
+    return state.claim_alert_transition(f"{alert.key}:operations")
 
 
 def _release_recovered_quota_alerts(state: HubState, pool: CodexPoolStatus) -> None:
@@ -67,6 +63,15 @@ def _release_recovered_quota_alerts(state: HubState, pool: CodexPoolStatus) -> N
         for suffix, remaining in windows:
             if remaining is not None and remaining > DEFAULT_LOW_QUOTA_PERCENT:
                 state.release_alert_delivery(f"codex:account:{account.index}:{suffix}:operations")
+
+
+def _release_resolved_operational_alerts(
+    state: HubState, alerts: tuple[OperationalAlert, ...]
+) -> None:
+    state.reconcile_alert_transitions(
+        active_keys=tuple(f"{alert.key}:operations" for alert in alerts),
+        suffix=":operations",
+    )
 
 
 def _send_hermes(
@@ -348,6 +353,7 @@ def run_monitor_once(
                         )
         if notify:
             _release_recovered_quota_alerts(state, pool)
+            _release_resolved_operational_alerts(state, alerts)
         if notify and alerts:
             destination = _destination(config.operational_alerts)
             operations_due = tuple(

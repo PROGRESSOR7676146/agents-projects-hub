@@ -89,6 +89,48 @@ class OperationalAlertTests(unittest.TestCase):
         )
         self.assertEqual(alerts, ())
 
+    def test_exhausted_inactive_account_is_status_not_alert_after_rotation(self) -> None:
+        alerts = evaluate_operational_alerts(
+            pool=CodexPoolStatus(
+                True,
+                True,
+                (
+                    CodexAccountStatus(
+                        1, True, "ready", "low", 100, 84, None, None, 1, False, "abc…"
+                    ),
+                    CodexAccountStatus(
+                        2, False, "unavailable", "high", 98, 0, None, None, 1, False, "xyz…"
+                    ),
+                ),
+                1,
+                0,
+            ),
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+        )
+
+        self.assertEqual(alerts, ())
+
+    def test_unavailable_account_with_healthy_quota_remains_auth_alert(self) -> None:
+        alerts = evaluate_operational_alerts(
+            pool=CodexPoolStatus(
+                True,
+                True,
+                (
+                    CodexAccountStatus(1, True, "ready", "low", 80, 80, None, None, 1, False),
+                    CodexAccountStatus(
+                        2, False, "unavailable", "high", 90, 90, None, None, 1, False
+                    ),
+                ),
+                1,
+                0,
+            ),
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+        )
+
+        self.assertEqual([alert.code for alert in alerts], ["codex_account_unavailable"])
+
     def test_stale_quota_does_not_page_as_if_it_were_current(self) -> None:
         pool = CodexPoolStatus(
             available=True,

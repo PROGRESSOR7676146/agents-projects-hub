@@ -7,6 +7,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 - Add a fixed two-provider acceptance scenario for switch isolation and explicit
   bounded `/context` retrieval.
+- Make all operational warnings transition-triggered, suppress quota/auth alerts
+  for an exhausted inactive account after successful replacement, and keep the
+  condition visible in `/accounts` without repeated Telegram notifications.
 
 ## [0.6.0] - 2026-09-03
 

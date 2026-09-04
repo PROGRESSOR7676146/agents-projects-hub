@@ -176,9 +176,14 @@ def evaluate_operational_alerts(
                     "Codex account rotation is disabled.",
                 )
             )
+        usable_replacement = any(account.availability == "ready" for account in pool.accounts)
         for account in pool.accounts:
             identity = f" ({account.identity_hint})" if account.identity_hint else ""
-            if account.availability == "unavailable":
+            fresh_quota_exhausted = not account.quota_stale and any(
+                remaining is not None and remaining <= low_quota_percent
+                for remaining in (account.five_hour_remaining, account.weekly_remaining)
+            )
+            if account.availability == "unavailable" and not fresh_quota_exhausted:
                 alerts.append(
                     OperationalAlert(
                         f"codex:account:{account.index}:unavailable",
@@ -187,8 +192,10 @@ def evaluate_operational_alerts(
                         f"Codex account {account.index}{identity} is unavailable; authentication needs attention.",
                     )
                 )
+            quota_alert_relevant = account.active or not usable_replacement
             if (
-                not account.quota_stale
+                quota_alert_relevant
+                and not account.quota_stale
                 and account.five_hour_remaining is not None
                 and account.five_hour_remaining <= low_quota_percent
             ):
@@ -201,7 +208,8 @@ def evaluate_operational_alerts(
                     )
                 )
             if (
-                not account.quota_stale
+                quota_alert_relevant
+                and not account.quota_stale
                 and account.weekly_remaining is not None
                 and account.weekly_remaining <= low_quota_percent
             ):

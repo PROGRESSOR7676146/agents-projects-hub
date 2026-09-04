@@ -486,12 +486,8 @@ more specific and consistent with this baseline.
   numeric topic/session state across ordinary restarts and report component
   health without invoking a model merely to check health.
 - **REQ-OPS-005 (Implemented):** Hermes Gateway and tlive MUST be monitored as
-  independent recovery channels. Failure of one is degraded service; neither is
-  a mandatory dependency of Project Hub. A fresh authenticated local Gateway
-  heartbeat is valid liveness evidence when Hermes is intentionally managed
-  outside the configured systemd unit. Bounded `tlive status` health markers
-  provide the equivalent evidence for tlive without logging its dashboard URL
-  or token. Diagnostics still report both configured unit states.
+  independent, non-mandatory recovery channels. Fresh local heartbeat/status
+  markers provide liveness evidence without exposing URLs or tokens.
 - **REQ-OPS-006 (Implemented):** General operational alerts are bounded,
   deduplicated, and delivered
   only to one explicitly configured Hub Operations/Alerts topic. Codex is the
@@ -499,7 +495,9 @@ more specific and consistent with this baseline.
   include a recognizable masked account hint and never expose a full identity.
   Stale quota may remain visible as cached status but MUST NOT alert. Fresh
   Codex quota warns once per ≤5% episode and re-arms only after recovery above
-  5%; a cooldown MUST NOT repeat unchanged quota information.
+  5%; unchanged conditions MUST NOT repeat. Other operational alerts are also
+  edge-triggered and re-arm after recovery. An exhausted inactive account stays
+  in `/accounts` but is not an auth failure while a replacement is ready.
 - **REQ-OPS-007 (Implemented):** Codex rotation reacts to the upstream provider
   `429` handled by the optional multi-auth proxy, never to a forecast threshold.
   The transition is always reported to Hub Operations with masked source/target
