@@ -18,6 +18,7 @@ from hermes_codex_router.hub_config import (
 from hermes_codex_router.outbox_sender import TelegramOutboxSender
 from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.state import HubState
+from hermes_codex_router.telegram import TelegramError
 
 
 class Bot:
@@ -57,6 +58,18 @@ class Bot:
         self, chat_id: int, thread_id: int, *, draft_id: int, text: str = ""
     ) -> None:
         self.drafts.append((chat_id, thread_id, draft_id, text))
+
+
+class TransportFailBot(Bot):
+    def send_html(self, chat_id: int, thread_id: int, html: str) -> int:
+        self.sent.append((chat_id, thread_id, html))
+        if self.fail:
+            raise TelegramError(
+                "safe Telegram failure",
+                operation="send_message",
+                failure_class="network_timeout",
+            )
+        return len(self.sent) + len(self.documents)
 
 
 class TelegramOutboxSenderTests(unittest.TestCase):
@@ -243,6 +256,52 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             assert health is not None
             self.assertEqual(health.error_code, "RuntimeError")
             self.assertEqual(health.activity_state, "idle")
+        finally:
+            sender.close()
+
+    def test_transport_health_is_edge_triggered_and_recovers_after_outbox_retry(self) -> None:
+        job_id = self.ready_outbox("opencode", 14)
+        bot = TransportFailBot(fail=True)
+        sender = self.sender(opencode=bot, antigravity=Bot())
+        try:
+            clock = datetime.now(timezone.utc)
+            self.assertTrue(sender.run_cycle(now=clock))
+            clock += timedelta(seconds=2)
+            self.assertTrue(sender.run_cycle(now=clock))
+
+            failed = sender.state.get_runtime_health("sender", "test-sender")
+            assert failed is not None
+            self.assertEqual(failed.error_code, "telegram_send_message_network_timeout")
+            self.assertEqual(failed.transport_operation, "send_message")
+            self.assertEqual(failed.transport_failure_class, "network_timeout")
+            self.assertEqual(failed.transport_consecutive_failures, 2)
+            events = cast(
+                list[dict[str, object]],
+                sender.state.status_snapshot()["runtime_events"],
+            )
+            transport_events = [
+                event for event in events if event["code"] == "telegram_transport_error"
+            ]
+            self.assertEqual(len(transport_events), 1)
+
+            bot.fail = False
+            clock += timedelta(seconds=2)
+            self.assertTrue(sender.run_cycle(now=clock))
+            recovered = sender.state.get_runtime_health("sender", "test-sender")
+            assert recovered is not None
+            self.assertEqual(sender.state.get_provider_job(job_id).status, "completed")
+            self.assertIsNone(recovered.error_code)
+            self.assertIsNone(recovered.transport_operation)
+            self.assertEqual(recovered.transport_consecutive_failures, 0)
+            self.assertIsNotNone(recovered.transport_success_at)
+            events = cast(
+                list[dict[str, object]],
+                sender.state.status_snapshot()["runtime_events"],
+            )
+            self.assertEqual(
+                len([event for event in events if event["code"] == "telegram_recovered"]),
+                1,
+            )
         finally:
             sender.close()
 

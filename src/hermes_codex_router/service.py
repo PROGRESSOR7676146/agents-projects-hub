@@ -180,6 +180,10 @@ class ProjectHubService:
         self._health_process_start_marker = uuid.uuid4().hex
         self._health_last_success_at: datetime | None = None
         self._health_last_error_code: str | None = None
+        self._health_transport_error: TelegramError | None = None
+        self._health_transport_consecutive_failures = 0
+        self._health_transport_success_at: datetime | None = None
+        self._health_transport_reported_signature: tuple[str, str, int | None] | None = None
         self._health_last_publish_monotonic = 0.0
         self._publish_runtime_health()
 
@@ -224,10 +228,74 @@ class ProjectHubService:
                 error_code=self._health_last_error_code,
                 activity_state=activity_state,
                 active_job_id=active_job_id,
+                transport_operation=(
+                    None
+                    if self._health_transport_error is None
+                    else self._health_transport_error.operation
+                ),
+                transport_failure_class=(
+                    None
+                    if self._health_transport_error is None
+                    else self._health_transport_error.failure_class
+                ),
+                transport_status_code=(
+                    None
+                    if self._health_transport_error is None
+                    else self._health_transport_error.status_code
+                ),
+                transport_retry_after=(
+                    None
+                    if self._health_transport_error is None
+                    else self._health_transport_error.retry_after
+                ),
+                transport_consecutive_failures=self._health_transport_consecutive_failures,
+                transport_success_at=self._health_transport_success_at,
             )
             self._health_last_publish_monotonic = now_monotonic
         except Exception:
             pass
+
+    def _record_telegram_poll_success(self, ingress_identity: str) -> None:
+        observed_at = datetime.now(timezone.utc)
+        # A few bounded fault actors construct the service around a real state
+        # boundary without running the provider-heavy initializer. Treat their
+        # first successful poll like a clean process start.
+        failures = getattr(self, "_health_transport_consecutive_failures", 0)
+        if failures:
+            self.state.record_runtime_event(
+                ingress_identity,
+                "info",
+                "telegram_recovered",
+                f"operation=poll;consecutive_failures={failures};"
+                f"last_success={observed_at.isoformat()}",
+            )
+        self._health_transport_error = None
+        self._health_transport_consecutive_failures = 0
+        self._health_transport_success_at = observed_at
+        self._health_transport_reported_signature = None
+        self._health_last_success_at = observed_at
+        self._health_last_error_code = None
+
+    def _record_telegram_poll_failure(self, ingress_identity: str, error: TelegramError) -> None:
+        self._health_transport_consecutive_failures = (
+            getattr(self, "_health_transport_consecutive_failures", 0) + 1
+        )
+        self._health_transport_error = error
+        self._health_last_error_code = error.health_code
+        if error.signature != getattr(self, "_health_transport_reported_signature", None):
+            transport_success_at = getattr(self, "_health_transport_success_at", None)
+            self.state.record_runtime_event(
+                ingress_identity,
+                "warning",
+                "telegram_transport_error",
+                error.safe_detail(
+                    consecutive_failures=self._health_transport_consecutive_failures,
+                    last_success=(
+                        None if transport_success_at is None else transport_success_at.isoformat()
+                    ),
+                ),
+            )
+            self._health_transport_reported_signature = error.signature
 
     def close(self) -> None:
         self.stop()
@@ -427,11 +495,20 @@ class ProjectHubService:
                     # Group drafts are not supported by the Bot API yet.
                     self.telegram.send_chat_action(message.chat_id, message.thread_id)
             except Exception as exc:
+                error = (
+                    exc
+                    if isinstance(exc, TelegramError)
+                    else TelegramError(
+                        "Telegram advisory request failed",
+                        operation="chat_action",
+                        failure_class="unexpected_client",
+                    )
+                )
                 self.state.record_runtime_event(
                     "telegram",
                     "warning",
                     "initial_chat_action_error",
-                    type(exc).__name__,
+                    error.safe_detail(consecutive_failures=1, last_success=None),
                 )
         return created
 
@@ -2223,9 +2300,7 @@ class ProjectHubService:
             self._publish_runtime_health()
             try:
                 updates = self.telegram.updates(offset=offset, timeout=5)
-                if not updates:
-                    self._health_last_success_at = datetime.now(timezone.utc)
-                    self._health_last_error_code = None
+                self._record_telegram_poll_success(ingress_identity)
                 self._publish_runtime_health(force=True)
                 for update in updates:
                     if stop.is_set():
@@ -2253,9 +2328,6 @@ class ProjectHubService:
                             ingress_identity, "error", "update_error", type(exc).__name__
                         )
                         self._health_last_error_code = "update_error"
-                    else:
-                        self._health_last_success_at = datetime.now(timezone.utc)
-                        self._health_last_error_code = None
                     self._publish_runtime_health(force=True)
                     if advance_offset:
                         offset = update_id + 1
@@ -2266,9 +2338,6 @@ class ProjectHubService:
                         # unaccepted productive update on the next poll.
                         break
             except TelegramError as exc:
-                self.state.record_runtime_event(
-                    ingress_identity, "warning", "telegram_error", type(exc).__name__
-                )
-                self._health_last_error_code = "telegram_error"
+                self._record_telegram_poll_failure(ingress_identity, exc)
                 self._publish_runtime_health(force=True)
                 stop.wait(3)

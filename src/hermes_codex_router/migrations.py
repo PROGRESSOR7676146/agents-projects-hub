@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-LATEST_SCHEMA_VERSION = 19
+LATEST_SCHEMA_VERSION = 20
 
 
 MIGRATION_1 = """
@@ -645,6 +645,22 @@ CREATE INDEX runtime_health_agent ON runtime_health(agent_id, heartbeat_at);
 """
 
 
+MIGRATION_20 = """
+ALTER TABLE runtime_health ADD COLUMN transport_operation TEXT
+    CHECK(transport_operation IS NULL OR length(transport_operation) BETWEEN 1 AND 32);
+ALTER TABLE runtime_health ADD COLUMN transport_failure_class TEXT
+    CHECK(transport_failure_class IS NULL OR length(transport_failure_class) BETWEEN 1 AND 64);
+ALTER TABLE runtime_health ADD COLUMN transport_status_code INTEGER
+    CHECK(transport_status_code IS NULL OR transport_status_code BETWEEN 100 AND 599);
+ALTER TABLE runtime_health ADD COLUMN transport_retry_after INTEGER
+    CHECK(transport_retry_after IS NULL OR transport_retry_after BETWEEN 0 AND 86400);
+ALTER TABLE runtime_health ADD COLUMN transport_consecutive_failures INTEGER NOT NULL DEFAULT 0
+    CHECK(transport_consecutive_failures BETWEEN 0 AND 1000000);
+ALTER TABLE runtime_health ADD COLUMN transport_success_at TEXT
+    CHECK(transport_success_at IS NULL OR length(transport_success_at) BETWEEN 1 AND 64);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -766,6 +782,9 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     if previous < 19:
         connection.executescript(MIGRATION_19)
         connection.execute("PRAGMA user_version = 19")
+    if previous < 20:
+        connection.executescript(MIGRATION_20)
+        connection.execute("PRAGMA user_version = 20")
     connection.commit()
     current = int(connection.execute("PRAGMA user_version").fetchone()[0])
     return previous, current

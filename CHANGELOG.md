@@ -8,6 +8,11 @@ and releases use semantic versioning while the public API is still evolving.
 - Embed package version, exact clean Git SHA, and build time in wheel artifacts;
   publish release identity from every required Hub runtime and alert once when
   cached deployment revisions are mixed or unknown.
+- Classify Telegram polling and delivery failures into bounded operation,
+  network/API class, safe status, retry-after, consecutive-failure, and
+  last-success fields. Controller and sender health now recover explicitly,
+  repeated identical failures emit one edge event, and delivery retries still
+  never repeat provider execution.
 - Add a fixed two-provider acceptance scenario for switch isolation and explicit
   bounded `/context` retrieval.
 - Make all operational warnings transition-triggered, suppress quota/auth alerts

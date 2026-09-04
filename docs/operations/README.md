@@ -29,6 +29,16 @@ Operational truth is split by purpose:
   Monitoring uses the same projection and sends one transition alert for a
   mixed/unknown episode to the configured Hub Operations topic, re-arming only
   after convergence.
+- Telegram transport diagnosis is cache-first. Controller and standalone-sender
+  health expose only `transport_operation`, `transport_failure_class`, optional
+  safe status/retry-after, `transport_consecutive_failures`, and
+  `transport_success_at`. `poll` identifies update ingress;
+  `send_message`/`send_document` identify durable outbox delivery. Repeated
+  identical failures create one `telegram_transport_error` event and one
+  `telegram_recovered` event after success. Direct-provider pollers publish the
+  same bounded events in their isolated state database. Raw exception text,
+  token-bearing URLs, payloads, local paths, and chat identifiers are
+  intentionally unavailable; do not reconstruct them in shared logs.
 - External queue delivery: run one `agents-projects-hub sender HUB_CONFIG`
   alongside the selected provider workers, then set `outbox_runtime` to
   `external`. The default `controller` value preserves the previous deployment

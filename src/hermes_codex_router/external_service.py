@@ -3,7 +3,7 @@ from __future__ import annotations
 import html
 import re
 import threading
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .artifact_delivery import deliver_staged_artifacts_immediately
@@ -80,6 +80,9 @@ class ExternalAgentService:
             candidate.agent_id: candidate.telegram_username for candidate in config.agents
         }
         self._stop = threading.Event()
+        self._transport_consecutive_failures = 0
+        self._transport_reported_signature: tuple[str, str, int | None] | None = None
+        self._transport_success_at: datetime | None = None
 
     @property
     def telegram(self) -> TelegramBotApi:
@@ -98,6 +101,40 @@ class ExternalAgentService:
     def close(self) -> None:
         self.stop()
         self.state.close()
+
+    def _record_telegram_poll_failure(self, error: TelegramError) -> None:
+        self._transport_consecutive_failures = (
+            getattr(self, "_transport_consecutive_failures", 0) + 1
+        )
+        if error.signature != getattr(self, "_transport_reported_signature", None):
+            transport_success_at = getattr(self, "_transport_success_at", None)
+            self.state.record_runtime_event(
+                self.agent.agent_id,
+                "warning",
+                "telegram_transport_error",
+                error.safe_detail(
+                    consecutive_failures=self._transport_consecutive_failures,
+                    last_success=(
+                        None if transport_success_at is None else transport_success_at.isoformat()
+                    ),
+                ),
+            )
+            self._transport_reported_signature = error.signature
+
+    def _record_telegram_poll_success(self) -> None:
+        observed_at = datetime.now(timezone.utc)
+        failures = getattr(self, "_transport_consecutive_failures", 0)
+        if failures:
+            self.state.record_runtime_event(
+                self.agent.agent_id,
+                "info",
+                "telegram_recovered",
+                f"operation=poll;consecutive_failures={failures};"
+                f"last_success={observed_at.isoformat()}",
+            )
+        self._transport_consecutive_failures = 0
+        self._transport_reported_signature = None
+        self._transport_success_at = observed_at
 
     @staticmethod
     def _grid(values: list[tuple[str, str]], width: int = 2) -> dict[str, object]:
@@ -665,7 +702,9 @@ class ExternalAgentService:
         offset = self.state.get_bot_offset(self.agent.agent_id)
         while not self._stop.is_set():
             try:
-                for update in self.telegram.updates(offset=offset, timeout=5):
+                updates = self.telegram.updates(offset=offset, timeout=5)
+                self._record_telegram_poll_success()
+                for update in updates:
                     if self._stop.is_set():
                         break
                     update_id = update.get("update_id")
@@ -684,10 +723,5 @@ class ExternalAgentService:
                         offset = update_id + 1
                         self.state.set_bot_offset(self.agent.agent_id, offset)
             except TelegramError as exc:
-                self.state.record_runtime_event(
-                    self.agent.agent_id,
-                    "warning",
-                    "telegram_error",
-                    type(exc).__name__,
-                )
+                self._record_telegram_poll_failure(exc)
                 self._stop.wait(3)

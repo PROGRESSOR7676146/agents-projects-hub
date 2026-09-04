@@ -9,12 +9,56 @@ from hermes_codex_router.migrations import (
     LATEST_SCHEMA_VERSION,
     MIGRATION_1,
     MIGRATION_12,
+    MIGRATION_19,
     backup_database,
     migrate_database,
 )
 
 
 class MigrationTests(unittest.TestCase):
+    def test_transport_health_migration_preserves_v19_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            migrate_database(path, create_backup=False)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute("DROP TABLE runtime_health")
+                connection.executescript(MIGRATION_12)
+                connection.executescript(MIGRATION_19)
+                connection.execute(
+                    """INSERT INTO runtime_health (
+                           component, instance_id, pid, process_start_marker,
+                           started_at, heartbeat_at, activity_state, provider_state,
+                           release_version, release_git_sha, release_built_at,
+                           release_clean, updated_at
+                       ) VALUES ('sender', 'telegram-outbox-sender', 1234, 'old-start',
+                                 '2026-09-04T12:00:00+00:00',
+                                 '2026-09-04T12:00:00+00:00', 'idle', 'unknown',
+                                 '0.6.0', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                                 '2026-09-04T11:00:00+00:00', 1,
+                                 '2026-09-04T12:00:00+00:00')"""
+                )
+                connection.execute("PRAGMA user_version = 19")
+                connection.commit()
+            finally:
+                connection.close()
+
+            result = migrate_database(path, create_backup=False)
+            self.assertEqual((result.previous_version, result.current_version), (19, 20))
+            migrated = sqlite3.connect(path)
+            try:
+                row = migrated.execute(
+                    """SELECT release_git_sha, transport_operation,
+                              transport_failure_class, transport_status_code,
+                              transport_retry_after, transport_consecutive_failures,
+                              transport_success_at
+                       FROM runtime_health WHERE component = 'sender'"""
+                ).fetchone()
+                self.assertEqual(row, ("a" * 40, None, None, None, None, 0, None))
+                self.assertEqual(migrated.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            finally:
+                migrated.close()
+
     def test_release_health_migration_preserves_v18_rows_as_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
@@ -39,7 +83,9 @@ class MigrationTests(unittest.TestCase):
 
             result = migrate_database(path, create_backup=False)
 
-            self.assertEqual((result.previous_version, result.current_version), (18, 19))
+            self.assertEqual(
+                (result.previous_version, result.current_version), (18, LATEST_SCHEMA_VERSION)
+            )
             migrated = sqlite3.connect(path)
             try:
                 row = migrated.execute(

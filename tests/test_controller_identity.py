@@ -4,6 +4,7 @@ import json
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
@@ -15,7 +16,7 @@ from hermes_codex_router.hub_config import (
 )
 from hermes_codex_router.service import ProjectHubService, ServiceError
 from hermes_codex_router.state import HubState
-from hermes_codex_router.telegram import TopicCallback
+from hermes_codex_router.telegram import TelegramError, TopicCallback
 
 
 class FakeTelegram:
@@ -367,6 +368,53 @@ class ControllerIdentityTests(unittest.TestCase):
 
         self.assertEqual(service.state.requested, ["hub"])
         self.assertEqual(service.state.saved, [("hub", 10)])
+
+    def test_controller_poll_transport_health_is_edge_triggered_and_recovers(self) -> None:
+        service = cast(Any, ProjectHubService.__new__(ProjectHubService))
+        service.state = HubState.open(self.base / "transport.db")
+        service._publishes_controller_health = True
+        service._health_started_at = datetime.now(timezone.utc)
+        service._health_process_start_marker = "controller-transport-test"
+        service._health_last_success_at = None
+        service._health_last_error_code = None
+        service._health_transport_error = None
+        service._health_transport_consecutive_failures = 0
+        service._health_transport_success_at = None
+        service._health_transport_reported_signature = None
+        service._health_last_publish_monotonic = 0.0
+        error = TelegramError(
+            "safe failure",
+            operation="poll",
+            failure_class="api_http",
+            status_code=502,
+        )
+        try:
+            service._record_telegram_poll_failure("hub", error)
+            service._record_telegram_poll_failure("hub", error)
+            service._publish_runtime_health(force=True)
+            failed = service.state.get_runtime_health("controller", "project-hub-controller")
+            assert failed is not None
+            self.assertEqual(failed.transport_operation, "poll")
+            self.assertEqual(failed.transport_failure_class, "api_http")
+            self.assertEqual(failed.transport_status_code, 502)
+            self.assertEqual(failed.transport_consecutive_failures, 2)
+
+            service._record_telegram_poll_success("hub")
+            service._publish_runtime_health(force=True)
+            recovered = service.state.get_runtime_health("controller", "project-hub-controller")
+            assert recovered is not None
+            self.assertIsNone(recovered.transport_operation)
+            self.assertEqual(recovered.transport_consecutive_failures, 0)
+            events = cast(
+                list[dict[str, object]],
+                service.state.status_snapshot()["runtime_events"],
+            )
+            self.assertEqual(
+                [event["code"] for event in reversed(events)],
+                ["telegram_transport_error", "telegram_recovered"],
+            )
+        finally:
+            service.state.close()
 
     def test_hub_offset_does_not_replace_existing_codex_offset(self) -> None:
         state = HubState.open(self.base / "offsets.db")

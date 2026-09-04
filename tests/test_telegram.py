@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import io
+import socket
+import ssl
 import unittest
+import urllib.error
+from email.message import Message
 from unittest.mock import call as mock_call
 from unittest.mock import patch
 
@@ -15,6 +20,72 @@ from hermes_codex_router.telegram import (
 
 
 class TelegramUpdateTests(unittest.TestCase):
+    def test_transport_failures_are_classified_without_exposing_request_secrets(self) -> None:
+        cases = (
+            (urllib.error.URLError(socket.gaierror("secret DNS detail")), "network_dns"),
+            (urllib.error.URLError(socket.timeout("secret timeout detail")), "network_timeout"),
+            (urllib.error.URLError(ssl.SSLError("secret TLS detail")), "network_tls"),
+        )
+        for failure, expected_class in cases:
+            with self.subTest(expected_class=expected_class):
+                telegram = TelegramBotApi(
+                    "123456:super-secret-token",
+                    opener=lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+                )
+                with self.assertRaises(TelegramError) as raised:
+                    telegram.call("getMe")
+                error = raised.exception
+                self.assertEqual(
+                    (error.operation, error.failure_class), ("api_call", expected_class)
+                )
+                rendered = (
+                    f"{error}\n{error.safe_detail(consecutive_failures=2, last_success=None)}"
+                )
+                self.assertNotIn("super-secret-token", rendered)
+                self.assertNotIn("secret", rendered)
+                self.assertTrue(error.__suppress_context__)
+
+    def test_http_rejection_exposes_only_safe_status_and_retry_after(self) -> None:
+        headers = Message()
+        failure = urllib.error.HTTPError(
+            "https://api.telegram.org/bot123456:super-secret-token/sendMessage",
+            429,
+            "secret rejection detail",
+            headers,
+            io.BytesIO(b'{"parameters":{"retry_after":17}}'),
+        )
+        telegram = TelegramBotApi(
+            "123456:super-secret-token",
+            opener=lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+        )
+        with self.assertRaises(TelegramError) as raised:
+            telegram.send_html(-1001234567890, 77, "hello")
+        error = raised.exception
+        self.assertEqual(
+            (error.operation, error.failure_class, error.status_code, error.retry_after),
+            ("send_message", "api_http", 429, 17),
+        )
+        rendered = f"{error}\n{error.safe_detail(consecutive_failures=1, last_success=None)}"
+        self.assertNotIn("super-secret-token", rendered)
+        self.assertNotIn("secret rejection detail", rendered)
+
+    def test_untrusted_diagnostic_fields_fail_to_bounded_unknown_values(self) -> None:
+        error = TelegramError(
+            "safe failure",
+            operation="poll;token=secret",
+            failure_class="network_timeout;payload=secret",
+            status_code=True,
+            retry_after=True,
+        )
+        detail = error.safe_detail(
+            consecutive_failures=1,
+            last_success="2026-09-05T12:00:00+00:00;token=secret",
+        )
+        self.assertEqual((error.operation, error.failure_class), ("unknown", "unknown"))
+        self.assertIsNone(error.status_code)
+        self.assertIsNone(error.retry_after)
+        self.assertNotIn("secret", detail)
+
     def test_chat_action_targets_forum_topic_and_general_without_fake_thread(self) -> None:
         telegram = TelegramBotApi("123456:example")
         with patch.object(telegram, "_call_with_timeout", return_value=True) as api_call:

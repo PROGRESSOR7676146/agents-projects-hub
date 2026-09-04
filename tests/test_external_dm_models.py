@@ -16,6 +16,7 @@ from hermes_codex_router.hub_config import (
 )
 from hermes_codex_router.provider_catalog_cache import CachedProviderModel, CatalogSnapshot
 from hermes_codex_router.state import HubState
+from hermes_codex_router.telegram import TelegramError
 
 
 class FakeTelegram:
@@ -48,6 +49,31 @@ def callbacks(markup: object) -> list[str]:
 
 
 class ExternalDirectModelTests(unittest.TestCase):
+    def test_direct_poller_transport_events_are_edge_triggered_and_recover(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = ExternalAgentService.__new__(ExternalAgentService)
+            service.agent = cast(Any, type("Agent", (), {"agent_id": "opencode"})())
+            service.state = HubState.open(Path(directory) / "direct.db")
+            service._transport_consecutive_failures = 0
+            service._transport_reported_signature = None
+            service._transport_success_at = None
+            error = TelegramError("safe failure", operation="poll", failure_class="network_dns")
+            try:
+                service._record_telegram_poll_failure(error)
+                service._record_telegram_poll_failure(error)
+                service._record_telegram_poll_success()
+                events = cast(
+                    list[dict[str, object]],
+                    service.state.status_snapshot()["runtime_events"],
+                )
+                self.assertEqual(
+                    [event["code"] for event in reversed(events)],
+                    ["telegram_transport_error", "telegram_recovered"],
+                )
+                self.assertIn("consecutive_failures=2", str(events[0]["detail"]))
+            finally:
+                service.state.close()
+
     def test_model_and_effort_are_applied_in_direct_chat(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

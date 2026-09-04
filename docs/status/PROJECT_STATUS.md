@@ -45,6 +45,15 @@ operator deployment inventory or live conversation evidence.
   unknown revision episode and re-arms only after convergence. Existing
   heartbeat/error/provider-state classification and the single configured Hub
   Operations destination remain unchanged.
+- Telegram polling and durable-send failures are classified without raw
+  exception text as bounded operation, network/API class, optional safe HTTP
+  status/retry-after, consecutive-failure count, and last-success time.
+  Controller and sender runtime health degrades while the current transport
+  failure is active and clears on a successful request. Identical retries emit
+  one edge event plus one recovery event; direct-provider pollers use the same
+  event contract without becoming required deployment-health components.
+  Advisory chat-action failures remain best-effort and do not block or repeat
+  provider work.
 - Central Telegram ingress with deterministic ordinary, Reply, mention, and
   quote routing; forwarded messages are passive durable context and bypass all
   command/stop/provider parsing. Non-target providers are not invoked merely to observe. An
@@ -172,10 +181,12 @@ operator deployment inventory or live conversation evidence.
   Codex same-turn steering, deterministic queued follow-up for runtimes without
   steering, and exact-utterance emergency stop with provider/process
   interruption are also implemented.
-- Schema version 15 adds durable per-message Telegram outbox parts. Version 14
-  repairs early version-13 deployments that had durable input
-  membership but had not yet created stop-request and turn-absorption tables;
-  the upgrade creates a private SQLite-consistent backup first.
+- Schema version 20 adds bounded Telegram transport state to runtime-health
+  snapshots. Version 19 added immutable release identity; version 15 added
+  durable per-message Telegram outbox parts; and version 14 repairs early
+  version-13 deployments that had durable input membership but had not yet
+  created stop-request and turn-absorption tables. Upgrades create a private
+  SQLite-consistent backup first.
 - Optional read-only Antigravity structured status/quota cache integration for
   compact `/status` and `/accounts`; private-file and freshness checks fail to
   unknown without invoking a model, and `doctor` reports each cache as fresh,

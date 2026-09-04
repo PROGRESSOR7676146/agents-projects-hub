@@ -133,6 +133,17 @@ class RuntimeHealthTests(unittest.TestCase):
             heartbeat_at=self.now - timedelta(seconds=90),
         )
         self.state.upsert_runtime_health(
+            component="sender",
+            instance_id="sender-transport-failed",
+            pid=5679,
+            process_start_marker="start-transport-failed",
+            started_at=self.now - timedelta(minutes=5),
+            heartbeat_at=self.now - timedelta(seconds=10),
+            transport_operation="send_message",
+            transport_failure_class="network_timeout",
+            transport_consecutive_failures=2,
+        )
+        self.state.upsert_runtime_health(
             component="provider_worker",
             instance_id="worker-stale",
             runtime="antigravity",
@@ -155,6 +166,7 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual(classify("controller", "controller-healthy"), "healthy")
         self.assertEqual(classify("provider_worker", "worker-limited"), "degraded")
         self.assertEqual(classify("sender", "sender-degraded"), "degraded")
+        self.assertEqual(classify("sender", "sender-transport-failed"), "degraded")
         self.assertEqual(classify("provider_worker", "worker-stale"), "stale")
         self.assertEqual(classify("sender", "missing"), "unknown")
 
@@ -177,6 +189,71 @@ class RuntimeHealthTests(unittest.TestCase):
             )
         with self.assertRaises(StateError):
             self.state.upsert_runtime_health(**cast(Any, common | {"pid": 0}))
+        invalid_transport = (
+            {"transport_operation": "poll-with-dash", "transport_consecutive_failures": 1},
+            {"transport_failure_class": "network timeout", "transport_consecutive_failures": 1},
+            {"transport_operation": "poll", "transport_consecutive_failures": 0},
+            {"transport_operation": "poll", "transport_consecutive_failures": 1},
+            {
+                "transport_operation": "poll",
+                "transport_failure_class": "network_timeout",
+                "transport_status_code": 99,
+                "transport_consecutive_failures": 1,
+            },
+            {
+                "transport_operation": "poll",
+                "transport_failure_class": "network_timeout",
+                "transport_retry_after": 86_401,
+                "transport_consecutive_failures": 1,
+            },
+        )
+        for values in invalid_transport:
+            with self.subTest(values=values), self.assertRaises(StateError):
+                self.state.upsert_runtime_health(**cast(Any, common | values))
+
+    def test_transport_health_round_trips_and_clears_after_recovery(self) -> None:
+        failed = self.state.upsert_runtime_health(
+            component="sender",
+            instance_id="sender-transport",
+            runtime="telegram",
+            pid=1234,
+            process_start_marker="sender-start",
+            started_at=self.now,
+            heartbeat_at=self.now,
+            transport_operation="send_message",
+            transport_failure_class="api_http",
+            transport_status_code=429,
+            transport_retry_after=17,
+            transport_consecutive_failures=3,
+            transport_success_at=self.now - timedelta(minutes=1),
+        )
+        self.assertEqual(
+            (
+                failed.transport_operation,
+                failed.transport_failure_class,
+                failed.transport_status_code,
+                failed.transport_retry_after,
+                failed.transport_consecutive_failures,
+            ),
+            ("send_message", "api_http", 429, 17, 3),
+        )
+
+        recovered = self.state.upsert_runtime_health(
+            component="sender",
+            instance_id="sender-transport",
+            runtime="telegram",
+            pid=1234,
+            process_start_marker="sender-start",
+            started_at=self.now,
+            heartbeat_at=self.now + timedelta(seconds=1),
+            transport_success_at=self.now + timedelta(seconds=1),
+        )
+        self.assertIsNone(recovered.transport_operation)
+        self.assertIsNone(recovered.transport_failure_class)
+        self.assertEqual(recovered.transport_consecutive_failures, 0)
+        self.assertEqual(
+            recovered.transport_success_at, (self.now + timedelta(seconds=1)).isoformat()
+        )
 
     def test_projection_includes_expected_components_and_uses_cache_only(self) -> None:
         base = Path(self.tempdir.name)

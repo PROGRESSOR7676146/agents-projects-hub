@@ -173,6 +173,12 @@ class RuntimeHealthRecord:
     release_git_sha: str | None
     release_built_at: str | None
     release_clean: bool
+    transport_operation: str | None
+    transport_failure_class: str | None
+    transport_status_code: int | None
+    transport_retry_after: int | None
+    transport_consecutive_failures: int
+    transport_success_at: str | None
     updated_at: str
 
 
@@ -367,6 +373,24 @@ class HubState:
                 None if row["release_built_at"] is None else str(row["release_built_at"])
             ),
             release_clean=bool(row["release_clean"]),
+            transport_operation=(
+                None if row["transport_operation"] is None else str(row["transport_operation"])
+            ),
+            transport_failure_class=(
+                None
+                if row["transport_failure_class"] is None
+                else str(row["transport_failure_class"])
+            ),
+            transport_status_code=(
+                None if row["transport_status_code"] is None else int(row["transport_status_code"])
+            ),
+            transport_retry_after=(
+                None if row["transport_retry_after"] is None else int(row["transport_retry_after"])
+            ),
+            transport_consecutive_failures=int(row["transport_consecutive_failures"]),
+            transport_success_at=(
+                None if row["transport_success_at"] is None else str(row["transport_success_at"])
+            ),
             updated_at=str(row["updated_at"]),
         )
 
@@ -390,6 +414,12 @@ class HubState:
         quota_remaining_percent: float | None = None,
         quota_reset_at: datetime | None = None,
         release_identity: ReleaseIdentity = CURRENT_RELEASE,
+        transport_operation: str | None = None,
+        transport_failure_class: str | None = None,
+        transport_status_code: int | None = None,
+        transport_retry_after: int | None = None,
+        transport_consecutive_failures: int = 0,
+        transport_success_at: datetime | None = None,
     ) -> RuntimeHealthRecord:
         """Replace one bounded runtime snapshot without probing its provider."""
         if component not in {"controller", "sender", "monitor", "provider_worker"}:
@@ -443,6 +473,55 @@ class HubState:
         release_built_at = release_identity.built_at
         if release_built_at is not None:
             _parse_timestamp(release_built_at, name="release build time")
+        transport_operation = _optional_bounded(
+            transport_operation, name="transport operation", maximum=32
+        )
+        transport_failure_class = _optional_bounded(
+            transport_failure_class, name="transport failure class", maximum=64
+        )
+        if (
+            transport_operation is not None
+            and re.fullmatch(r"[a-z_]+", transport_operation) is None
+        ):
+            raise StateError("invalid transport operation")
+        if (
+            transport_failure_class is not None
+            and re.fullmatch(r"[a-z_]+", transport_failure_class) is None
+        ):
+            raise StateError("invalid transport failure class")
+        if transport_status_code is not None and (
+            isinstance(transport_status_code, bool) or not 100 <= transport_status_code <= 599
+        ):
+            raise StateError("invalid transport status code")
+        if transport_retry_after is not None and (
+            isinstance(transport_retry_after, bool) or not 0 <= transport_retry_after <= 86_400
+        ):
+            raise StateError("invalid transport retry-after")
+        if isinstance(transport_consecutive_failures, bool) or not (
+            0 <= transport_consecutive_failures <= 1_000_000
+        ):
+            raise StateError("invalid transport consecutive failures")
+        if transport_consecutive_failures == 0 and any(
+            value is not None
+            for value in (
+                transport_operation,
+                transport_failure_class,
+                transport_status_code,
+                transport_retry_after,
+            )
+        ):
+            raise StateError("transport failure detail requires a positive failure count")
+        if transport_consecutive_failures > 0 and (
+            transport_operation is None or transport_failure_class is None
+        ):
+            raise StateError("transport failures require operation and failure class")
+        if transport_status_code is not None and transport_failure_class is None:
+            raise StateError("transport status requires a failure class")
+        if transport_retry_after is not None and transport_failure_class is None:
+            raise StateError("transport retry-after requires a failure class")
+        transport_success = (
+            None if transport_success_at is None else _timestamp(transport_success_at)
+        )
         with self._connection:
             self._connection.execute(
                 """INSERT INTO runtime_health (
@@ -450,8 +529,11 @@ class HubState:
                        started_at, heartbeat_at, success_at, error_code, activity_state,
                        active_job_id, active_lease_expires_at, provider_state,
                        quota_remaining_percent, quota_reset_at, release_version,
-                       release_git_sha, release_built_at, release_clean, updated_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       release_git_sha, release_built_at, release_clean,
+                       transport_operation, transport_failure_class, transport_status_code,
+                       transport_retry_after, transport_consecutive_failures,
+                       transport_success_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(component, instance_id) DO UPDATE SET
                      runtime = excluded.runtime,
                      agent_id = excluded.agent_id,
@@ -473,6 +555,12 @@ class HubState:
                      release_git_sha = excluded.release_git_sha,
                      release_built_at = excluded.release_built_at,
                      release_clean = excluded.release_clean,
+                     transport_operation = excluded.transport_operation,
+                     transport_failure_class = excluded.transport_failure_class,
+                     transport_status_code = excluded.transport_status_code,
+                     transport_retry_after = excluded.transport_retry_after,
+                     transport_consecutive_failures = excluded.transport_consecutive_failures,
+                     transport_success_at = excluded.transport_success_at,
                      updated_at = excluded.updated_at""",
                 (
                     component,
@@ -495,6 +583,12 @@ class HubState:
                     release_git_sha,
                     release_built_at,
                     int(release_identity.clean_tree),
+                    transport_operation,
+                    transport_failure_class,
+                    transport_status_code,
+                    transport_retry_after,
+                    transport_consecutive_failures,
+                    transport_success,
                     heartbeat,
                 ),
             )
@@ -540,11 +634,11 @@ class HubState:
             status = "stale"
         elif age > degraded_after:
             status = "degraded"
-        elif record.error_code is not None or record.provider_state in {
-            "limited",
-            "exhausted",
-            "unavailable",
-        }:
+        elif (
+            record.error_code is not None
+            or record.transport_consecutive_failures > 0
+            or record.provider_state in {"limited", "exhausted", "unavailable"}
+        ):
             status = "degraded"
         else:
             status = "healthy"

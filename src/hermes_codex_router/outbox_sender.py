@@ -16,7 +16,7 @@ from .artifacts import (
 )
 from .hub_config import HubConfig
 from .state import HubState
-from .telegram import TelegramBotApi
+from .telegram import TelegramBotApi, TelegramError
 
 
 class TelegramOutboxSenderError(RuntimeError):
@@ -104,9 +104,13 @@ class TelegramOutboxSender:
         self._process_start_marker = uuid.uuid4().hex
         self._last_success_at: datetime | None = None
         self._last_error_code: str | None = None
+        self._transport_error: TelegramError | None = None
+        self._transport_consecutive_failures = 0
+        self._transport_success_at: datetime | None = None
+        self._transport_reported_signature: tuple[str, str, int | None] | None = None
         self._last_health_publish_monotonic = 0.0
         self._chat_action_due: dict[tuple[str, int, int], float] = {}
-        self._chat_action_failures: set[tuple[str, int, int]] = set()
+        self._chat_action_failures: dict[tuple[str, int, int], tuple[str, str, int | None]] = {}
         self._publish_health()
 
     def close(self) -> None:
@@ -149,10 +153,63 @@ class TelegramOutboxSender:
                 activity_state=activity_state,
                 active_job_id=active_outbox_id,
                 active_lease_expires_at=active_lease_expires_at,
+                transport_operation=(
+                    None if self._transport_error is None else self._transport_error.operation
+                ),
+                transport_failure_class=(
+                    None if self._transport_error is None else self._transport_error.failure_class
+                ),
+                transport_status_code=(
+                    None if self._transport_error is None else self._transport_error.status_code
+                ),
+                transport_retry_after=(
+                    None if self._transport_error is None else self._transport_error.retry_after
+                ),
+                transport_consecutive_failures=self._transport_consecutive_failures,
+                transport_success_at=self._transport_success_at,
             )
             self._last_health_publish_monotonic = now_monotonic
         except Exception:
             pass
+
+    def _record_transport_failure(self, error: TelegramError) -> None:
+        self._transport_consecutive_failures += 1
+        self._transport_error = error
+        self._last_error_code = error.health_code
+        if error.signature != self._transport_reported_signature:
+            self._record_event(
+                "warning",
+                "telegram_transport_error",
+                error.safe_detail(
+                    consecutive_failures=self._transport_consecutive_failures,
+                    last_success=(
+                        None
+                        if self._transport_success_at is None
+                        else self._transport_success_at.isoformat()
+                    ),
+                ),
+            )
+            self._transport_reported_signature = error.signature
+
+    def _record_transport_success(self) -> None:
+        observed_at = datetime.now(timezone.utc)
+        failures = self._transport_consecutive_failures
+        recovered_operation = (
+            "send" if self._transport_error is None else self._transport_error.operation
+        )
+        if failures:
+            self._record_event(
+                "info",
+                "telegram_recovered",
+                f"operation={recovered_operation};consecutive_failures={failures};"
+                f"last_success={observed_at.isoformat()}",
+            )
+        self._transport_error = None
+        self._transport_consecutive_failures = 0
+        self._transport_success_at = observed_at
+        self._transport_reported_signature = None
+        self._last_success_at = observed_at
+        self._last_error_code = None
 
     def run_forever(self, *, poll_seconds: float = 0.2) -> None:
         if poll_seconds <= 0:
@@ -207,7 +264,11 @@ class TelegramOutboxSender:
         self._chat_action_due = {
             key: due for key, due in self._chat_action_due.items() if key in active_keys
         }
-        self._chat_action_failures.intersection_update(active_keys)
+        self._chat_action_failures = {
+            key: signature
+            for key, signature in self._chat_action_failures.items()
+            if key in active_keys
+        }
         for activity in activities:
             key = (activity.agent_id, activity.chat_id, activity.thread_id)
             if current < self._chat_action_due.get(key, 0.0):
@@ -225,15 +286,25 @@ class TelegramOutboxSender:
                     except Exception:
                         pass
             except Exception as exc:
-                if key not in self._chat_action_failures:
+                error = (
+                    exc
+                    if isinstance(exc, TelegramError)
+                    else TelegramError(
+                        "Telegram advisory request failed",
+                        operation="chat_action",
+                        failure_class="unexpected_client",
+                    )
+                )
+                if self._chat_action_failures.get(key) != error.signature:
                     self._record_event(
                         "warning",
                         "chat_action_error",
-                        f"{activity.agent_id}:{type(exc).__name__}",
+                        error.safe_detail(consecutive_failures=1, last_success=None),
                     )
-                    self._chat_action_failures.add(key)
+                    self._chat_action_failures[key] = error.signature
             else:
-                self._chat_action_failures.discard(key)
+                if self._chat_action_failures.pop(key, None) is not None:
+                    self._record_event("info", "chat_action_recovered", "operation=chat_action")
             self._chat_action_due[key] = current + self._CHAT_ACTION_INTERVAL_SECONDS
 
     def _deliver_one(self, agent_id: str, *, now: datetime | None = None) -> bool:
@@ -293,6 +364,7 @@ class TelegramOutboxSender:
                 telegram_message_id=message_id or 1,
                 now=now,
             )
+            self._record_transport_success()
             if delivered_file is not None:
                 try:
                     remove_spooled_artifact(
@@ -300,14 +372,17 @@ class TelegramOutboxSender:
                     )
                 except Exception as exc:
                     self._record_event("warning", "artifact_cleanup_error", type(exc).__name__)
-            self._last_success_at = datetime.now(timezone.utc)
-            self._last_error_code = None
         except Exception as exc:
-            self._last_error_code = type(exc).__name__[:128]
+            error_code = type(exc).__name__[:128]
+            if isinstance(exc, TelegramError):
+                self._record_transport_failure(exc)
+                error_code = exc.health_code
+            else:
+                self._last_error_code = error_code
             self.state.retry_telegram_outbox(
                 outbox.outbox_id,
                 outbox.lease_token,
-                error_code=type(exc).__name__,
+                error_code=error_code,
                 delay_seconds=1,
                 now=now,
             )

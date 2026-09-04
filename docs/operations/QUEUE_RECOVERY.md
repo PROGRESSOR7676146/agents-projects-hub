@@ -92,6 +92,12 @@ gateway and a local worker as competing consumers for the same provider.
 
 ## Telegram outbox recovery
 
+- Diagnose the cached sender health before changing queue state. A current
+  `transport_operation` plus `transport_failure_class` distinguishes delivery
+  timeout/DNS/TLS/I/O from an API rejection; safe status and retry-after may be
+  present. The consecutive count describes the current episode and resets only
+  after a successful Telegram request. Runtime events are edge-triggered, so
+  one recorded error can represent many retries.
 - An expired `sending` lease returns to `pending` through sender-scoped stale
   recovery. The provider result is not recomputed.
 - Telegram may have accepted a message immediately before sender loss. A retry
@@ -120,6 +126,45 @@ not a live matching process and that no process accepts the socket. Stop the
 owning unit before any cleanup. If ownership remains uncertain, leave the path
 in place and use the official stdio fallback or local recovery rather than
 deleting it.
+
+## Interactive terminal takeover and lock contention
+
+When a session requires interactive debugging, manual turn execution, or re-authentication:
+
+1. **Do not use `pkill` on background daemons**:
+   Background units (`codex-multi-auth-appserver.service`, `tlive.service`, `agents-projects-hub-worker@codex.service`) have systemd restart policies (`Restart=always` / `Restart=on-failure`). Sending signals via `pkill` causes systemd to restart them within seconds, immediately re-locking control sockets (`app-server-control.sock`) and thread writer locks (`~/.codex/thread-writer-locks/`).
+
+2. **Use local takeover / release commands**:
+   ```bash
+   # Safely stop competing background services, verify locks, and ensure proxy listener
+   agents-projects-hub local-takeover [--session SESSION_ID]
+   # or helper script:
+   ./scripts/local-takeover.sh [--session SESSION_ID]
+   ```
+   This stops the background worker, tlive companion, and app-server cleanly.
+
+3. **Verify proxy configuration (`bind-app` vs `unbind-app`)**:
+   When using Codex multi-auth, `~/.codex/config.toml` configures a local proxy (typically `http://127.0.0.1:42911`).
+   - If the background appserver is stopped, standalone `codex` invocations fail with connection errors if the proxy port is not listening.
+   - `local-takeover` ensures the standalone multi-auth router is bound without launching background tlive or writer lock contention.
+   - Alternatively, running `codex-multi-auth rotation unbind-app` reverts `config.toml` to direct OpenAI endpoints.
+
+4. **Multi-auth headless re-authentication**:
+   If an account token is revoked or expired:
+   ```bash
+   codex-multi-auth login --account <N> --device-auth
+   codex-multi-auth rotation reset-rate-limits --all
+   ```
+   Do not run bare `codex login` if multi-auth is active, as multi-auth manages rotation and credentials.
+
+5. **Release control back to background services**:
+   Once interactive terminal work is complete and the CLI process has exited:
+   ```bash
+   agents-projects-hub local-release
+   # or helper script:
+   ./scripts/local-release.sh
+   ```
+   The release command verifies that no local processes still hold locks on `~/.codex/thread-writer-locks/` before restarting `codex-multi-auth-appserver.service`, `tlive.service`, and `agents-projects-hub-worker@codex.service` in the correct dependency order.
 
 ## Replacement hardware and writer leases
 
