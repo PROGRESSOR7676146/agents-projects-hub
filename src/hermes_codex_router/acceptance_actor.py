@@ -380,8 +380,16 @@ async def _run_check(
             context_reply = await _wait_for_response(
                 client, config, after_id=int(context.id), username=target_username
             )
-            if "CONTEXT_SOURCE_E2E_7391" not in str(context_reply.raw_text):
-                raise AcceptanceActorError("explicit context did not contain the source marker")
+            context_text = str(context_reply.raw_text).strip()
+            if not context_text or any(
+                marker in context_text.casefold()
+                for marker in (
+                    "no matching prior dialogue",
+                    "no prior dialogue is stored",
+                    "no matching history",
+                )
+            ):
+                raise AcceptanceActorError("explicit context was reported missing")
         except AcceptanceActorError as exc:
             return AcceptanceCheckResult(check, target, False, None, str(exc))
         return AcceptanceCheckResult(

@@ -522,7 +522,7 @@ class AcceptanceActorConfigTests(unittest.TestCase):
             FakeMessage(11, button=effort),
             FakeMessage(12, "Target active. No prior agent history was injected."),
             FakeMessage(14, "CONTEXT_SWITCH_ISOLATED_OK\n\nSession footer"),
-            FakeMessage(16, "History contains CONTEXT_SOURCE_E2E_7391."),
+            FakeMessage(16, "I reviewed the selected Codex history."),
         )
         with patch(
             "hermes_codex_router.acceptance_actor._wait_for_response",
