@@ -8,12 +8,58 @@ from pathlib import Path
 from hermes_codex_router.migrations import (
     LATEST_SCHEMA_VERSION,
     MIGRATION_1,
+    MIGRATION_12,
     backup_database,
     migrate_database,
 )
 
 
 class MigrationTests(unittest.TestCase):
+    def test_release_health_migration_preserves_v18_rows_as_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            migrate_database(path, create_backup=False)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute("DROP TABLE runtime_health")
+                connection.executescript(MIGRATION_12)
+                connection.execute(
+                    """INSERT INTO runtime_health (
+                           component, instance_id, pid, process_start_marker,
+                           started_at, heartbeat_at, activity_state, provider_state, updated_at
+                       ) VALUES ('controller', 'project-hub-controller', 1234, 'old-start',
+                                 '2026-09-04T12:00:00+00:00',
+                                 '2026-09-04T12:00:00+00:00', 'idle', 'unknown',
+                                 '2026-09-04T12:00:00+00:00')"""
+                )
+                connection.execute("PRAGMA user_version = 18")
+                connection.commit()
+            finally:
+                connection.close()
+
+            result = migrate_database(path, create_backup=False)
+
+            self.assertEqual((result.previous_version, result.current_version), (18, 19))
+            migrated = sqlite3.connect(path)
+            try:
+                row = migrated.execute(
+                    """SELECT release_version, release_git_sha, release_built_at, release_clean
+                       FROM runtime_health
+                       WHERE component = 'controller'"""
+                ).fetchone()
+                self.assertEqual(row, (None, None, None, 0))
+                migrated.execute(
+                    """INSERT INTO runtime_health (
+                           component, instance_id, pid, process_start_marker,
+                           started_at, heartbeat_at, activity_state, provider_state, updated_at
+                       ) VALUES ('monitor', 'operations-monitor', 1234, 'monitor-start',
+                                 '2026-09-04T12:00:00+00:00',
+                                 '2026-09-04T12:00:00+00:00', 'idle', 'unknown',
+                                 '2026-09-04T12:00:00+00:00')"""
+                )
+            finally:
+                migrated.close()
+
     def test_migration_handles_legacy_writer_column_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"

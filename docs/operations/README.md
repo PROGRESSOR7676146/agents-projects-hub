@@ -15,15 +15,20 @@ Operational truth is split by purpose:
 - Engineering debt and exact evidence rules:
   [`ENGINEERING_BASELINE.md`](ENGINEERING_BASELINE.md).
 - Complete validation gate: `python scripts/validate.py`.
+- Artifact provenance: `agents-projects-hub release-info` succeeds only for a
+  wheel with complete clean-tree release identity; run it before promotion.
 - Read-only deployment diagnostics: `agents-projects-hub doctor HUB_CONFIG` and
   `agents-projects-hub monitor HUB_CONFIG`.
 - Cache-only status and component health: `agents-projects-hub status HUB_CONFIG` reports
-  the expected Controller, the standalone sender when configured, and every
-  configured external provider worker as `healthy`, `degraded`, `stale`, or
-  `unknown`. This projection reads SQLite only and never invokes a provider or
-  model or optional account helper. Account/provider probes belong to their
-  dedicated command and monitoring paths. Monitoring uses the same projection; general notifications still go
-  only to the explicitly configured Hub Operations topic.
+  the expected Controller and monitor, the standalone sender when configured,
+  and every configured external provider worker as `healthy`, `degraded`,
+  `stale`, or `unknown`. Their bounded release fields produce one deterministic
+  deployment status: `converged`, `mixed`, or `unknown`. Only `converged` names
+  one clean package version, exact Git SHA, and build time. This projection reads
+  SQLite only and never invokes a provider, model, or optional account helper.
+  Monitoring uses the same projection and sends one transition alert for a
+  mixed/unknown episode to the configured Hub Operations topic, re-arming only
+  after convergence.
 - External queue delivery: run one `agents-projects-hub sender HUB_CONFIG`
   alongside the selected provider workers, then set `outbox_runtime` to
   `external`. The default `controller` value preserves the previous deployment

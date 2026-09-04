@@ -37,14 +37,14 @@ operator deployment inventory or live conversation evidence.
   conservative ambiguity recovery. Managed-socket ownership guards remain part
   of the service/recovery stage.
 - Additive SQLite runtime-health cache and bounded state APIs cover Controller,
-  sender, and provider-worker identities. Classification is derived only from
-  cached heartbeat/error/provider state and never calls a model or provider.
-  Controller, standalone Telegram sender, and external provider workers publish
-  startup, heartbeat, activity, bounded error, and success snapshots as
-  applicable. Local `status` projects every configured component from this cache,
-  and monitoring distinguishes unknown, stale, and degraded components without
-  probing their provider. General notifications retain the single configured Hub
-  Operations destination.
+  sender, monitor, and provider-worker identities. Wheel builds embed package
+  version, exact Git SHA, build time, and a clean-tree assertion; each required
+  process publishes that identity with its heartbeat. Cache-only `status`
+  deterministically reports a converged, mixed, or unknown deployment without a
+  provider/runtime probe. Monitoring emits one transition alert for a mixed or
+  unknown revision episode and re-arms only after convergence. Existing
+  heartbeat/error/provider-state classification and the single configured Hub
+  Operations destination remain unchanged.
 - Central Telegram ingress with deterministic ordinary, Reply, mention, and
   quote routing; forwarded messages are passive durable context and bypass all
   command/stop/provider parsing. Non-target providers are not invoked merely to observe. An

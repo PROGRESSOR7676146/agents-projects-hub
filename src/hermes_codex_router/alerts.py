@@ -43,8 +43,22 @@ def evaluate_operational_alerts(
     evaluated_at = now or datetime.now(timezone.utc)
     alerts: list[OperationalAlert] = []
     if runtime_health is not None:
+        deployment_revision = runtime_health.get("deployment_revision")
+        if isinstance(deployment_revision, Mapping):
+            revision_status = str(deployment_revision.get("status") or "unknown")
+            if revision_status in {"mixed", "unknown"}:
+                alerts.append(
+                    OperationalAlert(
+                        "deployment:revision",
+                        f"deployment_revision_{revision_status}",
+                        "error",
+                        "Required Project Hub components report "
+                        f"{revision_status} release identity; inspect local cached status "
+                        "before acceptance.",
+                    )
+                )
         health_items: list[Mapping[str, object]] = []
-        for name in ("controller", "sender"):
+        for name in ("controller", "monitor", "sender"):
             value = runtime_health.get(name)
             if isinstance(value, Mapping):
                 health_items.append(value)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import os
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -12,6 +13,7 @@ from typing import Iterator, Sequence
 
 from .artifacts import ValidatedArtifact
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
+from .release_identity import CURRENT_RELEASE, ReleaseIdentity
 from .telegram_multipart import split_telegram_html
 
 MAX_PROVIDER_RESPONSE_LENGTH = 200_000
@@ -167,6 +169,10 @@ class RuntimeHealthRecord:
     provider_state: str
     quota_remaining_percent: float | None
     quota_reset_at: str | None
+    release_version: str | None
+    release_git_sha: str | None
+    release_built_at: str | None
+    release_clean: bool
     updated_at: str
 
 
@@ -351,6 +357,16 @@ class HubState:
                 else float(row["quota_remaining_percent"])
             ),
             quota_reset_at=(None if row["quota_reset_at"] is None else str(row["quota_reset_at"])),
+            release_version=(
+                None if row["release_version"] is None else str(row["release_version"])
+            ),
+            release_git_sha=(
+                None if row["release_git_sha"] is None else str(row["release_git_sha"])
+            ),
+            release_built_at=(
+                None if row["release_built_at"] is None else str(row["release_built_at"])
+            ),
+            release_clean=bool(row["release_clean"]),
             updated_at=str(row["updated_at"]),
         )
 
@@ -373,9 +389,10 @@ class HubState:
         provider_state: str = "unknown",
         quota_remaining_percent: float | None = None,
         quota_reset_at: datetime | None = None,
+        release_identity: ReleaseIdentity = CURRENT_RELEASE,
     ) -> RuntimeHealthRecord:
         """Replace one bounded runtime snapshot without probing its provider."""
-        if component not in {"controller", "sender", "provider_worker"}:
+        if component not in {"controller", "sender", "monitor", "provider_worker"}:
             raise StateError("invalid runtime health component")
         instance_id = _bounded(instance_id, name="instance id", maximum=128)
         process_start_marker = _bounded(
@@ -414,14 +431,27 @@ class HubState:
             None if active_lease_expires_at is None else _timestamp(active_lease_expires_at)
         )
         quota_reset = None if quota_reset_at is None else _timestamp(quota_reset_at)
+        release_version = _bounded(
+            release_identity.package_version, name="release version", maximum=64
+        )
+        release_git_sha = release_identity.git_sha
+        if (
+            release_git_sha is not None
+            and re.fullmatch(r"[0-9a-f]{40,64}", release_git_sha) is None
+        ):
+            raise StateError("invalid release Git SHA")
+        release_built_at = release_identity.built_at
+        if release_built_at is not None:
+            _parse_timestamp(release_built_at, name="release build time")
         with self._connection:
             self._connection.execute(
                 """INSERT INTO runtime_health (
                        component, instance_id, runtime, agent_id, pid, process_start_marker,
                        started_at, heartbeat_at, success_at, error_code, activity_state,
                        active_job_id, active_lease_expires_at, provider_state,
-                       quota_remaining_percent, quota_reset_at, updated_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       quota_remaining_percent, quota_reset_at, release_version,
+                       release_git_sha, release_built_at, release_clean, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(component, instance_id) DO UPDATE SET
                      runtime = excluded.runtime,
                      agent_id = excluded.agent_id,
@@ -439,6 +469,10 @@ class HubState:
                      provider_state = excluded.provider_state,
                      quota_remaining_percent = excluded.quota_remaining_percent,
                      quota_reset_at = excluded.quota_reset_at,
+                     release_version = excluded.release_version,
+                     release_git_sha = excluded.release_git_sha,
+                     release_built_at = excluded.release_built_at,
+                     release_clean = excluded.release_clean,
                      updated_at = excluded.updated_at""",
                 (
                     component,
@@ -457,6 +491,10 @@ class HubState:
                     provider_state,
                     quota_remaining_percent,
                     quota_reset,
+                    release_version,
+                    release_git_sha,
+                    release_built_at,
+                    int(release_identity.clean_tree),
                     heartbeat,
                 ),
             )

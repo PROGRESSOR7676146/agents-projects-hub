@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import html
+import os
 import subprocess
 import time
+import uuid
 from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from .alerts import DEFAULT_LOW_QUOTA_PERCENT, OperationalAlert, evaluate_operational_alerts
@@ -28,7 +31,7 @@ from .provider_events import (
     format_codex_rotation_event,
     read_codex_runtime_snapshot,
 )
-from .runtime_health import project_runtime_health
+from .runtime_health import MONITOR_INSTANCE_ID, project_runtime_health
 from .state import HubState
 from .telegram import TelegramBotApi, TelegramError
 
@@ -138,6 +141,17 @@ def run_monitor_once(
     cooldown_seconds: int = 60 * 60,
 ) -> dict[str, object]:
     state = HubState.open(config.state_path)
+    monitor_started = datetime.now(timezone.utc)
+    monitor_marker = uuid.uuid4().hex
+    monitor_completed = False
+    state.upsert_runtime_health(
+        component="monitor",
+        instance_id=MONITOR_INSTANCE_ID,
+        pid=os.getpid(),
+        process_start_marker=monitor_marker,
+        started_at=monitor_started,
+        heartbeat_at=monitor_started,
+    )
     try:
         snapshot = state.status_snapshot()
         catalog_refresh = refresh_provider_catalogs(config)
@@ -390,12 +404,37 @@ def run_monitor_once(
                         )
                 else:
                     delivered.extend(f"{alert.code}:codex" for alert in operations_due)
-        return {
+        result = {
             "ok": not any(alert.severity == "error" for alert in alerts),
             "alerts": [asdict(alert) for alert in alerts],
             "delivered": delivered,
             "repairs": repairs,
             "catalog_refresh": asdict(catalog_refresh),
         }
+        completed_at = datetime.now(timezone.utc)
+        state.upsert_runtime_health(
+            component="monitor",
+            instance_id=MONITOR_INSTANCE_ID,
+            pid=os.getpid(),
+            process_start_marker=monitor_marker,
+            started_at=monitor_started,
+            heartbeat_at=completed_at,
+            success_at=completed_at,
+        )
+        monitor_completed = True
+        return result
     finally:
+        if not monitor_completed:
+            try:
+                state.upsert_runtime_health(
+                    component="monitor",
+                    instance_id=MONITOR_INSTANCE_ID,
+                    pid=os.getpid(),
+                    process_start_marker=monitor_marker,
+                    started_at=monitor_started,
+                    heartbeat_at=datetime.now(timezone.utc),
+                    error_code="monitor_cycle_error",
+                )
+            except Exception:
+                pass
         state.close()

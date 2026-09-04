@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
@@ -31,6 +32,7 @@ from .outbox_sender import TelegramOutboxSender
 from .pilot import run_codex_pilot
 from .project_admin import add_project, set_project_enabled
 from .registry import RegistryError, load_registry
+from .release_identity import CURRENT_RELEASE
 from .runtime_health import project_runtime_health
 from .service import ProjectHubService
 from .state import HubState, StateError
@@ -77,6 +79,8 @@ def _parser() -> argparse.ArgumentParser:
 
     status = commands.add_parser("status", help="print persisted topic/session status")
     status.add_argument("config", type=Path)
+
+    commands.add_parser("release-info", help="print embedded package release identity")
 
     migrate = commands.add_parser("migrate", help="migrate a state database safely")
     migrate.add_argument("state", type=Path)
@@ -357,6 +361,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             finally:
                 state.close()
             return 0
+        if args.command == "release-info":
+            _print({"ok": CURRENT_RELEASE.verified, **asdict(CURRENT_RELEASE)})
+            return 0 if CURRENT_RELEASE.verified else 1
         if args.command == "migrate":
             result = migrate_database(args.state, create_backup=not args.no_backup)
             _print(

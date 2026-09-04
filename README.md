@@ -357,6 +357,7 @@ Install BotFather tokens without echoing them or placing them in JSON:
 # Read-only diagnostics and persisted status
 agents-projects-hub doctor config/hub.json
 agents-projects-hub status config/hub.json
+agents-projects-hub release-info
 agents-projects-hub monitor config/hub.json
 
 # SQLite-consistent backup and versioned migration

@@ -508,12 +508,13 @@ more specific and consistent with this baseline.
 - **REQ-OPS-008 (Accepted):** On replacement hardware, stale writer leases from
   the lost host MUST be reset safely after verifying the old processes cannot
   exist.
-- **REQ-OPS-009 (Implemented):** Controller, sender,
-  and provider workers MUST publish bounded last-known runtime health to local
-  SQLite. Cached health MUST distinguish `healthy`, `degraded`, `stale`, and
-  `unknown` without invoking a model, provider API, or runtime probe. It MUST
-  contain no prompts, responses, exception detail, command lines, environment
-  data, credentials, or account identifiers.
+- **REQ-OPS-009 (Implemented):** Controller, sender, monitor, and every configured
+  provider worker MUST publish bounded SQLite health with package version, exact
+  Git SHA, build time, and clean-tree assertion. Cache-only status MUST detect
+  mixed or unknown required-component revisions; monitoring alerts once per
+  episode and re-arms only after convergence. Health MUST contain no prompts,
+  responses, exception detail, paths, command lines, environment data,
+  credentials, or account identifiers.
 
 **Recovery limit:** exact in-flight turns are not portable across process or
 machine loss. Only completed state that was persisted before the loss can be

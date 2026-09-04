@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from hermes_codex_router.cli import main
 from hermes_codex_router.hub_config import AgentDefinition, HubConfig, TerminalSettings
+from hermes_codex_router.release_identity import ReleaseIdentity
 from hermes_codex_router.runtime_health import project_runtime_health
 from hermes_codex_router.state import HubState, StateError
 
@@ -28,6 +29,7 @@ class RuntimeHealthTests(unittest.TestCase):
         self.tempdir.cleanup()
 
     def test_health_snapshot_round_trips_bounded_non_secret_fields(self) -> None:
+        release = ReleaseIdentity("0.6.0", "a" * 40, "2026-09-04T12:00:00+00:00", True)
         record = self.state.upsert_runtime_health(
             component="provider_worker",
             instance_id="worker-opencode-1",
@@ -44,6 +46,7 @@ class RuntimeHealthTests(unittest.TestCase):
             provider_state="ready",
             quota_remaining_percent=75.5,
             quota_reset_at=self.now + timedelta(hours=1),
+            release_identity=release,
         )
 
         self.assertEqual(record.component, "provider_worker")
@@ -55,6 +58,10 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual(record.active_job_id, "job-example-1")
         self.assertEqual(record.provider_state, "ready")
         self.assertEqual(record.quota_remaining_percent, 75.5)
+        self.assertEqual(record.release_version, "0.6.0")
+        self.assertEqual(record.release_git_sha, "a" * 40)
+        self.assertEqual(record.release_built_at, "2026-09-04T12:00:00+00:00")
+        self.assertTrue(record.release_clean)
         self.assertEqual(
             self.state.get_runtime_health("provider_worker", "worker-opencode-1"),
             record,
@@ -325,6 +332,94 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertTrue(worker["identity_mismatch"])
         self.assertEqual(worker["runtime"], "codex")
         self.assertEqual(worker["agent_id"], "codex")
+
+    def test_deployment_revision_requires_one_complete_identity(self) -> None:
+        base = Path(self.tempdir.name)
+        config = HubConfig(
+            schema_version=1,
+            owner_user_ids=(42,),
+            registry_path=base / "projects.json",
+            state_path=base / "state.db",
+            codex_socket_path=base / "codex.sock",
+            manage_codex_server=False,
+            terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+            projects=(),
+            agents=(
+                AgentDefinition(
+                    "codex",
+                    "Codex",
+                    "example_bot",
+                    "codex",
+                    None,
+                    True,
+                    False,
+                    "gpt-example",
+                    "high",
+                ),
+            ),
+            dispatch_mode="queue",
+            queue_runtime="external",
+            outbox_runtime="external",
+            external_worker_agent_ids=("codex",),
+        )
+        release = ReleaseIdentity("0.6.0", "a" * 40, "2026-09-04T12:00:00+00:00", True)
+        components = (
+            ("controller", "project-hub-controller", None, None),
+            ("monitor", "operations-monitor", None, None),
+            ("sender", "telegram-outbox-sender", "telegram", None),
+            ("provider_worker", "codex-worker", "codex", "codex"),
+        )
+        for component, instance_id, runtime, agent_id in components:
+            self.state.upsert_runtime_health(
+                component=component,
+                instance_id=instance_id,
+                runtime=runtime,
+                agent_id=agent_id,
+                pid=1234,
+                process_start_marker=f"{component}-start",
+                started_at=self.now,
+                heartbeat_at=self.now,
+                release_identity=release,
+            )
+
+        projected = project_runtime_health(self.state, config, now=self.now)
+        self.assertEqual(projected["deployment_revision"]["status"], "converged")
+        self.assertEqual(projected["deployment_revision"]["git_sha"], "a" * 40)
+        self.assertEqual(projected["deployment_revision"]["required_components"], 4)
+
+        self.state.upsert_runtime_health(
+            component="provider_worker",
+            instance_id="codex-worker",
+            runtime="codex",
+            agent_id="codex",
+            pid=1234,
+            process_start_marker="codex-start",
+            started_at=self.now,
+            heartbeat_at=self.now,
+            release_identity=ReleaseIdentity("0.6.0", "b" * 40, "2026-09-04T12:00:00+00:00", True),
+        )
+        self.assertEqual(
+            project_runtime_health(self.state, config, now=self.now)["deployment_revision"][
+                "status"
+            ],
+            "mixed",
+        )
+
+        self.state.upsert_runtime_health(
+            component="monitor",
+            instance_id="operations-monitor",
+            pid=1234,
+            process_start_marker="monitor-start",
+            started_at=self.now,
+            heartbeat_at=self.now,
+            release_identity=ReleaseIdentity("0.6.0", None, None, False),
+        )
+        self.assertEqual(
+            project_runtime_health(self.state, config, now=self.now)["deployment_revision"][
+                "status"
+            ],
+            "unknown",
+        )
 
 
 if __name__ == "__main__":

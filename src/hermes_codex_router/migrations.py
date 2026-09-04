@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-LATEST_SCHEMA_VERSION = 18
+LATEST_SCHEMA_VERSION = 19
 
 
 MIGRATION_1 = """
@@ -575,6 +575,76 @@ END;
 """
 
 
+MIGRATION_19 = """
+DROP INDEX IF EXISTS runtime_health_heartbeat;
+DROP INDEX IF EXISTS runtime_health_agent;
+ALTER TABLE runtime_health RENAME TO runtime_health_v18;
+CREATE TABLE runtime_health (
+    component TEXT NOT NULL CHECK(component IN (
+        'controller', 'sender', 'monitor', 'provider_worker'
+    )),
+    instance_id TEXT NOT NULL CHECK(length(instance_id) BETWEEN 1 AND 128),
+    runtime TEXT CHECK(runtime IS NULL OR length(runtime) BETWEEN 1 AND 64),
+    agent_id TEXT CHECK(agent_id IS NULL OR length(agent_id) BETWEEN 1 AND 64),
+    pid INTEGER NOT NULL CHECK(pid > 0),
+    process_start_marker TEXT NOT NULL
+        CHECK(length(process_start_marker) BETWEEN 1 AND 128),
+    started_at TEXT NOT NULL CHECK(length(started_at) BETWEEN 1 AND 64),
+    heartbeat_at TEXT NOT NULL CHECK(length(heartbeat_at) BETWEEN 1 AND 64),
+    success_at TEXT CHECK(success_at IS NULL OR length(success_at) BETWEEN 1 AND 64),
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) BETWEEN 1 AND 128),
+    activity_state TEXT NOT NULL DEFAULT 'idle' CHECK(activity_state IN (
+        'idle', 'leased', 'executing', 'sending', 'unknown'
+    )),
+    active_job_id TEXT CHECK(active_job_id IS NULL OR length(active_job_id) BETWEEN 1 AND 128),
+    active_lease_expires_at TEXT CHECK(
+        active_lease_expires_at IS NULL OR length(active_lease_expires_at) BETWEEN 1 AND 64
+    ),
+    provider_state TEXT NOT NULL DEFAULT 'unknown' CHECK(provider_state IN (
+        'unknown', 'ready', 'limited', 'exhausted', 'unavailable'
+    )),
+    quota_remaining_percent REAL CHECK(
+        quota_remaining_percent IS NULL
+        OR (quota_remaining_percent >= 0 AND quota_remaining_percent <= 100)
+    ),
+    quota_reset_at TEXT CHECK(quota_reset_at IS NULL OR length(quota_reset_at) BETWEEN 1 AND 64),
+    release_version TEXT CHECK(release_version IS NULL OR length(release_version) BETWEEN 1 AND 64),
+    release_git_sha TEXT CHECK(
+        release_git_sha IS NULL OR length(release_git_sha) BETWEEN 40 AND 64
+    ),
+    release_built_at TEXT CHECK(
+        release_built_at IS NULL OR length(release_built_at) BETWEEN 1 AND 64
+    ),
+    release_clean INTEGER NOT NULL DEFAULT 0 CHECK(release_clean IN (0, 1)),
+    updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64),
+    PRIMARY KEY(component, instance_id),
+    CHECK(active_job_id IS NOT NULL OR activity_state IN ('idle', 'unknown')),
+    CHECK(active_job_id IS NOT NULL OR active_lease_expires_at IS NULL),
+    CHECK(runtime IS NOT NULL OR provider_state = 'unknown'),
+    CHECK(runtime IS NOT NULL OR quota_remaining_percent IS NULL),
+    CHECK(runtime IS NOT NULL OR quota_reset_at IS NULL),
+    CHECK(release_clean = 0 OR (
+        release_version IS NOT NULL AND release_git_sha IS NOT NULL
+        AND release_built_at IS NOT NULL
+    ))
+);
+INSERT INTO runtime_health (
+    component, instance_id, runtime, agent_id, pid, process_start_marker,
+    started_at, heartbeat_at, success_at, error_code, activity_state,
+    active_job_id, active_lease_expires_at, provider_state,
+    quota_remaining_percent, quota_reset_at, updated_at
+)
+SELECT component, instance_id, runtime, agent_id, pid, process_start_marker,
+       started_at, heartbeat_at, success_at, error_code, activity_state,
+       active_job_id, active_lease_expires_at, provider_state,
+       quota_remaining_percent, quota_reset_at, updated_at
+FROM runtime_health_v18;
+DROP TABLE runtime_health_v18;
+CREATE INDEX runtime_health_heartbeat ON runtime_health(heartbeat_at);
+CREATE INDEX runtime_health_agent ON runtime_health(agent_id, heartbeat_at);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -693,6 +763,9 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     if previous < 18:
         connection.executescript(MIGRATION_18)
         connection.execute("PRAGMA user_version = 18")
+    if previous < 19:
+        connection.executescript(MIGRATION_19)
+        connection.execute("PRAGMA user_version = 19")
     connection.commit()
     current = int(connection.execute("PRAGMA user_version").fetchone()[0])
     return previous, current

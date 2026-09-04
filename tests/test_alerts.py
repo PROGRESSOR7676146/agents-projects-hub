@@ -12,6 +12,7 @@ from hermes_codex_router.monitoring import (
     _claim_operational_alert,
     _destination,
     _release_recovered_quota_alerts,
+    _release_resolved_operational_alerts,
     _send_hermes,
 )
 from hermes_codex_router.state import HubState
@@ -407,6 +408,29 @@ class OperationalAlertTests(unittest.TestCase):
             },
         )
         self.assertEqual(transitioned[0].key, "runtime:controller:project-hub-controller")
+
+    def test_deployment_revision_alert_is_one_per_episode_and_rearms(self) -> None:
+        pool = CodexPoolStatus(True, True, (), None, 0)
+
+        def alerts(status: str):
+            return evaluate_operational_alerts(
+                pool=pool,
+                state_snapshot={"pending_dispatches": []},
+                doctor_ok=True,
+                runtime_health={"deployment_revision": {"status": status}},
+            )
+
+        unknown = alerts("unknown")
+        mixed = alerts("mixed")
+        self.assertEqual([item.code for item in unknown], ["deployment_revision_unknown"])
+        self.assertEqual([item.key for item in mixed], ["deployment:revision"])
+        with TemporaryDirectory() as directory:
+            state = HubState.open(Path(directory) / "state.db")
+            self.assertTrue(_claim_operational_alert(state, unknown[0], cooldown_seconds=0))
+            self.assertFalse(_claim_operational_alert(state, mixed[0], cooldown_seconds=0))
+            _release_resolved_operational_alerts(state, alerts("converged"))
+            self.assertTrue(_claim_operational_alert(state, mixed[0], cooldown_seconds=0))
+            state.close()
 
 
 if __name__ == "__main__":
