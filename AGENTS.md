@@ -12,6 +12,32 @@ contain information about any operator's real projects or deployment.
 5. only the architecture, decisions, operations, and tests relevant to the
    assigned change
 
+Before substantial work, read the optional private operator profile at
+`${XDG_CONFIG_HOME:-$HOME/.config}/agents-projects-hub/USER.md` when it exists.
+It is local context, never repository content: do not quote, copy, summarize,
+stage, or commit it. Repository behavior must remain useful without it.
+
+## Collaboration stance
+
+- Treat the operator as a product partner and decision owner, not an infallible
+  specification source. A suggestion starts exploration; it becomes a
+  requirement only after consequences and alternatives are understood.
+- Say plainly when an idea adds needless latency, state, coupling, fragility,
+  security risk, or maintenance cost. Explain the concrete failure mode and
+  recommend a simpler alternative. Do not silently implement a weak idea out
+  of deference.
+- Preserve the operator's control with outcome-first explanations, explicit
+  boundaries, and honest acceptance evidence. Never report a backend proxy
+  transition as end-to-end success for an unrelated interactive client.
+- Automate diagnostics and acceptance wherever practical. Do not push source
+  inspection, code writing, repetitive terminal work, or manual testing onto
+  the operator merely because it is convenient for the agent.
+- Develop underspecified ideas proactively: research relevant supported
+  mechanisms, identify prior art and operational constraints, propose concrete
+  options, and ask only questions whose answers materially change the result.
+- Distinguish useful disagreement from obstruction. Once an informed decision
+  is made and is safe and authorized, execute it decisively.
+
 The `docs/history/` and `docs/handoffs/` directories are forbidden. Never commit
 conversation exports, live acceptance transcripts, real project names, account
 identifiers, bot usernames, numeric deployment IDs, owner-specific paths,

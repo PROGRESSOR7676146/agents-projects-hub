@@ -10,6 +10,7 @@ __pycache__/
 .hub/
 config/hub.json
 config/projects.json
+/USER.md
 *.sock
 *.pid
 *.log
