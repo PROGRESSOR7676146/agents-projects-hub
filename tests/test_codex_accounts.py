@@ -25,7 +25,18 @@ class CodexAccountStatusTests(unittest.TestCase):
             True,
             (
                 CodexAccountStatus(
-                    1, True, "ready", "low", 80, 60, 1_800_000_000, None, None, False, "abc…"
+                    1,
+                    True,
+                    "unavailable",
+                    "high",
+                    80,
+                    60,
+                    1_800_000_000,
+                    None,
+                    None,
+                    False,
+                    "abc…",
+                    auth_invalidated=True,
                 ),
             ),
             1,
@@ -67,6 +78,7 @@ class CodexAccountStatusTests(unittest.TestCase):
                             "isCurrent": True,
                             "availability": "ready",
                             "riskLevel": "low",
+                            "reasons": ["token-invalid — re-login needed"],
                         }
                     ],
                 },
@@ -86,6 +98,7 @@ class CodexAccountStatusTests(unittest.TestCase):
         self.assertEqual(status.accounts[0].five_hour_remaining, 75)
         self.assertEqual(status.accounts[0].weekly_remaining, 60)
         self.assertEqual(status.accounts[0].identity_hint, "acc…")
+        self.assertTrue(status.accounts[0].auth_invalidated)
         self.assertNotIn("secret@example.com", rendered)
         self.assertNotIn("ABC123", rendered)
         self.assertIn("acc…", rendered)

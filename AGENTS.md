@@ -73,5 +73,7 @@ revision and highest proven level.
 - Never forward hidden reasoning, credentials, environment dumps or raw terminal screen contents.
 - One active Codex turn per project lane. Parallel work requires an explicit additional worktree and lane.
 - Persist routing state locally with restrictive permissions; treat duplicate Telegram updates idempotently.
+- Never use `pkill` against systemd-managed services; manage their lifecycle
+  explicitly through the service manager.
 
 Use test-first development for router behavior. Live bot changes, daemon launch, service installation and credential changes require an explicit deployment task.

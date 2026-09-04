@@ -432,6 +432,65 @@ class OperationalAlertTests(unittest.TestCase):
             self.assertTrue(_claim_operational_alert(state, mixed[0], cooldown_seconds=0))
             state.close()
 
+    def test_invalid_token_account_alerts_even_if_replacement_is_ready(self) -> None:
+        pool = CodexPoolStatus(
+            available=True,
+            rotation_enabled=True,
+            accounts=(
+                CodexAccountStatus(
+                    1, True, "ready", "low", 100, 100, None, None, None, False, "acc-1"
+                ),
+                CodexAccountStatus(
+                    2,
+                    False,
+                    "unavailable",
+                    "high",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    False,
+                    "acc-2",
+                    auth_invalidated=True,
+                ),
+            ),
+            recommended_account=1,
+            account_rotations=0,
+        )
+        alerts = evaluate_operational_alerts(
+            pool=pool,
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+        )
+        self.assertEqual({alert.code for alert in alerts}, {"codex_account_token_invalid"})
+        self.assertIn("device-auth", alerts[0].message)
+
+    def test_unreachable_configured_codex_proxy_alert_is_edge_triggered(self) -> None:
+        pool = CodexPoolStatus(True, True, (), None, 0)
+        alerts = evaluate_operational_alerts(
+            pool=pool,
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+            codex_config_proxy_ok=False,
+        )
+        self.assertEqual([alert.code for alert in alerts], ["codex_config_proxy_unavailable"])
+        with TemporaryDirectory() as directory:
+            state = HubState.open(Path(directory) / "state.db")
+            self.assertTrue(_claim_operational_alert(state, alerts[0], cooldown_seconds=0))
+            self.assertFalse(_claim_operational_alert(state, alerts[0], cooldown_seconds=0))
+            _release_resolved_operational_alerts(
+                state,
+                evaluate_operational_alerts(
+                    pool=pool,
+                    state_snapshot={"pending_dispatches": []},
+                    doctor_ok=True,
+                    codex_config_proxy_ok=True,
+                ),
+            )
+            self.assertTrue(_claim_operational_alert(state, alerts[0], cooldown_seconds=0))
+            state.close()
+
 
 if __name__ == "__main__":
     unittest.main()

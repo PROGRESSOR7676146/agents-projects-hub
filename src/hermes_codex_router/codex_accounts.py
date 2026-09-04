@@ -16,6 +16,7 @@ _LIVE_QUOTA = re.compile(
     r"5h\s+(\d+)% left \(resets ([^)]+)\),\s*"
     r"7d\s+(\d+)% left \(resets ([^)]+)\)"
 )
+_AUTH_INVALIDATION_MARKER = "token-invalid"
 _MONTHS = {
     name: index
     for index, name in enumerate(
@@ -38,6 +39,7 @@ class CodexAccountStatus:
     quota_updated_at: int | None
     quota_stale: bool
     identity_hint: str | None = None
+    auth_invalidated: bool = False
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -52,6 +54,7 @@ class CodexAccountStatus:
             "quota_updated_at": self.quota_updated_at,
             "quota_stale": self.quota_stale,
             "identity_hint": self.identity_hint,
+            "auth_invalidated": self.auth_invalidated,
         }
 
 
@@ -97,6 +100,7 @@ def encode_codex_pool_snapshot(status: CodexPoolStatus) -> str:
                 "updated": item.quota_updated_at,
                 "stale": item.quota_stale,
                 "hint": item.identity_hint,
+                "auth": item.auth_invalidated,
             }
             for item in status.accounts
         ],
@@ -128,6 +132,7 @@ def decode_codex_pool_snapshot(value: str) -> CodexPoolStatus:
                 quota_updated_at=_integer(item.get("updated")),
                 quota_stale=item.get("stale") is True,
                 identity_hint=(str(item["hint"])[:32] if item.get("hint") else None),
+                auth_invalidated=item.get("auth") is True,
             )
             for item in raw_accounts
             if isinstance(item, dict)
@@ -281,6 +286,11 @@ def read_codex_pool_status(
             availability: str = raw_availability if isinstance(raw_availability, str) else "unknown"
             raw_risk = row.get("riskLevel")
             risk: str = raw_risk if isinstance(raw_risk, str) else "unknown"
+            raw_reasons = row.get("reasons")
+            auth_invalidated = isinstance(raw_reasons, list) and any(
+                isinstance(reason, str) and _AUTH_INVALIDATION_MARKER in reason.casefold()
+                for reason in raw_reasons
+            )
             suffix_match = _ID_SUFFIX.search(label)
             account_quota: dict[str, Any] = {}
             if suffix_match:
@@ -342,6 +352,7 @@ def read_codex_pool_status(
                         if identity_hints and index + 1 in identity_hints
                         else _masked_identity_hint(label)
                     ),
+                    auth_invalidated=auth_invalidated,
                 )
             )
 

@@ -18,6 +18,10 @@ and releases use semantic versioning while the public API is still evolving.
 - Make all operational warnings transition-triggered, suppress quota/auth alerts
   for an exhausted inactive account after successful replacement, and keep the
   condition visible in `/accounts` without repeated Telegram notifications.
+- Detect an unreachable loopback provider configured for Codex without probing
+  remote provider URLs or exposing configuration detail, and emit an
+  edge-triggered alert when the supported multi-auth report explicitly marks an
+  account token invalid even if another account remains ready.
 
 ## [0.6.0] - 2026-09-03
 

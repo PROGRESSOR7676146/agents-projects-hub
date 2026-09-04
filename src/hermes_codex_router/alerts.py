@@ -36,12 +36,23 @@ def evaluate_operational_alerts(
     telegram_access: Mapping[tuple[str, str], bool] | None = None,
     hermes_telegram: Mapping[str, object] | None = None,
     runtime_health: Mapping[str, object] | None = None,
+    codex_config_proxy_ok: bool | None = None,
     now: datetime | None = None,
     low_quota_percent: int = DEFAULT_LOW_QUOTA_PERCENT,
     stuck_after_seconds: int = 15 * 60,
 ) -> tuple[OperationalAlert, ...]:
     evaluated_at = now or datetime.now(timezone.utc)
     alerts: list[OperationalAlert] = []
+    if codex_config_proxy_ok is False:
+        alerts.append(
+            OperationalAlert(
+                "codex:config-proxy",
+                "codex_config_proxy_unavailable",
+                "error",
+                "Codex is configured for a local provider proxy that is unavailable; "
+                "inspect the managed app-server before changing provider bindings.",
+            )
+        )
     if runtime_health is not None:
         deployment_revision = runtime_health.get("deployment_revision")
         if isinstance(deployment_revision, Mapping):
@@ -193,6 +204,17 @@ def evaluate_operational_alerts(
         usable_replacement = any(account.availability == "ready" for account in pool.accounts)
         for account in pool.accounts:
             identity = f" ({account.identity_hint})" if account.identity_hint else ""
+            if account.auth_invalidated:
+                alerts.append(
+                    OperationalAlert(
+                        f"codex:account:{account.index}:token_invalid",
+                        "codex_account_token_invalid",
+                        "error",
+                        f"Codex account {account.index}{identity} has an invalid or revoked token; "
+                        f"re-authenticate via 'codex-multi-auth login --account {account.index} --device-auth'.",
+                    )
+                )
+                continue
             fresh_quota_exhausted = not account.quota_stale and any(
                 remaining is not None and remaining <= low_quota_percent
                 for remaining in (account.five_hour_remaining, account.weekly_remaining)

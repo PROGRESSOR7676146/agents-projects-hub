@@ -159,6 +159,11 @@ operator deployment inventory or live conversation evidence.
   provider, and account conditions are sent once and re-arm only after recovery.
   Exhausted inactive accounts remain status data after a successful rotation;
   they are not reported as authentication failures while a replacement is ready.
+  Explicit token-invalidation markers from the supported redacted Codex
+  multi-auth report alert independently even when another account is ready.
+  Doctor also checks a configured loopback Codex provider proxy without probing
+  remote provider URLs or disclosing the configured endpoint; monitoring emits
+  one alert per unreachable episode and re-arms after recovery.
 - Durable masked Codex account snapshots for provider-free Controller status,
   plus private masked account hints and honest unknown-limit display for other
   providers. Cached quota and live worker availability remain separate signals:

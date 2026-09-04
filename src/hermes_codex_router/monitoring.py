@@ -292,6 +292,14 @@ def run_monitor_once(
             telegram_access=_telegram_access(config),
             hermes_telegram=hermes_telegram,
             runtime_health=project_runtime_health(state, config),
+            codex_config_proxy_ok=next(
+                (
+                    bool(check.get("ok"))
+                    for check in doctor_checks
+                    if isinstance(check, dict) and check.get("name") == "codex_config_proxy"
+                ),
+                None,
+            ),
         )
         proxy_check = next(
             (
