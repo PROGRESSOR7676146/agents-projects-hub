@@ -292,10 +292,21 @@ are never returned. The isolated stdio fallback cannot expose an approval to a
 tlive companion connection, so it pins `approvalPolicy: never` inside the same
 `workspace-write` sandbox: sandboxed work proceeds, escalation is unavailable,
 and any unexpected approval request is explicitly declined instead of hanging.
+Hub traffic uses this rotating backend independently of interactive clients.
+Codex Desktop must be attached with `codex-multi-auth rotation bind-app`, while
+a native terminal session must be launched through `codex-multi-auth-codex`
+(for example `tlive run codex-multi-auth-codex`). An already running plain
+`codex` process cannot be rebound in place and must not be reported as rotated
+merely because the Hub backend changed accounts.
 In an external-worker deployment the monitor publishes a
 bounded masked snapshot to local durable state, so `/accounts` remains a local
 Controller command and never spends model tokens. A snapshot older than thirty
 minutes is displayed as stale.
+
+The monitor also refreshes deterministic provider model catalogs when their
+private cache reaches 12 hours old. It uses provider discovery commands only,
+never an LLM turn. New entries are retained with first-seen metadata for the
+`/model` badge; a failed refresh leaves the last known-good menu active.
 
 If tlive and a persistent multi-auth app-server share Codex's default control
 socket, order tlive after the multi-auth unit and make that unit's activation

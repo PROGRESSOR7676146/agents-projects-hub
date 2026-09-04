@@ -183,13 +183,21 @@ def evaluate_operational_alerts(
                 remaining is not None and remaining <= low_quota_percent
                 for remaining in (account.five_hour_remaining, account.weekly_remaining)
             )
-            if account.availability == "unavailable" and not fresh_quota_exhausted:
+            # An inactive unavailable account is ordinary pool state while a
+            # replacement is ready. Keep it visible in /accounts, but do not
+            # page Operations or guess that authentication is broken.
+            unavailable_alert_relevant = account.active or not usable_replacement
+            if (
+                account.availability == "unavailable"
+                and unavailable_alert_relevant
+                and not fresh_quota_exhausted
+            ):
                 alerts.append(
                     OperationalAlert(
                         f"codex:account:{account.index}:unavailable",
                         "codex_account_unavailable",
                         "error",
-                        f"Codex account {account.index}{identity} is unavailable; authentication needs attention.",
+                        f"Codex account {account.index}{identity} is unavailable and no ready replacement exists; inspect quota and authentication state.",
                     )
                 )
             quota_alert_relevant = account.active or not usable_replacement

@@ -7,6 +7,7 @@ from dataclasses import asdict
 from typing import Any, Callable
 
 from .alerts import DEFAULT_LOW_QUOTA_PERCENT, OperationalAlert, evaluate_operational_alerts
+from .catalog_refresh import refresh_provider_catalogs
 from .codex_accounts import CodexPoolStatus, encode_codex_pool_snapshot, read_codex_pool_status
 from .diagnostics import run_doctor
 from .hermes_health import (
@@ -139,6 +140,7 @@ def run_monitor_once(
     state = HubState.open(config.state_path)
     try:
         snapshot = state.status_snapshot()
+        catalog_refresh = refresh_provider_catalogs(config)
         hermes_health = _hermes_health(config)
         repairs: list[str] = []
         if repair and hermes_health is not None:
@@ -393,6 +395,7 @@ def run_monitor_once(
             "alerts": [asdict(alert) for alert in alerts],
             "delivered": delivered,
             "repairs": repairs,
+            "catalog_refresh": asdict(catalog_refresh),
         }
     finally:
         state.close()

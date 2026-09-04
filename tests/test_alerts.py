@@ -65,7 +65,7 @@ class OperationalAlertTests(unittest.TestCase):
 
         self.assertEqual(
             {alert.code for alert in alerts},
-            {"codex_5h_low", "codex_account_unavailable", "dispatch_stuck"},
+            {"codex_5h_low", "dispatch_stuck"},
         )
         rendered = "\n".join(alert.message for alert in alerts)
         self.assertNotIn("dispatch-secret", rendered)
@@ -111,7 +111,7 @@ class OperationalAlertTests(unittest.TestCase):
 
         self.assertEqual(alerts, ())
 
-    def test_unavailable_account_with_healthy_quota_remains_auth_alert(self) -> None:
+    def test_inactive_unavailable_account_is_status_while_replacement_is_ready(self) -> None:
         alerts = evaluate_operational_alerts(
             pool=CodexPoolStatus(
                 True,
@@ -129,7 +129,33 @@ class OperationalAlertTests(unittest.TestCase):
             doctor_ok=True,
         )
 
-        self.assertEqual([alert.code for alert in alerts], ["codex_account_unavailable"])
+        self.assertEqual(alerts, ())
+
+    def test_unavailable_account_alerts_when_no_replacement_is_ready(self) -> None:
+        alerts = evaluate_operational_alerts(
+            pool=CodexPoolStatus(
+                True,
+                True,
+                (
+                    CodexAccountStatus(
+                        1, True, "unavailable", "high", 90, 90, None, None, 1, False
+                    ),
+                    CodexAccountStatus(
+                        2, False, "unavailable", "high", 80, 80, None, None, 1, False
+                    ),
+                ),
+                None,
+                0,
+            ),
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+        )
+
+        self.assertEqual(
+            [alert.code for alert in alerts],
+            ["codex_account_unavailable", "codex_account_unavailable"],
+        )
+        self.assertTrue(all("quota and authentication" in alert.message for alert in alerts))
 
     def test_stale_quota_does_not_page_as_if_it_were_current(self) -> None:
         pool = CodexPoolStatus(

@@ -131,8 +131,10 @@ operator deployment inventory or live conversation evidence.
   headless turn from waiting forever on a companion that cannot reach it.
 - Compact `/status`, `/accounts`, cached and paginated `/model`, confirmed
   single-session `/new`, `/local`, and `/return` controls.
-- Private last-known-good provider catalogs with bounded callback keys and
-  stale-after-failed-refresh monitoring.
+- Private last-known-good provider catalogs with bounded callback keys. The
+  deterministic monitor refreshes stale Codex, OpenCode, and Antigravity
+  catalogs every 12 hours without invoking a model; failed discovery preserves
+  the last good snapshot and raises one edge-triggered warning.
 - Event-driven Codex quota rotation telemetry and provider-supplied OpenCode
   reset telemetry. The isolated OpenCode worker watches only runtime-log bytes
   appended after its owned process starts, recognizes the provider's exact
