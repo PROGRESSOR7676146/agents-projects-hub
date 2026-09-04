@@ -12,18 +12,24 @@ Roadmap содержит только переносимые продуктов�
 
 1. Восстановить зелёный baseline: formatter, lint, полный test suite и privacy
    scan; сохранить checkpoint отдельным commit и push.
-2. Сделать SQLite-consistent backup, развернуть ровно проверенный revision во
+2. Реализовать первую фазу
+   [ADR 0012](decisions/0012-verifiable-immutable-deployments.md): каждый процесс
+   сообщает точный clean Git revision, а monitor обнаруживает mixed/unknown
+   deployment. Остальной engineering debt вести по
+   [baseline backlog](operations/ENGINEERING_BASELINE.md), не смешивая его с
+   передачей сессии.
+3. Сделать SQLite-consistent backup, развернуть ровно проверенный revision во
    всех Controller/Sender/provider-worker процессах и пройти bounded Telegram
    smoke без потери или дублирования turn.
-3. Разобрать повторяющиеся Telegram transport errors либо доказать корректный
+4. Разобрать повторяющиеся Telegram transport errors либо доказать корректный
    retry под контролируемым сетевым сбоем.
-4. Выполнить Codex feasibility canary: Hub thread → `/local` → native
+5. Выполнить Codex feasibility canary: Hub thread → `/local` → native
    `codex resume` → локальный turn → закрытие CLI → `/return` → следующий
    Telegram turn в том же provider thread.
-5. Реализовать [ADR 0011](decisions/0011-explicit-native-session-ownership-transfer.md):
+6. Реализовать [ADR 0011](decisions/0011-explicit-native-session-ownership-transfer.md):
    удалить автоматический summary из `/return`, сохранить строгий one-writer
    lease и не добавлять PID discovery, PTY mirroring или active-turn migration.
-6. Добавить fault/contract tests и deployment-local E2E для Codex. Расширять
+7. Добавить fault/contract tests и deployment-local E2E для Codex. Расширять
    контракт на OpenCode и Antigravity только после принятого Codex E2E.
 
 ### Последующие задачи

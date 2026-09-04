@@ -12,6 +12,8 @@ Operational truth is split by purpose:
 - Threat response and fail-closed behavior:
   [`SECURITY.ru.md`](../SECURITY.ru.md) and [`SECURITY.md`](../../SECURITY.md).
 - Planned post-baseline sequence: [`ROADMAP.ru.md`](../ROADMAP.ru.md).
+- Engineering debt and exact evidence rules:
+  [`ENGINEERING_BASELINE.md`](ENGINEERING_BASELINE.md).
 - Complete validation gate: `python scripts/validate.py`.
 - Read-only deployment diagnostics: `agents-projects-hub doctor HUB_CONFIG` and
   `agents-projects-hub monitor HUB_CONFIG`.

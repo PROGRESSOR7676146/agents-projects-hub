@@ -55,6 +55,13 @@ Record durable consequential rationale under `docs/decisions/`. Run the
 narrowest relevant checks followed by `python scripts/validate.py` when
 practical; distinguish automated coverage from owner-driven live E2E.
 
+Never call a deployment current or accepted without naming the exact clean Git
+revision and confirming that every required long-running component reports that
+revision. Process liveness, a clean development tree, package version, and a
+passing test from another revision are not substitutes. Use the evidence levels
+defined in `docs/operations/ENGINEERING_BASELINE.md`; “all green” must state its
+revision and highest proven level.
+
 ## Safety invariants
 
 - Telegram input selects only an immutable `project_id`; never accept a filesystem path from chat.
