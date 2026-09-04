@@ -72,9 +72,7 @@ class ProviderCatalogCacheTests(unittest.TestCase):
             path = Path(directory) / "model-catalogs.json"
             cache = ProviderCatalogCache(path)
             t1 = datetime(2026, 8, 30, 10, 0, tzinfo=timezone.utc)
-            initial = (
-                ProviderModel("gemini-3.7-flash", "Gemini 3.7 Flash", ("high",)),
-            )
+            initial = (ProviderModel("gemini-3.7-flash", "Gemini 3.7 Flash", ("high",)),)
             cache.store("antigravity", initial, source_version="1", observed_at=t1)
             loaded_t1 = cache.load("antigravity")
             assert loaded_t1 is not None

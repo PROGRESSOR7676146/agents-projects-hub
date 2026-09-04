@@ -3,9 +3,8 @@ from __future__ import annotations
 import html
 import re
 import threading
-from pathlib import Path
-
 from datetime import timedelta
+from pathlib import Path
 
 from .artifact_delivery import deliver_staged_artifacts_immediately
 from .artifacts import create_job_staging
@@ -191,9 +190,7 @@ class ExternalAgentService:
                 and not model.label.lower().endswith("(new)")
             )
             new_prefix = "🆕 " if is_highlighted else ""
-            values.append(
-                (f"{marker}{new_prefix}{model.label}", f"dmchoose:{model.callback_key}")
-            )
+            values.append((f"{marker}{new_prefix}{model.label}", f"dmchoose:{model.callback_key}"))
         navigation: list[tuple[str, str]] = []
         if page > 0:
             navigation.append(("←", f"dmmodels:{page - 1}"))
