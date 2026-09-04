@@ -5,17 +5,30 @@ Roadmap содержит только переносимые продуктов�
 
 ## Ближайшие задачи
 
-1. Реализовать supervisor основной нативной Codex-сессии: хранить явный UUID
-   атомарно в приватном локальном state-файле, блокировать дубли, запускать
-   `tlive run codex-ma resume <UUID>` и безопасно создавать первоначальную
-   сессию без `resume --last`.
-2. Добавить Windows Task Scheduler launcher основной сессии после входа:
-   отдельное окно/вкладка Windows Terminal с заголовком `Agent Session main`,
-   зелёным цветом вкладки и небольшой задержкой готовности WSL. Telegram не
-   является хранилищем session state.
-3. Проверить cold boot, аварийную перезагрузку, отсутствие дублей, восстановление
-   точного UUID и живую ротацию аккаунта внутри восстановленной wrapper-сессии.
-4. Реализовать и принять Telegram Interaction Contract v2 как основную
+### Активный checkpoint: нативная передача сессии Codex
+
+Работа выполняется строго в следующем порядке; следующий пункт не означает, что
+предыдущий принят без указанного evidence:
+
+1. Восстановить зелёный baseline: formatter, lint, полный test suite и privacy
+   scan; сохранить checkpoint отдельным commit и push.
+2. Сделать SQLite-consistent backup, развернуть ровно проверенный revision во
+   всех Controller/Sender/provider-worker процессах и пройти bounded Telegram
+   smoke без потери или дублирования turn.
+3. Разобрать повторяющиеся Telegram transport errors либо доказать корректный
+   retry под контролируемым сетевым сбоем.
+4. Выполнить Codex feasibility canary: Hub thread → `/local` → native
+   `codex resume` → локальный turn → закрытие CLI → `/return` → следующий
+   Telegram turn в том же provider thread.
+5. Реализовать [ADR 0011](decisions/0011-explicit-native-session-ownership-transfer.md):
+   удалить автоматический summary из `/return`, сохранить строгий one-writer
+   lease и не добавлять PID discovery, PTY mirroring или active-turn migration.
+6. Добавить fault/contract tests и deployment-local E2E для Codex. Расширять
+   контракт на OpenCode и Antigravity только после принятого Codex E2E.
+
+### Последующие задачи
+
+1. Реализовать и принять Telegram Interaction Contract v2 как основную
    продуктовую функцию, а не текстовую подсказку внутри пользовательского
    сообщения:
    - Codex получает контракт через штатный `developerInstructions` при
@@ -32,14 +45,14 @@ Roadmap содержит только переносимые продуктов�
    - E2E behavioural eval проверяет фактические ответы каждого provider на
      короткие, неоднозначные, длительные и artifact-producing задачи. Проверки
      наличия строки контракта в prompt недостаточно.
-5. Завершить E2E естественного исчерпания лимита Codex; выбор
+2. Завершить E2E естественного исчерпания лимита Codex; выбор
    provider/model/effort уже покрыт выделенным Telegram acceptance actor.
-6. Поддерживать уже добавленные contract tests при обновлении Codex app-server,
+3. Поддерживать уже добавленные contract tests при обновлении Codex app-server,
    Hermes Gateway hook, OpenCode/Antigravity CLI и Antigravity statusline.
-7. Реализовать автоматическую ротацию Antigravity только после появления
+4. Реализовать автоматическую ротацию Antigravity только после появления
    поддерживаемого headless account-pool интерфейса.
-8. Расширять terminal backends только argv-безопасными адаптерами.
-9. Реализовать команду `/steer`: передача агенту накопленных сообщений пользователя
+5. Расширять terminal backends только argv-безопасными адаптерами.
+6. Реализовать команду `/steer`: передача агенту накопленных сообщений пользователя
    с приостановкой/прерыванием выполнения предыдущих инструкций.
 
 ## Резервирование и восстановление WSL
@@ -72,6 +85,8 @@ Roadmap содержит только переносимые продуктов�
 ## Отложено
 
 - provider-neutral Session Bridge;
+- постоянная supervisor-managed `tlive run` сессия: она не нужна для принятой
+  попеременной передачи владения Telegram ↔ native CLI;
 - полное восстановление незавершённого turn после потери машины;
 - дополнительные providers до прохождения acceptance текущего набора.
 

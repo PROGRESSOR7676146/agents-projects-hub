@@ -200,6 +200,9 @@ operator deployment inventory or live conversation evidence.
 
 ## Acceptance still required per deployment
 
+- The current `/local` path and summary-producing `/return` path have automated
+  coverage, but deterministic summary-free same-session return from ADR 0011 is
+  not implemented or live-accepted. Codex is the first acceptance target.
 - Dedicated-user bounded Telegram baseline after deployment-local MTProto
   authorization. Repository checks define the safe scenarios; each deployment
   must still produce its own private live evidence.
