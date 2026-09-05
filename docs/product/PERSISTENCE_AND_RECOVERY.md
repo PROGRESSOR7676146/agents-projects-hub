@@ -26,8 +26,13 @@ This normative module is part of the
   Stale quota may remain visible as cached status but MUST NOT alert. Fresh
   Codex quota warns once per ≤5% episode and re-arms only after recovery above
   5%; unchanged conditions MUST NOT repeat. Other operational alerts are also
-  edge-triggered and re-arm after recovery. An exhausted inactive account stays
-  in `/accounts` but is not an auth failure while a replacement is ready.
+  edge-triggered and re-arm after recovery. The first two consecutive Telegram
+  transport failures remain visible diagnostic state; the third MUST degrade
+  the owning required component and emit one error edge for that episode. A
+  successful transport request MUST clear it, emit one recovery edge only if
+  the threshold was crossed, and re-arm the threshold. An exhausted inactive
+  account stays in `/accounts` but is not an auth failure while a replacement
+  is ready.
 - **REQ-OPS-007 (Implemented):** Codex rotation reacts to the upstream provider
   `429` handled by the optional multi-auth proxy, never to a forecast threshold.
   The transition is always reported to Hub Operations with masked source/target

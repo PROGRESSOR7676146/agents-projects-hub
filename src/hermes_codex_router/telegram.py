@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+TELEGRAM_HEALTH_FAILURE_THRESHOLD = 3
+
 
 class TelegramError(RuntimeError):
     _OPERATIONS = frozenset(

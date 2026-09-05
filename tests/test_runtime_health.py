@@ -134,14 +134,25 @@ class RuntimeHealthTests(unittest.TestCase):
         )
         self.state.upsert_runtime_health(
             component="sender",
-            instance_id="sender-transport-failed",
+            instance_id="sender-transport-transient",
             pid=5679,
-            process_start_marker="start-transport-failed",
+            process_start_marker="start-transport-transient",
             started_at=self.now - timedelta(minutes=5),
             heartbeat_at=self.now - timedelta(seconds=10),
             transport_operation="send_message",
             transport_failure_class="network_timeout",
             transport_consecutive_failures=2,
+        )
+        self.state.upsert_runtime_health(
+            component="sender",
+            instance_id="sender-transport-failed",
+            pid=5680,
+            process_start_marker="start-transport-failed",
+            started_at=self.now - timedelta(minutes=5),
+            heartbeat_at=self.now - timedelta(seconds=10),
+            transport_operation="send_message",
+            transport_failure_class="network_timeout",
+            transport_consecutive_failures=3,
         )
         self.state.upsert_runtime_health(
             component="provider_worker",
@@ -166,6 +177,7 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual(classify("controller", "controller-healthy"), "healthy")
         self.assertEqual(classify("provider_worker", "worker-limited"), "degraded")
         self.assertEqual(classify("sender", "sender-degraded"), "degraded")
+        self.assertEqual(classify("sender", "sender-transport-transient"), "healthy")
         self.assertEqual(classify("sender", "sender-transport-failed"), "degraded")
         self.assertEqual(classify("provider_worker", "worker-stale"), "stale")
         self.assertEqual(classify("sender", "missing"), "unknown")

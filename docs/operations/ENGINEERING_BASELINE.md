@@ -40,9 +40,11 @@ them.
    preserving current health, active alerts, and provider work. Migration,
    boundary, count, and rollback-on-fault tests cover the contract; no manual
    database editing is required.
-3. **Make health semantics honest.** A component with repeated Telegram errors
-   must not remain indefinitely indistinguishable from a fully healthy channel.
-   Use bounded thresholds and edge-triggered recovery rather than alert spam.
+3. **Make health semantics honest (repository-complete).** The first two
+   consecutive Telegram failures remain bounded visible state; the third
+   degrades health once. A successful request emits one recovery only for a
+   degraded episode and re-arms the threshold, with explicit tests across
+   Controller, sender, and direct-provider pollers.
 4. **Repair recovery diagnostics (repository-complete).** User-service probes
    distinguish active, confirmed inactive, and unavailable supervisor state;
    Hermes heartbeat and tlive runtime liveness remain independent evidence.

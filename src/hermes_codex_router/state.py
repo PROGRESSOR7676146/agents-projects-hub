@@ -14,6 +14,7 @@ from typing import Iterator, Sequence, TypedDict
 from .artifacts import ValidatedArtifact
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
 from .release_identity import CURRENT_RELEASE, ReleaseIdentity
+from .telegram import TELEGRAM_HEALTH_FAILURE_THRESHOLD
 from .telegram_multipart import split_telegram_html
 
 MAX_PROVIDER_RESPONSE_LENGTH = 200_000
@@ -646,7 +647,7 @@ class HubState:
             status = "degraded"
         elif (
             record.error_code is not None
-            or record.transport_consecutive_failures > 0
+            or record.transport_consecutive_failures >= TELEGRAM_HEALTH_FAILURE_THRESHOLD
             or record.provider_state in {"limited", "exhausted", "unavailable"}
         ):
             status = "degraded"

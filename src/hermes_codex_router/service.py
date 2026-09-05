@@ -56,6 +56,7 @@ from .state import HubState, SessionRecord, TopicRecord
 from .status_view import cached_codex_rate_limits, format_accounts, format_session_status
 from .supervisor import CodexAppServerSupervisor
 from .telegram import (
+    TELEGRAM_HEALTH_FAILURE_THRESHOLD,
     TelegramBotApi,
     TelegramError,
     TopicCallback,
@@ -267,7 +268,7 @@ class ProjectHubService:
         # boundary without running the provider-heavy initializer. Treat their
         # first successful poll like a clean process start.
         failures = getattr(self, "_health_transport_consecutive_failures", 0)
-        if failures:
+        if getattr(self, "_health_transport_reported_signature", None) is not None:
             self.state.record_runtime_event(
                 ingress_identity,
                 "info",
@@ -287,8 +288,12 @@ class ProjectHubService:
             getattr(self, "_health_transport_consecutive_failures", 0) + 1
         )
         self._health_transport_error = error
-        self._health_last_error_code = error.health_code
-        if error.signature != getattr(self, "_health_transport_reported_signature", None):
+        if self._health_transport_consecutive_failures >= TELEGRAM_HEALTH_FAILURE_THRESHOLD:
+            self._health_last_error_code = error.health_code
+        if (
+            self._health_transport_consecutive_failures >= TELEGRAM_HEALTH_FAILURE_THRESHOLD
+            and getattr(self, "_health_transport_reported_signature", None) is None
+        ):
             transport_success_at = getattr(self, "_health_transport_success_at", None)
             self.state.record_runtime_event(
                 ingress_identity,

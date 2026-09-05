@@ -369,7 +369,7 @@ class ControllerIdentityTests(unittest.TestCase):
         self.assertEqual(service.state.requested, ["hub"])
         self.assertEqual(service.state.saved, [("hub", 10)])
 
-    def test_controller_poll_transport_health_is_edge_triggered_and_recovers(self) -> None:
+    def test_controller_poll_transport_health_threshold_recovers_and_rearms(self) -> None:
         service = cast(Any, ProjectHubService.__new__(ProjectHubService))
         service.state = HubState.open(self.base / "transport.db")
         service._publishes_controller_health = True
@@ -392,12 +392,28 @@ class ControllerIdentityTests(unittest.TestCase):
             service._record_telegram_poll_failure("hub", error)
             service._record_telegram_poll_failure("hub", error)
             service._publish_runtime_health(force=True)
+            transient = service.state.get_runtime_health("controller", "project-hub-controller")
+            assert transient is not None
+            self.assertIsNone(transient.error_code)
+            self.assertEqual(transient.transport_consecutive_failures, 2)
+            self.assertEqual(
+                service.state.runtime_health_status("controller", "project-hub-controller").status,
+                "healthy",
+            )
+            self.assertEqual(service.state.status_snapshot()["runtime_events"], [])
+
+            service._record_telegram_poll_failure("hub", error)
+            service._publish_runtime_health(force=True)
             failed = service.state.get_runtime_health("controller", "project-hub-controller")
             assert failed is not None
             self.assertEqual(failed.transport_operation, "poll")
             self.assertEqual(failed.transport_failure_class, "api_http")
             self.assertEqual(failed.transport_status_code, 502)
-            self.assertEqual(failed.transport_consecutive_failures, 2)
+            self.assertEqual(failed.transport_consecutive_failures, 3)
+            self.assertEqual(
+                service.state.runtime_health_status("controller", "project-hub-controller").status,
+                "degraded",
+            )
 
             service._record_telegram_poll_success("hub")
             service._publish_runtime_health(force=True)
@@ -412,6 +428,23 @@ class ControllerIdentityTests(unittest.TestCase):
             self.assertEqual(
                 [event["code"] for event in reversed(events)],
                 ["telegram_transport_error", "telegram_recovered"],
+            )
+
+            for _ in range(3):
+                service._record_telegram_poll_failure("hub", error)
+            service._record_telegram_poll_success("hub")
+            events = cast(
+                list[dict[str, object]],
+                service.state.status_snapshot()["runtime_events"],
+            )
+            self.assertEqual(
+                [event["code"] for event in reversed(events)],
+                [
+                    "telegram_transport_error",
+                    "telegram_recovered",
+                    "telegram_transport_error",
+                    "telegram_recovered",
+                ],
             )
         finally:
             service.state.close()

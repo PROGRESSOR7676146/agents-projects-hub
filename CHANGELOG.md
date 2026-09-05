@@ -34,8 +34,8 @@ and releases use semantic versioning while the public API is still evolving.
   cached deployment revisions are mixed or unknown.
 - Classify Telegram polling and delivery failures into bounded operation,
   network/API class, safe status, retry-after, consecutive-failure, and
-  last-success fields. Controller and sender health now recover explicitly,
-  repeated identical failures emit one edge event, and delivery retries still
+  last-success fields. The third consecutive failure degrades health once; a
+  successful request recovers and re-arms the episode. Delivery retries still
   never repeat provider execution.
 - Add a fixed two-provider acceptance scenario for switch isolation and explicit
   bounded `/context` retrieval.

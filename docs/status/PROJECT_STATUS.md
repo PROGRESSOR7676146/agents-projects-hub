@@ -48,10 +48,12 @@ operator deployment inventory or live conversation evidence.
 - Telegram polling and durable-send failures are classified without raw
   exception text as bounded operation, network/API class, optional safe HTTP
   status/retry-after, consecutive-failure count, and last-success time.
-  Controller and sender runtime health degrades while the current transport
-  failure is active and clears on a successful request. Identical retries emit
-  one edge event plus one recovery event; direct-provider pollers use the same
-  event contract without becoming required deployment-health components.
+  The first two consecutive failures remain visible without falsely degrading
+  the component; the third degrades health and emits one edge for the whole
+  episode. A successful request emits one recovery only for a degraded episode,
+  clears it, and re-arms the threshold. Direct-provider pollers use the same
+  threshold/recovery contract without becoming required deployment-health
+  components.
   Advisory chat-action failures remain best-effort and do not block or repeat
   provider work.
 - Central Telegram ingress with deterministic ordinary, Reply, mention, and

@@ -49,7 +49,7 @@ def callbacks(markup: object) -> list[str]:
 
 
 class ExternalDirectModelTests(unittest.TestCase):
-    def test_direct_poller_transport_events_are_edge_triggered_and_recover(self) -> None:
+    def test_direct_poller_transport_threshold_recovers_and_rearms(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             service = ExternalAgentService.__new__(ExternalAgentService)
             service.agent = cast(Any, type("Agent", (), {"agent_id": "opencode"})())
@@ -61,6 +61,11 @@ class ExternalDirectModelTests(unittest.TestCase):
             try:
                 service._record_telegram_poll_failure(error)
                 service._record_telegram_poll_failure(error)
+                self.assertEqual(service.state.status_snapshot()["runtime_events"], [])
+                service._record_telegram_poll_failure(error)
+                service._record_telegram_poll_success()
+                for _ in range(3):
+                    service._record_telegram_poll_failure(error)
                 service._record_telegram_poll_success()
                 events = cast(
                     list[dict[str, object]],
@@ -68,9 +73,14 @@ class ExternalDirectModelTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     [event["code"] for event in reversed(events)],
-                    ["telegram_transport_error", "telegram_recovered"],
+                    [
+                        "telegram_transport_error",
+                        "telegram_recovered",
+                        "telegram_transport_error",
+                        "telegram_recovered",
+                    ],
                 )
-                self.assertIn("consecutive_failures=2", str(events[0]["detail"]))
+                self.assertIn("consecutive_failures=3", str(events[0]["detail"]))
             finally:
                 service.state.close()
 

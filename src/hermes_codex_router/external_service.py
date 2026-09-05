@@ -24,6 +24,7 @@ from .registry import load_registry
 from .routing import decide_targets, parse_command, parse_context_request
 from .state import HubState
 from .telegram import (
+    TELEGRAM_HEALTH_FAILURE_THRESHOLD,
     TelegramBotApi,
     TelegramError,
     TopicCallback,
@@ -106,7 +107,10 @@ class ExternalAgentService:
         self._transport_consecutive_failures = (
             getattr(self, "_transport_consecutive_failures", 0) + 1
         )
-        if error.signature != getattr(self, "_transport_reported_signature", None):
+        if (
+            self._transport_consecutive_failures >= TELEGRAM_HEALTH_FAILURE_THRESHOLD
+            and getattr(self, "_transport_reported_signature", None) is None
+        ):
             transport_success_at = getattr(self, "_transport_success_at", None)
             self.state.record_runtime_event(
                 self.agent.agent_id,
@@ -124,7 +128,7 @@ class ExternalAgentService:
     def _record_telegram_poll_success(self) -> None:
         observed_at = datetime.now(timezone.utc)
         failures = getattr(self, "_transport_consecutive_failures", 0)
-        if failures:
+        if getattr(self, "_transport_reported_signature", None) is not None:
             self.state.record_runtime_event(
                 self.agent.agent_id,
                 "info",

@@ -16,7 +16,7 @@ from .artifacts import (
 )
 from .hub_config import HubConfig
 from .state import HubState
-from .telegram import TelegramBotApi, TelegramError
+from .telegram import TELEGRAM_HEALTH_FAILURE_THRESHOLD, TelegramBotApi, TelegramError
 
 
 class TelegramOutboxSenderError(RuntimeError):
@@ -175,8 +175,12 @@ class TelegramOutboxSender:
     def _record_transport_failure(self, error: TelegramError) -> None:
         self._transport_consecutive_failures += 1
         self._transport_error = error
-        self._last_error_code = error.health_code
-        if error.signature != self._transport_reported_signature:
+        if self._transport_consecutive_failures >= TELEGRAM_HEALTH_FAILURE_THRESHOLD:
+            self._last_error_code = error.health_code
+        if (
+            self._transport_consecutive_failures >= TELEGRAM_HEALTH_FAILURE_THRESHOLD
+            and self._transport_reported_signature is None
+        ):
             self._record_event(
                 "warning",
                 "telegram_transport_error",
@@ -197,7 +201,7 @@ class TelegramOutboxSender:
         recovered_operation = (
             "send" if self._transport_error is None else self._transport_error.operation
         )
-        if failures:
+        if self._transport_reported_signature is not None:
             self._record_event(
                 "info",
                 "telegram_recovered",

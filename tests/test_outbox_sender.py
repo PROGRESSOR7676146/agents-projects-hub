@@ -259,7 +259,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
         finally:
             sender.close()
 
-    def test_transport_health_is_edge_triggered_and_recovers_after_outbox_retry(self) -> None:
+    def test_transport_health_threshold_recovers_after_outbox_retry(self) -> None:
         job_id = self.ready_outbox("opencode", 14)
         bot = TransportFailBot(fail=True)
         sender = self.sender(opencode=bot, antigravity=Bot())
@@ -269,12 +269,28 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             clock += timedelta(seconds=2)
             self.assertTrue(sender.run_cycle(now=clock))
 
+            transient = sender.state.get_runtime_health("sender", "test-sender")
+            assert transient is not None
+            self.assertIsNone(transient.error_code)
+            self.assertEqual(transient.transport_consecutive_failures, 2)
+            self.assertEqual(
+                sender.state.runtime_health_status("sender", "test-sender", now=clock).status,
+                "healthy",
+            )
+
+            clock += timedelta(seconds=2)
+            self.assertTrue(sender.run_cycle(now=clock))
+
             failed = sender.state.get_runtime_health("sender", "test-sender")
             assert failed is not None
             self.assertEqual(failed.error_code, "telegram_send_message_network_timeout")
             self.assertEqual(failed.transport_operation, "send_message")
             self.assertEqual(failed.transport_failure_class, "network_timeout")
-            self.assertEqual(failed.transport_consecutive_failures, 2)
+            self.assertEqual(failed.transport_consecutive_failures, 3)
+            self.assertEqual(
+                sender.state.runtime_health_status("sender", "test-sender", now=clock).status,
+                "degraded",
+            )
             events = cast(
                 list[dict[str, object]],
                 sender.state.status_snapshot()["runtime_events"],
