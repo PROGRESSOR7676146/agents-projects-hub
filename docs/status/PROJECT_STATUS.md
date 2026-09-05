@@ -241,8 +241,9 @@ operator deployment inventory or live conversation evidence.
   owner-specific paths, Telegram secrets/identifiers, and local runtime files.
 - Documentation validation inventories all 88 normative product requirement IDs,
   protects all 20 numbered baseline sections by content hash, and checks local
-  Markdown files/anchors repository-wide. These test-first guards precede the
-  planned requirements split; no normative content move is claimed yet.
+  Markdown files/anchors repository-wide. The product baseline is split into a
+  short normative index and five stable capability modules; the guarded move
+  changed no numbered normative section content.
 
 ## Acceptance still required per deployment
 

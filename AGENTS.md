@@ -5,7 +5,7 @@ contain information about any operator's real projects or deployment.
 
 ## Read order
 
-1. `docs/product/PRODUCT_REQUIREMENTS.md`
+1. `docs/product/PRODUCT_REQUIREMENTS.md` and every normative module it lists
 2. `docs/status/PROJECT_STATUS.md`
 3. `docs/INDEX.md`
 4. `docs/SECURITY.ru.md`

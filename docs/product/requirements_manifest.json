@@ -1,7 +1,12 @@
 {
   "schema_version": 1,
   "documents": [
-    "PRODUCT_REQUIREMENTS.md"
+    "PRODUCT_REQUIREMENTS.md",
+    "IDENTITY_AND_INTERACTION.md",
+    "ACCOUNTS_CONTROL_AND_SECURITY.md",
+    "PERSISTENCE_AND_RECOVERY.md",
+    "ONBOARDING_AND_ACCEPTANCE.md",
+    "MAINTENANCE.md"
   ],
   "section_sha256": {
     "1": "ec0216068715232abb0598a347e9f110c5ed3da7a07eb6d4953681451057c011",

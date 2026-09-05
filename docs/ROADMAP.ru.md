@@ -5,16 +5,11 @@ Roadmap содержит только переносимые продуктов�
 
 ## Ближайшие задачи
 
-### Активный checkpoint: безопасный split product requirements
+### Активный checkpoint: repository roadmap завершён
 
-Сначала подготовить test-first план: инвентаризировать requirement IDs и ссылки,
-добавить проверки полноты/уникальности/ссылочной целостности и прогнать privacy
-history gate. Массовый перенос выполнять только если эти проверки доказывают
-безопасность; иначе оставить документ на месте и зафиксировать точный blocker.
-
-План и pre-split guardrails готовы: inventory содержит 88 IDs и hashes всех 20
-нормативных секций, Markdown audit проверяет files/anchors. Следующий шаг —
-отдельный механический move при зелёных canonical и privacy/history gates.
+Запланированная безопасная repository-only последовательность выполнена. Перед
+следующим live/deployment checkpoint требуется отдельное разрешение и свежая
+проверка приватного operational handoff; этот roadmap не подразумевает rollout.
 
 ### Telegram Interaction Contract v2
 
@@ -78,6 +73,9 @@ providers остаётся вне текущего scope.
 
 ## Недавно завершено
 
+- Product requirements разделены на короткий normative index и пять стабильных
+  capability modules. Manifest и canonical gate подтверждают сохранность всех
+  88 IDs, hashes 20 секций и Markdown links/anchors.
 - Canonical gate проверяет согласованность package version, changelog, project
   status и Git tags. Отсутствующие tags видны как debt, но audit не создаёт и не
   переписывает Git history; deployed SHA остаётся отдельным доказательством.

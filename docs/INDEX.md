@@ -25,7 +25,8 @@ are intentionally excluded.
 
 ## Truth rules
 
-- Product outcomes and boundaries: `docs/product/PRODUCT_REQUIREMENTS.md`.
+- Product outcomes and boundaries: `docs/product/PRODUCT_REQUIREMENTS.md` and
+  every normative module linked from it.
 - Current reusable behavior: code, passing tests, and
   `docs/status/PROJECT_STATUS.md`.
 - Security and publication invariants: `AGENTS.md`, `SECURITY.md`, and the

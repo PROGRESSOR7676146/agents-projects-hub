@@ -27,6 +27,8 @@ and releases use semantic versioning while the public API is still evolving.
 - Add a test-first product-requirements split plan, an immutable inventory of 88
   normative IDs and 20 section hashes, and repository-wide Markdown file/anchor
   checks before moving the near-limit monolith.
+- Split the product requirements into a short normative index and five stable
+  capability modules with all 88 IDs and all 20 numbered sections preserved.
 - Embed package version, exact clean Git SHA, and build time in wheel artifacts;
   publish release identity from every required Hub runtime and alert once when
   cached deployment revisions are mixed or unknown.

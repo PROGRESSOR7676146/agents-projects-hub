@@ -59,11 +59,10 @@ them.
 
 ## P2: maintainability and product evidence
 
-1. **Split the product requirements by stable capability (guardrails ready).**
-   A reviewed migration plan, 88-ID inventory, 20 section-content hashes, and
-   repository-wide Markdown link/anchor audit are in the canonical gate. Move
-   the content only in a separate commit that passes these and privacy/history
-   checks with every target module below 50 KB.
+1. **Split the product requirements by stable capability (complete).** A short
+   normative index and five capability modules preserve all 88 IDs and 20
+   pre-split section hashes. Repository-wide Markdown link/anchor and privacy
+   gates protect later structural changes; every module remains below 50 KB.
 2. **Use an evidence vocabulary.** Every completion claim names its level:
    static check, unit test, adapter contract, synthetic fault test,
    deployment-local Telegram E2E, restart E2E, or cold-boot E2E. “All green”

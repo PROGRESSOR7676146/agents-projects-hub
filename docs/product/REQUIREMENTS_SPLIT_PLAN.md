@@ -1,6 +1,6 @@
 # Product requirements split plan
 
-Status: guardrails implemented; content move pending validation  
+Status: completed with machine-checked content preservation
 Date: 2026-09-05
 
 ## Objective
@@ -9,7 +9,7 @@ Replace the nearly 50 KB product-requirements monolith with a short normative
 index and stable capability modules without changing accepted wording,
 requirement IDs, lifecycle labels, or link destinations.
 
-The split is a documentation migration, not authorization to revise product
+The completed split is a documentation migration, not authorization to revise product
 behavior. Any later wording change is reviewed separately after the move.
 
 ## Baseline and target map
@@ -27,12 +27,12 @@ the current section numbers and text:
 | `ONBOARDING_AND_ACCEPTANCE.md` | 14–17 | onboarding, functional/non-functional acceptance, capability matrix |
 | `MAINTENANCE.md` | 18–20 | limitations, change policy and provenance |
 
-`requirements_manifest.json` is the stable inventory. During the split its
-`documents` list changes, but its 88 IDs and 20 section hashes do not.
+`requirements_manifest.json` is the stable inventory. The split changed its
+`documents` list, but its 88 IDs and 20 section hashes did not.
 
 ## Test-first gates
 
-Before moving content:
+The move was admitted only after these gates passed:
 
 1. The documentation audit must prove every inventoried requirement has exactly
    one definition and no unregistered definition exists.
@@ -42,8 +42,8 @@ Before moving content:
 4. The full privacy/history scan must pass with every target module below the
    documentation-size review threshold.
 
-After moving content, run the same audit and privacy/history scan before any
-commit, followed by the complete canonical validation gate. Review `git diff`
+After future structural changes, run the same audit and privacy/history scan
+before any commit, followed by the complete canonical validation gate. Review `git diff`
 as a move: only the short index/navigation prose and inbound file-level links
 may be new; numbered normative section text must remain hash-identical.
 
