@@ -132,9 +132,6 @@ class HubConfig:
     codex_multi_auth_dir: Path | None = None
     codex_multi_auth_executable: Path | None = None
     codex_stdio_executable: Path | None = None
-    # ``auto`` preserves the shared-socket/multi-auth preference. ``stdio``
-    # gives Hub a private app-server process that session monitors cannot see.
-    codex_transport: str = "auto"
     codex_account_hints: dict[int, str] = field(default_factory=dict)
     provider_account_hints: dict[str, tuple[str, ...]] = field(default_factory=dict)
     provider_telemetry: dict[str, ProviderTelemetrySettings] = field(default_factory=dict)
@@ -277,9 +274,6 @@ def load_hub_config(
     manage_codex_server = root.get("manage_codex_server", False)
     if not isinstance(manage_codex_server, bool):
         raise HubConfigError("manage_codex_server must be boolean")
-    codex_transport = root.get("codex_transport", "auto")
-    if codex_transport not in {"auto", "stdio"}:
-        raise HubConfigError("codex_transport must be auto or stdio")
     multi_auth_value = root.get("codex_multi_auth_dir")
     codex_multi_auth_dir = None
     if multi_auth_value is not None:
@@ -330,8 +324,6 @@ def load_hub_config(
             raise HubConfigError(
                 "manage_codex_server and codex_stdio_executable are mutually exclusive"
             )
-    if codex_transport == "stdio" and codex_stdio_executable is None:
-        raise HubConfigError("codex_transport stdio requires codex_stdio_executable")
 
     terminal_data = _object(root.get("terminal", {}), "terminal")
     terminal_backend = terminal_data.get("backend", "auto")
@@ -619,10 +611,12 @@ def load_hub_config(
         raise HubConfigError("outbox_runtime must be controller or external")
     if outbox_runtime == "external" and (dispatch_mode != "queue" or queue_runtime != "external"):
         raise HubConfigError("outbox_runtime external requires external queue runtime")
-    if hub_bot is not None and dispatch_mode != "queue":
-        raise HubConfigError("hub_bot requires queue dispatch")
-    if hub_bot is not None and queue_runtime == "external" and outbox_runtime != "external":
-        raise HubConfigError("hub_bot with external workers requires external outbox")
+    if hub_bot is not None and (
+        dispatch_mode != "queue" or queue_runtime != "external" or outbox_runtime != "external"
+    ):
+        raise HubConfigError(
+            "hub_bot requires queue dispatch with external workers and external outbox"
+        )
     raw_external_workers = root.get("external_worker_agent_ids")
     if raw_external_workers is None:
         # Compatibility with the first external-worker rollout: external queue
@@ -679,13 +673,12 @@ def load_hub_config(
                 "hub_bot does not support an in-controller or unisolated local runtime for "
                 f"agent: {unsupported_local[0]}"
             )
-        if queue_runtime == "external":
-            required_workers = {agent.agent_id for agent in agents if not agent.managed_externally}
-            missing_workers = sorted(required_workers.difference(external_worker_agent_ids))
-            if missing_workers:
-                raise HubConfigError(
-                    f"hub_bot requires an isolated external worker for agent: {missing_workers[0]}"
-                )
+        required_workers = {agent.agent_id for agent in agents if not agent.managed_externally}
+        missing_workers = sorted(required_workers.difference(external_worker_agent_ids))
+        if missing_workers:
+            raise HubConfigError(
+                f"hub_bot requires an isolated external worker for agent: {missing_workers[0]}"
+            )
 
     return HubConfig(
         schema_version=1,
@@ -722,7 +715,6 @@ def load_hub_config(
         codex_multi_auth_dir=codex_multi_auth_dir,
         codex_multi_auth_executable=codex_multi_auth_executable,
         codex_stdio_executable=codex_stdio_executable,
-        codex_transport=codex_transport,
         codex_account_hints=codex_account_hints,
         provider_account_hints=provider_account_hints,
         provider_telemetry=provider_telemetry,

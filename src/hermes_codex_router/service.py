@@ -151,7 +151,6 @@ class ProjectHubService:
                 self.config.codex_socket_path,
                 manage_process=self.config.manage_codex_server,
                 stdio_executable=self.config.codex_stdio_executable,
-                configured_transport=self.config.codex_transport,
             )
         self._codex_client: CodexAppServerClient | None = None
         self.terminal = TerminalRuntime(
@@ -392,10 +391,8 @@ class ProjectHubService:
             return external.telegram
         if agent_id != self.agent.agent_id:
             raise ServiceError(f"Telegram response identity is unavailable for {agent_id}")
-        if getattr(
-            self, "ingress_identity", self.agent.agent_id
-        ) == "hub" and self._has_external_worker(agent_id):
-            raise ServiceError("Hub controller does not own external-worker response credentials")
+        if getattr(self, "ingress_identity", self.agent.agent_id) == "hub":
+            raise ServiceError("Hub controller does not own provider response credentials")
         existing = getattr(self, "_codex_telegram", None)
         if existing is not None:
             return existing

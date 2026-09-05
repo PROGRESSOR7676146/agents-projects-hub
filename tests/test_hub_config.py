@@ -70,7 +70,6 @@ class HubConfigTests(unittest.TestCase):
             Path.home() / ".codex/app-server-control/app-server-control.sock",
         )
         self.assertFalse(config.manage_codex_server)
-        self.assertEqual(config.codex_transport, "auto")
         self.assertEqual(config.terminal.backend, "auto")
         self.assertNotIn("secret-token-value", path.read_text(encoding="utf-8"))
 
@@ -270,28 +269,11 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(config.hub_bot.token_file, hub_token.resolve())
         self.assertNotIsInstance(config.hub_bot, type(config.require_agent("codex")))
 
-    def test_hub_bot_accepts_single_process_durable_queue_runtime(self) -> None:
+    def test_hub_bot_rejects_coupled_inline_or_embedded_runtime(self) -> None:
         hub_token = self.base / "hub-token"
         hub_token.write_text("654321:hub-token-value", encoding="utf-8")
         hub_token.chmod(0o600)
-        config = load_hub_config(
-            self.write_config(
-                hub_bot={
-                    "telegram_username": "project_hub_bot",
-                    "token_file": str(hub_token),
-                },
-                dispatch_mode="queue",
-                queue_runtime="embedded",
-                outbox_runtime="controller",
-            )
-        )
-        self.assertEqual(config.external_worker_agent_ids, ())
-
-    def test_hub_bot_still_requires_durable_queue_dispatch(self) -> None:
-        hub_token = self.base / "hub-token"
-        hub_token.write_text("654321:hub-token-value", encoding="utf-8")
-        hub_token.chmod(0o600)
-        with self.assertRaisesRegex(HubConfigError, "queue dispatch"):
+        with self.assertRaisesRegex(HubConfigError, "external workers and external outbox"):
             load_hub_config(
                 self.write_config(
                     hub_bot={
@@ -301,25 +283,7 @@ class HubConfigTests(unittest.TestCase):
                 )
             )
 
-    def test_explicit_codex_stdio_transport_requires_an_executable(self) -> None:
-        with self.assertRaisesRegex(HubConfigError, "codex_stdio_executable"):
-            load_hub_config(self.write_config(codex_transport="stdio"))
-
-        executable = self.base / "codex"
-        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        executable.chmod(0o700)
-        config = load_hub_config(
-            self.write_config(
-                codex_transport="stdio",
-                codex_stdio_executable=str(executable),
-            )
-        )
-        self.assertEqual(config.codex_transport, "stdio")
-
-        with self.assertRaisesRegex(HubConfigError, "codex_transport"):
-            load_hub_config(self.write_config(codex_transport="shared"))
-
-    def test_hub_bot_rejects_local_runtime_without_embedded_or_worker_support(self) -> None:
+    def test_hub_bot_rejects_local_runtime_without_isolated_worker_support(self) -> None:
         hub_token = self.base / "hub-token"
         hub_token.write_text("654321:hub-token-value", encoding="utf-8")
         hub_token.chmod(0o600)

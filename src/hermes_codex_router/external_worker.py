@@ -99,7 +99,6 @@ class ExternalQueueWorker:
                 config.codex_socket_path,
                 manage_process=config.manage_codex_server,
                 stdio_executable=config.codex_stdio_executable,
-                configured_transport=config.codex_transport,
                 shared_socket_health=(
                     (lambda: probe_codex_runtime_proxy().ok)
                     if config.codex_multi_auth_dir is not None

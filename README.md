@@ -245,14 +245,6 @@ agents-projects-hub worker config/hub.json --agent antigravity
 agents-projects-hub sender config/hub.json
 ```
 
-For a single-owner installation, prefer one Controller process with
-`dispatch_mode: "queue"`, `queue_runtime: "embedded"`, and
-`outbox_runtime: "controller"`. The durable SQLite queue still keeps Telegram
-polling responsive while a background consumer executes providers and delivers
-their prepared replies. Set `codex_transport: "stdio"` with
-`codex_stdio_executable` to keep Hub Codex sessions in a private app-server
-process, outside a tlive companion that watches the shared Codex socket.
-
 The worker command is enabled only with `dispatch_mode: "queue"` and
 `queue_runtime: "external"`. `external_worker_agent_ids` selects Codex,
 OpenCode, and Antigravity independently; omitted providers keep the embedded
@@ -272,13 +264,11 @@ endpoints; they are not queue workers. External queue execution uses one
 `agents-projects-hub-worker@AGENT.service` per selected local provider, plus one
 `agents-projects-hub-sender.service` after the external outbox gate is enabled.
 These units restart independently and deliberately do not require one another.
-When `hub_bot` is configured in the recommended embedded mode, the Controller
-owns the Hub ingress plus each locally managed provider runtime and response
-token in one process. External workers and the standalone sender remain an
-optional fault-isolation topology; in that mode every local provider must have
-a worker and the Controller reads only the Hub credential. The corresponding
-`agents-projects-hub@AGENT.service` units are optional private-chat endpoints,
-not required project-group components.
+When `hub_bot` is configured, every locally managed productive provider must
+have an external worker, the standalone sender must own outbox delivery, and
+the corresponding `agents-projects-hub@AGENT.service` may be enabled to retain
+that provider's private-chat endpoint. The Hub controller reads only the Hub
+credential and never owns a provider runtime or response token.
 Hermes remains owned by its native gateway and uses the included drop-in. Copy
 the desired objects from `config/external-agents.example.json` into the local
 `agents` array; the primary example does not require unused external bot
@@ -289,11 +279,7 @@ permission-bypass flag is never used. Automatic Google account rotation remains
 disabled until `agy` exposes a stable account-pool or headless authentication
 interface.
 
-For strict separation from Agent Session Remote/tlive, set
-`codex_transport: "stdio"`; Hub then always ignores the shared socket and runs
-the official Codex executable privately with headless approvals disabled. For
-transparent Codex account rotation instead, leave `codex_transport: "auto"`
-and run one persistent `codex-multi-auth`
+For transparent Codex account rotation, run one persistent `codex-multi-auth`
 app-server on `codex_socket_path`, leave `manage_codex_server` disabled, and set
 `codex_multi_auth_dir` plus `codex_multi_auth_executable`. Also set
 `codex_stdio_executable` to the official Codex executable. The Hub prefers the
@@ -306,8 +292,7 @@ are never returned. The isolated stdio fallback cannot expose an approval to a
 tlive companion connection, so it pins `approvalPolicy: never` inside the same
 `workspace-write` sandbox: sandboxed work proceeds, escalation is unavailable,
 and any unexpected approval request is explicitly declined instead of hanging.
-This shared-socket mode is optional and visible to any companion attached to
-that socket; it is therefore not the recommended single-owner Hub deployment.
+Hub traffic uses this rotating backend independently of interactive clients.
 Codex Desktop must be attached with `codex-multi-auth rotation bind-app`, while
 a native terminal session must be launched through `codex-multi-auth-codex`
 (for example `tlive run codex-multi-auth-codex`). An already running plain
@@ -331,6 +316,13 @@ recreate the ownership race on every reboot. The installed drop-ins use the
 bounded `agents-projects-hub-wait-socket` probe. This is an ordering constraint
 only: neither service is a hard requirement of the other, and Hub retains its
 official Codex fallback.
+
+Hub Codex turns start with the `TLIVE APPROVAL-ONLY SESSION` transport marker.
+A compatible tlive companion keeps remote Allow/Deny available for those turns
+but does not mirror their prompt, completion, or reply-to-continue conversation
+into Agent Session Remote. Project dialogue and continuation remain owned by
+the Hub queue, writer lease, and project Telegram group. Interactive Codex
+sessions on the same socket retain tlive's full monitoring and continuation UI.
 
 ### Independent recovery plane
 

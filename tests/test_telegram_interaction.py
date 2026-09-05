@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from hermes_codex_router.telegram_interaction import (
+    TLIVE_APPROVAL_ONLY_MARKER,
     telegram_contract_version,
     telegram_developer_instructions,
     telegram_turn_prompt,
@@ -47,6 +48,12 @@ class TelegramInteractionPromptTests(unittest.TestCase):
         self.assertIn("Files elsewhere are not attached", prompt)
         self.assertNotIn("TELEGRAM INTERACTION CONTRACT", prompt)
         self.assertNotIn("TELEGRAM TRANSPORT REMINDER", prompt)
+
+    def test_codex_user_turn_marks_tlive_as_approval_only(self) -> None:
+        prompt = telegram_user_turn_prompt("Do the work.")
+
+        self.assertTrue(prompt.startswith(f"{TLIVE_APPROVAL_ONLY_MARKER}\n\n"))
+        self.assertIn("CURRENT USER TURN:\nDo the work.", prompt)
 
     def test_fallback_prompt_keeps_contract_for_non_native_runtimes(self) -> None:
         prompt = telegram_turn_prompt("Continue.", runtime="opencode", new_session=False)

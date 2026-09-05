@@ -2,6 +2,7 @@ from __future__ import annotations
 
 TELEGRAM_CONTRACT_VERSION = 1
 CODEX_TELEGRAM_CONTRACT_VERSION = 2
+TLIVE_APPROVAL_ONLY_MARKER = "TLIVE APPROVAL-ONLY SESSION"
 
 # Provider parity is deliberately phased. Keep prompt-fallback runtimes on the
 # accepted v1 contract until each native instruction channel is reviewed.
@@ -98,7 +99,7 @@ def telegram_user_turn_prompt(user_turn: str, *, staging_dir: object | None = No
     clean = user_turn.strip()
     if not clean:
         raise ValueError("Telegram user turn is empty")
-    sections: list[str] = []
+    sections: list[str] = [TLIVE_APPROVAL_ONLY_MARKER]
     if staging_dir is not None:
         sections.append(
             "ARTIFACT DELIVERY DIRECTORY FOR THIS TURN:\n"

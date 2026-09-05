@@ -26,7 +26,6 @@ with a new record.
 | Local frontend | Native CLI is preferred; one-writer lease is mandatory; tmux remains fallback. | Product requirements and tests |
 | Publication privacy | Deployment identities and live transcripts remain outside Git; automated privacy scan is mandatory. | Product requirements and security policy |
 | Durable execution isolation | Planned deterministic Controller, SQLite queue, strict topic FIFO, isolated provider workers, and outbox; unknown in-flight turns become `indeterminate`, not automatic retries. | [ADR 0001](0001-durable-provider-job-queue.md) |
-| Single-owner runtime | One Controller with the embedded durable queue and private Codex stdio is the recommended deployment; external workers/sender remain optional. | [ADR 0016](0016-single-owner-runtime.md) |
 | Live input semantics | Durable burst collection, capability-aware Codex steering, FIFO fallback, and model-free emergency stop. | [ADR 0004](0004-durable-input-batching-steering-and-stop.md) |
 | Runtime health | Components publish bounded last-known state to SQLite; status classifies the cache without provider or model calls. | [ADR 0002](0002-durable-runtime-health-cache.md) |
 | Telegram transport health | The third consecutive transport failure degrades health once; a proven success recovers and re-arms the episode. | [ADR 0015](0015-telegram-transport-health-threshold.md) |
@@ -36,6 +35,7 @@ with a new record.
 | Messenger task start | Complex work publishes a concise approach and proceeds without a mandatory timer; pause only for a real decision or authority boundary. | [ADR 0010](0010-no-mandatory-grace-period.md) |
 | Native session transfer | `/local` and `/return` transfer exclusive ownership of the same provider session; return performs no automatic summary or handoff. | [ADR 0011](0011-explicit-native-session-ownership-transfer.md) |
 | Deployment provenance | Every runtime reports an immutable Git revision; production never executes from a mutable development checkout. | [ADR 0012](0012-verifiable-immutable-deployments.md) |
+| Hub sessions in tlive | Hub owns project conversation and continuation; tlive remains approval-only for marked Hub Codex turns while retaining full UX for interactive Codex. | [ADR 0017](0017-tlive-approval-only-hub-sessions.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

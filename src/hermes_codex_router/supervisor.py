@@ -34,7 +34,6 @@ class CodexAppServerSupervisor:
         *,
         manage_process: bool = True,
         stdio_executable: Path | None = None,
-        configured_transport: str = "auto",
         shared_socket_health: Callable[[], bool] | None = None,
     ) -> None:
         self.socket_path = socket_path.expanduser().resolve()
@@ -42,11 +41,6 @@ class CodexAppServerSupervisor:
         self.stdio_executable = (
             stdio_executable.expanduser().resolve(strict=True) if stdio_executable else None
         )
-        if configured_transport not in {"auto", "stdio"}:
-            raise ValueError("configured_transport must be auto or stdio")
-        if configured_transport == "stdio" and self.stdio_executable is None:
-            raise ValueError("configured_transport stdio requires stdio_executable")
-        self.configured_transport = configured_transport
         self.shared_socket_health = shared_socket_health
         self.process: subprocess.Popen[bytes] | None = None
         self.transport_mode: str | None = None
@@ -92,9 +86,6 @@ class CodexAppServerSupervisor:
             ownership_file.close()
 
     def start(self, *, timeout: float = 15.0) -> None:
-        if self.configured_transport == "stdio":
-            self.transport_mode = "stdio-fallback"
-            return
         if not self.manage_process and self.socket_path.is_socket():
             if self.shared_socket_health is not None and not self.shared_socket_health():
                 if self.stdio_executable is None:

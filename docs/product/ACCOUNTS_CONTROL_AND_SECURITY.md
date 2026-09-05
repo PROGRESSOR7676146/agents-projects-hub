@@ -20,11 +20,6 @@ This normative module is part of the
   official stdio transport MUST be selected before starting a turn. Because a
   shared app-server may retain the old thread's writer lease, fallback starts a
   new official thread and prepends only bounded persisted visible context.
-- **REQ-AUTH-004A (Implemented):** A deployment MAY select
-  `codex_transport: "stdio"` to always use a private official Codex app-server,
-  even while the configured shared socket is healthy. This mode is recommended
-  when a tlive companion watches the shared socket, because Hub project threads
-  then cannot appear in Agent Session Remote.
 - **REQ-AUTH-005 (Implemented):** Account changes and quota state MUST remain
   visible to the owner; switching MUST NOT be silent.
 - **REQ-AUTH-006 (Accepted):** Hermes MAY guide a mode-aware manual device-login
@@ -110,7 +105,11 @@ This normative module is part of the
 - **REQ-WRITER-005 (Accepted):** Agent Session Remote/tlive is first-class only
   for providers it semantically supports (currently Codex and Claude Code). A
   generic PTY wrapper MUST NOT be described as semantic OpenCode or Antigravity
-  integration.
+  integration. Hub-managed Codex turns on a shared app-server MUST be marked as
+  approval-only for a compatible tlive companion: remote approvals remain
+  available, while prompt/completion mirroring and reply-to-continue MUST stay
+  disabled so tlive cannot become a second conversation writer outside the Hub
+  queue and writer lease.
 
 ### Implemented minimal native transfer
 
@@ -135,8 +134,8 @@ separate native capability check.
 ## 12. Approval, sandbox, and secret requirements
 
 - **REQ-SEC-001 (Implemented):** Codex MUST remain `workspace-write`.
-  Companion-capable shared sockets use `on-request`; isolated headless stdio,
-  whether explicit or selected as fallback, uses `never` so sandboxed work may proceed but escalation cannot be
+  Companion-capable shared sockets use `on-request`; an isolated headless stdio
+  fallback uses `never` so sandboxed work may proceed but escalation cannot be
   requested. Any unexpected server approval request on that fallback MUST be
   explicitly declined. `danger-full-access`, dangerous provider bypass flags,
   and automatic approval MUST be rejected.

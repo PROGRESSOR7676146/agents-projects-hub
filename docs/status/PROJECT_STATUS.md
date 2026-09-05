@@ -15,12 +15,6 @@ operator deployment inventory or live conversation evidence.
   idempotent enqueue, strict per-topic FIFO leases, conservative stale-job
   recovery, and a feature-gated embedded compatibility consumer. `dispatch_mode`
   defaults to `inline`; `queue_runtime` defaults to `embedded`.
-- The recommended single-owner deployment is one Controller process with a
-  durable embedded queue and Controller-owned outbox. The separate worker and
-  sender topology remains available when its extra fault isolation justifies
-  the operational cost. Explicit `codex_transport: "stdio"` always uses a
-  private official Codex app-server, preventing Hub project sessions from being
-  observed by a tlive companion attached to the shared Codex socket.
 - Isolated queue workers are available for locally managed Codex, OpenCode, and
   Antigravity behind `dispatch_mode: "queue"` and `queue_runtime: "external"`.
   `external_worker_agent_ids` selects each isolated provider independently and
@@ -172,6 +166,10 @@ operator deployment inventory or live conversation evidence.
   The isolated stdio fallback uses `never` inside `workspace-write` and
   explicitly declines any unexpected server approval request, preventing a
   headless turn from waiting forever on a companion that cannot reach it.
+- Hub-owned Codex turns carry an approval-only transport marker. A compatible
+  tlive companion still forwards their Allow/Deny requests, but suppresses
+  duplicate prompt/completion cards and reply-to-continue. Interactive Codex
+  sessions on the same shared socket retain the full Agent Session Remote UX.
 - Compact `/status`, `/accounts`, cached and paginated `/model`, confirmed
   single-session `/new`, `/local`, and `/return` controls. Codex `/return` is an
   idempotent local lease transition with no provider invocation, summary,
