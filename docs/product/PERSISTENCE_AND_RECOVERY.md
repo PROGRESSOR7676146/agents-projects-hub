@@ -50,6 +50,13 @@ This normative module is part of the
   episode and re-arms only after convergence. Health MUST contain no prompts,
   responses, exception detail, paths, command lines, environment data,
   credentials, or account identifiers.
+- **REQ-OPS-010 (Implemented):** Before immutable activation, a private
+  deployment manifest MUST bind the exact clean-tree active and rollback wheel
+  identities and SHA-256 digests, configuration digest, SQLite-consistent
+  backup digest/schema, and target schema. A read-only gate MUST re-inspect
+  every artifact and MUST reject activation or runtime rollback unless both
+  executables support the target state schema. Manifest creation and
+  verification MUST NOT migrate state, start a service, or contact a provider.
 
 **Recovery limit:** exact in-flight turns are not portable across process or
 machine loss. Only completed state that was persisted before the loss can be

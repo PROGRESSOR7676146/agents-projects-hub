@@ -43,7 +43,10 @@ delete a socket merely to make the canary continue.
    backed-up database, never the live file. Do not launch `controller`, `serve`,
    `worker`, or `sender` for this compatibility check. If an older binary cannot
    read the schema, rollback must use the current binary with the previous
-   runtime gates.
+   runtime gates. Bind the candidate wheel, distinct rollback wheel, shadow
+   configuration, and backup with `agents-projects-hub release-manifest create`,
+   then require `release-manifest verify` to pass. The gate rejects a rollback
+   wheel that cannot read the candidate target schema.
 3. Create a mode-`0600` shadow configuration outside Git. Do not replace the
    active configuration yet. It must set:
 
@@ -67,7 +70,9 @@ delete a socket merely to make the canary continue.
    token. Run `agents-projects-hub status SHADOW_CONFIG` only after the backup
    and intended schema migration. Status makes no provider/network request, but
    opening state may initialize or migrate SQLite. Missing processes may be
-   `unknown` before launch.
+   `unknown` before launch. Repeat `release-manifest verify --state` only against
+   the disposable migrated copy during preparation; the live-state gate belongs
+   inside the separately authorized controlled rollout.
 5. Confirm the service topology before changing Telegram settings: one central
    Controller, one standalone sender, one worker per local provider, and only
    the desired provider direct-message ingress units. No provider group ingress

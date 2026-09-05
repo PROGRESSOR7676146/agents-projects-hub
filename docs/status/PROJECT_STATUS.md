@@ -45,6 +45,12 @@ operator deployment inventory or live conversation evidence.
   unknown revision episode and re-arms only after convergence. Existing
   heartbeat/error/provider-state classification and the single configured Hub
   Operations destination remain unchanged.
+- A private mode-`0600` deployment manifest binds distinct active and rollback
+  wheel digests and embedded clean-tree identities, the private configuration
+  digest, the SQLite-consistent backup digest/schema, and the intended target
+  schema. Its read-only gate re-inspects both wheels and rejects promotion or
+  runtime rollback unless both immutable artifacts support the target schema;
+  it never migrates state, starts services, or contacts a provider.
 - Telegram polling and durable-send failures are classified without raw
   exception text as bounded operation, network/API class, optional safe HTTP
   status/retry-after, consecutive-failure count, and last-success time.
@@ -245,7 +251,7 @@ operator deployment inventory or live conversation evidence.
   immutable runtime artifacts remains the deployment identity.
 - Privacy gate that rejects deployment identities, raw histories/session dumps,
   owner-specific paths, Telegram secrets/identifiers, and local runtime files.
-- Documentation validation inventories all 88 normative product requirement IDs,
+- Documentation validation inventories all 89 normative product requirement IDs,
   protects all 20 numbered baseline sections by content hash, and checks local
   Markdown files/anchors repository-wide. The product baseline is split into a
   short normative index and five stable capability modules; the guarded move

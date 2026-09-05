@@ -9,7 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-LATEST_SCHEMA_VERSION = 21
+from .schema_compatibility import TARGET_SCHEMA_VERSION
+
+LATEST_SCHEMA_VERSION = TARGET_SCHEMA_VERSION
 
 
 MIGRATION_1 = """

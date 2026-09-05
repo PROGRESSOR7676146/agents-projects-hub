@@ -1,6 +1,6 @@
 # ADR 0012: Verifiable immutable deployments
 
-Status: accepted; phase one implemented, phase two planned
+Status: accepted; phase one and phase-two manifest gate implemented, activation planned
 Date: 2026-09-04
 
 ## Context
@@ -43,11 +43,12 @@ provenance.
 ## Phased delivery
 
 The first phase adds embedded revision metadata, per-process health reporting,
-and mixed/unknown-revision detection. The second
-phase builds a revision-specific wheel/virtual environment or equivalent
-immutable release directory and switches systemd units through a controlled
-release pointer. Packaging automation must remain simpler than a container
-platform; containers are not required for this single-machine deployment.
+and mixed/unknown-revision detection. Phase two now includes a private,
+digest-bound deployment manifest and a read-only schema-compatibility gate for
+distinct active and rollback wheels. Revision-specific installation and the
+controlled release-pointer switch remain planned. Packaging automation must
+remain simpler than a container platform; containers are not required for this
+single-machine deployment.
 
 ## Consequences
 

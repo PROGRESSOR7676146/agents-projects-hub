@@ -14,6 +14,10 @@ from .acceptance_actor import (
     run_acceptance_checks,
 )
 from .command_menu import configure_public_commands
+from .deployment_manifest import (
+    create_deployment_manifest,
+    verify_deployment_manifest,
+)
 from .diagnostics import run_doctor
 from .external_service import ExternalAgentService
 from .external_worker import ExternalQueueWorker
@@ -81,6 +85,20 @@ def _parser() -> argparse.ArgumentParser:
     status.add_argument("config", type=Path)
 
     commands.add_parser("release-info", help="print embedded package release identity")
+
+    release_manifest = commands.add_parser(
+        "release-manifest", help="create or verify an immutable deployment manifest"
+    )
+    manifest_commands = release_manifest.add_subparsers(dest="manifest_command", required=True)
+    manifest_create = manifest_commands.add_parser("create")
+    manifest_create.add_argument("manifest", type=Path)
+    manifest_create.add_argument("--active-artifact", required=True, type=Path)
+    manifest_create.add_argument("--rollback-artifact", required=True, type=Path)
+    manifest_create.add_argument("--config", required=True, type=Path)
+    manifest_create.add_argument("--backup", required=True, type=Path)
+    manifest_verify = manifest_commands.add_parser("verify")
+    manifest_verify.add_argument("manifest", type=Path)
+    manifest_verify.add_argument("--state", type=Path)
 
     migrate = commands.add_parser("migrate", help="migrate a state database safely")
     migrate.add_argument("state", type=Path)
@@ -364,6 +382,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "release-info":
             _print({"ok": CURRENT_RELEASE.verified, **asdict(CURRENT_RELEASE)})
             return 0 if CURRENT_RELEASE.verified else 1
+        if args.command == "release-manifest":
+            if args.manifest_command == "create":
+                manifest = create_deployment_manifest(
+                    args.manifest,
+                    active_artifact=args.active_artifact,
+                    rollback_artifact=args.rollback_artifact,
+                    configuration=args.config,
+                    state_backup=args.backup,
+                )
+            else:
+                manifest = verify_deployment_manifest(args.manifest, state_path=args.state)
+            _print({"ok": True, **asdict(manifest)})
+            return 0
         if args.command == "migrate":
             result = migrate_database(args.state, create_backup=not args.no_backup)
             _print(

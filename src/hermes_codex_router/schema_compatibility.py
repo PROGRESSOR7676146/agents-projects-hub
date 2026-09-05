@@ -1,0 +1,9 @@
+from __future__ import annotations
+
+MIN_SUPPORTED_SCHEMA_VERSION = 1
+MAX_SUPPORTED_SCHEMA_VERSION = 21
+TARGET_SCHEMA_VERSION = MAX_SUPPORTED_SCHEMA_VERSION
+
+
+def supports_schema(version: int) -> bool:
+    return MIN_SUPPORTED_SCHEMA_VERSION <= version <= MAX_SUPPORTED_SCHEMA_VERSION

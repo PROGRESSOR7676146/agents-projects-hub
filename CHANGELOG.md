@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Add a private, digest-bound deployment manifest and read-only compatibility
+  gate that inspects distinct immutable active/rollback wheels, configuration,
+  SQLite backup, and target schema without service or provider access.
 - Deliver Telegram Interaction Contract v2 to Codex through app-server
   `developerInstructions` on thread start and resume, keeping the stable
   contract out of user turn text and retaining bounded prompt fallback for
