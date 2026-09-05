@@ -47,10 +47,11 @@ them.
    distinguish active, confirmed inactive, and unavailable supervisor state;
    Hermes heartbeat and tlive runtime liveness remain independent evidence.
    Separate tests prevent probe failures from being labeled inactive.
-5. **Synchronize release metadata.** Package version, changelog, project status,
-   Git tag, and deployed SHA have different purposes but must not contradict one
-   another. Missing tags are visible release debt, not a reason to invent or
-   rewrite history.
+5. **Synchronize release metadata (repository-complete).** Canonical validation
+   checks package version, changelog, project status, and local Git tags for
+   contradictions. Missing tags are visible non-failing debt and are never
+   created or rewritten by the audit; deployed SHA remains separate runtime
+   evidence.
 6. **Move live configuration out of the checkout.** Production configuration is
    private state under the operator configuration directory. A Git-ignored file
    inside `config/` is safer than a tracked secret but remains vulnerable to

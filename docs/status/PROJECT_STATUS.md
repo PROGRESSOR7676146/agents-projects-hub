@@ -233,6 +233,10 @@ operator deployment inventory or live conversation evidence.
   reapers. Runtime-proxy monitoring remains independent and never restarts a
   shared app-server underneath an active Codex or tlive session.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
+- Canonical validation and CI audit package version, the newest changelog
+  release, project-status release, and local `vX.Y.Z` tags for contradictions.
+  Missing release tags are reported as non-mutating debt; Git SHA reported by
+  immutable runtime artifacts remains the deployment identity.
 - Privacy gate that rejects deployment identities, raw histories/session dumps,
   owner-specific paths, Telegram secrets/identifiers, and local runtime files.
 

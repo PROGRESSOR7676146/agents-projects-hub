@@ -21,6 +21,9 @@ and releases use semantic versioning while the public API is still evolving.
 - Distinguish an inaccessible user-service supervisor from a confirmed inactive
   unit in local diagnostics while retaining independent Hermes heartbeat and
   tlive runtime liveness as valid recovery-channel evidence.
+- Add a canonical release-metadata audit for package, changelog, project status,
+  and local Git tags; contradictions fail validation while missing tags remain
+  visible debt and are never created or rewritten automatically.
 - Embed package version, exact clean Git SHA, and build time in wheel artifacts;
   publish release identity from every required Hub runtime and alert once when
   cached deployment revisions are mixed or unknown.

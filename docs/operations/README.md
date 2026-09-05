@@ -17,6 +17,10 @@ Operational truth is split by purpose:
 - Complete validation gate: `python scripts/validate.py`.
 - Artifact provenance: `agents-projects-hub release-info` succeeds only for a
   wheel with complete clean-tree release identity; run it before promotion.
+- Release/version/tag truth and promotion order:
+  [`RELEASE_METADATA.md`](RELEASE_METADATA.md). The canonical gate fails
+  contradictions and reports missing tags as visible debt without creating or
+  rewriting them.
 - Read-only deployment diagnostics: `agents-projects-hub doctor HUB_CONFIG` and
   `agents-projects-hub monitor HUB_CONFIG`.
 - Cache-only status and component health: `agents-projects-hub status HUB_CONFIG` reports

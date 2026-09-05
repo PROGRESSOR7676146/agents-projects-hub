@@ -5,12 +5,12 @@ Roadmap содержит только переносимые продуктов�
 
 ## Ближайшие задачи
 
-### Активный checkpoint: синхронизация release metadata
+### Активный checkpoint: безопасный split product requirements
 
-Зафиксировать проверяемую политику согласования package version, changelog,
-project status и Git tags и добавить static checks. Отсутствующий tag должен
-быть видимым release debt, а не поводом автоматически создавать или
-переписывать Git history.
+Сначала подготовить test-first план: инвентаризировать requirement IDs и ссылки,
+добавить проверки полноты/уникальности/ссылочной целостности и прогнать privacy
+history gate. Массовый перенос выполнять только если эти проверки доказывают
+безопасность; иначе оставить документ на месте и зафиксировать точный blocker.
 
 ### Telegram Interaction Contract v2
 
@@ -74,6 +74,9 @@ providers остаётся вне текущего scope.
 
 ## Недавно завершено
 
+- Canonical gate проверяет согласованность package version, changelog, project
+  status и Git tags. Отсутствующие tags видны как debt, но audit не создаёт и не
+  переписывает Git history; deployed SHA остаётся отдельным доказательством.
 - Recovery diagnostics различают недоступный supervisor bus, подтверждённо
   inactive unit и независимо healthy Hermes/tlive runtime; probe failure больше
   не подписывается как `service=inactive`.
