@@ -24,6 +24,9 @@ and releases use semantic versioning while the public API is still evolving.
 - Add a canonical release-metadata audit for package, changelog, project status,
   and local Git tags; contradictions fail validation while missing tags remain
   visible debt and are never created or rewritten automatically.
+- Add a test-first product-requirements split plan, an immutable inventory of 88
+  normative IDs and 20 section hashes, and repository-wide Markdown file/anchor
+  checks before moving the near-limit monolith.
 - Embed package version, exact clean Git SHA, and build time in wheel artifacts;
   publish release identity from every required Hub runtime and alert once when
   cached deployment revisions are mixed or unknown.

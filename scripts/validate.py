@@ -23,6 +23,7 @@ def main() -> int:
     run(tool("ruff"), "check", ".")
     run(tool("pyright"))
     run(sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q")
+    run(sys.executable, "-m", "hermes_codex_router.documentation_contract", str(ROOT))
     run(sys.executable, "-m", "hermes_codex_router.release_metadata", str(ROOT))
     run(
         sys.executable,

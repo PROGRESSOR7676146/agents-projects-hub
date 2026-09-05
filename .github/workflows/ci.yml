@@ -39,6 +39,8 @@ jobs:
         run: pyright
       - name: Unit and integration tests
         run: python -m unittest discover -s tests -q
+      - name: Requirements and documentation contract
+        run: python -m hermes_codex_router.documentation_contract .
       - name: Release metadata policy
         run: python -m hermes_codex_router.release_metadata .
       - name: Validate publishable registry example

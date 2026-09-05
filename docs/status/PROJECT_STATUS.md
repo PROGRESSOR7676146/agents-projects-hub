@@ -239,6 +239,10 @@ operator deployment inventory or live conversation evidence.
   immutable runtime artifacts remains the deployment identity.
 - Privacy gate that rejects deployment identities, raw histories/session dumps,
   owner-specific paths, Telegram secrets/identifiers, and local runtime files.
+- Documentation validation inventories all 88 normative product requirement IDs,
+  protects all 20 numbered baseline sections by content hash, and checks local
+  Markdown files/anchors repository-wide. These test-first guards precede the
+  planned requirements split; no normative content move is claimed yet.
 
 ## Acceptance still required per deployment
 

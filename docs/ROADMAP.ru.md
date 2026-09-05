@@ -12,6 +12,10 @@ Roadmap содержит только переносимые продуктов�
 history gate. Массовый перенос выполнять только если эти проверки доказывают
 безопасность; иначе оставить документ на месте и зафиксировать точный blocker.
 
+План и pre-split guardrails готовы: inventory содержит 88 IDs и hashes всех 20
+нормативных секций, Markdown audit проверяет files/anchors. Следующий шаг —
+отдельный механический move при зелёных canonical и privacy/history gates.
+
 ### Telegram Interaction Contract v2
 
 Работа выполняется по

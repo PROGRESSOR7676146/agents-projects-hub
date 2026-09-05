@@ -7,9 +7,10 @@ are intentionally excluded.
 ## Start here
 
 1. [Product requirements](product/PRODUCT_REQUIREMENTS.md)
-2. [Project status](status/PROJECT_STATUS.md)
-3. [Security model](SECURITY.ru.md) and [security policy](../SECURITY.md)
-4. [Decision map](decisions/README.md)
+2. [Requirements split plan](product/REQUIREMENTS_SPLIT_PLAN.md)
+3. [Project status](status/PROJECT_STATUS.md)
+4. [Security model](SECURITY.ru.md) and [security policy](../SECURITY.md)
+5. [Decision map](decisions/README.md)
 
 ## Delivery and operation
 

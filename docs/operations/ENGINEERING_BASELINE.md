@@ -59,10 +59,11 @@ them.
 
 ## P2: maintainability and product evidence
 
-1. **Split the product requirements by stable capability.** The current
-   monolithic document is large enough that the privacy gate requires review on
-   any edit. Replace it through a reviewed migration with a short normative
-   index and stable requirement modules; preserve requirement IDs and links.
+1. **Split the product requirements by stable capability (guardrails ready).**
+   A reviewed migration plan, 88-ID inventory, 20 section-content hashes, and
+   repository-wide Markdown link/anchor audit are in the canonical gate. Move
+   the content only in a separate commit that passes these and privacy/history
+   checks with every target module below 50 KB.
 2. **Use an evidence vocabulary.** Every completion claim names its level:
    static check, unit test, adapter contract, synthetic fault test,
    deployment-local Telegram E2E, restart E2E, or cold-boot E2E. “All green”
