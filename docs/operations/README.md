@@ -9,6 +9,12 @@ Operational truth is split by purpose:
   [`README.md`](../../README.md).
 - Independent Hermes/tlive health and recovery:
   [`RECOVERY_PLANE.ru.md`](../RECOVERY_PLANE.ru.md).
+- Self-contained Hub recovery knowledge published for an independent Hermes
+  channel: [`../../recovery/agents-projects-hub/RUNBOOK.md`](../../recovery/agents-projects-hub/RUNBOOK.md).
+  Validate an installed copy with `scripts/verify-recovery-capsule.py` before
+  using it; the owner project alone publishes new generations.
+- Reciprocal ownership, freshness, and Hermes recovery:
+  [`RECOVERY_CAPSULES.md`](RECOVERY_CAPSULES.md).
 - Off-machine WSL backup and isolated cold-restore drill plan:
   [`WSL_OFF_MACHINE_RECOVERY.md`](WSL_OFF_MACHINE_RECOVERY.md).
 - Threat response and fail-closed behavior:

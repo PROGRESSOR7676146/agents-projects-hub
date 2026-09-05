@@ -24,6 +24,26 @@ Project Hub, Hermes Gateway и tlive не должны образовывать 
   `~/.tlive/config.json`, Telegram tokens, web token, provider OAuth и SQLite.
 - В Telegram нельзя передавать локальные пути, OAuth tokens или дампы окружения.
 
+## Взаимные recovery capsules
+
+Каждый проект владеет только собственной инструкцией восстановления и после
+чистого принятого изменения публикует её в нейтральный локальный каталог
+`recovery-capsules`. Публикация содержит Git SHA, время, хеши manifest/runbook и
+атомарный указатель `current`. Hermes читает Hub-owned capsule, но не правит её;
+Hub аналогично читает Hermes-owned capsule. Установленная копия остаётся
+доступной при поломке исходного checkout или venv и не создаёт service
+dependency между каналами.
+
+Hub публикует свою capsule командой:
+
+```bash
+python scripts/publish-recovery-capsule.py
+```
+
+Dirty tree не публикуется. Capsule не содержит credentials, deployment paths,
+Telegram identities или private state и не заменяет immutable artifacts,
+backup либо deployment-local acceptance.
+
 ## Проверка
 
 ```bash

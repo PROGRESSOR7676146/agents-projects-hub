@@ -63,6 +63,11 @@ install -m 600 "$repo_root/integrations/hermes-project-hub-hook/HOOK.yaml" \
 
 systemctl --user daemon-reload
 
+# Publish a clean, self-contained recovery guide outside the repository so an
+# independent Hermes channel can diagnose this project when its checkout or
+# runtime is unavailable. A dirty source intentionally fails closed.
+"$data_root/venv/bin/python" "$repo_root/scripts/publish-recovery-capsule.py"
+
 printf '%s\n' \
   "Installed Agents Projects Hub." \
   "Edit $config_root/projects.json, hub.json, and environment." \

@@ -256,6 +256,10 @@ operator deployment inventory or live conversation evidence.
   reapers. Runtime-proxy monitoring remains independent and never restarts a
   shared app-server underneath an active Codex or tlive session.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
+- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-21
+  immutable-deployment triage guide, source revision, timestamp, and content
+  hashes into a neutral local store for the independent Hermes channel. It
+  carries no private deployment inventory and creates no service dependency.
 - Canonical validation and CI audit package version, the newest changelog
   release, project-status release, and local `vX.Y.Z` tags for contradictions.
   Missing release tags are reported as non-mutating debt; Git SHA reported by
