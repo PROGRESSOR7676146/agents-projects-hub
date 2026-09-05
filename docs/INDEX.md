@@ -20,6 +20,7 @@ are intentionally excluded.
 - [Live canary and rollback](operations/LIVE_CANARY.md)
 - [Release metadata synchronization](operations/RELEASE_METADATA.md)
 - [Recovery plane](RECOVERY_PLANE.ru.md)
+- [Off-machine WSL recovery plan](operations/WSL_OFF_MACHINE_RECOVERY.md)
 - [Risk register](risks/RISK_REGISTER.md)
 - [Testing and privacy gate](testing/README.md)
 

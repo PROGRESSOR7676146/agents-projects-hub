@@ -258,7 +258,7 @@ operator deployment inventory or live conversation evidence.
   immutable runtime artifacts remains the deployment identity.
 - Privacy gate that rejects deployment identities, raw histories/session dumps,
   owner-specific paths, Telegram secrets/identifiers, and local runtime files.
-- Documentation validation inventories all 90 normative product requirement IDs,
+- Documentation validation inventories all 91 normative product requirement IDs,
   protects all 20 numbered baseline sections by content hash, and checks local
   Markdown files/anchors repository-wide. The product baseline is split into a
   short normative index and five stable capability modules; the guarded move
@@ -280,6 +280,15 @@ operator deployment inventory or live conversation evidence.
 
 Live acceptance results belong in private operational records, not this public
 repository.
+
+## Planned recovery exercise
+
+- The separate off-machine WSL recovery plan defines encrypted versioned
+  application snapshots, periodic cold exports stored away from the physical
+  source machine, exact recovery-set inventory, network/service isolation,
+  preservation of all indeterminate work, and measurable cold-restore gates.
+  Backup automation, WSL shutdown/export, and the first private timed drill were
+  intentionally not executed during v0.7.0 repository preparation.
 
 ## Deferred
 

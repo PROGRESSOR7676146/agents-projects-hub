@@ -7,6 +7,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [0.7.0] - 2026-09-05
 
+- Add a separate off-machine WSL backup and cold-restore drill plan covering
+  encrypted recovery sets, immutable release/schema checks, service/network
+  isolation, exact indeterminate preservation, and measurable private evidence;
+  no backup, WSL export, or private drill is performed by this release work.
 - Add a fully automated offline rollout/runtime-rollback rehearsal using only
   generated temporary schema-20 state, release directories, activation pointer,
   configuration, backup, and manifest, with durable-work comparison on schema

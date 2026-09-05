@@ -9,6 +9,8 @@ Operational truth is split by purpose:
   [`README.md`](../../README.md).
 - Independent Hermes/tlive health and recovery:
   [`RECOVERY_PLANE.ru.md`](../RECOVERY_PLANE.ru.md).
+- Off-machine WSL backup and isolated cold-restore drill plan:
+  [`WSL_OFF_MACHINE_RECOVERY.md`](WSL_OFF_MACHINE_RECOVERY.md).
 - Threat response and fail-closed behavior:
   [`SECURITY.ru.md`](../SECURITY.ru.md) and [`SECURITY.md`](../../SECURITY.md).
 - Planned post-baseline sequence: [`ROADMAP.ru.md`](../ROADMAP.ru.md).

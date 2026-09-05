@@ -53,6 +53,11 @@ providers остаётся вне текущего scope.
 
 ## Резервирование и восстановление WSL
 
+Подробный исполнимый план, recovery sets, stop conditions и критерии cold drill
+вынесены в [отдельный runbook](operations/WSL_OFF_MACHINE_RECOVERY.md). Ни
+backup automation, ни работа с приватными данными, ни остановка/экспорт WSL в
+рамках подготовки v0.7.0 не выполнялись.
+
 1. Считать весь WSL-дистрибутив критичными данными: исходники, Git worktrees,
    provider session stores, Hub SQLite, OAuth/configuration state, Hermes/tlive,
    локальные инструменты и пользовательские файлы не должны оставаться в одном
@@ -74,8 +79,8 @@ providers остаётся вне текущего scope.
 ## Недавно завершено
 
 - Product requirements разделены на короткий normative index и пять стабильных
-  capability modules. Manifest и canonical gate подтверждают сохранность всех
-  88 IDs, hashes 20 секций и Markdown links/anchors.
+  capability modules. Manifest и canonical gate подтверждают текущие 91 ID,
+  hashes 20 секций и Markdown links/anchors.
 - Canonical gate проверяет согласованность package version, changelog, project
   status и Git tags. Отсутствующие tags видны как debt, но audit не создаёт и не
   переписывает Git history; deployed SHA остаётся отдельным доказательством.

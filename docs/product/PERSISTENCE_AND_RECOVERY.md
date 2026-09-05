@@ -65,6 +65,14 @@ This normative module is part of the
   schema 21 state, and prove queued work, prepared outbox delivery, and an
   indeterminate job remain unchanged. It MUST NOT read deployment state, invoke
   a provider, contact Telegram, or control a service.
+- **REQ-OPS-012 (Planned):** Machine-loss recovery MUST use encrypted versioned
+  application snapshots and periodic cold WSL exports stored off the physical
+  source machine, with recovery keys held separately. A scheduled isolated
+  cold-restore drill MUST verify immutable artifacts, SQLite integrity/schema,
+  project and provider-session stores, outbox spool bindings, and unchanged
+  indeterminate work before any restored service or network access. Backup
+  automation, WSL shutdown/export, and private-data drills require separate
+  deployment authorization.
 
 **Recovery limit:** exact in-flight turns are not portable across process or
 machine loss. Only completed state that was persisted before the loss can be
