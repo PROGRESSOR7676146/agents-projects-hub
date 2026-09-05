@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from hermes_codex_router.hub_config import HubConfig, TerminalSettings
 from hermes_codex_router.monitoring import run_monitor_once
+from hermes_codex_router.release_identity import CURRENT_RELEASE
 from hermes_codex_router.runtime_health import MONITOR_INSTANCE_ID
 from hermes_codex_router.state import HubState
 
@@ -41,7 +42,7 @@ class MonitorHealthTests(unittest.TestCase):
                 assert health is not None
                 self.assertIsNotNone(health.success_at)
                 self.assertIsNone(health.error_code)
-                self.assertEqual(health.release_version, "0.6.0")
+                self.assertEqual(health.release_version, CURRENT_RELEASE.package_version)
             finally:
                 state.close()
 
