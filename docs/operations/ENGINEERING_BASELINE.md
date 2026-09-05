@@ -35,10 +35,11 @@ them.
 
 1. **Immutable release activation.** Complete ADR 0012 phase two. Development
    checkout, active release, and rollback artifact must be distinct.
-2. **Bound runtime-event storage.** Status reads only recent events, but the
-   SQLite `runtime_events` table currently has no retention deletion. Add
-   deterministic age/count retention that preserves current health and active
-   alert state, with a migration/fault test and no manual database editing.
+2. **Bound runtime-event storage (repository-complete).** Schema 21 and the
+   runtime write path enforce deterministic 30-day/10,000-row retention while
+   preserving current health, active alerts, and provider work. Migration,
+   boundary, count, and rollback-on-fault tests cover the contract; no manual
+   database editing is required.
 3. **Make health semantics honest.** A component with repeated Telegram errors
    must not remain indefinitely indistinguishable from a fully healthy channel.
    Use bounded thresholds and edge-triggered recovery rather than alert spam.

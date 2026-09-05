@@ -202,12 +202,15 @@ operator deployment inventory or live conversation evidence.
   Codex same-turn steering, deterministic queued follow-up for runtimes without
   steering, and exact-utterance emergency stop with provider/process
   interruption are also implemented.
-- Schema version 20 adds bounded Telegram transport state to runtime-health
-  snapshots. Version 19 added immutable release identity; version 15 added
-  durable per-message Telegram outbox parts; and version 14 repairs early
-  version-13 deployments that had durable input membership but had not yet
-  created stop-request and turn-absorption tables. Upgrades create a private
-  SQLite-consistent backup first.
+- Schema version 21 bounds diagnostic `runtime_events` to 30 days and the newest
+  10,000 rows, pruning atomically with each insertion and independently of
+  current health, alert state, and provider work. Version 20 added bounded
+  Telegram transport state to runtime-health snapshots; version 19 added
+  immutable release identity; version 15 added durable per-message Telegram
+  outbox parts; and version 14 repairs early version-13 deployments that had
+  durable input membership but had not yet created stop-request and
+  turn-absorption tables. Upgrades create a private SQLite-consistent backup
+  first.
 - Optional read-only Antigravity structured status/quota cache integration for
   compact `/status` and `/accounts`; private-file and freshness checks fail to
   unknown without invoking a model, and `doctor` reports each cache as fresh,

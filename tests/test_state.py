@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from hermes_codex_router.state import HubState
@@ -403,6 +405,93 @@ class HubStateTests(unittest.TestCase):
         self.state.set_runtime_counter("codex:429", 8)
         self.state.replace_runtime_counter("codex:429", 0)
         self.assertEqual(self.state.runtime_counter("codex:429"), 0)
+
+    def test_runtime_event_retention_enforces_age_boundary_and_preserves_state(self) -> None:
+        now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+        self.state.upsert_runtime_health(
+            component="controller",
+            instance_id="controller-test",
+            pid=1234,
+            process_start_marker="start-marker",
+            started_at=now,
+            heartbeat_at=now,
+        )
+        self.assertTrue(self.state.claim_alert_transition("runtime:test"))
+        self.state.replace_runtime_counter("runtime:test", 7)
+        self.state.record_runtime_event(
+            "controller",
+            "warning",
+            "expired",
+            "expired event",
+            recorded_at=now - timedelta(days=30, microseconds=1),
+        )
+        self.state.record_runtime_event(
+            "controller",
+            "warning",
+            "boundary",
+            "boundary event",
+            recorded_at=now - timedelta(days=30),
+        )
+
+        self.state.record_runtime_event(
+            "controller", "info", "current", "current event", recorded_at=now
+        )
+
+        events = self.state.status_snapshot()["runtime_events"]
+        assert isinstance(events, list)
+        self.assertEqual({item["code"] for item in events}, {"boundary", "current"})
+        self.assertIsNotNone(self.state.get_runtime_health("controller", "controller-test"))
+        self.assertFalse(self.state.claim_alert_transition("runtime:test"))
+        self.assertEqual(self.state.runtime_counter("runtime:test"), 7)
+
+    def test_runtime_event_retention_keeps_newest_count_with_stable_tie_breaker(self) -> None:
+        now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+        timestamp = now.isoformat()
+        with self.state._connection:
+            self.state._connection.executemany(
+                """INSERT INTO runtime_events
+                   (component, level, code, detail, created_at)
+                   VALUES ('controller', 'info', ?, 'event', ?)""",
+                ((f"event-{index}", timestamp) for index in range(10_000)),
+            )
+
+        self.state.record_runtime_event(
+            "controller", "info", "newest", "newest event", recorded_at=now
+        )
+
+        rows = self.state._connection.execute(
+            "SELECT code FROM runtime_events ORDER BY event_id"
+        ).fetchall()
+        self.assertEqual(len(rows), 10_000)
+        self.assertEqual(rows[0]["code"], "event-1")
+        self.assertEqual(rows[-1]["code"], "newest")
+
+    def test_runtime_event_retention_fault_rolls_back_new_event(self) -> None:
+        now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+        with self.state._connection:
+            self.state._connection.execute(
+                """INSERT INTO runtime_events
+                   (component, level, code, detail, created_at)
+                   VALUES ('controller', 'info', 'expired', 'old event', ?)""",
+                ((now - timedelta(days=31)).isoformat(),),
+            )
+            self.state._connection.execute(
+                """CREATE TRIGGER reject_runtime_event_delete
+                   BEFORE DELETE ON runtime_events
+                   BEGIN
+                     SELECT RAISE(ABORT, 'retention fault');
+                   END"""
+            )
+
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "retention fault"):
+            self.state.record_runtime_event(
+                "controller", "info", "new", "new event", recorded_at=now
+            )
+
+        rows = self.state._connection.execute(
+            "SELECT code FROM runtime_events ORDER BY event_id"
+        ).fetchall()
+        self.assertEqual([row["code"] for row in rows], ["expired"])
 
     def test_lists_only_topics_where_agent_is_active(self) -> None:
         self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")

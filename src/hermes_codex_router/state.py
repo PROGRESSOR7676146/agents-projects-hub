@@ -17,6 +17,8 @@ from .release_identity import CURRENT_RELEASE, ReleaseIdentity
 from .telegram_multipart import split_telegram_html
 
 MAX_PROVIDER_RESPONSE_LENGTH = 200_000
+RUNTIME_EVENT_MAX_AGE = timedelta(days=30)
+RUNTIME_EVENT_MAX_COUNT = 10_000
 
 
 class StateError(RuntimeError):
@@ -3039,14 +3041,37 @@ class HubState:
         if cursor.rowcount != 1:
             raise StateError(f"unknown dispatch_id: {dispatch_id}")
 
-    def record_runtime_event(self, component: str, level: str, code: str, detail: str) -> None:
+    def record_runtime_event(
+        self,
+        component: str,
+        level: str,
+        code: str,
+        detail: str,
+        *,
+        recorded_at: datetime | None = None,
+    ) -> None:
         if level not in {"info", "warning", "error"}:
             raise StateError("invalid runtime event level")
+        current = recorded_at or datetime.now(timezone.utc)
+        created_at = _timestamp(current)
+        cutoff = _timestamp(current - RUNTIME_EVENT_MAX_AGE)
         with self._connection:
             self._connection.execute(
                 """INSERT INTO runtime_events(component, level, code, detail, created_at)
                    VALUES (?, ?, ?, ?, ?)""",
-                (component[:64], level, code[:64], detail[:1000], _now()),
+                (component[:64], level, code[:64], detail[:1000], created_at),
+            )
+            self._connection.execute(
+                "DELETE FROM runtime_events WHERE created_at < ?",
+                (cutoff,),
+            )
+            self._connection.execute(
+                """DELETE FROM runtime_events
+                   WHERE event_id NOT IN (
+                     SELECT event_id FROM runtime_events
+                     ORDER BY created_at DESC, event_id DESC LIMIT ?
+                   )""",
+                (RUNTIME_EVENT_MAX_COUNT,),
             )
 
     def latest_runtime_event(self, component: str, code: str) -> dict[str, object] | None:

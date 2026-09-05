@@ -16,6 +16,104 @@ from hermes_codex_router.migrations import (
 
 
 class MigrationTests(unittest.TestCase):
+    def test_runtime_event_retention_migration_preserves_v20_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            migrate_database(path, create_backup=False)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute("DROP INDEX runtime_events_retention")
+                connection.execute(
+                    "CREATE INDEX runtime_events_created_at ON runtime_events(created_at DESC)"
+                )
+                connection.execute(
+                    """INSERT INTO runtime_events
+                       (component, level, code, detail, created_at)
+                       VALUES ('controller', 'warning', 'legacy', 'kept',
+                               '2026-09-05T12:00:00+00:00')"""
+                )
+                connection.execute(
+                    """INSERT INTO runtime_events
+                       (component, level, code, detail, created_at)
+                       VALUES ('controller', 'info', 'expired', 'removed',
+                               '2020-01-01T00:00:00+00:00')"""
+                )
+                connection.executescript(
+                    """INSERT INTO topics
+                       (project_id, chat_id, thread_id, title, created_at, updated_at)
+                       VALUES ('example-project', -1001234567890, 7, 'Topic', 'now', 'now');
+                       INSERT INTO agent_sessions
+                       (session_id, topic_id, agent_id, generation, status, model, effort,
+                        created_at, updated_at)
+                       VALUES ('session', 1, 'codex', 1, 'active', 'model', 'high',
+                               'now', 'now');
+                       INSERT INTO provider_jobs
+                       (job_id, idempotency_key, chat_id, message_id, topic_id,
+                        topic_sequence, agent_id, session_id, session_generation, model,
+                        effort, payload_text, status, created_at, updated_at)
+                       VALUES ('queued-job', 'retention-key', -1001234567890, 1, 1, 1,
+                               'codex', 'session', 1, 'model', 'high', 'hello', 'queued',
+                               'now', 'now');"""
+                )
+                connection.execute("PRAGMA user_version = 20")
+                connection.commit()
+            finally:
+                connection.close()
+
+            result = migrate_database(path, create_backup=False)
+
+            self.assertEqual((result.previous_version, result.current_version), (20, 21))
+            migrated = sqlite3.connect(path)
+            try:
+                self.assertEqual(
+                    migrated.execute("SELECT code FROM runtime_events").fetchall(),
+                    [("legacy",)],
+                )
+                self.assertEqual(
+                    migrated.execute(
+                        "SELECT status, attempt_count FROM provider_jobs WHERE job_id = 'queued-job'"
+                    ).fetchone(),
+                    ("queued", 0),
+                )
+                columns = migrated.execute("PRAGMA index_info(runtime_events_retention)").fetchall()
+                self.assertEqual([column[2] for column in columns], ["created_at", "event_id"])
+                self.assertEqual(migrated.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            finally:
+                migrated.close()
+
+    def test_runtime_event_retention_migration_fault_restores_v20_database(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            migrate_database(path, create_backup=False)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute("DROP INDEX runtime_events_retention")
+                connection.execute("CREATE TABLE runtime_events_retention (marker TEXT NOT NULL)")
+                connection.execute(
+                    """INSERT INTO runtime_events
+                       (component, level, code, detail, created_at)
+                       VALUES ('controller', 'warning', 'legacy', 'kept',
+                               '2026-09-05T12:00:00+00:00')"""
+                )
+                connection.execute("PRAGMA user_version = 20")
+                connection.commit()
+            finally:
+                connection.close()
+
+            with self.assertRaises(sqlite3.OperationalError):
+                migrate_database(path)
+
+            restored = sqlite3.connect(path)
+            try:
+                self.assertEqual(restored.execute("PRAGMA user_version").fetchone()[0], 20)
+                self.assertEqual(
+                    restored.execute("SELECT code FROM runtime_events").fetchone()[0],
+                    "legacy",
+                )
+                self.assertEqual(restored.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            finally:
+                restored.close()
+
     def test_transport_health_migration_preserves_v19_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
@@ -44,7 +142,10 @@ class MigrationTests(unittest.TestCase):
                 connection.close()
 
             result = migrate_database(path, create_backup=False)
-            self.assertEqual((result.previous_version, result.current_version), (19, 20))
+            self.assertEqual(
+                (result.previous_version, result.current_version),
+                (19, LATEST_SCHEMA_VERSION),
+            )
             migrated = sqlite3.connect(path)
             try:
                 row = migrated.execute(

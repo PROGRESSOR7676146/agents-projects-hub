@@ -5,13 +5,12 @@ Roadmap содержит только переносимые продуктов�
 
 ## Ближайшие задачи
 
-### Активный checkpoint: bounded retention для runtime events
+### Активный checkpoint: честные recovery diagnostics
 
-Добавить совместимую версионированную миграцию и детерминированную очистку
-`runtime_events` одновременно по возрасту и количеству. Очистка не должна
-затрагивать текущий `runtime_health`, alert transitions/checkpoints или
-provider work; acceptance включает migration compatibility, boundary и fault
-tests без ручного изменения live SQLite.
+Различить в локальных recovery checks три наблюдаемых состояния: supervisor bus
+недоступен, unit подтверждённо inactive и independently detected runtime
+healthy. Не выдавать probe failure за inactive unit; каждую ветвь покрыть
+отдельным тестом без рестартов сервисов.
 
 ### Telegram Interaction Contract v2
 
@@ -75,6 +74,9 @@ providers остаётся вне текущего scope.
 
 ## Недавно завершено
 
+- Schema 21 ограничивает `runtime_events` одновременно 30 сутками и 10 000
+  newest rows. Миграция и runtime pruning атомарны, детерминированы и не меняют
+  health/alert state или provider work.
 - Нативная передача Codex принята на immutable release: `/local` и model-free
   `/return` сохраняют provider thread и режим единственного writer.
 - Автоматический межагентный handoff и фоновая инъекция непрочитанного диалога

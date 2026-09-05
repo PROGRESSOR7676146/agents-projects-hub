@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-LATEST_SCHEMA_VERSION = 20
+LATEST_SCHEMA_VERSION = 21
 
 
 MIGRATION_1 = """
@@ -661,6 +661,28 @@ ALTER TABLE runtime_health ADD COLUMN transport_success_at TEXT
 """
 
 
+MIGRATION_21 = """
+CREATE TABLE IF NOT EXISTS runtime_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    component TEXT NOT NULL,
+    level TEXT NOT NULL CHECK(level IN ('info', 'warning', 'error')),
+    code TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+DROP INDEX IF EXISTS runtime_events_created_at;
+CREATE INDEX IF NOT EXISTS runtime_events_retention
+ON runtime_events(created_at DESC, event_id DESC);
+DELETE FROM runtime_events
+WHERE julianday(created_at) < julianday('now', '-30 days');
+DELETE FROM runtime_events
+WHERE event_id NOT IN (
+    SELECT event_id FROM runtime_events
+    ORDER BY created_at DESC, event_id DESC LIMIT 10000
+);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -785,6 +807,9 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     if previous < 20:
         connection.executescript(MIGRATION_20)
         connection.execute("PRAGMA user_version = 20")
+    if previous < 21:
+        connection.executescript(MIGRATION_21)
+        connection.execute("PRAGMA user_version = 21")
     connection.commit()
     current = int(connection.execute("PRAGMA user_version").fetchone()[0])
     return previous, current

@@ -1,7 +1,7 @@
 # Decision map
 
 Status: active  
-Last updated: 2026-08-30
+Last updated: 2026-09-05
 
 This directory is the durable entry point for consequential product and
 architecture decisions. New records should be named `NNNN-short-title.md`.
@@ -28,6 +28,7 @@ with a new record.
 | Durable execution isolation | Planned deterministic Controller, SQLite queue, strict topic FIFO, isolated provider workers, and outbox; unknown in-flight turns become `indeterminate`, not automatic retries. | [ADR 0001](0001-durable-provider-job-queue.md) |
 | Live input semantics | Durable burst collection, capability-aware Codex steering, FIFO fallback, and model-free emergency stop. | [ADR 0004](0004-durable-input-batching-steering-and-stop.md) |
 | Runtime health | Components publish bounded last-known state to SQLite; status classifies the cache without provider or model calls. | [ADR 0002](0002-durable-runtime-health-cache.md) |
+| Runtime-event retention | Diagnostic events retain at most 30 days and 10,000 newest rows without touching current health, alerts, or provider work. | [ADR 0014](0014-bounded-runtime-event-retention.md) |
 | Telegram interaction | Providers own conversational meaning; the Hub owns Telegram UI effects and delivery guarantees. | [ADR 0005](0005-telegram-interaction-contract.md) |
 | Provider instruction channel | Codex receives Telegram Contract v2 through native thread developer instructions; prompt fallback remains only for providers without an accepted native channel. | [ADR 0013](0013-native-provider-interaction-instructions.md) |
 | Messenger task start | Complex work publishes a concise approach and proceeds without a mandatory timer; pause only for a real decision or authority boundary. | [ADR 0010](0010-no-mandatory-grace-period.md) |

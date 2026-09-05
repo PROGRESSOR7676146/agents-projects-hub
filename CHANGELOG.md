@@ -15,6 +15,9 @@ and releases use semantic versioning while the public API is still evolving.
 - Show the acknowledged Telegram interaction-contract version for each current
   provider session in bounded local `doctor` diagnostics without expanding the
   mobile `/status` response.
+- Bound `runtime_events` to 30 days and the newest 10,000 rows with atomic
+  insertion/pruning, deterministic timestamp/row-ID ordering, and a compatible
+  schema-21 migration that leaves health, alerts, and provider work untouched.
 - Embed package version, exact clean Git SHA, and build time in wheel artifacts;
   publish release identity from every required Hub runtime and alert once when
   cached deployment revisions are mixed or unknown.
