@@ -217,6 +217,29 @@ class AcceptanceActorConfigTests(unittest.TestCase):
                 )
             )
 
+    def test_codex_interaction_v2_requires_one_aligned_codex_identity(self) -> None:
+        with self.assertRaisesRegex(AcceptanceActorError, "aligned codex provider"):
+            load_acceptance_actor_config(
+                self.write_config(
+                    checks=["codex_interaction_v2"],
+                    provider_agent_ids=["opencode"],
+                )
+            )
+
+    def test_codex_interaction_v2_targets_only_aligned_codex_provider(self) -> None:
+        config = load_acceptance_actor_config(
+            self.write_config(
+                provider_usernames=["example_other_bot", "example_codex_bot"],
+                provider_agent_ids=["opencode", "codex"],
+                checks=["codex_interaction_v2"],
+            )
+        )
+
+        self.assertEqual(
+            _targets_for_check(config, "codex_interaction_v2"),
+            ("example_codex_bot",),
+        )
+
     def test_stop_route_targets_only_the_provider_selected_by_model_menu(self) -> None:
         config = load_acceptance_actor_config(
             self.write_config(
@@ -489,6 +512,87 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         call = wait.await_args
         assert call is not None
         self.assertTrue(call.kwargs["require_document"])
+
+    def test_codex_interaction_v2_checks_four_observable_scenarios(self) -> None:
+        config = AcceptanceActorConfig(
+            api_id=1,
+            api_hash_file=self.secret,
+            session_path=self.base / "acceptance.session",
+            expected_user_id=1,
+            telegram_chat_id=-1001234567890,
+            telegram_thread_id=77,
+            hub_username="example_hub_bot",
+            provider_usernames=("example_codex_bot",),
+            checks=("codex_interaction_v2",),
+            timeout_seconds=15,
+            artifacts_dir=self.artifacts,
+            provider_agent_ids=("codex",),
+        )
+        responses = (
+            FakeMessage(10, "4."),
+            FakeMessage(12, "Which audience should the fictional launch note address?"),
+            FakeMessage(
+                14,
+                "Approach: compare the three fictional options. "
+                "Recommendation: choose option B because it is reversible.",
+            ),
+            FakeDocumentMessage(16, "hub-contract-v2-e2e.md", b"HUB_CONTRACT_V2_E2E_OK\n"),
+        )
+        with (
+            patch(
+                "hermes_codex_router.acceptance_actor._select_provider",
+                new=AsyncMock(),
+            ) as select,
+            patch(
+                "hermes_codex_router.acceptance_actor._wait_for_response",
+                new=AsyncMock(side_effect=responses),
+            ) as wait,
+        ):
+            client = FakeClient()
+            result = asyncio.run(
+                _run_check(client, config, "codex_interaction_v2", "example_codex_bot")
+            )
+
+        self.assertTrue(result.ok)
+        select.assert_awaited_once_with(client, config, "codex")
+        self.assertEqual(len(client.sent), 4)
+        self.assertIn("2 + 2", str(client.sent[0][0][1]))
+        self.assertIn("underspecified", str(client.sent[1][0][1]))
+        self.assertIn("three fictional options", str(client.sent[2][0][1]))
+        self.assertIn("hub-contract-v2-e2e.md", str(client.sent[3][0][1]))
+        self.assertTrue(wait.await_args_list[-1].kwargs["require_document"])
+
+    def test_codex_interaction_v2_fails_when_ambiguity_is_not_clarified(self) -> None:
+        config = AcceptanceActorConfig(
+            api_id=1,
+            api_hash_file=self.secret,
+            session_path=self.base / "acceptance.session",
+            expected_user_id=1,
+            telegram_chat_id=-1001234567890,
+            telegram_thread_id=77,
+            hub_username="example_hub_bot",
+            provider_usernames=("example_codex_bot",),
+            checks=("codex_interaction_v2",),
+            timeout_seconds=15,
+            artifacts_dir=self.artifacts,
+            provider_agent_ids=("codex",),
+        )
+        with (
+            patch(
+                "hermes_codex_router.acceptance_actor._select_provider",
+                new=AsyncMock(),
+            ),
+            patch(
+                "hermes_codex_router.acceptance_actor._wait_for_response",
+                new=AsyncMock(side_effect=(FakeMessage(10, "4."), FakeMessage(12, "Done."))),
+            ),
+        ):
+            result = asyncio.run(
+                _run_check(FakeClient(), config, "codex_interaction_v2", "example_codex_bot")
+            )
+
+        self.assertFalse(result.ok)
+        self.assertIn("clarification", result.detail)
 
     def test_context_contract_switches_without_handoff_then_requests_history(self) -> None:
         config = AcceptanceActorConfig(

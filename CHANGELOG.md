@@ -9,6 +9,9 @@ and releases use semantic versioning while the public API is still evolving.
   `developerInstructions` on thread start and resume, keeping the stable
   contract out of user turn text and retaining bounded prompt fallback for
   providers without an accepted native instruction channel.
+- Add a Codex-only scoped Telegram behavioural acceptance scenario for bounded
+  short, clarification, complex-progress, and exact artifact responses without
+  treating repository runner tests as live provider evidence.
 - Embed package version, exact clean Git SHA, and build time in wheel artifacts;
   publish release identity from every required Hub runtime and alert once when
   cached deployment revisions are mixed or unknown.

@@ -21,6 +21,7 @@ SUPPORTED_CHECKS = (
     "forwarded_quote",
     "artifact_delivery",
     "context_contract",
+    "codex_interaction_v2",
 )
 
 
@@ -168,6 +169,7 @@ def load_acceptance_actor_config(
                 "forwarded_quote",
                 "artifact_delivery",
                 "context_contract",
+                "codex_interaction_v2",
             }
             for check in checks
         )
@@ -180,6 +182,12 @@ def load_acceptance_actor_config(
         raise AcceptanceActorError("model_menu must run before stop_route")
     if "context_contract" in checks and (len(providers) < 2 or len(provider_agent_ids) < 2):
         raise AcceptanceActorError("context_contract requires two aligned providers and agent ids")
+    if "codex_interaction_v2" in checks and (
+        len(provider_agent_ids) != len(providers) or provider_agent_ids.count("codex") != 1
+    ):
+        raise AcceptanceActorError(
+            "codex_interaction_v2 requires one aligned codex provider identity"
+        )
 
     return AcceptanceActorConfig(
         api_id=api_id,
@@ -341,6 +349,122 @@ async def _select_provider(client: Any, config: AcceptanceActorConfig, agent_id:
 async def _run_check(
     client: Any, config: AcceptanceActorConfig, check: str, target: str
 ) -> AcceptanceCheckResult:
+    if check == "codex_interaction_v2":
+        try:
+            await _select_provider(client, config, "codex")
+            short_request = await client.send_message(
+                config.telegram_chat_id,
+                f"@{target} What is 2 + 2? Answer for a phone in one short sentence. Use no tools.",
+                reply_to=config.telegram_thread_id,
+            )
+            short_response = await _wait_for_response(
+                client, config, after_id=int(short_request.id), username=target
+            )
+            short_text = str(getattr(short_response, "raw_text", "")).strip()
+            if "4" not in short_text or len(short_text) > 400:
+                return AcceptanceCheckResult(
+                    check,
+                    target,
+                    False,
+                    int(short_response.id),
+                    "short task response was empty, incorrect, or not bounded",
+                )
+
+            ambiguous_request = await client.send_message(
+                config.telegram_chat_id,
+                (
+                    f"@{target} Without tools or file changes, prepare the fictional launch "
+                    "note. The request is intentionally underspecified: no audience, facts, "
+                    "format, or language are given."
+                ),
+                reply_to=config.telegram_thread_id,
+            )
+            ambiguous_response = await _wait_for_response(
+                client, config, after_id=int(ambiguous_request.id), username=target
+            )
+            ambiguous_text = str(getattr(ambiguous_response, "raw_text", "")).strip()
+            question_count = ambiguous_text.count("?")
+            if (
+                not 1 <= question_count <= 2
+                or len(ambiguous_text) > 800
+                or getattr(ambiguous_response, "document", None) is not None
+            ):
+                return AcceptanceCheckResult(
+                    check,
+                    target,
+                    False,
+                    int(ambiguous_response.id),
+                    "ambiguous task did not produce a bounded focused clarification",
+                )
+
+            progress_request = await client.send_message(
+                config.telegram_chat_id,
+                (
+                    f"@{target} Use no tools. Compare three fictional options: A is fast but "
+                    "irreversible, B is slower and reversible, C is untested. Start with one "
+                    "brief line labelled Approach, then continue immediately with a concise "
+                    "recommendation labelled Recommendation."
+                ),
+                reply_to=config.telegram_thread_id,
+            )
+            progress_response = await _wait_for_response(
+                client, config, after_id=int(progress_request.id), username=target
+            )
+            progress_text = str(getattr(progress_response, "raw_text", "")).strip()
+            lowered = progress_text.casefold()
+            approach_at = lowered.find("approach")
+            recommendation_at = lowered.find("recommendation")
+            if (
+                approach_at < 0
+                or recommendation_at <= approach_at
+                or len(progress_text) > 2_000
+                or getattr(progress_response, "document", None) is not None
+            ):
+                return AcceptanceCheckResult(
+                    check,
+                    target,
+                    False,
+                    int(progress_response.id),
+                    "complex task did not expose a bounded approach before its recommendation",
+                )
+
+            filename = "hub-contract-v2-e2e.md"
+            artifact_request = await client.send_message(
+                config.telegram_chat_id,
+                (
+                    f"@{target} Create {filename} in the exact Hub artifact delivery directory "
+                    "for this turn. Its complete UTF-8 content must be "
+                    "HUB_CONTRACT_V2_E2E_OK followed by one newline. Reply briefly; do no "
+                    "other work."
+                ),
+                reply_to=config.telegram_thread_id,
+            )
+            artifact_response = await _wait_for_response(
+                client,
+                config,
+                after_id=int(artifact_request.id),
+                username=target,
+                require_document=True,
+            )
+            received_name = str(getattr(getattr(artifact_response, "file", None), "name", ""))
+            payload = await artifact_response.download_media(file=bytes)
+            if received_name != filename or payload != b"HUB_CONTRACT_V2_E2E_OK\n":
+                return AcceptanceCheckResult(
+                    check,
+                    target,
+                    False,
+                    int(artifact_response.id),
+                    "artifact task returned an unexpected document",
+                )
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        return AcceptanceCheckResult(
+            check,
+            target,
+            True,
+            int(artifact_response.id),
+            "short, clarification, complex-progress, and artifact behavior verified",
+        )
     if check == "context_contract":
         source_username, target_username = config.provider_usernames[:2]
         source_agent_id, target_agent_id = config.provider_agent_ids[:2]
@@ -709,6 +833,14 @@ async def run_acceptance_checks(config: AcceptanceActorConfig) -> dict[str, obje
 
 
 def _targets_for_check(config: AcceptanceActorConfig, check: str) -> tuple[str, ...]:
+    if check == "codex_interaction_v2":
+        try:
+            index = config.provider_agent_ids.index("codex")
+            return (config.provider_usernames[index],)
+        except (IndexError, ValueError) as exc:
+            raise AcceptanceActorError(
+                "codex_interaction_v2 requires one aligned codex provider identity"
+            ) from exc
     if check in {"stop_route", "artifact_delivery"}:
         return config.provider_usernames[:1]
     if check in {"provider_ping", "reply_route", "burst_route", "forwarded_quote"}:

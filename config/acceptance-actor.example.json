@@ -19,6 +19,7 @@
     "accounts",
     "model_menu",
     "provider_ping",
+    "codex_interaction_v2",
     "reply_route",
     "forwarded_quote",
     "artifact_delivery",

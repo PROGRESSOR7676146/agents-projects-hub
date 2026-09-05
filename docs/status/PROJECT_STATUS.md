@@ -123,7 +123,12 @@ operator deployment inventory or live conversation evidence.
 - The scoped MTProto acceptance actor has fixed checks for deterministic
   commands, full model selection, provider connectivity, Reply provenance,
   passive forwarded quotes, rapid multi-message bursts, and bounded
-  emergency-stop recovery. An aligned two-provider scenario verifies that a
+  emergency-stop recovery. A Codex-only Contract v2 scenario selects the exact
+  aligned Codex identity and evaluates four delivered behaviours: a bounded
+  short answer, focused clarification, ordered complex-task approach and
+  recommendation, and exact artifact attachment. Repository tests cover the
+  evaluator; each deployment still requires its own private live evidence. An
+  aligned two-provider scenario verifies that a
   switch injects no history and `/context` retrieves only explicitly selected
   visible history. It accepts no arbitrary prompt from configuration
   and fails fast on the first failed scenario or when unrelated senders
