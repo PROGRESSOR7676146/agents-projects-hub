@@ -68,10 +68,10 @@ them.
    need provider-specific behavioural scenarios for short, ambiguous, long, and
    artifact-producing tasks. Prompt-string injection tests prove wiring, not
    user-visible style.
-4. **Expose prompt-contract provenance diagnostically.** Persist the acknowledged
-   contract version per provider session and make it available to local doctor
-   output. Keep the ordinary mobile `/status` compact unless mismatch requires
-   an actionable warning.
+4. **Expose prompt-contract provenance diagnostically (repository-complete).**
+   The acknowledged contract version is persisted per provider session and
+   local `doctor` lists bounded current-session provenance. The ordinary mobile
+   `/status` remains unchanged; live acceptance is tracked separately.
 5. **Keep deployment evidence private and bounded.** Store exact live evidence
    outside Git, but record reusable acceptance procedures and failure classes in
    the repository.

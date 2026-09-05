@@ -68,11 +68,15 @@ operator deployment inventory or live conversation evidence.
   sessions receive the full current contract once after rollout; its version is
   acknowledged only after a successful provider turn, then compact reminders
   avoid paying the full contract cost repeatedly. Provider-specific notes tune
-  presentation without changing safety authority. Private-chat queue admission
-  and external sender refresh use Telegram's native ephemeral `Thinking…`
-  draft; project groups retain the bounded `typing` action because Bot API
-  drafts are private-chat only. Receipt ticks remain Telegram-owned and are not
-  imitated with reactions.
+  presentation without changing safety authority. Local `doctor` diagnostics
+  list the acknowledged version and binding state for at most 100 current
+  active/satellite provider sessions, identified by their Hub session ID;
+  archived sessions and raw provider thread IDs are omitted. This provenance is
+  informational and does not expand the ordinary mobile `/status`. Private-chat
+  queue admission and external sender refresh use Telegram's native ephemeral
+  `Thinking…` draft; project groups retain the bounded `typing` action because
+  Bot API drafts are private-chat only. Receipt ticks remain Telegram-owned and
+  are not imitated with reactions.
 - Long provider results are split into ordered, independently valid Telegram
   HTML messages instead of being truncated. Queue-backed delivery persists each
   part and resumes at the first part without a recorded Telegram message ID;

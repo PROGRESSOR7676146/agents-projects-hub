@@ -19,7 +19,7 @@ from .migrations import LATEST_SCHEMA_VERSION
 from .provider_telemetry import probe_antigravity_telemetry
 from .recovery_plane import RecoveryPlaneProbe, probe_recovery_plane, probe_tlive_runtime
 from .registry import load_registry
-from .state import HubState
+from .state import HubState, TelegramContractProvenance
 from .terminal_runtime import TerminalRuntime
 
 
@@ -66,6 +66,30 @@ def _service_check(
     return Check(f"service:{unit}", active, "active" if active else "inactive")
 
 
+def _telegram_contract_checks(
+    provenance: tuple[TelegramContractProvenance, ...],
+) -> list[Check]:
+    checks: list[Check] = []
+    for item in provenance:
+        version = int(item["acknowledged_version"])
+        checks.append(
+            Check(
+                f"telegram_contract:{item['session_id']}",
+                True,
+                " ".join(
+                    (
+                        f"agent={item['agent_id']}",
+                        f"status={item['status']}",
+                        "provider_bound=" + ("yes" if item["provider_bound"] else "no"),
+                        f"acknowledged=v{version}",
+                    )
+                ),
+                required=False,
+            )
+        )
+    return checks
+
+
 def run_doctor(config: HubConfig) -> dict[str, object]:
     checks: list[Check] = []
     try:
@@ -92,6 +116,7 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
                     oct(config.state_path.stat().st_mode & 0o777),
                 )
             )
+            checks.extend(_telegram_contract_checks(state.telegram_contract_provenance()))
         finally:
             state.close()
     except Exception as exc:

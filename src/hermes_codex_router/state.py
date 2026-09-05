@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterator, Sequence
+from typing import Iterator, Sequence, TypedDict
 
 from .artifacts import ValidatedArtifact
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
@@ -186,6 +186,14 @@ class RuntimeHealthRecord:
 class RuntimeHealthStatus:
     status: str
     record: RuntimeHealthRecord | None
+
+
+class TelegramContractProvenance(TypedDict):
+    session_id: str
+    agent_id: str
+    status: str
+    provider_bound: bool
+    acknowledged_version: int
 
 
 def _now() -> str:
@@ -945,6 +953,37 @@ class HubState:
             (f"telegram-contract:{session_id}",),
         ).fetchone()
         return 0 if row is None else max(0, int(row["integer_value"]))
+
+    def telegram_contract_provenance(
+        self, *, limit: int = 100
+    ) -> tuple[TelegramContractProvenance, ...]:
+        """Return bounded local diagnostics for non-archived provider sessions."""
+        if not 1 <= limit <= 100:
+            raise ValueError("contract provenance limit must be between 1 and 100")
+        rows = self._connection.execute(
+            """SELECT s.session_id, s.agent_id, s.status,
+                      s.provider_session_id,
+                      COALESCE(c.integer_value, 0) AS acknowledged_version
+               FROM agent_sessions AS s
+               LEFT JOIN runtime_checkpoints AS c
+                 ON c.checkpoint_key = 'telegram-contract:' || s.session_id
+               WHERE s.status IN ('active', 'satellite')
+               ORDER BY s.topic_id,
+                        CASE s.status WHEN 'active' THEN 0 ELSE 1 END,
+                        s.agent_id, s.session_id
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return tuple(
+            {
+                "session_id": str(row["session_id"]),
+                "agent_id": str(row["agent_id"]),
+                "status": str(row["status"]),
+                "provider_bound": row["provider_session_id"] is not None,
+                "acknowledged_version": max(0, int(row["acknowledged_version"])),
+            }
+            for row in rows
+        )
 
     def acknowledge_telegram_contract(self, session_id: str, version: int) -> None:
         if version <= 0:

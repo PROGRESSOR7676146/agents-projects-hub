@@ -106,6 +106,51 @@ class HubStateTests(unittest.TestCase):
         updated = self.state.set_context_remaining(session.session_id, 73.25)
         self.assertEqual(updated.context_remaining_percent, 73.25)
 
+    def test_contract_provenance_lists_only_current_provider_sessions(self) -> None:
+        previous = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
+        self.state.bind_provider_session(previous.session_id, "thread-previous", None)
+        self.state.acknowledge_telegram_contract(previous.session_id, 1)
+        current = self.state.new_active_session(self.topic.topic_id)
+        satellite = self.state.ensure_satellite(
+            self.topic.topic_id, "opencode", "provider-selected", "high"
+        )
+        self.state.bind_provider_session(satellite.session_id, "thread-satellite", None)
+        self.state.acknowledge_telegram_contract(satellite.session_id, 2)
+
+        provenance = self.state.telegram_contract_provenance()
+
+        self.assertEqual(
+            provenance,
+            (
+                {
+                    "session_id": current.session_id,
+                    "agent_id": "codex",
+                    "status": "active",
+                    "provider_bound": False,
+                    "acknowledged_version": 0,
+                },
+                {
+                    "session_id": satellite.session_id,
+                    "agent_id": "opencode",
+                    "status": "satellite",
+                    "provider_bound": True,
+                    "acknowledged_version": 2,
+                },
+            ),
+        )
+        self.assertNotIn(previous.session_id, {item["session_id"] for item in provenance})
+
+    def test_contract_provenance_is_deterministically_bounded(self) -> None:
+        self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
+        self.state.ensure_satellite(self.topic.topic_id, "opencode", "provider-selected", "high")
+
+        provenance = self.state.telegram_contract_provenance(limit=1)
+
+        self.assertEqual(len(provenance), 1)
+        self.assertEqual(provenance[0]["agent_id"], "codex")
+        with self.assertRaisesRegex(ValueError, "contract provenance limit"):
+            self.state.telegram_contract_provenance(limit=0)
+
     def test_bot_update_offset_is_persisted_monotonically_by_caller(self) -> None:
         self.assertIsNone(self.state.get_bot_offset("codex"))
         self.state.set_bot_offset("codex", 514951014)

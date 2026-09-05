@@ -5,7 +5,15 @@ Roadmap содержит только переносимые продуктов�
 
 ## Ближайшие задачи
 
-### Активный checkpoint: Telegram Interaction Contract v2
+### Активный checkpoint: bounded retention для runtime events
+
+Добавить совместимую версионированную миграцию и детерминированную очистку
+`runtime_events` одновременно по возрасту и количеству. Очистка не должна
+затрагивать текущий `runtime_health`, alert transitions/checkpoints или
+provider work; acceptance включает migration compatibility, boundary и fault
+tests без ручного изменения live SQLite.
+
+### Telegram Interaction Contract v2
 
 Работа выполняется по
 [ADR 0013](decisions/0013-native-provider-interaction-instructions.md).
@@ -27,9 +35,11 @@ Roadmap содержит только переносимые продуктов�
   короткие, неоднозначные, длительные и artifact-producing задачи. Проверки
   наличия строки контракта в prompt недостаточно.
 
-Codex repository wiring и bounded behavioural runner реализованы. Для принятия
-Codex v2 всё ещё требуется отдельный разрешённый deployment-local прогон;
-проверка native channels других providers остаётся вне текущего scope.
+Codex repository wiring, bounded behavioural runner и локальная doctor-
+provenance принятой версии по текущим provider sessions реализованы. Обычный
+мобильный `/status` не расширен. Для принятия Codex v2 всё ещё требуется
+отдельный разрешённый deployment-local прогон; проверка native channels других
+providers остаётся вне текущего scope.
 
 ### Последующие задачи
 
