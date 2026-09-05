@@ -210,7 +210,11 @@ operator deployment inventory or live conversation evidence.
   outbox parts; and version 14 repairs early version-13 deployments that had
   durable input membership but had not yet created stop-request and
   turn-absorption tables. Upgrades create a private SQLite-consistent backup
-  first.
+  first. The full migration and `user_version` update share one immediate
+  transaction, so a fault rolls back in place without overwriting concurrent
+  commits from an older backup. A temporary production-shaped rehearsal covers
+  schema 20→21, concurrent access, injected DDL failure, backup rollback,
+  queued/outbox rows, and preserved indeterminate work.
 - Optional read-only Antigravity structured status/quota cache integration for
   compact `/status` and `/accounts`; private-file and freshness checks fail to
   unknown without invoking a model, and `doctor` reports each cache as fresh,

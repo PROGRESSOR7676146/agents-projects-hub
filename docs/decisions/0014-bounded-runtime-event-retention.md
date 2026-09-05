@@ -26,7 +26,10 @@ growth during a fault storm.
    partial delete.
 4. Schema version 21 replaces the single-column timestamp index with the
    composite retention index and applies the same age/count bounds to existing
-   rows. Normal migration backup and restore semantics remain in force.
+   rows. The whole version transition, including `user_version`, runs in one
+   `BEGIN IMMEDIATE` transaction. A fault rolls back in place instead of
+   copying an older backup over a database that may have accepted a concurrent
+   committed write.
 5. Retention addresses only `runtime_events`. `runtime_health`, alert delivery
    and transition checkpoints, runtime counters, provider jobs, results, and
    outbox state are outside the deletion query.
@@ -38,4 +41,7 @@ growth during a fault storm.
 - The migration may intentionally discard expired or over-limit diagnostic
   history, while its pre-migration SQLite backup remains available to the
   operator.
+- Temporary production-shaped rehearsal covers an open concurrent writer,
+  injected DDL failure, the schema-20 backup, queued/result/outbox work, and an
+  indeterminate job. It never opens deployment state.
 - Status output remains capped at its existing newest 50 events.

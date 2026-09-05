@@ -148,8 +148,11 @@ it.
    restore a migration backup for an ordinary runtime rollback.
 5. Validate and run fault acceptance before resuming routine work.
 
-Migration backup restoration is reserved for a failed migration. Runtime
-rollback retains accepted jobs, results, outbox rows, and diagnostic history.
+A migration fault rolls its SQLite transaction back in place; it does not copy
+the earlier backup over concurrent state. Manual backup restoration is reserved
+for a separately proven database-integrity failure after all database users are
+stopped. Runtime rollback retains accepted jobs, results, outbox rows, and
+diagnostic history.
 
 ## Automated fault gate
 

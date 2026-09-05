@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import fcntl
 import os
-import shutil
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -737,6 +736,28 @@ def _ensure_legacy_columns(connection: sqlite3.Connection) -> None:
         )
 
 
+def _execute_migration_script(connection: sqlite3.Connection, script: str) -> None:
+    """Execute one trusted migration script without sqlite3's implicit COMMIT.
+
+    ``Connection.executescript`` commits an open transaction before executing
+    its input.  Migrations must instead remain inside the surrounding
+    ``BEGIN IMMEDIATE`` so a DDL or retention fault restores the exact
+    pre-migration database, including writes which committed after the backup
+    snapshot was taken.
+    """
+    pending: list[str] = []
+    for line in script.splitlines(keepends=True):
+        pending.append(line)
+        statement = "".join(pending)
+        if not sqlite3.complete_statement(statement):
+            continue
+        if statement.strip():
+            connection.execute(statement)
+        pending.clear()
+    if "".join(pending).strip():
+        raise RuntimeError("incomplete SQLite migration statement")
+
+
 def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     connection.execute("PRAGMA busy_timeout = 5000")
     connection.execute("PRAGMA foreign_keys = ON")
@@ -746,71 +767,46 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         raise RuntimeError(
             f"database schema {previous} is newer than supported {LATEST_SCHEMA_VERSION}"
         )
-    if previous < 1:
-        connection.executescript(MIGRATION_1)
-        _ensure_legacy_columns(connection)
-        connection.execute("PRAGMA user_version = 1")
-    if previous < 2:
-        connection.executescript(MIGRATION_2)
-        connection.execute("PRAGMA user_version = 2")
-    if previous < 3:
-        connection.executescript(MIGRATION_3)
-        connection.execute("PRAGMA user_version = 3")
-    if previous < 4:
-        connection.executescript(MIGRATION_4)
-        connection.execute("PRAGMA user_version = 4")
-    if previous < 5:
-        connection.executescript(MIGRATION_5)
-        connection.execute("PRAGMA user_version = 5")
-    if previous < 6:
-        connection.executescript(MIGRATION_6)
-        connection.execute("PRAGMA user_version = 6")
-    if previous < 7:
-        connection.executescript(MIGRATION_7)
-        connection.execute("PRAGMA user_version = 7")
-    if previous < 8:
-        connection.executescript(MIGRATION_8)
-        connection.execute("PRAGMA user_version = 8")
-    if previous < 9:
-        connection.executescript(MIGRATION_9)
-        connection.execute("PRAGMA user_version = 9")
-    if previous < 10:
-        connection.executescript(MIGRATION_10)
-        connection.execute("PRAGMA user_version = 10")
-    if previous < 11:
-        connection.executescript(MIGRATION_11)
-        connection.execute("PRAGMA user_version = 11")
-    if previous < 12:
-        connection.executescript(MIGRATION_12)
-        connection.execute("PRAGMA user_version = 12")
-    if previous < 13:
-        connection.executescript(MIGRATION_13)
-        connection.execute("PRAGMA user_version = 13")
-    if previous < 14:
-        connection.executescript(MIGRATION_14)
-        connection.execute("PRAGMA user_version = 14")
-    if previous < 15:
-        connection.executescript(MIGRATION_15)
-        connection.execute("PRAGMA user_version = 15")
-    if previous < 16:
-        connection.executescript(MIGRATION_16)
-        connection.execute("PRAGMA user_version = 16")
-    if previous < 17:
-        connection.executescript(MIGRATION_17)
-        connection.execute("PRAGMA user_version = 17")
-    if previous < 18:
-        connection.executescript(MIGRATION_18)
-        connection.execute("PRAGMA user_version = 18")
-    if previous < 19:
-        connection.executescript(MIGRATION_19)
-        connection.execute("PRAGMA user_version = 19")
-    if previous < 20:
-        connection.executescript(MIGRATION_20)
-        connection.execute("PRAGMA user_version = 20")
-    if previous < 21:
-        connection.executescript(MIGRATION_21)
-        connection.execute("PRAGMA user_version = 21")
-    connection.commit()
+    migrations = (
+        MIGRATION_1,
+        MIGRATION_2,
+        MIGRATION_3,
+        MIGRATION_4,
+        MIGRATION_5,
+        MIGRATION_6,
+        MIGRATION_7,
+        MIGRATION_8,
+        MIGRATION_9,
+        MIGRATION_10,
+        MIGRATION_11,
+        MIGRATION_12,
+        MIGRATION_13,
+        MIGRATION_14,
+        MIGRATION_15,
+        MIGRATION_16,
+        MIGRATION_17,
+        MIGRATION_18,
+        MIGRATION_19,
+        MIGRATION_20,
+        MIGRATION_21,
+    )
+    if previous < LATEST_SCHEMA_VERSION:
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            for version, script in enumerate(migrations, start=1):
+                if previous >= version:
+                    continue
+                _execute_migration_script(connection, script)
+                if version == 1:
+                    _ensure_legacy_columns(connection)
+                connection.execute(f"PRAGMA user_version = {version}")
+            check = connection.execute("PRAGMA integrity_check").fetchone()
+            if check is None or check[0] != "ok":
+                raise RuntimeError("SQLite integrity check failed during migration")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
     current = int(connection.execute("PRAGMA user_version").fetchone()[0])
     return previous, current
 
@@ -846,10 +842,8 @@ def migrate_database(path: Path, *, create_backup: bool = True) -> MigrationResu
             if check is None or check[0] != "ok":
                 raise RuntimeError("SQLite integrity check failed after migration")
         except Exception:
+            connection.rollback()
             connection.close()
-            if backup_path is not None:
-                shutil.copy2(backup_path, path)
-                os.chmod(path, 0o600)
             raise
         finally:
             try:
