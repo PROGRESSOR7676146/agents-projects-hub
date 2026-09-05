@@ -335,10 +335,22 @@ class CodexAppServerClient:
         self._transport.send({"method": "initialized", "params": {}})
         self._initialized = True
 
-    def start_thread(self, *, cwd: Path, model: str, project_id: str) -> CodexThread:
+    def start_thread(
+        self,
+        *,
+        cwd: Path,
+        model: str,
+        project_id: str,
+        developer_instructions: str | None = None,
+    ) -> CodexThread:
         if not self._initialized:
             raise RpcError("Codex client is not initialized")
         canonical_cwd = cwd.expanduser().resolve(strict=True)
+        instruction_params = (
+            {"developerInstructions": developer_instructions}
+            if developer_instructions is not None
+            else {}
+        )
         result = self._request(
             "thread/start",
             {
@@ -346,6 +358,7 @@ class CodexAppServerClient:
                 "model": model,
                 "sandbox": "workspace-write",
                 **self._approval_params(),
+                **instruction_params,
                 "experimentalRawEvents": False,
             },
         )
@@ -372,10 +385,22 @@ class CodexAppServerClient:
             model_provider=str(result.get("modelProvider") or "unknown"),
         )
 
-    def resume_thread(self, *, thread_id: str, cwd: Path, model: str) -> CodexThread:
+    def resume_thread(
+        self,
+        *,
+        thread_id: str,
+        cwd: Path,
+        model: str,
+        developer_instructions: str | None = None,
+    ) -> CodexThread:
         if not self._initialized:
             raise RpcError("Codex client is not initialized")
         canonical_cwd = cwd.expanduser().resolve(strict=True)
+        instruction_params = (
+            {"developerInstructions": developer_instructions}
+            if developer_instructions is not None
+            else {}
+        )
         result = self._request(
             "thread/resume",
             {
@@ -384,6 +409,7 @@ class CodexAppServerClient:
                 "model": model,
                 "sandbox": "workspace-write",
                 **self._approval_params(),
+                **instruction_params,
                 "excludeTurns": True,
             },
         )

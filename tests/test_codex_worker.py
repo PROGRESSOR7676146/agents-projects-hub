@@ -195,6 +195,47 @@ class CodexQueueWorkerTests(unittest.TestCase):
         finally:
             worker.close()
 
+    def test_codex_v2_contract_uses_native_thread_instructions(self) -> None:
+        job_id = self.enqueue(1, "Current question", provider_session_id="thread-1")
+        state = HubState.open(self.config.state_path)
+        try:
+            job = state.get_provider_job(job_id)
+            state.acknowledge_telegram_contract(job.session_id, 1)
+        finally:
+            state.close()
+        resume_calls: list[dict[str, object]] = []
+        turn_prompts: list[str] = []
+
+        class Client(WorkerClient):
+            def resume_thread(self, **kwargs: object) -> CodexThread:
+                resume_calls.append(kwargs)
+                return CodexThread("thread-1", Path(str(kwargs["cwd"])), "gpt-5.6-sol", "openai")
+
+            def start_turn(self, **kwargs: object) -> str:
+                turn_prompts.append(str(kwargs["text"]))
+                return super().start_turn(**kwargs)
+
+        class Supervisor(WorkerSupervisor):
+            transport_mode = "socket"
+
+        worker = CodexQueueWorker(
+            self.config,
+            registry=self.registry,
+            supervisor=cast(Any, Supervisor(Client())),
+            worker_id="test-codex-worker",
+        )
+        try:
+            self.assertTrue(worker.run_cycle())
+            instructions = str(resume_calls[0]["developer_instructions"])
+            self.assertIn("TELEGRAM INTERACTION CONTRACT v2", instructions)
+            self.assertNotIn("TELEGRAM INTERACTION CONTRACT", turn_prompts[0])
+            self.assertNotIn("TELEGRAM TRANSPORT REMINDER", turn_prompts[0])
+            self.assertIn("CURRENT USER TURN:\nCurrent question", turn_prompts[0])
+            job = worker.state.get_provider_job(job_id)
+            self.assertEqual(worker.state.telegram_contract_version(job.session_id), 2)
+        finally:
+            worker.close()
+
     def test_running_codex_turn_absorbs_ready_followup_via_turn_steer(self) -> None:
         parent_id = self.enqueue(1, "first")
         entered = threading.Event()

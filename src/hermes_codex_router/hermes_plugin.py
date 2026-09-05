@@ -12,7 +12,7 @@ from .external_admission import (
     telegram_contract_required,
 )
 from .routing import parse_context_request
-from .telegram_interaction import TELEGRAM_CONTRACT_VERSION, telegram_turn_prompt
+from .telegram_interaction import telegram_contract_version, telegram_turn_prompt
 
 DEFAULT_STATE_PATH = Path.home() / ".local/state/agents-projects-hub/state.db"
 
@@ -98,7 +98,7 @@ async def _dispatch_active_text(
             chat_id,
             thread_id,
             agent_id="hermes",
-            version=TELEGRAM_CONTRACT_VERSION,
+            version=telegram_contract_version("hermes"),
         ),
     )
     await adapter._cache_replied_media(message, event)

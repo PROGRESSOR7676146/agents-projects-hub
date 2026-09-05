@@ -5,6 +5,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Deliver Telegram Interaction Contract v2 to Codex through app-server
+  `developerInstructions` on thread start and resume, keeping the stable
+  contract out of user turn text and retaining bounded prompt fallback for
+  providers without an accepted native instruction channel.
 - Embed package version, exact clean Git SHA, and build time in wheel artifacts;
   publish release identity from every required Hub runtime and alert once when
   cached deployment revisions are mixed or unknown.

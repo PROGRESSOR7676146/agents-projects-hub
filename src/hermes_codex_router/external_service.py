@@ -33,7 +33,7 @@ from .telegram import (
     parse_topic_message,
 )
 from .telegram_activity import telegram_activity
-from .telegram_interaction import TELEGRAM_CONTRACT_VERSION, telegram_turn_prompt
+from .telegram_interaction import telegram_contract_version, telegram_turn_prompt
 from .telegram_multipart import send_telegram_html_parts
 
 
@@ -371,11 +371,13 @@ class ExternalAgentService:
                 runtime=self.agent.runtime,
                 new_session=(
                     self.state.telegram_contract_version(session.session_id)
-                    < TELEGRAM_CONTRACT_VERSION
+                    < telegram_contract_version(self.agent.runtime)
                 ),
             ),
         )
-        self.state.acknowledge_telegram_contract(session.session_id, TELEGRAM_CONTRACT_VERSION)
+        self.state.acknowledge_telegram_contract(
+            session.session_id, telegram_contract_version(self.agent.runtime)
+        )
         if result.provider_session_id and result.provider_session_id != session.provider_session_id:
             session = self.state.bind_provider_session(
                 session.session_id, result.provider_session_id, None
@@ -621,7 +623,7 @@ class ExternalAgentService:
                         new_session=(
                             session.provider_session_id is None
                             or self.state.telegram_contract_version(session.session_id)
-                            < TELEGRAM_CONTRACT_VERSION
+                            < telegram_contract_version(self.agent.runtime)
                         ),
                     ),
                     session_id=session.provider_session_id,
@@ -649,7 +651,9 @@ class ExternalAgentService:
             )
             return True
         self.state.finish_dispatch(dispatch_id, success=True)
-        self.state.acknowledge_telegram_contract(session.session_id, TELEGRAM_CONTRACT_VERSION)
+        self.state.acknowledge_telegram_contract(
+            session.session_id, telegram_contract_version(self.agent.runtime)
+        )
         if result.provider_session_id and result.provider_session_id != session.provider_session_id:
             session = self.state.bind_provider_session(
                 session.session_id, result.provider_session_id, None

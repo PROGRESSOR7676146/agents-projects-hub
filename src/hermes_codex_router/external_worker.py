@@ -28,7 +28,12 @@ from .metadata import format_agent_response, format_telegram_response
 from .registry import ProjectRegistry, load_registry
 from .state import HubState, ProviderJobRecord
 from .supervisor import CodexAppServerSupervisor
-from .telegram_interaction import TELEGRAM_CONTRACT_VERSION, telegram_turn_prompt
+from .telegram_interaction import (
+    telegram_contract_version,
+    telegram_developer_instructions,
+    telegram_turn_prompt,
+    telegram_user_turn_prompt,
+)
 
 
 class ExternalQueueWorkerError(RuntimeError):
@@ -366,7 +371,7 @@ class ExternalQueueWorker:
                 user_excerpt=job.payload_text,
                 acknowledge_context=job.context_watermark is not None,
                 acknowledge_handoff=job.handoff_id is not None,
-                telegram_contract_version=TELEGRAM_CONTRACT_VERSION,
+                telegram_contract_version=telegram_contract_version(self.agent.runtime),
                 artifacts=artifacts,
             )
         except BaseException:
@@ -393,10 +398,9 @@ class ExternalQueueWorker:
             self._record_event("warning", "artifact_staging_cleanup_error", type(exc).__name__)
 
     def _needs_full_telegram_contract(self, job: ProviderJobRecord) -> bool:
-        return (
-            job.provider_session_id is None
-            or self.state.telegram_contract_version(job.session_id) < TELEGRAM_CONTRACT_VERSION
-        )
+        return job.provider_session_id is None or self.state.telegram_contract_version(
+            job.session_id
+        ) < telegram_contract_version(self.agent.runtime)
 
     def _execute_codex(
         self, job: ProviderJobRecord, token: str, project: object, topic: object
@@ -428,24 +432,28 @@ class ExternalQueueWorker:
                 )
         staging_dir = Path(project.root) / ".hub" / "staging" / job.job_id
         staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        turn_text = telegram_turn_prompt(
-            turn_text,
-            runtime="codex",
-            new_session=self._needs_full_telegram_contract(job) or fallback_transfer,
-            staging_dir=staging_dir,
+        full_contract = self._needs_full_telegram_contract(job) or fallback_transfer
+        developer_instructions = telegram_developer_instructions(
+            runtime="codex", new_session=full_contract
         )
         if job.provider_session_id and not fallback_transfer:
             thread = client.resume_thread(
-                thread_id=job.provider_session_id, cwd=project.root, model=job.model
+                thread_id=job.provider_session_id,
+                cwd=project.root,
+                model=job.model,
+                developer_instructions=developer_instructions,
             )
         else:
             thread = client.start_thread(
-                cwd=project.root, model=job.model, project_id=project.project_id
+                cwd=project.root,
+                model=job.model,
+                project_id=project.project_id,
+                developer_instructions=developer_instructions,
             )
         turn_id = client.start_turn(
             thread_id=thread.thread_id,
             cwd=project.root,
-            text=turn_text,
+            text=telegram_user_turn_prompt(turn_text, staging_dir=staging_dir),
             model=job.model,
             effort=job.effort,
         )

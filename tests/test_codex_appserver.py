@@ -64,6 +64,7 @@ class CodexAppServerTests(unittest.TestCase):
             cwd=self.cwd,
             model="gpt-5.6-sol",
             project_id="alpha",
+            developer_instructions="Telegram contract",
         )
 
         self.assertEqual(thread.thread_id, "thread-123")
@@ -74,6 +75,7 @@ class CodexAppServerTests(unittest.TestCase):
         self.assertEqual(request["params"]["cwd"], str(self.cwd))
         self.assertEqual(request["params"]["sandbox"], "workspace-write")
         self.assertEqual(request["params"]["approvalPolicy"], "on-request")
+        self.assertEqual(request["params"]["developerInstructions"], "Telegram contract")
         self.assertNotIn("projectId", request["params"])
         self.assertNotIn("danger-full-access", str(request))
 
@@ -140,11 +142,13 @@ class CodexAppServerTests(unittest.TestCase):
             thread_id="thread-123",
             cwd=self.cwd,
             model="gpt-5.6-sol",
+            developer_instructions="Telegram reminder",
         )
         self.assertEqual(thread.thread_id, "thread-123")
         params = transport.sent[0]["params"]
         self.assertEqual(params["approvalPolicy"], "on-request")
         self.assertEqual(params["sandbox"], "workspace-write")
+        self.assertEqual(params["developerInstructions"], "Telegram reminder")
 
     def test_rpc_error_is_not_treated_as_result(self) -> None:
         transport = FakeTransport([{"id": 1, "error": {"code": -32602, "message": "bad"}}])

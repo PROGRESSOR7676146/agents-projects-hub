@@ -66,7 +66,13 @@ from .telegram import (
     parse_topic_message,
 )
 from .telegram_activity import telegram_activity
-from .telegram_interaction import TELEGRAM_CONTRACT_VERSION, telegram_turn_prompt
+from .telegram_interaction import (
+    CODEX_TELEGRAM_CONTRACT_VERSION,
+    telegram_contract_version,
+    telegram_developer_instructions,
+    telegram_turn_prompt,
+    telegram_user_turn_prompt,
+)
 from .telegram_multipart import send_telegram_html_parts
 from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
@@ -701,10 +707,10 @@ class ProjectHubService:
         staging_dir = project.root / ".hub" / "staging" / executing.job_id
         staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
+            contract_version = telegram_contract_version(agent.runtime)
             full_contract = (
                 executing.provider_session_id is None
-                or queue_state.telegram_contract_version(executing.session_id)
-                < TELEGRAM_CONTRACT_VERSION
+                or queue_state.telegram_contract_version(executing.session_id) < contract_version
             )
             if agent.runtime == "codex":
                 client = self._client()
@@ -713,22 +719,23 @@ class ProjectHubService:
                         thread_id=executing.provider_session_id,
                         cwd=project.root,
                         model=executing.model,
+                        developer_instructions=telegram_developer_instructions(
+                            runtime="codex", new_session=full_contract
+                        ),
                     )
                 else:
                     thread = client.start_thread(
                         cwd=project.root,
                         model=executing.model,
                         project_id=project.project_id,
+                        developer_instructions=telegram_developer_instructions(
+                            runtime="codex", new_session=full_contract
+                        ),
                     )
                 turn_id = client.start_turn(
                     thread_id=thread.thread_id,
                     cwd=project.root,
-                    text=telegram_turn_prompt(
-                        executing.payload_text,
-                        runtime=agent.runtime,
-                        staging_dir=staging_dir,
-                        new_session=full_contract,
-                    ),
+                    text=telegram_user_turn_prompt(executing.payload_text, staging_dir=staging_dir),
                     model=executing.model,
                     effort=executing.effort,
                 )
@@ -809,7 +816,7 @@ class ProjectHubService:
                 user_excerpt=executing.payload_text,
                 acknowledge_context=executing.context_watermark is not None,
                 acknowledge_handoff=executing.handoff_id is not None,
-                telegram_contract_version=TELEGRAM_CONTRACT_VERSION,
+                telegram_contract_version=contract_version,
                 artifacts=artifacts,
             )
         except Exception as exc:
@@ -1018,6 +1025,9 @@ class ProjectHubService:
             cwd=project.root,
             model=session.model,
             project_id=project.project_id,
+            developer_instructions=telegram_developer_instructions(
+                runtime="codex", new_session=True
+            ),
         )
         tab_name = terminal_session_name(
             project.display_name, topic.title, self.agent.display_name, topic.thread_id
@@ -1036,19 +1046,26 @@ class ProjectHubService:
         client = self._client()
         new_session = (
             session.provider_session_id is None
-            or self.state.telegram_contract_version(session.session_id) < TELEGRAM_CONTRACT_VERSION
+            or self.state.telegram_contract_version(session.session_id)
+            < CODEX_TELEGRAM_CONTRACT_VERSION
         )
         if session.provider_session_id:
             thread = client.resume_thread(
                 thread_id=session.provider_session_id,
                 cwd=project.root,
                 model=session.model,
+                developer_instructions=telegram_developer_instructions(
+                    runtime="codex", new_session=new_session
+                ),
             )
         else:
             thread = client.start_thread(
                 cwd=project.root,
                 model=session.model,
                 project_id=project.project_id,
+                developer_instructions=telegram_developer_instructions(
+                    runtime="codex", new_session=new_session
+                ),
             )
             tab_name = terminal_session_name(
                 project.display_name, topic.title, self.agent.display_name, topic.thread_id
@@ -1066,17 +1083,14 @@ class ProjectHubService:
             turn_id = client.start_turn(
                 thread_id=thread.thread_id,
                 cwd=project.root,
-                text=telegram_turn_prompt(
-                    text,
-                    runtime="codex",
-                    staging_dir=staging_dir,
-                    new_session=new_session,
-                ),
+                text=telegram_user_turn_prompt(text, staging_dir=staging_dir),
                 model=session.model,
                 effort=session.effort,
             )
             result = client.wait_for_turn(turn_id)
-        self.state.acknowledge_telegram_contract(session.session_id, TELEGRAM_CONTRACT_VERSION)
+        self.state.acknowledge_telegram_contract(
+            session.session_id, CODEX_TELEGRAM_CONTRACT_VERSION
+        )
         if result.context_window and result.context_tokens_used is not None:
             remaining = max(0, result.context_window - result.context_tokens_used)
             session = self.state.set_context_remaining(

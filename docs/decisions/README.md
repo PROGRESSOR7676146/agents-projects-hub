@@ -29,6 +29,7 @@ with a new record.
 | Live input semantics | Durable burst collection, capability-aware Codex steering, FIFO fallback, and model-free emergency stop. | [ADR 0004](0004-durable-input-batching-steering-and-stop.md) |
 | Runtime health | Components publish bounded last-known state to SQLite; status classifies the cache without provider or model calls. | [ADR 0002](0002-durable-runtime-health-cache.md) |
 | Telegram interaction | Providers own conversational meaning; the Hub owns Telegram UI effects and delivery guarantees. | [ADR 0005](0005-telegram-interaction-contract.md) |
+| Provider instruction channel | Codex receives Telegram Contract v2 through native thread developer instructions; prompt fallback remains only for providers without an accepted native channel. | [ADR 0013](0013-native-provider-interaction-instructions.md) |
 | Messenger task start | Complex work publishes a concise approach and proceeds without a mandatory timer; pause only for a real decision or authority boundary. | [ADR 0010](0010-no-mandatory-grace-period.md) |
 | Native session transfer | `/local` and `/return` transfer exclusive ownership of the same provider session; return performs no automatic summary or handoff. | [ADR 0011](0011-explicit-native-session-ownership-transfer.md) |
 | Deployment provenance | Every runtime reports an immutable Git revision; production never executes from a mutable development checkout. | [ADR 0012](0012-verifiable-immutable-deployments.md) |
