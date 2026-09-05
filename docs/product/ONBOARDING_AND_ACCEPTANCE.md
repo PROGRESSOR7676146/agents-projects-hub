@@ -67,6 +67,12 @@ necessary but not sufficient for items marked live.
   it cannot enqueue unrelated later scenarios behind unhealthy provider work.
   Bot identities MUST NOT be used to impersonate the operator because
   Telegram does not deliver bot-authored messages to other bots.
+- **AC-F-012 (Automated offline; REQ-OPS-010..011):** Distinct clean candidate
+  and rollback wheels pass the digest/identity/schema manifest gate; a
+  temporary schema-20 production-shaped database migrates to schema 21; the
+  temporary activation pointer switches to the candidate and back; and both
+  artifacts open the retained schema-21 state without changing queued,
+  outbox, or indeterminate work. This is not a live rollout or Telegram E2E.
 
 ## 16. Non-functional acceptance criteria
 

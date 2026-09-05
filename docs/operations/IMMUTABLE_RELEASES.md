@@ -60,3 +60,27 @@ release from a mutable checkout.
 Manifest verification proves artifact identity and schema compatibility only.
 It does not prove queue drain, service convergence, Telegram behavior, or a
 live rollout.
+
+## Automated offline rollout and rollback
+
+Run the candidate and rollback wheels through the synthetic gate:
+
+```bash
+agents-projects-hub release-dry-run \
+  --active-artifact CANDIDATE_WHEEL \
+  --rollback-artifact ROLLBACK_WHEEL
+```
+
+The command accepts no config or state path. It generates a production-shaped
+schema-20 database with queued, prepared-outbox, and indeterminate jobs under a
+new temporary root, creates a consistent backup and manifest, unpacks both
+wheels into digest-addressed release directories, and atomically switches a
+temporary `active` symlink to the candidate. Candidate code migrates the copy to
+schema 21. The manifest is verified against that migrated copy, the pointer is
+switched back, and rollback-artifact code opens the retained schema 21. Exact
+durable work rows must match before, after rollout, and after rollback.
+
+The report states `temporary_state_only: true`, `service_actions: false`, and
+`network_actions: false`. The temporary root is removed on exit. Passing this
+gate is synthetic fault/release evidence, not permission or evidence for a live
+rollout.

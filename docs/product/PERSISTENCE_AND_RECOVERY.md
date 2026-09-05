@@ -57,6 +57,14 @@ This normative module is part of the
   every artifact and MUST reject activation or runtime rollback unless both
   executables support the target state schema. Manifest creation and
   verification MUST NOT migrate state, start a service, or contact a provider.
+- **REQ-OPS-011 (Implemented as an offline dry-run):** Release acceptance MUST
+  include an automated rollout/runtime-rollback rehearsal that creates all
+  state, configuration, release directories, manifest, backup, and activation
+  pointers under one temporary root. It MUST run the candidate migration from
+  schema 20 to 21, run the distinct rollback artifact against the retained
+  schema 21 state, and prove queued work, prepared outbox delivery, and an
+  indeterminate job remain unchanged. It MUST NOT read deployment state, invoke
+  a provider, contact Telegram, or control a service.
 
 **Recovery limit:** exact in-flight turns are not portable across process or
 machine loss. Only completed state that was persisted before the loss can be

@@ -1,6 +1,6 @@
 # ADR 0012: Verifiable immutable deployments
 
-Status: accepted; phase one and phase-two manifest gate implemented, activation planned
+Status: accepted; provenance, manifest, and offline dry-run implemented; activation planned
 Date: 2026-09-04
 
 ## Context
@@ -45,10 +45,12 @@ provenance.
 The first phase adds embedded revision metadata, per-process health reporting,
 and mixed/unknown-revision detection. Phase two now includes a private,
 digest-bound deployment manifest and a read-only schema-compatibility gate for
-distinct active and rollback wheels. Revision-specific installation and the
-controlled release-pointer switch remain planned. Packaging automation must
-remain simpler than a container platform; containers are not required for this
-single-machine deployment.
+distinct active and rollback wheels. An offline rehearsal exercises temporary
+revision-specific release directories, activation pointer, schema-20→21
+migration, and runtime rollback without controlling services or reading live
+state. Production installation and the controlled live pointer switch remain
+planned. Packaging automation must remain simpler than a container platform;
+containers are not required for this single-machine deployment.
 
 ## Consequences
 

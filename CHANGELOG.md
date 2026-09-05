@@ -7,6 +7,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [0.7.0] - 2026-09-05
 
+- Add a fully automated offline rollout/runtime-rollback rehearsal using only
+  generated temporary schema-20 state, release directories, activation pointer,
+  configuration, backup, and manifest, with durable-work comparison on schema
+  21 and no service or network actions.
 - Add a private, digest-bound deployment manifest and read-only compatibility
   gate that inspects distinct immutable active/rollback wheels, configuration,
   SQLite backup, and target schema without service or provider access.

@@ -36,6 +36,7 @@ from .outbox_sender import TelegramOutboxSender
 from .pilot import run_codex_pilot
 from .project_admin import add_project, set_project_enabled
 from .registry import RegistryError, load_registry
+from .release_dry_run import report_dict, run_release_dry_run
 from .release_identity import CURRENT_RELEASE
 from .runtime_health import project_runtime_health
 from .service import ProjectHubService
@@ -99,6 +100,12 @@ def _parser() -> argparse.ArgumentParser:
     manifest_verify = manifest_commands.add_parser("verify")
     manifest_verify.add_argument("manifest", type=Path)
     manifest_verify.add_argument("--state", type=Path)
+
+    release_dry_run = commands.add_parser(
+        "release-dry-run", help="exercise rollout and rollback on generated temporary state"
+    )
+    release_dry_run.add_argument("--active-artifact", required=True, type=Path)
+    release_dry_run.add_argument("--rollback-artifact", required=True, type=Path)
 
     migrate = commands.add_parser("migrate", help="migrate a state database safely")
     migrate.add_argument("state", type=Path)
@@ -394,6 +401,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 manifest = verify_deployment_manifest(args.manifest, state_path=args.state)
             _print({"ok": True, **asdict(manifest)})
+            return 0
+        if args.command == "release-dry-run":
+            _print(report_dict(run_release_dry_run(args.active_artifact, args.rollback_artifact)))
             return 0
         if args.command == "migrate":
             result = migrate_database(args.state, create_backup=not args.no_backup)
