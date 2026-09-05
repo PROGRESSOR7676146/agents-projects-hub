@@ -43,9 +43,10 @@ them.
 3. **Make health semantics honest.** A component with repeated Telegram errors
    must not remain indefinitely indistinguishable from a fully healthy channel.
    Use bounded thresholds and edge-triggered recovery rather than alert spam.
-4. **Repair recovery diagnostics.** Distinguish an inaccessible supervisor bus,
-   an inactive unit, and a healthy independently detected runtime. Do not print
-   `service=inactive` when the probe did not establish that fact.
+4. **Repair recovery diagnostics (repository-complete).** User-service probes
+   distinguish active, confirmed inactive, and unavailable supervisor state;
+   Hermes heartbeat and tlive runtime liveness remain independent evidence.
+   Separate tests prevent probe failures from being labeled inactive.
 5. **Synchronize release metadata.** Package version, changelog, project status,
    Git tag, and deployed SHA have different purposes but must not contradict one
    another. Missing tags are visible release debt, not a reason to invent or

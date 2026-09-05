@@ -35,6 +35,11 @@ tlive status
 
 `doctor` показывает два независимых check: `recovery:hermes` и
 `recovery:tlive`. Один неработающий канал даёт warning мониторинга, оба — error.
+Поле `service` различает `active`, подтверждённый `inactive` (exit code 3) и
+`unavailable`, когда supervisor bus/команда недоступны или результат probe не
+доказывает состояние unit. Свежий Hermes heartbeat или bounded `tlive status`
+может независимо подтвердить healthy runtime даже при `service=unavailable`;
+эти факты показываются одновременно, а не подменяют друг друга.
 Monitor делает отдельные cooldown claims для Codex project groups и домашнего
 канала Hermes (`hermes_notify_target`), поэтому сбой одной доставки не помечает
 вторую как выполненную.

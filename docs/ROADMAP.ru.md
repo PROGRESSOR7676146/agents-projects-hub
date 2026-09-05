@@ -5,12 +5,12 @@ Roadmap содержит только переносимые продуктов�
 
 ## Ближайшие задачи
 
-### Активный checkpoint: честные recovery diagnostics
+### Активный checkpoint: синхронизация release metadata
 
-Различить в локальных recovery checks три наблюдаемых состояния: supervisor bus
-недоступен, unit подтверждённо inactive и independently detected runtime
-healthy. Не выдавать probe failure за inactive unit; каждую ветвь покрыть
-отдельным тестом без рестартов сервисов.
+Зафиксировать проверяемую политику согласования package version, changelog,
+project status и Git tags и добавить static checks. Отсутствующий tag должен
+быть видимым release debt, а не поводом автоматически создавать или
+переписывать Git history.
 
 ### Telegram Interaction Contract v2
 
@@ -74,6 +74,9 @@ providers остаётся вне текущего scope.
 
 ## Недавно завершено
 
+- Recovery diagnostics различают недоступный supervisor bus, подтверждённо
+  inactive unit и независимо healthy Hermes/tlive runtime; probe failure больше
+  не подписывается как `service=inactive`.
 - Schema 21 ограничивает `runtime_events` одновременно 30 сутками и 10 000
   newest rows. Миграция и runtime pruning атомарны, детерминированы и не меняют
   health/alert state или provider work.

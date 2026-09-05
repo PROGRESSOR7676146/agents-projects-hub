@@ -38,6 +38,14 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertFalse(check.ok)
         self.assertEqual(check.detail, "inactive")
 
+    def test_inaccessible_supervisor_is_not_reported_as_inactive(self) -> None:
+        def run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(argv, 1, "", "bus unavailable")
+
+        check = _service_check("agents-projects-hub@opencode.service", run=run)
+        self.assertFalse(check.ok)
+        self.assertEqual(check.detail, "unavailable")
+
     def test_contract_checks_are_local_optional_and_do_not_expose_provider_id(self) -> None:
         checks = _telegram_contract_checks(
             (

@@ -217,8 +217,11 @@ operator deployment inventory or live conversation evidence.
   stale, missing, malformed, oversized, or permission-unsafe.
 - Recovery diagnostics accept the independently managed Hermes Gateway's fresh
   local heartbeat and bounded tlive status markers as liveness evidence while
-  continuing to expose inactive configured service units. Token-bearing tlive
-  dashboard URLs are neither returned nor logged by the probe.
+  reporting supervisor state separately as active, confirmed inactive, or
+  unavailable. A failed supervisor-bus probe is never labeled as an inactive
+  unit, and independently healthy runtime evidence remains visible alongside
+  it. Token-bearing tlive dashboard URLs are neither returned nor logged by the
+  probe.
 - Sandboxed Antigravity `accept-edits` mode; dangerous permission bypass is
   rejected.
 - Optional `codex-multi-auth` with official Codex stdio fallback.

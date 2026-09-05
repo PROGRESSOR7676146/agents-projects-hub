@@ -18,6 +18,9 @@ and releases use semantic versioning while the public API is still evolving.
 - Bound `runtime_events` to 30 days and the newest 10,000 rows with atomic
   insertion/pruning, deterministic timestamp/row-ID ordering, and a compatible
   schema-21 migration that leaves health, alerts, and provider work untouched.
+- Distinguish an inaccessible user-service supervisor from a confirmed inactive
+  unit in local diagnostics while retaining independent Hermes heartbeat and
+  tlive runtime liveness as valid recovery-channel evidence.
 - Embed package version, exact clean Git SHA, and build time in wheel artifacts;
   publish release identity from every required Hub runtime and alert once when
   cached deployment revisions are mixed or unknown.

@@ -17,7 +17,12 @@ from .hermes_health import probe_gateway_heartbeat, probe_hermes_group_policy
 from .hub_config import HubConfig
 from .migrations import LATEST_SCHEMA_VERSION
 from .provider_telemetry import probe_antigravity_telemetry
-from .recovery_plane import RecoveryPlaneProbe, probe_recovery_plane, probe_tlive_runtime
+from .recovery_plane import (
+    RecoveryPlaneProbe,
+    probe_recovery_plane,
+    probe_supervisor_service,
+    probe_tlive_runtime,
+)
 from .registry import load_registry
 from .state import HubState, TelegramContractProvenance
 from .terminal_runtime import TerminalRuntime
@@ -51,19 +56,11 @@ def _service_check(
     *,
     run: Callable[..., Any] = subprocess.run,
 ) -> Check:
-    try:
-        completed = run(
-            ("systemctl", "--user", "is-active", "--quiet", unit),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return Check(f"service:{unit}", False, "probe failed")
-    active = completed.returncode == 0
-    return Check(f"service:{unit}", active, "active" if active else "inactive")
+    state = probe_supervisor_service(
+        ("systemctl", "--user", "is-active", "--quiet", unit),
+        run=run,
+    )
+    return Check(f"service:{unit}", state == "active", state)
 
 
 def _telegram_contract_checks(
