@@ -1705,10 +1705,29 @@ class ProjectHubService:
             "model",
             "agent",
         }
-        queued_return = bool(
-            command and command.name == "return" and self._queue_enabled(self.agent.agent_id)
+        return_session = (
+            self.state.active_session(topic.topic_id)
+            if command and command.name == "return"
+            else None
         )
-        if command and command.name in control_commands and not queued_return:
+        queued_non_codex_return = bool(
+            return_session is not None
+            and return_session.agent_id != "codex"
+            and self._queue_enabled(return_session.agent_id)
+        )
+        atomic_codex_return = bool(
+            return_session is not None
+            and return_session.agent_id == "codex"
+            and return_session.writer_mode == "local"
+            and not self.state.topic_has_running_dispatch(topic.topic_id)
+            and not self.state.topic_has_pending_provider_job(topic.topic_id)
+        )
+        if (
+            command
+            and command.name in control_commands
+            and not queued_non_codex_return
+            and not atomic_codex_return
+        ):
             if not self.state.claim_message(
                 message.chat_id,
                 message.message_id,
@@ -1981,7 +2000,22 @@ class ProjectHubService:
                     message, "A provider turn is still running; try /return again later."
                 )
                 return True
-            project = self.registry.require_project(binding.project_id)
+            if session.agent_id == "codex":
+                _, created = self.state.return_codex_local_writer(
+                    chat_id=message.chat_id,
+                    message_id=message.message_id,
+                    topic_id=topic.topic_id,
+                    session_id=session.session_id,
+                    observer_agent_id=self.agent.agent_id,
+                )
+                if not created:
+                    return False
+                self._send_text(
+                    message,
+                    "Ownership returned to Telegram. The next Telegram turn will continue "
+                    "the same provider session.",
+                )
+                return True
             summary_prompt = (
                 "Summarize only the work completed through the local CLI since Telegram "
                 "handed this session over. Do not use tools. Do not include hidden reasoning, "
@@ -2000,25 +2034,16 @@ class ProjectHubService:
                 )
             self.state.set_writer_mode(session.session_id, "telegram")
             try:
-                if session.agent_id == self.agent.agent_id:
-                    self._run_codex_turn(
-                        project=project,
-                        topic=topic,
-                        session=self.state.get_session(session.session_id),
-                        text=summary_prompt,
-                        message=message,
-                    )
-                else:
-                    external = getattr(self, "external_services", {}).get(session.agent_id)
-                    if external is None:
-                        raise ServiceError("local summary is unsupported for this provider")
-                    external.publish_local_interval(
-                        chat_id=message.chat_id,
-                        thread_id=message.thread_id,
-                        topic_id=topic.topic_id,
-                        project_id=binding.project_id,
-                        session_id=session.session_id,
-                    )
+                external = getattr(self, "external_services", {}).get(session.agent_id)
+                if external is None:
+                    raise ServiceError("local summary is unsupported for this provider")
+                external.publish_local_interval(
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    topic_id=topic.topic_id,
+                    project_id=binding.project_id,
+                    session_id=session.session_id,
+                )
             except Exception as exc:
                 self._send_text(
                     message,

@@ -139,7 +139,10 @@ operator deployment inventory or live conversation evidence.
   explicitly declines any unexpected server approval request, preventing a
   headless turn from waiting forever on a companion that cannot reach it.
 - Compact `/status`, `/accounts`, cached and paginated `/model`, confirmed
-  single-session `/new`, `/local`, and `/return` controls.
+  single-session `/new`, `/local`, and `/return` controls. Codex `/return` is an
+  idempotent local lease transition with no provider invocation, summary,
+  transcript copy, or session-ID change. OpenCode and Antigravity retain their
+  prior bounded-summary return pending separate native-resume acceptance.
 - Private last-known-good provider catalogs with bounded callback keys. The
   deterministic monitor refreshes stale Codex, OpenCode, and Antigravity
   catalogs every 12 hours without invoking a model; failed discovery preserves
@@ -216,9 +219,11 @@ operator deployment inventory or live conversation evidence.
 
 ## Acceptance still required per deployment
 
-- The current `/local` path and summary-producing `/return` path have automated
-  coverage, but deterministic summary-free same-session return from ADR 0011 is
-  not implemented or live-accepted. Codex is the first acceptance target.
+- Summary-free same-session Codex return from ADR 0011 has automated coverage
+  for active-work rejection, local-writer Telegram rejection, duplicate return,
+  restart persistence, absence of a model call, and same-session continuation.
+  Each deployed revision still requires its own Telegram → native CLI →
+  Telegram acceptance. Other providers are outside this acceptance claim.
 - Dedicated-user bounded Telegram baseline after deployment-local MTProto
   authorization. Repository checks define the safe scenarios; each deployment
   must still produce its own private live evidence.

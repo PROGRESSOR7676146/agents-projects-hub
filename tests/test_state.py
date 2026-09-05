@@ -120,6 +120,39 @@ class HubStateTests(unittest.TestCase):
         telegram = self.state.set_writer_mode(session.session_id, "telegram")
         self.assertEqual(telegram.writer_mode, "telegram")
 
+    def test_codex_return_claim_and_writer_transition_are_atomic_and_idempotent(self) -> None:
+        session = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
+        session = self.state.bind_provider_session(session.session_id, "thread-123", None)
+        self.state.set_writer_mode(session.session_id, "local")
+
+        returned, created = self.state.return_codex_local_writer(
+            chat_id=self.topic.chat_id,
+            message_id=501,
+            topic_id=self.topic.topic_id,
+            session_id=session.session_id,
+            observer_agent_id="codex",
+        )
+        self.assertTrue(created)
+        self.assertEqual(returned.writer_mode, "telegram")
+        self.assertEqual(returned.provider_session_id, "thread-123")
+
+        duplicate, created = self.state.return_codex_local_writer(
+            chat_id=self.topic.chat_id,
+            message_id=501,
+            topic_id=self.topic.topic_id,
+            session_id=session.session_id,
+            observer_agent_id="codex",
+        )
+        self.assertFalse(created)
+        self.assertEqual(duplicate.writer_mode, "telegram")
+        self.assertFalse(
+            self.state.claim_message(
+                self.topic.chat_id,
+                501,
+                observer_agent_id="codex",
+            )
+        )
+
     def test_topic_running_dispatch_is_detected(self) -> None:
         session = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
         dispatch_id = self.state.start_dispatch(

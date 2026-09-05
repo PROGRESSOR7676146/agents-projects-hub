@@ -858,6 +858,74 @@ class HubState:
             raise StateError(f"unknown session_id: {session_id}")
         return self.get_session(session_id)
 
+    def return_codex_local_writer(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        topic_id: int,
+        session_id: str,
+        observer_agent_id: str,
+    ) -> tuple[SessionRecord, bool]:
+        """Atomically claim a Codex /return and restore Telegram ownership."""
+        observer = _bounded(observer_agent_id, name="observer agent id", maximum=64)
+        if chat_id == 0 or message_id <= 0:
+            raise StateError("invalid Telegram message identity")
+        with self._immediate_transaction():
+            existing = self._connection.execute(
+                "SELECT 1 FROM observed_messages WHERE chat_id = ? AND message_id = ?",
+                (chat_id, message_id),
+            ).fetchone()
+            if existing is not None:
+                return self.get_session(session_id), False
+            topic = self._connection.execute(
+                "SELECT chat_id FROM topics WHERE topic_id = ?", (topic_id,)
+            ).fetchone()
+            if topic is None or int(topic["chat_id"]) != chat_id:
+                raise StateError("Codex return does not match topic")
+            session = self._connection.execute(
+                """SELECT topic_id, agent_id, status, writer_mode
+                   FROM agent_sessions WHERE session_id = ?""",
+                (session_id,),
+            ).fetchone()
+            if (
+                session is None
+                or int(session["topic_id"]) != topic_id
+                or str(session["agent_id"]) != "codex"
+                or str(session["status"]) != "active"
+                or str(session["writer_mode"]) != "local"
+            ):
+                raise StateError("Codex local writer state changed during return")
+            running_dispatch = self._connection.execute(
+                """SELECT 1 FROM turn_dispatches
+                   WHERE topic_id = ? AND status = 'running' LIMIT 1""",
+                (topic_id,),
+            ).fetchone()
+            pending_job = self._connection.execute(
+                """SELECT 1 FROM provider_jobs
+                   WHERE topic_id = ? AND status IN
+                     ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                   LIMIT 1""",
+                (topic_id,),
+            ).fetchone()
+            if running_dispatch is not None or pending_job is not None:
+                raise StateError("provider work is already pending for this topic")
+            now = _now()
+            cursor = self._connection.execute(
+                """UPDATE agent_sessions SET writer_mode = 'telegram', updated_at = ?
+                   WHERE session_id = ? AND writer_mode = 'local'""",
+                (now, session_id),
+            )
+            if cursor.rowcount != 1:
+                raise StateError("Codex local writer ownership changed during return")
+            self._connection.execute(
+                """INSERT INTO observed_messages
+                   (chat_id, message_id, observer_agent_id, observed_at)
+                   VALUES (?, ?, ?, ?)""",
+                (chat_id, message_id, observer, now),
+            )
+        return self.get_session(session_id), True
+
     def set_context_remaining(self, session_id: str, percent: float) -> SessionRecord:
         bounded = max(0.0, min(100.0, percent))
         with self._connection:

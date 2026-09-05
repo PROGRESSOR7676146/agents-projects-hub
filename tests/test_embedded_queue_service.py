@@ -319,9 +319,9 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         self.assertTrue(job.payload_text.endswith("current request"))
         service.close()
 
-    def test_return_transfers_local_writer_and_queues_summary_atomically(self) -> None:
+    def test_return_is_model_free_and_idempotent(self) -> None:
         client = QueueClient()
-        service, _ = self.service(client)
+        service, telegram = self.service(client)
         self.assertTrue(service.handle_update(update(1, "initial task")))
         self.assertTrue(service.run_embedded_queue_cycle())
         self.assertTrue(service.handle_update(update(2, "/local")))
@@ -335,11 +335,103 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         returned = service.state.active_session(topic.topic_id)
         assert returned is not None
         self.assertEqual(returned.writer_mode, "telegram")
-        self.assertEqual(len(service.state.provider_jobs_for_topic(topic.topic_id)), 2)
+        self.assertEqual(len(service.state.provider_jobs_for_topic(topic.topic_id)), 1)
         self.assertEqual(len(client.turn_threads), 1)
-        self.assertTrue(service.run_embedded_queue_cycle())
-        self.assertEqual(len(client.turn_threads), 2)
+        self.assertFalse(service.run_embedded_queue_cycle())
+        self.assertIn("Ownership returned to Telegram", telegram.sent[-1])
+
+        self.assertFalse(service.handle_update(update(3, "/return")))
+        self.assertTrue(service.handle_update(update(4, "/return")))
+        self.assertIn("already owns", telegram.sent[-1])
+        self.assertEqual(len(service.state.provider_jobs_for_topic(topic.topic_id)), 1)
+        self.assertEqual(len(client.turn_threads), 1)
         service.close()
+
+    def test_return_rejects_pending_work_and_preserves_local_lease(self) -> None:
+        client = QueueClient()
+        service, telegram = self.service(client)
+        self.assertTrue(service.handle_update(update(1, "initial task")))
+        self.assertTrue(service.run_embedded_queue_cycle())
+        self.assertTrue(service.handle_update(update(2, "pending task")))
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        active = service.state.active_session(topic.topic_id)
+        assert active is not None
+        service.state.set_writer_mode(active.session_id, "local")
+
+        self.assertTrue(service.handle_update(update(3, "/return")))
+        rejected = service.state.active_session(topic.topic_id)
+        assert rejected is not None
+        self.assertEqual(rejected.writer_mode, "local")
+        self.assertIn("still running", telegram.sent[-1])
+        self.assertEqual(len(client.turn_threads), 1)
+        service.close()
+
+    def test_summary_free_return_is_scoped_to_codex(self) -> None:
+        service, _ = self.service(QueueClient())
+        antigravity = AgentDefinition(
+            "antigravity",
+            "Antigravity",
+            "example_antigravity_bot",
+            "antigravity",
+            None,
+            True,
+            False,
+            "gemini-example",
+            "high",
+        )
+        service.config = replace(service.config, agents=service.config.agents + (antigravity,))
+        service.usernames[antigravity.agent_id] = antigravity.telegram_username
+        self.assertTrue(service.handle_update(update(1, "/menu")))
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        session = service.state.activate_agent(
+            topic.topic_id,
+            antigravity.agent_id,
+            antigravity.default_model,
+            antigravity.default_effort,
+        )
+        service.state.bind_provider_session(session.session_id, "conversation-1", None)
+        service.state.set_writer_mode(session.session_id, "local")
+
+        self.assertTrue(service.handle_update(update(2, "/return")))
+        jobs = service.state.provider_jobs_for_topic(topic.topic_id)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].agent_id, "antigravity")
+        self.assertIn("Summarize only", jobs[0].payload_text)
+        returned = service.state.active_session(topic.topic_id)
+        assert returned is not None
+        self.assertEqual(returned.writer_mode, "telegram")
+        service.close()
+
+    def test_local_lease_survives_restart_and_blocks_telegram_until_return(self) -> None:
+        client = QueueClient()
+        first, _ = self.service(client)
+        self.assertTrue(first.handle_update(update(1, "initial task")))
+        self.assertTrue(first.run_embedded_queue_cycle())
+        self.assertTrue(first.handle_update(update(2, "/local")))
+        first.close()
+
+        resumed, telegram = self.service(client)
+        topic = resumed.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        local = resumed.state.active_session(topic.topic_id)
+        assert local is not None
+        self.assertEqual(local.writer_mode, "local")
+        jobs_before = len(resumed.state.provider_jobs_for_topic(topic.topic_id))
+
+        self.assertTrue(resumed.handle_update(update(3, "must not run")))
+        self.assertIn("/return", telegram.sent[-1])
+        self.assertEqual(len(resumed.state.provider_jobs_for_topic(topic.topic_id)), jobs_before)
+        self.assertEqual(len(client.turn_threads), 1)
+
+        self.assertTrue(resumed.handle_update(update(4, "/return")))
+        returned = resumed.state.active_session(topic.topic_id)
+        assert returned is not None
+        self.assertEqual(returned.writer_mode, "telegram")
+        self.assertEqual(len(resumed.state.provider_jobs_for_topic(topic.topic_id)), jobs_before)
+        self.assertEqual(len(client.turn_threads), 1)
+        resumed.close()
 
     def test_terminal_without_completed_session_does_not_call_provider(self) -> None:
         client = QueueClient()

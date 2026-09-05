@@ -383,8 +383,9 @@ or response metadata when the provider exposes it.
   oversized, or non-private cache files MUST degrade to unknown.
 - **REQ-CMD-004 (Implemented):** `/new` requires an owner callback confirmation
   and resets only the active provider session; mass reset behavior is removed.
-  `/local` transfers writer ownership; `/return` returns ownership and
-  publishes a bounded safe summary of the local interval.
+  `/local` transfers writer ownership. Codex `/return` changes only the lease,
+  with no provider call, summary, or session-ID change. Other providers retain
+  bounded summaries pending separate native-resume acceptance.
 - **REQ-CMD-005 (Implemented):** The public Telegram command menu contains only
   `/status`, `/model`, `/accounts`, `/new`, `/local`, `/return`, and `/stop`. Legacy
   maintenance commands may remain locally callable for compatibility but are
@@ -433,12 +434,11 @@ or response metadata when the provider exposes it.
   running and that a completed provider session exists, changes `writer_mode`
   from `telegram` to `local`, and returns a reviewed
   provider-specific resume command for the canonical root and session ID.
-- **REQ-WRITER-007 (Implemented with explicit owner assertion):** `/return`
-  restores Telegram ownership after instructing the owner to close the local
-  CLI and confirming that no Hub dispatch is running, then asks the same
-  provider session for a bounded `Completed / Verified / Next` publication.
-  Summary failure does not take the writer lease back from Telegram. V1
-  deliberately does not infer OS process state.
+- **REQ-WRITER-007 (Implemented for Codex with explicit owner assertion):**
+  after the owner closes the CLI and Hub work is terminal, `/return` changes
+  only the lease; it invokes no model and copies no summary or transcript. The
+  next Telegram turn resumes the same session. V1 does not infer OS process
+  state. Other providers retain prior behavior pending separate acceptance.
 - **REQ-WRITER-008 (Implemented):** Messages arriving while `local` owns the
   writer do not call a provider and explain how to return safely.
 
@@ -714,9 +714,9 @@ necessary but not sufficient for items marked live.
 | Codex tmux takeover/release | Implemented | Fallback frontend, not preferred long-term UX. |
 | Optional Codex account pool/fallback | Implemented | Natural exhaustion E2E remains an acceptance item. |
 | Telegram E2E baseline | Bounded actor implemented; live authorization pending | Results remain private deployment evidence. |
-| `/local` and `/return` | Implemented | Codex, OpenCode, and Antigravity; Hermes fails closed pending a native resume contract. |
+| `/local` and `/return` | Implemented | Codex return is model-free and same-session; other providers retain prior behavior pending acceptance. |
 | Compact command surface | Implemented | `/status`, cached/paginated `/model`, `/accounts`, confirmed `/new`, `/local`, `/return`; Telegram menu readback passed. |
-| Return-and-publish | Implemented | `/return` publishes a bounded summary; no full transcript mirroring. |
+| Summary-free Codex return | Implemented | Local lease change; no model, transcript, handoff, or session change. |
 | Provider-limit rotation events | Implemented | Provider `429` drives Codex rotation visibility; natural exhaustion E2E remains pending. |
 | Durable embedded queue compatibility path | Implemented | `dispatch_mode: "inline"` remains default; `"queue"` with `queue_runtime: "embedded"` consumes work on a background thread. |
 | Isolated local provider workers | Implemented behind feature gate | `dispatch_mode: "queue"`, `queue_runtime: "external"`, explicit `external_worker_agent_ids`, and opt-in `outbox_runtime: "external"`; controller delivery remains the default rollback path. |

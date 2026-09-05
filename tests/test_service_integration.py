@@ -41,6 +41,7 @@ class FakeClient:
     def __init__(self) -> None:
         self.started = 0
         self.resumed = 0
+        self.resumed_thread_ids: list[str] = []
         self.start_roots: list[Path] = []
         self.prompts: list[str] = []
 
@@ -50,8 +51,9 @@ class FakeClient:
         self.start_roots.append(root)
         return CodexThread(f"thread-{self.started}", root, "gpt-5.6-sol", "openai")
 
-    def resume_thread(self, **_: object) -> CodexThread:
+    def resume_thread(self, **kwargs: object) -> CodexThread:
         self.resumed += 1
+        self.resumed_thread_ids.append(str(kwargs["thread_id"]))
         return CodexThread("thread-1", Path.cwd(), "gpt-5.6-sol", "openai")
 
     def start_turn(self, **kwargs: object) -> str:
@@ -819,17 +821,18 @@ class ServiceIntegrationTests(unittest.TestCase):
             active = value.state.active_session(topic.topic_id)
             assert active is not None
             self.assertEqual(active.writer_mode, "telegram")
+            self.assertEqual(active.provider_session_id, "thread-1")
+            self.assertEqual(len(client.prompts), prompt_count)
             self.assertTrue(value.handle_update(update(14, "continue")))
+            active = value.state.active_session(topic.topic_id)
+            assert active is not None
+            self.assertEqual(active.provider_session_id, "thread-1")
             value.state.close()
 
         self.assertEqual(client.started, 1)
-        self.assertEqual(client.resumed, 2)
-        self.assertTrue(
-            any(
-                "Summarize only the work completed through the local CLI" in item
-                for item in client.prompts
-            )
-        )
+        self.assertEqual(client.resumed, 1)
+        self.assertEqual(client.resumed_thread_ids, ["thread-1"])
+        self.assertFalse(any("Summarize only" in item for item in client.prompts))
 
 
 if __name__ == "__main__":

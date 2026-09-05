@@ -1,6 +1,6 @@
 # ADR 0011: Explicit native session ownership transfer
 
-Status: accepted  
+Status: accepted; implemented for Codex, deployment acceptance required
 Date: 2026-09-04
 
 ## Context
