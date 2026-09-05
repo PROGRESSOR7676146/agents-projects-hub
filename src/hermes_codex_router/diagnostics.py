@@ -205,7 +205,11 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
     if config.codex_stdio_executable is not None:
         checks.append(
             Check(
-                "codex_stdio_fallback",
+                (
+                    "codex_private_stdio"
+                    if config.codex_transport == "stdio"
+                    else "codex_stdio_fallback"
+                ),
                 True,
                 str(config.codex_stdio_executable),
             )

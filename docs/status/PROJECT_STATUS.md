@@ -15,6 +15,12 @@ operator deployment inventory or live conversation evidence.
   idempotent enqueue, strict per-topic FIFO leases, conservative stale-job
   recovery, and a feature-gated embedded compatibility consumer. `dispatch_mode`
   defaults to `inline`; `queue_runtime` defaults to `embedded`.
+- The recommended single-owner deployment is one Controller process with a
+  durable embedded queue and Controller-owned outbox. The separate worker and
+  sender topology remains available when its extra fault isolation justifies
+  the operational cost. Explicit `codex_transport: "stdio"` always uses a
+  private official Codex app-server, preventing Hub project sessions from being
+  observed by a tlive companion attached to the shared Codex socket.
 - Isolated queue workers are available for locally managed Codex, OpenCode, and
   Antigravity behind `dispatch_mode: "queue"` and `queue_runtime: "external"`.
   `external_worker_agent_ids` selects each isolated provider independently and

@@ -47,6 +47,13 @@ Operational truth is split by purpose:
   same bounded events in their isolated state database. Raw exception text,
   token-bearing URLs, payloads, local paths, and chat identifiers are
   intentionally unavailable; do not reconstruct them in shared logs.
+- Recommended single-owner runtime: run only `agents-projects-hub controller
+  HUB_CONFIG` with `dispatch_mode: "queue"`, `queue_runtime: "embedded"`, and
+  `outbox_runtime: "controller"`. The Controller's background consumer owns
+  local providers and durable response delivery; the Telegram polling thread
+  stays independent. Keep the deterministic monitor timer if operational
+  alerts are desired. Provider direct-message services are optional and should
+  remain disabled when unused.
 - External queue delivery: run one `agents-projects-hub sender HUB_CONFIG`
   alongside the selected provider workers, then set `outbox_runtime` to
   `external`. The default `controller` value preserves the previous deployment
@@ -61,8 +68,9 @@ Operational truth is split by purpose:
   controller HUB_CONFIG` polls project groups as Hub and stores its Telegram offset
   separately from Codex. Controller startup reads only that ingress token;
   provider tokens remain owned by response senders and direct-message services.
-  Hub mode requires an external queue worker for every locally managed
-  productive provider and the external outbox sender.
+  Hub mode supports the recommended embedded topology. If external queue mode
+  is selected, it requires a worker for every locally managed productive
+  provider and the external outbox sender.
   `agents-projects-hub serve HUB_CONFIG --agent codex` remains a separate,
   direct-message-only Codex ingress with its own offset and credential boundary.
   Direct-message ingress does not overwrite the Controller health identity.

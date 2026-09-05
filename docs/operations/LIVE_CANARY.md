@@ -4,7 +4,7 @@ Status: owner-coordinated acceptance procedure
 Last updated: 2026-08-31
 
 This procedure is the final gate between the automated subprocess fault matrix
-and routine use of the external queue topology. It changes live Telegram and
+and routine use of either supported queue topology. It changes live Telegram and
 local service state, so it MUST run only in a declared maintenance window with
 the operator present. Real configuration, identities, transcripts, screenshots,
 logs, and acceptance evidence stay outside Git.
@@ -17,8 +17,12 @@ Do not begin, or stop at the next safe boundary, when any of these is true:
   the exact deployed commit;
 - the current SQLite state has any nonterminal provider job (`queued`,
   `retry_wait`, `leased`, `executing`, or `result_ready`) or any nonterminal
-  outbox row (`pending` or `sending`), or has an unresolved `indeterminate`
-  job; adopt and drain or classify every such row before cutover;
+  outbox row (`pending` or `sending`); adopt and drain or classify every such
+  row before cutover. Historical terminal `indeterminate` rows MAY remain
+  untouched during a runtime-only external-to-embedded cutover when the new
+  binary uses the same schema and configuration does not change their provider
+  ownership. Record their count before and after and never requeue or delete
+  them;
 - a consistent state backup and the previous executable/configuration are not
    available;
 - the shadow Hub configuration does not validate or does not select every
@@ -52,10 +56,13 @@ delete a socket merely to make the canary continue.
 
    - a private `hub_bot.token_file`;
    - `dispatch_mode: "queue"`;
-   - `queue_runtime: "external"`;
-   - `outbox_runtime: "external"`;
-   - every locally managed Codex, OpenCode, and Antigravity identity in
-     `external_worker_agent_ids`.
+   - `queue_runtime: "embedded"` and `outbox_runtime: "controller"` for the
+     recommended single-owner topology; or both values to `"external"` plus
+     every locally managed Codex, OpenCode, and Antigravity identity in
+     `external_worker_agent_ids` for the optional isolated topology;
+   - `codex_transport: "stdio"` and the official
+     `codex_stdio_executable` when Hub Codex sessions must remain outside the
+     shared tlive companion.
 
    Also create the private deployment environment file expected by the units.
    Its `PATH` must resolve the configured Hermes, tlive, and provider commands;
@@ -73,10 +80,11 @@ delete a socket merely to make the canary continue.
    `unknown` before launch. Repeat `release-manifest verify --state` only against
    the disposable migrated copy during preparation; the live-state gate belongs
    inside the separately authorized controlled rollout.
-5. Confirm the service topology before changing Telegram settings: one central
-   Controller, one standalone sender, one worker per local provider, and only
-   the desired provider direct-message ingress units. No provider group ingress
-   process may compete with the Hub Controller.
+5. Confirm the service topology before changing Telegram settings. The
+   recommended topology is one central Controller and only the provider
+   direct-message ingress units that are actually used. The optional external
+   topology adds one standalone sender and one worker per local provider. No
+   provider group ingress process may compete with the Hub Controller.
    Run one monitor cycle through its actual systemd unit, not only from an
    interactive shell, and confirm that its next timer trigger is scheduled.
 6. Confirm the intended Telegram policy privately. The Hub must receive the
@@ -95,6 +103,17 @@ delete a socket merely to make the canary continue.
 Preparation ends here when restarts or Telegram changes are not authorized.
 
 ## Controlled cutover
+
+For an external-to-embedded single-owner cutover, stop the Controller, sender,
+and provider workers after the bounded poll/lease return, verify that no
+nonterminal queue or outbox work appeared, activate the new wheel and shadow
+configuration, disable the sender and worker units, and start only the
+Controller. Keep historical terminal `indeterminate` rows unchanged. Disable a
+provider direct-message unit only after confirming privately that its endpoint
+is unused. Keep the deterministic monitor timer if desired.
+
+The steps below describe the optional external topology. Skip its worker and
+sender starts when selecting the embedded topology.
 
 Use the supervisor commands appropriate to the local installation; do not paste
 real unit names, paths, or output into the repository. First perform an explicit

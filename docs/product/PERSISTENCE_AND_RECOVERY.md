@@ -90,13 +90,16 @@ recreate unsaved provider context or a partially executed turn.
   file and MUST NOT appear in Git, examples, logs, or Telegram content. Hub
   ingress MUST use a durable offset identity distinct from Codex. When
   `hub_bot` is omitted, Codex remains the compatibility ingress without
-  changing its existing offset. Controller startup MUST validate and read only
-  the selected ingress token; provider workers, direct-message services, and
-  outbox delivery retain their own credential and response-identity boundaries.
-  Hub mode MUST use external queue/outbox ownership and MUST isolate every
-  locally managed productive provider in its own external worker. A local
-  runtime without external-worker support MUST be rejected rather than run
-  inside the Controller.
+  changing its existing offset. For a single-owner installation Hub mode SHOULD
+  use the durable embedded queue and Controller-owned outbox so ingress, local
+  providers, and response delivery need only one long-running process. The
+  provider turn still runs on the background queue consumer rather than the
+  Telegram polling thread. In this mode the Controller owns the selected Hub
+  ingress token and the locally managed providers' response credentials.
+  External workers and an external sender MAY be selected together when their
+  additional process isolation is operationally justified; that topology keeps
+  provider credentials outside the Controller. A local runtime without embedded
+  or selected external-worker support MUST be rejected.
 - **REQ-QUEUE-001 (Implemented behind `dispatch_mode: "queue"`):** The deterministic Hub Controller MUST durably
   enqueue each admitted productive request before provider execution and MUST
   NOT wait for a provider CLI, RPC, or model turn to process local commands.
@@ -119,6 +122,12 @@ recreate unsaved provider context or a partially executed turn.
   or another provider's eligible work. This stage covers the shared project-group
   queue only; provider direct-message services remain separate legacy inline
   endpoints with their own state database.
+- **REQ-QUEUE-002A (Implemented):** `queue_runtime: "embedded"` with
+  `outbox_runtime: "controller"` is the recommended single-owner topology. It
+  retains durable admission, strict FIFO, conservative `indeterminate`
+  recovery, and outbox retry while removing separate worker and sender
+  services. A failure of the one Controller process may briefly affect all
+  local providers until systemd restarts it; persisted work remains intact.
 - **REQ-QUEUE-003 (Implemented for the embedded compatibility consumer):** Productive jobs MUST execute strict FIFO within
   one numeric topic; different topics MAY execute concurrently. The target
   provider/session/model/effort snapshot MUST be immutable after enqueue.

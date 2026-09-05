@@ -241,6 +241,35 @@ class ControllerIdentityTests(unittest.TestCase):
             finally:
                 service.close()
 
+    def test_single_process_hub_opens_codex_response_transport_lazily(self) -> None:
+        self.codex_token.write_text("123456:codex-secret", encoding="utf-8")
+        self.codex_token.chmod(0o600)
+        path = self.config_path()
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["queue_runtime"] = "embedded"
+        document["outbox_runtime"] = "controller"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        config = load_controller_config(path)
+        created: list[FakeTelegram] = []
+
+        def api(token: str) -> FakeTelegram:
+            value = FakeTelegram(token)
+            created.append(value)
+            return value
+
+        with patch("hermes_codex_router.service.TelegramBotApi", side_effect=api):
+            service = ProjectHubService(config)
+            try:
+                self.assertEqual([item.token for item in created], ["654321:hub-secret"])
+                response_transport = service._provider_telegram("codex")
+                self.assertIs(response_transport, created[-1])
+                self.assertEqual(
+                    [item.token for item in created],
+                    ["654321:hub-secret", "123456:codex-secret"],
+                )
+            finally:
+                service.close()
+
     def test_codex_direct_ingress_reads_only_codex_token_and_ignores_groups(self) -> None:
         self.codex_token.write_text("123456:codex-secret", encoding="utf-8")
         self.codex_token.chmod(0o600)

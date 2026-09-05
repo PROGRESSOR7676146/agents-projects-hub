@@ -29,6 +29,20 @@ class SupervisorFallbackTests(unittest.TestCase):
             supervisor.start()
             self.assertEqual(supervisor.transport_mode, "socket")
 
+    def test_explicit_stdio_ignores_an_existing_shared_socket(self) -> None:
+        socket_path = self.base / "codex.sock"
+        socket_path.touch()
+        with patch.object(Path, "is_socket", return_value=True):
+            supervisor = CodexAppServerSupervisor(
+                socket_path,
+                manage_process=False,
+                stdio_executable=self.fallback,
+                configured_transport="stdio",
+            )
+            supervisor.start()
+
+        self.assertEqual(supervisor.transport_mode, "stdio-fallback")
+
     def test_uses_official_stdio_when_shared_socket_is_down(self) -> None:
         supervisor = CodexAppServerSupervisor(
             self.base / "missing.sock",

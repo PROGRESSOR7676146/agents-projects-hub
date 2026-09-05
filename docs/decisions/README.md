@@ -26,6 +26,7 @@ with a new record.
 | Local frontend | Native CLI is preferred; one-writer lease is mandatory; tmux remains fallback. | Product requirements and tests |
 | Publication privacy | Deployment identities and live transcripts remain outside Git; automated privacy scan is mandatory. | Product requirements and security policy |
 | Durable execution isolation | Planned deterministic Controller, SQLite queue, strict topic FIFO, isolated provider workers, and outbox; unknown in-flight turns become `indeterminate`, not automatic retries. | [ADR 0001](0001-durable-provider-job-queue.md) |
+| Single-owner runtime | One Controller with the embedded durable queue and private Codex stdio is the recommended deployment; external workers/sender remain optional. | [ADR 0016](0016-single-owner-runtime.md) |
 | Live input semantics | Durable burst collection, capability-aware Codex steering, FIFO fallback, and model-free emergency stop. | [ADR 0004](0004-durable-input-batching-steering-and-stop.md) |
 | Runtime health | Components publish bounded last-known state to SQLite; status classifies the cache without provider or model calls. | [ADR 0002](0002-durable-runtime-health-cache.md) |
 | Telegram transport health | The third consecutive transport failure degrades health once; a proven success recovers and re-arms the episode. | [ADR 0015](0015-telegram-transport-health-threshold.md) |
