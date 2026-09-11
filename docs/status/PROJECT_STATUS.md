@@ -170,8 +170,10 @@ is not implied by this repository checkpoint.
 - The scoped MTProto acceptance actor has fixed checks for deterministic
   commands, full model selection, provider connectivity, Reply provenance,
   passive forwarded quotes, rapid multi-message bursts, and bounded
-  emergency-stop recovery. A Codex-only Contract v2 scenario selects the exact
-  aligned Codex identity and evaluates four delivered behaviours: a bounded
+  emergency-stop recovery. The stop check accepts either an active-turn stop
+  acknowledgement or an explicit nonzero queued-job cancellation before it
+  verifies a fresh provider response. A Codex-only Contract v2 scenario selects
+  the exact aligned Codex identity and evaluates four delivered behaviours: a bounded
   short answer, focused clarification, ordered complex-task approach and
   recommendation, and exact artifact attachment. Repository tests cover the
   evaluator; each deployment still requires its own private live evidence. An

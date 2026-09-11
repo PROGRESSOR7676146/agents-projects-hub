@@ -290,6 +290,15 @@ async def _click_callback_exact(message: Any, data: bytes) -> None:
     )
 
 
+def _stop_acknowledged(text: str) -> bool:
+    if "Останавливаю активную работу" in text:
+        return True
+    return (
+        "Активной работы нет" in text
+        and re.search(r"отменено задач в очереди: [1-9][0-9]*", text) is not None
+    )
+
+
 async def _complete_model_selection(
     client: Any,
     config: AcceptanceActorConfig,
@@ -678,7 +687,7 @@ async def _run_check(
         except AcceptanceActorError as exc:
             return AcceptanceCheckResult(check, target, False, None, str(exc))
         response_text = str(getattr(response, "raw_text", "")).strip()
-        ok = "Останавливаю активную работу" in stop_text and "AFTER_STOP_E2E_OK" in response_text
+        ok = _stop_acknowledged(stop_text) and "AFTER_STOP_E2E_OK" in response_text
         return AcceptanceCheckResult(
             check,
             target,

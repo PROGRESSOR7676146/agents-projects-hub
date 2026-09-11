@@ -143,7 +143,9 @@ step 1, the harmless provider connectivity part of step 2, the complete
 provider/model/effort callback ladder, real Reply provenance, and passive
 forwarded-quote semantics for allowlisted providers. It also covers a rapid
 three-message burst and a bounded stop/recovery cycle for the first selected
-provider. The Codex-only `codex_interaction_v2` check requires an exact aligned
+provider. That cycle accepts an active-work stop acknowledgement or an explicit
+nonzero queued-job cancellation, then requires a new visible provider result.
+The Codex-only `codex_interaction_v2` check requires an exact aligned
 `codex` agent ID and verifies four observable responses: a bounded short answer,
 a focused clarification for an intentionally underspecified harmless request,
 an ordered bounded approach and recommendation for a fictional complex task,

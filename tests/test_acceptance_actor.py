@@ -444,6 +444,36 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         self.assertEqual(client.sent[1][0][1], "stop")
         self.assertIn("AFTER_STOP_E2E_OK", str(client.sent[2][0][1]))
 
+    def test_stop_route_accepts_explicit_queued_job_cancellation(self) -> None:
+        config = AcceptanceActorConfig(
+            api_id=1,
+            api_hash_file=self.secret,
+            session_path=self.base / "acceptance.session",
+            expected_user_id=1,
+            telegram_chat_id=-1001234567890,
+            telegram_thread_id=77,
+            hub_username="example_hub_bot",
+            provider_usernames=("example_provider_bot",),
+            checks=("stop_route",),
+            timeout_seconds=15,
+            artifacts_dir=self.artifacts,
+        )
+        client = FakeClient()
+        responses = (
+            FakeMessage(10, "Активной работы нет; отменено задач в очереди: 1."),
+            FakeMessage(12, "AFTER_STOP_E2E_OK"),
+        )
+        with (
+            patch(
+                "hermes_codex_router.acceptance_actor._wait_for_response",
+                new=AsyncMock(side_effect=responses),
+            ),
+            patch("hermes_codex_router.acceptance_actor.asyncio.sleep", new=AsyncMock()),
+        ):
+            result = asyncio.run(_run_check(client, config, "stop_route", "example_provider_bot"))
+
+        self.assertTrue(result.ok)
+
     def test_forwarded_quote_is_passive_then_visible_as_context(self) -> None:
         config = AcceptanceActorConfig(
             api_id=1,
