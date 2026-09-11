@@ -51,8 +51,8 @@ class ExecutionJournalTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.fixture.tearDown()
 
-    def test_schema_22_is_additive_and_preserves_queued_work(self) -> None:
-        from hermes_codex_router.migrations import migrate_database
+    def test_execution_journal_migration_is_additive_and_preserves_queued_work(self) -> None:
+        from hermes_codex_router.migrations import LATEST_SCHEMA_VERSION, migrate_database
 
         job_id = self.fixture.enqueue()
         path = self.fixture.config.state_path
@@ -61,7 +61,10 @@ class ExecutionJournalTests(unittest.TestCase):
             con.execute("DROP TABLE IF EXISTS provider_execution_checkpoints")
             con.execute("PRAGMA user_version = 21")
         migrated = migrate_database(path)
-        self.assertEqual((migrated.previous_version, migrated.current_version), (21, 22))
+        self.assertEqual(
+            (migrated.previous_version, migrated.current_version),
+            (21, LATEST_SCHEMA_VERSION),
+        )
         assert migrated.backup_path is not None
         with sqlite3.connect(migrated.backup_path) as con:
             self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0], 21)
@@ -293,7 +296,7 @@ class ExecutionJournalTests(unittest.TestCase):
                 [],
             )
 
-    def test_rollout_rejects_old_rollback_and_rehearses_schema_22_artifacts(self) -> None:
+    def test_rollout_rejects_old_rollback_and_rehearses_current_schema_artifacts(self) -> None:
         from hermes_codex_router.deployment_manifest import DeploymentManifestError
         from hermes_codex_router.release_dry_run import run_release_dry_run
         from tests.test_deployment_manifest import _wheel
@@ -307,7 +310,7 @@ class ExecutionJournalTests(unittest.TestCase):
                     base / f"agents_projects_hub-{version}-py3-none-any.whl",
                     version=version,
                     git_sha=sha,
-                    schema_max=22,
+                    schema_max=23,
                 )
                 with zipfile.ZipFile(wheel, "a") as archive:
                     for name in ("__init__.py", "migrations.py", "models.py", "registry.py"):
@@ -316,8 +319,8 @@ class ExecutionJournalTests(unittest.TestCase):
                         )
                 artifacts.append(wheel)
             report = run_release_dry_run(*artifacts)
-            self.assertEqual(report.schema_after_rollout, 22)
-            self.assertEqual(report.schema_after_rollback, 22)
+            self.assertEqual(report.schema_after_rollout, 23)
+            self.assertEqual(report.schema_after_rollback, 23)
             self.assertTrue(report.durable_work_preserved)
             old = _wheel(
                 base / "agents_projects_hub-0.5.0-py3-none-any.whl",

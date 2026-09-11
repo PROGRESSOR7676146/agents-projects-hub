@@ -16,6 +16,57 @@ from hermes_codex_router.migrations import (
 
 
 class MigrationTests(unittest.TestCase):
+    def test_indeterminate_resolution_migration_is_additive_from_v22(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            migrate_database(path, create_backup=False)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute("DROP TABLE IF EXISTS provider_job_resolutions")
+                connection.executescript(
+                    """INSERT INTO topics
+                       (project_id, chat_id, thread_id, title, created_at, updated_at)
+                       VALUES ('example-project', -1001234567890, 7, 'Topic', 'now', 'now');
+                       INSERT INTO agent_sessions
+                       (session_id, topic_id, agent_id, generation, status, model, effort,
+                        created_at, updated_at)
+                       VALUES ('session', 1, 'codex', 1, 'active', 'model', 'high',
+                               'now', 'now');
+                       INSERT INTO provider_jobs
+                       (job_id, idempotency_key, chat_id, message_id, topic_id,
+                        topic_sequence, agent_id, session_id, session_generation, model,
+                        effort, payload_text, status, error_class, error_code,
+                        created_at, updated_at)
+                       VALUES ('uncertain-job', 'resolution-key', -1001234567890, 1, 1, 1,
+                               'codex', 'session', 1, 'model', 'high', 'hello',
+                               'indeterminate', 'indeterminate', 'provider_outcome_unknown',
+                               'now', 'now');
+                       PRAGMA user_version = 22;"""
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            result = migrate_database(path, create_backup=False)
+
+            self.assertEqual((result.previous_version, result.current_version), (22, 23))
+            migrated = sqlite3.connect(path)
+            try:
+                self.assertEqual(
+                    migrated.execute(
+                        "SELECT status, error_code FROM provider_jobs WHERE job_id = 'uncertain-job'"
+                    ).fetchone(),
+                    ("indeterminate", "provider_outcome_unknown"),
+                )
+                columns = {
+                    row[1]
+                    for row in migrated.execute("PRAGMA table_info(provider_job_resolutions)")
+                }
+                self.assertEqual(columns, {"job_id", "resolution", "resolved_at"})
+                self.assertEqual(migrated.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            finally:
+                migrated.close()
+
     def test_runtime_event_retention_migration_preserves_v20_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"

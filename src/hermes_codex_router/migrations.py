@@ -707,6 +707,16 @@ ON provider_visible_items(job_id, sequence);
 """
 
 
+MIGRATION_23 = """
+CREATE TABLE IF NOT EXISTS provider_job_resolutions (
+    job_id TEXT PRIMARY KEY REFERENCES provider_jobs(job_id),
+    resolution TEXT NOT NULL
+        CHECK(resolution IN ('acknowledged', 'superseded', 'externally_completed')),
+    resolved_at TEXT NOT NULL
+);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -815,6 +825,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_20,
         MIGRATION_21,
         MIGRATION_22,
+        MIGRATION_23,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:
