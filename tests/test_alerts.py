@@ -566,16 +566,16 @@ class OperationalAlertTests(unittest.TestCase):
             self.assertIn("75,000 tokens", alert.message)
             self.assertIn("/compact", alert.message)
 
-            # Also verify integration via evaluate_operational_alerts
+            # Session-size inspection remains available as a local diagnostic,
+            # but routine monitoring must not turn it into an operational alert.
             pool = CodexPoolStatus(True, True, (), None, 0)
             evaluated = evaluate_operational_alerts(
                 pool=pool,
                 state_snapshot={"pending_dispatches": []},
                 doctor_ok=True,
-                codex_sessions_dir=sessions_dir,
                 now=now,
             )
-            self.assertIn("codex_context_bloat", {a.code for a in evaluated})
+            self.assertNotIn("codex_context_bloat", {a.code for a in evaluated})
 
     def test_session_bloat_labels_telegram_and_cli_sessions(self) -> None:
         with TemporaryDirectory() as directory:

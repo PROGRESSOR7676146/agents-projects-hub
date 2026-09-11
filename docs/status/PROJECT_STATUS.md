@@ -217,6 +217,10 @@ No deployment acceptance is implied by this repository checkpoint.
   selection changes are not mislabeled as quota rotation.
 - Operational notifications are edge-triggered: unchanged deployment, catalog,
   provider, and account conditions are sent once and re-arm only after recovery.
+  A configured Hub bot owns these service messages, including Codex account
+  rotation events; Codex owns them only in legacy configurations without a
+  separate Hub identity. Automatic Codex session context-size advice is
+  disabled; compaction remains user initiated.
   Exhausted inactive accounts remain status data after a successful rotation;
   they are not reported as authentication failures while a replacement is ready.
   Explicit token-invalidation markers from the supported redacted Codex

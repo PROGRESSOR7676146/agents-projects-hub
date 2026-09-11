@@ -22,7 +22,7 @@ with a new record.
 | Shared Codex socket boot | Readiness requires a successful Unix connection; stale socket inodes cannot release tlive ordering. | [ADR 0007](0007-connectable-shared-socket-readiness.md) |
 | Resident Codex proxy lifetime | systemd owns resident helper cleanup; CLI-oriented proxy reapers are disabled for the service launch. | [ADR 0008](0008-resident-codex-proxy-lifetime.md) |
 | Recovery plane | Hermes Gateway and Agent Session Remote/tlive are independent service channels, not project groups or mandatory Hub dependencies. | Product requirements; `RECOVERY_PLANE.ru.md` |
-| Operational alerts | One explicit Hub Operations/Alerts topic; Codex primary, Hermes fallback to the same topic; masked account hints. | Product requirements REQ-OPS-006 |
+| Operational alerts | One explicit Hub Operations/Alerts topic; configured Hub bot primary, legacy Codex fallback when no Hub bot exists, Hermes recovery fallback to the same topic; no automatic session-size advice. | Product requirements REQ-OPS-006 |
 | Local frontend | Native CLI is preferred; one-writer lease is mandatory; tmux remains fallback. | Product requirements and tests |
 | Publication privacy | Deployment identities and live transcripts remain outside Git; automated privacy scan is mandatory. | Product requirements and security policy |
 | Durable execution isolation | Planned deterministic Controller, SQLite queue, strict topic FIFO, isolated provider workers, and outbox; unknown in-flight turns become `indeterminate`, not automatic retries. | [ADR 0001](0001-durable-provider-job-queue.md) |

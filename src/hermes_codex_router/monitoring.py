@@ -23,7 +23,7 @@ from .hermes_health import (
     restart_hermes_gateway,
     sync_hermes_group_policy,
 )
-from .hub_config import HubConfig, OperationalAlertSettings
+from .hub_config import HubConfig, OperationalAlertSettings, read_telegram_token
 from .provider_catalog_cache import ProviderCatalogCache
 from .provider_events import (
     codex_rotation_targets,
@@ -47,6 +47,20 @@ def _destination(settings: OperationalAlertSettings) -> tuple[int, int] | None:
     if settings.telegram_chat_id is None or settings.telegram_thread_id is None:
         return None
     return settings.telegram_chat_id, settings.telegram_thread_id
+
+
+def _operational_telegram(config: HubConfig) -> tuple[TelegramBotApi, str]:
+    """Open the controller identity used for Hub-owned operational messages."""
+    if config.hub_bot is not None:
+        identity = "hub"
+        token_file = config.hub_bot.token_file
+    else:
+        agent = config.require_agent("codex")
+        if agent.token_file is None:
+            raise RuntimeError("legacy operational bot token is unavailable")
+        identity = agent.agent_id
+        token_file = agent.token_file
+    return TelegramBotApi(read_telegram_token(token_file, identity)), identity
 
 
 def _claim_operational_alert(
@@ -300,7 +314,6 @@ def run_monitor_once(
                 ),
                 None,
             ),
-            codex_sessions_dir=config.codex_sessions_dir,
         )
         proxy_check = next(
             (
@@ -338,10 +351,7 @@ def run_monitor_once(
             destination = _destination(config.operational_alerts)
             targets = codex_rotation_targets(state, destination)
             if targets:
-                agent = config.require_agent("codex")
-                if agent.token_file is None:
-                    raise RuntimeError("managed Codex bot token is unavailable")
-                telegram = TelegramBotApi(agent.token_file.read_text(encoding="utf-8").strip())
+                telegram, sender_identity = _operational_telegram(config)
                 event_text = format_codex_rotation_event(pool, rotation_observation)
                 operations_sent = False
                 for target in targets:
@@ -361,7 +371,7 @@ def run_monitor_once(
                         delivered.append("codex_rotation:hermes-fallback")
                         operations_sent = True
                     else:
-                        delivered.append("codex_rotation:codex")
+                        delivered.append(f"codex_rotation:{sender_identity}")
                         if target == destination:
                             operations_sent = True
                 if operations_sent or destination is None:
@@ -391,10 +401,7 @@ def run_monitor_once(
                 chat_id, thread_id = destination
                 rendered = _render(operations_due)
                 try:
-                    agent = config.require_agent("codex")
-                    if agent.token_file is None:
-                        raise RuntimeError("managed Codex bot token is unavailable")
-                    telegram = TelegramBotApi(agent.token_file.read_text(encoding="utf-8").strip())
+                    telegram, sender_identity = _operational_telegram(config)
                     telegram.send_html(chat_id, thread_id, rendered[:4090])
                 except Exception:
                     try:
@@ -412,7 +419,7 @@ def run_monitor_once(
                             f"{alert.code}:hermes-fallback" for alert in operations_due
                         )
                 else:
-                    delivered.extend(f"{alert.code}:codex" for alert in operations_due)
+                    delivered.extend(f"{alert.code}:{sender_identity}" for alert in operations_due)
         result = {
             "ok": not any(alert.severity == "error" for alert in alerts),
             "alerts": [asdict(alert) for alert in alerts],

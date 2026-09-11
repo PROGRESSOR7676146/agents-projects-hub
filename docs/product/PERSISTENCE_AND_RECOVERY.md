@@ -24,8 +24,11 @@ This normative module is part of the
   markers provide liveness evidence without exposing URLs or tokens.
 - **REQ-OPS-006 (Implemented):** General operational alerts are bounded,
   deduplicated, and delivered
-  only to one explicitly configured Hub Operations/Alerts topic. Codex is the
-  primary sender; Hermes may fall back only to that same topic. Quota alerts
+  only to one explicitly configured Hub Operations/Alerts topic. The configured
+  Hub bot is the primary sender; Codex remains the sender only for legacy
+  configurations without a separate Hub bot. Hermes may fall back only to that
+  same topic. Routine monitoring MUST NOT emit Codex session context-size
+  advice; session compaction remains an explicit user decision. Quota alerts
   include a recognizable masked account hint and never expose a full identity.
   Stale quota may remain visible as cached status but MUST NOT alert. Fresh
   Codex quota warns once per ≤5% episode and re-arms only after recovery above

@@ -235,11 +235,8 @@ def evaluate_operational_alerts(
     hermes_telegram: Mapping[str, object] | None = None,
     runtime_health: Mapping[str, object] | None = None,
     codex_config_proxy_ok: bool | None = None,
-    codex_sessions_dir: Path | None = None,
     now: datetime | None = None,
     low_quota_percent: int = DEFAULT_LOW_QUOTA_PERCENT,
-    context_bloat_threshold: int = DEFAULT_CONTEXT_BLOAT_THRESHOLD,
-    session_max_age_seconds: int = DEFAULT_SESSION_SCAN_MAX_AGE_SECONDS,
     stuck_after_seconds: int = 15 * 60,
 ) -> tuple[OperationalAlert, ...]:
     evaluated_at = now or datetime.now(timezone.utc)
@@ -505,14 +502,4 @@ def evaluate_operational_alerts(
                     f"A {agent_id} dispatch in {topic_desc} has been running for over 15 minutes.",
                 )
             )
-    if codex_sessions_dir is not None and codex_sessions_dir.is_dir():
-        alerts.extend(
-            check_codex_session_bloat(
-                codex_sessions_dir,
-                threshold_tokens=context_bloat_threshold,
-                max_age_seconds=session_max_age_seconds,
-                now=evaluated_at,
-                state_snapshot=state_snapshot,
-            )
-        )
     return tuple(alerts)
