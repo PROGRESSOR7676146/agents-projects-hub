@@ -97,16 +97,27 @@ def classify_indeterminate_jobs(state_path: Path) -> dict[str, Any]:
             if "telegram_outbox" in tables
             else ""
         )
+        resolution_columns = (
+            "resolution.resolution, resolution.resolved_at"
+            if "provider_job_resolutions" in tables
+            else "NULL AS resolution, NULL AS resolved_at"
+        )
+        resolution_join = (
+            "LEFT JOIN provider_job_resolutions resolution ON resolution.job_id = jobs.job_id"
+            if "provider_job_resolutions" in tables
+            else ""
+        )
         rows = connection.execute(
             f"""SELECT jobs.job_id, jobs.agent_id, jobs.created_at, jobs.updated_at,
                        jobs.error_class, jobs.error_code,
                        {checkpoint_columns}, {visible_columns}, {result_columns},
-                       {notice_columns}
+                       {notice_columns}, {resolution_columns}
                 FROM provider_jobs jobs
                 {checkpoint_join}
                 {visible_join}
                 {result_join}
                 {notice_join}
+                {resolution_join}
                 WHERE jobs.status = 'indeterminate'
                 ORDER BY jobs.created_at, jobs.job_id"""
         ).fetchall()
@@ -115,12 +126,19 @@ def classify_indeterminate_jobs(state_path: Path) -> dict[str, Any]:
 
     evidence_counts: Counter[str] = Counter()
     notice_counts: Counter[str] = Counter()
+    resolution_status_counts: Counter[str] = Counter()
+    resolution_counts: Counter[str] = Counter()
     records: list[dict[str, object]] = []
     for row in rows:
         evidence = _evidence(row)
         notice_status = str(row["notice_status"])
+        resolution = str(row["resolution"]) if row["resolution"] is not None else None
+        resolution_status = "resolved" if resolution is not None else "unresolved"
         evidence_counts[evidence] += 1
         notice_counts[notice_status] += 1
+        resolution_status_counts[resolution_status] += 1
+        if resolution is not None:
+            resolution_counts[resolution] += 1
         records.append(
             {
                 "job_id": str(row["job_id"]),
@@ -131,7 +149,9 @@ def classify_indeterminate_jobs(state_path: Path) -> dict[str, Any]:
                 "error_code": row["error_code"],
                 "evidence": evidence,
                 "notice_status": notice_status,
-                "recommended_action": _ACTIONS[evidence],
+                "resolution": resolution,
+                "resolved_at": row["resolved_at"],
+                "recommended_action": "none" if resolution is not None else _ACTIONS[evidence],
             }
         )
     return {
@@ -140,6 +160,8 @@ def classify_indeterminate_jobs(state_path: Path) -> dict[str, Any]:
         "total": len(records),
         "evidence": dict(sorted(evidence_counts.items())),
         "notice_status": dict(sorted(notice_counts.items())),
+        "resolution_status": dict(sorted(resolution_status_counts.items())),
+        "resolutions": dict(sorted(resolution_counts.items())),
         "productive_replay_authorized": False,
         "records": records,
     }

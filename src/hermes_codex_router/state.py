@@ -1452,6 +1452,35 @@ class HubState:
             raise StateError(f"unknown provider job: {job_id}")
         return self._provider_job(row)
 
+    def resolve_indeterminate_job(self, job_id: str, resolution: str) -> bool:
+        """Append one immutable operator classification without changing the job."""
+        identifier = _bounded(job_id, name="provider job id", maximum=128)
+        classification = _bounded(resolution, name="resolution", maximum=32)
+        if classification not in {"acknowledged", "superseded", "externally_completed"}:
+            raise StateError("invalid indeterminate job resolution")
+        with self._immediate_transaction():
+            job = self._connection.execute(
+                "SELECT status FROM provider_jobs WHERE job_id = ?", (identifier,)
+            ).fetchone()
+            if job is None:
+                raise StateError(f"unknown provider job: {identifier}")
+            if str(job["status"]) != "indeterminate":
+                raise StateError("only an indeterminate provider job can be resolved")
+            existing = self._connection.execute(
+                "SELECT resolution FROM provider_job_resolutions WHERE job_id = ?",
+                (identifier,),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["resolution"]) == classification:
+                    return False
+                raise StateError("indeterminate provider job already has a different resolution")
+            self._connection.execute(
+                """INSERT INTO provider_job_resolutions (job_id, resolution, resolved_at)
+                   VALUES (?, ?, ?)""",
+                (identifier, classification, _now()),
+            )
+        return True
+
     def provider_jobs_for_topic(self, topic_id: int) -> tuple[ProviderJobRecord, ...]:
         rows = self._connection.execute(
             "SELECT * FROM provider_jobs WHERE topic_id = ? ORDER BY topic_sequence",

@@ -26,6 +26,7 @@ agents-projects-hub doctor HUB_CONFIG
 agents-projects-hub status HUB_CONFIG
 agents-projects-hub monitor HUB_CONFIG
 agents-projects-hub indeterminate-audit HUB_CONFIG
+agents-projects-hub indeterminate-resolve HUB_CONFIG JOB_ID --resolution acknowledged
 systemctl --user status agents-projects-hub.service
 systemctl --user status agents-projects-hub-sender.service
 systemctl --user status 'agents-projects-hub-worker@*.service'
@@ -82,6 +83,15 @@ productive replay. Its evidence classes distinguish a persisted result, saved
 completion, partial text, accepted turn without visible output, thread creation
 without accepted turn, and absence of an execution checkpoint. Notification
 status is reported separately so an undelivered uncertainty notice is visible.
+
+After reviewing one exact job, `indeterminate-resolve` can append one fixed
+operator classification: `acknowledged` means the uncertainty was reviewed,
+`superseded` means a later explicit request made the old outcome irrelevant,
+and `externally_completed` means completion was confirmed outside Hub. The
+command is idempotent for the same value and rejects replacement. It does not
+change the original job or error, send a message, or authorize provider replay.
+The audit reports these annotations separately and recommends no further action
+for resolved records.
 
 ## Changing provider ownership
 

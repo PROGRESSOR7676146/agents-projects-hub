@@ -25,14 +25,17 @@ without productive replay. Abrupt-process and handled-disconnect tests cover
 accepted/partial/completed boundaries. Milestone three bounds stdio reads and
 propagates clean WebSocket closure without stranding its sender. Passive monitor
 output now reports aggregate outcomes, recovery counts, delivery delay and queue
-ages without provider access or task identity. Schema-21 runtime artifacts cannot
-roll back a schema-22 deployment. A compatible rollback artifact is a release prerequisite.
+ages without provider access or task identity. Runtime rollback after the
+operator-resolution migration requires an artifact that supports schema 23.
 The read-only `indeterminate-audit` command now classifies retained uncertain work
 and its notification state without outputting content, mutating state, or authorizing
-provider replay. Failure notices use a consistent what happened / saved / next action
-structure. Privacy, formatting, typing, documentation, history, and full test gates
-pass in the current repository history. Live deployment evidence remains private and
-is not implied by this repository checkpoint.
+provider replay. Schema 23 adds immutable, fixed-value operator resolutions for an
+exact indeterminate job; they preserve the original status and error evidence, and
+the audit reports resolved and unresolved work separately. Failure notices use a
+consistent what happened / saved / next action structure. Privacy, formatting,
+typing, documentation, history, and full test gates pass in the current repository
+history. Live deployment evidence remains private and is not implied by this
+repository checkpoint.
 
 ## Implemented
 
@@ -302,7 +305,7 @@ is not implied by this repository checkpoint.
   reapers. Runtime-proxy monitoring remains independent and never restarts a
   shared app-server underneath an active Codex or tlive session.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
-- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-22
+- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-23
   immutable-deployment triage guide, source revision, timestamp, and content
   hashes into a neutral local store for the independent Hermes channel. It
   carries no private deployment inventory and creates no service dependency.

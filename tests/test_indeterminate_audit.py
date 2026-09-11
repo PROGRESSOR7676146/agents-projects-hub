@@ -17,7 +17,7 @@ from hermes_codex_router.indeterminate_audit import (
     classify_indeterminate_jobs,
     write_private_indeterminate_report,
 )
-from hermes_codex_router.state import HubState
+from hermes_codex_router.state import HubState, StateError
 
 
 class IndeterminateAuditTests(unittest.TestCase):
@@ -132,6 +132,70 @@ class IndeterminateAuditTests(unittest.TestCase):
             saved = json.loads(destination.read_text())
             self.assertEqual(saved["records"], report["records"])
             self.assertEqual(saved["total"], report["total"])
+
+    def test_resolution_is_idempotent_immutable_and_preserves_job_evidence(self) -> None:
+        job_id = self._indeterminate(1, "none", notice=False)
+        queued_id = self.fixture.enqueue(message_id=2, payload="private-queued")
+        state = HubState.open(self.fixture.config.state_path)
+        try:
+            before = state.get_provider_job(job_id)
+            self.assertTrue(state.resolve_indeterminate_job(job_id, "acknowledged"))
+            self.assertFalse(state.resolve_indeterminate_job(job_id, "acknowledged"))
+            with self.assertRaises(StateError):
+                state.resolve_indeterminate_job(job_id, "superseded")
+            with self.assertRaises(StateError):
+                state.resolve_indeterminate_job(queued_id, "acknowledged")
+            with self.assertRaises(StateError):
+                state.resolve_indeterminate_job(job_id, "invalid")
+            after = state.get_provider_job(job_id)
+            self.assertEqual(
+                (after.status, after.error_class, after.error_code, after.error_detail),
+                (before.status, before.error_class, before.error_code, before.error_detail),
+            )
+        finally:
+            state.close()
+
+        report = classify_indeterminate_jobs(self.fixture.config.state_path)
+        record = next(item for item in report["records"] if item["job_id"] == job_id)
+        self.assertEqual(report["resolution_status"], {"resolved": 1})
+        self.assertEqual(report["resolutions"], {"acknowledged": 1})
+        self.assertEqual(record["resolution"], "acknowledged")
+        self.assertIsNotNone(record["resolved_at"])
+        self.assertEqual(record["recommended_action"], "none")
+        self.assertFalse(report["productive_replay_authorized"])
+
+    def test_cli_resolves_exact_job_without_replay_or_private_content(self) -> None:
+        job_id = self._indeterminate(1, "none", notice=False)
+        output = io.StringIO()
+        with (
+            patch(
+                "hermes_codex_router.cli.load_external_worker_config",
+                return_value=self.fixture.config,
+            ),
+            redirect_stdout(output),
+        ):
+            code = main(
+                [
+                    "indeterminate-resolve",
+                    "private-config.json",
+                    job_id,
+                    "--resolution",
+                    "superseded",
+                ]
+            )
+
+        self.assertEqual(code, 0)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["resolution"], "superseded")
+        self.assertTrue(result["created"])
+        self.assertNotIn("private-", output.getvalue())
+        state = HubState.open(self.fixture.config.state_path)
+        try:
+            job = state.get_provider_job(job_id)
+            self.assertEqual(job.status, "indeterminate")
+            self.assertEqual(job.attempt_count, 1)
+        finally:
+            state.close()
 
 
 if __name__ == "__main__":

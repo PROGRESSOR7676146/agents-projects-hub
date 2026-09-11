@@ -1,6 +1,6 @@
 # ADR 0020: Immutable operator resolutions for uncertain work
 
-Status: schema support implemented; operator command pending
+Status: repository implementation; deployment acceptance pending
 Date: 2026-09-12
 
 ## Decision
@@ -29,5 +29,5 @@ the behavior revision.
 
 Migration tests cover schema 22 to 23, preservation of an existing
 `indeterminate` job, the exact table shape, and SQLite integrity. Behavior tests
-for terminal-state validation, idempotency, conflict rejection, unchanged job
-evidence, and passive audit reporting are required with the operator command.
+cover terminal-state validation, idempotency, conflict rejection, unchanged job
+evidence, CLI behavior, and passive audit reporting without replay.

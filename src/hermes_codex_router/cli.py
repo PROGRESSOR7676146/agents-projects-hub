@@ -96,6 +96,18 @@ def _parser() -> argparse.ArgumentParser:
     indeterminate_audit.add_argument("config", type=Path)
     indeterminate_audit.add_argument("--output", type=Path)
 
+    indeterminate_resolve = commands.add_parser(
+        "indeterminate-resolve",
+        help="record an immutable operator resolution for one uncertain job",
+    )
+    indeterminate_resolve.add_argument("config", type=Path)
+    indeterminate_resolve.add_argument("job_id")
+    indeterminate_resolve.add_argument(
+        "--resolution",
+        required=True,
+        choices=("acknowledged", "superseded", "externally_completed"),
+    )
+
     commands.add_parser("release-info", help="print embedded package release identity")
 
     release_manifest = commands.add_parser(
@@ -408,8 +420,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "total": report["total"],
                     "evidence": report["evidence"],
                     "notice_status": report["notice_status"],
+                    "resolution_status": report["resolution_status"],
+                    "resolutions": report["resolutions"],
                     "productive_replay_authorized": False,
                     "report_written": args.output is not None,
+                }
+            )
+            return 0
+        if args.command == "indeterminate-resolve":
+            config = load_external_worker_config(args.config)
+            state = HubState.open(config.state_path)
+            try:
+                created = state.resolve_indeterminate_job(args.job_id, args.resolution)
+            finally:
+                state.close()
+            _print(
+                {
+                    "ok": True,
+                    "job_id": args.job_id,
+                    "resolution": args.resolution,
+                    "created": created,
+                    "productive_replay_authorized": False,
                 }
             )
             return 0

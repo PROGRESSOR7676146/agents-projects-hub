@@ -159,8 +159,13 @@ recreate unsaved provider context or a partially executed turn.
   read-only local audit MUST classify terminal indeterminate jobs from persisted
   result, completion, partial, acceptance, thread, and notification evidence;
   it MUST exclude prompt/response content from its aggregate output and MUST
-  never mutate or replay provider work. Failure notices MUST state what happened,
-  what Hub saved, and the next safe action.
+  never mutate or replay provider work. An operator MAY append exactly one
+  schema-23 resolution to an exact terminal indeterminate job: `acknowledged`,
+  `superseded`, or `externally_completed`. Repeating the same resolution MUST be
+  idempotent; replacing it or resolving another job state MUST fail. Resolution
+  MUST leave the job status, error evidence, delivery state, and replay policy
+  unchanged, and the audit MUST report resolved and unresolved counts. Failure
+  notices MUST state what happened, what Hub saved, and the next safe action.
 - **REQ-QUEUE-005 (Implemented for embedded compatibility and the external sender):** Provider result persistence and Telegram delivery
   MUST use a durable outbox. Telegram delivery retry MUST NOT create another
   provider turn, and visible-context acknowledgement MUST occur only after a
