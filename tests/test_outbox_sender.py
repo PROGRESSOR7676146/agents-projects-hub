@@ -12,6 +12,7 @@ from hermes_codex_router.cli import main
 from hermes_codex_router.hub_config import (
     AgentDefinition,
     HubConfig,
+    HubTelegramBot,
     ProjectBinding,
     TerminalSettings,
 )
@@ -478,6 +479,59 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             self.assertEqual(sender.state.get_provider_job(agy_job).status, "completed")
             self.assertEqual(len(open_bot.sent), 1)
             self.assertEqual(len(agy_bot.sent), 1)
+        finally:
+            sender.close()
+
+    def test_sender_delivers_durable_stop_notice_through_hub_identity(self) -> None:
+        token = Path(self.tempdir.name) / "hub.token"
+        token.write_text("fictional-token", encoding="utf-8")
+        token.chmod(0o600)
+        config = replace(
+            self.config,
+            hub_bot=HubTelegramBot("example_hub_bot", token),
+        )
+        state = HubState.open(config.state_path)
+        try:
+            topic = state.observe_topic(
+                project_id="example-project",
+                chat_id=-1001234567890,
+                thread_id=170,
+                title="Stop",
+            )
+            session = state.activate_agent(topic.topic_id, "opencode", "model-1", "high")
+            job, _ = state.enqueue_provider_job(
+                idempotency_key="telegram:-1001234567890:170",
+                chat_id=-1001234567890,
+                message_id=170,
+                topic_id=topic.topic_id,
+                agent_id="opencode",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                model=session.model,
+                effort=session.effort,
+                payload_text="queued task",
+            )
+            request_id, _, _ = state.request_emergency_stop(
+                topic_id=topic.topic_id,
+                chat_id=-1001234567890,
+                message_id=171,
+                target_agent_id="opencode",
+            )
+            self.assertTrue(
+                state.enqueue_emergency_stop_notice(
+                    request_id, "Активной работы нет; отменено задач в очереди: 1."
+                )
+            )
+        finally:
+            state.close()
+
+        bots = {"hub": Bot(), "opencode": Bot(), "antigravity": Bot()}
+        sender = TelegramOutboxSender(config, telegram_bots=bots)
+        try:
+            self.assertTrue(sender.run_cycle())
+            self.assertEqual(len(bots["hub"].sent), 1)
+            self.assertEqual(bots["opencode"].sent, [])
+            self.assertEqual(sender.state.get_provider_job(job.job_id).status, "cancelled")
         finally:
             sender.close()
 

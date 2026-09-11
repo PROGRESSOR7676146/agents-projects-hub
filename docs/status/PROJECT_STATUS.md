@@ -182,6 +182,11 @@ is not implied by this repository checkpoint.
   visible history. It accepts no arbitrary prompt from configuration
   and fails fast on the first failed scenario or when unrelated senders
   contaminate the dedicated canary topic.
+- Hub-owned stop acknowledgements for affected work are persisted through the
+  shared Telegram outbox and delivered by the Hub identity. Idle stop replies
+  remain immediate. Release environments use the checked-in hash-locked
+  runtime dependency export, whose exact derivation from `uv.lock` is enforced
+  by the repository validation gate.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity
   adapters with isolated failure boundaries. Contract tests pin structured CLI
   output, safe argv/approval modes, app-server RPC shapes, Hermes hook fields,

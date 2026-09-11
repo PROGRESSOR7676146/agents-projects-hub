@@ -12,6 +12,7 @@ from hermes_codex_router.codex_appserver import CodexThread, RateLimits, TurnRes
 from hermes_codex_router.hub_config import (
     AgentDefinition,
     HubConfig,
+    HubTelegramBot,
     ProjectBinding,
     TerminalSettings,
 )
@@ -279,6 +280,31 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         self.assertFalse(service.run_embedded_queue_cycle())
         self.assertEqual(client.turn_threads, [])
         self.assertTrue(any("отменено задач в очереди: 1" in item for item in telegram.sent))
+        service.close()
+
+    def test_hub_mode_persists_stop_acknowledgement_for_external_sender(self) -> None:
+        client = QueueClient()
+        service, telegram = self.service(client)
+        token = Path(self.tempdir.name) / "hub.token"
+        token.write_text("fictional-token", encoding="utf-8")
+        token.chmod(0o600)
+        service.config = replace(
+            service.config,
+            hub_bot=HubTelegramBot("example_hub_bot", token),
+            queue_runtime="external",
+            outbox_runtime="external",
+            external_worker_agent_ids=("codex",),
+        )
+        self.assertTrue(service.handle_update(update(1, "queued task")))
+        self.assertTrue(service.handle_update(update(2, "stop")))
+
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        job = service.state.provider_jobs_for_topic(topic.topic_id)[0]
+        notice = service.state.get_telegram_outbox_for_job(job.job_id)
+        self.assertEqual((job.status, notice.sender_agent_id), ("cancelled", "hub"))
+        self.assertIn("отменено задач в очереди: 1", notice.telegram_html)
+        self.assertEqual(telegram.sent, [])
         service.close()
 
     def test_queued_work_survives_recreation_and_commands_do_not_enqueue(self) -> None:

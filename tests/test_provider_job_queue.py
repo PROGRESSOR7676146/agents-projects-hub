@@ -250,6 +250,36 @@ class ProviderJobQueueTests(unittest.TestCase):
         self.assertEqual(self.state.get_provider_job(active.job_id).status, "cancelled")
         self.assertIsNone(self.state.pending_emergency_stop(self.topic.topic_id, "codex"))
 
+    def test_emergency_stop_notice_is_durable_idempotent_and_keeps_cancelled_job(self) -> None:
+        active, _ = self.enqueue(613)
+        leased = self.state.lease_provider_job("codex", "worker")
+        assert leased is not None and leased.lease_token is not None
+        self.state.mark_provider_job_executing(leased.job_id, leased.lease_token)
+        request_id, _, _ = self.state.request_emergency_stop(
+            topic_id=self.topic.topic_id,
+            chat_id=self.topic.chat_id,
+            message_id=614,
+            target_agent_id="codex",
+        )
+
+        self.assertTrue(
+            self.state.enqueue_emergency_stop_notice(request_id, "Останавливаю активную работу.")
+        )
+        self.assertTrue(
+            self.state.enqueue_emergency_stop_notice(request_id, "Останавливаю активную работу.")
+        )
+        notice = self.state.get_telegram_outbox_for_job(active.job_id)
+        self.assertEqual((notice.sender_agent_id, notice.status), ("hub", "pending"))
+
+        self.state.cancel_active_provider_job(active.job_id, leased.lease_token)
+        self.state.complete_emergency_stop(request_id)
+        sending = self.state.lease_telegram_outbox("hub", "sender")
+        assert sending is not None and sending.lease_token is not None
+        self.state.mark_telegram_outbox_delivered(
+            sending.outbox_id, sending.lease_token, telegram_message_id=615
+        )
+        self.assertEqual(self.state.get_provider_job(active.job_id).status, "cancelled")
+
     def test_compatible_fifo_successor_can_be_absorbed_into_active_turn(self) -> None:
         parent, _ = self.enqueue(620)
         child, _ = self.enqueue(621)

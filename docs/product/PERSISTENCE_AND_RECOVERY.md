@@ -65,7 +65,9 @@ This normative module is part of the
   identities and SHA-256 digests, configuration digest, SQLite-consistent
   backup digest/schema, and target schema. A read-only gate MUST re-inspect
   every artifact and MUST reject activation or runtime rollback unless both
-  executables support the target state schema. Manifest creation and
+  executables support the target state schema. Runtime and E2E dependencies
+  MUST come from the hash-locked export at the candidate Git revision; the
+  repository gate MUST reject a stale export. Manifest creation and
   verification MUST NOT migrate state, start a service, or contact a provider.
 - **REQ-OPS-011 (Implemented as an offline dry-run):** Release acceptance MUST
   include an automated rollout/runtime-rollback rehearsal that creates all
@@ -171,7 +173,11 @@ recreate unsaved provider context or a partially executed turn.
   Both sender paths MUST persist a retry deadline no earlier than Telegram's
   valid `retry_after`, combined with bounded exponential backoff. Restart MUST
   retain the deadline; waiting for it MUST NOT consume delivery attempts or
-  repeat provider work.
+  repeat provider work. In Hub mode, acknowledgement of a stop that affected an
+  active or queued provider job MUST use the same durable outbox under the Hub
+  identity. Duplicate stop updates MUST NOT create another acknowledgement,
+  and delivering it MUST leave the affected job terminally cancelled. A stop
+  that finds no work may reply directly because it records no state change.
 - **REQ-QUEUE-006 (Implemented for the additive schema and global compatibility gate; per-provider rollout Planned):** Queue migration and per-provider rollout MUST be
   additive, feature-gated, recoverable through the existing backup discipline,
   and retain safe rollback without destroying accepted jobs. Changing an agent

@@ -44,7 +44,7 @@ class TelegramSender(Protocol):
 
 
 class TelegramOutboxSender:
-    """Deliver durable provider results without owning any provider runtime."""
+    """Deliver durable provider results and Hub control notices."""
 
     _LOCAL_QUEUE_RUNTIMES = frozenset({"codex", "gemini", "opencode", "antigravity"})
     _CHAT_ACTION_INTERVAL_SECONDS = 4.0
@@ -68,16 +68,17 @@ class TelegramOutboxSender:
         # queue, including providers whose execution remains embedded during a
         # mixed rollout. Otherwise their committed outbox rows would be
         # stranded when the compatibility controller sender is disabled.
-        self.agent_ids = tuple(
+        self.provider_agent_ids = tuple(
             agent.agent_id
             for agent in config.agents
             if not agent.managed_externally and agent.runtime in self._LOCAL_QUEUE_RUNTIMES
         )
-        if not self.agent_ids:
+        if not self.provider_agent_ids:
             raise TelegramOutboxSenderError("external outbox has no locally managed agents")
+        self.agent_ids = self.provider_agent_ids + (("hub",) if config.hub_bot is not None else ())
         if telegram_bots is None:
             bots: dict[str, TelegramSender] = {}
-            for agent_id in self.agent_ids:
+            for agent_id in self.provider_agent_ids:
                 agent = config.require_agent(agent_id)
                 if agent.token_file is None:
                     raise TelegramOutboxSenderError(
@@ -89,6 +90,11 @@ class TelegramOutboxSender:
                     )
                 token = agent.token_file.read_text(encoding="utf-8").strip()
                 bots[agent_id] = TelegramBotApi(token)
+            if config.hub_bot is not None:
+                token_file = config.hub_bot.token_file
+                if not token_file.is_file() or token_file.stat().st_mode & 0o077:
+                    raise TelegramOutboxSenderError("Hub Telegram token must be private")
+                bots["hub"] = TelegramBotApi(token_file.read_text(encoding="utf-8").strip())
             telegram_bots = bots
         missing = [agent_id for agent_id in self.agent_ids if agent_id not in telegram_bots]
         if missing:
@@ -262,7 +268,7 @@ class TelegramOutboxSender:
     def _refresh_chat_actions(self, *, now_monotonic: float | None = None) -> None:
         """Best-effort provider-identity typing indicators for accepted work."""
         current = time.monotonic() if now_monotonic is None else now_monotonic
-        activities = self.state.provider_chat_activities(self.agent_ids)
+        activities = self.state.provider_chat_activities(self.provider_agent_ids)
         active_keys = {
             (activity.agent_id, activity.chat_id, activity.thread_id) for activity in activities
         }

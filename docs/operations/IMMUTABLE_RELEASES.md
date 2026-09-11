@@ -61,6 +61,24 @@ Manifest verification proves artifact identity and schema compatibility only.
 It does not prove queue drain, service convergence, Telegram behavior, or a
 live rollout.
 
+## Reproducible runtime dependencies
+
+`requirements-release.lock` is the hash-locked runtime plus `e2e` dependency
+set exported from `uv.lock`. `scripts/validate.py` regenerates it offline and
+fails when the checked-in export is stale. Create a release environment from
+the lock at the exact candidate Git revision, then install the manifest-bound
+wheel without resolving dependencies again:
+
+```bash
+uv venv RELEASE/venv --python 3.12
+uv pip sync --python RELEASE/venv/bin/python --require-hashes requirements-release.lock
+uv pip install --python RELEASE/venv/bin/python --no-deps CANDIDATE_WHEEL
+```
+
+Do not install the wheel with an extra specifier during deployment: that asks
+the package index to resolve a new environment and can silently select newer
+dependencies than the tested candidate.
+
 ## Automated offline rollout and rollback
 
 Run the candidate and rollback wheels through the synthetic gate:

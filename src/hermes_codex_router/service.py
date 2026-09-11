@@ -1759,7 +1759,7 @@ class ProjectHubService:
         if is_emergency_stop(message.text):
             active = self.state.active_session(topic.topic_id)
             target_agent_id = active.agent_id if active is not None else self.agent.agent_id
-            _, cancelled, pending = self.state.request_emergency_stop(
+            request_id, cancelled, pending = self.state.request_emergency_stop(
                 topic_id=topic.topic_id,
                 chat_id=message.chat_id,
                 message_id=message.message_id,
@@ -1768,7 +1768,14 @@ class ProjectHubService:
             detail = "Останавливаю активную работу" if pending else "Активной работы нет"
             if cancelled:
                 detail += f"; отменено задач в очереди: {cancelled}"
-            self._send_text(message, detail + ".")
+            detail += "."
+            durable = (
+                self.config.hub_bot is not None
+                and self.config.outbox_runtime == "external"
+                and self.state.enqueue_emergency_stop_notice(request_id, html.escape(detail))
+            )
+            if not durable:
+                self._send_text(message, detail)
             return True
         command = parse_command(message.text)
         if command is not None:

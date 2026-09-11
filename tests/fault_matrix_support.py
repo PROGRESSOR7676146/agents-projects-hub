@@ -182,6 +182,7 @@ class FaultMatrixHarness:
             "codex": RecordingBot(),
             "opencode": RecordingBot(),
             "antigravity": RecordingBot(),
+            "hub": RecordingBot(),
         }
         defaults.update(bots)
         return TelegramOutboxSender(

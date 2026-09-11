@@ -1536,6 +1536,74 @@ class HubState:
             )
             return request_id, cursor.rowcount, pending
 
+    def enqueue_emergency_stop_notice(self, request_id: str, telegram_html: str) -> bool:
+        """Durably queue a Hub-owned stop acknowledgement when work was affected."""
+        identifier = _bounded(request_id, name="stop request id", maximum=128)
+        body = _bounded(
+            telegram_html,
+            name="Telegram outbox text",
+            maximum=MAX_PROVIDER_RESPONSE_LENGTH,
+        )
+        timestamp = _now()
+        with self._immediate_transaction():
+            request = self._connection.execute(
+                """SELECT topic_id, chat_id, target_agent_id, created_at
+                   FROM provider_stop_requests WHERE request_id = ?""",
+                (identifier,),
+            ).fetchone()
+            if request is None:
+                raise StateError("emergency stop request does not exist")
+            candidate = self._connection.execute(
+                """SELECT jobs.job_id, topics.thread_id
+                   FROM provider_jobs jobs
+                   JOIN topics ON topics.topic_id = jobs.topic_id
+                   WHERE jobs.topic_id = ? AND jobs.agent_id = ? AND (
+                       jobs.status IN ('leased', 'executing') OR (
+                           jobs.status = 'cancelled'
+                           AND jobs.error_class = 'user_stop'
+                           AND jobs.error_code = 'emergency_stop'
+                           AND jobs.updated_at >= ?
+                       )
+                   )
+                   ORDER BY CASE WHEN jobs.status IN ('leased', 'executing') THEN 0 ELSE 1 END,
+                            jobs.updated_at DESC, jobs.created_at DESC
+                   LIMIT 1""",
+                (
+                    request["topic_id"],
+                    request["target_agent_id"],
+                    request["created_at"],
+                ),
+            ).fetchone()
+            if candidate is None:
+                return False
+            existing = self._connection.execute(
+                "SELECT sender_agent_id FROM telegram_outbox WHERE job_id = ?",
+                (candidate["job_id"],),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["sender_agent_id"]) != "hub":
+                    raise StateError("stopped provider job already has a non-Hub outbox row")
+                return True
+            outbox_id = str(uuid.uuid4())
+            self._connection.execute(
+                """INSERT INTO telegram_outbox (
+                     outbox_id, job_id, sender_agent_id, chat_id, thread_id,
+                     telegram_html, status, available_at, created_at, updated_at
+                   ) VALUES (?, ?, 'hub', ?, ?, ?, 'pending', ?, ?, ?)""",
+                (
+                    outbox_id,
+                    candidate["job_id"],
+                    request["chat_id"],
+                    candidate["thread_id"],
+                    body,
+                    timestamp,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            self._insert_telegram_outbox_parts(outbox_id, body)
+        return True
+
     def pending_emergency_stop(self, topic_id: int, agent_id: str) -> str | None:
         row = self._connection.execute(
             """SELECT request_id FROM provider_stop_requests
@@ -2455,7 +2523,7 @@ class HubState:
         timestamp = _timestamp(now)
         with self._immediate_transaction():
             row = self._connection.execute(
-                """SELECT job_id FROM telegram_outbox
+                """SELECT job_id, sender_agent_id FROM telegram_outbox
                    WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
                      AND lease_expires_at > ?""",
                 (outbox_id, lease_token, timestamp),
@@ -2517,10 +2585,10 @@ class HubState:
                         "SELECT status FROM provider_jobs WHERE job_id = ?",
                         (row["job_id"],),
                     ).fetchone()
-                    if terminal is None or str(terminal["status"]) not in {
-                        "failed",
-                        "indeterminate",
-                    }:
+                    allowed_terminal = {"failed", "indeterminate"}
+                    if str(row["sender_agent_id"]) == "hub":
+                        allowed_terminal.add("cancelled")
+                    if terminal is None or str(terminal["status"]) not in allowed_terminal:
                         raise StateError("provider job is not ready for Telegram completion")
             delivered = self._connection.execute(
                 "SELECT * FROM telegram_outbox WHERE outbox_id = ?", (outbox_id,)
