@@ -380,7 +380,7 @@ def evaluate_operational_alerts(
                     f"Hermes has {pending} Telegram update(s) waiting for its gateway.",
                 )
             )
-    if not pool.available:
+    if not pool.available and pool.error != "not_configured":
         alerts.append(
             OperationalAlert(
                 "codex:pool",
@@ -389,7 +389,7 @@ def evaluate_operational_alerts(
                 "Codex account-pool status is unavailable.",
             )
         )
-    else:
+    elif pool.available:
         if not pool.rotation_enabled:
             alerts.append(
                 OperationalAlert(

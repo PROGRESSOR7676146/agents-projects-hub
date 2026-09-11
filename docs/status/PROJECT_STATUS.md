@@ -220,7 +220,8 @@ No deployment acceptance is implied by this repository checkpoint.
   A configured Hub bot owns these service messages, including Codex account
   rotation events; Codex owns them only in legacy configurations without a
   separate Hub identity. Automatic Codex session context-size advice is
-  disabled; compaction remains user initiated.
+  disabled; compaction remains user initiated. An intentionally unconfigured
+  optional Codex account pool is silent rather than reported as unavailable.
   Exhausted inactive accounts remain status data after a successful rotation;
   they are not reported as authentication failures while a replacement is ready.
   Explicit token-invalidation markers from the supported redacted Codex

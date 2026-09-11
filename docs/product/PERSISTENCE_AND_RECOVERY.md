@@ -28,8 +28,10 @@ This normative module is part of the
   Hub bot is the primary sender; Codex remains the sender only for legacy
   configurations without a separate Hub bot. Hermes may fall back only to that
   same topic. Routine monitoring MUST NOT emit Codex session context-size
-  advice; session compaction remains an explicit user decision. Quota alerts
-  include a recognizable masked account hint and never expose a full identity.
+  advice; session compaction remains an explicit user decision. An optional
+  Codex account pool that is not configured MUST NOT produce an unavailable-pool
+  alert. Quota alerts include a recognizable masked account hint and never
+  expose a full identity.
   Stale quota may remain visible as cached status but MUST NOT alert. Fresh
   Codex quota warns once per ≤5% episode and re-arms only after recovery above
   5%; unchanged conditions MUST NOT repeat. Other operational alerts are also

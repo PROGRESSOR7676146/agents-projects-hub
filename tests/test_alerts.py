@@ -94,6 +94,18 @@ class OperationalAlertTests(unittest.TestCase):
         )
         self.assertEqual(alerts, ())
 
+    def test_optional_codex_pool_is_silent_when_not_configured(self) -> None:
+        alerts = evaluate_operational_alerts(
+            pool=CodexPoolStatus(False, False, (), None, 0, "not_configured"),
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+        )
+
+        self.assertNotIn(
+            "codex_pool_unavailable",
+            {alert.code for alert in alerts},
+        )
+
     def test_exhausted_inactive_account_is_status_not_alert_after_rotation(self) -> None:
         alerts = evaluate_operational_alerts(
             pool=CodexPoolStatus(
