@@ -25,9 +25,9 @@ This normative module is part of the
 - **REQ-OPS-006 (Implemented):** General operational alerts are bounded,
   deduplicated, and delivered
   only to one explicitly configured Hub Operations/Alerts topic. The configured
-  Hub bot is the primary sender; Codex remains the sender only for legacy
-  configurations without a separate Hub bot. Hermes may fall back only to that
-  same topic. Routine monitoring MUST NOT emit Codex session context-size
+  Hub bot is the only Telegram sender for Hub-owned operational notifications;
+  provider bot identities MUST NOT be used when `hub_bot` is absent. Hermes may
+  fall back only to that same topic. Routine monitoring MUST NOT emit Codex session context-size
   advice; session compaction remains an explicit user decision. An optional
   Codex account pool that is not configured MUST NOT produce an unavailable-pool
   alert. Quota alerts include a recognizable masked account hint and never

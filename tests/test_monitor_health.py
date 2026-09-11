@@ -149,7 +149,7 @@ class MonitorHealthTests(unittest.TestCase):
             api.assert_called_once_with("654321:hub-example")
             self.assertEqual(identity, "hub")
 
-    def test_operational_sender_uses_codex_for_legacy_config(self) -> None:
+    def test_operational_sender_rejects_config_without_hub_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             codex_token = Path(directory) / "codex.token"
             codex_token.write_text("123456:codex-example", encoding="utf-8")
@@ -171,11 +171,13 @@ class MonitorHealthTests(unittest.TestCase):
                 ),
             )
 
-            with patch("hermes_codex_router.monitoring.TelegramBotApi") as api:
-                _telegram, identity = _operational_telegram(config)
+            with (
+                patch("hermes_codex_router.monitoring.TelegramBotApi") as api,
+                self.assertRaisesRegex(RuntimeError, "Hub bot is required"),
+            ):
+                _operational_telegram(config)
 
-            api.assert_called_once_with("123456:codex-example")
-            self.assertEqual(identity, "codex")
+            api.assert_not_called()
 
     def test_general_monitor_alert_is_sent_by_hub_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

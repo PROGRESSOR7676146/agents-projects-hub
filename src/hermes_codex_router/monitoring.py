@@ -51,15 +51,10 @@ def _destination(settings: OperationalAlertSettings) -> tuple[int, int] | None:
 
 def _operational_telegram(config: HubConfig) -> tuple[TelegramBotApi, str]:
     """Open the controller identity used for Hub-owned operational messages."""
-    if config.hub_bot is not None:
-        identity = "hub"
-        token_file = config.hub_bot.token_file
-    else:
-        agent = config.require_agent("codex")
-        if agent.token_file is None:
-            raise RuntimeError("legacy operational bot token is unavailable")
-        identity = agent.agent_id
-        token_file = agent.token_file
+    if config.hub_bot is None:
+        raise RuntimeError("Hub bot is required for operational notifications")
+    identity = "hub"
+    token_file = config.hub_bot.token_file
     return TelegramBotApi(read_telegram_token(token_file, identity)), identity
 
 

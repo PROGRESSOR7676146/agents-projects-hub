@@ -218,8 +218,8 @@ No deployment acceptance is implied by this repository checkpoint.
 - Operational notifications are edge-triggered: unchanged deployment, catalog,
   provider, and account conditions are sent once and re-arm only after recovery.
   A configured Hub bot owns these service messages, including Codex account
-  rotation events; Codex owns them only in legacy configurations without a
-  separate Hub identity. Automatic Codex session context-size advice is
+  rotation events. Provider bot identities are never used for Hub-owned
+  operational notifications. Automatic Codex session context-size advice is
   disabled; compaction remains user initiated. An intentionally unconfigured
   optional Codex account pool is silent rather than reported as unavailable.
   Exhausted inactive accounts remain status data after a successful rotation;
