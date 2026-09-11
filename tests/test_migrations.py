@@ -62,7 +62,9 @@ class MigrationTests(unittest.TestCase):
 
             result = migrate_database(path, create_backup=False)
 
-            self.assertEqual((result.previous_version, result.current_version), (20, 21))
+            self.assertEqual(
+                (result.previous_version, result.current_version), (20, LATEST_SCHEMA_VERSION)
+            )
             migrated = sqlite3.connect(path)
             try:
                 self.assertEqual(

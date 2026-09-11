@@ -301,7 +301,8 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             self.assertEqual(len(transport_events), 1)
 
             bot.fail = False
-            clock += timedelta(seconds=2)
+            # The third failed attempt now persists a four-second backoff.
+            clock += timedelta(seconds=4)
             self.assertTrue(sender.run_cycle(now=clock))
             recovered = sender.state.get_runtime_health("sender", "test-sender")
             assert recovered is not None

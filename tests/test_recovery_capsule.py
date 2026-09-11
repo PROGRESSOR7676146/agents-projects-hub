@@ -7,6 +7,8 @@ import pathlib
 import tempfile
 import unittest
 
+from hermes_codex_router.schema_compatibility import TARGET_SCHEMA_VERSION
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
@@ -23,6 +25,14 @@ VERIFY = load("verify_capsule", ROOT / "scripts/verify-recovery-capsule.py")
 
 
 class RecoveryCapsuleTests(unittest.TestCase):
+    def test_repository_capsule_matches_current_target_schema(self) -> None:
+        source = ROOT / "recovery/agents-projects-hub"
+        manifest = json.loads((source / "manifest.json").read_text())
+        runbook = (source / "RUNBOOK.md").read_text()
+        self.assertEqual(manifest["state_schema"], TARGET_SCHEMA_VERSION)
+        self.assertIn(f"state schema `{TARGET_SCHEMA_VERSION}`", runbook)
+        self.assertIn(f"schema `{TARGET_SCHEMA_VERSION}/{TARGET_SCHEMA_VERSION}`", runbook)
+
     def make_capsule(self, base: pathlib.Path) -> pathlib.Path:
         capsule = base / "agents-projects-hub"
         generation = capsule / "versions" / ("a" * 40)

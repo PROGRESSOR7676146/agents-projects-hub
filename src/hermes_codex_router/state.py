@@ -18,6 +18,7 @@ from .telegram import TELEGRAM_HEALTH_FAILURE_THRESHOLD
 from .telegram_multipart import split_telegram_html
 
 MAX_PROVIDER_RESPONSE_LENGTH = 200_000
+RECOVERED_RESULT_METADATA_JSON = '{"hub_recovered":true}'
 RUNTIME_EVENT_MAX_AGE = timedelta(days=30)
 RUNTIME_EVENT_MAX_COUNT = 10_000
 
@@ -3005,7 +3006,105 @@ class HubState:
             "bot_offsets": [dict(row) for row in offsets],
             "dispatch_counts": {row["status"]: row["count"] for row in dispatch_counts},
             "pending_dispatches": [dict(row) for row in running],
+            "reliability": self.reliability_snapshot(),
             "runtime_events": [dict(row) for row in runtime_events],
+        }
+
+    def reliability_snapshot(self, *, now: datetime | None = None) -> dict[str, int | None]:
+        """Return bounded aggregate outcome telemetry without provider or network access."""
+        current = now or datetime.now(timezone.utc)
+        _timestamp(current)
+        counts = {
+            str(row["status"]): int(row["count"])
+            for row in self._connection.execute(
+                "SELECT status, COUNT(*) AS count FROM provider_jobs GROUP BY status"
+            ).fetchall()
+        }
+        delivered_final_results = int(
+            self._connection.execute(
+                """SELECT COUNT(*) FROM provider_job_results results
+                   JOIN telegram_outbox outbox ON outbox.job_id = results.job_id
+                   WHERE outbox.status = 'delivered'"""
+            ).fetchone()[0]
+        )
+        partial_outcomes = int(
+            self._connection.execute(
+                """SELECT COUNT(*) FROM provider_jobs jobs
+                   WHERE jobs.status IN ('failed', 'indeterminate')
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_job_results results
+                       WHERE results.job_id = jobs.job_id
+                     )
+                     AND (
+                       EXISTS (
+                         SELECT 1 FROM provider_visible_items items
+                         WHERE items.job_id = jobs.job_id
+                           AND length(items.visible_text) > 0
+                       )
+                       OR EXISTS (
+                         SELECT 1 FROM provider_execution_checkpoints checkpoints
+                         WHERE checkpoints.job_id = jobs.job_id
+                           AND length(checkpoints.completed_text) > 0
+                       )
+                     )"""
+            ).fetchone()[0]
+        )
+        recovered_results = int(
+            self._connection.execute(
+                "SELECT COUNT(*) FROM provider_job_results WHERE safe_metadata_json = ?",
+                (RECOVERED_RESULT_METADATA_JSON,),
+            ).fetchone()[0]
+        )
+        pending_delivery = int(
+            self._connection.execute(
+                "SELECT COUNT(*) FROM telegram_outbox WHERE status IN ('pending', 'sending')"
+            ).fetchone()[0]
+        )
+        queued_statuses = ("queued", "leased", "executing", "retry_wait")
+        queued_work = sum(counts.get(status, 0) for status in queued_statuses)
+        oldest_queue = self._connection.execute(
+            """SELECT MIN(created_at) FROM provider_jobs
+               WHERE status IN ('queued', 'leased', 'executing', 'retry_wait')"""
+        ).fetchone()[0]
+        oldest_delivery = self._connection.execute(
+            """SELECT MIN(created_at) FROM telegram_outbox
+               WHERE status IN ('pending', 'sending')"""
+        ).fetchone()[0]
+        latest_delivery = self._connection.execute(
+            """SELECT created_at, delivered_at FROM telegram_outbox
+               WHERE status = 'delivered' AND delivered_at IS NOT NULL
+               ORDER BY delivered_at DESC LIMIT 1"""
+        ).fetchone()
+
+        def age_seconds(value: object) -> int | None:
+            if not isinstance(value, str):
+                return None
+            parsed = datetime.fromisoformat(value)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return max(0, int((current - parsed.astimezone(timezone.utc)).total_seconds()))
+
+        delivery_delay: int | None = None
+        if latest_delivery is not None:
+            created = datetime.fromisoformat(str(latest_delivery["created_at"]))
+            delivered = datetime.fromisoformat(str(latest_delivery["delivered_at"]))
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            if delivered.tzinfo is None:
+                delivered = delivered.replace(tzinfo=timezone.utc)
+            delivery_delay = max(0, int((delivered - created).total_seconds()))
+
+        return {
+            "accepted_requests": sum(counts.values()),
+            "delivered_final_results": delivered_final_results,
+            "partial_outcomes": partial_outcomes,
+            "uncertain_execution": counts.get("indeterminate", 0),
+            "recovered_results": recovered_results,
+            "queued_work": queued_work,
+            "pending_delivery": pending_delivery,
+            "oldest_queue_age_seconds": age_seconds(oldest_queue),
+            "oldest_delivery_age_seconds": age_seconds(oldest_delivery),
+            "last_delivery_delay_seconds": delivery_delay,
         }
 
     def start_dispatch(

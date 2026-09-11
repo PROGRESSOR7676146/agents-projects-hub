@@ -77,7 +77,7 @@ def _abbreviate_path(path_str: str) -> str:
     if path_str == home:
         return "~"
     if path_str.startswith(home + "/"):
-        return "~" + path_str[len(home):]
+        return "~" + path_str[len(home) :]
     return path_str
 
 

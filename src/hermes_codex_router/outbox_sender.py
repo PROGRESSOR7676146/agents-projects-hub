@@ -14,6 +14,7 @@ from .artifacts import (
     remove_spooled_artifact,
     verify_spooled_artifact,
 )
+from .delivery_retry import delivery_retry_delay
 from .hub_config import HubConfig
 from .state import HubState
 from .telegram import TELEGRAM_HEALTH_FAILURE_THRESHOLD, TelegramBotApi, TelegramError
@@ -387,7 +388,7 @@ class TelegramOutboxSender:
                 outbox.outbox_id,
                 outbox.lease_token,
                 error_code=error_code,
-                delay_seconds=1,
+                delay_seconds=delivery_retry_delay(exc, outbox.attempt_count),
                 now=now,
             )
         self._publish_health(force=True)

@@ -7,13 +7,15 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from hermes_codex_router.migrations import backup_database, migrate_database
+from hermes_codex_router.migrations import LATEST_SCHEMA_VERSION, backup_database, migrate_database
 
 
 def _prepare_production_shaped_v20(path: Path, *, migration_fault: bool = False) -> None:
     migrate_database(path, create_backup=False)
     connection = sqlite3.connect(path)
     try:
+        connection.execute("DROP TABLE IF EXISTS provider_visible_items")
+        connection.execute("DROP TABLE IF EXISTS provider_execution_checkpoints")
         connection.execute("DROP INDEX runtime_events_retention")
         connection.execute(
             "CREATE INDEX runtime_events_created_at ON runtime_events(created_at DESC)"
@@ -112,7 +114,9 @@ class Schema2021RehearsalTests(unittest.TestCase):
 
             result = migrate_database(state_path)
 
-            self.assertEqual((result.previous_version, result.current_version), (20, 21))
+            self.assertEqual(
+                (result.previous_version, result.current_version), (20, LATEST_SCHEMA_VERSION)
+            )
             self.assertEqual(_durable_work_snapshot(state_path), expected)
             self.assertIsNotNone(result.backup_path)
             assert result.backup_path is not None
@@ -129,7 +133,9 @@ class Schema2021RehearsalTests(unittest.TestCase):
 
             migrated = sqlite3.connect(state_path)
             try:
-                self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 21)
+                self.assertEqual(
+                    migrated.execute("PRAGMA user_version").fetchone()[0], LATEST_SCHEMA_VERSION
+                )
                 self.assertEqual(
                     migrated.execute(
                         "SELECT code FROM runtime_events ORDER BY event_id"
@@ -161,7 +167,9 @@ class Schema2021RehearsalTests(unittest.TestCase):
             finally:
                 writer.close()
 
-            self.assertEqual((result.previous_version, result.current_version), (20, 21))
+            self.assertEqual(
+                (result.previous_version, result.current_version), (20, LATEST_SCHEMA_VERSION)
+            )
             migrated = sqlite3.connect(state_path)
             try:
                 self.assertEqual(

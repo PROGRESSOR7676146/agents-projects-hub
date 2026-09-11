@@ -76,9 +76,9 @@ schema-20 database with queued, prepared-outbox, and indeterminate jobs under a
 new temporary root, creates a consistent backup and manifest, unpacks both
 wheels into digest-addressed release directories, and atomically switches a
 temporary `active` symlink to the candidate. Candidate code migrates the copy to
-schema 21. The manifest is verified against that migrated copy, the pointer is
-switched back, and rollback-artifact code opens the retained schema 21. Exact
-durable work rows must match before, after rollout, and after rollback.
+its declared target schema. The manifest is verified against that migrated copy,
+the pointer is switched back, and rollback-artifact code opens the retained target
+schema. Exact durable work rows must match before, after rollout, and after rollback.
 
 The report states `temporary_state_only: true`, `service_actions: false`, and
 `network_actions: false`. The temporary root is removed on exit. Passing this

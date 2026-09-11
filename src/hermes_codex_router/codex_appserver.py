@@ -6,11 +6,14 @@ import queue
 import socket
 import subprocess
 import threading
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 import aiohttp
+
+from .codex_failure import MAX_PARTIAL_TEXT, codex_failure_reason
 
 
 class RpcError(RuntimeError):
@@ -19,6 +22,19 @@ class RpcError(RuntimeError):
 
 class RpcRejectedError(RpcError):
     """The app-server returned an explicit JSON-RPC rejection."""
+
+
+class CodexTurnError(RpcError):
+    """A failed wait retains visible output without claiming task success."""
+
+    def __init__(self, cause: BaseException, partial_text: str = "") -> None:
+        super().__init__(str(cause))
+        self.partial_text = (
+            "[Earlier partial text omitted]\n" + partial_text[-(MAX_PARTIAL_TEXT - 40) :]
+            if len(partial_text) > MAX_PARTIAL_TEXT
+            else partial_text
+        )
+        self.failure_reason = codex_failure_reason(cause)
 
 
 class MessageTransport(Protocol):
@@ -79,6 +95,17 @@ class StdioJsonLineTransport:
         self._reader = process.stdout
         self._writer = process.stdin
         self._closed = False
+        self._lines: queue.Queue[str | BaseException] = queue.Queue()
+        self._reader_thread = threading.Thread(target=self._read_stdout, daemon=True)
+        self._reader_thread.start()
+
+    def _read_stdout(self) -> None:
+        try:
+            while line := self._reader.readline():
+                self._lines.put(line)
+            self._lines.put(EOFError("Codex app-server closed stdout"))
+        except Exception as exc:
+            self._lines.put(exc)
 
     @classmethod
     def start(cls, executable: str = "codex") -> "StdioJsonLineTransport":
@@ -99,10 +126,12 @@ class StdioJsonLineTransport:
         self._writer.flush()
 
     def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
-        del timeout
-        line = self._reader.readline()
-        if not line:
-            raise EOFError("Codex app-server closed stdout")
+        try:
+            line = self._lines.get(timeout=20.0 if timeout is None else timeout)
+        except queue.Empty as exc:
+            raise RpcError("timed out waiting for Codex stdio") from exc
+        if isinstance(line, BaseException):
+            raise line
         try:
             message = json.loads(line)
         except json.JSONDecodeError as exc:
@@ -125,6 +154,9 @@ class StdioJsonLineTransport:
                 except subprocess.TimeoutExpired:
                     self._process.kill()
                     self._process.wait(timeout=5)
+            self._reader_thread.join(timeout=2)
+            if not self._reader_thread.is_alive():
+                self._reader.close()
 
 
 class UnixWebSocketTransport:
@@ -136,6 +168,8 @@ class UnixWebSocketTransport:
         self._outbound: queue.Queue[dict[str, Any] | None] = queue.Queue()
         self._inbound: queue.Queue[dict[str, Any] | BaseException] = queue.Queue()
         self._ready = threading.Event()
+        self._outbound_event: asyncio.Event | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._closed = False
         self._thread = threading.Thread(target=self._thread_main, daemon=True)
         self._thread.start()
@@ -154,41 +188,65 @@ class UnixWebSocketTransport:
             self._ready.set()
 
     async def _run(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        outbound_event = asyncio.Event()
+        self._outbound_event = outbound_event
         connector = aiohttp.UnixConnector(path=str(self._socket_path))
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.ws_connect("http://localhost/") as websocket:
-                self._ready.set()
+        try:
+            async with aiohttp.ClientSession(connector=connector) as session:
+                async with session.ws_connect("http://localhost/") as websocket:
+                    self._ready.set()
 
-                async def sender() -> None:
-                    while True:
-                        message = await asyncio.to_thread(self._outbound.get)
-                        if message is None:
-                            await websocket.close()
-                            return
-                        await websocket.send_json(message)
-
-                async def receiver() -> None:
-                    async for message in websocket:
-                        if message.type == aiohttp.WSMsgType.TEXT:
+                    async def sender() -> None:
+                        while True:
+                            outbound_event.clear()
                             try:
-                                value = json.loads(message.data)
-                            except json.JSONDecodeError as exc:
-                                self._inbound.put(exc)
+                                message = self._outbound.get_nowait()
+                            except queue.Empty:
+                                await outbound_event.wait()
                                 continue
-                            if isinstance(value, dict):
-                                self._inbound.put(value)
-                        elif message.type == aiohttp.WSMsgType.ERROR:
-                            self._inbound.put(
-                                websocket.exception() or RpcError("Codex WebSocket failed")
-                            )
-                            return
+                            if message is None:
+                                await websocket.close()
+                                return
+                            await websocket.send_json(message)
 
-                await asyncio.gather(sender(), receiver())
+                    async def receiver() -> None:
+                        try:
+                            async for message in websocket:
+                                if message.type == aiohttp.WSMsgType.TEXT:
+                                    try:
+                                        value = json.loads(message.data)
+                                    except json.JSONDecodeError as exc:
+                                        self._inbound.put(exc)
+                                        continue
+                                    if isinstance(value, dict):
+                                        self._inbound.put(value)
+                                elif message.type == aiohttp.WSMsgType.ERROR:
+                                    self._inbound.put(
+                                        websocket.exception() or RpcError("Codex WebSocket failed")
+                                    )
+                                    return
+                        finally:
+                            self._inbound.put(EOFError("Codex WebSocket closed"))
+                            self._outbound.put(None)
+                            outbound_event.set()
+
+                    await asyncio.gather(sender(), receiver())
+        finally:
+            self._outbound_event = None
+            self._loop = None
+
+    def _wake_sender(self) -> None:
+        loop = self._loop
+        event = self._outbound_event
+        if loop is not None and event is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(event.set)
 
     def send(self, message: dict[str, Any]) -> None:
         if self._closed:
             raise RpcError("Codex Unix WebSocket is closed")
         self._outbound.put(message)
+        self._wake_sender()
 
     def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
         try:
@@ -204,6 +262,7 @@ class UnixWebSocketTransport:
             return
         self._closed = True
         self._outbound.put(None)
+        self._wake_sender()
         self._thread.join(timeout=5)
 
 
@@ -251,7 +310,9 @@ class CodexAppServerClient:
         self._initialized = initialized
         self._approval_policy = approval_policy
         self._next_request_id = 1
-        self.notifications: list[dict[str, Any]] = []
+        self.notifications: deque[dict[str, Any]] = deque()
+        self.on_visible_item: Callable[[str, str, str], None] | None = None
+        self.on_completed: Callable[[TurnResult], None] | None = None
 
     def close(self) -> None:
         self._transport.close()
@@ -315,6 +376,8 @@ class CodexAppServerClient:
             # only bounded protocol objects; hidden reasoning is never emitted
             # to Telegram by this client.
             if "method" in message and "id" not in message:
+                if len(self.notifications) >= 1024:
+                    raise RpcError("Codex notification buffer exceeded its bound")
                 self.notifications.append(message)
                 continue
 
@@ -500,13 +563,21 @@ class CodexAppServerClient:
     def wait_for_turn(self, turn_id: str) -> TurnResult:
         """Wait for one turn while excluding hidden reasoning from the result."""
         answers: list[str] = []
+        seen_items: set[str] = set()
         context_window: int | None = None
         context_tokens_used: int | None = None
         while True:
             # Model turns routinely exceed the short RPC handshake timeout.
             # Keep a finite ceiling so a lost app-server cannot strand a worker
             # forever; the worker heartbeat protects the durable job meanwhile.
-            message = self._transport.receive(timeout=3600.0)
+            try:
+                message = (
+                    self.notifications.popleft()
+                    if self.notifications
+                    else self._transport.receive(timeout=3600.0)
+                )
+            except Exception as exc:
+                raise CodexTurnError(exc, "\n\n".join(answers)) from exc
             method = message.get("method")
             if method and "id" in message:
                 # tlive answers approvals on its companion connection.
@@ -533,7 +604,14 @@ class CodexAppServerClient:
                     and item.get("type") == "agentMessage"
                     and isinstance(item.get("text"), str)
                 ):
-                    answers.append(item["text"])
+                    item_id = item.get("id")
+                    if not isinstance(item_id, str) or item_id not in seen_items:
+                        answers.append(item["text"])
+                        if isinstance(item_id, str):
+                            seen_items.add(item_id)
+                            if self.on_visible_item is not None and item["text"].strip():
+                                phase = item.get("phase") or "unknown"
+                                self.on_visible_item(item_id, item["text"], str(phase))
                 continue
             if method == "turn/completed":
                 turn = params.get("turn")
@@ -541,12 +619,18 @@ class CodexAppServerClient:
                     if turn.get("status") in {"failed", "interrupted"}:
                         error = turn.get("error")
                         message = error.get("message") if isinstance(error, dict) else None
-                        raise RpcError(str(message or f"Codex turn {turn.get('status')}"))
-                    return TurnResult(
+                        raise CodexTurnError(
+                            RpcError(str(message or f"Codex turn {turn.get('status')}")),
+                            "\n\n".join(answers),
+                        )
+                    result = TurnResult(
                         text="\n\n".join(answer for answer in answers if answer).strip(),
                         context_window=context_window,
                         context_tokens_used=context_tokens_used,
                     )
+                    if self.on_completed is not None:
+                        self.on_completed(result)
+                    return result
             if method == "error" and params.get("turnId") == turn_id:
                 # Current app-server nests the public message under ``error``.
                 # A retrying notification is informational; the terminal event
@@ -555,7 +639,45 @@ class CodexAppServerClient:
                     continue
                 error = params.get("error")
                 message = error.get("message") if isinstance(error, dict) else None
-                raise RpcError(str(message or params.get("message") or "Codex turn failed"))
+                raise CodexTurnError(
+                    RpcError(str(message or params.get("message") or "Codex turn failed")),
+                    "\n\n".join(answers),
+                )
+
+    def read_completed_turn(self, *, thread_id: str, turn_id: str, cwd: Path) -> TurnResult | None:
+        """Read persisted outcome only; never resume, subscribe, or invoke a model."""
+        result = self._request("thread/read", {"threadId": thread_id, "includeTurns": True})
+        thread = result.get("thread") if isinstance(result, dict) else None
+        if not isinstance(thread, dict) or thread.get("id") != thread_id:
+            raise RpcError("stored thread identity mismatch")
+        stored_cwd = thread.get("cwd")
+        if not isinstance(stored_cwd, str) or Path(stored_cwd).resolve() != cwd.resolve(
+            strict=True
+        ):
+            raise RpcError("stored thread project root mismatch")
+        turns = thread.get("turns")
+        if not isinstance(turns, list):
+            raise RpcError("stored thread has no turn history")
+        matches = [turn for turn in turns if isinstance(turn, dict) and turn.get("id") == turn_id]
+        if len(matches) != 1 or matches[0].get("status") != "completed":
+            return None
+        items = matches[0].get("items")
+        if not isinstance(items, list):
+            return None
+        answers: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict) or item.get("type") != "agentMessage":
+                continue
+            text, item_id = item.get("text"), item.get("id")
+            if not isinstance(text, str) or not isinstance(item_id, str) or item_id in seen:
+                continue
+            seen.add(item_id)
+            answers.append(text)
+        text = "\n\n".join(answers).strip()
+        if len(text) > 200_000:
+            raise RpcError("stored visible response exceeds recovery bound")
+        return TurnResult(text, None, None)
 
     def list_models(self) -> tuple[dict[str, Any], ...]:
         result = self._request("model/list", {"includeHidden": False})

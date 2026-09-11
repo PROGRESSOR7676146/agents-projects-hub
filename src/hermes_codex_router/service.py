@@ -26,6 +26,14 @@ from .codex_accounts import (
     read_codex_pool_status,
 )
 from .codex_appserver import CodexAppServerClient, LimitWindow, RateLimits, RpcError
+from .codex_failure import CodexPreparationError, codex_preparation
+from .codex_recovery import (
+    checkpoint_failure_notice,
+    reconcile_codex_completion,
+    recover_codex_job,
+)
+from .delivery_retry import delivery_retry_delay
+from .execution_journal import ExecutionJournal
 from .external_runtime import ProviderLimitError, ProviderUnavailableError
 from .external_service import ExternalAgentService
 from .hub_config import HubConfig, read_telegram_token
@@ -647,6 +655,17 @@ class ProjectHubService:
             for agent in self.config.agents:
                 if not self._embedded_consumer_owns_agent(agent.agent_id):
                     continue
+                if agent.runtime == "codex":
+                    assert self.supervisor is not None
+                    if recover_codex_job(
+                        queue_state,
+                        self.config,
+                        self.registry,
+                        agent.agent_id,
+                        "embedded-recovery",
+                        self.supervisor.client,
+                    ):
+                        return True
                 queue_state.recover_stale_provider_jobs(agent_id=agent.agent_id)
                 if queue_stop is not None and queue_stop.is_set():
                     return False
@@ -718,25 +737,28 @@ class ProjectHubService:
                 or queue_state.telegram_contract_version(executing.session_id) < contract_version
             )
             if agent.runtime == "codex":
-                client = self._client()
-                if executing.provider_session_id:
-                    thread = client.resume_thread(
-                        thread_id=executing.provider_session_id,
-                        cwd=project.root,
-                        model=executing.model,
-                        developer_instructions=telegram_developer_instructions(
-                            runtime="codex", new_session=full_contract
-                        ),
-                    )
-                else:
-                    thread = client.start_thread(
-                        cwd=project.root,
-                        model=executing.model,
-                        project_id=project.project_id,
-                        developer_instructions=telegram_developer_instructions(
-                            runtime="codex", new_session=full_contract
-                        ),
-                    )
+                journal = ExecutionJournal(queue_state)
+                with codex_preparation():
+                    client = self._client()
+                    if executing.provider_session_id:
+                        thread = client.resume_thread(
+                            thread_id=executing.provider_session_id,
+                            cwd=project.root,
+                            model=executing.model,
+                            developer_instructions=telegram_developer_instructions(
+                                runtime="codex", new_session=full_contract
+                            ),
+                        )
+                    else:
+                        thread = client.start_thread(
+                            cwd=project.root,
+                            model=executing.model,
+                            project_id=project.project_id,
+                            developer_instructions=telegram_developer_instructions(
+                                runtime="codex", new_session=full_contract
+                            ),
+                        )
+                    journal.record_thread(executing.job_id, token, thread.thread_id, project.root)
                 turn_id = client.start_turn(
                     thread_id=thread.thread_id,
                     cwd=project.root,
@@ -744,7 +766,19 @@ class ProjectHubService:
                     model=executing.model,
                     effort=executing.effort,
                 )
-                result = client.wait_for_turn(turn_id)
+                journal.record_turn(executing.job_id, token, turn_id)
+                client.on_visible_item = lambda item_id, text, phase: journal.record_item(
+                    executing.job_id, token, item_id, text, phase
+                )
+                client.on_completed = lambda result: journal.record_completion(
+                    executing.job_id, token, result.text
+                )
+                try:
+                    result = client.wait_for_turn(turn_id)
+                    journal.record_completion(executing.job_id, token, result.text)
+                finally:
+                    client.on_visible_item = None
+                    client.on_completed = None
                 if result.context_window and result.context_tokens_used is not None:
                     remaining = max(0, result.context_window - result.context_tokens_used)
                     try:
@@ -828,8 +862,30 @@ class ProjectHubService:
             # The provider call may have started.  Do not retry it without
             # provider-specific proof, even if an adapter reports an error.
             error_class = "quota" if isinstance(exc, ProviderLimitError) else "ambiguous_execution"
+            recovered = False
+            if agent.runtime == "codex" and not isinstance(exc, CodexPreparationError):
+                assert self.supervisor is not None
+                try:
+                    recovered = reconcile_codex_completion(
+                        queue_state,
+                        self.config,
+                        project_root=project.root,
+                        job_id=executing.job_id,
+                        lease_token=token,
+                        agent_id=agent.agent_id,
+                        client_factory=self.supervisor.client,
+                    )
+                except Exception:
+                    recovered = False
             try:
-                if isinstance(exc, ProviderLimitError):
+                if recovered:
+                    queue_state.record_runtime_event(
+                        agent.agent_id,
+                        "info",
+                        "provider_result_recovered",
+                        agent.agent_id,
+                    )
+                elif isinstance(exc, ProviderLimitError):
                     queue_state.terminate_provider_job_with_notice(
                         executing.job_id,
                         token,
@@ -854,26 +910,33 @@ class ProjectHubService:
                         telegram_html=exc.public_message,
                     )
                 else:
+                    if isinstance(exc, CodexPreparationError):
+                        error_class = "pre_execution"
                     queue_state.terminate_provider_job_with_notice(
                         executing.job_id,
                         token,
-                        status="indeterminate",
+                        status="failed"
+                        if isinstance(exc, CodexPreparationError)
+                        else "indeterminate",
                         error_class=error_class,
                         error_code=type(exc).__name__,
                         sender_agent_id=agent.agent_id,
                         telegram_html=(
-                            f"{agent.display_name} stopped before producing a visible result. "
+                            checkpoint_failure_notice(queue_state, executing.job_id, exc)
+                            if agent.runtime == "codex"
+                            else f"{agent.display_name} stopped before producing a visible result. "
                             "The outcome is uncertain, so Hub did not retry it automatically."
                         ),
                     )
             except Exception:
                 pass
-            queue_state.record_runtime_event(
-                agent.agent_id,
-                "warning",
-                "queued_provider_error",
-                f"{error_class}:{type(exc).__name__}",
-            )
+            if not recovered:
+                queue_state.record_runtime_event(
+                    agent.agent_id,
+                    "warning",
+                    "queued_provider_error",
+                    f"{error_class}:{type(exc).__name__}",
+                )
             if agent.runtime == "codex":
                 self._discard_codex_client()
         finally:
@@ -933,7 +996,7 @@ class ProjectHubService:
                 outbox.outbox_id,
                 outbox.lease_token,
                 error_code=type(exc).__name__,
-                delay_seconds=1,
+                delay_seconds=delivery_retry_delay(exc, outbox.attempt_count),
             )
         return True
 

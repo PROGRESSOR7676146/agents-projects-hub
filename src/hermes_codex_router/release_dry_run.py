@@ -43,6 +43,8 @@ def _seed_production_shaped_v20(path: Path) -> None:
     migrate_database(path, create_backup=False)
     connection = sqlite3.connect(path)
     try:
+        connection.execute("DROP TABLE IF EXISTS provider_visible_items")
+        connection.execute("DROP TABLE IF EXISTS provider_execution_checkpoints")
         connection.execute("DROP INDEX runtime_events_retention")
         connection.execute(
             "CREATE INDEX runtime_events_created_at ON runtime_events(created_at DESC)"
@@ -276,7 +278,11 @@ def run_release_dry_run(active_artifact: Path, rollback_artifact: Path) -> Relea
         durable_work_preserved = expected_work == rollout_work == rollback_work
         if not durable_work_preserved:
             raise ReleaseDryRunError("temporary rollout changed durable provider work")
-        if schema_before != 20 or schema_after_rollout != 21 or schema_after_rollback != 21:
+        if (
+            schema_before != 20
+            or schema_after_rollout != active.schema_max
+            or schema_after_rollback != active.schema_max
+        ):
             raise ReleaseDryRunError("temporary rollout produced an unexpected schema transition")
         if not pointer_restored:
             raise ReleaseDryRunError("temporary activation pointer did not return to rollback")

@@ -14,7 +14,11 @@ This normative module is part of the
   an SQLite-consistent pre-migration backup with rollback on failure.
 - **REQ-OPS-004 (Implemented):** User services and monitoring MUST preserve
   numeric topic/session state across ordinary restarts and report component
-  health without invoking a model merely to check health.
+  health without invoking a model merely to check health. The passive monitor
+  result MUST expose bounded aggregate counts for accepted requests, delivered
+  final results, partial outcomes, uncertain executions and recovered results,
+  plus pending queue/delivery counts and ages. These aggregates MUST contain no
+  prompt, response, provider-session, project, topic or account identity.
 - **REQ-OPS-005 (Implemented):** Hermes Gateway and tlive MUST be monitored as
   independent, non-mandatory recovery channels. Fresh local heartbeat/status
   markers provide liveness evidence without exposing URLs or tokens.
@@ -61,8 +65,8 @@ This normative module is part of the
   include an automated rollout/runtime-rollback rehearsal that creates all
   state, configuration, release directories, manifest, backup, and activation
   pointers under one temporary root. It MUST run the candidate migration from
-  schema 20 to 21, run the distinct rollback artifact against the retained
-  schema 21 state, and prove queued work, prepared outbox delivery, and an
+  schema 20 to the candidate's target schema, run the distinct compatible
+  rollback artifact against the retained target state, and prove queued work, prepared outbox delivery, and an
   indeterminate job remain unchanged. It MUST NOT read deployment state, invoke
   a provider, contact Telegram, or control a service.
 - **REQ-OPS-012 (Planned):** Machine-loss recovery MUST use encrypted versioned
@@ -129,6 +133,21 @@ recreate unsaved provider context or a partially executed turn.
   enqueue one bounded user-visible notice through the provider bot identity;
   delivering that notice MUST NOT convert the terminal job into a successful
   provider result.
+  Codex queue paths MUST consume already-buffered turn events and deduplicate
+  completed visible items by ID. A handled turn failure MUST retain a bounded,
+  explicitly incomplete visible excerpt in its durable notice and show a safe
+  cause without exposing raw diagnostics. A caught preparation failure before
+  `turn/start` MUST be classified separately from uncertain invocation. These
+  Codex queue paths additionally persist execution identity and completed visible
+  items in schema 22, separately from immutable enqueue snapshots. Thread identity
+  MUST be recorded before `turn/start`; accepted turn identity MUST be recorded
+  before consuming its visible items. Expired invocation leases and handled
+  post-acceptance transport/commit failures MUST first enter recovery-only
+  processing: a saved completed result may be committed directly,
+  otherwise one bounded `thread/read` may retrieve the exact accepted completed
+  turn without resuming or invoking it. Root/identity mismatch, missing acceptance,
+  unavailable read capability or an unfinished turn MUST preserve uncertainty
+  and any eligible saved partial text, never authorize productive replay.
 - **REQ-QUEUE-005 (Implemented for embedded compatibility and the external sender):** Provider result persistence and Telegram delivery
   MUST use a durable outbox. Telegram delivery retry MUST NOT create another
   provider turn, and visible-context acknowledgement MUST occur only after a
@@ -138,6 +157,10 @@ recreate unsaved provider context or a partially executed turn.
   execution during mixed rollout, use each provider bot identity, recover only
   their stale delivery leases, and MUST NOT own a provider adapter
   or RPC client. The Controller MUST NOT deliver external-worker outbox rows.
+  Both sender paths MUST persist a retry deadline no earlier than Telegram's
+  valid `retry_after`, combined with bounded exponential backoff. Restart MUST
+  retain the deadline; waiting for it MUST NOT consume delivery attempts or
+  repeat provider work.
 - **REQ-QUEUE-006 (Implemented for the additive schema and global compatibility gate; per-provider rollout Planned):** Queue migration and per-provider rollout MUST be
   additive, feature-gated, recoverable through the existing backup discipline,
   and retain safe rollback without destroying accepted jobs. Changing an agent
@@ -149,7 +172,8 @@ recreate unsaved provider context or a partially executed turn.
   into cooperative stop requests only. They MUST stop polling and taking work
   at the next explicit safe boundary, return a lease when stop is observed
   before invocation without consuming an attempt, bound transport waits and
-  joins, and restore prior process signal handlers. A signal may race after the
+  joins, propagate WebSocket closure to blocked readers/senders, and restore
+  prior process signal handlers. A signal may race after the
   final safe-boundary check; work past that boundary is treated as potentially
   started and remains subject to the existing `indeterminate`/outbox ambiguity
   rules rather than being made automatically retryable.

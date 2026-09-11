@@ -684,6 +684,29 @@ WHERE event_id NOT IN (
 """
 
 
+MIGRATION_22 = """
+CREATE TABLE IF NOT EXISTS provider_execution_checkpoints (
+    job_id TEXT PRIMARY KEY REFERENCES provider_jobs(job_id),
+    provider_thread_id TEXT NOT NULL CHECK(length(provider_thread_id) BETWEEN 1 AND 256),
+    project_root TEXT NOT NULL CHECK(length(project_root) BETWEEN 1 AND 4096),
+    provider_turn_id TEXT CHECK(length(provider_turn_id) BETWEEN 1 AND 256),
+    completed_text TEXT CHECK(length(completed_text) <= 200000),
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS provider_visible_items (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL REFERENCES provider_execution_checkpoints(job_id),
+    item_id TEXT NOT NULL CHECK(length(item_id) BETWEEN 1 AND 256),
+    phase TEXT NOT NULL CHECK(phase IN ('commentary', 'final_answer', 'unknown')),
+    visible_text TEXT NOT NULL CHECK(length(visible_text) BETWEEN 1 AND 200000),
+    created_at TEXT NOT NULL,
+    UNIQUE(job_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS provider_visible_items_job
+ON provider_visible_items(job_id, sequence);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -791,6 +814,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_19,
         MIGRATION_20,
         MIGRATION_21,
+        MIGRATION_22,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:

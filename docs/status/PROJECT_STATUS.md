@@ -6,6 +6,31 @@ Release: v0.7.0
 This file describes repository capabilities only. It intentionally contains no
 operator deployment inventory or live conversation evidence.
 
+## Quality checkpoint
+
+The [quality and stability review](../operations/QUALITY_AND_STABILITY_REVIEW.md)
+records the initial findings. Milestone one of the
+[reliability plan](../operations/RELIABILITY_PLAN.md) now consumes buffered Codex
+turn events, deduplicates completed visible items, retains bounded partial text
+in durable notices after handled failures, distinguishes caught preparation
+failures, and respects Telegram cooldowns in both senders. These notices never
+mark uncertain work successful or replay the provider. New offline regressions
+cover both queue paths and restart during delivery cooldown.
+
+Milestone two adds schema-22 execution identity and visible-item checkpoints for
+both Codex queue paths. Expired invocations and handled post-acceptance failures
+first recover a saved completed result or perform an exact-turn read-only lookup;
+unconfirmed work retains an indeterminate notice and eligible saved partial text,
+without productive replay. Abrupt-process and handled-disconnect tests cover
+accepted/partial/completed boundaries. Milestone three bounds stdio reads and
+propagates clean WebSocket closure without stranding its sender. Passive monitor
+output now reports aggregate outcomes, recovery counts, delivery delay and queue
+ages without provider access or task identity. Schema-21 runtime artifacts cannot
+roll back a schema-22 deployment. A compatible rollback artifact is a release prerequisite.
+Current-tree privacy, formatting and documentation gates are repaired; the full
+release gate remains blocked by pre-existing private data in reachable history.
+No deployment acceptance is implied by this repository checkpoint.
+
 ## Implemented
 
 - Numeric project/topic identity, canonical allowlisted roots, idempotent
@@ -54,8 +79,8 @@ operator deployment inventory or live conversation evidence.
 - The automated release dry-run creates its production-shaped schema-20 state,
   configuration, backup, manifest, unpacked immutable release directories, and
   activation pointer under one temporary root. It switches to the candidate,
-  migrates to schema 21 using candidate code, verifies the manifest, switches
-  back, runs the rollback artifact against the retained schema 21, and compares
+  migrates to the candidate's target schema using candidate code, verifies the
+  manifest, switches back, runs the rollback artifact against the retained target, and compares
   queued/outbox/indeterminate rows byte-for-value. It has no service, provider,
   Telegram, credential, or live-state capability.
 - Telegram polling and durable-send failures are classified without raw
@@ -185,7 +210,7 @@ operator deployment inventory or live conversation evidence.
   usage-limit/reset phrase even when the CLI omits HTTP status, terminates a CLI
   that otherwise remains alive, and releases topic FIFO with a cached quota
   failure instead of waiting for the general turn timeout.
-- Codex quota monitoring uses bounded live account probes outside the Controller,
+- Codex quota monitoring reads passive account/cache status outside the Controller,
   warns once when a fresh window first reaches 5% remaining, re-arms only after
   confirmed recovery, and reports provider-driven or quota-driven account
   transitions with the replacement account's fresh status. Ordinary account
@@ -256,7 +281,7 @@ operator deployment inventory or live conversation evidence.
   reapers. Runtime-proxy monitoring remains independent and never restarts a
   shared app-server underneath an active Codex or tlive session.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
-- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-21
+- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-22
   immutable-deployment triage guide, source revision, timestamp, and content
   hashes into a neutral local store for the independent Hermes channel. It
   carries no private deployment inventory and creates no service dependency.

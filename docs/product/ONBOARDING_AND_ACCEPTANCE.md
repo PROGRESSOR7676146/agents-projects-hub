@@ -31,9 +31,10 @@ necessary but not sufficient for items marked live.
   satellite; a real Reply returns to the response author; a selected/pasted
   quote remains with the active agent; and a forwarded message is stored as
   passive context without executing forwarded commands.
-- **AC-F-003 (REQ-CTX-001..007):** After a satellite exchange, the
-  main agent receives the unseen visible delta on its next productive turn,
-  understands its addressee, and does not answer the old message as a new task.
+- **AC-F-003 (REQ-CTX-001..007):** After a satellite exchange, the main
+  agent receives no automatic unseen-dialogue injection. An explicit `/context`
+  request supplies only the selected bounded visible topic history, with its
+  attribution, and does not reinterpret old messages as new tasks.
 - **AC-F-004 (REQ-ROUTE-006):** Idle provider models show no
   provider invocation or token use during another agent's turn.
 - **AC-F-005 (REQ-OPS-001..004):** A controlled restart retains
@@ -69,9 +70,9 @@ necessary but not sufficient for items marked live.
   Telegram does not deliver bot-authored messages to other bots.
 - **AC-F-012 (Automated offline; REQ-OPS-010..011):** Distinct clean candidate
   and rollback wheels pass the digest/identity/schema manifest gate; a
-  temporary schema-20 production-shaped database migrates to schema 21; the
+  temporary schema-20 production-shaped database migrates to the candidate target; the
   temporary activation pointer switches to the candidate and back; and both
-  artifacts open the retained schema-21 state without changing queued,
+  compatible artifacts open the retained target state without changing queued,
   outbox, or indeterminate work. This is not a live rollout or Telegram E2E.
 
 ## 16. Non-functional acceptance criteria

@@ -36,6 +36,8 @@ with a new record.
 | Native session transfer | `/local` and `/return` transfer exclusive ownership of the same provider session; return performs no automatic summary or handoff. | [ADR 0011](0011-explicit-native-session-ownership-transfer.md) |
 | Deployment provenance | Every runtime reports an immutable Git revision; production never executes from a mutable development checkout. | [ADR 0012](0012-verifiable-immutable-deployments.md) |
 | Hub sessions in tlive | Hub owns project conversation and continuation; tlive remains approval-only for marked Hub Codex turns while retaining full UX for interactive Codex. | [ADR 0017](0017-tlive-approval-only-hub-sessions.md) |
+| Handled provider failure | Retain bounded visible partial text in an incomplete outbox notice, distinguish preparation failure, and persist Telegram cooldowns without replaying work. | [ADR 0018](0018-visible-results-on-provider-failure.md) |
+| Codex process-loss recovery | Schema-22 execution/visible checkpoints and exact-turn read-only reconciliation preserve results without productive replay; rollback must support schema 22. | [ADR 0019](0019-durable-codex-execution-checkpoints.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

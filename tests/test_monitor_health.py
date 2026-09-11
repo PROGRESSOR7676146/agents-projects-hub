@@ -34,7 +34,23 @@ class MonitorHealthTests(unittest.TestCase):
                 "hermes_codex_router.monitoring.run_doctor",
                 return_value={"ok": True, "checks": []},
             ):
-                run_monitor_once(config, notify=False)
+                result = run_monitor_once(config, notify=False)
+
+            self.assertEqual(
+                result["reliability"],
+                {
+                    "accepted_requests": 0,
+                    "delivered_final_results": 0,
+                    "partial_outcomes": 0,
+                    "uncertain_execution": 0,
+                    "recovered_results": 0,
+                    "queued_work": 0,
+                    "pending_delivery": 0,
+                    "oldest_queue_age_seconds": None,
+                    "oldest_delivery_age_seconds": None,
+                    "last_delivery_delay_seconds": None,
+                },
+            )
 
             state = HubState.open(config.state_path)
             try:

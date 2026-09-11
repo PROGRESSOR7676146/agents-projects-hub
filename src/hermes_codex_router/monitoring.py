@@ -419,6 +419,7 @@ def run_monitor_once(
             "delivered": delivered,
             "repairs": repairs,
             "catalog_refresh": asdict(catalog_refresh),
+            "reliability": snapshot["reliability"],
         }
         completed_at = datetime.now(timezone.utc)
         state.upsert_runtime_health(
