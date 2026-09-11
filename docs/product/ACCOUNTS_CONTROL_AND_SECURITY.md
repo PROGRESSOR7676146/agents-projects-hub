@@ -47,7 +47,10 @@ This normative module is part of the
   private atomic last-known-good catalog with source version and timestamp.
   Telegram callbacks use bounded opaque keys rather than provider model IDs;
   long catalogs are paginated. Failed discovery uses the cache and becomes an
-  Operations warning only after the cached success is older than 24 hours.
+  Operations warning only after the cached success is older than 24 hours. When
+  Codex multi-auth is not configured, monitoring MUST NOT execute a discovered
+  `codex-multi-auth` binary or retain its account-agnostic matrix: the selectable
+  Codex catalog MUST collapse to the configured default model and effort.
 - **REQ-CMD-003 (Implemented):** `/accounts` lists configured provider accounts
   and observable limits. OpenCode Go exact exhaustion/reset telemetry is shown
   only after a real provider `429`; plan caps are labelled separately. In the

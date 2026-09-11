@@ -4,6 +4,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -88,6 +89,35 @@ class CatalogRefreshTests(unittest.TestCase):
             loaded = cache.load("codex")
             assert loaded is not None
             self.assertEqual(tuple(item.model_id for item in loaded.models), ("old",))
+
+    def test_unconfigured_multi_auth_replaces_fresh_codex_matrix_with_configured_model(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = replace(self._config(root), codex_multi_auth_executable=None)
+            cache = ProviderCatalogCache(root / "provider-model-catalogs.json")
+            now = datetime(2026, 9, 4, tzinfo=timezone.utc)
+            cache.store(
+                "codex",
+                (ProviderModel("gpt-5-mini", "GPT 5 Mini", ("medium",)),),
+                source_version="codex-multi-auth 2.12.0",
+                observed_at=now,
+            )
+
+            def forbidden_run(*_args, **_kwargs):
+                raise AssertionError("unconfigured multi-auth must not be executed")
+
+            result = refresh_provider_catalogs(config, now=now, run=forbidden_run)
+
+            self.assertEqual(result.refreshed, ("codex",))
+            loaded = cache.load("codex")
+            assert loaded is not None
+            self.assertEqual(
+                [(model.model_id, model.efforts) for model in loaded.models],
+                [("gpt", ("high",))],
+            )
+            self.assertEqual(loaded.source_version, "configured fallback")
 
 
 if __name__ == "__main__":

@@ -67,12 +67,45 @@ def refresh_provider_catalogs(
     for agent in config.agents:
         if agent.managed_externally or agent.runtime not in {"codex", "opencode", "antigravity"}:
             continue
+        if agent.runtime == "codex" and config.codex_multi_auth_executable is None:
+            before = cache.load(agent.agent_id)
+            configured = ProviderModel(
+                agent.default_model,
+                agent.default_model,
+                (agent.default_effort,),
+            )
+            matches_config = bool(
+                before is not None
+                and before.source_version == "configured fallback"
+                and len(before.models) == 1
+                and before.models[0].model_id == configured.model_id
+                and before.models[0].efforts == configured.efforts
+            )
+            if matches_config and not cache.is_stale(
+                agent.agent_id, max_age=max_age, now=observed_at
+            ):
+                continue
+            previous_ids = {item.model_id for item in before.models} if before else set()
+            snapshot = cache.store(
+                agent.agent_id,
+                (configured,),
+                source_version="configured fallback",
+                observed_at=observed_at,
+            )
+            refreshed.append(agent.agent_id)
+            new_ids = tuple(
+                item.model_id for item in snapshot.models if item.model_id not in previous_ids
+            )
+            if new_ids:
+                added[agent.agent_id] = new_ids
+            continue
         if not cache.is_stale(agent.agent_id, max_age=max_age, now=observed_at):
             continue
         before = cache.load(agent.agent_id)
         previous_ids = {item.model_id for item in before.models} if before else set()
         if agent.runtime == "codex":
-            executable = str(config.codex_multi_auth_executable or "codex-multi-auth")
+            assert config.codex_multi_auth_executable is not None
+            executable = str(config.codex_multi_auth_executable)
             discover: Callable[[], tuple[ProviderModel, ...]] = partial(
                 codex_models, executable, run=run
             )
