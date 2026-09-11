@@ -299,6 +299,40 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertTrue(all(button.clicked for button in (provider, model, effort)))
 
+    def test_model_menu_accepts_current_provider_activation_response(self) -> None:
+        provider = FakeButton(b"provider:codex")
+        model = FakeButton(b"choose:codex:model")
+        effort = FakeButton(b"use:codex:model:high")
+        responses = (
+            FakeMessage(2, button=provider),
+            FakeMessage(3, button=model),
+            FakeMessage(4, button=effort),
+            FakeMessage(5, "Codex is now active (generation 2)."),
+        )
+        config = AcceptanceActorConfig(
+            api_id=1,
+            api_hash_file=self.secret,
+            session_path=self.base / "acceptance.session",
+            expected_user_id=1,
+            telegram_chat_id=-1001234567890,
+            telegram_thread_id=77,
+            hub_username="example_hub_bot",
+            provider_usernames=("example_provider_bot",),
+            checks=("model_menu",),
+            timeout_seconds=15,
+            artifacts_dir=self.artifacts,
+        )
+        with patch(
+            "hermes_codex_router.acceptance_actor._wait_for_response",
+            new=AsyncMock(side_effect=responses),
+        ):
+            result = asyncio.run(
+                _run_check(FakeClient(), config, "model_menu", config.hub_username)
+            )
+
+        self.assertTrue(all(button.clicked for button in (provider, model, effort)))
+        self.assertTrue(result.ok)
+
     def test_wait_for_response_fails_fast_on_unrelated_canary_traffic(self) -> None:
         config = load_acceptance_actor_config(self.write_config())
         client = FakeIterClient([FakeIncomingMessage(2, "unrelated_user", sender_id=42)])

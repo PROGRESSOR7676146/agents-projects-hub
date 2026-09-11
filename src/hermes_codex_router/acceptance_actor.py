@@ -731,7 +731,10 @@ async def _run_check(
         except AcceptanceActorError as exc:
             return AcceptanceCheckResult(check, target, False, None, str(exc))
         response_text = str(getattr(response, "raw_text", "")).strip()
-        ok = "will start on the next message" in response_text or "already active" in response_text
+        ok = any(
+            phrase in response_text
+            for phrase in ("will start on the next message", "already active", "is now active")
+        )
     if check == "reply_route":
         if "REPLY_PARENT_OK" not in response_text:
             ok = False
