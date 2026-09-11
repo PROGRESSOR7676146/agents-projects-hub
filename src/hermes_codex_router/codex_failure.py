@@ -36,8 +36,9 @@ def codex_failure_notice(error: BaseException) -> str:
     """Only fixed causes and explicitly visible assistant text reach Telegram."""
     if isinstance(error, CodexPreparationError):
         return (
-            "Codex failed during preparation, before starting the task. "
-            "No productive turn was sent. The provider must be available before retrying."
+            "What happened: Codex could not prepare the task before starting it.\n\n"
+            "Saved: No productive provider turn was sent.\n\n"
+            "Next: Retry after Codex is available."
         )
     reason = getattr(error, "failure_reason", codex_failure_reason(error))
     causes = {
@@ -45,15 +46,29 @@ def codex_failure_notice(error: BaseException) -> str:
         "connection_lost": "Hub lost the connection to Codex before confirming completion.",
         "timeout": "Hub timed out waiting for Codex to confirm completion.",
     }
-    notice = causes.get(reason, "Codex stopped before Hub could confirm completion.")
+    notice = "What happened: " + causes.get(
+        reason, "Codex stopped before Hub could confirm completion."
+    )
     notice += (
-        " Completion is unconfirmed; the task may have changed files or performed other actions. "
-        "Hub did not run it again automatically."
+        "\n\nSaved: Completion is unconfirmed. The task may have changed files or performed "
+        "other actions. Hub did not retry it automatically."
     )
     partial = getattr(error, "partial_text", "")
     if isinstance(partial, str) and partial.strip():
-        notice += "\n\nSaved partial response (incomplete):\n" + html.escape(
-            partial[:MAX_PARTIAL_TEXT]
-        )
-    notice += "\n\nYou can ask Codex to check the partial work and continue when the provider is available."
+        notice += "\n\nPartial response (incomplete):\n" + html.escape(partial[:MAX_PARTIAL_TEXT])
+    notice += (
+        "\n\nNext: Ask Codex to inspect the current project state and continue after the provider "
+        "is available."
+    )
     return notice
+
+
+def uncertain_provider_notice(display_name: str) -> str:
+    """Explain an uncertain non-Codex outcome without exposing provider diagnostics."""
+    safe_name = html.escape(display_name)
+    return (
+        f"What happened: {safe_name} stopped before a final response.\n\n"
+        "Saved: Completion is unconfirmed. The task may have changed files or performed "
+        "other actions. Hub did not retry it automatically.\n\n"
+        f"Next: Ask {safe_name} to inspect the current project state and continue."
+    )

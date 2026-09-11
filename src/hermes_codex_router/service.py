@@ -26,7 +26,7 @@ from .codex_accounts import (
     read_codex_pool_status,
 )
 from .codex_appserver import CodexAppServerClient, LimitWindow, RateLimits, RpcError
-from .codex_failure import CodexPreparationError, codex_preparation
+from .codex_failure import CodexPreparationError, codex_preparation, uncertain_provider_notice
 from .codex_recovery import (
     checkpoint_failure_notice,
     reconcile_codex_completion,
@@ -924,8 +924,7 @@ class ProjectHubService:
                         telegram_html=(
                             checkpoint_failure_notice(queue_state, executing.job_id, exc)
                             if agent.runtime == "codex"
-                            else f"{agent.display_name} stopped before producing a visible result. "
-                            "The outcome is uncertain, so Hub did not retry it automatically."
+                            else uncertain_provider_notice(agent.display_name)
                         ),
                     )
             except Exception:

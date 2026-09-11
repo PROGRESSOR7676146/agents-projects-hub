@@ -27,9 +27,12 @@ propagates clean WebSocket closure without stranding its sender. Passive monitor
 output now reports aggregate outcomes, recovery counts, delivery delay and queue
 ages without provider access or task identity. Schema-21 runtime artifacts cannot
 roll back a schema-22 deployment. A compatible rollback artifact is a release prerequisite.
-Current-tree privacy, formatting and documentation gates are repaired; the full
-release gate remains blocked by pre-existing private data in reachable history.
-No deployment acceptance is implied by this repository checkpoint.
+The read-only `indeterminate-audit` command now classifies retained uncertain work
+and its notification state without outputting content, mutating state, or authorizing
+provider replay. Failure notices use a consistent what happened / saved / next action
+structure. Privacy, formatting, typing, documentation, history, and full test gates
+pass in the current repository history. Live deployment evidence remains private and
+is not implied by this repository checkpoint.
 
 ## Implemented
 
@@ -219,7 +222,8 @@ No deployment acceptance is implied by this repository checkpoint.
   provider, and account conditions are sent once and re-arm only after recovery.
   A configured Hub bot owns these service messages, including Codex account
   rotation events. Provider bot identities are never used for Hub-owned
-  operational notifications. Automatic Codex session context-size advice is
+  operational notifications, and an operations topic without `hub_bot` is
+  rejected during configuration loading. Automatic Codex session context-size advice is
   disabled; compaction remains user initiated. An intentionally unconfigured
   optional Codex account pool is silent rather than reported as unavailable.
   Exhausted inactive accounts remain status data after a successful rotation;
@@ -245,6 +249,8 @@ No deployment acceptance is implied by this repository checkpoint.
   per-turn private diagnostic log, recognizes the provider's unsupported-network
   precondition without exposing raw logs, and reports the safe cause promptly;
   unknown post-invocation failures remain non-retryable and visibly uncertain.
+  All generic uncertain notices state what happened, what Hub saved, and the next
+  safe action.
 - Declarative Telegram command-menu synchronization.
 - Durable bounded Telegram burst collection keeps an unaddressed continuation
   with the first part's provider, including a satellite provider; socket-backed

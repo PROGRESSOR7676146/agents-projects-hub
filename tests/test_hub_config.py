@@ -323,6 +323,20 @@ class HubConfigTests(unittest.TestCase):
     def test_hub_bot_remains_optional_for_backward_compatible_configs(self) -> None:
         self.assertIsNone(load_hub_config(self.write_config()).hub_bot)
 
+    def test_operational_alert_topic_requires_hub_bot(self) -> None:
+        projects = [
+            {"project_id": "alpha", "telegram_chat_id": -1001234567890},
+            {"project_id": "hub", "telegram_chat_id": -1000000000001},
+        ]
+
+        with self.assertRaisesRegex(HubConfigError, "operational_alerts requires hub_bot"):
+            load_hub_config(
+                self.write_config(
+                    projects=projects,
+                    operational_alerts={"project_id": "hub", "telegram_thread_id": 77},
+                )
+            )
+
     def test_dispatch_mode_defaults_to_inline_and_accepts_queue(self) -> None:
         self.assertEqual(load_hub_config(self.write_config()).dispatch_mode, "inline")
         self.assertEqual(load_hub_config(self.write_config()).queue_runtime, "embedded")
@@ -427,6 +441,9 @@ class HubConfigTests(unittest.TestCase):
             load_hub_config(self.write_config(direct_message_project_id="missing"))
 
     def test_loads_single_operational_alert_topic_from_registered_hub_project(self) -> None:
+        hub_token = self.base / "hub-token"
+        hub_token.write_text("654321:hub-token-value", encoding="utf-8")
+        hub_token.chmod(0o600)
         config = load_hub_config(
             self.write_config(
                 projects=[
@@ -434,6 +451,13 @@ class HubConfigTests(unittest.TestCase):
                     {"project_id": "alpha", "telegram_chat_id": -1001234567890},
                 ],
                 operational_alerts={"project_id": "hub", "telegram_thread_id": 41},
+                hub_bot={
+                    "telegram_username": "project_hub_bot",
+                    "token_file": str(hub_token),
+                },
+                dispatch_mode="queue",
+                queue_runtime="external",
+                outbox_runtime="external",
             )
         )
         self.assertEqual(config.operational_alerts.telegram_chat_id, -1000000000001)

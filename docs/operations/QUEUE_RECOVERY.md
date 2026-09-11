@@ -25,6 +25,7 @@ chat IDs, account hints, and live evidence stay in private operator records.
 agents-projects-hub doctor HUB_CONFIG
 agents-projects-hub status HUB_CONFIG
 agents-projects-hub monitor HUB_CONFIG
+agents-projects-hub indeterminate-audit HUB_CONFIG
 systemctl --user status agents-projects-hub.service
 systemctl --user status agents-projects-hub-sender.service
 systemctl --user status 'agents-projects-hub-worker@*.service'
@@ -72,6 +73,15 @@ If a provider has no safe reconciliation capability, retain the
 `indeterminate` record, inspect the project and provider session locally, and
 create a new explicit user request only after deciding whether duplicate side
 effects are acceptable.
+
+`indeterminate-audit` classifies all retained uncertain jobs from read-only
+SQLite evidence and prints only aggregate counts. To preserve a detailed local
+record, pass `--output PRIVATE_PATH`; the command creates a new mode-`0600` JSON
+file and refuses to overwrite an earlier report. The report never authorizes
+productive replay. Its evidence classes distinguish a persisted result, saved
+completion, partial text, accepted turn without visible output, thread creation
+without accepted turn, and absence of an execution checkpoint. Notification
+status is reported separately so an undelivered uncertainty notice is visible.
 
 ## Changing provider ownership
 

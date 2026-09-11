@@ -599,6 +599,8 @@ def load_hub_config(
         )
         if any(agent.token_file == hub_bot.token_file for agent in agents):
             raise HubConfigError("hub_bot.token_file duplicates an agent token_file")
+    if alerts_chat_id is not None and hub_bot is None:
+        raise HubConfigError("operational_alerts requires hub_bot")
 
     direct_message_project_id = root.get("direct_message_project_id")
     if direct_message_project_id is not None and (

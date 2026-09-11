@@ -316,10 +316,11 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         try:
             self.assertTrue(worker.run_cycle())
             self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
-            self.assertIn(
-                "did not retry",
-                worker.state.get_telegram_outbox_for_job(job_id).telegram_html,
-            )
+            notice = worker.state.get_telegram_outbox_for_job(job_id).telegram_html
+            self.assertIn("did not retry", notice)
+            self.assertIn("What happened:", notice)
+            self.assertIn("Saved:", notice)
+            self.assertIn("Next:", notice)
         finally:
             worker.close()
 

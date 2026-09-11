@@ -27,8 +27,9 @@ This normative module is part of the
   only to one explicitly configured Hub Operations/Alerts topic. The configured
   Hub bot is the only Telegram sender for Hub-owned operational notifications;
   provider bot identities MUST NOT be used when `hub_bot` is absent. Hermes may
-  fall back only to that same topic. Routine monitoring MUST NOT emit Codex session context-size
-  advice; session compaction remains an explicit user decision. An optional
+  fall back only to that same topic. A configured operations topic MUST fail
+  configuration validation when `hub_bot` is absent. Routine monitoring MUST
+  NOT emit Codex session context-size advice; session compaction remains an explicit user decision. An optional
   Codex account pool that is not configured MUST NOT produce an unavailable-pool
   alert. Quota alerts include a recognizable masked account hint and never
   expose a full identity.
@@ -152,7 +153,12 @@ recreate unsaved provider context or a partially executed turn.
   otherwise one bounded `thread/read` may retrieve the exact accepted completed
   turn without resuming or invoking it. Root/identity mismatch, missing acceptance,
   unavailable read capability or an unfinished turn MUST preserve uncertainty
-  and any eligible saved partial text, never authorize productive replay.
+  and any eligible saved partial text, never authorize productive replay. A
+  read-only local audit MUST classify terminal indeterminate jobs from persisted
+  result, completion, partial, acceptance, thread, and notification evidence;
+  it MUST exclude prompt/response content from its aggregate output and MUST
+  never mutate or replay provider work. Failure notices MUST state what happened,
+  what Hub saved, and the next safe action.
 - **REQ-QUEUE-005 (Implemented for embedded compatibility and the external sender):** Provider result persistence and Telegram delivery
   MUST use a durable outbox. Telegram delivery retry MUST NOT create another
   provider turn, and visible-context acknowledgement MUST occur only after a

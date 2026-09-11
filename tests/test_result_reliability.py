@@ -119,6 +119,9 @@ class ResultReliabilityTests(unittest.TestCase):
             self.assertIn("Partial &lt;answer&gt;", notice.telegram_html)
             self.assertNotIn("private diagnostic", notice.telegram_html)
             self.assertIn("incomplete", notice.telegram_html.lower())
+            self.assertIn("What happened:", notice.telegram_html)
+            self.assertIn("Saved:", notice.telegram_html)
+            self.assertIn("Next:", notice.telegram_html)
             self.assertEqual(worker.state.telegram_contract_version(job.session_id), 0)
             lease = worker.state.lease_telegram_outbox("codex", "fictional-sender")
             assert lease is not None and lease.lease_token is not None

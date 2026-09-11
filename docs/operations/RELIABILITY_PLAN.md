@@ -37,10 +37,13 @@ Source findings are in [the quality review](QUALITY_AND_STABILITY_REVIEW.md).
    age. Extracting more duplicated lifecycle policy remains incremental
    maintenance under contract tests. Retire compatibility paths only after
    acceptance and rollback requirements.
-6. **Deployment acceptance and recovery.** Prepare an exact clean candidate and
-   compatible rollback artifact, then perform separately authorized deployment,
-   bounded Telegram/provider E2E and off-machine restore drills. Keep all real
-   deployment evidence outside Git. No background model probes.
+6. **Deployment acceptance and recovery — active rollout complete; bounded live
+   acceptance in progress.** Prepare an exact clean candidate and compatible
+   rollback artifact, then perform separately authorized deployment, bounded
+   Telegram/provider E2E and off-machine restore drills. Keep all real deployment
+   evidence outside Git. No background model probes. A read-only indeterminate
+   audit and fail-fast Hub operations identity validation are included before
+   the bounded live acceptance run.
 
 ## Scope and execution discipline
 

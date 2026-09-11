@@ -15,7 +15,7 @@ from .artifacts import (
     spool_staged_artifacts,
 )
 from .codex_appserver import CodexAppServerClient, RateLimits, RpcRejectedError
-from .codex_failure import CodexPreparationError, codex_preparation
+from .codex_failure import CodexPreparationError, codex_preparation, uncertain_provider_notice
 from .codex_proxy_health import probe_codex_runtime_proxy
 from .codex_recovery import (
     checkpoint_failure_notice,
@@ -378,9 +378,7 @@ class ExternalQueueWorker:
                             telegram_html=(
                                 checkpoint_failure_notice(self.state, executing.job_id, exc)
                                 if self.agent.runtime == "codex"
-                                else f"{self.agent.display_name} stopped before producing a "
-                                "visible result. The outcome is uncertain, so Hub did not "
-                                "retry it automatically."
+                                else uncertain_provider_notice(self.agent.display_name)
                             ),
                         )
                         self._record_event(

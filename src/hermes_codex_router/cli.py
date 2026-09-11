@@ -29,6 +29,10 @@ from .hub_config import (
     load_outbox_sender_config,
     load_provider_service_config,
 )
+from .indeterminate_audit import (
+    classify_indeterminate_jobs,
+    write_private_indeterminate_report,
+)
 from .lifecycle import stop_on_signals
 from .migrations import backup_database, migrate_database
 from .monitoring import run_monitor_once
@@ -84,6 +88,13 @@ def _parser() -> argparse.ArgumentParser:
 
     status = commands.add_parser("status", help="print persisted topic/session status")
     status.add_argument("config", type=Path)
+
+    indeterminate_audit = commands.add_parser(
+        "indeterminate-audit",
+        help="classify uncertain provider jobs without replaying them",
+    )
+    indeterminate_audit.add_argument("config", type=Path)
+    indeterminate_audit.add_argument("--output", type=Path)
 
     commands.add_parser("release-info", help="print embedded package release identity")
 
@@ -385,6 +396,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _print(result)
             finally:
                 state.close()
+            return 0
+        if args.command == "indeterminate-audit":
+            config = load_external_worker_config(args.config)
+            report = classify_indeterminate_jobs(config.state_path)
+            if args.output is not None:
+                write_private_indeterminate_report(args.output, report)
+            _print(
+                {
+                    "ok": True,
+                    "total": report["total"],
+                    "evidence": report["evidence"],
+                    "notice_status": report["notice_status"],
+                    "productive_replay_authorized": False,
+                    "report_written": args.output is not None,
+                }
+            )
             return 0
         if args.command == "release-info":
             _print({"ok": CURRENT_RELEASE.verified, **asdict(CURRENT_RELEASE)})
