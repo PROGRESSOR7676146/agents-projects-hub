@@ -5,7 +5,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from hermes_codex_router.alerts import evaluate_operational_alerts
+from hermes_codex_router.alerts import (
+    _extract_latest_session_token_usage,
+    check_codex_session_bloat,
+    evaluate_operational_alerts,
+)
 from hermes_codex_router.codex_accounts import CodexAccountStatus, CodexPoolStatus
 from hermes_codex_router.hub_config import OperationalAlertSettings
 from hermes_codex_router.monitoring import (
@@ -490,6 +494,155 @@ class OperationalAlertTests(unittest.TestCase):
             )
             self.assertTrue(_claim_operational_alert(state, alerts[0], cooldown_seconds=0))
             state.close()
+
+    def test_extract_latest_session_token_usage(self) -> None:
+        with TemporaryDirectory() as directory:
+            p = Path(directory) / "rollout-test.jsonl"
+            self.assertIsNone(_extract_latest_session_token_usage(p))
+
+            p.write_text('{"type":"session_meta"}\n{"type":"turn_context"}\n', encoding="utf-8")
+            self.assertIsNone(_extract_latest_session_token_usage(p))
+
+            p.write_text(
+                '{"type":"session_meta"}\n'
+                '{"type":"token_usage_record","payload":{"session_id":"sess-123","usage":{"input_tokens":75000,"total_tokens":75500}}}\n'
+                '{"type":"event_msg","payload":{"type":"task_complete"}}\n',
+                encoding="utf-8",
+            )
+            extracted = _extract_latest_session_token_usage(p)
+            self.assertIsNotNone(extracted)
+            assert extracted is not None
+            session_id, input_tokens, total_tokens = extracted
+            self.assertEqual(session_id, "sess-123")
+            self.assertEqual(input_tokens, 75000)
+            self.assertEqual(total_tokens, 75500)
+
+    def test_check_codex_session_bloat_alerts_and_ignores(self) -> None:
+        with TemporaryDirectory() as directory:
+            sessions_dir = Path(directory)
+            now = datetime(2026, 9, 6, 4, 0, 0, tzinfo=timezone.utc)
+            now_ts = now.timestamp()
+
+            # Session 1: Bloated (75k tokens, recent)
+            s1 = sessions_dir / "2026" / "09" / "06" / "rollout-2026-09-06-sess-bloat.jsonl"
+            s1.parent.mkdir(parents=True, exist_ok=True)
+            s1.write_text(
+                '{"type":"token_usage_record","payload":{"session_id":"01a07027-bloated-uuid","usage":{"input_tokens":75000,"total_tokens":75500}}}\n',
+                encoding="utf-8",
+            )
+            import os
+
+            os.utime(s1, (now_ts - 300, now_ts - 300))  # 5 min ago
+
+            # Session 2: Safe tokens (25k tokens, recent)
+            s2 = sessions_dir / "2026" / "09" / "06" / "rollout-2026-09-06-sess-safe.jsonl"
+            s2.write_text(
+                '{"type":"token_usage_record","payload":{"session_id":"01a073bf-safe-uuid","usage":{"input_tokens":25000,"total_tokens":25200}}}\n',
+                encoding="utf-8",
+            )
+            os.utime(s2, (now_ts - 300, now_ts - 300))
+
+            # Session 3: Bloated but stale (100k tokens, 5 hours ago > max_age_seconds)
+            s3 = sessions_dir / "2026" / "09" / "05" / "rollout-2026-09-05-sess-stale.jsonl"
+            s3.parent.mkdir(parents=True, exist_ok=True)
+            s3.write_text(
+                '{"type":"token_usage_record","payload":{"session_id":"01a06999-stale-uuid","usage":{"input_tokens":100000,"total_tokens":101000}}}\n',
+                encoding="utf-8",
+            )
+            os.utime(s3, (now_ts - 18000, now_ts - 18000))
+
+            alerts = check_codex_session_bloat(
+                sessions_dir,
+                threshold_tokens=65000,
+                max_age_seconds=7200,
+                now=now,
+            )
+            self.assertEqual(len(alerts), 1)
+            alert = alerts[0]
+            self.assertEqual(alert.code, "codex_context_bloat")
+            self.assertEqual(alert.key, "codex:session:01a07027-bloated-uuid:bloat")
+            self.assertEqual(alert.severity, "warning")
+            self.assertIn("01a07027", alert.message)
+            self.assertIn("75,000 tokens", alert.message)
+            self.assertIn("/compact", alert.message)
+
+            # Also verify integration via evaluate_operational_alerts
+            pool = CodexPoolStatus(True, True, (), None, 0)
+            evaluated = evaluate_operational_alerts(
+                pool=pool,
+                state_snapshot={"pending_dispatches": []},
+                doctor_ok=True,
+                codex_sessions_dir=sessions_dir,
+                now=now,
+            )
+            self.assertIn("codex_context_bloat", {a.code for a in evaluated})
+
+    def test_session_bloat_labels_telegram_and_cli_sessions(self) -> None:
+        with TemporaryDirectory() as directory:
+            codex_home = Path(directory)
+            sessions_dir = codex_home / "sessions"
+            now = datetime(2026, 9, 6, 11, 0, 0, tzinfo=timezone.utc)
+            now_ts = now.timestamp()
+
+            # Session 1: Telegram session (mapped in state_snapshot)
+            s1_id = "01a049a1-tg-uuid"
+            s1 = sessions_dir / "2026" / "09" / "06" / f"rollout-{s1_id}.jsonl"
+            s1.parent.mkdir(parents=True, exist_ok=True)
+            s1.write_text(
+                '{"type":"session_meta","payload":{"cwd":"/home/example/projects/example-project"}}\n'
+                f'{{"type":"token_usage_record","payload":{{"session_id":"{s1_id}","usage":{{"input_tokens":80000,"total_tokens":81000}}}}}}\n',
+                encoding="utf-8",
+            )
+            import os
+
+            os.utime(s1, (now_ts - 60, now_ts - 60))
+
+            # Session 2: CLI session with thread_name in session_index.jsonl
+            s2_id = "01a0759e-cli-uuid"
+            s2 = sessions_dir / "2026" / "09" / "06" / f"rollout-{s2_id}.jsonl"
+            s2.write_text(
+                '{"type":"session_meta","payload":{"cwd":"/home/example/projects/example-cli"}}\n'
+                f'{{"type":"token_usage_record","payload":{{"session_id":"{s2_id}","usage":{{"input_tokens":95000,"total_tokens":96000}}}}}}\n',
+                encoding="utf-8",
+            )
+            os.utime(s2, (now_ts - 60, now_ts - 60))
+
+            idx_file = codex_home / "session_index.jsonl"
+            idx_file.write_text(
+                f'{{"id":"{s2_id}","thread_name":"Example CLI task","updated_at":"2026-09-06T11:00:00Z"}}\n',
+                encoding="utf-8",
+            )
+
+            state_snapshot = {
+                "topics": [
+                    {
+                        "topic_id": 1,
+                        "project_id": "example-project",
+                        "thread_id": 77,
+                        "title": "Example topic",
+                        "provider_session_id": s1_id,
+                    }
+                ],
+                "pending_dispatches": [],
+            }
+
+            alerts = check_codex_session_bloat(
+                sessions_dir,
+                threshold_tokens=65000,
+                max_age_seconds=7200,
+                now=now,
+                state_snapshot=state_snapshot,
+            )
+            self.assertEqual(len(alerts), 2)
+            alert_by_key = {a.key: a for a in alerts}
+
+            tg_alert = alert_by_key[f"codex:session:{s1_id}:bloat"]
+            self.assertIn("Telegram [example-project: Example topic #77]", tg_alert.message)
+            self.assertIn("80,000 tokens", tg_alert.message)
+
+            cli_alert = alert_by_key[f"codex:session:{s2_id}:bloat"]
+            self.assertIn('CLI "Example CLI task"', cli_alert.message)
+            self.assertIn("95,000 tokens", cli_alert.message)
 
 
 if __name__ == "__main__":

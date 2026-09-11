@@ -203,7 +203,7 @@ def run_monitor_once(
                     else "codex-multi-auth"
                 ),
                 identity_hints=config.codex_account_hints,
-                live=True,
+                live=False,
                 timezone_name="Europe/Moscow",
             )
             if config.codex_multi_auth_dir is not None
@@ -300,6 +300,7 @@ def run_monitor_once(
                 ),
                 None,
             ),
+            codex_sessions_dir=config.codex_sessions_dir,
         )
         proxy_check = next(
             (

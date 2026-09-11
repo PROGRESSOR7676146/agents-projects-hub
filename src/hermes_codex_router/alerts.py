@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Mapping
 
 from .codex_accounts import CodexPoolStatus
 
 DEFAULT_LOW_QUOTA_PERCENT = 5
+DEFAULT_CONTEXT_BLOAT_THRESHOLD = 65_000
+DEFAULT_SESSION_SCAN_MAX_AGE_SECONDS = 7200
+DEFAULT_MAX_TAIL_BYTES = 524288
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +33,198 @@ def _timestamp(value: object) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
+def _extract_latest_session_token_usage(
+    path: Path, max_tail_bytes: int = DEFAULT_MAX_TAIL_BYTES
+) -> tuple[str, int, int] | None:
+    """Extract (session_id, input_tokens, total_tokens) from the tail of a rollout-*.jsonl file."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, size - max_tail_bytes))
+            chunk = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+    for line in reversed(chunk.splitlines()):
+        if '"token_usage_record"' in line:
+            try:
+                data = json.loads(line)
+            except Exception:
+                continue
+            if data.get("type") == "token_usage_record":
+                payload = data.get("payload")
+                if isinstance(payload, dict):
+                    usage = payload.get("usage")
+                    if isinstance(usage, dict):
+                        input_tokens = usage.get("input_tokens")
+                        if isinstance(input_tokens, int):
+                            session_id = str(
+                                payload.get("session_id")
+                                or payload.get("thread_id")
+                                or path.stem.replace("rollout-", "")
+                            )
+                            total_tokens = usage.get("total_tokens")
+                            total = total_tokens if isinstance(total_tokens, int) else input_tokens
+                            return session_id, input_tokens, total
+    return None
+
+
+def _abbreviate_path(path_str: str) -> str:
+    home = str(Path.home())
+    if path_str == home:
+        return "~"
+    if path_str.startswith(home + "/"):
+        return "~" + path_str[len(home):]
+    return path_str
+
+
+def _clean_text(text: str, max_len: int = 60) -> str:
+    line = text.splitlines()[0].strip()
+    return line[:max_len] + ("..." if len(line) > max_len else "")
+
+
+def _resolve_codex_session_label(
+    session_id: str,
+    sessions_dir: Path,
+    *,
+    state_snapshot: Mapping[str, object] | None = None,
+    rollout_path: Path | None = None,
+) -> str | None:
+    """Return a descriptive human-readable label for a Codex session."""
+    # 1. Check if session belongs to a Telegram topic managed by Hub
+    if state_snapshot is not None:
+        topics = state_snapshot.get("topics")
+        if isinstance(topics, list):
+            for t in topics:
+                if not isinstance(t, dict):
+                    continue
+                provider_sid = t.get("provider_session_id")
+                if provider_sid and str(provider_sid).strip() == session_id:
+                    project = str(t.get("project_id") or "hub")
+                    title = str(t.get("title") or "").strip()
+                    thread_id = t.get("thread_id")
+                    if title and thread_id is not None:
+                        return f"Telegram [{project}: {title} #{thread_id}]"
+                    if title:
+                        return f"Telegram [{project}: {title}]"
+                    return f"Telegram [{project} #{thread_id}]"
+
+    # 2. Check Codex local session index (~/.codex/session_index.jsonl)
+    thread_name: str | None = None
+    codex_home = sessions_dir.parent
+    idx_path = codex_home / "session_index.jsonl"
+    if idx_path.is_file():
+        try:
+            with open(idx_path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if session_id in line:
+                        try:
+                            data = json.loads(line)
+                            if data.get("id") == session_id and data.get("thread_name"):
+                                thread_name = _clean_text(str(data["thread_name"]))
+                        except Exception:
+                            continue
+        except OSError:
+            pass
+
+    # 3. Check Codex local state db (~/.codex/state_5.sqlite) for name/title and cwd
+    cwd: str | None = None
+    db_path = codex_home / "state_5.sqlite"
+    if db_path.is_file():
+        try:
+            with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as con:
+                row = con.execute(
+                    "SELECT name, title, cwd FROM threads WHERE id = ?", (session_id,)
+                ).fetchone()
+                if row:
+                    if not thread_name and row[0]:
+                        thread_name = _clean_text(str(row[0]))
+                    elif not thread_name and row[1]:
+                        thread_name = _clean_text(str(row[1]))
+                    if row[2]:
+                        cwd = str(row[2]).strip()
+        except Exception:
+            pass
+
+    # 4. Fallback cwd from rollout file header if needed
+    if not cwd and rollout_path and rollout_path.is_file():
+        try:
+            with open(rollout_path, "r", encoding="utf-8", errors="replace") as f:
+                first_line = f.readline()
+                if first_line:
+                    meta = json.loads(first_line)
+                    if meta.get("type") == "session_meta":
+                        payload = meta.get("payload")
+                        if isinstance(payload, dict) and payload.get("cwd"):
+                            cwd = str(payload["cwd"]).strip()
+        except Exception:
+            pass
+
+    parts: list[str] = []
+    if thread_name:
+        parts.append(f'"{thread_name}"')
+    if cwd:
+        parts.append(f"in {_abbreviate_path(cwd)}")
+
+    joined = " ".join(parts)
+    return f"CLI {joined}" if parts else None
+
+
+def check_codex_session_bloat(
+    sessions_dir: Path,
+    *,
+    threshold_tokens: int = DEFAULT_CONTEXT_BLOAT_THRESHOLD,
+    max_age_seconds: int = DEFAULT_SESSION_SCAN_MAX_AGE_SECONDS,
+    now: datetime | None = None,
+    state_snapshot: Mapping[str, object] | None = None,
+) -> tuple[OperationalAlert, ...]:
+    if not sessions_dir.is_dir():
+        return ()
+    current_time = (now or datetime.now(timezone.utc)).timestamp()
+    alerts: list[OperationalAlert] = []
+
+    try:
+        entries = list(sessions_dir.rglob("rollout-*.jsonl"))
+    except OSError:
+        return ()
+
+    for entry in entries:
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            continue
+        if (current_time - mtime) > max_age_seconds:
+            continue
+        usage_info = _extract_latest_session_token_usage(entry)
+        if usage_info is None:
+            continue
+        session_id, input_tokens, total_tokens = usage_info
+        if input_tokens >= threshold_tokens:
+            sid_short = session_id[:8]
+            label = _resolve_codex_session_label(
+                session_id,
+                sessions_dir,
+                state_snapshot=state_snapshot,
+                rollout_path=entry,
+            )
+            name_part = f" ({label})" if label else ""
+            alerts.append(
+                OperationalAlert(
+                    key=f"codex:session:{session_id}:bloat",
+                    code="codex_context_bloat",
+                    severity="warning",
+                    message=(
+                        f"Codex session {sid_short}{name_part} context size reached {input_tokens:,} tokens. "
+                        "Run /compact or start a /new session to avoid rapid quota exhaustion and 429."
+                    ),
+                )
+            )
+    return tuple(alerts)
+
+
 def evaluate_operational_alerts(
     *,
     pool: CodexPoolStatus,
@@ -37,8 +235,11 @@ def evaluate_operational_alerts(
     hermes_telegram: Mapping[str, object] | None = None,
     runtime_health: Mapping[str, object] | None = None,
     codex_config_proxy_ok: bool | None = None,
+    codex_sessions_dir: Path | None = None,
     now: datetime | None = None,
     low_quota_percent: int = DEFAULT_LOW_QUOTA_PERCENT,
+    context_bloat_threshold: int = DEFAULT_CONTEXT_BLOAT_THRESHOLD,
+    session_max_age_seconds: int = DEFAULT_SESSION_SCAN_MAX_AGE_SECONDS,
     stuck_after_seconds: int = 15 * 60,
 ) -> tuple[OperationalAlert, ...]:
     evaluated_at = now or datetime.now(timezone.utc)
@@ -267,6 +468,19 @@ def evaluate_operational_alerts(
                 )
     pending = state_snapshot.get("pending_dispatches")
     if isinstance(pending, list):
+        topic_lookup: dict[int, str] = {}
+        topics = state_snapshot.get("topics")
+        if isinstance(topics, list):
+            for t in topics:
+                if isinstance(t, dict) and t.get("topic_id") is not None:
+                    try:
+                        tid = int(t["topic_id"])
+                        project = str(t.get("project_id") or "hub")
+                        title = str(t.get("title") or "").strip()
+                        topic_lookup[tid] = f"{project}: {title}" if title else project
+                    except (ValueError, TypeError):
+                        pass
+
         for item in pending:
             if not isinstance(item, dict):
                 continue
@@ -277,13 +491,28 @@ def evaluate_operational_alerts(
             ):
                 continue
             topic_id = item.get("topic_id")
+            topic_desc = (
+                f"topic {topic_id} ({topic_lookup[topic_id]})"
+                if topic_id in topic_lookup
+                else f"topic {topic_id}"
+            )
             agent_id = str(item.get("agent_id") or "unknown")[:32]
             alerts.append(
                 OperationalAlert(
                     f"dispatch:topic:{topic_id}:agent:{agent_id}",
                     "dispatch_stuck",
                     "error",
-                    f"A {agent_id} dispatch in topic {topic_id} has been running for over 15 minutes.",
+                    f"A {agent_id} dispatch in {topic_desc} has been running for over 15 minutes.",
                 )
             )
+    if codex_sessions_dir is not None and codex_sessions_dir.is_dir():
+        alerts.extend(
+            check_codex_session_bloat(
+                codex_sessions_dir,
+                threshold_tokens=context_bloat_threshold,
+                max_age_seconds=session_max_age_seconds,
+                now=evaluated_at,
+                state_snapshot=state_snapshot,
+            )
+        )
     return tuple(alerts)

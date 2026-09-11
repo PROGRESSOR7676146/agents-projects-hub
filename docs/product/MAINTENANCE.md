@@ -42,6 +42,11 @@ This normative module is part of the
    abstraction.
 7. Store live deployment evidence outside Git and publish only reusable
    acceptance requirements or anonymized aggregate results.
+8. Background monitors, daemons, healthchecks, and scheduled timers MUST NEVER
+   make live inference calls to LLMs or trigger `--live` probes. Telemetry,
+   quota status, and health metrics must always be read passively from local
+   cached files (`quota-cache.json`, logs) or response headers. Live probes are
+   strictly prohibited except upon explicit, interactive operator request.
 
 ## 20. Provenance
 

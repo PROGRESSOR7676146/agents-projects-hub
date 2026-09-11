@@ -75,5 +75,6 @@ revision and highest proven level.
 - Persist routing state locally with restrictive permissions; treat duplicate Telegram updates idempotently.
 - Never use `pkill` against systemd-managed services; manage their lifecycle
   explicitly through the service manager.
+- Background monitors, health checks, cron jobs, recovery probes, and scheduled timers MUST NEVER invoke live LLM inference endpoints or pass `--live` flags. Telemetry, quota status, and provider health must always be read passively from local cached files (`quota-cache.json`, logs, response headers). Live probes are permitted ONLY upon explicit, manual user invocation.
 
 Use test-first development for router behavior. Live bot changes, daemon launch, service installation and credential changes require an explicit deployment task.

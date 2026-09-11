@@ -130,6 +130,7 @@ class HubConfig:
     )
     acceptance_actors: tuple[AcceptanceActor, ...] = ()
     codex_multi_auth_dir: Path | None = None
+    codex_sessions_dir: Path | None = None
     codex_multi_auth_executable: Path | None = None
     codex_stdio_executable: Path | None = None
     codex_account_hints: dict[int, str] = field(default_factory=dict)
@@ -324,6 +325,14 @@ def load_hub_config(
             raise HubConfigError(
                 "manage_codex_server and codex_stdio_executable are mutually exclusive"
             )
+    sessions_dir_value = root.get("codex_sessions_dir")
+    codex_sessions_dir = None
+    if sessions_dir_value is not None:
+        codex_sessions_dir = _absolute_path(
+            sessions_dir_value, "codex_sessions_dir", must_exist=True
+        )
+        if not codex_sessions_dir.is_dir():
+            raise HubConfigError("codex_sessions_dir must be a directory")
 
     terminal_data = _object(root.get("terminal", {}), "terminal")
     terminal_backend = terminal_data.get("backend", "auto")
@@ -713,6 +722,7 @@ def load_hub_config(
         message_batch_max_ms=message_batch_max_ms,
         direct_message_project_id=direct_message_project_id,
         codex_multi_auth_dir=codex_multi_auth_dir,
+        codex_sessions_dir=codex_sessions_dir,
         codex_multi_auth_executable=codex_multi_auth_executable,
         codex_stdio_executable=codex_stdio_executable,
         codex_account_hints=codex_account_hints,
