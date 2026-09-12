@@ -8,6 +8,28 @@ operator deployment inventory or live conversation evidence.
 
 ## Quality checkpoint
 
+Hub-owned execution now revalidates the cached canonical allowlisted Git root
+before provider access or project staging. Both queue modes reject filesystem
+drift as a terminal pre-execution failure with a durable, path-free notice and
+no automatic retry. Inline/native execution and local-transfer preparation use
+the same guard; real linked Git worktrees remain supported. Offline regressions
+first reproduced invocation through a replaced root and now cover refusal in
+all three local queue runtimes. See [ADR 0023](../decisions/0023-execution-time-root-validation.md).
+Schema remains 25. This is not root/lane-wide execution exclusion, protection
+against every filesystem race, or acceptance of unmanaged CLI/Hermes execution.
+Deployment and live continuity remain unverified for this change.
+
+Queue-owned productive ingress now retains the Telegram offset when a transient
+SQLite fault prevents session preparation or leaves enqueue disposition
+uncertain. It stops the current batch, waits with a bounded backoff, and returns
+the update through the existing idempotent queue admission; a committed job or
+input membership is not duplicated after Controller recreation or offset-write
+failure. Diagnostic-event failure cannot turn the original admission fault into
+an acknowledgement. Deterministic terminal/ignored inputs keep their existing
+disposition, and inline turns remain outside this retry boundary after provider
+invocation may have begun. Schema remains 25. Offline polling/SQLite tests cover
+these boundaries; no live Telegram or deployment acceptance is claimed.
+
 The [quality and stability review](../operations/QUALITY_AND_STABILITY_REVIEW.md)
 records the initial findings. Milestone one of the
 [reliability plan](../operations/RELIABILITY_PLAN.md) now consumes buffered Codex

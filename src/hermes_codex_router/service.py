@@ -4,6 +4,7 @@ import hashlib
 import html
 import os
 import re
+import sqlite3
 import subprocess
 import threading
 import time
@@ -51,7 +52,7 @@ from .provider_catalog import (
 from .provider_catalog_cache import CatalogSnapshot, ProviderCatalogCache
 from .provider_limits import ProviderLimit, decode_provider_limit
 from .provider_telemetry import load_antigravity_telemetry
-from .registry import Project, load_registry
+from .registry import ExecutionRootError, Project, load_registry, validate_execution_root
 from .routing import (
     decide_targets,
     is_emergency_stop,
@@ -93,7 +94,7 @@ class ServiceError(RuntimeError):
 
 
 class QueueAcceptanceError(ServiceError):
-    """A productive update has not reached its durable enqueue commit."""
+    """A queued productive update must return through idempotent admission."""
 
 
 class ProjectHubService:
@@ -742,8 +743,9 @@ class ProjectHubService:
         )
         heartbeat.start()
         staging_dir = project.root / ".hub" / "staging" / executing.job_id
-        staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
+            validate_execution_root(self.registry, project)
+            staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             contract_version = telegram_contract_version(agent.runtime)
             full_contract = (
                 executing.provider_session_id is None
@@ -879,7 +881,9 @@ class ProjectHubService:
             # provider-specific proof, even if an adapter reports an error.
             error_class = "quota" if isinstance(exc, ProviderLimitError) else "ambiguous_execution"
             recovered = False
-            if agent.runtime == "codex" and not isinstance(exc, CodexPreparationError):
+            if agent.runtime == "codex" and not isinstance(
+                exc, (CodexPreparationError, ExecutionRootError)
+            ):
                 assert self.supervisor is not None
                 try:
                     recovered = reconcile_codex_completion(
@@ -894,7 +898,18 @@ class ProjectHubService:
                 except Exception:
                     recovered = False
             try:
-                if recovered:
+                if isinstance(exc, ExecutionRootError):
+                    error_class = "pre_execution"
+                    queue_state.terminate_provider_job_with_notice(
+                        executing.job_id,
+                        token,
+                        status="failed",
+                        error_class=error_class,
+                        error_code=exc.code,
+                        sender_agent_id=agent.agent_id,
+                        telegram_html=exc.public_message,
+                    )
+                elif recovered:
                     queue_state.record_runtime_event(
                         agent.agent_id,
                         "info",
@@ -1101,6 +1116,7 @@ class ProjectHubService:
     def _ensure_provider_thread(
         self, *, project: Project, topic: TopicRecord, session: SessionRecord
     ) -> SessionRecord:
+        validate_execution_root(self.registry, project)
         if session.provider_session_id:
             return session
         self._require_legacy_codex_execution(self.state)
@@ -1135,6 +1151,7 @@ class ProjectHubService:
         message: TopicMessage,
     ) -> str:
         self._require_legacy_codex_execution(self.state)
+        validate_execution_root(self.registry, project)
         client = self._client()
         new_session = (
             session.provider_session_id is None
@@ -1793,7 +1810,55 @@ class ProjectHubService:
         self.telegram.answer_callback(callback.callback_id, "Unknown action")
         return False
 
+    def _queue_ingress_can_retry_without_productive_replay(self, update: dict[str, object]) -> bool:
+        """Classify only queue-owned productive input before handling it again."""
+        if getattr(self.config, "dispatch_mode", "inline") != "queue":
+            return False
+        direct_messages_only = getattr(self, "direct_messages_only", False)
+        ingress_identity = getattr(self, "ingress_identity", self.agent.agent_id)
+        if direct_messages_only:
+            callback = parse_direct_callback(update)
+        elif ingress_identity == "hub":
+            callback = parse_topic_callback(update)
+        else:
+            callback = parse_topic_callback(update) or parse_direct_callback(update)
+        if callback is not None:
+            return False
+        if direct_messages_only:
+            message = parse_direct_message(update)
+        elif ingress_identity == "hub":
+            message = parse_topic_message(update)
+        else:
+            message = parse_topic_message(update) or parse_direct_message(update)
+        if message is None or not self.config.is_authorized(
+            message.sender_id, message.chat_id, message.thread_id
+        ):
+            return False
+        try:
+            self.config.project_for_chat(message.chat_id)
+        except KeyError:
+            direct_project = self.config.direct_message_project_id
+            if direct_project is None or message.chat_id != message.sender_id:
+                return False
+        if message.is_forwarded or is_emergency_stop(message.text):
+            return False
+        if parse_command(message.text) is not None:
+            return False
+        return any(self._queue_enabled(agent.agent_id) for agent in self.config.agents)
+
     def handle_update(self, update: dict[str, object]) -> bool:
+        try:
+            return self._handle_update(update)
+        except QueueAcceptanceError:
+            raise
+        except sqlite3.Error as exc:
+            if self._queue_ingress_can_retry_without_productive_replay(update):
+                raise QueueAcceptanceError(
+                    "queued productive admission has no durable disposition"
+                ) from exc
+            raise
+
+    def _handle_update(self, update: dict[str, object]) -> bool:
         direct_messages_only = getattr(self, "direct_messages_only", False)
         ingress_identity = getattr(self, "ingress_identity", self.agent.agent_id)
         if direct_messages_only:
@@ -2087,7 +2152,13 @@ class ProjectHubService:
                 )
                 return True
             project = self.registry.require_project(binding.project_id)
-            session = self._ensure_provider_thread(project=project, topic=topic, session=session)
+            try:
+                session = self._ensure_provider_thread(
+                    project=project, topic=topic, session=session
+                )
+            except ExecutionRootError as exc:
+                self._send_text(message, exc.public_message)
+                return True
             if not session.provider_session_id or not session.terminal_name:
                 raise ServiceError("provider thread is not ready for terminal takeover")
             if session.writer_mode == "terminal" and self.terminal.is_running(
@@ -2140,10 +2211,11 @@ class ProjectHubService:
             project = self.registry.require_project(binding.project_id)
             agent = self.config.require_agent(session.agent_id)
             try:
+                validate_execution_root(self.registry, project)
                 resume = local_resume_command(
                     agent.runtime, agent.executable, session.provider_session_id, project.root
                 )
-            except LocalTransferError as exc:
+            except (LocalTransferError, ExecutionRootError) as exc:
                 self._send_text(message, str(exc))
                 return True
             self.state.set_writer_mode(session.session_id, "local")
@@ -2228,7 +2300,11 @@ class ProjectHubService:
                 self._send_text(
                     message,
                     "Ownership returned to Telegram, but the local summary failed safely "
-                    f"({type(exc).__name__}).",
+                    + (
+                        exc.public_message
+                        if isinstance(exc, ExecutionRootError)
+                        else f"({type(exc).__name__})."
+                    ),
                 )
             return True
         if command and command.name == "model":
@@ -2481,7 +2557,9 @@ class ProjectHubService:
             )
             self._send_text(
                 message,
-                f"Codex turn failed safely ({type(exc).__name__}); no permission was auto-approved.",
+                exc.public_message
+                if isinstance(exc, ExecutionRootError)
+                else f"Codex turn failed safely ({type(exc).__name__}); no permission was auto-approved.",
             )
             # A provider/RPC failure belongs to this one update. Letting it escape
             # terminates the Telegram poller and makes every bot appear offline.
@@ -2521,11 +2599,21 @@ class ProjectHubService:
                     try:
                         self.handle_update(update)
                     except QueueAcceptanceError as exc:
-                        # Retry the Telegram update: no durable acceptance occurred.
+                        # Queue admission is idempotent, so redelivery is safe
+                        # both before commit and when commit outcome is unclear.
                         advance_offset = False
-                        self.state.record_runtime_event(
-                            ingress_identity, "error", "queue_enqueue_error", type(exc).__name__
-                        )
+                        try:
+                            self.state.record_runtime_event(
+                                ingress_identity,
+                                "error",
+                                "queue_enqueue_error",
+                                type(exc).__name__,
+                            )
+                        except sqlite3.Error:
+                            # The admission fault may also make diagnostics
+                            # temporarily unavailable. Offset ownership must
+                            # not depend on recording the secondary event.
+                            pass
                         self._health_last_error_code = "queue_enqueue_error"
                     except Exception as exc:
                         self._discard_codex_client()
@@ -2533,14 +2621,26 @@ class ProjectHubService:
                             ingress_identity, "error", "update_error", type(exc).__name__
                         )
                         self._health_last_error_code = "update_error"
-                    self._publish_runtime_health(force=True)
+                    try:
+                        self._publish_runtime_health(force=True)
+                    except sqlite3.Error:
+                        if advance_offset:
+                            raise
                     if advance_offset:
-                        offset = update_id + 1
-                        self.state.set_bot_offset(ingress_identity, offset)
+                        next_offset = update_id + 1
+                        try:
+                            self.state.set_bot_offset(ingress_identity, next_offset)
+                        except sqlite3.Error:
+                            # A committed queue job makes redelivery safe; an
+                            # unpersisted offset must never be skipped locally.
+                            stop.wait(1)
+                            break
+                        offset = next_offset
                     else:
                         # Do not process later updates from this Telegram batch:
                         # advancing past any of them would also skip this
                         # unaccepted productive update on the next poll.
+                        stop.wait(1)
                         break
             except TelegramError as exc:
                 self._record_telegram_poll_failure(ingress_identity, exc)

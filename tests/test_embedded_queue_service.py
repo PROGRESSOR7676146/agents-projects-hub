@@ -19,6 +19,7 @@ from hermes_codex_router.hub_config import (
 from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.service import ProjectHubService, QueueAcceptanceError
 from hermes_codex_router.state import HubState
+from tests.git_fixtures import init_git_root
 
 
 class FakeTelegram:
@@ -110,7 +111,7 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         base = Path(self.tempdir.name)
         root = base / "project"
-        (root / ".git").mkdir(parents=True)
+        init_git_root(root)
         self.config = HubConfig(
             schema_version=1,
             owner_user_ids=(42,),
