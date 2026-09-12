@@ -17,6 +17,7 @@ from hermes_codex_router.hub_config import (
 from hermes_codex_router.service import ProjectHubService, ServiceError
 from hermes_codex_router.state import HubState
 from hermes_codex_router.telegram import TelegramError, TopicCallback
+from tests.git_fixtures import init_git_root
 
 
 class FakeTelegram:
@@ -38,7 +39,7 @@ class ControllerIdentityTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         self.base = Path(self.tempdir.name)
         project_root = self.base / "project"
-        (project_root / ".git").mkdir(parents=True)
+        init_git_root(project_root)
         self.registry = self.base / "projects.json"
         self.registry.write_text(
             json.dumps(

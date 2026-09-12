@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 
 from .hub_config import HubConfig
 from .metadata import format_telegram_response
-from .registry import load_registry
+from .registry import load_registry, validate_execution_root
 from .session_adoption_policy import validate_adoption_mode
 from .state import HubState
 from .supervisor import CodexAppServerSupervisor
@@ -38,7 +38,9 @@ def run_codex_pilot(
     binding = config.project_for_chat(chat_id)
     if binding.project_id != project_id:
         raise ValueError("Telegram group is bound to a different project")
-    project = load_registry(config.registry_path).require_project(project_id)
+    registry = load_registry(config.registry_path)
+    project = registry.require_project(project_id)
+    validate_execution_root(registry, project)
     agent = config.require_agent("codex")
     if agent.runtime != "codex" or agent.token_file is None:
         raise ValueError("managed Codex bot is not configured")

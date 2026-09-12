@@ -33,7 +33,7 @@ from .external_runtime import (
 )
 from .hub_config import HubConfig
 from .metadata import format_agent_response, format_telegram_response
-from .registry import ProjectRegistry, load_registry
+from .registry import ExecutionRootError, ProjectRegistry, load_registry, validate_execution_root
 from .session_adoption_policy import validate_adoption_mode
 from .session_adoption_state import CodexSessionOrigins
 from .state import HubState, ProviderJobRecord
@@ -289,13 +289,26 @@ class ExternalQueueWorker:
         )
         heartbeat.start()
         try:
+            validate_execution_root(self.registry, project)
             if self.agent.runtime == "codex":
                 self._execute_codex(executing, token, project, topic)
             else:
                 self._execute_external(executing, token, project, topic)
         except Exception as exc:
             try:
-                if isinstance(exc, ProviderTurnStopped):
+                if isinstance(exc, ExecutionRootError):
+                    self._last_error_code = exc.code
+                    self._provider_state = "unavailable"
+                    self.state.terminate_provider_job_with_notice(
+                        executing.job_id,
+                        token,
+                        status="failed",
+                        error_class="pre_execution",
+                        error_code=exc.code,
+                        sender_agent_id=self.agent.agent_id,
+                        telegram_html=exc.public_message,
+                    )
+                elif isinstance(exc, ProviderTurnStopped):
                     self.state.cancel_active_provider_job(
                         executing.job_id, token, error_code="emergency_stop"
                     )
