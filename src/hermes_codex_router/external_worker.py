@@ -36,6 +36,7 @@ from .metadata import format_agent_response, format_telegram_response
 from .registry import ProjectRegistry, load_registry
 from .session_adoption_policy import validate_adoption_mode
 from .session_adoption_state import CodexSessionOrigins
+from .session_connect import ConnectCandidate, SessionConnectStore
 from .state import HubState, ProviderJobRecord
 from .supervisor import CodexAppServerSupervisor
 from .telegram_interaction import (
@@ -233,7 +234,7 @@ class ExternalQueueWorker:
             return False
         job = self.state.lease_provider_job(self.agent.agent_id, self.worker_id)
         if job is None:
-            return False
+            return self._run_connect_cycle() if self.agent.runtime == "codex" else False
         if self._stop.is_set():
             assert job.lease_token is not None
             self.state.release_provider_job_lease(job.job_id, job.lease_token)
@@ -248,6 +249,45 @@ class ExternalQueueWorker:
             self._quota_remaining_percent = None
             self._quota_reset_at = None
         self._publish_health()
+        return True
+
+    def _run_connect_cycle(self) -> bool:
+        """Handle one bounded metadata-only request after productive work."""
+        store = SessionConnectStore(self.state)
+        workflow = store.lease_worker(self.worker_id)
+        if workflow is None:
+            return False
+        try:
+            if workflow.canonical_root is None:
+                raise ExternalQueueWorkerError("connect project is missing")
+            client = self._client()
+            client.initialize()
+            if workflow.stage == "discovering":
+                discovered = client.list_connectable_threads(root=workflow.canonical_root)
+                store.finish_discovery(
+                    workflow.workflow_id,
+                    workflow.lease_token,
+                    tuple(
+                        ConnectCandidate("", item.thread_id, item.safe_label, item.updated_at)
+                        for item in discovered
+                    ),
+                )
+            elif workflow.stage == "activation_requested":
+                if workflow.source_thread_id is None:
+                    raise ExternalQueueWorkerError("connect source is missing")
+                client.read_thread_metadata(
+                    thread_id=workflow.source_thread_id,
+                    cwd=workflow.canonical_root,
+                )
+                store.prepare_marker(workflow.workflow_id, workflow.lease_token)
+            else:
+                raise ExternalQueueWorkerError("connect workflow stage is not executable")
+        except Exception as exc:
+            safe_code = (
+                str(exc) if type(exc).__name__ == "CodexMetadataError" else "metadata_unavailable"
+            )
+            store.fail_worker(workflow.workflow_id, workflow.lease_token, safe_code)
+            self._discard_client()
         return True
 
     def _execute(self, job: ProviderJobRecord) -> None:

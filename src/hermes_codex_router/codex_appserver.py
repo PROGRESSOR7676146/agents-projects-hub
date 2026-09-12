@@ -10,6 +10,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -316,6 +317,18 @@ class CodexThreadMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class ConnectableCodexThread:
+    """Bounded discovery metadata; prompt previews and store paths are omitted."""
+
+    thread_id: str
+    safe_label: str
+    updated_at: int
+
+    def to_public_dict(self) -> dict[str, object]:
+        return {"label": self.safe_label, "updated_at": self.updated_at}
+
+
+@dataclass(frozen=True, slots=True)
 class LimitWindow:
     remaining_percent: int
     resets_at: int | None
@@ -493,6 +506,85 @@ class CodexAppServerClient:
         if status.get("activeFlags", []) != []:
             raise CodexMetadataError("source_not_idle")
         return CodexThreadMetadata(thread_id, source_root, "openai", status["type"])
+
+    def list_connectable_threads(
+        self,
+        *,
+        root: Path,
+        limit: int = 24,
+        deadline: float | None = None,
+    ) -> tuple[ConnectableCodexThread, ...]:
+        """List a bounded exact-root page without loading transcripts or resuming."""
+        if not self._initialized:
+            raise CodexMetadataError("client_not_initialized")
+        if not 1 <= limit <= 24:
+            raise CodexMetadataError("source_list_limit_invalid")
+        try:
+            canonical_root = root.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            raise CodexMetadataError("source_root_invalid") from None
+        result = self._request(
+            "thread/list",
+            {
+                "cwd": str(canonical_root),
+                "limit": limit,
+                "sortKey": "updated_at",
+                "sortDirection": "desc",
+                "modelProviders": ["openai"],
+                "sourceKinds": ["cli"],
+                "archived": False,
+                "useStateDbOnly": True,
+            },
+            deadline=time.monotonic() + 10 if deadline is None else deadline,
+        )
+        data = result.get("data") if isinstance(result, dict) else None
+        if not isinstance(data, list) or len(data) > limit:
+            raise CodexMetadataError("source_list_shape_invalid")
+        discovered: list[ConnectableCodexThread] = []
+        for raw in data:
+            if not isinstance(raw, dict):
+                raise CodexMetadataError("source_list_shape_invalid")
+            thread_id = raw.get("id")
+            raw_cwd = raw.get("cwd")
+            status = raw.get("status")
+            updated_at = raw.get("updatedAt")
+            if (
+                not isinstance(thread_id, str)
+                or not isinstance(raw_cwd, str)
+                or not isinstance(status, dict)
+                or status.get("type") not in ("idle", "notLoaded")
+                or status.get("activeFlags", []) != []
+                or raw.get("ephemeral") is not False
+                or raw.get("modelProvider") != "openai"
+                or raw.get("source") != "cli"
+                or not isinstance(updated_at, int)
+                or isinstance(updated_at, bool)
+                or updated_at < 0
+            ):
+                continue
+            try:
+                if Path(raw_cwd).resolve(strict=True) != canonical_root:
+                    continue
+                validate_codex_thread_id(thread_id)
+            except (OSError, RuntimeError, ValueError, CodexMetadataError):
+                continue
+            raw_name = raw.get("name")
+            name = ""
+            if isinstance(raw_name, str):
+                compact = " ".join(raw_name.split())
+                if (
+                    1 <= len(compact) <= 64
+                    and "/" not in compact
+                    and "\\" not in compact
+                    and "<" not in compact
+                    and ">" not in compact
+                ):
+                    name = compact
+            timestamp = datetime.fromtimestamp(updated_at, timezone.utc).strftime("%Y-%m-%d %H:%M")
+            suffix = "".join(character for character in thread_id if character.isalnum())[-6:]
+            label = f"{name or 'Сессия'} · {timestamp} UTC · {suffix or 'saved'}"
+            discovered.append(ConnectableCodexThread(thread_id, label[:160], updated_at))
+        return tuple(discovered)
 
     def start_thread(
         self,

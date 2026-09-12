@@ -778,6 +778,116 @@ BEGIN SELECT RAISE(ABORT, 'Codex origin requires the exact provider thread'); EN
 """
 
 
+MIGRATION_26 = """
+CREATE TABLE session_connect_workflows (
+    workflow_id TEXT PRIMARY KEY CHECK(length(workflow_id) BETWEEN 8 AND 32),
+    owner_user_id INTEGER NOT NULL CHECK(owner_user_id > 0),
+    entrypoint TEXT NOT NULL CHECK(entrypoint IN ('topic','direct','code')),
+    project_id TEXT CHECK(project_id IS NULL OR length(project_id) BETWEEN 1 AND 48),
+    canonical_root TEXT CHECK(canonical_root IS NULL OR length(canonical_root) BETWEEN 1 AND 4096),
+    source_thread_id TEXT CHECK(length(source_thread_id) BETWEEN 1 AND 128),
+    source_label TEXT CHECK(length(source_label) BETWEEN 1 AND 160),
+    source_updated_at INTEGER,
+    destination_chat_id INTEGER,
+    destination_thread_id INTEGER CHECK(destination_thread_id IS NULL OR destination_thread_id > 0),
+    expected_session_id TEXT REFERENCES agent_sessions(session_id),
+    replaces_session_id TEXT REFERENCES agent_sessions(session_id),
+    model TEXT NOT NULL CHECK(length(model) BETWEEN 1 AND 200),
+    effort TEXT NOT NULL CHECK(length(effort) BETWEEN 1 AND 64),
+    stage TEXT NOT NULL CHECK(stage IN (
+        'choosing_project','discovering','choosing_source','choosing_destination',
+        'awaiting_topic_title','creating_topic','topic_create_unknown','confirming',
+        'activation_requested','marker_ready','marker_unknown','completed',
+        'cancelled','expired','failed'
+    )),
+    code_id TEXT REFERENCES session_connect_codes(code_id),
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    result_session_id TEXT REFERENCES agent_sessions(session_id),
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) <= 128),
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX session_connect_worker_ready
+ON session_connect_workflows(stage, expires_at, created_at);
+CREATE INDEX session_connect_owner_active
+ON session_connect_workflows(owner_user_id, stage, updated_at);
+
+CREATE TABLE session_connect_candidates (
+    candidate_id TEXT PRIMARY KEY CHECK(length(candidate_id) BETWEEN 8 AND 32),
+    workflow_id TEXT NOT NULL REFERENCES session_connect_workflows(workflow_id) ON DELETE CASCADE,
+    provider_thread_id TEXT NOT NULL CHECK(length(provider_thread_id) BETWEEN 1 AND 128),
+    safe_label TEXT NOT NULL CHECK(length(safe_label) BETWEEN 1 AND 160),
+    updated_at_epoch INTEGER NOT NULL CHECK(updated_at_epoch >= 0),
+    created_at TEXT NOT NULL,
+    UNIQUE(workflow_id, provider_thread_id)
+);
+
+CREATE TABLE session_connect_options (
+    option_id TEXT PRIMARY KEY CHECK(length(option_id) BETWEEN 8 AND 32),
+    workflow_id TEXT NOT NULL REFERENCES session_connect_workflows(workflow_id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('project','destination')),
+    project_id TEXT NOT NULL CHECK(length(project_id) BETWEEN 1 AND 48),
+    canonical_root TEXT NOT NULL CHECK(length(canonical_root) BETWEEN 1 AND 4096),
+    destination_chat_id INTEGER,
+    destination_thread_id INTEGER CHECK(destination_thread_id IS NULL OR destination_thread_id > 0),
+    safe_label TEXT NOT NULL CHECK(length(safe_label) BETWEEN 1 AND 160),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX session_connect_options_workflow
+ON session_connect_options(workflow_id, kind, created_at);
+
+CREATE TABLE session_connect_outbox (
+    outbox_id TEXT PRIMARY KEY CHECK(length(outbox_id) BETWEEN 8 AND 32),
+    workflow_id TEXT NOT NULL REFERENCES session_connect_workflows(workflow_id),
+    kind TEXT NOT NULL CHECK(kind IN ('source_menu','activation_marker','result','notice')),
+    chat_id INTEGER NOT NULL,
+    thread_id INTEGER NOT NULL CHECK(thread_id > 0),
+    telegram_html TEXT NOT NULL CHECK(length(telegram_html) BETWEEN 1 AND 4096),
+    reply_markup_json TEXT,
+    status TEXT NOT NULL CHECK(status IN ('prepared','leased','delivered','unknown','failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 20),
+    available_at TEXT NOT NULL,
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    telegram_message_id INTEGER,
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) <= 128),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    delivered_at TEXT
+);
+CREATE INDEX session_connect_outbox_ready
+ON session_connect_outbox(status, available_at, created_at);
+
+CREATE TABLE session_connect_codes (
+    code_id TEXT PRIMARY KEY CHECK(length(code_id) BETWEEN 8 AND 32),
+    code_digest TEXT NOT NULL UNIQUE CHECK(length(code_digest) = 64),
+    owner_user_id INTEGER NOT NULL CHECK(owner_user_id > 0),
+    project_id TEXT NOT NULL CHECK(length(project_id) BETWEEN 1 AND 48),
+    canonical_root TEXT NOT NULL CHECK(length(canonical_root) BETWEEN 1 AND 4096),
+    provider_thread_id TEXT NOT NULL CHECK(length(provider_thread_id) BETWEEN 1 AND 128),
+    safe_label TEXT NOT NULL CHECK(length(safe_label) BETWEEN 1 AND 160),
+    source_updated_at INTEGER NOT NULL CHECK(source_updated_at >= 0),
+    model TEXT NOT NULL CHECK(length(model) BETWEEN 1 AND 200),
+    effort TEXT NOT NULL CHECK(length(effort) BETWEEN 1 AND 64),
+    claimed_workflow_id TEXT UNIQUE,
+    result_session_id TEXT REFERENCES agent_sessions(session_id),
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE session_connect_code_attempts (
+    owner_user_id INTEGER PRIMARY KEY CHECK(owner_user_id > 0),
+    window_started_at TEXT NOT NULL,
+    failure_count INTEGER NOT NULL CHECK(failure_count BETWEEN 0 AND 20)
+);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -897,6 +1007,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_23,
         MIGRATION_24,
         MIGRATION_25,
+        MIGRATION_26,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:

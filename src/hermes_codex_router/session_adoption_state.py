@@ -214,57 +214,67 @@ class CodexSessionOrigins:
         self, request: AdoptionRequest, *, expected_session_id: str | None
     ) -> AttachedSession:
         with self.state._immediate_transaction():
-            # Compare the active binding first, so a stale preview cannot adopt
-            # a freshly reset placeholder. Exact receipt repeats are exempt.
-            topic = self.state.find_topic(request.chat_id, request.thread_id)
-            current = self.state.active_session(topic.topic_id) if topic is not None else None
-            if (
-                current.session_id if current else None
-            ) != expected_session_id and not self._exists(
-                "SELECT 1 FROM codex_session_origins WHERE provider_thread_id=?",
+            return self._attach_locked(request, expected_session_id=expected_session_id)
+
+    def _attach_locked(
+        self, request: AdoptionRequest, *, expected_session_id: str | None
+    ) -> AttachedSession:
+        """Attach inside the caller's immediate transaction.
+
+        This primitive lets the connect workflow commit its activation marker,
+        code consumption, and final binding as one SQLite boundary.
+        """
+        if not self.connection.in_transaction:
+            raise StateError("Codex attachment requires an immediate transaction")
+        # Compare the active binding first, so a stale preview cannot adopt
+        # a freshly reset placeholder. Exact receipt repeats are exempt.
+        topic = self.state.find_topic(request.chat_id, request.thread_id)
+        current = self.state.active_session(topic.topic_id) if topic is not None else None
+        if (current.session_id if current else None) != expected_session_id and not self._exists(
+            "SELECT 1 FROM codex_session_origins WHERE provider_thread_id=?",
+            request.provider_thread_id,
+        ):
+            raise StateError("target_changed")
+        target = self.preview(request)
+        if target.already_attached:
+            assert target.session is not None
+            return AttachedSession(target.topic, target.session, True)
+        if (target.session.session_id if target.session else None) != expected_session_id:
+            raise StateError("target_changed")
+        now = _now()
+        if target.session is not None:
+            self.connection.execute(
+                "UPDATE agent_sessions SET status='archived', updated_at=? WHERE session_id=?",
+                (now, target.session.session_id),
+            )
+        session = self.state._insert_session(
+            target.topic.topic_id, "codex", request.model, request.effort, "active"
+        )
+        self.connection.execute(
+            "UPDATE agent_sessions SET provider_session_id=?, writer_mode='local' WHERE session_id=?",
+            (request.provider_thread_id, session.session_id),
+        )
+        self.connection.execute(
+            """INSERT INTO codex_session_origins (session_id, provider_thread_id, project_id,
+               canonical_root, model_provider, created_at, replaces_session_id)
+               VALUES (?, ?, ?, ?, 'openai', ?, ?)""",
+            (
+                session.session_id,
                 request.provider_thread_id,
-            ):
-                raise StateError("target_changed")
-            target = self.preview(request)
-            if target.already_attached:
-                assert target.session is not None
-                return AttachedSession(target.topic, target.session, True)
-            if (target.session.session_id if target.session else None) != expected_session_id:
-                raise StateError("target_changed")
-            now = _now()
-            if target.session is not None:
-                self.connection.execute(
-                    "UPDATE agent_sessions SET status='archived', updated_at=? WHERE session_id=?",
-                    (now, target.session.session_id),
-                )
-            session = self.state._insert_session(
-                target.topic.topic_id, "codex", request.model, request.effort, "active"
-            )
-            self.connection.execute(
-                "UPDATE agent_sessions SET provider_session_id=?, writer_mode='local' WHERE session_id=?",
-                (request.provider_thread_id, session.session_id),
-            )
-            self.connection.execute(
-                """INSERT INTO codex_session_origins (session_id, provider_thread_id, project_id,
-                   canonical_root, model_provider, created_at, replaces_session_id)
-                   VALUES (?, ?, ?, ?, 'openai', ?, ?)""",
-                (
-                    session.session_id,
-                    request.provider_thread_id,
-                    request.project_id,
-                    str(request.canonical_root),
-                    now,
-                    request.replaces_session_id,
-                ),
-            )
-            self.connection.execute(
-                "UPDATE topics SET active_agent_id='codex', updated_at=? WHERE topic_id=?",
-                (now, target.topic.topic_id),
-            )
-            return AttachedSession(
-                self.state.get_topic(target.topic.topic_id),
-                self.state.get_session(session.session_id),
-            )
+                request.project_id,
+                str(request.canonical_root),
+                now,
+                request.replaces_session_id,
+            ),
+        )
+        self.connection.execute(
+            "UPDATE topics SET active_agent_id='codex', updated_at=? WHERE topic_id=?",
+            (now, target.topic.topic_id),
+        )
+        return AttachedSession(
+            self.state.get_topic(target.topic.topic_id),
+            self.state.get_session(session.session_id),
+        )
 
     def require_admission(self, session_id: str, message_id: int) -> None:
         origin = self.get(session_id)

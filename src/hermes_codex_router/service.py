@@ -60,6 +60,7 @@ from .routing import (
     parse_context_request,
 )
 from .runtime_health import CONTROLLER_INSTANCE_ID
+from .session_connect import SessionConnectStore
 from .session_controls import bind_controls, validate_control
 from .state import HubState, SessionRecord, StateError, TopicRecord
 from .status_view import cached_codex_rate_limits, format_accounts, format_session_status
@@ -1649,6 +1650,42 @@ class ProjectHubService:
         try:
             from dataclasses import replace
 
+            if callback.data.startswith("cx:"):
+                parts = callback.data.split(":", 2)
+                if len(parts) != 3:
+                    raise ServiceError("Недействительное действие подключения")
+                _, action, value = parts
+                connect = SessionConnectStore(self.state)
+                if action == "s":
+                    workflow = connect.select_candidate(callback.sender_id, value)
+                    self.telegram.answer_callback(callback.callback_id, "Подтвердите подключение")
+                    self.telegram.send_html(
+                        callback.chat_id,
+                        callback.thread_id,
+                        connect.confirmation_text(workflow),
+                        reply_markup=connect.confirmation_markup(workflow),
+                    )
+                    return True
+                if action == "ok":
+                    connect.request_activation(callback.sender_id, value)
+                    self.telegram.answer_callback(callback.callback_id, "Проверяю сессию…")
+                    self._send_text(
+                        message,
+                        "Проверяю сохранённую сессию. Hub сообщит результат в этой теме.",
+                    )
+                    return True
+                if action == "x":
+                    cancelled = connect.cancel(callback.sender_id, value)
+                    self.telegram.answer_callback(
+                        callback.callback_id, "Отменено" if cancelled else "Уже завершено"
+                    )
+                    if cancelled:
+                        self._send_text(
+                            message, "Подключение отменено; текущая сессия не изменена."
+                        )
+                    return True
+                raise ServiceError("Недействительное действие подключения")
+
             data, expected_control_session = validate_control(
                 self.state, topic.topic_id, callback.data
             )
@@ -1876,6 +1913,7 @@ class ProjectHubService:
             "return",
             "model",
             "agent",
+            "connect",
         }
         return_session = (
             self.state.active_session(topic.topic_id)
@@ -1911,6 +1949,28 @@ class ProjectHubService:
             status = "connected" if session.provider_session_id else "registered"
             self._send_text(message, f"Codex topic session is {status}.")
             return True
+        if command and command.name == "connect":
+            if command.arguments:
+                self._send_text(message, "Usage: /connect")
+                return True
+            if self.config.hub_bot is None:
+                self._send_text(message, "Подключение через Telegram требует Hub bot.")
+                return True
+            project = self.registry.require_project(binding.project_id)
+            workflow = SessionConnectStore(self.state).start_topic(
+                owner_user_id=message.sender_id,
+                project_id=project.project_id,
+                canonical_root=project.root,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                model=self.agent.default_model,
+                effort=self.agent.default_effort,
+            )
+            self._send_text(
+                message,
+                "Ищу сохранённые Codex-сессии этого проекта. Hub пришлёт ограниченный список.",
+            )
+            return workflow.stage == "discovering"
         if command and command.name == "menu":
             self._show_control_menu(message)
             return True

@@ -5,7 +5,7 @@ import threading
 import time
 import uuid
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -17,6 +17,7 @@ from .artifacts import (
 from .delivery_retry import delivery_retry_delay
 from .hub_config import HubConfig
 from .progress_delivery import ProgressDeliveryQueue
+from .session_connect import SessionConnectStore
 from .state import HubState
 from .telegram import TELEGRAM_HEALTH_FAILURE_THRESHOLD, TelegramBotApi, TelegramError
 
@@ -27,7 +28,14 @@ class TelegramOutboxSenderError(RuntimeError):
 
 class TelegramSender(Protocol):
     def send_chat_action(self, chat_id: int, thread_id: int, action: str = "typing") -> None: ...
-    def send_html(self, chat_id: int, thread_id: int, html: str) -> int: ...
+    def send_html(
+        self,
+        chat_id: int,
+        thread_id: int,
+        html: str,
+        *,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> int: ...
     def send_document(
         self,
         chat_id: int,
@@ -275,9 +283,45 @@ class TelegramOutboxSender:
             if self._deliver_progress_one(agent_id, now=now):
                 self._progress_cursor = (position + 1) % len(self.provider_agent_ids)
                 return True
+        if self.config.hub_bot is not None and self._deliver_connect_one():
+            return True
         # Final results and durable progress have priority over advisory chat actions.
         self._refresh_chat_actions()
         return False
+
+    def _deliver_connect_one(self) -> bool:
+        store = SessionConnectStore(self.state)
+        store.recover_stale_outbox()
+        outbox = store.lease_outbox(self.sender_id)
+        if outbox is None:
+            return False
+        try:
+            message_id = self.telegram_bots["hub"].send_html(
+                outbox.chat_id,
+                outbox.thread_id,
+                outbox.telegram_html,
+                reply_markup=outbox.reply_markup,
+            )
+            if outbox.kind == "activation_marker":
+                try:
+                    store.complete_marker(outbox, telegram_message_id=message_id)
+                except Exception:
+                    store.mark_marker_unknown(outbox, "marker_commit_unknown")
+            else:
+                store.complete_outbox(outbox, message_id)
+            self._record_transport_success()
+        except Exception as exc:
+            if outbox.kind == "activation_marker":
+                store.mark_marker_unknown(outbox, "marker_send_unknown")
+            else:
+                store.retry_outbox(
+                    outbox,
+                    type(exc).__name__,
+                    timedelta(seconds=delivery_retry_delay(exc, outbox.attempt_count)),
+                )
+            if isinstance(exc, TelegramError):
+                self._record_transport_failure(exc)
+        return True
 
     def _refresh_chat_actions(self, *, now_monotonic: float | None = None) -> None:
         """Best-effort provider-identity typing indicators for accepted work."""
