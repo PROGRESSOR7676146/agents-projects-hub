@@ -328,3 +328,33 @@ class SessionAdoptionStateTests(unittest.TestCase):
                 expected_session_id=session.session_id,
             )
         self.assertEqual(self.state.get_session(session.session_id).model, "example-model")
+
+    def test_known_same_root_checkpoint_blocks_old_registration_writer(self) -> None:
+        old_topic = self.state.observe_topic(
+            project_id="previous-registration", chat_id=-1002, thread_id=9, title="Previous"
+        )
+        old = self.state.activate_agent(old_topic.topic_id, "codex", "example-model", "high")
+        job, _ = self.state.enqueue_provider_job(
+            idempotency_key="previous-registration",
+            chat_id=-1002,
+            message_id=1,
+            topic_id=old_topic.topic_id,
+            agent_id="codex",
+            session_id=old.session_id,
+            session_generation=old.generation,
+            provider_session_id=None,
+            model=old.model,
+            effort=old.effort,
+            payload_text="Previous work",
+        )
+        with self.state._connection:
+            self.state._connection.execute(
+                "INSERT INTO provider_execution_checkpoints (job_id,provider_thread_id,project_root,updated_at) VALUES (?,?,?,?)",
+                (job.job_id, "previous-thread", str(self.root), "now"),
+            )
+            self.state._connection.execute(
+                "UPDATE provider_jobs SET status='completed' WHERE job_id=?", (job.job_id,)
+            )
+        self.state.set_writer_mode(old.session_id, "local")
+        with self.assertRaisesRegex(StateError, "local_writer"):
+            self.attach()

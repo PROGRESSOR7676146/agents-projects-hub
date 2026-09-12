@@ -190,13 +190,21 @@ class CodexSessionOrigins:
                 topic.topic_id,
             ):
                 raise StateError("target_not_empty")
-        # Registry roots are unique. Also account for immutable origins from an
-        # older project registration of this same root; never inspect filesystem here.
+        # Registry roots are unique. Retained origins and execution checkpoints
+        # can also identify this root under an older registration; no filesystem
+        # inspection belongs inside this transaction.
         other_topics = self.connection.execute(
             """SELECT topic_id FROM topics WHERE topic_id != ? AND
                (project_id=? OR topic_id IN (SELECT s.topic_id FROM agent_sessions s
-                  JOIN codex_session_origins o ON o.session_id=s.session_id WHERE o.canonical_root=?))""",
-            (topic.topic_id, request.project_id, str(request.canonical_root)),
+                  JOIN codex_session_origins o ON o.session_id=s.session_id WHERE o.canonical_root=?)
+                OR topic_id IN (SELECT j.topic_id FROM provider_jobs j
+                  JOIN provider_execution_checkpoints c ON c.job_id=j.job_id WHERE c.project_root=?))""",
+            (
+                topic.topic_id,
+                request.project_id,
+                str(request.canonical_root),
+                str(request.canonical_root),
+            ),
         ).fetchall()
         for other in other_topics:
             self._topic_idle(int(other["topic_id"]))
