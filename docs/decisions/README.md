@@ -39,6 +39,7 @@ with a new record.
 | Handled provider failure | Retain bounded visible partial text in an incomplete outbox notice, distinguish preparation failure, and persist Telegram cooldowns without replaying work. | [ADR 0018](0018-visible-results-on-provider-failure.md) |
 | Codex process-loss recovery | Schema-22 execution/visible checkpoints and exact-turn read-only reconciliation preserve results without productive replay; rollback must support schema 22. | [ADR 0019](0019-durable-codex-execution-checkpoints.md) |
 | Uncertain-work resolution | Schema-23 immutable operator annotations close reviewed `indeterminate` cases without changing evidence or authorizing replay. | [ADR 0020](0020-immutable-indeterminate-resolutions.md) |
+| Long-task progress | Schema-24 provider progress queue delivers bounded commentary without completing or replaying work, and supersedes stale pending progress at terminal state. | [ADR 0021](0021-durable-rate-limited-progress.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

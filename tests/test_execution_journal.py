@@ -310,7 +310,7 @@ class ExecutionJournalTests(unittest.TestCase):
                     base / f"agents_projects_hub-{version}-py3-none-any.whl",
                     version=version,
                     git_sha=sha,
-                    schema_max=23,
+                    schema_max=24,
                 )
                 with zipfile.ZipFile(wheel, "a") as archive:
                     for name in ("__init__.py", "migrations.py", "models.py", "registry.py"):
@@ -319,8 +319,8 @@ class ExecutionJournalTests(unittest.TestCase):
                         )
                 artifacts.append(wheel)
             report = run_release_dry_run(*artifacts)
-            self.assertEqual(report.schema_after_rollout, 23)
-            self.assertEqual(report.schema_after_rollback, 23)
+            self.assertEqual(report.schema_after_rollout, 24)
+            self.assertEqual(report.schema_after_rollback, 24)
             self.assertTrue(report.durable_work_preserved)
             old = _wheel(
                 base / "agents_projects_hub-0.5.0-py3-none-any.whl",

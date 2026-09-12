@@ -717,6 +717,34 @@ CREATE TABLE IF NOT EXISTS provider_job_resolutions (
 """
 
 
+MIGRATION_24 = """
+CREATE TABLE IF NOT EXISTS provider_progress_deliveries (
+    progress_id TEXT PRIMARY KEY,
+    item_sequence INTEGER NOT NULL UNIQUE REFERENCES provider_visible_items(sequence),
+    job_id TEXT NOT NULL REFERENCES provider_jobs(job_id),
+    sender_agent_id TEXT NOT NULL,
+    chat_id INTEGER NOT NULL,
+    thread_id INTEGER NOT NULL,
+    telegram_html TEXT NOT NULL CHECK(length(telegram_html) BETWEEN 1 AND 4096),
+    status TEXT NOT NULL CHECK(status IN ('pending', 'sending', 'delivered', 'superseded', 'failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 20),
+    available_at TEXT NOT NULL,
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    telegram_message_id INTEGER,
+    error_code TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    delivered_at TEXT
+);
+CREATE INDEX IF NOT EXISTS provider_progress_delivery_ready
+ON provider_progress_deliveries(sender_agent_id, status, available_at, created_at);
+CREATE INDEX IF NOT EXISTS provider_progress_delivery_job
+ON provider_progress_deliveries(job_id, created_at);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -826,6 +854,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_21,
         MIGRATION_22,
         MIGRATION_23,
+        MIGRATION_24,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:

@@ -26,7 +26,7 @@ accepted/partial/completed boundaries. Milestone three bounds stdio reads and
 propagates clean WebSocket closure without stranding its sender. Passive monitor
 output now reports aggregate outcomes, recovery counts, delivery delay and queue
 ages without provider access or task identity. Runtime rollback after the
-operator-resolution migration requires an artifact that supports schema 23.
+progress-delivery migration requires an artifact that supports schema 24.
 The read-only `indeterminate-audit` command now classifies retained uncertain work
 and its notification state without outputting content, mutating state, or authorizing
 provider replay. Schema 23 adds immutable, fixed-value operator resolutions for an
@@ -311,7 +311,7 @@ copyable explicit continuation request while preserving the no-replay boundary.
   reapers. Runtime-proxy monitoring remains independent and never restarts a
   shared app-server underneath an active Codex or tlive session.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
-- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-23
+- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-24
   immutable-deployment triage guide, source revision, timestamp, and content
   hashes into a neutral local store for the independent Hermes channel. It
   carries no private deployment inventory and creates no service dependency.

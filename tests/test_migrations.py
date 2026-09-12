@@ -16,6 +16,54 @@ from hermes_codex_router.migrations import (
 
 
 class MigrationTests(unittest.TestCase):
+    def test_progress_delivery_migration_is_additive_from_v23(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            migrate_database(path, create_backup=False)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute("DROP TABLE IF EXISTS provider_progress_deliveries")
+                connection.execute("PRAGMA user_version = 23")
+                connection.commit()
+            finally:
+                connection.close()
+
+            result = migrate_database(path, create_backup=False)
+
+            self.assertEqual((result.previous_version, result.current_version), (23, 24))
+            migrated = sqlite3.connect(path)
+            try:
+                columns = {
+                    row[1]
+                    for row in migrated.execute("PRAGMA table_info(provider_progress_deliveries)")
+                }
+                self.assertEqual(
+                    columns,
+                    {
+                        "progress_id",
+                        "item_sequence",
+                        "job_id",
+                        "sender_agent_id",
+                        "chat_id",
+                        "thread_id",
+                        "telegram_html",
+                        "status",
+                        "attempt_count",
+                        "available_at",
+                        "lease_owner",
+                        "lease_token",
+                        "lease_expires_at",
+                        "telegram_message_id",
+                        "error_code",
+                        "created_at",
+                        "updated_at",
+                        "delivered_at",
+                    },
+                )
+                self.assertEqual(migrated.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            finally:
+                migrated.close()
+
     def test_indeterminate_resolution_migration_is_additive_from_v22(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
@@ -49,7 +97,10 @@ class MigrationTests(unittest.TestCase):
 
             result = migrate_database(path, create_backup=False)
 
-            self.assertEqual((result.previous_version, result.current_version), (22, 23))
+            self.assertEqual(
+                (result.previous_version, result.current_version),
+                (22, LATEST_SCHEMA_VERSION),
+            )
             migrated = sqlite3.connect(path)
             try:
                 self.assertEqual(
