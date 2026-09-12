@@ -17,10 +17,12 @@ This normative module is part of the
   health without invoking a model merely to check health. The passive monitor
   result MUST expose bounded aggregate counts for accepted requests, delivered
   final results, partial outcomes, uncertain executions and recovered results,
-  plus pending queue/delivery counts and ages. These aggregates MUST contain no
-  prompt, response, provider-session, project, topic or account identity. The
+  plus pending queue/final-delivery/progress-delivery counts and ages. These
+  aggregates MUST contain no prompt, response, provider-session, project, topic
+  or account identity. The
   passive alert evaluator MUST report nonterminal provider work older than 15
-  minutes, committed Telegram delivery older than 5 minutes, and every newly
+  minutes, committed Telegram final or progress delivery older than 5 minutes,
+  and every newly
   unresolved indeterminate outcome. Historical indeterminate work with an
   operator resolution MUST remain visible in totals without keeping the alert
   active.
@@ -191,6 +193,15 @@ recreate unsaved provider context or a partially executed turn.
   identity. Duplicate stop updates MUST NOT create another acknowledgement,
   and delivering it MUST leave the affected job terminally cancelled. A stop
   that finds no work may reply directly because it records no state change.
+  With external outbox ownership, a completed visible Codex commentary item MAY
+  create a separate durable progress delivery under the provider identity. The
+  first eligible item MAY be immediate; later items MUST be limited to at most
+  one per 120 seconds for that job and bounded to Telegram-safe text. The queue
+  MUST deduplicate by durable visible-item sequence, retain Telegram retry
+  deadlines across sender restart, and supersede pending progress when the job
+  becomes terminal. Progress delivery MUST NOT complete a job, acknowledge
+  visible context, or authorize provider replay. Final-result delivery MUST have
+  priority over progress delivery.
 - **REQ-QUEUE-006 (Implemented for the additive schema and global compatibility gate; per-provider rollout Planned):** Queue migration and per-provider rollout MUST be
   additive, feature-gated, recoverable through the existing backup discipline,
   and retain safe rollback without destroying accepted jobs. Changing an agent

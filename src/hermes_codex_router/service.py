@@ -737,7 +737,9 @@ class ProjectHubService:
                 or queue_state.telegram_contract_version(executing.session_id) < contract_version
             )
             if agent.runtime == "codex":
-                journal = ExecutionJournal(queue_state)
+                journal = ExecutionJournal(
+                    queue_state, progress_enabled=self.config.outbox_runtime == "external"
+                )
                 with codex_preparation():
                     client = self._client()
                     if executing.provider_session_id:

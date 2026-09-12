@@ -11,8 +11,10 @@ class ReliabilityAlertTests(unittest.TestCase):
             {
                 "queued_work": 1,
                 "pending_delivery": 1,
+                "pending_progress_delivery": 1,
                 "oldest_queue_age_seconds": 901,
                 "oldest_delivery_age_seconds": 301,
+                "oldest_progress_delivery_age_seconds": 301,
                 "unresolved_uncertain_execution": 1,
             }
         )
@@ -22,6 +24,7 @@ class ReliabilityAlertTests(unittest.TestCase):
             {
                 "provider_queue_age_exceeded",
                 "telegram_delivery_age_exceeded",
+                "progress_delivery_age_exceeded",
                 "unresolved_provider_outcome",
             },
         )
@@ -31,8 +34,10 @@ class ReliabilityAlertTests(unittest.TestCase):
             {
                 "queued_work": 1,
                 "pending_delivery": 1,
+                "pending_progress_delivery": 1,
                 "oldest_queue_age_seconds": 900,
                 "oldest_delivery_age_seconds": 300,
+                "oldest_progress_delivery_age_seconds": 300,
                 "uncertain_execution": 37,
                 "unresolved_uncertain_execution": 0,
             }
@@ -47,8 +52,10 @@ class ReliabilityAlertTests(unittest.TestCase):
                 {
                     "queued_work": 0,
                     "pending_delivery": 0,
+                    "pending_progress_delivery": 0,
                     "oldest_queue_age_seconds": 9999,
                     "oldest_delivery_age_seconds": 9999,
+                    "oldest_progress_delivery_age_seconds": 9999,
                     "unresolved_uncertain_execution": "unknown",
                 }
             ),

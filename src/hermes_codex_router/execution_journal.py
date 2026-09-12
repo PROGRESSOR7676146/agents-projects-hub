@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .codex_failure import MAX_PARTIAL_TEXT
+from .progress_delivery import ProgressDeliveryQueue
 from .state import HubState, ProviderJobRecord, StateError
 
 
@@ -18,9 +19,10 @@ def _bounded(value: str, maximum: int) -> str:
 class ExecutionJournal:
     """Private task data, separate from diagnostic runtime events and admission snapshots."""
 
-    def __init__(self, state: HubState) -> None:
+    def __init__(self, state: HubState, *, progress_enabled: bool = False) -> None:
         self.state = state
         self.connection = state._connection
+        self.progress = ProgressDeliveryQueue(state) if progress_enabled else None
 
     def _lease(self, job_id: str, token: str) -> sqlite3.Row:
         row = self.connection.execute(
@@ -104,11 +106,16 @@ class ExecutionJournal:
             ).fetchone()
             if count >= 512 or size + len(text) > 200_000:
                 raise StateError("visible execution journal limit reached")
-            self.connection.execute(
+            cursor = self.connection.execute(
                 "INSERT INTO provider_visible_items (job_id, item_id, phase, visible_text, created_at) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (job_id, item_id, phase, text, datetime.now(timezone.utc).isoformat()),
             )
+            item_sequence = cursor.lastrowid
+            if item_sequence is None:
+                raise StateError("visible execution journal sequence is missing")
+            if self.progress is not None and phase == "commentary":
+                self.progress.enqueue_in_transaction(job_id, token, item_sequence, text)
 
     def record_completion(self, job_id: str, token: str, text: str) -> None:
         if not isinstance(text, str) or len(text) > 200_000:

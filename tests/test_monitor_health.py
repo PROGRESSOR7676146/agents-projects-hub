@@ -56,8 +56,10 @@ class MonitorHealthTests(unittest.TestCase):
                     "recovered_results": 0,
                     "queued_work": 0,
                     "pending_delivery": 0,
+                    "pending_progress_delivery": 0,
                     "oldest_queue_age_seconds": None,
                     "oldest_delivery_age_seconds": None,
+                    "oldest_progress_delivery_age_seconds": None,
                     "last_delivery_delay_seconds": None,
                 },
             )

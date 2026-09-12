@@ -41,6 +41,22 @@ def evaluate_reliability_alerts(
                 "sender and persisted retry deadline without repeating provider work.",
             )
         )
+    pending_progress = _positive_int(telemetry.get("pending_progress_delivery"))
+    progress_age = _positive_int(telemetry.get("oldest_progress_delivery_age_seconds"))
+    if (
+        pending_progress is not None
+        and progress_age is not None
+        and progress_age > MAX_DELIVERY_AGE_SECONDS
+    ):
+        alerts.append(
+            OperationalAlert(
+                "reliability:progress-delivery-age",
+                "progress_delivery_age_exceeded",
+                "warning",
+                "A provider progress update has waited for over 5 minutes; inspect the "
+                "sender and persisted retry deadline. The provider job is unchanged.",
+            )
+        )
     unresolved = _positive_int(telemetry.get("unresolved_uncertain_execution"))
     if unresolved is not None:
         alerts.append(

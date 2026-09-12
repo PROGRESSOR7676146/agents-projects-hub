@@ -16,6 +16,7 @@ from .artifacts import (
 )
 from .delivery_retry import delivery_retry_delay
 from .hub_config import HubConfig
+from .progress_delivery import ProgressDeliveryQueue
 from .state import HubState
 from .telegram import TELEGRAM_HEALTH_FAILURE_THRESHOLD, TelegramBotApi, TelegramError
 
@@ -105,7 +106,9 @@ class TelegramOutboxSender:
         self.telegram_bots = dict(telegram_bots)
         self.sender_id = sender_id
         self.state = HubState.open(config.state_path)
+        self.progress = ProgressDeliveryQueue(self.state)
         self._cursor = 0
+        self._progress_cursor = 0
         self._stop = threading.Event()
         self._started_at = datetime.now(timezone.utc)
         self._process_start_marker = uuid.uuid4().hex
@@ -252,6 +255,8 @@ class TelegramOutboxSender:
             return False
         self._publish_health()
         self.state.recover_stale_telegram_outbox(sender_agent_ids=self.agent_ids, now=now)
+        self.progress.recover_stale(self.provider_agent_ids, now=now)
+        self.progress.supersede_terminal(self.provider_agent_ids, now=now)
         start = self._cursor % len(self.agent_ids)
         for offset in range(len(self.agent_ids)):
             if self._stop.is_set():
@@ -261,7 +266,16 @@ class TelegramOutboxSender:
             if self._deliver_one(agent_id, now=now):
                 self._cursor = (position + 1) % len(self.agent_ids)
                 return True
-        # Result delivery always has priority over an advisory chat action.
+        progress_start = self._progress_cursor % len(self.provider_agent_ids)
+        for offset in range(len(self.provider_agent_ids)):
+            if self._stop.is_set():
+                return False
+            position = (progress_start + offset) % len(self.provider_agent_ids)
+            agent_id = self.provider_agent_ids[position]
+            if self._deliver_progress_one(agent_id, now=now):
+                self._progress_cursor = (position + 1) % len(self.provider_agent_ids)
+                return True
+        # Final results and durable progress have priority over advisory chat actions.
         self._refresh_chat_actions()
         return False
 
@@ -395,6 +409,52 @@ class TelegramOutboxSender:
                 outbox.lease_token,
                 error_code=error_code,
                 delay_seconds=delivery_retry_delay(exc, outbox.attempt_count),
+                now=now,
+            )
+        self._publish_health(force=True)
+        return True
+
+    def _deliver_progress_one(self, agent_id: str, *, now: datetime | None = None) -> bool:
+        progress = self.progress.lease(agent_id, self.sender_id, now=now)
+        if progress is None or progress.lease_token is None:
+            return False
+        if self._stop.is_set():
+            self.progress.release(progress.progress_id, progress.lease_token, now=now)
+            return False
+        lease_expires_at = (
+            None
+            if progress.lease_expires_at is None
+            else datetime.fromisoformat(progress.lease_expires_at)
+        )
+        self._publish_health(
+            activity_state="sending",
+            active_outbox_id=progress.progress_id,
+            active_lease_expires_at=lease_expires_at,
+            force=True,
+        )
+        try:
+            message_id = self.telegram_bots[agent_id].send_html(
+                progress.chat_id, progress.thread_id, progress.telegram_html
+            )
+            self.progress.mark_delivered(
+                progress.progress_id,
+                progress.lease_token,
+                telegram_message_id=message_id or 1,
+                now=now,
+            )
+            self._record_transport_success()
+        except Exception as exc:
+            error_code = type(exc).__name__[:128]
+            if isinstance(exc, TelegramError):
+                self._record_transport_failure(exc)
+                error_code = exc.health_code
+            else:
+                self._last_error_code = error_code
+            self.progress.retry(
+                progress.progress_id,
+                progress.lease_token,
+                error_code=error_code,
+                delay_seconds=delivery_retry_delay(exc, progress.attempt_count),
                 now=now,
             )
         self._publish_health(force=True)

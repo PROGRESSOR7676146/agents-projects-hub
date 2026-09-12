@@ -3167,6 +3167,12 @@ class HubState:
                 "SELECT COUNT(*) FROM telegram_outbox WHERE status IN ('pending', 'sending')"
             ).fetchone()[0]
         )
+        pending_progress_delivery = int(
+            self._connection.execute(
+                "SELECT COUNT(*) FROM provider_progress_deliveries "
+                "WHERE status IN ('pending', 'sending')"
+            ).fetchone()[0]
+        )
         queued_statuses = ("queued", "leased", "executing", "retry_wait")
         queued_work = sum(counts.get(status, 0) for status in queued_statuses)
         oldest_queue = self._connection.execute(
@@ -3176,6 +3182,10 @@ class HubState:
         oldest_delivery = self._connection.execute(
             """SELECT MIN(created_at) FROM telegram_outbox
                WHERE status IN ('pending', 'sending')"""
+        ).fetchone()[0]
+        oldest_progress_delivery = self._connection.execute(
+            "SELECT MIN(created_at) FROM provider_progress_deliveries "
+            "WHERE status IN ('pending', 'sending')"
         ).fetchone()[0]
         latest_delivery = self._connection.execute(
             """SELECT created_at, delivered_at FROM telegram_outbox
@@ -3210,8 +3220,10 @@ class HubState:
             "recovered_results": recovered_results,
             "queued_work": queued_work,
             "pending_delivery": pending_delivery,
+            "pending_progress_delivery": pending_progress_delivery,
             "oldest_queue_age_seconds": age_seconds(oldest_queue),
             "oldest_delivery_age_seconds": age_seconds(oldest_delivery),
+            "oldest_progress_delivery_age_seconds": age_seconds(oldest_progress_delivery),
             "last_delivery_delay_seconds": delivery_delay,
         }
 

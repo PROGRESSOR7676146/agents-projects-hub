@@ -38,10 +38,16 @@ history. Live deployment evidence remains private and is not implied by this
 repository checkpoint.
 
 Passive reliability thresholds now alert on provider work older than 15
-minutes, committed Telegram delivery older than 5 minutes, and unresolved
-indeterminate outcomes. The evaluator is isolated from the broader alert module
+minutes, committed Telegram final or progress delivery older than 5 minutes,
+and unresolved indeterminate outcomes. The evaluator is isolated from the broader alert module
 and reads only aggregate SQLite telemetry. Uncertain-result notices give a
 copyable explicit continuation request while preserving the no-replay boundary.
+Schema 24 now backs a separate progress-delivery queue. In external-outbox mode,
+completed visible Codex commentary can be delivered immediately and then at
+most once per job every 120 seconds through the provider identity. Progress is
+bounded, restart-safe, deduplicated, superseded after terminal job state, and
+cannot complete or replay provider work. Final results retain delivery priority.
+The queue implementation lives outside the already large state module.
 
 ## Implemented
 

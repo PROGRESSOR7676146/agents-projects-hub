@@ -457,7 +457,9 @@ class ExternalQueueWorker:
         assert isinstance(project, Project)
         assert isinstance(topic, TopicRecord)
         assert self.supervisor is not None
-        journal = ExecutionJournal(self.state)
+        journal = ExecutionJournal(
+            self.state, progress_enabled=self.config.outbox_runtime == "external"
+        )
         with codex_preparation():
             ensure_socket_health = getattr(self.supervisor, "ensure_shared_socket_health", None)
             if callable(ensure_socket_health) and not ensure_socket_health():

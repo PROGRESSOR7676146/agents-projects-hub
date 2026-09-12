@@ -1,6 +1,6 @@
 # ADR 0021: Durable rate-limited progress delivery
 
-Status: schema support implemented; delivery behavior pending
+Status: accepted and implemented
 Date: 2026-09-12
 
 ## Decision
@@ -12,8 +12,8 @@ authorizes replay. The provider identity sends progress only while the exact job
 remains executing.
 
 The first eligible commentary item may be queued immediately. Later items are
-rate-limited per job, bounded to Telegram-safe text, and deduplicated by the
-durable visible-item sequence. Pending progress is superseded when the job
+limited to at most one per 120 seconds per job, bounded to Telegram-safe text,
+and deduplicated by the durable visible-item sequence. Pending progress is superseded when the job
 becomes terminal so an old update cannot arrive after a final result or failure.
 Telegram retry deadlines survive sender restart and use the same bounded retry
 policy as final delivery.
@@ -28,6 +28,7 @@ artifact.
 ## Evidence
 
 Migration coverage verifies the schema-23 to schema-24 boundary and complete
-table shape. Behavior coverage must prove item deduplication, rate limiting,
-provider identity, restart-safe retry, terminal supersession, and unchanged job
-state after progress delivery.
+table shape. Behavior coverage proves item deduplication, rate limiting,
+provider identity, restart-safe `retry_after`, terminal supersession, final
+delivery priority, and unchanged job state after progress delivery. Passive
+telemetry exposes pending progress count and age without reading task content.
