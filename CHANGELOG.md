@@ -5,6 +5,15 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Add schema-26 canonical-root execution scopes so Hub queue workers, local
+  writer transfer, and saved-session adoption cannot concurrently write one
+  checkout across different topics or providers; separately registered roots
+  and Git worktrees remain independent.
+- Retain a root after uncertain execution until immutable operator resolution,
+  while preserving the original indeterminate evidence and no-replay policy;
+  add contention, worker-loop, crash/recovery, adoption, and migration rollback
+  regressions.
+
 ## [0.7.0] - 2026-09-05
 
 - Add durable, rate-limited Codex progress delivery through the provider bot,

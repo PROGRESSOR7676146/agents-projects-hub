@@ -56,6 +56,7 @@ def run_codex_pilot(
             chat_id=chat_id,
             thread_id=thread_id,
             title=topic_title,
+            execution_root=project.root,
         )
         session = state.active_session(topic.topic_id)
         if session is None or session.agent_id != agent.agent_id:

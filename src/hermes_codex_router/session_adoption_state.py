@@ -131,6 +131,9 @@ class CodexSessionOrigins:
         topic = self.state.find_topic(request.chat_id, request.thread_id)
         if topic is None or topic.project_id != request.project_id:
             raise StateError("topic_mismatch")
+        requested_scope = f"root:{request.canonical_root}"
+        if topic.execution_scope.startswith("root:") and topic.execution_scope != requested_scope:
+            raise StateError("project_root_changed")
         if self._exists(
             "SELECT 1 FROM worktree_lanes WHERE topic_id=? AND status='active'", topic.topic_id
         ):
@@ -190,17 +193,20 @@ class CodexSessionOrigins:
                 topic.topic_id,
             ):
                 raise StateError("target_not_empty")
-        # Registry roots are unique. Retained origins and execution checkpoints
-        # can also identify this root under an older registration; no filesystem
-        # inspection belongs inside this transaction.
+        # The durable execution scope is authoritative for current registrations.
+        # Retained origins and execution checkpoints still identify an older
+        # registration of the same canonical root; no filesystem inspection
+        # belongs inside this transaction.
         other_topics = self.connection.execute(
             """SELECT topic_id FROM topics WHERE topic_id != ? AND
-               (project_id=? OR topic_id IN (SELECT s.topic_id FROM agent_sessions s
+               (COALESCE(execution_scope, 'project:' || project_id)=?
+                OR project_id=? OR topic_id IN (SELECT s.topic_id FROM agent_sessions s
                   JOIN codex_session_origins o ON o.session_id=s.session_id WHERE o.canonical_root=?)
                 OR topic_id IN (SELECT j.topic_id FROM provider_jobs j
                   JOIN provider_execution_checkpoints c ON c.job_id=j.job_id WHERE c.project_root=?))""",
             (
                 topic.topic_id,
+                requested_scope,
                 request.project_id,
                 str(request.canonical_root),
                 str(request.canonical_root),
@@ -226,9 +232,16 @@ class CodexSessionOrigins:
             ):
                 raise StateError("target_changed")
             target = self.preview(request)
+            requested_scope = f"root:{request.canonical_root}"
+            self.connection.execute(
+                "UPDATE topics SET execution_scope=?, updated_at=? WHERE topic_id=?",
+                (requested_scope, _now(), target.topic.topic_id),
+            )
             if target.already_attached:
                 assert target.session is not None
-                return AttachedSession(target.topic, target.session, True)
+                return AttachedSession(
+                    self.state.get_topic(target.topic.topic_id), target.session, True
+                )
             if (target.session.session_id if target.session else None) != expected_session_id:
                 raise StateError("target_changed")
             now = _now()

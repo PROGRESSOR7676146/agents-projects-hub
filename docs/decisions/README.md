@@ -1,7 +1,7 @@
 # Decision map
 
 Status: active  
-Last updated: 2026-09-05
+Last updated: 2026-09-13
 
 This directory is the durable entry point for consequential product and
 architecture decisions. New records should be named `NNNN-short-title.md`.
@@ -42,6 +42,7 @@ with a new record.
 | Long-task progress | Schema-24 provider progress queue delivers bounded commentary without completing or replaying work, and supersedes stale pending progress at terminal state. | [ADR 0021](0021-durable-rate-limited-progress.md) |
 | Saved Codex session adoption | Schema-25 immutable origins, local preview/apply, atomic replacement and first-return boundary; exact resume without conversation substitution. | [ADR 0022](0022-explicit-codex-session-adoption.md) |
 | Execution root validation | Recheck the registered canonical allowlisted Git root before Hub-owned execution; invalid roots fail before invocation with no automatic replay. | [ADR 0023](0023-execution-time-root-validation.md) |
+| Root execution exclusion | Schema-26 transactional ownership permits at most one Hub-owned productive writer per canonical root across topics/providers; unresolved uncertainty retains the scope. | [ADR 0024](0024-canonical-root-execution-exclusion.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

@@ -8,6 +8,19 @@ operator deployment inventory or live conversation evidence.
 
 ## Quality checkpoint
 
+Schema 26 now enforces one Hub-owned productive writer per canonical registered
+root across Telegram topics and providers. Queue lease selection, local writer
+transfer, and saved Codex-session adoption share the transactional execution
+scope. Different registered roots, including separately registered Git
+worktrees, remain independent. A pre-execution expired lease releases the scope;
+an uncertain executed job retains it until immutable operator resolution, which
+does not replay or mutate the old job. Offline contention, real worker-loop,
+process-crash, adoption, migration and rollback tests cover this repository
+checkpoint. This is the exclusion prerequisite for bounded concurrency, not a
+worker-count increase or a claim about separate direct-message databases,
+unmanaged Hermes/CLI processes, deployment, or live acceptance. See
+[ADR 0024](../decisions/0024-canonical-root-execution-exclusion.md).
+
 Hub-owned execution now revalidates the cached canonical allowlisted Git root
 before provider access or project staging. Both queue modes reject filesystem
 drift as a terminal pre-execution failure with a durable, path-free notice and
@@ -15,8 +28,9 @@ no automatic retry. Inline/native execution and local-transfer preparation use
 the same guard; real linked Git worktrees remain supported. Offline regressions
 first reproduced invocation through a replaced root and now cover refusal in
 all three local queue runtimes. See [ADR 0023](../decisions/0023-execution-time-root-validation.md).
-Schema remains 25. This is not root/lane-wide execution exclusion, protection
-against every filesystem race, or acceptance of unmanaged CLI/Hermes execution.
+That checkpoint used schema 25 and did not itself provide root/lane-wide
+execution exclusion, protection against every filesystem race, or acceptance
+of unmanaged CLI/Hermes execution.
 Deployment and live continuity remain unverified for this change.
 
 Queue-owned productive ingress now retains the Telegram offset when a transient
@@ -102,14 +116,15 @@ adopted history; explicit `/new` creates a normal new session. See
 failure boundaries and rollback limitations. Automated acceptance includes real
 queue/outbox flow with fictional provider/Telegram boundaries. Live continuity
 and a production rollback artifact remain unaccepted. Earlier schema-24
-checkpoints above describe their own milestones; the current target is schema 25.
+checkpoints above describe their own milestones; the current target is schema 26.
 
 - Numeric project/topic identity, canonical allowlisted roots, idempotent
   routing, persistent provider sessions, bounded visible context, and writer
   leases backed by versioned SQLite migrations.
 - Additive durable provider-job, result, and Telegram-outbox schema with atomic
-  idempotent enqueue, strict per-topic FIFO leases, conservative stale-job
-  recovery, and a feature-gated embedded compatibility consumer. `dispatch_mode`
+  idempotent enqueue, strict per-topic FIFO leases, canonical-root execution
+  exclusion, conservative stale-job recovery, and a feature-gated embedded
+  compatibility consumer. `dispatch_mode`
   defaults to `inline`; `queue_runtime` defaults to `embedded`.
 - Isolated queue workers are available for locally managed Codex, OpenCode, and
   Antigravity behind `dispatch_mode: "queue"` and `queue_runtime: "external"`.
@@ -228,7 +243,8 @@ checkpoints above describe their own milestones; the current target is schema 25
   before offset persistence, during provider invocation, and after Telegram
   acceptance but before delivery persistence. It proves redelivery
   idempotency, conservative recovery on both sides of `executing`, outbox-only
-  retry, concurrent provider isolation, responsive cached Controller status,
+  retry, same-root provider exclusion with explicit uncertainty resolution,
+  responsive cached Controller status,
   and distinct Hub/provider polling offsets without network, credentials, or
   live services.
 - Automatic inter-agent handoff and unseen-dialogue injection are disabled at

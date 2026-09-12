@@ -35,6 +35,7 @@ class TopicRecord:
     thread_id: int
     title: str
     active_agent_id: str | None
+    execution_scope: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,6 +298,9 @@ class HubState:
 
     @staticmethod
     def _topic(row: sqlite3.Row) -> TopicRecord:
+        execution_scope = row["execution_scope"]
+        if execution_scope is None:
+            execution_scope = f"project:{row['project_id']}"
         return TopicRecord(
             topic_id=row["topic_id"],
             project_id=row["project_id"],
@@ -304,6 +308,7 @@ class HubState:
             thread_id=row["thread_id"],
             title=row["title"],
             active_agent_id=row["active_agent_id"],
+            execution_scope=str(execution_scope),
         )
 
     @staticmethod
@@ -773,13 +778,24 @@ class HubState:
         chat_id: int,
         thread_id: int,
         title: str,
+        execution_root: Path | None = None,
     ) -> TopicRecord:
         # Supergroups use negative IDs; direct bot chats use the positive user
         # ID. Zero is never a valid Telegram chat identity.
         if chat_id == 0 or thread_id <= 0 or not title.strip():
             raise StateError("invalid Telegram topic identity")
+        project = _bounded(project_id, name="project id", maximum=48)
+        fallback_scope = f"project:{project}"
+        requested_scope = fallback_scope
+        if execution_root is not None:
+            if not execution_root.is_absolute():
+                raise StateError("execution root must be absolute")
+            canonical_root = execution_root.resolve()
+            requested_scope = "root:" + _bounded(
+                str(canonical_root), name="execution root", maximum=4096
+            )
         now = _now()
-        with self._connection:
+        with self._immediate_transaction():
             existing = self._connection.execute(
                 "SELECT * FROM topics WHERE chat_id = ? AND thread_id = ?",
                 (chat_id, thread_id),
@@ -789,14 +805,24 @@ class HubState:
             if existing is None:
                 self._connection.execute(
                     """INSERT INTO topics
-                       (project_id, chat_id, thread_id, title, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (project_id, chat_id, thread_id, title.strip(), now, now),
+                       (project_id, chat_id, thread_id, title, execution_scope,
+                        created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (project, chat_id, thread_id, title.strip(), requested_scope, now, now),
                 )
             else:
+                stored_scope = existing["execution_scope"] or fallback_scope
+                if execution_root is not None and stored_scope not in {
+                    fallback_scope,
+                    requested_scope,
+                }:
+                    raise StateError("Telegram topic execution root changed")
+                next_scope = requested_scope if execution_root is not None else stored_scope
                 self._connection.execute(
-                    "UPDATE topics SET title = ?, updated_at = ? WHERE topic_id = ?",
-                    (title.strip(), now, existing["topic_id"]),
+                    """UPDATE topics
+                       SET title = ?, execution_scope = ?, updated_at = ?
+                       WHERE topic_id = ?""",
+                    (title.strip(), next_scope, now, existing["topic_id"]),
                 )
         row = self._connection.execute(
             "SELECT * FROM topics WHERE chat_id = ? AND thread_id = ?",
@@ -868,7 +894,62 @@ class HubState:
     def set_writer_mode(self, session_id: str, writer_mode: str) -> SessionRecord:
         if writer_mode not in {"telegram", "local", "terminal"}:
             raise StateError("invalid writer mode")
-        with self._connection:
+        with self._immediate_transaction():
+            session = self._connection.execute(
+                """SELECT sessions.session_id, sessions.writer_mode,
+                          COALESCE(topics.execution_scope, 'project:' || topics.project_id)
+                            AS execution_scope
+                   FROM agent_sessions sessions
+                   JOIN topics ON topics.topic_id = sessions.topic_id
+                   WHERE sessions.session_id = ?""",
+                (session_id,),
+            ).fetchone()
+            if session is None:
+                raise StateError(f"unknown session_id: {session_id}")
+            if writer_mode != "telegram" and session["writer_mode"] == "telegram":
+                scope = str(session["execution_scope"])
+                conflicting_writer = self._connection.execute(
+                    """SELECT 1 FROM agent_sessions other
+                       JOIN topics ON topics.topic_id = other.topic_id
+                       WHERE other.session_id != ?
+                         AND other.status IN ('active', 'satellite')
+                         AND other.writer_mode != 'telegram'
+                         AND COALESCE(topics.execution_scope,
+                                      'project:' || topics.project_id) = ?
+                       LIMIT 1""",
+                    (session_id, scope),
+                ).fetchone()
+                conflicting_job = self._connection.execute(
+                    """SELECT 1 FROM provider_jobs jobs
+                       JOIN topics ON topics.topic_id = jobs.topic_id
+                       WHERE COALESCE(topics.execution_scope,
+                                      'project:' || topics.project_id) = ?
+                         AND (
+                           jobs.status IN (
+                             'queued', 'leased', 'executing', 'retry_wait', 'result_ready'
+                           )
+                           OR (jobs.status = 'indeterminate' AND NOT EXISTS (
+                             SELECT 1 FROM provider_job_resolutions resolutions
+                             WHERE resolutions.job_id = jobs.job_id
+                           ))
+                         )
+                       LIMIT 1""",
+                    (scope,),
+                ).fetchone()
+                conflicting_dispatch = self._connection.execute(
+                    """SELECT 1 FROM turn_dispatches dispatches
+                       JOIN topics ON topics.topic_id = dispatches.topic_id
+                       WHERE dispatches.status = 'running'
+                         AND COALESCE(topics.execution_scope,
+                                      'project:' || topics.project_id) = ?
+                       LIMIT 1""",
+                    (scope,),
+                ).fetchone()
+                if any(
+                    conflict is not None
+                    for conflict in (conflicting_writer, conflicting_job, conflicting_dispatch)
+                ):
+                    raise StateError("execution root is owned by another writer")
             cursor = self._connection.execute(
                 "UPDATE agent_sessions SET writer_mode = ?, updated_at = ? WHERE session_id = ?",
                 (writer_mode, _now(), session_id),
@@ -1717,6 +1798,7 @@ class HubState:
         with self._immediate_transaction():
             row = self._connection.execute(
                 """SELECT candidate.* FROM provider_jobs candidate
+                   JOIN topics candidate_topic ON candidate_topic.topic_id = candidate.topic_id
                    WHERE candidate.agent_id = ?
                      AND candidate.attempt_count < candidate.max_attempts
                      AND (
@@ -1735,10 +1817,46 @@ class HubState:
                            'completed', 'failed', 'cancelled', 'indeterminate'
                          )
                      )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_jobs active
+                       JOIN topics active_topic ON active_topic.topic_id = active.topic_id
+                       WHERE active.job_id != candidate.job_id
+                         AND COALESCE(active_topic.execution_scope,
+                                      'project:' || active_topic.project_id) =
+                             COALESCE(candidate_topic.execution_scope,
+                                      'project:' || candidate_topic.project_id)
+                         AND (
+                           active.status = 'executing'
+                           OR (active.status = 'leased' AND active.lease_expires_at > ?)
+                           OR (active.status = 'indeterminate' AND NOT EXISTS (
+                             SELECT 1 FROM provider_job_resolutions resolutions
+                             WHERE resolutions.job_id = active.job_id
+                           ))
+                         )
+                     )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM agent_sessions writer
+                       JOIN topics writer_topic ON writer_topic.topic_id = writer.topic_id
+                       WHERE writer.status IN ('active', 'satellite')
+                         AND writer.writer_mode != 'telegram'
+                         AND COALESCE(writer_topic.execution_scope,
+                                      'project:' || writer_topic.project_id) =
+                             COALESCE(candidate_topic.execution_scope,
+                                      'project:' || candidate_topic.project_id)
+                     )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM turn_dispatches dispatch
+                       JOIN topics dispatch_topic ON dispatch_topic.topic_id = dispatch.topic_id
+                       WHERE dispatch.status = 'running'
+                         AND COALESCE(dispatch_topic.execution_scope,
+                                      'project:' || dispatch_topic.project_id) =
+                             COALESCE(candidate_topic.execution_scope,
+                                      'project:' || candidate_topic.project_id)
+                     )
                    ORDER BY candidate.created_at, candidate.topic_id,
                             candidate.topic_sequence
                    LIMIT 1""",
-                (target_agent, timestamp, timestamp),
+                (target_agent, timestamp, timestamp, timestamp),
             ).fetchone()
             if row is None:
                 return None

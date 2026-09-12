@@ -59,13 +59,13 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
                         migrations.migrate_database(path)
                 else:
                     result = migrations.migrate_database(path)
-                    self.assertEqual((result.previous_version, result.current_version), (24, 25))
+                    self.assertEqual((result.previous_version, result.current_version), (24, 26))
                     assert result.backup_path is not None
                     with closing(sqlite3.connect(result.backup_path)) as backup:
                         self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 24)
                 with closing(sqlite3.connect(path)) as connection:
                     self.assertEqual(
-                        connection.execute("PRAGMA user_version").fetchone()[0], 24 if fail else 25
+                        connection.execute("PRAGMA user_version").fetchone()[0], 24 if fail else 26
                     )
                     self.assertEqual(
                         connection.execute("SELECT * FROM agent_sessions").fetchall(), before
@@ -120,7 +120,7 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
                 state.close()
             package = Path(__file__).resolve().parents[1] / "src/hermes_codex_router"
             descriptors = []
-            for index, maximum in enumerate((25, 25, 24)):
+            for index, maximum in enumerate((26, 26, 24)):
                 wheel = _wheel(
                     root / f"fixture-{index}.whl",
                     version=f"0.7.{index}",
@@ -145,7 +145,7 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
                     with self.assertRaises(ReleaseDryRunError):
                         _run_artifact_migration(extracted, state_path)
                     continue
-                self.assertEqual(_run_artifact_migration(extracted, state_path)["state_schema"], 25)
+                self.assertEqual(_run_artifact_migration(extracted, state_path)["state_schema"], 26)
                 script = """
 import sys
 from pathlib import Path

@@ -5,7 +5,7 @@
   "intended_recoverers": ["hermes", "local-operator"],
   "runbook": "RUNBOOK.md",
   "maintained_release": "0.7.0",
-  "state_schema": 25,
+  "state_schema": 26,
   "max_age_days": 30,
   "required_units": [
     "agents-projects-hub.service",

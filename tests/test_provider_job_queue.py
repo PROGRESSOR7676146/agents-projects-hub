@@ -332,6 +332,7 @@ class ProviderJobQueueTests(unittest.TestCase):
             self.enqueue(505, provider_session_id="foreign-provider-session")
         with self.assertRaisesRegex(StateError, "model"):
             self.enqueue(506, model="different-model")
+        self.state.cancel_provider_job(derived.job_id)
         self.state.set_writer_mode(self.codex.session_id, "local")
         with self.assertRaisesRegex(StateError, "writer"):
             self.enqueue(507)
@@ -384,7 +385,7 @@ class ProviderJobQueueTests(unittest.TestCase):
         assert next_job is not None
         self.assertEqual(next_job.job_id, second.job_id)
 
-    def test_indeterminate_provider_does_not_block_other_provider_forever(self) -> None:
+    def test_indeterminate_provider_blocks_root_until_operator_resolution(self) -> None:
         first, _ = self.enqueue(512)
         satellite = self.state.ensure_satellite(
             self.topic.topic_id, "opencode", "provider-selected", "high"
@@ -405,6 +406,8 @@ class ProviderJobQueueTests(unittest.TestCase):
             first.job_id, leased.lease_token, error_code="provider_failure"
         )
 
+        self.assertIsNone(self.state.lease_provider_job("opencode", "worker-open"))
+        self.state.resolve_indeterminate_job(first.job_id, "acknowledged")
         next_job = self.state.lease_provider_job("opencode", "worker-open")
         self.assertIsNotNone(next_job)
         assert next_job is not None
@@ -436,7 +439,7 @@ class ProviderJobQueueTests(unittest.TestCase):
     def test_stale_leased_requeues_but_stale_executing_is_indeterminate(self) -> None:
         first, _ = self.enqueue(530)
         second_topic = self.state.observe_topic(
-            project_id="example-project",
+            project_id="second-example-project",
             chat_id=-1001234567890,
             thread_id=78,
             title="Second topic",
@@ -672,7 +675,7 @@ class ProviderJobQueueTests(unittest.TestCase):
         self.assertEqual(self.state.get_provider_job(queued.job_id).status, "indeterminate")
 
         ready_topic = self.state.observe_topic(
-            project_id="example-project",
+            project_id="ready-example-project",
             chat_id=self.topic.chat_id,
             thread_id=79,
             title="Ready outbox topic",

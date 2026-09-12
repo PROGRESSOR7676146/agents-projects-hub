@@ -778,6 +778,15 @@ BEGIN SELECT RAISE(ABORT, 'Codex origin requires the exact provider thread'); EN
 """
 
 
+MIGRATION_26 = """
+UPDATE topics
+SET execution_scope = 'project:' || project_id
+WHERE execution_scope IS NULL OR execution_scope = '';
+CREATE INDEX IF NOT EXISTS topics_execution_scope
+ON topics(execution_scope, topic_id);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -840,6 +849,12 @@ def _ensure_legacy_columns(connection: sqlite3.Connection) -> None:
         )
 
 
+def _ensure_execution_scope_column(connection: sqlite3.Connection) -> None:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(topics)")}
+    if columns and "execution_scope" not in columns:
+        connection.execute("ALTER TABLE topics ADD COLUMN execution_scope TEXT")
+
+
 def _execute_migration_script(connection: sqlite3.Connection, script: str) -> None:
     """Execute one trusted migration script without sqlite3's implicit COMMIT.
 
@@ -897,6 +912,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_23,
         MIGRATION_24,
         MIGRATION_25,
+        MIGRATION_26,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:
@@ -904,6 +920,8 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
             for version, script in enumerate(migrations, start=1):
                 if previous >= version:
                     continue
+                if version == 26:
+                    _ensure_execution_scope_column(connection)
                 _execute_migration_script(connection, script)
                 if version == 1:
                     _ensure_legacy_columns(connection)
