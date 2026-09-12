@@ -10,6 +10,8 @@ and releases use semantic versioning while the public API is still evolving.
 - Add durable, rate-limited Codex progress delivery through the provider bot,
   with final-result priority, restart-safe retries, terminal supersession, and
   passive stuck-progress monitoring.
+- Require a focused clarification before drafting a materially underspecified
+  deliverable, including in compact reminders for existing provider sessions.
 - Add passive reliability thresholds for stale provider work, delayed Telegram
   delivery, and unresolved uncertain outcomes; resolved historical uncertainty
   remains visible without keeping an operational alert active.

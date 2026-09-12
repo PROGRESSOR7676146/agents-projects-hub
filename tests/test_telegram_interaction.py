@@ -33,6 +33,14 @@ class TelegramInteractionPromptTests(unittest.TestCase):
         self.assertIn("TELEGRAM TRANSPORT REMINDER v1", prompt)
         self.assertNotIn("TELEGRAM INTERACTION CONTRACT v1", prompt)
 
+    def test_codex_reminder_requires_one_useful_question_before_guessing_a_deliverable(
+        self,
+    ) -> None:
+        prompt = telegram_developer_instructions(runtime="codex", new_session=False)
+
+        self.assertIn("ask one focused question before drafting", prompt)
+        self.assertIn("audience, facts, format, or language", prompt)
+
     def test_contract_does_not_claim_unavailable_ui_actions(self) -> None:
         prompt = telegram_turn_prompt("Create a report.", runtime="antigravity", new_session=True)
 

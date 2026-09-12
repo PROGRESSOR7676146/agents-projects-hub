@@ -103,7 +103,10 @@ Routing precedence is deterministic:
 - **REQ-UX-002 (Implemented):** The shared contract MUST prefer concise,
   outcome-first conversational replies, focused clarification when missing
   context materially affects the result, separate copyable blocks, restrained
-  emoji, and visible progress without exposing hidden reasoning. Runtime notes
+  emoji, and visible progress without exposing hidden reasoning. When a requested
+  deliverable lacks audience, facts, format, or language and those choices
+  materially affect it, the provider MUST ask one focused question before
+  drafting rather than silently inventing them. Runtime notes
   MAY refine presentation but MUST NOT change safety or approval authority.
 - **REQ-UX-003 (Implemented for private-chat admission and external queue
   refresh):** Private chats SHOULD show Telegram's native ephemeral `Thinking…`

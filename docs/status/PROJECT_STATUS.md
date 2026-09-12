@@ -125,7 +125,9 @@ The queue implementation lives outside the already large state module.
   native channel passes separate capability and behavioral acceptance. Existing
   sessions receive the full current contract once after rollout; its version is
   acknowledged only after a successful provider turn, then compact reminders
-  avoid paying the full contract cost repeatedly. Provider-specific notes tune
+  avoid paying the full contract cost repeatedly. Both forms explicitly require
+  one focused question before drafting when missing audience, facts, format, or
+  language materially changes the requested deliverable. Provider-specific notes tune
   presentation without changing safety authority. Local `doctor` diagnostics
   list the acknowledged version and binding state for at most 100 current
   active/satellite provider sessions, identified by their Hub session ID;
