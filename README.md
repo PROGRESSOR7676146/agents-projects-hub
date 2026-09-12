@@ -115,6 +115,31 @@ After closing the native CLI, `/return` explicitly gives the same provider
 session back to Telegram. Hermes remains fail-closed until its native resume
 contract is confirmed.
 
+### Connect an existing Codex conversation
+
+An owner can send `/connect` in a registered project topic and choose a bounded
+saved-session label. The Hub asks for an explicit CLI-closed confirmation,
+publishes a service marker, and makes the next later ordinary message continue
+that exact Codex thread. Replacement archives only the prior Hub binding; it
+does not merge histories and needs no additional `/return`.
+
+The Hub private chat offers `/start`, `/projects`, `/connect`, and `/cancel`.
+Its `/connect` flow selects a registered project, saved session, and an existing
+or newly created topic in that project's configured forum group. Private free
+text is control input only and never becomes a provider prompt.
+
+For a local assisted selection, run:
+
+```text
+agents-projects-hub session connect CONFIG
+```
+
+Choose the registered project and saved session, close the CLI, then send the
+returned `/connect CODE` in the destination topic. Sending the code to the Hub
+private chat instead opens destination selection. Codes expire, are scoped to
+the configured owner/project/source, and are consumed only with the final
+activation commit. Configuration is never guessed when `CONFIG` is omitted.
+
 ## Implemented pilot
 
 - Strict Telegram owner, private-supergroup, topic, and project allowlists.

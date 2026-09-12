@@ -74,6 +74,15 @@ necessary but not sufficient for items marked live.
   temporary activation pointer switches to the candidate and back; and both
   compatible artifacts open the retained target state without changing queued,
   outbox, or indeterminate work. This is not a live rollout or Telegram E2E.
+- **AC-F-013 (Automated offline; live Telegram acceptance pending;
+  REQ-CMD-008, REQ-WRITER-009..012):** Topic, Hub-private, and local-code entry
+  paths select one exact saved Codex thread without model inference. Empty,
+  occupied and newly created destinations preserve project/root/owner checks.
+  Expired, repeated and concurrent codes, stale callbacks, changed targets,
+  delayed input, restart boundaries, metadata failure, and unknown Telegram
+  send/create outcomes neither substitute a thread nor partially archive the
+  existing binding. A committed marker activates one generation; the next
+  later message resumes the selected thread without `/return`.
 
 ## 16. Non-functional acceptance criteria
 
@@ -114,7 +123,8 @@ necessary but not sufficient for items marked live.
 | Optional Codex account pool/fallback | Implemented | Natural exhaustion E2E remains an acceptance item. |
 | Telegram E2E baseline | Bounded actor implemented; live authorization pending | Results remain private deployment evidence. |
 | `/local` and `/return` | Implemented | Codex return is model-free and same-session; other providers retain prior behavior pending acceptance. |
-| Compact command surface | Implemented | `/status`, cached/paginated `/model`, `/accounts`, confirmed `/new`, `/local`, `/return`; Telegram menu readback passed. |
+| Compact command surface | Implemented | Provider defaults remain bounded; project Hub scope exposes `/menu`, `/connect`, `/stop`, and Hub private scope exposes `/start`, `/projects`, `/connect`, `/cancel`. |
+| Saved Codex session connect | Implemented; live Telegram acceptance pending | One durable workflow serves topic selection, Hub-private selection/new-topic creation, and owner-scoped local one-time codes. |
 | Summary-free Codex return | Implemented | Local lease change; no model, transcript, handoff, or session change. |
 | Provider-limit rotation events | Implemented | Provider `429` drives Codex rotation visibility; natural exhaustion E2E remains pending. |
 | Durable embedded queue compatibility path | Implemented | `dispatch_mode: "inline"` remains default; `"queue"` with `queue_runtime: "embedded"` consumes work on a background thread. |

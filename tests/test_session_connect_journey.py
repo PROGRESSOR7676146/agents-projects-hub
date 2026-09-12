@@ -145,7 +145,9 @@ class SessionConnectJourneyTests(unittest.TestCase):
         self.assertTrue(sender.run_cycle())
 
         topic = state.find_topic(-1001234567890, 77)
+        assert topic is not None
         session = state.active_session(topic.topic_id)
+        assert session is not None
         self.assertEqual(session.provider_session_id, "example-cli-thread")
         self.assertEqual(session.writer_mode, "telegram")
         self.assertEqual(client.turns, 0)
@@ -213,6 +215,7 @@ class SessionConnectJourneyTests(unittest.TestCase):
         )
         topic = state.find_topic(-1001234567890, 88)
         self.assertIsNotNone(topic)
+        assert topic is not None
         self.assertEqual(client.turns, 0)
         self.assertEqual(state.provider_jobs_for_topic(topic.topic_id), ())
 

@@ -74,11 +74,12 @@ This normative module is part of the
   `/status`, `/model`, `/accounts`, `/new`, `/local`, `/return`, and `/stop`. Legacy
   maintenance commands may remain locally callable for compatibility but are
   not part of the normal mobile interface. In registered project groups only
-  the central router bot publishes this universal menu; provider bots publish
+  the central router bot publishes `/menu`, `/connect`, and `/stop`; provider bots publish
   empty chat-scoped menus so Telegram does not duplicate commands with bot
   username suffixes. Direct provider chats expose only commands implemented by
-  that provider endpoint. A deterministic local command checks and synchronizes
-  every scope.
+  that provider endpoint. The Hub private chat publishes `/start`, `/projects`,
+  `/connect`, and `/cancel`. A deterministic local command checks and
+  synchronizes every scope.
 - **REQ-CMD-006 (Implemented):** Provider, model, and effort buttons mark the
   active choice and use Telegram's success style where supported. Account and
   quota summaries use portable green/yellow/red status symbols because message
@@ -93,6 +94,15 @@ This normative module is part of the
   provider ignores graceful termination.
   Legacy inline OpenCode/Antigravity direct-message endpoints do not advertise
   this command until they move behind an interruptible worker boundary.
+- **REQ-CMD-008 (Implemented; live Telegram acceptance pending):** `/connect` in
+  a registered project topic, `/connect` in the owner-only Hub private control
+  plane, and local `session connect [CONFIG]` MUST use one durable deterministic
+  workflow. Telegram selects only opaque project/session/destination options;
+  it never supplies a filesystem path. Discovery is limited to exact canonical
+  registered roots, exposes no transcript or prompt text, and invokes no model,
+  thread creation, or resume. Hub private free text MUST NOT become productive
+  provider input. Local configuration MUST be explicit rather than discovered
+  from hidden user files.
 
 ## 11. Frontends, writer lease, and local transfer
 
@@ -154,6 +164,19 @@ This normative module is part of the
   starts a normal new conversation while retaining the old origin reservation.
   Unsupported Codex execution modes MUST refuse retained origins, including
   archived bindings. CLI environment/plugin parity is not guaranteed.
+- **REQ-WRITER-012 (Implemented; live Telegram acceptance pending):** A
+  confirmed session-connect workflow MUST recheck the exact source metadata,
+  destination binding, busy work and expected prior session before activation.
+  The standalone sender MUST publish one neutral marker in the destination and
+  use its positive Telegram message ID as the input/context boundary. One
+  SQLite transaction then performs the existing immutable-origin attachment,
+  replacement archive, activation, writer transfer to Telegram, one-time-code
+  consumption, workflow completion, marker receipt, and preparation of the
+  success result. Success MUST NOT be published before this commit. An unknown
+  marker outcome MUST retain the old binding and MUST NOT be retried blindly.
+  The next later ordinary message continues the exact chosen thread without a
+  separate `/return`; stale callbacks, cancellation and expiry create no new
+  generation.
 
 Initial reviewed resume shapes are `codex resume SESSION_ID -C ROOT`,
 `opencode ROOT --session SESSION_ID`, and

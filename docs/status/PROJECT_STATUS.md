@@ -68,19 +68,24 @@ the existing alert output, transaction semantics, and schema.
 
 ## Implemented
 
-Saved Codex CLI sessions can now be attached locally using `session attach-codex`
-with read-only preview, explicit apply and a CLI-closed assertion. An occupied
-topic additionally requires the exact previous active Codex session ID. Schema
-25 persists immutable origins and a first-return input/context boundary. The old
-Hub binding is archived without deleting its provider thread or merging history.
-External workers continue the exact thread through socket or stdio; unsupported
-Codex modes fail closed while origins remain. Model/effort changes preserve
-adopted history; explicit `/new` creates a normal new session. See
-[ADR 0022](../decisions/0022-explicit-codex-session-adoption.md) for protocol,
-failure boundaries and rollback limitations. Automated acceptance includes real
-queue/outbox flow with fictional provider/Telegram boundaries. Live continuity
-and a production rollback artifact remain unaccepted. Earlier schema-24
-checkpoints above describe their own milestones; the current target is schema 25.
+Saved Codex CLI sessions can be connected through `/connect` in a registered
+project topic, the owner-only Hub private control plane, or a short-lived code
+issued by local `session connect [CONFIG]`. All three entrances use one durable,
+model-free workflow. Bounded app-server discovery exposes only safe labels for
+the exact canonical project root. A positive Telegram marker message becomes
+the activation boundary; its delivery receipt, immutable-origin attachment,
+replacement archive, writer transfer, code consumption and result preparation
+commit atomically. A separate `/return` is unnecessary. Unknown marker and
+topic-creation outcomes are not retried blindly and preserve the previous
+binding. Schema 26 adds workflow, candidate, option, outbox and one-time-code
+state. See [ADR 0023](../decisions/0023-deterministic-session-connect.md).
+
+The administrative `session attach-codex` preview/apply interface remains
+available for recovery. Schema 25 introduced immutable origins and the original
+first-return boundary. External workers continue the exact thread through socket
+or stdio; unsupported modes fail closed. Automated evidence uses fictional
+provider and Telegram adapters. Live continuity and a production rollback
+artifact for schema 26 remain unaccepted; the current target is schema 26.
 
 - Numeric project/topic identity, canonical allowlisted roots, idempotent
   routing, persistent provider sessions, bounded visible context, and writer
@@ -350,7 +355,7 @@ checkpoints above describe their own milestones; the current target is schema 25
   reapers. Runtime-proxy monitoring remains independent and never restarts a
   shared app-server underneath an active Codex or tlive session.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
-- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-24
+- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-26
   immutable-deployment triage guide, source revision, timestamp, and content
   hashes into a neutral local store for the independent Hermes channel. It
   carries no private deployment inventory and creates no service dependency.
@@ -360,7 +365,7 @@ checkpoints above describe their own milestones; the current target is schema 25
   immutable runtime artifacts remains the deployment identity.
 - Privacy gate that rejects deployment identities, raw histories/session dumps,
   owner-specific paths, Telegram secrets/identifiers, and local runtime files.
-- Documentation validation inventories all 91 normative product requirement IDs,
+- Documentation validation inventories all 96 normative product requirement IDs,
   protects all 20 numbered baseline sections by content hash, and checks local
   Markdown files/anchors repository-wide. The product baseline is split into a
   short normative index and five stable capability modules; the guarded move

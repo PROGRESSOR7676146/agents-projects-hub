@@ -54,8 +54,9 @@ Do not conflate them with history rewrite, publication, service activation or
 live acceptance. Finish a tested repository checkpoint before any deployment
 decision. Keep schema migration and release-artifact compatibility in one reviewed
 batch, rather than silently changing the existing schema version in place.
-The current schema is 24; later stateful features must not hide additive schema
-changes under that version.
+The current schema is 26; later stateful features must not hide additive schema
+changes under that version. Earlier milestone tables retain their historical
+schema-24 constraints.
 
 Delegate small bounded test-matrix or source lookups to agy when useful. Empty,
 denied or timed-out output supplies no evidence. Final integration reads code

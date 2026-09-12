@@ -5,6 +5,16 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Add one durable, model-free saved-Codex-session connection workflow for
+  project-topic `/connect`, the owner-only Hub private control plane, and
+  expiring one-time codes issued by local `session connect [CONFIG]`.
+- Activate a selected session with a real Telegram marker receipt, atomic
+  immutable-origin/replacement/code commit, and no additional `/return`; unknown
+  Telegram outcomes preserve the prior binding and are never retried blindly.
+- Add bounded exact-root app-server discovery, existing/new-topic selection in
+  registered groups, private Hub command scopes, schema-26 persistence, and an
+  explicit follow-up plan for project/group onboarding.
+
 ## [0.7.0] - 2026-09-05
 
 - Add durable, rate-limited Codex progress delivery through the provider bot,

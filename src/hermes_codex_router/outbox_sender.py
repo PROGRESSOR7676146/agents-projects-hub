@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from .artifacts import (
     artifact_spool_root,
@@ -28,14 +28,7 @@ class TelegramOutboxSenderError(RuntimeError):
 
 class TelegramSender(Protocol):
     def send_chat_action(self, chat_id: int, thread_id: int, action: str = "typing") -> None: ...
-    def send_html(
-        self,
-        chat_id: int,
-        thread_id: int,
-        html: str,
-        *,
-        reply_markup: dict[str, Any] | None = None,
-    ) -> int: ...
+    def send_html(self, chat_id: int, thread_id: int, html: str) -> int: ...
     def send_document(
         self,
         chat_id: int,
@@ -296,7 +289,7 @@ class TelegramOutboxSender:
         if outbox is None:
             return False
         try:
-            message_id = self.telegram_bots["hub"].send_html(
+            message_id = cast(Any, self.telegram_bots["hub"]).send_html(
                 outbox.chat_id,
                 outbox.thread_id,
                 outbox.telegram_html,

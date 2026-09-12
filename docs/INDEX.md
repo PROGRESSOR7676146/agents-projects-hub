@@ -26,6 +26,8 @@ are intentionally excluded.
 - [Quality and stability review](operations/QUALITY_AND_STABILITY_REVIEW.md)
 - [Reliability implementation plan](operations/RELIABILITY_PLAN.md)
 - [CLI-to-Telegram session transfer implementation plan](operations/SESSION_TRANSFER_IMPLEMENTATION_PLAN.md)
+- [Saved Codex session connection](operations/SESSION_CONNECT.md)
+- [Project/group onboarding plan](operations/PROJECT_GROUP_ONBOARDING_PLAN.md)
 - [Testing and privacy gate](testing/README.md)
 
 ## Truth rules

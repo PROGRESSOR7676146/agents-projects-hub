@@ -23,6 +23,10 @@ Operational truth is split by purpose:
 - Engineering debt and exact evidence rules:
   [`ENGINEERING_BASELINE.md`](ENGINEERING_BASELINE.md).
 - Complete validation gate: `python scripts/validate.py`.
+- Saved Codex session connection and deployment-local acceptance:
+  [`SESSION_CONNECT.md`](SESSION_CONNECT.md).
+- Separate planned project/group onboarding package:
+  [`PROJECT_GROUP_ONBOARDING_PLAN.md`](PROJECT_GROUP_ONBOARDING_PLAN.md).
 - Artifact provenance: `agents-projects-hub release-info` succeeds only for a
   wheel with complete clean-tree release identity; run it before promotion.
 - Release/version/tag truth and promotion order:
@@ -75,7 +79,7 @@ Operational truth is split by purpose:
   Omitting `hub_bot` retains Codex ingress for rollback. Privacy Mode and live
   bot/menu changes remain an owner-coordinated deployment acceptance step.
 - Public Telegram menu drift: `agents-projects-hub telegram-commands HUB_CONFIG`.
-  Apply the exact six-command menu with
+  Apply the exact scoped menus with
   `agents-projects-hub telegram-commands HUB_CONFIG --sync`.
 
 ## Operating rules

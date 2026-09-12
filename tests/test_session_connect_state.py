@@ -4,9 +4,17 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from typing import TypeVar
 
 from hermes_codex_router.session_connect import ConnectCandidate, SessionConnectStore
 from hermes_codex_router.state import HubState, StateError
+
+T = TypeVar("T")
+
+
+def required(value: T | None) -> T:
+    assert value is not None
+    return value
 
 
 class SessionConnectStateTests(unittest.TestCase):
@@ -34,7 +42,7 @@ class SessionConnectStateTests(unittest.TestCase):
             model="gpt-5.6-sol",
             effort="high",
         )
-        leased = self.store.lease_worker("worker-1")
+        leased = required(self.store.lease_worker("worker-1"))
         self.assertEqual(leased.workflow_id, workflow.workflow_id)
         candidates = self.store.finish_discovery(
             workflow.workflow_id,
@@ -52,13 +60,13 @@ class SessionConnectStateTests(unittest.TestCase):
         self.assertEqual(selected.stage, "confirming")
         requested = self.store.request_activation(42, selected.workflow_id)
         self.assertEqual(requested.stage, "activation_requested")
-        leased = self.store.lease_worker("worker-1")
+        leased = required(self.store.lease_worker("worker-1"))
         self.store.prepare_marker(leased.workflow_id, leased.lease_token)
-        outbox = self.store.lease_outbox("sender-1")
+        outbox = required(self.store.lease_outbox("sender-1"))
         self.assertEqual(outbox.kind, "activation_marker")
         completed = self.store.complete_marker(outbox, telegram_message_id=120)
         self.assertEqual(completed.stage, "completed")
-        session = self.state.get_session(completed.result_session_id)
+        session = self.state.get_session(required(completed.result_session_id))
         self.assertEqual(session.writer_mode, "telegram")
         self.assertEqual(session.provider_session_id, "example-thread")
         origin = self.state._connection.execute(
@@ -93,7 +101,7 @@ class SessionConnectStateTests(unittest.TestCase):
             model="gpt-5.6-sol",
             effort="high",
         )
-        leased = self.store.lease_worker("worker-1")
+        leased = required(self.store.lease_worker("worker-1"))
         candidates = self.store.finish_discovery(
             workflow.workflow_id,
             leased.lease_token,
@@ -101,12 +109,12 @@ class SessionConnectStateTests(unittest.TestCase):
         )
         selected = self.store.select_candidate(42, candidates[0].candidate_id)
         self.store.request_activation(42, selected.workflow_id)
-        leased = self.store.lease_worker("worker-1")
+        leased = required(self.store.lease_worker("worker-1"))
         self.store.prepare_marker(leased.workflow_id, leased.lease_token)
-        outbox = self.store.lease_outbox("sender-1")
+        outbox = required(self.store.lease_outbox("sender-1"))
         self.store.mark_marker_unknown(outbox, "telegram_outcome_unknown")
         self.assertEqual(
-            self.state.active_session(self.topic.topic_id).session_id,
+            required(self.state.active_session(self.topic.topic_id)).session_id,
             previous.session_id,
         )
         self.assertEqual(self.store.get(workflow.workflow_id).stage, "marker_unknown")
@@ -124,7 +132,7 @@ class SessionConnectStateTests(unittest.TestCase):
         self.assertEqual(discovering.project_id, "example-project")
         self.assertEqual(discovering.stage, "discovering")
 
-        leased = self.store.lease_worker("worker-1")
+        leased = required(self.store.lease_worker("worker-1"))
         candidates = self.store.finish_discovery(
             workflow.workflow_id,
             leased.lease_token,
@@ -148,7 +156,7 @@ class SessionConnectStateTests(unittest.TestCase):
         )
         project = self.store.options(workflow.workflow_id, "project")[0]
         self.store.select_project(42, project.option_id)
-        leased = self.store.lease_worker("worker-1")
+        leased = required(self.store.lease_worker("worker-1"))
         candidates = self.store.finish_discovery(
             workflow.workflow_id,
             leased.lease_token,
@@ -165,7 +173,10 @@ class SessionConnectStateTests(unittest.TestCase):
             title="Saved work",
         )
         self.assertEqual(completed.stage, "confirming")
-        self.assertEqual(self.state.find_topic(-1001234567890, 88).project_id, "example-project")
+        self.assertEqual(
+            required(self.state.find_topic(-1001234567890, 88)).project_id,
+            "example-project",
+        )
 
     def test_one_time_code_claim_is_idempotent_and_consumed_only_on_activation(self) -> None:
         issued = self.store.issue_code(
@@ -192,7 +203,9 @@ class SessionConnectStateTests(unittest.TestCase):
             chat_id=-1001234567890,
             thread_id=77,
         )
-        self.assertEqual(first.workflow.workflow_id, repeated.workflow.workflow_id)
+        first_workflow = required(first.workflow)
+        repeated_workflow = required(repeated.workflow)
+        self.assertEqual(first_workflow.workflow_id, repeated_workflow.workflow_id)
         self.assertFalse(first.already_consumed)
         self.assertIsNone(
             self.state._connection.execute(
@@ -200,10 +213,10 @@ class SessionConnectStateTests(unittest.TestCase):
                 (issued.code_id,),
             ).fetchone()[0]
         )
-        self.store.request_activation(42, first.workflow.workflow_id)
-        leased = self.store.lease_worker("worker-1")
+        self.store.request_activation(42, first_workflow.workflow_id)
+        leased = required(self.store.lease_worker("worker-1"))
         self.store.prepare_marker(leased.workflow_id, leased.lease_token)
-        outbox = self.store.lease_outbox("sender-1")
+        outbox = required(self.store.lease_outbox("sender-1"))
         completed = self.store.complete_marker(outbox, telegram_message_id=121)
         after = self.store.redeem_code_topic(
             owner_user_id=42,
@@ -283,6 +296,114 @@ class SessionConnectStateTests(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertEqual(len(results), 2)
         self.assertEqual(len(set(results)), 1)
+
+    def test_stale_selection_and_changed_target_never_replace_current_session(self) -> None:
+        workflow = self.store.start_topic(
+            owner_user_id=42,
+            project_id="example-project",
+            canonical_root=self.root,
+            chat_id=-1001234567890,
+            thread_id=77,
+            model="gpt-5.6-sol",
+            effort="high",
+        )
+        leased = required(self.store.lease_worker("worker-1"))
+        candidates = self.store.finish_discovery(
+            workflow.workflow_id,
+            leased.lease_token,
+            (ConnectCandidate("candidate-9", "saved-thread", "Сессия · saved", 10),),
+        )
+        self.store.select_candidate(42, candidates[0].candidate_id)
+        with self.assertRaisesRegex(StateError, "connect_selection_stale"):
+            self.store.select_candidate(42, candidates[0].candidate_id)
+        with self.assertRaisesRegex(StateError, "connect_selection_stale"):
+            self.store.select_candidate(99, candidates[0].candidate_id)
+
+        changed = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
+        with self.assertRaisesRegex(StateError, "target_changed"):
+            self.store.request_activation(42, workflow.workflow_id)
+        self.assertEqual(self.state.active_session(self.topic.topic_id), changed)
+        self.assertEqual(
+            self.state._connection.execute("SELECT COUNT(*) FROM codex_session_origins").fetchone()[
+                0
+            ],
+            0,
+        )
+
+    def test_work_appearing_after_confirmation_blocks_marker_without_partial_archive(self) -> None:
+        current = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
+        current = self.state.bind_provider_session(current.session_id, "old-thread", None)
+        workflow = self.store.start_topic(
+            owner_user_id=42,
+            project_id="example-project",
+            canonical_root=self.root,
+            chat_id=-1001234567890,
+            thread_id=77,
+            model="gpt-5.6-sol",
+            effort="high",
+        )
+        leased = required(self.store.lease_worker("worker-1"))
+        candidates = self.store.finish_discovery(
+            workflow.workflow_id,
+            leased.lease_token,
+            (ConnectCandidate("candidate-10", "saved-thread", "Сессия · saved", 10),),
+        )
+        selected = self.store.select_candidate(42, candidates[0].candidate_id)
+        self.store.request_activation(42, selected.workflow_id)
+        self.state.enqueue_provider_job(
+            idempotency_key="new-work",
+            chat_id=-1001234567890,
+            message_id=122,
+            topic_id=self.topic.topic_id,
+            agent_id="codex",
+            session_id=current.session_id,
+            session_generation=current.generation,
+            provider_session_id=current.provider_session_id,
+            model=current.model,
+            effort=current.effort,
+            payload_text="New work",
+        )
+        leased = required(self.store.lease_worker("worker-1"))
+        with self.assertRaises(StateError):
+            self.store.prepare_marker(leased.workflow_id, leased.lease_token)
+        self.assertEqual(
+            required(self.state.active_session(self.topic.topic_id)).session_id,
+            current.session_id,
+        )
+        self.assertEqual(
+            self.state._connection.execute("SELECT COUNT(*) FROM codex_session_origins").fetchone()[
+                0
+            ],
+            0,
+        )
+
+    def test_workflow_survives_restart_and_unknown_topic_creation_is_not_retried(self) -> None:
+        workflow = self.store.start_direct(
+            owner_user_id=42,
+            projects=(("example-project", self.root, "Example project"),),
+            model="gpt-5.6-sol",
+            effort="high",
+        )
+        option = self.store.options(workflow.workflow_id, "project")[0]
+        self.store.select_project(42, option.option_id)
+        reopened = HubState.open(self.root / "state.db")
+        self.addCleanup(reopened.close)
+        restarted = SessionConnectStore(reopened)
+        self.assertEqual(restarted.get(workflow.workflow_id).stage, "discovering")
+
+        leased = required(restarted.lease_worker("worker-after-restart"))
+        candidates = restarted.finish_discovery(
+            workflow.workflow_id,
+            leased.lease_token,
+            (ConnectCandidate("candidate-11", "saved-thread", "Сессия · saved", 10),),
+        )
+        restarted.select_candidate(42, candidates[0].candidate_id)
+        restarted.request_new_topic(42, workflow.workflow_id)
+        restarted.begin_topic_creation(42, workflow.workflow_id)
+        unknown = restarted.topic_creation_unknown(42, workflow.workflow_id)
+        self.assertEqual(unknown.stage, "topic_create_unknown")
+        with self.assertRaisesRegex(StateError, "connect_topic_creation_stale"):
+            restarted.begin_topic_creation(42, workflow.workflow_id)
 
 
 if __name__ == "__main__":
