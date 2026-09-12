@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
@@ -128,7 +129,7 @@ def _resolve_codex_session_label(
     db_path = codex_home / "state_5.sqlite"
     if db_path.is_file():
         try:
-            with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as con:
+            with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as con:
                 row = con.execute(
                     "SELECT name, title, cwd FROM threads WHERE id = ?", (session_id,)
                 ).fetchone()

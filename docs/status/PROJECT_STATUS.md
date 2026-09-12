@@ -49,6 +49,23 @@ bounded, restart-safe, deduplicated, superseded after terminal job state, and
 cannot complete or replay provider work. Final results retain delivery priority.
 The queue implementation lives outside the already large state module.
 
+Package A now closes SQLite connections whenever `HubState.open()` fails before
+transferring ownership, when a backup cannot open its destination, and when a
+pre-backup migration failure occurs after the original connection is closed.
+Focused regressions exercise those resource/error boundaries without changing
+schema 24 or migration ordering. CI and tag-release workflows now share one
+reusable Python 3.11–3.13 canonical validator; publication depends on its full
+matrix and alone has write permission. Structural tests prove the checked-in
+wiring, while a hosted Actions execution remains separate evidence.
+Review regressions also require backup handles to close before failed-output
+cleanup, preserve a destination that was never opened, and reject skipped or
+error-tolerant validation. A temporary Git fixture executes the release revision
+guard against matching and mismatched HEAD/event/annotated-tag commits.
+Read-only alert metadata lookups and execution-journal migration fixtures now
+explicitly close their SQLite connections; the latter were independently
+identified by Python 3.13 ResourceWarning allocation traces. These fixes retain
+the existing alert output, transaction semantics, and schema.
+
 ## Implemented
 
 - Numeric project/topic identity, canonical allowlisted roots, idempotent

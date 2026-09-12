@@ -6,15 +6,28 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  validation:
+    uses: ./.github/workflows/validate.yml
+
   release:
+    needs: validation
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - name: Verify release revision
+        env:
+          EVENT_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EVENT_SHA"
+          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$EVENT_SHA"
       - name: Verify release metadata and tag
         env:
           PYTHONPATH: src
@@ -22,4 +35,5 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" --verify-tag --generate-notes
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" --verify-tag --generate-notes

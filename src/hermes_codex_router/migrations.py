@@ -767,26 +767,34 @@ def backup_database(source: Path, destination: Path | None = None) -> Path:
     if destination.exists():
         raise FileExistsError(destination)
     source_connection = sqlite3.connect(source)
-    destination_connection = sqlite3.connect(destination)
+    destination_connection: sqlite3.Connection | None = None
+    failed = False
     try:
+        destination_connection = sqlite3.connect(destination)
         source_connection.backup(destination_connection)
         check = destination_connection.execute("PRAGMA integrity_check").fetchone()
         if check is None or check[0] != "ok":
             raise RuntimeError("SQLite backup integrity check failed")
-    except Exception:
-        destination_connection.close()
-        source_connection.close()
-        destination.unlink(missing_ok=True)
+    except BaseException:
+        failed = True
         raise
     finally:
-        try:
-            destination_connection.close()
-        except sqlite3.Error:
-            pass
+        if destination_connection is not None:
+            try:
+                destination_connection.close()
+            except sqlite3.Error:
+                pass
         try:
             source_connection.close()
         except sqlite3.Error:
             pass
+        if failed and destination_connection is not None:
+            # Only remove a destination we opened, and only after releasing handles.
+            # Cleanup failure must not replace the original backup error.
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                pass
     os.chmod(destination, 0o600)
     return destination
 
@@ -896,11 +904,12 @@ def migrate_database(path: Path, *, create_backup: bool = True) -> MigrationResu
     with _migration_lock(path):
         existed = path.exists() and path.stat().st_size > 0
         backup_path: Path | None = None
-        connection = sqlite3.connect(path)
+        connection: sqlite3.Connection | None = sqlite3.connect(path)
         try:
             previous = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if existed and previous < LATEST_SCHEMA_VERSION and create_backup:
                 connection.close()
+                connection = None
                 backup_path = backup_database(path)
                 connection = sqlite3.connect(path)
             _, current = migrate_connection(connection)
@@ -908,13 +917,17 @@ def migrate_database(path: Path, *, create_backup: bool = True) -> MigrationResu
             if check is None or check[0] != "ok":
                 raise RuntimeError("SQLite integrity check failed after migration")
         except Exception:
-            connection.rollback()
-            connection.close()
+            if connection is not None:
+                try:
+                    connection.rollback()
+                except sqlite3.Error:
+                    pass
             raise
         finally:
-            try:
-                connection.close()
-            except sqlite3.Error:
-                pass
+            if connection is not None:
+                try:
+                    connection.close()
+                except sqlite3.Error:
+                    pass
     os.chmod(path, 0o600)
     return MigrationResult(previous, current, backup_path)

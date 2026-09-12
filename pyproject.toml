@@ -24,6 +24,8 @@ e2e = [
   "Telethon>=1.44,<2",
 ]
 dev = [
+  "PyYAML>=6,<7",
+  "Telethon>=1.44,<2",
   "pyright>=1.1.400,<2",
   "ruff>=0.12,<1",
 ]

@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import unittest
 import zipfile
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -56,7 +57,7 @@ class ExecutionJournalTests(unittest.TestCase):
 
         job_id = self.fixture.enqueue()
         path = self.fixture.config.state_path
-        with sqlite3.connect(path) as con:
+        with closing(sqlite3.connect(path)) as con, con:
             con.execute("DROP TABLE IF EXISTS provider_visible_items")
             con.execute("DROP TABLE IF EXISTS provider_execution_checkpoints")
             con.execute("PRAGMA user_version = 21")
@@ -66,7 +67,7 @@ class ExecutionJournalTests(unittest.TestCase):
             (21, LATEST_SCHEMA_VERSION),
         )
         assert migrated.backup_path is not None
-        with sqlite3.connect(migrated.backup_path) as con:
+        with closing(sqlite3.connect(migrated.backup_path)) as con, con:
             self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0], 21)
         state = HubState.open(path)
         try:
@@ -277,7 +278,7 @@ class ExecutionJournalTests(unittest.TestCase):
 
         path = self.fixture.config.state_path
         self.fixture.enqueue()
-        with sqlite3.connect(path) as con:
+        with closing(sqlite3.connect(path)) as con, con:
             con.execute("DROP TABLE provider_visible_items")
             con.execute("DROP TABLE provider_execution_checkpoints")
             con.execute("PRAGMA user_version = 21")
@@ -287,7 +288,7 @@ class ExecutionJournalTests(unittest.TestCase):
         ):
             with self.assertRaises(sqlite3.DatabaseError):
                 migrate_database(path)
-        with sqlite3.connect(path) as con:
+        with closing(sqlite3.connect(path)) as con, con:
             self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0], 21)
             self.assertEqual(
                 con.execute(

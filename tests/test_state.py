@@ -7,8 +7,70 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
+from unittest import mock
 
+from hermes_codex_router import state as state_module
 from hermes_codex_router.state import HubState
+
+
+class HubStateOpenFailureTests(unittest.TestCase):
+    @staticmethod
+    def _assert_closed(connection: sqlite3.Connection) -> None:
+        try:
+            with unittest.TestCase().assertRaises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
+        finally:
+            try:
+                connection.close()
+            except sqlite3.Error:
+                pass
+
+    def test_open_closes_connection_when_migration_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            original_connect = sqlite3.connect
+            created: list[sqlite3.Connection] = []
+
+            def capture_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+                connection = original_connect(*args, **kwargs)
+                created.append(connection)
+                return connection
+
+            with (
+                mock.patch.object(state_module.sqlite3, "connect", side_effect=capture_connect),
+                mock.patch.object(
+                    state_module, "migrate_connection", side_effect=RuntimeError("migration fault")
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "migration fault"):
+                    HubState.open(path)
+
+            self.assertEqual(len(created), 1)
+            self._assert_closed(created[0])
+
+    def test_open_closes_connection_when_database_permissions_cannot_be_set(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            original_connect = sqlite3.connect
+            created: list[sqlite3.Connection] = []
+
+            def capture_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+                connection = original_connect(*args, **kwargs)
+                created.append(connection)
+                return connection
+
+            with (
+                mock.patch.object(state_module.sqlite3, "connect", side_effect=capture_connect),
+                mock.patch.object(
+                    state_module.os, "chmod", side_effect=PermissionError("chmod fault")
+                ),
+            ):
+                with self.assertRaisesRegex(PermissionError, "chmod fault"):
+                    HubState.open(path)
+
+            self.assertEqual(len(created), 1)
+            self._assert_closed(created[0])
 
 
 class HubStateTests(unittest.TestCase):

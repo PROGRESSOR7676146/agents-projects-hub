@@ -9,9 +9,24 @@ python scripts/validate.py
 ```
 
 The gate performs the repository privacy scan, formatting, Ruff, Pyright,
-unit/integration tests, and publishable configuration validation. Automated
-tests use fake transports and temporary Git/SQLite fixtures. They must not
-contact real Telegram groups or consume provider tokens.
+unit/integration tests, release-lock verification, documentation/release
+metadata contracts, and publishable configuration validation. Automated tests
+use fake transports and temporary Git/SQLite fixtures. They must not contact
+real Telegram groups or consume provider tokens.
+
+GitHub CI and tag-release validation both call the same reusable
+`.github/workflows/validate.yml` matrix for Python 3.11, 3.12, and 3.13. Each
+matrix entry installs `.[dev]`, including the test-only Telegram client used by
+the acceptance-actor unit tests, and runs this full canonical command. The
+release publication job depends on the entire reusable validation job and alone
+has `contents: write`. `tests/test_workflows.py` parses the workflows
+structurally, including GitHub's `on` key, and has negative temporary-copy cases
+for a missing dependency, bypass condition, or Python 3.13. That offline
+contract test rejects skipped/error-tolerant validation as well. A temporary
+Git fixture executes the revision guard with matching and mismatched event,
+checkout and annotated-tag commits without publishing a release. These tests
+prove local wiring and guard behavior; a successful hosted Actions run remains
+separate evidence.
 
 `tests/test_fault_injection_matrix.py` is the subprocess queue acceptance gate.
 It uses marker-synchronized fictional child actors, bounded parent waits, and

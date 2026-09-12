@@ -4,7 +4,10 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
+from unittest import mock
 
+from hermes_codex_router import migrations as migrations_module
 from hermes_codex_router.migrations import (
     LATEST_SCHEMA_VERSION,
     MIGRATION_1,
@@ -16,6 +19,117 @@ from hermes_codex_router.migrations import (
 
 
 class MigrationTests(unittest.TestCase):
+    @staticmethod
+    def _assert_closed(connection: sqlite3.Connection) -> None:
+        try:
+            with unittest.TestCase().assertRaises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
+        finally:
+            try:
+                connection.close()
+            except sqlite3.Error:
+                pass
+
+    def test_backup_closes_source_when_destination_open_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.db"
+            destination = Path(directory) / "destination.db"
+            initial = sqlite3.connect(source)
+            initial.close()
+            original_connect = sqlite3.connect
+            created: list[sqlite3.Connection] = []
+
+            def fail_destination_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+                if created:
+                    # Another writer won the destination path after the existence check.
+                    competitor = original_connect(destination)
+                    try:
+                        competitor.execute("CREATE TABLE marker (value TEXT)")
+                        competitor.execute("INSERT INTO marker VALUES ('fictional competitor')")
+                        competitor.commit()
+                    finally:
+                        competitor.close()
+                    raise RuntimeError("destination connection fault")
+                connection = original_connect(*args, **kwargs)
+                created.append(connection)
+                return connection
+
+            with mock.patch.object(
+                migrations_module.sqlite3, "connect", side_effect=fail_destination_connect
+            ):
+                with self.assertRaisesRegex(RuntimeError, "destination connection fault"):
+                    backup_database(source, destination)
+
+            self.assertEqual(len(created), 1)
+            self._assert_closed(created[0])
+            self.assertTrue(destination.is_file())
+            competitor = original_connect(destination)
+            try:
+                self.assertEqual(
+                    competitor.execute("SELECT value FROM marker").fetchone()[0],
+                    "fictional competitor",
+                )
+            finally:
+                competitor.close()
+
+    def test_backup_closes_connections_before_removing_failed_destination(self) -> None:
+        class BrokenBackupConnection(sqlite3.Connection):
+            def backup(self, *args: Any, **kwargs: Any) -> None:
+                raise RuntimeError("backup copy fault")
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.db"
+            destination = Path(directory) / "destination.db"
+            original_connect = sqlite3.connect
+            original_unlink = Path.unlink
+            initial = original_connect(source)
+            initial.close()
+            created: list[sqlite3.Connection] = []
+
+            def capture_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+                if not created:
+                    kwargs["factory"] = BrokenBackupConnection
+                connection = original_connect(*args, **kwargs)
+                created.append(connection)
+                return connection
+
+            def require_closed_before_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+                if path == destination:
+                    for connection in created:
+                        with self.assertRaises(sqlite3.ProgrammingError):
+                            connection.execute("SELECT 1")
+                original_unlink(path, *args, **kwargs)
+
+            try:
+                with (
+                    mock.patch.object(
+                        migrations_module.sqlite3, "connect", side_effect=capture_connect
+                    ),
+                    mock.patch.object(Path, "unlink", require_closed_before_unlink),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "backup copy fault"):
+                        backup_database(source, destination)
+                self.assertEqual(len(created), 2)
+                self.assertFalse(destination.exists())
+            finally:
+                for connection in created:
+                    connection.close()
+
+    def test_migration_preserves_backup_error_after_closing_prebackup_connection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute("PRAGMA user_version = 1")
+            finally:
+                connection.close()
+
+            with mock.patch.object(
+                migrations_module, "backup_database", side_effect=RuntimeError("backup fault")
+            ):
+                with self.assertRaisesRegex(RuntimeError, "backup fault"):
+                    migrate_database(path)
+
     def test_progress_delivery_migration_is_additive_from_v23(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"

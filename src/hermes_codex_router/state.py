@@ -264,9 +264,16 @@ class HubState:
             if version < LATEST_SCHEMA_VERSION:
                 migrate_database(path, create_backup=True)
         connection = sqlite3.connect(path, timeout=5.0)
-        os.chmod(path, 0o600)
-        migrate_connection(connection)
-        return cls(connection)
+        try:
+            os.chmod(path, 0o600)
+            migrate_connection(connection)
+            return cls(connection)
+        except BaseException:
+            try:
+                connection.close()
+            except sqlite3.Error:
+                pass
+            raise
 
     @property
     def schema_version(self) -> int:

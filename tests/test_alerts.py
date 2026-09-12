@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import sqlite3
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
+from unittest.mock import patch
 
 from hermes_codex_router.alerts import (
     _extract_latest_session_token_usage,
+    _resolve_codex_session_label,
     check_codex_session_bloat,
     evaluate_operational_alerts,
 )
@@ -23,6 +27,44 @@ from hermes_codex_router.state import HubState
 
 
 class OperationalAlertTests(unittest.TestCase):
+    def test_session_label_closes_database_after_success_or_query_failure(self) -> None:
+        for valid_schema in (True, False):
+            with self.subTest(valid_schema=valid_schema), TemporaryDirectory() as directory:
+                base = Path(directory)
+                original_connect = sqlite3.connect
+                initial = original_connect(base / "state_5.sqlite")
+                try:
+                    if valid_schema:
+                        initial.execute(
+                            "CREATE TABLE threads (id TEXT, name TEXT, title TEXT, cwd TEXT)"
+                        )
+                        initial.execute(
+                            "INSERT INTO threads VALUES (?, ?, ?, ?)",
+                            ("example-thread", "Example session", "", ""),
+                        )
+                        initial.commit()
+                finally:
+                    initial.close()
+                created: list[sqlite3.Connection] = []
+
+                def capture_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+                    connection = original_connect(*args, **kwargs)
+                    created.append(connection)
+                    return connection
+
+                try:
+                    with patch(
+                        "hermes_codex_router.alerts.sqlite3.connect", side_effect=capture_connect
+                    ):
+                        label = _resolve_codex_session_label("example-thread", base / "sessions")
+                    self.assertEqual(label, 'CLI "Example session"' if valid_schema else None)
+                    self.assertEqual(len(created), 1)
+                    with self.assertRaises(sqlite3.ProgrammingError):
+                        created[0].execute("SELECT 1")
+                finally:
+                    for connection in created:
+                        connection.close()
+
     def test_reports_unavailable_low_quota_and_stuck_dispatch(self) -> None:
         pool = CodexPoolStatus(
             available=True,
