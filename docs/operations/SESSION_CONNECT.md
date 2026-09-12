@@ -3,9 +3,10 @@
 Status: repository-complete; live acceptance pending  
 Last updated: 2026-09-12
 
-This procedure connects an existing Codex CLI conversation to one registered
-Telegram project topic. It invokes no model during selection or activation.
-Close the native CLI before confirming so Telegram becomes the only writer.
+This procedure connects an existing Codex CLI or Codex VS Code/app conversation
+to one registered Telegram project topic. It invokes no model during selection
+or activation. Close the native client before confirming so Telegram becomes
+the only writer.
 
 ## Project-topic entry
 

@@ -99,8 +99,9 @@ This normative module is part of the
   plane, and local `session connect [CONFIG]` MUST use one durable deterministic
   workflow. Telegram selects only opaque project/session/destination options;
   it never supplies a filesystem path. Discovery is limited to exact canonical
-  registered roots, exposes no transcript or prompt text, and invokes no model,
-  thread creation, or resume. Hub private free text MUST NOT become productive
+  registered roots and supported persisted interactive sources (`cli` and
+  `vscode`), exposes no transcript or prompt text, and invokes no model, thread
+  creation, or resume. Hub private free text MUST NOT become productive
   provider input. Local configuration MUST be explicit rather than discovered
   from hidden user files.
 

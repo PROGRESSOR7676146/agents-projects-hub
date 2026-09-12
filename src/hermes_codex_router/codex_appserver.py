@@ -531,7 +531,7 @@ class CodexAppServerClient:
                 "sortKey": "updated_at",
                 "sortDirection": "desc",
                 "modelProviders": ["openai"],
-                "sourceKinds": ["cli"],
+                "sourceKinds": ["cli", "vscode"],
                 "archived": False,
                 "useStateDbOnly": True,
             },
@@ -556,7 +556,7 @@ class CodexAppServerClient:
                 or status.get("activeFlags", []) != []
                 or raw.get("ephemeral") is not False
                 or raw.get("modelProvider") != "openai"
-                or raw.get("source") != "cli"
+                or raw.get("source") not in ("cli", "vscode")
                 or not isinstance(updated_at, int)
                 or isinstance(updated_at, bool)
                 or updated_at < 0

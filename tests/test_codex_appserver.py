@@ -121,6 +121,49 @@ class CodexAppServerTests(unittest.TestCase):
         )
         self.assertEqual(transport.sent[1]["method"], "turn/interrupt")
 
+    def test_connectable_threads_include_cli_and_vscode_sessions(self) -> None:
+        def thread(thread_id: str, source: str) -> dict[str, object]:
+            return {
+                "id": thread_id,
+                "cwd": str(self.cwd),
+                "status": {"type": "notLoaded", "activeFlags": []},
+                "updatedAt": 1_800_000_000,
+                "ephemeral": False,
+                "modelProvider": "openai",
+                "source": source,
+                "name": f"Saved {source}",
+            }
+
+        transport = FakeTransport(
+            [
+                {
+                    "id": 1,
+                    "result": {
+                        "data": [
+                            thread("example-cli-thread", "cli"),
+                            thread("example-vscode-thread", "vscode"),
+                            thread("example-exec-thread", "exec"),
+                        ]
+                    },
+                }
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True)
+
+        sessions = client.list_connectable_threads(root=self.cwd)
+
+        self.assertEqual(
+            [item.thread_id for item in sessions],
+            [
+                "example-cli-thread",
+                "example-vscode-thread",
+            ],
+        )
+        self.assertEqual(
+            transport.sent[0]["params"]["sourceKinds"],
+            ["cli", "vscode"],
+        )
+
     def test_resume_thread_reasserts_safe_policy(self) -> None:
         transport = FakeTransport(
             [

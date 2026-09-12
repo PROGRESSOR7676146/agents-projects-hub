@@ -14,6 +14,8 @@ and releases use semantic versioning while the public API is still evolving.
 - Add bounded exact-root app-server discovery, existing/new-topic selection in
   registered groups, private Hub command scopes, schema-26 persistence, and an
   explicit follow-up plan for project/group onboarding.
+- Discover supported saved conversations created by both Codex CLI and the
+  Codex VS Code/app client instead of filtering the latter out before display.
 
 ## [0.7.0] - 2026-09-05
 

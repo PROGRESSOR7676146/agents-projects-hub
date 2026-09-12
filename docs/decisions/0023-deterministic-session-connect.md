@@ -39,8 +39,9 @@ interface. A new conversation still starts through ordinary first input, and
 `/new` remains the explicit reset.
 
 Discovery runs only in the isolated Codex worker. It uses the installed
-app-server `thread/list` contract with exact `cwd`, OpenAI provider, CLI source,
-non-archived state, descending update time, and a hard result limit. Labels use
+app-server `thread/list` contract with exact `cwd`, OpenAI provider, supported
+interactive `cli` or `vscode` source, non-archived state, descending update
+time, and a hard result limit. Labels use
 only a safe bounded name when available, UTC update time, and a short thread-ID
 suffix. Transcript previews, first prompts and filesystem paths never enter
 Telegram. A final `thread/read` metadata request rechecks exact source/root and

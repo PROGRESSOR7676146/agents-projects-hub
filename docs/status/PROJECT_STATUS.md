@@ -68,8 +68,8 @@ the existing alert output, transaction semantics, and schema.
 
 ## Implemented
 
-Saved Codex CLI sessions can be connected through `/connect` in a registered
-project topic, the owner-only Hub private control plane, or a short-lived code
+Saved Codex CLI and Codex VS Code/app sessions can be connected through
+`/connect` in a registered project topic, the owner-only Hub private control plane, or a short-lived code
 issued by local `session connect [CONFIG]`. All three entrances use one durable,
 model-free workflow. Bounded app-server discovery exposes only safe labels for
 the exact canonical project root. A positive Telegram marker message becomes

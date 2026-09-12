@@ -118,7 +118,7 @@ contract is confirmed.
 ### Connect an existing Codex conversation
 
 An owner can send `/connect` in a registered project topic and choose a bounded
-saved-session label. The Hub asks for an explicit CLI-closed confirmation,
+saved-session label from Codex CLI or the Codex VS Code/app client. The Hub asks for an explicit client-closed confirmation,
 publishes a service marker, and makes the next later ordinary message continue
 that exact Codex thread. Replacement archives only the prior Hub binding; it
 does not merge histories and needs no additional `/return`.
@@ -134,7 +134,7 @@ For a local assisted selection, run:
 agents-projects-hub session connect CONFIG
 ```
 
-Choose the registered project and saved session, close the CLI, then send the
+Choose the registered project and saved session, close its Codex client, then send the
 returned `/connect CODE` in the destination topic. Sending the code to the Hub
 private chat instead opens destination selection. Codes expire, are scoped to
 the configured owner/project/source, and are consumed only with the final
