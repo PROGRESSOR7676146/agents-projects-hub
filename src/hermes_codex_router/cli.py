@@ -27,6 +27,7 @@ from .hub_config import (
     load_external_worker_config,
     load_hub_config,
     load_outbox_sender_config,
+    load_project_provisioner_config,
     load_provider_service_config,
 )
 from .indeterminate_audit import (
@@ -39,6 +40,12 @@ from .monitoring import run_monitor_once
 from .outbox_sender import TelegramOutboxSender
 from .pilot import run_codex_pilot
 from .project_admin import add_project, set_project_enabled
+from .project_onboarding import ProjectOnboardingStore
+from .project_provisioner import (
+    ProjectProvisioner,
+    ProjectProvisioningError,
+    login_project_provisioner,
+)
 from .registry import RegistryError, load_registry
 from .release_dry_run import report_dict, run_release_dry_run
 from .release_identity import CURRENT_RELEASE
@@ -187,6 +194,28 @@ def _parser() -> argparse.ArgumentParser:
         "e2e-run", help="run bounded checks from the dedicated Telegram acceptance user"
     )
     e2e_run.add_argument("config", type=Path)
+
+    project_provision_login = commands.add_parser(
+        "project-provision-login",
+        help="authorize the owner Telegram session used for project-group creation",
+    )
+    project_provision_login.add_argument("config", type=Path)
+    project_provisioner = commands.add_parser(
+        "project-provisioner",
+        help="run the durable project and Telegram-group provisioning worker",
+    )
+    project_provisioner.add_argument("config", type=Path)
+    project_provisioner.add_argument("--once", action="store_true")
+    project_provisioner.add_argument("--poll-seconds", type=float, default=2.0)
+    project_provision_reconcile = commands.add_parser(
+        "project-provision-reconcile",
+        help="resume one inspected unknown provisioning workflow",
+    )
+    project_provision_reconcile.add_argument("config", type=Path)
+    project_provision_reconcile.add_argument("workflow_id")
+    project_provision_reconcile.add_argument("--chat-id", required=True, type=int)
+    project_provision_reconcile.add_argument("--access-hash", required=True, type=int)
+    project_provision_reconcile.add_argument("--confirm", required=True)
 
     project = commands.add_parser("project", help="manage the local project registry")
     project_commands = project.add_subparsers(dest="project_command", required=True)
@@ -594,6 +623,39 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = asyncio.run(run_acceptance_checks(load_acceptance_actor_config(args.config)))
             _print(result)
             return 0 if result["ok"] else 1
+        if args.command == "project-provision-login":
+            result = asyncio.run(
+                login_project_provisioner(
+                    load_project_provisioner_config(args.config, require_identity=False)
+                )
+            )
+            _print(result)
+            return 0
+        if args.command == "project-provisioner":
+            worker = ProjectProvisioner(load_project_provisioner_config(args.config))
+            try:
+                if args.once:
+                    _print({"ok": True, "processed": worker.run_cycle()})
+                else:
+                    with stop_on_signals(worker):
+                        worker.run_forever(poll_seconds=args.poll_seconds)
+            finally:
+                worker.close()
+            return 0
+        if args.command == "project-provision-reconcile":
+            config = load_project_provisioner_config(args.config)
+            state = HubState.open(config.state_path)
+            try:
+                workflow = ProjectOnboardingStore(state).reconcile_unknown(
+                    args.workflow_id,
+                    telegram_chat_id=args.chat_id,
+                    telegram_access_hash=args.access_hash,
+                    confirm=args.confirm,
+                )
+            finally:
+                state.close()
+            _print({"ok": True, "workflow_id": workflow.workflow_id, "stage": workflow.stage})
+            return 0
         if args.command == "project":
             return _project_command(args)
         if args.command == "lane":
@@ -612,6 +674,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 130
     except (
         AcceptanceActorError,
+        ProjectProvisioningError,
         HubConfigError,
         RegistryError,
         StateError,

@@ -9,7 +9,7 @@ hermes_root="${HERMES_HOME:-$HOME/.hermes}"
 
 python3 -m venv "$data_root/venv"
 "$data_root/venv/bin/python" -m pip install --upgrade pip
-"$data_root/venv/bin/python" -m pip install "$repo_root"
+"$data_root/venv/bin/python" -m pip install "${repo_root}[provisioning]"
 
 install -d -m 700 \
   "$config_root" \
@@ -34,6 +34,8 @@ install -m 644 "$repo_root/systemd/agents-projects-hub-worker@.service" \
   "$systemd_root/agents-projects-hub-worker@.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-sender.service" \
   "$systemd_root/agents-projects-hub-sender.service"
+install -m 644 "$repo_root/systemd/agents-projects-hub-project-provisioner.service" \
+  "$systemd_root/agents-projects-hub-project-provisioner.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-monitor.service" \
   "$systemd_root/agents-projects-hub-monitor.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-monitor.timer" \

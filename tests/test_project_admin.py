@@ -5,7 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hermes_codex_router.project_admin import add_project, set_project_enabled
+from hermes_codex_router.project_admin import (
+    add_project,
+    prepare_project_root,
+    set_project_enabled,
+)
 from hermes_codex_router.registry import RegistryError, load_registry
 
 
@@ -56,6 +60,19 @@ class ProjectAdminTests(unittest.TestCase):
                 topic_name="Outside",
                 root=root,
             )
+
+    def test_prepares_only_empty_or_existing_git_direct_child(self) -> None:
+        created = prepare_project_root(self.allowed, "new-project")
+        self.assertEqual(created, self.allowed / "new-project")
+        self.assertTrue((created / ".git").exists())
+        self.assertEqual(prepare_project_root(self.allowed, "new-project"), created)
+
+        unsafe = self.allowed / "nonempty"
+        unsafe.mkdir()
+        (unsafe / "data.txt").write_text("keep", encoding="utf-8")
+        with self.assertRaisesRegex(RegistryError, "non-empty"):
+            prepare_project_root(self.allowed, "nonempty")
+        self.assertEqual((unsafe / "data.txt").read_text(encoding="utf-8"), "keep")
 
 
 if __name__ == "__main__":

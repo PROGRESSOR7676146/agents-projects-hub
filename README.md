@@ -128,6 +128,14 @@ Its `/connect` flow selects a registered project, saved session, and an existing
 or newly created topic in that project's configured forum group. Private free
 text is control input only and never becomes a provider prompt.
 
+When explicitly enabled, `/projects` also starts project/group onboarding. The
+owner chooses an opaque configured root, enters a safe project ID, and confirms
+the derived path. A separate pinned Telegram user-session worker creates the
+private forum and adds the Hub and provider bots because Telegram restricts
+those methods to user identities. See the
+[onboarding guide](docs/operations/PROJECT_GROUP_ONBOARDING_PLAN.md) for private
+credential setup, failure recovery and live acceptance.
+
 For a local assisted selection, run:
 
 ```text
@@ -401,6 +409,10 @@ agents-projects-hub project list config/projects.json
 agents-projects-hub project add config/projects.json \
   --id my-project --name "My Project" --topic "My Project" --root /allowed/root/project
 agents-projects-hub project disable config/projects.json my-project
+
+# Explicit Telegram user-session authority for project-group provisioning
+agents-projects-hub project-provision-login config/hub.json
+agents-projects-hub project-provisioner config/hub.json --once
 
 # Separate Git worktree for a concurrent lane
 agents-projects-hub lane create config/hub.json --project my-project --lane backend

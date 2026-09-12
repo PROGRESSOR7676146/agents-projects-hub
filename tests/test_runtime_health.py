@@ -12,7 +12,12 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from hermes_codex_router.cli import main
-from hermes_codex_router.hub_config import AgentDefinition, HubConfig, TerminalSettings
+from hermes_codex_router.hub_config import (
+    AgentDefinition,
+    HubConfig,
+    ProjectProvisioningSettings,
+    TerminalSettings,
+)
 from hermes_codex_router.release_identity import ReleaseIdentity
 from hermes_codex_router.runtime_health import project_runtime_health
 from hermes_codex_router.state import HubState, StateError
@@ -475,6 +480,30 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual(projected["deployment_revision"]["status"], "converged")
         self.assertEqual(projected["deployment_revision"]["git_sha"], "a" * 40)
         self.assertEqual(projected["deployment_revision"]["required_components"], 4)
+
+        provisioned_config = replace(
+            config,
+            project_provisioning=ProjectProvisioningSettings(
+                True, 12345, None, None, 42, "Example"
+            ),
+        )
+        missing_provisioner = project_runtime_health(self.state, provisioned_config, now=self.now)
+        self.assertEqual(missing_provisioner["project_provisioner"]["status"], "unknown")
+        self.assertEqual(missing_provisioner["deployment_revision"]["status"], "unknown")
+        self.assertEqual(missing_provisioner["deployment_revision"]["required_components"], 5)
+        self.state.upsert_runtime_health(
+            component="project_provisioner",
+            instance_id="project-group-provisioner",
+            runtime="telegram-user",
+            pid=1234,
+            process_start_marker="provisioner-start",
+            started_at=self.now,
+            heartbeat_at=self.now,
+            release_identity=release,
+        )
+        with_provisioner = project_runtime_health(self.state, provisioned_config, now=self.now)
+        self.assertEqual(with_provisioner["deployment_revision"]["status"], "converged")
+        self.assertEqual(with_provisioner["deployment_revision"]["required_components"], 5)
 
         self.state.upsert_runtime_health(
             component="provider_worker",

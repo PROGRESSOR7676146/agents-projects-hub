@@ -5,12 +5,18 @@ This normative module is part of the
 
 ## 14. Project onboarding and Telegram acceptance
 
-- **REQ-ONBOARD-001 (Implemented):** Project creation and root selection occur
-  locally. A project is identified by stable ID, display name, canonical Git
-  root, and allowlisted root boundary.
+- **REQ-ONBOARD-001 (Implemented):** Project root authority remains local. The
+  private Hub onboarding wizard MAY accept a safe project ID and an opaque
+  choice among configured `allowed_roots`; it MUST derive a single direct-child
+  root locally and MUST NOT accept a path, separator, dot component, callback
+  path or forwarded text as root authority. A project is identified by stable
+  ID, display name, canonical Git root, and allowlisted root boundary.
 - **REQ-ONBOARD-002 (Implemented):** A Telegram group may be discovered only as
-  bounded numeric/title metadata; binding requires exact local confirmation.
-- **REQ-ONBOARD-003 (Accepted):** The group MUST be a private forum supergroup,
+  bounded numeric/title metadata. A newly created group is bound only through
+  the exact durable workflow receipt for its numeric identity and canonical
+  root; titles and invite links never authorize a binding.
+- **REQ-ONBOARD-003 (Implemented offline; live acceptance required):** The group
+  MUST be a private forum supergroup,
   contain the intended bot identities, and provide topic IDs. Bot permissions
   MUST be the minimum needed; lack of Manage Topics does not block General.
 - **REQ-ONBOARD-004 (Accepted):** Privacy Mode and bot re-add requirements are
@@ -18,6 +24,17 @@ This normative module is part of the
 - **REQ-ONBOARD-005 (Planned acceptance):** Every new project must pass a canary
   for root isolation, ordinary routing, satellite invocation, Reply routing,
   restart persistence, and correct response identity before routine use.
+- **REQ-ONBOARD-006 (Implemented offline; deployment opt-in required):** Because
+  Telegram group creation and participant invitation are user-only MTProto
+  operations, full automation MAY use a separate explicitly enabled local user
+  session. Its API hash and session remain private files, its numeric identity
+  MUST be pinned to an owner, and the long-running provisioner MUST refuse an
+  unpinned or different identity. The acceptance actor is not reused.
+- **REQ-ONBOARD-007 (Implemented):** Project onboarding MUST persist external
+  operation boundaries. Root preparation is idempotent; an unknown group create
+  or bot-configuration outcome MUST pause without blind retry or deletion.
+  Recovery requires an exact local workflow/group confirmation and MUST reject
+  conflicting project, group or root identities.
 
 ## 15. Functional acceptance criteria
 
@@ -46,9 +63,11 @@ necessary but not sufficient for items marked live.
   approval timeout, and provider failure all fail closed without secret output.
 - **AC-F-008 (REQ-AUTH-002..004):** Failure of optional multi-auth degrades or
   falls back only the Codex runtime and does not stop Hub, Hermes, or tlive.
-- **AC-F-009 (REQ-ONBOARD-001..004):** Telegram cannot create or rebind an
-  arbitrary local project, even through crafted text, titles, quotes, or
-  callback data.
+- **AC-F-009 (REQ-ONBOARD-001..007):** Telegram cannot select or rebind an
+  arbitrary local path. Project creation is bounded to one safe project ID and
+  one opaque `allowed_root` option; crafted text, titles, quotes, forwards and
+  callback data cannot escape that derived root or steal a numeric group
+  binding.
 - **AC-F-010 (Automated; live cutover acceptance still required;
   REQ-QUEUE-001..006):** A committed request survives Controller restart; an
   interrupted unknown provider turn is not repeated; Telegram delivery retry
@@ -123,6 +142,7 @@ necessary but not sufficient for items marked live.
 | Optional Codex account pool/fallback | Implemented | Natural exhaustion E2E remains an acceptance item. |
 | Telegram E2E baseline | Bounded actor implemented; live authorization pending | Results remain private deployment evidence. |
 | `/local` and `/return` | Implemented | Codex return is model-free and same-session; other providers retain prior behavior pending acceptance. |
+| Project/group onboarding | Implemented offline; deployment opt-in and live canary required | Owner-only Hub wizard, schema-27 receipts, bounded Git-root preparation and a separately authorized user-session provisioner; unknown Telegram outcomes stop without blind retry. |
 | Compact command surface | Implemented | Provider defaults remain bounded; project Hub scope exposes `/menu`, `/connect`, `/stop`, and Hub private scope exposes `/start`, `/projects`, `/connect`, `/cancel`. |
 | Saved Codex session connect | Implemented; live Telegram acceptance pending | One durable workflow serves topic selection, Hub-private selection/new-topic creation, and owner-scoped local one-time codes. |
 | Summary-free Codex return | Implemented | Local lease change; no model, transcript, handoff, or session change. |

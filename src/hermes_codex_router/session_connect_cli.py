@@ -12,6 +12,7 @@ from .codex_session_adoption import (
     open_adoption_state,
 )
 from .hub_config import HubConfig
+from .project_onboarding import registered_project_ids
 from .registry import load_registry
 from .session_adoption_policy import supports_adoption
 from .session_connect import ConnectCandidate, SessionConnectStore
@@ -69,9 +70,11 @@ def prepare_connect_code(
         raise ConnectCliError("owner_not_authorized")
 
     registry = load_registry(config.registry_path)
-    registered = {
-        binding.project_id for binding in config.projects if binding.telegram_chat_id is not None
-    }
+    try:
+        with open_adoption_state(config.state_path) as state:
+            registered = registered_project_ids(config, state)
+    except AdoptionError as exc:
+        raise ConnectCliError(exc.reason, temporary=exc.exit_code == 3) from None
     projects = tuple(
         project
         for project in registry.projects

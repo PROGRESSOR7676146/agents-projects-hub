@@ -24,9 +24,9 @@ GROUP_COMMANDS: tuple[tuple[str, str], ...] = (
 
 DIRECT_HUB_COMMANDS: tuple[tuple[str, str], ...] = (
     ("start", "Open Hub controls"),
-    ("projects", "List registered projects"),
+    ("projects", "List or create projects"),
     ("connect", "Connect a saved Codex session"),
-    ("cancel", "Cancel the current connection"),
+    ("cancel", "Cancel the current Hub wizard"),
 )
 
 DIRECT_PROVIDER_COMMANDS: tuple[tuple[str, str], ...] = (

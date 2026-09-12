@@ -42,6 +42,7 @@ with a new record.
 | Long-task progress | Schema-24 provider progress queue delivers bounded commentary without completing or replaying work, and supersedes stale pending progress at terminal state. | [ADR 0021](0021-durable-rate-limited-progress.md) |
 | Saved Codex session adoption | Schema-25 immutable origins, local preview/apply, atomic replacement and first-return boundary; exact resume without conversation substitution. | [ADR 0022](0022-explicit-codex-session-adoption.md) |
 | Deterministic saved-session connect | Schema-26 unifies topic, Hub-private and local-code selection; a real marker receipt atomically activates Telegram without `/return`, while unknown sends preserve the old binding. | [ADR 0023](0023-deterministic-session-connect.md) |
+| Project/group provisioning | Schema-27 lets the owner-only Hub queue bounded local-root and forum creation through a separately enabled, pinned Telegram user session; ambiguous external operations stop for exact local reconciliation. | [ADR 0024](0024-user-authorized-project-group-provisioning.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

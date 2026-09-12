@@ -10,6 +10,7 @@ from .state import HubState, RuntimeHealthStatus
 CONTROLLER_INSTANCE_ID = "project-hub-controller"
 SENDER_INSTANCE_ID = "telegram-outbox-sender"
 MONITOR_INSTANCE_ID = "operations-monitor"
+PROJECT_PROVISIONER_INSTANCE_ID = "project-group-provisioner"
 
 
 def _project(
@@ -89,6 +90,24 @@ def project_runtime_health(
             "status": "not_configured",
         }
 
+    if config.project_provisioning.enabled:
+        project_provisioner = _project(
+            state.runtime_health_status(
+                "project_provisioner", PROJECT_PROVISIONER_INSTANCE_ID, now=now
+            ),
+            component="project_provisioner",
+            instance_id=PROJECT_PROVISIONER_INSTANCE_ID,
+            runtime="telegram-user",
+        )
+    else:
+        project_provisioner = {
+            "component": "project_provisioner",
+            "instance_id": PROJECT_PROVISIONER_INSTANCE_ID,
+            "runtime": "telegram-user",
+            "agent_id": None,
+            "status": "not_configured",
+        }
+
     workers: list[dict[str, Any]] = []
     if config.dispatch_mode == "queue" and config.queue_runtime == "external":
         for agent_id in sorted(config.external_worker_agent_ids or ("codex",)):
@@ -106,6 +125,8 @@ def project_runtime_health(
     required = [controller, monitor]
     if sender["status"] != "not_configured":
         required.append(sender)
+    if project_provisioner["status"] != "not_configured":
+        required.append(project_provisioner)
     required.extend(workers)
     release_identities: set[tuple[str, str, str]] = set()
     unknown_release = False
@@ -136,6 +157,7 @@ def project_runtime_health(
         "controller": controller,
         "monitor": monitor,
         "sender": sender,
+        "project_provisioner": project_provisioner,
         "provider_workers": workers,
         "deployment_revision": {
             "status": deployment_status,

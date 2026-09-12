@@ -13,9 +13,16 @@ and releases use semantic versioning while the public API is still evolving.
   Telegram outcomes preserve the prior binding and are never retried blindly.
 - Add bounded exact-root app-server discovery, existing/new-topic selection in
   registered groups, private Hub command scopes, schema-26 persistence, and an
-  explicit follow-up plan for project/group onboarding.
+  explicit project/group onboarding boundary.
 - Discover supported saved conversations created by both Codex CLI and the
   Codex VS Code/app client instead of filtering the latter out before display.
+- Add owner-only `/projects` creation with bounded allowed-root selection,
+  safe direct-child Git preparation, schema-27 external-operation receipts and
+  immutable numeric group bindings.
+- Add an opt-in, separately pinned Telegram user-session provisioner for the
+  user-only forum creation and bot invitation methods. Ambiguous group or bot
+  configuration outcomes stop for exact local reconciliation without blind
+  retry or deletion.
 
 ## [0.7.0] - 2026-09-05
 

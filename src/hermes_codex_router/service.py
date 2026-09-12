@@ -36,10 +36,11 @@ from .delivery_retry import delivery_retry_delay
 from .execution_journal import ExecutionJournal
 from .external_runtime import ProviderLimitError, ProviderUnavailableError
 from .external_service import ExternalAgentService
-from .hub_config import HubConfig, read_telegram_token
+from .hub_config import HubConfig, ProjectBinding, read_telegram_token
 from .local_transfer import LocalTransferError, local_resume_command
 from .metadata import format_agent_response, format_telegram_response
 from .model_selection import ModelSelectionError, available_models
+from .project_onboarding import ProjectOnboardingStore
 from .provider_catalog import (
     ANTIGRAVITY_FALLBACK,
     DEFAULT_CATALOG_TTL,
@@ -1621,8 +1622,10 @@ class ProjectHubService:
             return False
         if callback.data.startswith("cx:"):
             return self._handle_connect_callback(callback)
+        if callback.data.startswith("po:"):
+            return self._handle_project_onboarding_callback(callback)
         try:
-            binding = self.config.project_for_chat(callback.chat_id)
+            binding = self._project_binding_for_chat(callback.chat_id)
         except KeyError:
             direct_project = self.config.direct_message_project_id
             if direct_project is None or callback.chat_id != callback.sender_id:
@@ -1797,19 +1800,46 @@ class ProjectHubService:
         return False
 
     def _registered_project_chat(self, project_id: str) -> int:
-        for binding in self.config.projects:
+        for binding in self._all_project_bindings():
             if binding.project_id == project_id and binding.telegram_chat_id is not None:
                 return binding.telegram_chat_id
         raise ServiceError("Для проекта не зарегистрирована Telegram-группа")
 
+    def _all_project_bindings(self) -> tuple[ProjectBinding, ...]:
+        by_project = {item.project_id: item for item in self.config.projects}
+        for item in ProjectOnboardingStore(self.state).bindings():
+            by_project.setdefault(
+                item.project_id, ProjectBinding(item.project_id, item.telegram_chat_id)
+            )
+        return tuple(by_project.values())
+
+    def _project_binding_for_chat(self, chat_id: int) -> ProjectBinding:
+        try:
+            return self.config.project_for_chat(chat_id)
+        except KeyError:
+            dynamic = ProjectOnboardingStore(self.state).binding_for_chat(chat_id)
+            if dynamic is None:
+                raise
+            registry = load_registry(self.config.registry_path)
+            project = registry.require_project(dynamic.project_id)
+            if project.root != dynamic.canonical_root:
+                raise ServiceError("Onboarded project root no longer matches its binding")
+            self.registry = registry
+            return ProjectBinding(dynamic.project_id, dynamic.telegram_chat_id)
+
+    def _reload_registry_if_available(self) -> None:
+        if self.config.registry_path.is_file():
+            self.registry = load_registry(self.config.registry_path)
+
     def _start_direct_connect(self, message: TopicMessage) -> bool:
+        self._reload_registry_if_available()
         projects = tuple(
             (project.project_id, project.root, project.display_name)
             for project in self.registry.projects
             if project.enabled
             and any(
                 binding.project_id == project.project_id and binding.telegram_chat_id is not None
-                for binding in self.config.projects
+                for binding in self._all_project_bindings()
             )
         )
         if not projects:
@@ -1829,6 +1859,83 @@ class ProjectHubService:
             reply_markup=connect.project_markup(workflow.workflow_id),
         )
         return True
+
+    def _start_project_onboarding(self, message: TopicMessage) -> bool:
+        if not self.config.project_provisioning.enabled:
+            self._send_text(message, "Автоматическое создание проектов не настроено.")
+            return True
+        self._reload_registry_if_available()
+        SessionConnectStore(self.state).cancel(message.sender_id)
+        workflow = ProjectOnboardingStore(self.state).start(
+            owner_user_id=message.sender_id,
+            allowed_roots=self.registry.allowed_roots,
+        )
+        self._send_text(
+            message,
+            "Введите название новой Telegram-группы одним сообщением.",
+        )
+        return workflow.stage == "awaiting_name"
+
+    def _handle_project_onboarding_callback(self, callback: TopicCallback) -> bool:
+        message = TopicMessage(
+            update_id=0,
+            message_id=callback.message_id,
+            chat_id=callback.chat_id,
+            thread_id=callback.thread_id,
+            chat_title="Direct",
+            sender_id=callback.sender_id,
+            text="",
+            reply_to_username=None,
+        )
+        if callback.chat_id != callback.sender_id:
+            self.telegram.answer_callback(callback.callback_id, "Только в личном чате Hub")
+            return True
+        try:
+            parts = callback.data.split(":", 2)
+            if len(parts) != 3:
+                raise StateError("onboarding_selection_stale")
+            _, action, value = parts
+            store = ProjectOnboardingStore(self.state)
+            if action == "b" and value == "start":
+                self.telegram.answer_callback(callback.callback_id, "Начинаем")
+                return self._start_project_onboarding(message)
+            if action == "r":
+                store.select_root(callback.sender_id, value)
+                self.telegram.answer_callback(callback.callback_id, "Корень выбран")
+                self._send_text(
+                    message,
+                    "Введите имя каталога латиницей: строчные буквы, цифры, _ или -. "
+                    "Оно станет неизменяемым ID проекта.",
+                )
+                return True
+            if action == "ok":
+                workflow = store.confirm(callback.sender_id, value)
+                self.telegram.answer_callback(callback.callback_id, "Задание принято")
+                self._send_text(
+                    message,
+                    "Создание принято. Hub сообщит результат здесь; повторное нажатие не "
+                    "создаст вторую группу.",
+                )
+                return workflow.stage in {
+                    "queued",
+                    "preparing_root",
+                    "creating_group",
+                    "configuring_group",
+                    "committing_binding",
+                    "completed",
+                }
+            if action == "x":
+                cancelled = store.cancel(callback.sender_id, value)
+                self.telegram.answer_callback(
+                    callback.callback_id, "Отменено" if cancelled else "Уже выполняется"
+                )
+                if cancelled:
+                    self._send_text(message, "Создание проекта отменено; изменений нет.")
+                return True
+            raise StateError("onboarding_selection_stale")
+        except (OSError, StateError) as exc:
+            self.telegram.answer_callback(callback.callback_id, str(exc)[:180])
+            return True
 
     def _handle_connect_callback(self, callback: TopicCallback) -> bool:
         message = TopicMessage(
@@ -1929,7 +2036,9 @@ class ProjectHubService:
             return False
         command = parse_command(message.text)
         connect = SessionConnectStore(self.state)
+        onboarding = ProjectOnboardingStore(self.state)
         if command and command.name in {"start", "projects"}:
+            self._reload_registry_if_available()
             projects = [
                 project.display_name
                 for project in self.registry.projects
@@ -1937,7 +2046,7 @@ class ProjectHubService:
                 and any(
                     binding.project_id == project.project_id
                     and binding.telegram_chat_id is not None
-                    for binding in self.config.projects
+                    for binding in self._all_project_bindings()
                 )
             ]
             listing = "\n".join(f"• {html.escape(name)}" for name in projects)
@@ -1946,10 +2055,19 @@ class ProjectHubService:
                 1,
                 "<b>Проекты</b>\n"
                 + (listing or "Нет доступных проектов")
-                + "\n\nСоздание проекта появится в следующем пакете.",
+                + (
+                    "\n\nСоздание группы выполняется локальной пользовательской Telegram-сессией."
+                    if self.config.project_provisioning.enabled
+                    else "\n\nАвтоматическое создание проекта не настроено."
+                ),
                 reply_markup={
                     "inline_keyboard": [
-                        [{"text": "Подключить сессию", "callback_data": "cx:b:start"}]
+                        *(
+                            [[{"text": "Создать проект", "callback_data": "po:b:start"}]]
+                            if self.config.project_provisioning.enabled
+                            else []
+                        ),
+                        [{"text": "Подключить сессию", "callback_data": "cx:b:start"}],
                     ]
                 },
             )
@@ -1992,12 +2110,54 @@ class ProjectHubService:
                 return True
             return self._start_direct_connect(message)
         if command and command.name == "cancel":
-            cancelled = connect.cancel(message.sender_id)
+            cancelled = onboarding.cancel(message.sender_id) or connect.cancel(message.sender_id)
             self._send_text(
                 message,
-                "Подключение отменено; текущая сессия не изменена."
+                "Операция отменена; текущее состояние не изменено."
                 if cancelled
-                else "Активного подключения нет.",
+                else "Активной операции нет.",
+            )
+            return True
+        active_onboarding = onboarding.active_for_owner(message.sender_id)
+        if active_onboarding is not None and active_onboarding.stage == "awaiting_name":
+            if message.is_forwarded:
+                self._send_text(message, "Перешлите название обычным сообщением, не Forward.")
+                return True
+            try:
+                workflow = onboarding.set_name(
+                    message.sender_id, active_onboarding.workflow_id, message.text
+                )
+            except StateError:
+                self._send_text(message, "Название должно содержать 1–128 печатных символов.")
+                return True
+            self.telegram.send_html(
+                message.chat_id,
+                1,
+                "Выберите разрешённую базовую папку. Произвольный путь из Telegram не принимается:",
+                reply_markup=onboarding.roots_markup(workflow.workflow_id),
+            )
+            return True
+        if active_onboarding is not None and active_onboarding.stage == "awaiting_folder":
+            if message.is_forwarded:
+                self._send_text(message, "Введите имя каталога обычным сообщением.")
+                return True
+            try:
+                workflow = onboarding.set_folder(
+                    message.sender_id, active_onboarding.workflow_id, message.text
+                )
+            except StateError as exc:
+                detail = (
+                    "Такой проект или каталог уже зарегистрирован."
+                    if str(exc) == "onboarding_project_exists"
+                    else "Имя: 1–48 символов, строчная латиница, цифры, _ или -; первый — буква."
+                )
+                self._send_text(message, detail)
+                return True
+            self.telegram.send_html(
+                message.chat_id,
+                1,
+                onboarding.confirmation_text(workflow),
+                reply_markup=onboarding.confirmation_markup(workflow.workflow_id),
             )
             return True
         active = connect.active_for_owner(message.sender_id)
@@ -2049,6 +2209,20 @@ class ProjectHubService:
         )
         return True
 
+    def run_project_onboarding_outbox_cycle(self) -> bool:
+        store = ProjectOnboardingStore(self.state)
+        outbox = store.claim_outbox("hub-controller")
+        if outbox is None:
+            return False
+        assert outbox.lease_token is not None
+        try:
+            message_id = self.telegram.send_html(outbox.chat_id, 1, outbox.telegram_html)
+        except TelegramError as exc:
+            store.mark_outbox_unknown(outbox.outbox_id, outbox.lease_token, type(exc).__name__)
+            return True
+        store.mark_outbox_delivered(outbox.outbox_id, outbox.lease_token, message_id or 1)
+        return True
+
     def handle_update(self, update: dict[str, object]) -> bool:
         direct_messages_only = getattr(self, "direct_messages_only", False)
         ingress_identity = getattr(self, "ingress_identity", self.agent.agent_id)
@@ -2073,7 +2247,7 @@ class ProjectHubService:
         if ingress_identity == "hub" and message.chat_id == message.sender_id:
             return self._handle_hub_direct(message)
         try:
-            binding = self.config.project_for_chat(message.chat_id)
+            binding = self._project_binding_for_chat(message.chat_id)
         except KeyError:
             direct_project = self.config.direct_message_project_id
             if direct_project is not None and message.chat_id == message.sender_id:
@@ -2818,6 +2992,9 @@ class ProjectHubService:
         offset = self.state.get_bot_offset(ingress_identity)
         while not stop.is_set():
             self._publish_runtime_health()
+            provisioning = getattr(getattr(self, "config", None), "project_provisioning", None)
+            if ingress_identity == "hub" and getattr(provisioning, "enabled", False):
+                self.run_project_onboarding_outbox_cycle()
             try:
                 updates = self.telegram.updates(offset=offset, timeout=5)
                 self._record_telegram_poll_success(ingress_identity)

@@ -1,52 +1,119 @@
-# Project and Telegram-group onboarding plan
+# Project and Telegram-group onboarding
 
-Status: planned separate package  
-Last updated: 2026-09-12
+Status: implemented offline; deployment and live acceptance required
+Last updated: 2026-09-13
 
-This plan reserves the next product slice. The current `/projects` menu lists
-registered projects and states that creation is unavailable. No project, group,
-credential, permission, or deployment change is part of session-connect.
+The owner-only Hub private chat exposes **Create project** under `/projects`
+when `project_provisioning.enabled` is true. The Hub owns the deterministic
+wizard. A separate local worker, authenticated as an explicitly authorized
+Telegram user, performs the user-only MTProto operations needed to create a
+private forum supergroup and add bots. No model is invoked.
 
-## Proposed boundary
+Telegram documents supergroup/forum creation through
+[`channels.createChannel`](https://core.telegram.org/method/channels.createChannel)
+and adding participants through
+[`channels.inviteToChannel`](https://core.telegram.org/method/channels.inviteToChannel).
+Both methods are user-only. A Bot API identity cannot provide the requested
+automation by itself.
 
-1. Add **Create project** to the owner-only Hub private `/projects` menu only
-   after every following acceptance boundary is implemented.
-2. Telegram may select only a locally prepared immutable project ID from a
-   bounded registry of candidates. Root preparation and allowlisting remain a
-   local action; Telegram never accepts a path.
-3. Recheck the current official Telegram capability before implementation. The
-   Bot API documents
-   [`createForumTopic`](https://core.telegram.org/bots/api#createforumtopic)
-   inside an existing forum group but does not currently establish the complete
-   private supergroup/forum topology required here. If that remains true, give
-   the owner a bounded manual group-creation step. Do not introduce a hidden
-   user-account client.
-4. Verify private-supergroup/forum mode, numeric identity, owner membership,
-   minimum bot permissions, Privacy Mode deployment instructions, and absence
-   of an existing binding before any registry mutation.
-5. Bind the prepared immutable `project_id` to the exact numeric group only
-   through a local durable confirmation. Then verify root resolution, group
-   readiness and a topic canary.
-6. Persist an onboarding workflow with external-operation receipts. Repeating a
-   completed step returns its result. An unknown group/topic creation or binding
-   outcome pauses for inspection and never creates or deletes another Telegram
-   object automatically.
-7. Treat any user-account session, additional bot token, group-creation
-   authority, or broader permission as new authority requiring a separate owner
-   decision. The acceptance actor remains test-only unless the owner explicitly
-   changes that product boundary.
+## User flow
 
-## Acceptance outline
+1. In the private Hub chat, run `/projects` and choose **Create project**.
+2. Enter the Telegram group display name.
+3. Choose one configured `allowed_root`. The callback contains an opaque local
+   option ID, never a path.
+4. Enter a safe lowercase project ID. It is also the single direct-child
+   directory name under the chosen root. An uppercase value is normalized to
+   lowercase; separators, dots and absolute paths are rejected.
+5. Review the exact group name, immutable project ID and derived local path,
+   then choose **Create**.
 
-- crafted titles, callbacks, forwards and private text cannot select a root;
-- duplicate and concurrent create requests produce one durable project binding;
-- partial local preparation and unknown Telegram outcomes recover without
-  duplicate groups or silent deletion;
-- a pre-existing numeric group binding cannot be stolen by title reuse;
-- disabled or non-Git projects and roots outside `allowed_roots` fail closed;
-- minimum bot permissions are demonstrated in a deployment-local canary;
-- rollback retains the immutable project/group mapping and all uncertainty
-  evidence.
+The worker creates the directory when absent and initializes an empty directory
+as a Git repository on branch `main`. It refuses a non-empty non-Git directory.
+It then creates a private forum supergroup, adds the Hub and all configured
+provider bot usernames, grants only the Hub `invite_users`, `manage_topics` and
+the Telegram `other` compatibility right, verifies forum mode and membership,
+atomically adds the project to the local registry, and records the immutable
+numeric group binding in schema 27 state. Provider bots remain ordinary members;
+their group pollers are not enabled.
 
-Implementation should begin with a fresh official Bot API review and failing
-state-machine tests. It must remain a separate checked package from this plan.
+The completed binding is read dynamically by the Controller, so the new group
+does not require a source-config edit. The registry remains the authority for
+the canonical Git root. A state binding is admitted only when its project exists,
+is enabled, and resolves to the exact recorded root.
+
+## Private configuration
+
+Install the `provisioning` extra and keep every credential outside Git. A
+deployment-local example is:
+
+```json
+{
+  "project_provisioning": {
+    "enabled": true,
+    "api_id": 12345,
+    "api_hash_file": "/home/example/.config/agents-projects-hub/secrets/telegram-api-hash",
+    "session_path": "/home/example/.local/state/agents-projects-hub/project-provisioner.session",
+    "expected_user_id": 123456789,
+    "group_about": "Private project group managed by Agents Projects Hub"
+  }
+}
+```
+
+The API hash and authorized Telethon session must be mode `0600`. The configured
+`expected_user_id` must also appear in `owner_user_ids`. Bootstrap the session
+interactively, inspect the returned numeric identity, pin that identity in the
+configuration, then validate the whole Hub configuration:
+
+```bash
+agents-projects-hub project-provision-login /home/example/.config/agents-projects-hub/hub.json
+agents-projects-hub validate-hub /home/example/.config/agents-projects-hub/hub.json
+systemctl --user enable --now agents-projects-hub-project-provisioner.service
+```
+
+The login command is the only interactive credential bootstrap. The long-running
+worker requires the identity to be pinned and refuses another authorized user.
+
+## Failure and recovery
+
+Local preparation is idempotent. A worker lost while preparing the root may
+retry that step. A worker lost during group creation or bot configuration moves
+the workflow to an unknown state and sends a bounded Hub notice; it never creates
+or deletes another group automatically.
+
+After inspecting Telegram locally, resume an exact unknown workflow with the
+numeric group ID and MTProto access hash. The confirmation must equal
+`WORKFLOW_ID:CHAT_ID`:
+
+```bash
+agents-projects-hub project-provision-reconcile \
+  /home/example/.config/agents-projects-hub/hub.json WORKFLOW_ID \
+  --chat-id -1001234567890 --access-hash 123456789 \
+  --confirm WORKFLOW_ID:-1001234567890
+```
+
+Reconciliation never accepts a path and rejects a group or project identity
+already bound by another workflow. Existing groups, directories and registry
+entries are retained on failure.
+
+## Acceptance boundary
+
+Offline tests prove bounded root derivation, opaque callbacks, duplicate
+confirmation, exact user identity, Git preparation, bot configuration calls,
+numeric binding, registry persistence, completion notification, and no blind
+retry after unknown creation. They use fictional adapters and do not establish
+Telegram behavior.
+
+A deployment is accepted only after the exact clean revision is reported by the
+Controller, sender, provider workers and project provisioner, followed by one
+owner-driven live creation canary that verifies:
+
+- the resulting chat is a private forum supergroup owned by the intended user;
+- the Hub is present with Manage Topics and can receive ordinary owner messages;
+- every configured provider bot is present and can send through its own identity;
+- the new numeric chat maps to the intended project and exact canonical root;
+- restart preserves the binding and ordinary, mention and Reply routing;
+- no provider or LLM is invoked by the control-plane wizard itself.
+
+Live identifiers, invite links, session files, access hashes and screenshots
+remain private deployment evidence and must never enter the repository.

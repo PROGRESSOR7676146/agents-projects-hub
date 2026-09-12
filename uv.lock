@@ -20,6 +20,9 @@ dev = [
 e2e = [
     { name = "telethon" },
 ]
+provisioning = [
+    { name = "telethon" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -29,8 +32,9 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12,<1" },
     { name = "telethon", marker = "extra == 'dev'", specifier = ">=1.44,<2" },
     { name = "telethon", marker = "extra == 'e2e'", specifier = ">=1.44,<2" },
+    { name = "telethon", marker = "extra == 'provisioning'", specifier = ">=1.44,<2" },
 ]
-provides-extras = ["e2e", "dev"]
+provides-extras = ["provisioning", "e2e", "dev"]
 
 [[package]]
 name = "aiohappyeyeballs"

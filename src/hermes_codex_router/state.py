@@ -441,7 +441,13 @@ class HubState:
         transport_success_at: datetime | None = None,
     ) -> RuntimeHealthRecord:
         """Replace one bounded runtime snapshot without probing its provider."""
-        if component not in {"controller", "sender", "monitor", "provider_worker"}:
+        if component not in {
+            "controller",
+            "sender",
+            "monitor",
+            "provider_worker",
+            "project_provisioner",
+        }:
             raise StateError("invalid runtime health component")
         instance_id = _bounded(instance_id, name="instance id", maximum=128)
         process_start_marker = _bounded(

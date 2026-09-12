@@ -888,6 +888,160 @@ CREATE TABLE session_connect_code_attempts (
 """
 
 
+MIGRATION_27 = """
+DROP INDEX IF EXISTS runtime_health_heartbeat;
+DROP INDEX IF EXISTS runtime_health_agent;
+ALTER TABLE runtime_health RENAME TO runtime_health_v26;
+CREATE TABLE runtime_health (
+    component TEXT NOT NULL CHECK(component IN (
+        'controller', 'sender', 'monitor', 'provider_worker', 'project_provisioner'
+    )),
+    instance_id TEXT NOT NULL CHECK(length(instance_id) BETWEEN 1 AND 128),
+    runtime TEXT CHECK(runtime IS NULL OR length(runtime) BETWEEN 1 AND 64),
+    agent_id TEXT CHECK(agent_id IS NULL OR length(agent_id) BETWEEN 1 AND 64),
+    pid INTEGER NOT NULL CHECK(pid > 0),
+    process_start_marker TEXT NOT NULL
+        CHECK(length(process_start_marker) BETWEEN 1 AND 128),
+    started_at TEXT NOT NULL CHECK(length(started_at) BETWEEN 1 AND 64),
+    heartbeat_at TEXT NOT NULL CHECK(length(heartbeat_at) BETWEEN 1 AND 64),
+    success_at TEXT CHECK(success_at IS NULL OR length(success_at) BETWEEN 1 AND 64),
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) BETWEEN 1 AND 128),
+    activity_state TEXT NOT NULL DEFAULT 'idle' CHECK(activity_state IN (
+        'idle', 'leased', 'executing', 'sending', 'unknown'
+    )),
+    active_job_id TEXT CHECK(active_job_id IS NULL OR length(active_job_id) BETWEEN 1 AND 128),
+    active_lease_expires_at TEXT CHECK(
+        active_lease_expires_at IS NULL OR length(active_lease_expires_at) BETWEEN 1 AND 64
+    ),
+    provider_state TEXT NOT NULL DEFAULT 'unknown' CHECK(provider_state IN (
+        'unknown', 'ready', 'limited', 'exhausted', 'unavailable'
+    )),
+    quota_remaining_percent REAL CHECK(
+        quota_remaining_percent IS NULL
+        OR (quota_remaining_percent >= 0 AND quota_remaining_percent <= 100)
+    ),
+    quota_reset_at TEXT CHECK(quota_reset_at IS NULL OR length(quota_reset_at) BETWEEN 1 AND 64),
+    release_version TEXT CHECK(release_version IS NULL OR length(release_version) BETWEEN 1 AND 64),
+    release_git_sha TEXT CHECK(
+        release_git_sha IS NULL OR length(release_git_sha) BETWEEN 40 AND 64
+    ),
+    release_built_at TEXT CHECK(
+        release_built_at IS NULL OR length(release_built_at) BETWEEN 1 AND 64
+    ),
+    release_clean INTEGER NOT NULL DEFAULT 0 CHECK(release_clean IN (0, 1)),
+    updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64),
+    transport_operation TEXT
+        CHECK(transport_operation IS NULL OR length(transport_operation) BETWEEN 1 AND 32),
+    transport_failure_class TEXT
+        CHECK(transport_failure_class IS NULL OR length(transport_failure_class) BETWEEN 1 AND 64),
+    transport_status_code INTEGER
+        CHECK(transport_status_code IS NULL OR transport_status_code BETWEEN 100 AND 599),
+    transport_retry_after INTEGER
+        CHECK(transport_retry_after IS NULL OR transport_retry_after BETWEEN 0 AND 86400),
+    transport_consecutive_failures INTEGER NOT NULL DEFAULT 0
+        CHECK(transport_consecutive_failures BETWEEN 0 AND 1000000),
+    transport_success_at TEXT
+        CHECK(transport_success_at IS NULL OR length(transport_success_at) BETWEEN 1 AND 64),
+    PRIMARY KEY(component, instance_id),
+    CHECK(active_job_id IS NOT NULL OR activity_state IN ('idle', 'unknown')),
+    CHECK(active_job_id IS NOT NULL OR active_lease_expires_at IS NULL),
+    CHECK(runtime IS NOT NULL OR provider_state = 'unknown'),
+    CHECK(runtime IS NOT NULL OR quota_remaining_percent IS NULL),
+    CHECK(runtime IS NOT NULL OR quota_reset_at IS NULL),
+    CHECK(release_clean = 0 OR (
+        release_version IS NOT NULL AND release_git_sha IS NOT NULL
+        AND release_built_at IS NOT NULL
+    ))
+);
+INSERT INTO runtime_health (
+    component, instance_id, runtime, agent_id, pid, process_start_marker,
+    started_at, heartbeat_at, success_at, error_code, activity_state,
+    active_job_id, active_lease_expires_at, provider_state,
+    quota_remaining_percent, quota_reset_at, release_version, release_git_sha,
+    release_built_at, release_clean, updated_at, transport_operation,
+    transport_failure_class, transport_status_code, transport_retry_after,
+    transport_consecutive_failures, transport_success_at
+)
+SELECT component, instance_id, runtime, agent_id, pid, process_start_marker,
+       started_at, heartbeat_at, success_at, error_code, activity_state,
+       active_job_id, active_lease_expires_at, provider_state,
+       quota_remaining_percent, quota_reset_at, release_version, release_git_sha,
+       release_built_at, release_clean, updated_at, transport_operation,
+       transport_failure_class, transport_status_code, transport_retry_after,
+       transport_consecutive_failures, transport_success_at
+FROM runtime_health_v26;
+DROP TABLE runtime_health_v26;
+CREATE INDEX runtime_health_heartbeat ON runtime_health(heartbeat_at);
+CREATE INDEX runtime_health_agent ON runtime_health(agent_id, heartbeat_at);
+
+CREATE TABLE project_onboarding_workflows (
+    workflow_id TEXT PRIMARY KEY CHECK(length(workflow_id) BETWEEN 8 AND 32),
+    owner_user_id INTEGER NOT NULL CHECK(owner_user_id > 0),
+    display_name TEXT CHECK(display_name IS NULL OR length(display_name) BETWEEN 1 AND 128),
+    project_id TEXT CHECK(project_id IS NULL OR length(project_id) BETWEEN 1 AND 48),
+    base_root TEXT CHECK(base_root IS NULL OR length(base_root) BETWEEN 1 AND 4096),
+    canonical_root TEXT CHECK(canonical_root IS NULL OR length(canonical_root) BETWEEN 1 AND 4096),
+    stage TEXT NOT NULL CHECK(stage IN (
+        'awaiting_name','choosing_root','awaiting_folder','confirming','queued',
+        'preparing_root','creating_group','group_unknown','configuring_group',
+        'configuration_unknown','committing_binding','completed','cancelled',
+        'expired','failed'
+    )),
+    telegram_chat_id INTEGER,
+    telegram_access_hash INTEGER,
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) <= 128),
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX project_onboarding_worker_ready
+ON project_onboarding_workflows(stage, expires_at, created_at);
+CREATE INDEX project_onboarding_owner_active
+ON project_onboarding_workflows(owner_user_id, stage, updated_at);
+
+CREATE TABLE project_onboarding_options (
+    option_id TEXT PRIMARY KEY CHECK(length(option_id) BETWEEN 8 AND 32),
+    workflow_id TEXT NOT NULL REFERENCES project_onboarding_workflows(workflow_id)
+        ON DELETE CASCADE,
+    base_root TEXT NOT NULL CHECK(length(base_root) BETWEEN 1 AND 4096),
+    safe_label TEXT NOT NULL CHECK(length(safe_label) BETWEEN 1 AND 160),
+    created_at TEXT NOT NULL,
+    UNIQUE(workflow_id, base_root)
+);
+
+CREATE TABLE project_group_bindings (
+    project_id TEXT PRIMARY KEY CHECK(length(project_id) BETWEEN 1 AND 48),
+    telegram_chat_id INTEGER NOT NULL UNIQUE,
+    canonical_root TEXT NOT NULL CHECK(length(canonical_root) BETWEEN 1 AND 4096),
+    workflow_id TEXT NOT NULL UNIQUE REFERENCES project_onboarding_workflows(workflow_id),
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE project_onboarding_outbox (
+    outbox_id TEXT PRIMARY KEY CHECK(length(outbox_id) BETWEEN 8 AND 32),
+    workflow_id TEXT NOT NULL REFERENCES project_onboarding_workflows(workflow_id),
+    chat_id INTEGER NOT NULL CHECK(chat_id > 0),
+    telegram_html TEXT NOT NULL CHECK(length(telegram_html) BETWEEN 1 AND 4096),
+    status TEXT NOT NULL CHECK(status IN ('prepared','leased','delivered','unknown','failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 20),
+    available_at TEXT NOT NULL,
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    telegram_message_id INTEGER,
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) <= 128),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    delivered_at TEXT
+);
+CREATE INDEX project_onboarding_outbox_ready
+ON project_onboarding_outbox(status, available_at, created_at);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -1008,6 +1162,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_24,
         MIGRATION_25,
         MIGRATION_26,
+        MIGRATION_27,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:

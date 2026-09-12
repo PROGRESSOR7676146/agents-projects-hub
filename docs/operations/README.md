@@ -25,7 +25,7 @@ Operational truth is split by purpose:
 - Complete validation gate: `python scripts/validate.py`.
 - Saved Codex session connection and deployment-local acceptance:
   [`SESSION_CONNECT.md`](SESSION_CONNECT.md).
-- Separate planned project/group onboarding package:
+- Project/group onboarding, private setup and live acceptance:
   [`PROJECT_GROUP_ONBOARDING_PLAN.md`](PROJECT_GROUP_ONBOARDING_PLAN.md).
 - Artifact provenance: `agents-projects-hub release-info` succeeds only for a
   wheel with complete clean-tree release identity; run it before promotion.

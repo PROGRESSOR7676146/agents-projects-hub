@@ -21,6 +21,41 @@ from hermes_codex_router.migrations import (
 
 
 class MigrationTests(unittest.TestCase):
+    def test_schema_27_adds_project_onboarding_without_private_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            result = migrate_database(path, create_backup=False)
+            self.assertEqual(result.current_version, LATEST_SCHEMA_VERSION)
+            connection = sqlite3.connect(path)
+            try:
+                tables = {
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+                self.assertTrue(
+                    {
+                        "project_onboarding_workflows",
+                        "project_onboarding_options",
+                        "project_group_bindings",
+                        "project_onboarding_outbox",
+                    }.issubset(tables)
+                )
+                connection.execute(
+                    """INSERT INTO runtime_health (
+                       component,instance_id,runtime,pid,process_start_marker,
+                       started_at,heartbeat_at,activity_state,provider_state,updated_at
+                       ) VALUES (
+                       'project_provisioner','project-group-provisioner','telegram-user',1,
+                       'test-process','2026-09-13T00:00:00+00:00',
+                       '2026-09-13T00:00:00+00:00','idle','unknown',
+                       '2026-09-13T00:00:00+00:00'
+                       )"""
+                )
+            finally:
+                connection.close()
+
     @staticmethod
     def _assert_closed(connection: sqlite3.Connection) -> None:
         try:

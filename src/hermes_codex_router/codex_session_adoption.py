@@ -21,6 +21,7 @@ from .codex_appserver import (
 )
 from .hub_config import HubConfig
 from .migrations import LATEST_SCHEMA_VERSION
+from .project_onboarding import project_id_for_chat
 from .provider_catalog_cache import ProviderCatalogCache
 from .registry import RegistryError, load_registry
 from .session_adoption_policy import supports_adoption
@@ -106,7 +107,12 @@ def list_connectable_codex_sessions(
 
 def _project_root(config: HubConfig, project_id: str, chat_id: int) -> Path:
     try:
-        if config.project_for_chat(chat_id).project_id != project_id:
+        try:
+            bound_project_id = config.project_for_chat(chat_id).project_id
+        except KeyError:
+            with open_adoption_state(config.state_path) as state:
+                bound_project_id = project_id_for_chat(config, state, chat_id)
+        if bound_project_id != project_id:
             raise AdoptionError("project_binding_mismatch")
         registry = load_registry(config.registry_path)
         project = registry.require_project(project_id)

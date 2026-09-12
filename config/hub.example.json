@@ -35,6 +35,10 @@
     "telegram_username": "example_projects_hub_bot",
     "token_file": "/home/example/.config/agents-projects-hub/secrets/hub-telegram-token"
   },
+  "project_provisioning": {
+    "enabled": false,
+    "group_about": "Private project group managed by Agents Projects Hub"
+  },
   "projects": [
     {"project_id": "hub", "telegram_chat_id": null},
     {"project_id": "example-project", "telegram_chat_id": null}

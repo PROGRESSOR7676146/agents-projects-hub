@@ -80,12 +80,25 @@ topic-creation outcomes are not retried blindly and preserve the previous
 binding. Schema 26 adds workflow, candidate, option, outbox and one-time-code
 state. See [ADR 0023](../decisions/0023-deterministic-session-connect.md).
 
+Project/group onboarding is implemented offline behind explicit
+`project_provisioning.enabled` configuration. The owner-only Hub wizard accepts
+a display name, an opaque configured root choice and a safe direct-child project
+ID. A separate pinned Telegram user-session worker creates the private forum,
+adds configured bots, grants the Hub minimum topic/invite rights, prepares an
+empty Git root, updates the registry and records the immutable numeric binding.
+Schema 27 persists the workflow, opaque options, binding and result notices.
+Unknown Telegram creation/configuration outcomes stop without automatic retry;
+an exact local reconciliation is required. See
+[ADR 0024](../decisions/0024-user-authorized-project-group-provisioning.md).
+No user session, group, project, credential, service or live canary has been
+created by this repository change.
+
 The administrative `session attach-codex` preview/apply interface remains
 available for recovery. Schema 25 introduced immutable origins and the original
 first-return boundary. External workers continue the exact thread through socket
 or stdio; unsupported modes fail closed. Automated evidence uses fictional
 provider and Telegram adapters. Live continuity and a production rollback
-artifact for schema 26 remain unaccepted; the current target is schema 26.
+artifact for schema 27 remain unaccepted; the current target is schema 27.
 
 - Numeric project/topic identity, canonical allowlisted roots, idempotent
   routing, persistent provider sessions, bounded visible context, and writer
@@ -355,7 +368,7 @@ artifact for schema 26 remain unaccepted; the current target is schema 26.
   reapers. Runtime-proxy monitoring remains independent and never restarts a
   shared app-server underneath an active Codex or tlive session.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
-- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-26
+- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-27
   immutable-deployment triage guide, source revision, timestamp, and content
   hashes into a neutral local store for the independent Hermes channel. It
   carries no private deployment inventory and creates no service dependency.

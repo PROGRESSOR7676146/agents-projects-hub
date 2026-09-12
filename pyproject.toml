@@ -20,6 +20,9 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+provisioning = [
+  "Telethon>=1.44,<2",
+]
 e2e = [
   "Telethon>=1.44,<2",
 ]

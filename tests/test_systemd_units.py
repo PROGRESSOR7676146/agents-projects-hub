@@ -26,6 +26,7 @@ class SystemdTopologyTests(unittest.TestCase):
             "agents-projects-hub.service",
             "agents-projects-hub-worker@.service",
             "agents-projects-hub-sender.service",
+            "agents-projects-hub-project-provisioner.service",
         )
         for name in names:
             with self.subTest(name=name):
@@ -35,6 +36,9 @@ class SystemdTopologyTests(unittest.TestCase):
         installer = (self.root / "scripts" / "install.sh").read_text(encoding="utf-8")
         self.assertIn("agents-projects-hub-worker@.service", installer)
         self.assertIn("agents-projects-hub-sender.service", installer)
+        self.assertIn("agents-projects-hub-project-provisioner.service", installer)
+        provisioner = self.unit("agents-projects-hub-project-provisioner.service")
+        self.assertIn("agents-projects-hub project-provisioner ", provisioner)
         self.assertIn("codex-multi-auth-appserver.service.d/socket-ready.conf", installer)
         self.assertIn("tlive.service.d/multi-auth-order.conf", installer)
 
