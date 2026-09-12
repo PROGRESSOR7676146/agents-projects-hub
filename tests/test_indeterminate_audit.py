@@ -152,6 +152,7 @@ class IndeterminateAuditTests(unittest.TestCase):
                 (after.status, after.error_class, after.error_code, after.error_detail),
                 (before.status, before.error_class, before.error_code, before.error_detail),
             )
+            self.assertEqual(state.reliability_snapshot()["unresolved_uncertain_execution"], 0)
         finally:
             state.close()
 

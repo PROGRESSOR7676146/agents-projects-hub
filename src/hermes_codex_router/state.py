@@ -3152,6 +3152,16 @@ class HubState:
                 (RECOVERED_RESULT_METADATA_JSON,),
             ).fetchone()[0]
         )
+        unresolved_uncertain_execution = int(
+            self._connection.execute(
+                """SELECT COUNT(*) FROM provider_jobs jobs
+                   WHERE jobs.status = 'indeterminate'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_job_resolutions resolutions
+                       WHERE resolutions.job_id = jobs.job_id
+                     )"""
+            ).fetchone()[0]
+        )
         pending_delivery = int(
             self._connection.execute(
                 "SELECT COUNT(*) FROM telegram_outbox WHERE status IN ('pending', 'sending')"
@@ -3196,6 +3206,7 @@ class HubState:
             "delivered_final_results": delivered_final_results,
             "partial_outcomes": partial_outcomes,
             "uncertain_execution": counts.get("indeterminate", 0),
+            "unresolved_uncertain_execution": unresolved_uncertain_execution,
             "recovered_results": recovered_results,
             "queued_work": queued_work,
             "pending_delivery": pending_delivery,

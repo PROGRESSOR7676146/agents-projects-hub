@@ -7,6 +7,13 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [0.7.0] - 2026-09-05
 
+- Add passive reliability thresholds for stale provider work, delayed Telegram
+  delivery, and unresolved uncertain outcomes; resolved historical uncertainty
+  remains visible without keeping an operational alert active.
+- Add immutable operator resolution of exact indeterminate jobs and explicit
+  safe continuation wording that never authorizes automatic provider replay.
+- Deliver affected-work stop acknowledgements durably under the Hub identity,
+  and pin release/E2E dependencies with a checked hash-locked export.
 - Add a separate off-machine WSL backup and cold-restore drill plan covering
   encrypted recovery sets, immutable release/schema checks, service/network
   isolation, exact indeterminate preservation, and measurable private evidence;

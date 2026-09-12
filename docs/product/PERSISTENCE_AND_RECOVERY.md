@@ -18,7 +18,12 @@ This normative module is part of the
   result MUST expose bounded aggregate counts for accepted requests, delivered
   final results, partial outcomes, uncertain executions and recovered results,
   plus pending queue/delivery counts and ages. These aggregates MUST contain no
-  prompt, response, provider-session, project, topic or account identity.
+  prompt, response, provider-session, project, topic or account identity. The
+  passive alert evaluator MUST report nonterminal provider work older than 15
+  minutes, committed Telegram delivery older than 5 minutes, and every newly
+  unresolved indeterminate outcome. Historical indeterminate work with an
+  operator resolution MUST remain visible in totals without keeping the alert
+  active.
 - **REQ-OPS-005 (Implemented):** Hermes Gateway and tlive MUST be monitored as
   independent, non-mandatory recovery channels. Fresh local heartbeat/status
   markers provide liveness evidence without exposing URLs or tokens.
@@ -166,6 +171,9 @@ recreate unsaved provider context or a partially executed turn.
   MUST leave the job status, error evidence, delivery state, and replay policy
   unchanged, and the audit MUST report resolved and unresolved counts. Failure
   notices MUST state what happened, what Hub saved, and the next safe action.
+  For an uncertain outcome that action MUST be an explicit new user request to
+  inspect current project state before continuing; the notice itself MUST NOT
+  enqueue or imply an automatic retry.
 - **REQ-QUEUE-005 (Implemented for embedded compatibility and the external sender):** Provider result persistence and Telegram delivery
   MUST use a durable outbox. Telegram delivery retry MUST NOT create another
   provider turn, and visible-context acknowledgement MUST occur only after a

@@ -37,6 +37,12 @@ typing, documentation, history, and full test gates pass in the current reposito
 history. Live deployment evidence remains private and is not implied by this
 repository checkpoint.
 
+Passive reliability thresholds now alert on provider work older than 15
+minutes, committed Telegram delivery older than 5 minutes, and unresolved
+indeterminate outcomes. The evaluator is isolated from the broader alert module
+and reads only aggregate SQLite telemetry. Uncertain-result notices give a
+copyable explicit continuation request while preserving the no-replay boundary.
+
 ## Implemented
 
 - Numeric project/topic identity, canonical allowlisted roots, idempotent

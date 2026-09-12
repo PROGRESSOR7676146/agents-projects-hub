@@ -52,6 +52,7 @@ class MonitorHealthTests(unittest.TestCase):
                     "delivered_final_results": 0,
                     "partial_outcomes": 0,
                     "uncertain_execution": 0,
+                    "unresolved_uncertain_execution": 0,
                     "recovered_results": 0,
                     "queued_work": 0,
                     "pending_delivery": 0,

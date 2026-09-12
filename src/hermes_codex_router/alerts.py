@@ -2,25 +2,18 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
 from .codex_accounts import CodexPoolStatus
+from .operational_alert import OperationalAlert
+from .reliability_alerts import evaluate_reliability_alerts
 
 DEFAULT_LOW_QUOTA_PERCENT = 5
 DEFAULT_CONTEXT_BLOAT_THRESHOLD = 65_000
 DEFAULT_SESSION_SCAN_MAX_AGE_SECONDS = 7200
 DEFAULT_MAX_TAIL_BYTES = 524288
-
-
-@dataclass(frozen=True, slots=True)
-class OperationalAlert:
-    key: str
-    code: str
-    severity: str
-    message: str
 
 
 def _timestamp(value: object) -> datetime | None:
@@ -241,6 +234,9 @@ def evaluate_operational_alerts(
 ) -> tuple[OperationalAlert, ...]:
     evaluated_at = now or datetime.now(timezone.utc)
     alerts: list[OperationalAlert] = []
+    reliability = state_snapshot.get("reliability")
+    if isinstance(reliability, Mapping):
+        alerts.extend(evaluate_reliability_alerts(reliability))
     if codex_config_proxy_ok is False:
         alerts.append(
             OperationalAlert(

@@ -57,8 +57,9 @@ def codex_failure_notice(error: BaseException) -> str:
     if isinstance(partial, str) and partial.strip():
         notice += "\n\nPartial response (incomplete):\n" + html.escape(partial[:MAX_PARTIAL_TEXT])
     notice += (
-        "\n\nNext: Ask Codex to inspect the current project state and continue after the provider "
-        "is available."
+        "\n\nNext: After the provider is available, send a new message: “Inspect the current "
+        "project state, summarize what remains, and continue safely.” Hub creates a new job "
+        "only from that explicit request."
     )
     return notice
 
@@ -70,5 +71,7 @@ def uncertain_provider_notice(display_name: str) -> str:
         f"What happened: {safe_name} stopped before a final response.\n\n"
         "Saved: Completion is unconfirmed. The task may have changed files or performed "
         "other actions. Hub did not retry it automatically.\n\n"
-        f"Next: Ask {safe_name} to inspect the current project state and continue."
+        f"Next: Send a new message asking {safe_name} to inspect the current project state, "
+        "summarize what remains, and continue safely. Hub creates a new job only from that "
+        "explicit request."
     )

@@ -289,6 +289,8 @@ class ResultReliabilityTests(unittest.TestCase):
         self.assertIn("Earlier partial text omitted", notice)
         self.assertIn("&lt;latest&gt;", notice)
         self.assertNotIn("Private error detail", notice)
+        self.assertIn("Inspect the current project state", notice)
+        self.assertIn("explicit request", notice)
 
     def test_retry_backoff_respects_hint_and_caps_without_overflow(self) -> None:
         self.assertEqual(delivery_retry_delay(RuntimeError(), 1), 1)
