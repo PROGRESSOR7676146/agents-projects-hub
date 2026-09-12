@@ -887,6 +887,8 @@ class HubState:
         observer_agent_id: str,
     ) -> tuple[SessionRecord, bool]:
         """Atomically claim a Codex /return and restore Telegram ownership."""
+        from .session_adoption_state import CodexSessionOrigins
+
         observer = _bounded(observer_agent_id, name="observer agent id", maximum=64)
         if chat_id == 0 or message_id <= 0:
             raise StateError("invalid Telegram message identity")
@@ -937,6 +939,7 @@ class HubState:
             )
             if cursor.rowcount != 1:
                 raise StateError("Codex local writer ownership changed during return")
+            CodexSessionOrigins(self).activate(session_id, message_id, topic_id)
             self._connection.execute(
                 """INSERT INTO observed_messages
                    (chat_id, message_id, observer_agent_id, observed_at)
@@ -1109,6 +1112,8 @@ class HubState:
         network or provider operation. A duplicate idempotency key returns the
         original immutable snapshot without allocating another topic sequence.
         """
+        from .session_adoption_state import CodexSessionOrigins
+
         key = _bounded(idempotency_key, name="idempotency key", maximum=256)
         target_agent = _bounded(agent_id, name="agent id", maximum=64)
         target_session = _bounded(session_id, name="session id", maximum=128)
@@ -1163,6 +1168,7 @@ class HubState:
                 raise StateError("provider job session snapshot does not match persisted session")
             if str(session["status"]) not in {"active", "satellite"}:
                 raise StateError("provider job session is not routable")
+            CodexSessionOrigins(self).require_admission(target_session, message_id)
             expected_writer = "local" if take_local_writer else "telegram"
             if str(session["writer_mode"]) != expected_writer:
                 raise StateError(f"provider job session writer is not {expected_writer}")
@@ -1324,6 +1330,8 @@ class HubState:
         absolute batch windows can be extended; otherwise a new FIFO job is
         created.  Provider context/handoffs belong to the first part only.
         """
+        from .session_adoption_state import CodexSessionOrigins
+
         if quiet_ms <= 0:
             return self.enqueue_provider_job(
                 idempotency_key=idempotency_key,
@@ -1355,6 +1363,23 @@ class HubState:
             ).fetchone()
             if existing is not None:
                 return self._provider_job(existing), False
+            CodexSessionOrigins(self).require_admission(session_id, message_id)
+            session = self.get_session(session_id)
+            if (
+                session.topic_id != topic_id
+                or session.agent_id != agent_id
+                or session.generation != session_generation
+                or session.status not in {"active", "satellite"}
+                or session.writer_mode != "telegram"
+                or session.model != model
+                or session.effort != effort
+                or (
+                    provider_session_id is not None
+                    and session.provider_session_id != provider_session_id
+                )
+                or self.get_topic(topic_id).chat_id != chat_id
+            ):
+                raise StateError("provider batch session snapshot changed")
             candidate = self._connection.execute(
                 """SELECT * FROM provider_jobs
                    WHERE topic_id = ? AND agent_id = ? AND session_id = ?
@@ -2832,6 +2857,8 @@ class HubState:
         self, topic_id: int, observer_agent_id: str, *, limit: int = 8
     ) -> tuple[str | None, int | None]:
         """Return passive user-forwarded quotes, excluding ordinary agent dialogue."""
+        from .session_adoption_state import CodexSessionOrigins
+
         if not observer_agent_id or not 1 <= limit <= 20:
             raise StateError("invalid forwarded context request")
         cursor = self._connection.execute(
@@ -2840,11 +2867,15 @@ class HubState:
             (topic_id, observer_agent_id),
         ).fetchone()
         last_turn_id = int(cursor["last_turn_id"]) if cursor is not None else 0
+        floor, activation = CodexSessionOrigins(self).forwarded_boundary(
+            topic_id, observer_agent_id
+        )
         rows = self._connection.execute(
             """SELECT turn_id, response_excerpt FROM external_turn_excerpts
                WHERE topic_id = ? AND agent_id = 'forwarded-quote' AND turn_id > ?
+                 AND (? = 0 OR source_message_id > ?)
                ORDER BY turn_id DESC LIMIT ?""",
-            (topic_id, last_turn_id, limit),
+            (topic_id, max(last_turn_id, floor), activation, activation, limit),
         ).fetchall()
         if not rows:
             return None, None
@@ -2898,12 +2929,31 @@ class HubState:
         )
         return self.get_session(session_id)
 
+    def _require_control_snapshot(self, topic_id: int, expected_session_id: str | None) -> None:
+        if expected_session_id is not None:
+            current = self.active_session(topic_id)
+            if (current.session_id if current else "") != expected_session_id:
+                raise StateError("active session changed; open controls again")
+            if current is not None and current.writer_mode != "telegram":
+                raise StateError("return the local writer before changing session settings")
+            if self.topic_has_running_dispatch(topic_id) or self.topic_has_pending_provider_job(
+                topic_id
+            ):
+                raise StateError("provider work is pending; retry controls after it completes")
+
     def activate_agent(
-        self, topic_id: int, agent_id: str, model: str, effort: str
+        self,
+        topic_id: int,
+        agent_id: str,
+        model: str,
+        effort: str,
+        *,
+        expected_session_id: str | None = None,
     ) -> SessionRecord:
         self.get_topic(topic_id)
         now = _now()
-        with self._connection:
+        with self._immediate_transaction():
+            self._require_control_snapshot(topic_id, expected_session_id)
             current = self._connection.execute(
                 "SELECT * FROM agent_sessions WHERE topic_id = ? AND status = 'active'",
                 (topic_id,),
@@ -2960,15 +3010,14 @@ class HubState:
             session = self._insert_session(topic_id, agent_id, model, effort, "satellite")
         return self.get_session(session.session_id)
 
-    def new_active_session(self, topic_id: int) -> SessionRecord:
-        row = self._connection.execute(
-            "SELECT * FROM agent_sessions WHERE topic_id = ? AND status = 'active'",
-            (topic_id,),
-        ).fetchone()
-        if row is None:
-            raise StateError("topic has no active session")
-        previous = self._session(row)
-        with self._connection:
+    def new_active_session(
+        self, topic_id: int, *, expected_session_id: str | None = None
+    ) -> SessionRecord:
+        with self._immediate_transaction():
+            self._require_control_snapshot(topic_id, expected_session_id)
+            previous = self.active_session(topic_id)
+            if previous is None:
+                raise StateError("topic has no active session")
             self._connection.execute(
                 "UPDATE agent_sessions SET status = 'archived', updated_at = ? WHERE session_id = ?",
                 (_now(), previous.session_id),
@@ -2978,15 +3027,29 @@ class HubState:
             )
         return self.get_session(replacement.session_id)
 
-    def replace_active_session(self, topic_id: int, *, model: str, effort: str) -> SessionRecord:
-        row = self._connection.execute(
-            "SELECT * FROM agent_sessions WHERE topic_id = ? AND status = 'active'",
-            (topic_id,),
-        ).fetchone()
-        if row is None:
-            raise StateError("topic has no active session")
-        previous = self._session(row)
-        with self._connection:
+    def replace_active_session(
+        self, topic_id: int, *, model: str, effort: str, expected_session_id: str | None = None
+    ) -> SessionRecord:
+        from .session_adoption_state import CodexSessionOrigins
+
+        with self._immediate_transaction():
+            self._require_control_snapshot(topic_id, expected_session_id)
+            previous = self.active_session(topic_id)
+            if previous is None:
+                raise StateError("topic has no active session")
+            if CodexSessionOrigins(self).get(previous.session_id) is not None:
+                if previous.writer_mode != "telegram":
+                    raise StateError("return the local writer before changing session settings")
+                self._connection.execute(
+                    "UPDATE agent_sessions SET model=?, effort=?, updated_at=? WHERE session_id=?",
+                    (
+                        _bounded(model, name="model", maximum=200),
+                        _bounded(effort, name="effort", maximum=64),
+                        _now(),
+                        previous.session_id,
+                    ),
+                )
+                return self.get_session(previous.session_id)
             self._connection.execute(
                 "UPDATE agent_sessions SET status = 'archived', updated_at = ? "
                 "WHERE session_id = ?",
@@ -3031,10 +3094,10 @@ class HubState:
                 self._connection.execute(
                     """INSERT INTO external_turn_excerpts
                        (topic_id, agent_id, provider_session_id, model, provider,
-                        user_excerpt, response_excerpt, created_at)
+                        user_excerpt, response_excerpt, created_at, source_message_id)
                        VALUES (?, 'forwarded-quote', '', 'quoted-context', 'telegram',
-                               'Forwarded message', ?, ?)""",
-                    (topic_id, quote, timestamp),
+                               'Forwarded message', ?, ?, ?)""",
+                    (topic_id, quote, timestamp, message_id),
                 )
                 self._connection.execute(
                     """DELETE FROM external_turn_excerpts

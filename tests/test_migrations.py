@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from schema_fixtures import remove_adoption_schema
+
 from hermes_codex_router import migrations as migrations_module
 from hermes_codex_router.migrations import (
     LATEST_SCHEMA_VERSION,
@@ -136,6 +138,7 @@ class MigrationTests(unittest.TestCase):
             migrate_database(path, create_backup=False)
             connection = sqlite3.connect(path)
             try:
+                remove_adoption_schema(connection)
                 connection.execute("DROP TABLE IF EXISTS provider_progress_deliveries")
                 connection.execute("PRAGMA user_version = 23")
                 connection.commit()
@@ -144,7 +147,9 @@ class MigrationTests(unittest.TestCase):
 
             result = migrate_database(path, create_backup=False)
 
-            self.assertEqual((result.previous_version, result.current_version), (23, 24))
+            self.assertEqual(
+                (result.previous_version, result.current_version), (23, LATEST_SCHEMA_VERSION)
+            )
             migrated = sqlite3.connect(path)
             try:
                 columns = {
@@ -184,6 +189,7 @@ class MigrationTests(unittest.TestCase):
             migrate_database(path, create_backup=False)
             connection = sqlite3.connect(path)
             try:
+                remove_adoption_schema(connection)
                 connection.execute("DROP TABLE IF EXISTS provider_job_resolutions")
                 connection.executescript(
                     """INSERT INTO topics
@@ -238,6 +244,7 @@ class MigrationTests(unittest.TestCase):
             migrate_database(path, create_backup=False)
             connection = sqlite3.connect(path)
             try:
+                remove_adoption_schema(connection)
                 connection.execute("DROP INDEX runtime_events_retention")
                 connection.execute(
                     "CREATE INDEX runtime_events_created_at ON runtime_events(created_at DESC)"
@@ -305,6 +312,7 @@ class MigrationTests(unittest.TestCase):
             migrate_database(path, create_backup=False)
             connection = sqlite3.connect(path)
             try:
+                remove_adoption_schema(connection)
                 connection.execute("DROP INDEX runtime_events_retention")
                 connection.execute("CREATE TABLE runtime_events_retention (marker TEXT NOT NULL)")
                 connection.execute(
@@ -338,6 +346,7 @@ class MigrationTests(unittest.TestCase):
             migrate_database(path, create_backup=False)
             connection = sqlite3.connect(path)
             try:
+                remove_adoption_schema(connection)
                 connection.execute("DROP TABLE runtime_health")
                 connection.executescript(MIGRATION_12)
                 connection.executescript(MIGRATION_19)
@@ -384,6 +393,7 @@ class MigrationTests(unittest.TestCase):
             migrate_database(path, create_backup=False)
             connection = sqlite3.connect(path)
             try:
+                remove_adoption_schema(connection)
                 connection.execute("DROP TABLE runtime_health")
                 connection.executescript(MIGRATION_12)
                 connection.execute(
@@ -514,6 +524,7 @@ class MigrationTests(unittest.TestCase):
             migrate_database(path, create_backup=False)
             connection = sqlite3.connect(path)
             try:
+                remove_adoption_schema(connection)
                 connection.execute(
                     """INSERT INTO topics
                        (project_id, chat_id, thread_id, title, created_at, updated_at)
@@ -586,6 +597,7 @@ class MigrationTests(unittest.TestCase):
             migrate_database(path, create_backup=False)
             connection = sqlite3.connect(path)
             try:
+                remove_adoption_schema(connection)
                 connection.executescript(
                     """DROP TABLE telegram_outbox_parts;
                        DROP TABLE provider_job_absorptions;

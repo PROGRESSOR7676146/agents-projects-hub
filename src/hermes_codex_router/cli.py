@@ -52,6 +52,23 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agents-projects-hub")
     commands = parser.add_subparsers(dest="command", required=True)
 
+    session = commands.add_parser("session", help="explicit local provider-session binding")
+    session_commands = session.add_subparsers(dest="session_command", required=True)
+    attach = session_commands.add_parser(
+        "attach-codex", help="preview or attach an exact saved Codex thread"
+    )
+    attach.add_argument("config", type=Path)
+    attach.add_argument("--project", required=True)
+    attach.add_argument("--chat-id", required=True, type=int)
+    attach.add_argument("--thread-id", required=True, type=int)
+    attach.add_argument("--codex-thread-id", required=True)
+    attach.add_argument("--model")
+    attach.add_argument("--effort")
+    attach.add_argument("--replace-session")
+    attach.add_argument("--apply", action="store_true")
+    attach.add_argument("--confirm-cli-closed", action="store_true")
+    attach.add_argument("--json", action="store_true")
+
     validate = commands.add_parser("validate", help="validate a local project registry")
     validate.add_argument("registry", type=Path)
     validate.add_argument("--allow-missing", action="store_true")
@@ -321,6 +338,31 @@ def _lane_command(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command == "session":
+            from .codex_session_adoption import AdoptionError, attach_codex_session
+
+            try:
+                config = load_external_worker_config(args.config)
+                result = attach_codex_session(
+                    config,
+                    project_id=args.project,
+                    chat_id=args.chat_id,
+                    thread_id=args.thread_id,
+                    codex_thread_id=args.codex_thread_id,
+                    model=args.model,
+                    effort=args.effort,
+                    replace_session=args.replace_session,
+                    apply=args.apply,
+                    confirm_cli_closed=args.confirm_cli_closed,
+                )
+            except AdoptionError as exc:
+                _print({"format_version": 1, "ok": False, "reason_code": exc.reason})
+                return exc.exit_code
+            except (ValueError, KeyError, OSError):
+                _print({"format_version": 1, "ok": False, "reason_code": "configuration_invalid"})
+                return 2
+            _print(result)
+            return 0
         if args.command == "validate-hub":
             config = load_hub_config(args.config, allow_unbound=args.allow_unbound)
             load_registry(config.registry_path)

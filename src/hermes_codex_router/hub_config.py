@@ -691,7 +691,7 @@ def load_hub_config(
                 f"hub_bot requires an isolated external worker for agent: {missing_workers[0]}"
             )
 
-    return HubConfig(
+    config = HubConfig(
         schema_version=1,
         owner_user_ids=tuple(raw_owners),
         registry_path=registry_path,
@@ -731,6 +731,13 @@ def load_hub_config(
         provider_account_hints=provider_account_hints,
         provider_telemetry=provider_telemetry,
     )
+    from .session_adoption_policy import validate_adoption_mode
+
+    try:
+        validate_adoption_mode(config)
+    except ValueError as exc:
+        raise HubConfigError(str(exc)) from None
+    return config
 
 
 def load_codex_worker_config(path: Path) -> HubConfig:

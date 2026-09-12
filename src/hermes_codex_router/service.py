@@ -60,7 +60,8 @@ from .routing import (
     parse_context_request,
 )
 from .runtime_health import CONTROLLER_INSTANCE_ID
-from .state import HubState, SessionRecord, TopicRecord
+from .session_controls import bind_controls, validate_control
+from .state import HubState, SessionRecord, StateError, TopicRecord
 from .status_view import cached_codex_rate_limits, format_accounts, format_session_status
 from .supervisor import CodexAppServerSupervisor
 from .telegram import (
@@ -106,6 +107,9 @@ class ProjectHubService:
         direct_messages_only: bool = False,
     ) -> None:
         self.config = config
+        from .session_adoption_policy import validate_adoption_mode
+
+        validate_adoption_mode(config)
         self.registry = load_registry(config.registry_path)
         self.state = HubState.open(config.state_path)
         self.agent = config.require_agent("codex")
@@ -501,6 +505,15 @@ class ProjectHubService:
                     take_local_writer=take_local_writer,
                 )
         except Exception as exc:
+            if isinstance(exc, StateError) and str(exc) == "input_before_session_activation":
+                self.state.claim_message(
+                    message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
+                )
+                self._send_text(
+                    message,
+                    "This message predates activation of the attached session. Send a new request after /return.",
+                )
+                return True
             raise QueueAcceptanceError("durable provider enqueue did not commit") from exc
         if created:
             try:
@@ -741,6 +754,7 @@ class ProjectHubService:
                     queue_state, progress_enabled=self.config.outbox_runtime == "external"
                 )
                 with codex_preparation():
+                    self._require_legacy_codex_execution(queue_state)
                     client = self._client()
                     if executing.provider_session_id:
                         thread = client.resume_thread(
@@ -1089,6 +1103,7 @@ class ProjectHubService:
     ) -> SessionRecord:
         if session.provider_session_id:
             return session
+        self._require_legacy_codex_execution(self.state)
         client = self._client()
         thread = client.start_thread(
             cwd=project.root,
@@ -1103,6 +1118,13 @@ class ProjectHubService:
         )
         return self.state.bind_provider_session(session.session_id, thread.thread_id, tab_name)
 
+    def _require_legacy_codex_execution(self, state: HubState) -> None:
+        from dataclasses import replace
+
+        from .session_adoption_policy import validate_adoption_mode
+
+        validate_adoption_mode(replace(self.config, dispatch_mode="inline"), state._connection)
+
     def _run_codex_turn(
         self,
         *,
@@ -1112,6 +1134,7 @@ class ProjectHubService:
         text: str,
         message: TopicMessage,
     ) -> str:
+        self._require_legacy_codex_execution(self.state)
         client = self._client()
         new_session = (
             session.provider_session_id is None
@@ -1310,6 +1333,7 @@ class ProjectHubService:
         message: TopicMessage,
         target_model: str | None = None,
         target_effort: str | None = None,
+        expected_session_id: str | None = None,
     ) -> None:
         try:
             target = self.config.require_agent(target_agent_id)
@@ -1319,6 +1343,11 @@ class ProjectHubService:
         selected_model = target_model or target.default_model
         selected_effort = target_effort or target.default_effort
         previous = self.state.active_session(topic.topic_id)
+        if (
+            expected_session_id is not None
+            and (previous.session_id if previous else "") != expected_session_id
+        ):
+            raise StateError("active session changed; open controls again")
         if previous is None:
             previous = self._ensure_codex_session(topic)
         if previous.agent_id == target.agent_id:
@@ -1333,10 +1362,14 @@ class ProjectHubService:
             target.agent_id,
             selected_model,
             selected_effort,
+            expected_session_id=previous.session_id,
         )
         if (replacement.model, replacement.effort) != (selected_model, selected_effort):
             replacement = self.state.replace_active_session(
-                topic.topic_id, model=selected_model, effort=selected_effort
+                topic.topic_id,
+                model=selected_model,
+                effort=selected_effort,
+                expected_session_id=replacement.session_id,
             )
         self._send_text(
             message,
@@ -1387,23 +1420,29 @@ class ProjectHubService:
             message.chat_id,
             message.thread_id,
             "Provider → model → effort",
-            reply_markup=self._inline_grid(values),
+            reply_markup=self._inline_grid(bind_controls(self.state, topic.topic_id, values)),
         )
 
     def _show_control_menu(self, message: TopicMessage) -> None:
+        topic = self.state.find_topic(message.chat_id, message.thread_id)
+        assert topic is not None
         self.telegram.send_html(
             message.chat_id,
             message.thread_id,
             "Project controls",
             reply_markup=self._inline_grid(
-                [
-                    ("Status", "menu:status"),
-                    ("Model", "menu:model"),
-                    ("Accounts", "menu:accounts"),
-                    ("New", "menu:new"),
-                    ("Local", "menu:local"),
-                    ("Return", "menu:return"),
-                ]
+                bind_controls(
+                    self.state,
+                    topic.topic_id,
+                    [
+                        ("Status", "menu:status"),
+                        ("Model", "menu:model"),
+                        ("Accounts", "menu:accounts"),
+                        ("New", "menu:new"),
+                        ("Local", "menu:local"),
+                        ("Return", "menu:return"),
+                    ],
+                )
             ),
         )
 
@@ -1450,9 +1489,15 @@ class ProjectHubService:
             navigation.append(("→", f"models:{agent_id}:{page + 1}"))
         agent = self.config.require_agent(agent_id)
         cached = " · cached" if catalog.last_failure_at is not None else ""
-        keyboard = self._inline_grid(values)["inline_keyboard"]
+        keyboard = self._inline_grid(bind_controls(self.state, topic.topic_id, values))[
+            "inline_keyboard"
+        ]
         if navigation:
-            keyboard.extend(self._inline_grid(navigation)["inline_keyboard"])
+            keyboard.extend(
+                self._inline_grid(bind_controls(self.state, topic.topic_id, navigation))[
+                    "inline_keyboard"
+                ]
+            )
         self.telegram.send_html(
             message.chat_id,
             message.thread_id,
@@ -1495,7 +1540,7 @@ class ProjectHubService:
             message.chat_id,
             message.thread_id,
             html.escape(f"{model.label}: choose effort"),
-            reply_markup=self._inline_grid(values),
+            reply_markup=self._inline_grid(bind_controls(self.state, topic.topic_id, values)),
         )
 
     def _apply_model_selection(
@@ -1507,6 +1552,7 @@ class ProjectHubService:
         callback_key: str,
         effort: str,
         message: TopicMessage,
+        expected_session_id: str | None = None,
     ) -> None:
         # The callback key belongs to the snapshot the user just saw. A final
         # click must update local state, not depend on another provider RPC.
@@ -1519,8 +1565,15 @@ class ProjectHubService:
             raise ModelSelectionError("provider selection is no longer available")
         model = selected.model_id
         active = self.state.active_session(topic.topic_id)
+        if (
+            expected_session_id is not None
+            and (active.session_id if active else "") != expected_session_id
+        ):
+            raise StateError("active session changed; open controls again")
         if active is None:
-            replacement = self.state.activate_agent(topic.topic_id, agent_id, model, effort)
+            replacement = self.state.activate_agent(
+                topic.topic_id, agent_id, model, effort, expected_session_id=""
+            )
             self._send_text(
                 message,
                 f"{self.config.require_agent(agent_id).display_name} · {model} · "
@@ -1539,13 +1592,16 @@ class ProjectHubService:
                 message=message,
                 target_model=model,
                 target_effort=effort,
+                expected_session_id=active.session_id,
             )
             return
         if (active.model, active.effort) == (model, effort):
             self._send_text(message, "This provider, model, and effort are already active.")
             return
         agent = self.config.require_agent(agent_id)
-        replacement = self.state.replace_active_session(topic.topic_id, model=model, effort=effort)
+        replacement = self.state.replace_active_session(
+            topic.topic_id, model=model, effort=effort, expected_session_id=active.session_id
+        )
         self._send_text(
             message,
             f"{agent.display_name} · {model} · {effort.title()} will start on the next "
@@ -1591,10 +1647,32 @@ class ProjectHubService:
             reply_to_username=None,
         )
         try:
+            from dataclasses import replace
+
+            data, expected_control_session = validate_control(
+                self.state, topic.topic_id, callback.data
+            )
+            callback = replace(callback, data=data)
             if callback.data.startswith("menu:"):
                 action = callback.data.removeprefix("menu:")
                 if action not in {"status", "model", "accounts", "new", "local", "return"}:
                     raise ServiceError("Unknown project-control action")
+                if action == "return":
+                    from .session_adoption_state import CodexSessionOrigins
+
+                    active = self.state.active_session(topic.topic_id)
+                    origin = (
+                        CodexSessionOrigins(self.state).get(active.session_id) if active else None
+                    )
+                    if origin is not None and active is not None and active.writer_mode == "local":
+                        self.telegram.answer_callback(
+                            callback.callback_id, "Send /return in this topic"
+                        )
+                        self._send_text(
+                            message,
+                            "Close the local CLI, then send /return in this topic to activate the connected session.",
+                        )
+                        return True
                 self.telegram.answer_callback(callback.callback_id, "Opening…")
                 synthetic_message_id = -(
                     int.from_bytes(
@@ -1641,7 +1719,9 @@ class ProjectHubService:
                     topic.topic_id
                 ) or self.state.topic_has_pending_provider_job(topic.topic_id):
                     raise ServiceError("A provider turn is still running")
-                replacement = self.state.new_active_session(topic.topic_id)
+                replacement = self.state.new_active_session(
+                    topic.topic_id, expected_session_id=expected_session_id
+                )
                 self.telegram.answer_callback(callback.callback_id, "New session ready")
                 self._send_text(
                     message,
@@ -1694,6 +1774,7 @@ class ProjectHubService:
                     callback_key=callback_key,
                     effort=effort,
                     message=message,
+                    expected_session_id=expected_control_session,
                 )
                 return True
         except (
@@ -1702,6 +1783,7 @@ class ProjectHubService:
             ModelSelectionError,
             ProviderCatalogError,
             ServiceError,
+            StateError,
             RpcError,
         ) as exc:
             if isinstance(exc, RpcError):
@@ -2100,10 +2182,18 @@ class ProjectHubService:
                 )
                 if not created:
                     return False
+                from .session_adoption_state import CodexSessionOrigins
+
+                origin = CodexSessionOrigins(self.state).get(session.session_id)
                 self._send_text(
                     message,
                     "Ownership returned to Telegram. The next Telegram turn will continue "
-                    "the same provider session.",
+                    "the same provider session."
+                    + (
+                        " The previous Hub session is archived; its history was not merged into the connected CLI session."
+                        if origin is not None and origin.replaces_session_id is not None
+                        else ""
+                    ),
                 )
                 return True
             summary_prompt = (

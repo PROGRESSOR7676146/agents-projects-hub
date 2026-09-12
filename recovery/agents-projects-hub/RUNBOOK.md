@@ -1,6 +1,6 @@
 # Agents Projects Hub recovery capsule
 
-Maintained for Hub `0.7.0`, state schema `24`. This capsule is a bounded local
+Maintained for Hub `0.7.0`, state schema `25`. This capsule is a bounded local
 recovery guide, not authority to weaken policy, retry ambiguous work, expose
 private state, or perform a rollout.
 
@@ -38,7 +38,7 @@ ACTIVE_BIN doctor HUB_CONFIG
 ```
 
 Acceptance requires `release-info.ok=true`, `clean_tree=true`, an exact Git
-SHA, schema `24/24`, and `deployment_revision.status=converged`. A live process
+SHA, schema `25/25`, and `deployment_revision.status=converged`. A live process
 or package version alone is not deployment identity.
 
 ## Classify before repair
@@ -52,7 +52,11 @@ or package version alone is not deployment identity.
 - Mixed/unknown revision: stop promotion and use immutable manifest/rollback
   gates; do not reinstall from a dirty checkout.
 - Schema/integrity failure: stop database users and preserve evidence before a
-  reviewed restore. Ordinary runtime rollback retains schema-24 state.
+  reviewed restore. Ordinary runtime rollback retains schema-25 state.
+- Retained Codex origins: never delete origin records or change a provider
+  thread ID to bypass a resume failure. Inline/embedded execution is unsupported
+  while any origin remains, including archived bindings. Schema compatibility
+  alone does not prove a rollback artifact preserves this policy.
 
 Inspect the failed unit and bounded journal, then restart only that unit:
 

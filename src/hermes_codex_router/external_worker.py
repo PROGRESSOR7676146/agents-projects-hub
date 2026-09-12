@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import threading
 import uuid
 from dataclasses import replace
@@ -33,6 +34,8 @@ from .external_runtime import (
 from .hub_config import HubConfig
 from .metadata import format_agent_response, format_telegram_response
 from .registry import ProjectRegistry, load_registry
+from .session_adoption_policy import validate_adoption_mode
+from .session_adoption_state import CodexSessionOrigins
 from .state import HubState, ProviderJobRecord
 from .supervisor import CodexAppServerSupervisor
 from .telegram_interaction import (
@@ -88,6 +91,7 @@ class ExternalQueueWorker:
             )
         if self.agent.managed_externally:
             raise ExternalQueueWorkerError("external worker agent must be locally managed")
+        validate_adoption_mode(config)
         self.registry = registry or load_registry(config.registry_path)
         self.state = HubState.open(config.state_path)
         self.worker_id = worker_id or f"{self.agent.agent_id}-worker"
@@ -461,12 +465,50 @@ class ExternalQueueWorker:
             self.state, progress_enabled=self.config.outbox_runtime == "external"
         )
         with codex_preparation():
+            origin = CodexSessionOrigins(self.state).get(job.session_id)
+            if origin is not None:
+                validate_adoption_mode(self.config, self.state._connection)
+                current_session = self.state.get_session(job.session_id)
+                root = project.root.resolve(strict=True)
+                if (
+                    origin.provider_thread_id != job.provider_session_id
+                    or current_session.provider_session_id != origin.provider_thread_id
+                    or origin.project_id != project.project_id
+                    or origin.canonical_root != root
+                    or current_session.writer_mode != "telegram"
+                    or not any(
+                        root.is_relative_to(allowed.resolve(strict=True))
+                        for allowed in self.registry.allowed_roots
+                    )
+                ):
+                    raise ExternalQueueWorkerError("adopted Codex binding mismatch")
+                git_root = subprocess.run(
+                    ("git", "-C", str(root), "rev-parse", "--show-toplevel"),
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=True,
+                )
+                if Path(git_root.stdout.strip()).resolve(strict=True) != root:
+                    raise ExternalQueueWorkerError("adopted Codex project root mismatch")
             ensure_socket_health = getattr(self.supervisor, "ensure_shared_socket_health", None)
             if callable(ensure_socket_health) and not ensure_socket_health():
                 self._discard_client()
             client = self._client()
+            if origin is not None:
+                metadata = client.read_thread_metadata(
+                    thread_id=origin.provider_thread_id, cwd=origin.canonical_root
+                )
+                if (
+                    metadata.thread_id != origin.provider_thread_id
+                    or metadata.cwd != origin.canonical_root
+                    or metadata.model_provider != origin.model_provider
+                ):
+                    raise ExternalQueueWorkerError("adopted Codex source mismatch")
             fallback_transfer = bool(
-                job.provider_session_id and self.supervisor.transport_mode == "stdio-fallback"
+                origin is None
+                and job.provider_session_id
+                and self.supervisor.transport_mode == "stdio-fallback"
             )
             turn_text = job.payload_text
             if fallback_transfer:
@@ -500,6 +542,12 @@ class ExternalQueueWorker:
                     project_id=project.project_id,
                     developer_instructions=developer_instructions,
                 )
+            if origin is not None and (
+                thread.thread_id != origin.provider_thread_id
+                or thread.cwd != origin.canonical_root
+                or thread.model_provider != origin.model_provider
+            ):
+                raise ExternalQueueWorkerError("adopted Codex resume identity mismatch")
             journal.record_thread(job.job_id, token, thread.thread_id, project.root)
         turn_id = client.start_turn(
             thread_id=thread.thread_id,

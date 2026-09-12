@@ -745,6 +745,39 @@ ON provider_progress_deliveries(job_id, created_at);
 """
 
 
+MIGRATION_25 = """
+CREATE TABLE codex_session_origins (
+    session_id TEXT PRIMARY KEY REFERENCES agent_sessions(session_id),
+    provider_thread_id TEXT NOT NULL UNIQUE CHECK(length(provider_thread_id) BETWEEN 1 AND 128),
+    project_id TEXT NOT NULL CHECK(length(project_id) BETWEEN 1 AND 48),
+    canonical_root TEXT NOT NULL CHECK(length(canonical_root) BETWEEN 1 AND 4096),
+    model_provider TEXT NOT NULL CHECK(model_provider = 'openai'),
+    created_at TEXT NOT NULL,
+    replaces_session_id TEXT REFERENCES agent_sessions(session_id),
+    activation_message_id INTEGER CHECK(activation_message_id > 0),
+    context_floor_turn_id INTEGER NOT NULL DEFAULT 0 CHECK(context_floor_turn_id >= 0)
+);
+ALTER TABLE external_turn_excerpts ADD COLUMN source_message_id INTEGER
+    CHECK(source_message_id > 0);
+CREATE TRIGGER codex_origin_identity_immutable
+BEFORE UPDATE OF session_id, provider_thread_id, project_id, canonical_root,
+    model_provider, created_at, replaces_session_id ON codex_session_origins
+BEGIN SELECT RAISE(ABORT, 'Codex origin identity is immutable'); END;
+CREATE TRIGGER codex_origin_reservation_retained
+BEFORE DELETE ON codex_session_origins
+BEGIN SELECT RAISE(ABORT, 'Codex origin reservation must be retained'); END;
+CREATE TRIGGER codex_origin_activation_immutable
+BEFORE UPDATE OF activation_message_id, context_floor_turn_id ON codex_session_origins
+WHEN OLD.activation_message_id IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'Codex first activation is immutable'); END;
+CREATE TRIGGER codex_origin_binding_guard
+BEFORE UPDATE OF provider_session_id ON agent_sessions
+WHEN EXISTS (SELECT 1 FROM codex_session_origins o WHERE o.session_id = OLD.session_id
+             AND o.provider_thread_id IS NOT NEW.provider_session_id)
+BEGIN SELECT RAISE(ABORT, 'Codex origin requires the exact provider thread'); END;
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -863,6 +896,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_22,
         MIGRATION_23,
         MIGRATION_24,
+        MIGRATION_25,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:

@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import queue
+import re
 import socket
 import subprocess
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +24,15 @@ class RpcError(RuntimeError):
 
 class RpcRejectedError(RpcError):
     """The app-server returned an explicit JSON-RPC rejection."""
+
+
+class CodexMetadataError(RpcError):
+    """Safe capability/precondition failure; never contains provider payloads."""
+
+
+def validate_codex_thread_id(value: str) -> None:
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", value):
+        raise CodexMetadataError("invalid_thread_id")
 
 
 class CodexTurnError(RpcError):
@@ -170,22 +181,35 @@ class UnixWebSocketTransport:
         self._ready = threading.Event()
         self._outbound_event: asyncio.Event | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._task: asyncio.Task[None] | None = None
         self._closed = False
         self._thread = threading.Thread(target=self._thread_main, daemon=True)
         self._thread.start()
         if not self._ready.wait(timeout):
+            self.close()
             raise RpcError("timed out connecting to Codex Unix WebSocket")
         if not self._inbound.empty():
             first = self._inbound.queue[0]
             if isinstance(first, BaseException):
+                self.close()
                 raise RpcError(f"Codex Unix WebSocket failed: {type(first).__name__}")
 
     def _thread_main(self) -> None:
         try:
-            asyncio.run(self._run())
+            asyncio.run(self._run_owned())
         except BaseException as exc:
             self._inbound.put(exc)
             self._ready.set()
+
+    async def _run_owned(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._task = asyncio.current_task()
+        try:
+            if not self._closed:
+                await self._run()
+        finally:
+            self._task = None
+            self._loop = None
 
     async def _run(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -240,7 +264,10 @@ class UnixWebSocketTransport:
         loop = self._loop
         event = self._outbound_event
         if loop is not None and event is not None and not loop.is_closed():
-            loop.call_soon_threadsafe(event.set)
+            try:
+                loop.call_soon_threadsafe(event.set)
+            except RuntimeError:
+                pass  # Concurrent transport teardown already closed the loop.
 
     def send(self, message: dict[str, Any]) -> None:
         if self._closed:
@@ -263,6 +290,12 @@ class UnixWebSocketTransport:
         self._closed = True
         self._outbound.put(None)
         self._wake_sender()
+        loop, task = self._loop, self._task
+        if loop is not None and task is not None and not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(task.cancel)
+            except RuntimeError:
+                pass  # The loop completed between inspection and notification.
         self._thread.join(timeout=5)
 
 
@@ -272,6 +305,14 @@ class CodexThread:
     cwd: Path
     model: str
     model_provider: str
+
+
+@dataclass(frozen=True, slots=True)
+class CodexThreadMetadata:
+    thread_id: str
+    cwd: Path
+    model_provider: str
+    status: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,12 +394,22 @@ class CodexAppServerClient:
         self._transport.send({"id": request_id, "result": result})
         return True
 
-    def _request(self, method: str, params: dict[str, Any]) -> Any:
+    def _request(
+        self, method: str, params: dict[str, Any], *, deadline: float | None = None
+    ) -> Any:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise RpcError("Codex request deadline exceeded")
         request_id = self._next_request_id
         self._next_request_id += 1
         self._transport.send({"method": method, "id": request_id, "params": params})
         while True:
-            message = self._transport.receive()
+            if deadline is None:
+                message = self._transport.receive()
+            else:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RpcError("Codex request deadline exceeded")
+                message = self._transport.receive(timeout=remaining)
             if "method" in message and "id" in message:
                 # A companion client such as tlive owns remote approval. Do
                 # not answer from this headless bridge and never auto-allow.
@@ -381,7 +432,7 @@ class CodexAppServerClient:
                 self.notifications.append(message)
                 continue
 
-    def initialize(self) -> None:
+    def initialize(self, *, deadline: float | None = None) -> None:
         if self._initialized:
             return
         self._request(
@@ -394,9 +445,54 @@ class CodexAppServerClient:
                 },
                 "capabilities": {"experimentalApi": True},
             },
+            deadline=deadline,
         )
         self._transport.send({"method": "initialized", "params": {}})
         self._initialized = True
+
+    def read_thread_metadata(
+        self, *, thread_id: str, cwd: Path, deadline: float | None = None
+    ) -> CodexThreadMetadata:
+        """Inspect exact persisted metadata without loading history or resuming.
+
+        The safe subset is checked against codex-cli 0.154.0's generated v2
+        ThreadReadResponse. Runtime idle is not proof that another CLI is closed.
+        """
+        validate_codex_thread_id(thread_id)
+        if not self._initialized:
+            raise CodexMetadataError("client_not_initialized")
+        result = self._request(
+            "thread/read",
+            {"threadId": thread_id, "includeTurns": False},
+            deadline=time.monotonic() + 10 if deadline is None else deadline,
+        )
+        thread = result.get("thread") if isinstance(result, dict) else None
+        if not isinstance(thread, dict) or thread.get("id") != thread_id:
+            raise CodexMetadataError("source_identity_mismatch")
+        raw_cwd = thread.get("cwd")
+        if not isinstance(raw_cwd, str) or len(raw_cwd) > 4096 or not Path(raw_cwd).is_absolute():
+            raise CodexMetadataError("source_root_invalid")
+        try:
+            source_root = Path(raw_cwd).resolve(strict=True)
+            expected_root = cwd.resolve(strict=True)
+        except (OSError, ValueError, RuntimeError):
+            raise CodexMetadataError("source_root_invalid") from None
+        if source_root != expected_root:
+            raise CodexMetadataError("source_root_mismatch")
+        if thread.get("ephemeral") is not False or thread.get("modelProvider") != "openai":
+            raise CodexMetadataError("source_backend_unsupported")
+        if thread.get("source") not in ("cli", "vscode", "exec", "appServer"):
+            raise CodexMetadataError("source_kind_unsupported")
+        if thread.get("historyMode", "legacy") not in ("legacy", "paginated"):
+            raise CodexMetadataError("source_history_unsupported")
+        if thread.get("turns", []) != []:
+            raise CodexMetadataError("source_metadata_shape_invalid")
+        status = thread.get("status")
+        if not isinstance(status, dict) or status.get("type") not in ("idle", "notLoaded"):
+            raise CodexMetadataError("source_not_idle")
+        if status.get("activeFlags", []) != []:
+            raise CodexMetadataError("source_not_idle")
+        return CodexThreadMetadata(thread_id, source_root, "openai", status["type"])
 
     def start_thread(
         self,

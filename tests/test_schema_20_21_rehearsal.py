@@ -7,6 +7,8 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from schema_fixtures import remove_adoption_schema
+
 from hermes_codex_router.migrations import LATEST_SCHEMA_VERSION, backup_database, migrate_database
 
 
@@ -14,6 +16,7 @@ def _prepare_production_shaped_v20(path: Path, *, migration_fault: bool = False)
     migrate_database(path, create_backup=False)
     connection = sqlite3.connect(path)
     try:
+        remove_adoption_schema(connection)
         connection.execute("DROP TABLE IF EXISTS provider_visible_items")
         connection.execute("DROP TABLE IF EXISTS provider_execution_checkpoints")
         connection.execute("DROP INDEX runtime_events_retention")

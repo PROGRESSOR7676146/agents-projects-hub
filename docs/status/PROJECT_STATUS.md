@@ -68,6 +68,20 @@ the existing alert output, transaction semantics, and schema.
 
 ## Implemented
 
+Saved Codex CLI sessions can now be attached locally using `session attach-codex`
+with read-only preview, explicit apply and a CLI-closed assertion. An occupied
+topic additionally requires the exact previous active Codex session ID. Schema
+25 persists immutable origins and a first-return input/context boundary. The old
+Hub binding is archived without deleting its provider thread or merging history.
+External workers continue the exact thread through socket or stdio; unsupported
+Codex modes fail closed while origins remain. Model/effort changes preserve
+adopted history; explicit `/new` creates a normal new session. See
+[ADR 0022](../decisions/0022-explicit-codex-session-adoption.md) for protocol,
+failure boundaries and rollback limitations. Automated acceptance includes real
+queue/outbox flow with fictional provider/Telegram boundaries. Live continuity
+and a production rollback artifact remain unaccepted. Earlier schema-24
+checkpoints above describe their own milestones; the current target is schema 25.
+
 - Numeric project/topic identity, canonical allowlisted roots, idempotent
   routing, persistent provider sessions, bounded visible context, and writer
   leases backed by versioned SQLite migrations.

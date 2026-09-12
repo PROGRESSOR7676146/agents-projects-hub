@@ -1,6 +1,13 @@
 # Единое задание: подключение CLI-сессии к Telegram
 
-Статус: план реализации, код функции пока не написан.
+Статус: реализовано в репозитории, офлайн-проверки добавлены; живая приёмка и
+production rollback artifact остаются отдельными задачами. Решения и границы:
+[ADR 0022](../decisions/0022-explicit-codex-session-adoption.md).
+
+План ниже сохранён как контракт реализации. Проверки находятся в
+`test_codex_session_metadata.py`, `test_codex_session_adoption.py` и
+`test_session_adoption_{state,ingress,worker,transport,journey,migrations}.py`.
+Имитаторы provider/Telegram не являются доказательством живой приёмки.
 
 Это основной документ для следующего исполнителя. Он объединяет два сценария:
 подключение сохранённого Codex thread к свободной теме и замена текущей

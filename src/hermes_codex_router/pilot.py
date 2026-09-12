@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .hub_config import HubConfig
 from .metadata import format_telegram_response
 from .registry import load_registry
+from .session_adoption_policy import validate_adoption_mode
 from .state import HubState
 from .supervisor import CodexAppServerSupervisor
 from .telegram import TelegramBotApi
@@ -32,6 +33,8 @@ def run_codex_pilot(
     thread_id: int,
     topic_title: str,
 ) -> PilotResult:
+    # Pilot is an inline thread/start path, even with a queue-shaped config.
+    validate_adoption_mode(replace(config, dispatch_mode="inline"))
     binding = config.project_for_chat(chat_id)
     if binding.project_id != project_id:
         raise ValueError("Telegram group is bound to a different project")

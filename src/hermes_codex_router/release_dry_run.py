@@ -11,13 +11,14 @@ import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from . import migrations
 from .deployment_manifest import (
     ArtifactDescriptor,
     create_deployment_manifest,
     inspect_wheel,
     verify_deployment_manifest,
 )
-from .migrations import backup_database, migrate_database
+from .migrations import backup_database
 
 
 class ReleaseDryRunError(RuntimeError):
@@ -40,15 +41,14 @@ class ReleaseDryRunReport:
 
 
 def _seed_production_shaped_v20(path: Path) -> None:
-    migrate_database(path, create_backup=False)
     connection = sqlite3.connect(path)
     try:
-        connection.execute("DROP TABLE IF EXISTS provider_visible_items")
-        connection.execute("DROP TABLE IF EXISTS provider_execution_checkpoints")
-        connection.execute("DROP INDEX runtime_events_retention")
-        connection.execute(
-            "CREATE INDEX runtime_events_created_at ON runtime_events(created_at DESC)"
-        )
+        # Build the historical fixture from its actual migrations. Relabelling
+        # today's schema as v20 leaves future non-idempotent DDL behind.
+        for version in range(1, 21):
+            connection.executescript(getattr(migrations, f"MIGRATION_{version}"))
+            if version == 1:
+                migrations._ensure_legacy_columns(connection)
         connection.executescript(
             """
             INSERT INTO topics

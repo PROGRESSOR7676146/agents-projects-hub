@@ -20,6 +20,8 @@ This normative module is part of the
   official stdio transport MUST be selected before starting a turn. Because a
   shared app-server may retain the old thread's writer lease, fallback starts a
   new official thread and prepends only bounded persisted visible context.
+  Explicitly adopted CLI threads are an exception: stdio MUST resume their exact
+  identity or fail visibly, never substitute a new thread or a summary.
 - **REQ-AUTH-005 (Implemented):** Account changes and quota state MUST remain
   visible to the owner; switching MUST NOT be silent.
 - **REQ-AUTH-006 (Accepted):** Hermes MAY guide a mode-aware manual device-login
@@ -127,6 +129,31 @@ This normative module is part of the
   state. Other providers retain prior behavior pending separate acceptance.
 - **REQ-WRITER-008 (Implemented):** Messages arriving while `local` owns the
   writer do not call a provider and explain how to return safely.
+- **REQ-WRITER-009 (Implemented; live acceptance pending):** An explicit local
+  `session attach-codex` preview/apply MAY connect a saved Codex thread to a
+  registered topic. It MUST verify exact persisted metadata and the canonical
+  allowlisted Git root without productive inference, transcript import,
+  bot-token reads or implicit migration. Apply requires an explicit CLI-closed
+  assertion and external Codex workers/external outbox. It atomically creates a
+  fresh Hub identity and immutable origin with writer `local`. Replacement
+  requires the exact previous active Codex session ID; busy or unresolved work,
+  unfinished deliveries and known local writers block it. Only the old Hub
+  binding is archived; idle satellites and history remain.
+- **REQ-WRITER-010 (Implemented):** First `/return` on an adopted session MUST
+  atomically persist the activation message ID, forwarded-context floor, writer
+  change and receipt. Productive ingress at or before that boundary MUST be
+  refused inside admission and batching transactions. Old quotes MUST NOT cross
+  the boundary through delayed delivery. Explicit `/context` remains available.
+  Stale controls MUST NOT mutate a replacement generation; old Reply routing
+  addresses the current provider binding. Exact apply retries MUST NOT create
+  another generation or reset ownership after return.
+- **REQ-WRITER-011 (Implemented):** Adopted execution MUST validate origin/root
+  before resume overrides and continue the exact provider thread, including on
+  stdio fallback. Read/resume failure MUST NOT create a substitute conversation.
+  Model/effort changes and provider switching preserve origin; explicit `/new`
+  starts a normal new conversation while retaining the old origin reservation.
+  Unsupported Codex execution modes MUST refuse retained origins, including
+  archived bindings. CLI environment/plugin parity is not guaranteed.
 
 Initial reviewed resume shapes are `codex resume SESSION_ID -C ROOT`,
 `opencode ROOT --session SESSION_ID`, and
