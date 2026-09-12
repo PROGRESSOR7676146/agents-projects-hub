@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -164,9 +165,124 @@ class SessionConnectStateTests(unittest.TestCase):
             title="Saved work",
         )
         self.assertEqual(completed.stage, "confirming")
-        self.assertEqual(
-            self.state.find_topic(-1001234567890, 88).project_id, "example-project"
+        self.assertEqual(self.state.find_topic(-1001234567890, 88).project_id, "example-project")
+
+    def test_one_time_code_claim_is_idempotent_and_consumed_only_on_activation(self) -> None:
+        issued = self.store.issue_code(
+            owner_user_id=42,
+            project_id="example-project",
+            canonical_root=self.root,
+            source=ConnectCandidate("candidate-5", "saved-thread", "Сессия · saved", 10),
+            model="gpt-5.6-sol",
+            effort="high",
         )
+        first = self.store.redeem_code_topic(
+            owner_user_id=42,
+            code=issued.code,
+            project_id="example-project",
+            canonical_root=self.root,
+            chat_id=-1001234567890,
+            thread_id=77,
+        )
+        repeated = self.store.redeem_code_topic(
+            owner_user_id=42,
+            code=issued.code,
+            project_id="example-project",
+            canonical_root=self.root,
+            chat_id=-1001234567890,
+            thread_id=77,
+        )
+        self.assertEqual(first.workflow.workflow_id, repeated.workflow.workflow_id)
+        self.assertFalse(first.already_consumed)
+        self.assertIsNone(
+            self.state._connection.execute(
+                "SELECT consumed_at FROM session_connect_codes WHERE code_id=?",
+                (issued.code_id,),
+            ).fetchone()[0]
+        )
+        self.store.request_activation(42, first.workflow.workflow_id)
+        leased = self.store.lease_worker("worker-1")
+        self.store.prepare_marker(leased.workflow_id, leased.lease_token)
+        outbox = self.store.lease_outbox("sender-1")
+        completed = self.store.complete_marker(outbox, telegram_message_id=121)
+        after = self.store.redeem_code_topic(
+            owner_user_id=42,
+            code=issued.code,
+            project_id="example-project",
+            canonical_root=self.root,
+            chat_id=-1001234567890,
+            thread_id=77,
+        )
+        self.assertTrue(after.already_consumed)
+        self.assertEqual(after.result_session_id, completed.result_session_id)
+
+    def test_code_failures_are_owner_scoped_and_rate_limited(self) -> None:
+        issued = self.store.issue_code(
+            owner_user_id=42,
+            project_id="example-project",
+            canonical_root=self.root,
+            source=ConnectCandidate("candidate-6", "saved-thread", "Сессия · saved", 10),
+            model="gpt-5.6-sol",
+            effort="high",
+        )
+        for _ in range(5):
+            with self.assertRaisesRegex(StateError, "connect_code_invalid"):
+                self.store.redeem_code_direct(owner_user_id=42, code="WRONGCODE")
+        with self.assertRaisesRegex(StateError, "connect_code_rate_limited"):
+            self.store.redeem_code_direct(owner_user_id=42, code=issued.code)
+
+    def test_expired_code_is_rejected_without_creating_a_workflow(self) -> None:
+        issued = self.store.issue_code(
+            owner_user_id=42,
+            project_id="example-project",
+            canonical_root=self.root,
+            source=ConnectCandidate("candidate-7", "saved-thread", "Сессия · saved", 10),
+            model="gpt-5.6-sol",
+            effort="high",
+        )
+        self.state._connection.execute(
+            "UPDATE session_connect_codes SET expires_at='2000-01-01T00:00:00+00:00' WHERE code_id=?",
+            (issued.code_id,),
+        )
+        self.state._connection.commit()
+        with self.assertRaisesRegex(StateError, "connect_code_invalid"):
+            self.store.redeem_code_direct(owner_user_id=42, code=issued.code)
+
+    def test_concurrent_code_redemption_returns_one_claimed_workflow(self) -> None:
+        issued = self.store.issue_code(
+            owner_user_id=42,
+            project_id="example-project",
+            canonical_root=self.root,
+            source=ConnectCandidate("candidate-8", "saved-thread", "Сессия · saved", 10),
+            model="gpt-5.6-sol",
+            effort="high",
+        )
+        barrier = threading.Barrier(2)
+        results: list[str] = []
+        failures: list[BaseException] = []
+
+        def redeem() -> None:
+            state = HubState.open(self.root / "state.db")
+            try:
+                barrier.wait()
+                result = SessionConnectStore(state).redeem_code_direct(
+                    owner_user_id=42, code=issued.code
+                )
+                assert result.workflow is not None
+                results.append(result.workflow.workflow_id)
+            except BaseException as exc:
+                failures.append(exc)
+            finally:
+                state.close()
+
+        threads = [threading.Thread(target=redeem) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        self.assertEqual(failures, [])
+        self.assertEqual(len(results), 2)
+        self.assertEqual(len(set(results)), 1)
 
 
 if __name__ == "__main__":

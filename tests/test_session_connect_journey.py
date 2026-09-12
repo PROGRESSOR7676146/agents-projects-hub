@@ -17,6 +17,7 @@ from hermes_codex_router.hub_config import HubTelegramBot
 from hermes_codex_router.outbox_sender import TelegramOutboxSender
 from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.session_adoption_state import CodexSessionOrigins
+from hermes_codex_router.session_connect import ConnectCandidate, SessionConnectStore
 from hermes_codex_router.state import HubState
 
 
@@ -214,6 +215,55 @@ class SessionConnectJourneyTests(unittest.TestCase):
         self.assertIsNotNone(topic)
         self.assertEqual(client.turns, 0)
         self.assertEqual(state.provider_jobs_for_topic(topic.topic_id), ())
+
+    def test_topic_accepts_local_helper_code_without_manual_identifiers(self) -> None:
+        fixture = worker_fixtures.CodexQueueWorkerTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        config = replace(
+            fixture.config,
+            hub_bot=HubTelegramBot("example_hub_bot", Path("/tmp/example-token")),
+            outbox_runtime="external",
+            external_worker_agent_ids=("codex",),
+        )
+        state = HubState.open(config.state_path)
+        self.addCleanup(state.close)
+        state.observe_topic(
+            project_id="example-project",
+            chat_id=-1001234567890,
+            thread_id=77,
+            title="Example",
+        )
+        issued = SessionConnectStore(state).issue_code(
+            owner_user_id=42,
+            project_id="example-project",
+            canonical_root=fixture.registry.projects[0].root,
+            source=ConnectCandidate("", "example-cli-thread", "Сессия · saved", 10),
+            model="gpt-5.6-sol",
+            effort="high",
+        )
+        controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
+        controller.config = config
+        controller.registry = fixture.registry
+        controller.state = state
+        controller.agent = config.agents[0]
+        controller.telegram = service_fixtures.FakeTelegram()
+        controller.usernames = {"codex": controller.agent.telegram_username}
+        controller._codex_client = None
+
+        self.assertTrue(
+            controller.handle_update(service_fixtures.update(20, f"/connect {issued.code.lower()}"))
+        )
+        self.assertIn("Закройте CLI", controller.telegram.sent[-1][2])
+        self.assertTrue(
+            any(
+                value.startswith("cx:ok:")
+                for value in service_fixtures.callback_values(controller.telegram.markups[-1])
+            )
+        )
+        self.assertEqual(
+            state._connection.execute("SELECT COUNT(*) FROM provider_jobs").fetchone()[0], 0
+        )
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from .codex_appserver import (
     CodexAppServerClient,
     CodexMetadataError,
     CodexThreadMetadata,
+    ConnectableCodexThread,
     RpcError,
     StdioJsonLineTransport,
     UnixWebSocketTransport,
@@ -75,6 +76,30 @@ def inspect_codex_session(config: HubConfig, thread_id: str, root: Path) -> Code
     try:
         client.initialize(deadline=deadline)
         return client.read_thread_metadata(thread_id=thread_id, cwd=root, deadline=deadline)
+    finally:
+        client.close()
+
+
+def list_connectable_codex_sessions(
+    config: HubConfig, root: Path
+) -> tuple[ConnectableCodexThread, ...]:
+    """List bounded saved-session metadata without resuming or starting a turn."""
+    deadline = time.monotonic() + 10
+    use_socket = config.codex_socket_path.is_socket() and (
+        not config.manage_codex_server or config.codex_stdio_executable is None
+    )
+    if use_socket:
+        transport = UnixWebSocketTransport(
+            config.codex_socket_path, timeout=max(0.01, deadline - time.monotonic())
+        )
+    elif config.codex_stdio_executable is not None:
+        transport = StdioJsonLineTransport.start(str(config.codex_stdio_executable))
+    else:
+        raise RpcError("configured Codex metadata transport unavailable")
+    client = CodexAppServerClient(transport, approval_policy="never")
+    try:
+        client.initialize(deadline=deadline)
+        return client.list_connectable_threads(root=root, limit=24)
     finally:
         client.close()
 

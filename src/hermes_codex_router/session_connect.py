@@ -18,6 +18,10 @@ WORKFLOW_TTL = timedelta(minutes=15)
 WORKER_LEASE = timedelta(seconds=30)
 OUTBOX_LEASE = timedelta(seconds=30)
 MAX_CANDIDATES = 24
+CODE_TTL = timedelta(minutes=10)
+CODE_RATE_WINDOW = timedelta(minutes=1)
+CODE_RATE_LIMIT = 5
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
 def _token() -> str:
@@ -50,6 +54,20 @@ class ConnectOption:
     destination_chat_id: int | None
     destination_thread_id: int | None
     safe_label: str
+
+
+@dataclass(frozen=True, slots=True)
+class IssuedConnectCode:
+    code_id: str
+    code: str
+    expires_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class CodeRedemption:
+    workflow: ConnectWorkflow | None
+    already_consumed: bool
+    result_session_id: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,11 +250,7 @@ class SessionConnectStore:
                 str(row["kind"]),
                 str(row["project_id"]),
                 Path(str(row["canonical_root"])),
-                (
-                    None
-                    if row["destination_chat_id"] is None
-                    else int(row["destination_chat_id"])
-                ),
+                (None if row["destination_chat_id"] is None else int(row["destination_chat_id"])),
                 (
                     None
                     if row["destination_thread_id"] is None
@@ -347,6 +361,235 @@ class SessionConnectStore:
                 ),
             )
         return self.get(workflow_id)
+
+    def issue_code(
+        self,
+        *,
+        owner_user_id: int,
+        project_id: str,
+        canonical_root: Path,
+        source: ConnectCandidate,
+        model: str,
+        effort: str,
+    ) -> IssuedConnectCode:
+        if owner_user_id <= 0:
+            raise StateError("invalid_connect_identity")
+        now = _now()
+        expires_at = _deadline(CODE_TTL)
+        code_id = _token()
+        with self.state._immediate_transaction():
+            while True:
+                code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(10))
+                digest = code_digest(code)
+                exists = self.connection.execute(
+                    "SELECT 1 FROM session_connect_codes WHERE code_digest=?", (digest,)
+                ).fetchone()
+                if exists is None:
+                    break
+            self.connection.execute(
+                """INSERT INTO session_connect_codes
+                   (code_id,code_digest,owner_user_id,project_id,canonical_root,
+                    provider_thread_id,safe_label,source_updated_at,model,effort,
+                    expires_at,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    code_id,
+                    digest,
+                    owner_user_id,
+                    project_id,
+                    str(canonical_root),
+                    source.provider_thread_id,
+                    " ".join(source.safe_label.split())[:160] or "Сохранённая сессия",
+                    source.updated_at_epoch,
+                    model,
+                    effort,
+                    expires_at,
+                    now,
+                ),
+            )
+        return IssuedConnectCode(code_id, code, expires_at)
+
+    def redeem_code_direct(self, *, owner_user_id: int, code: str) -> CodeRedemption:
+        return self._redeem_code(owner_user_id=owner_user_id, code=code)
+
+    def redeem_code_topic(
+        self,
+        *,
+        owner_user_id: int,
+        code: str,
+        project_id: str,
+        canonical_root: Path,
+        chat_id: int,
+        thread_id: int,
+    ) -> CodeRedemption:
+        return self._redeem_code(
+            owner_user_id=owner_user_id,
+            code=code,
+            project_id=project_id,
+            canonical_root=canonical_root,
+            chat_id=chat_id,
+            thread_id=thread_id,
+        )
+
+    def _redeem_code(
+        self,
+        *,
+        owner_user_id: int,
+        code: str,
+        project_id: str | None = None,
+        canonical_root: Path | None = None,
+        chat_id: int | None = None,
+        thread_id: int | None = None,
+    ) -> CodeRedemption:
+        try:
+            digest = code_digest(code)
+        except (UnicodeEncodeError, ValueError):
+            digest = "0" * 64
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+        failure: str | None = None
+        redemption: CodeRedemption | None = None
+        with self.state._immediate_transaction():
+            attempt = self.connection.execute(
+                "SELECT * FROM session_connect_code_attempts WHERE owner_user_id=?",
+                (owner_user_id,),
+            ).fetchone()
+            if attempt is not None:
+                window = _parse_time(str(attempt["window_started_at"]))
+                if (
+                    now_dt - window < CODE_RATE_WINDOW
+                    and int(attempt["failure_count"]) >= CODE_RATE_LIMIT
+                ):
+                    failure = "connect_code_rate_limited"
+                elif now_dt - window >= CODE_RATE_WINDOW:
+                    self.connection.execute(
+                        "DELETE FROM session_connect_code_attempts WHERE owner_user_id=?",
+                        (owner_user_id,),
+                    )
+            row = None
+            if failure is None:
+                row = self.connection.execute(
+                    "SELECT * FROM session_connect_codes WHERE code_digest=?", (digest,)
+                ).fetchone()
+                valid = (
+                    row is not None
+                    and int(row["owner_user_id"]) == owner_user_id
+                    and _parse_time(str(row["expires_at"])) > now_dt
+                    and (project_id is None or str(row["project_id"]) == project_id)
+                    and (
+                        canonical_root is None or Path(str(row["canonical_root"])) == canonical_root
+                    )
+                )
+                if not valid:
+                    failure = "connect_code_invalid"
+                    self.connection.execute(
+                        """INSERT INTO session_connect_code_attempts
+                           (owner_user_id,window_started_at,failure_count) VALUES (?,?,1)
+                           ON CONFLICT(owner_user_id) DO UPDATE SET
+                           failure_count=failure_count+1""",
+                        (owner_user_id, now),
+                    )
+            if failure is None:
+                assert row is not None
+                self.connection.execute(
+                    "DELETE FROM session_connect_code_attempts WHERE owner_user_id=?",
+                    (owner_user_id,),
+                )
+                if row["consumed_at"] is not None:
+                    redemption = CodeRedemption(None, True, row["result_session_id"])
+                else:
+                    claimed_id = row["claimed_workflow_id"]
+                    if claimed_id is not None:
+                        claimed = self.connection.execute(
+                            "SELECT * FROM session_connect_workflows WHERE workflow_id=?",
+                            (claimed_id,),
+                        ).fetchone()
+                        if claimed is not None and str(claimed["stage"]) not in {
+                            "cancelled",
+                            "expired",
+                            "failed",
+                        }:
+                            redemption = CodeRedemption(self._workflow(claimed), False, None)
+                        else:
+                            self.connection.execute(
+                                "UPDATE session_connect_codes SET claimed_workflow_id=NULL WHERE code_id=?",
+                                (row["code_id"],),
+                            )
+                    if redemption is None:
+                        destination_topic = None
+                        current = None
+                        if chat_id is not None and thread_id is not None:
+                            destination_topic = self.state.find_topic(chat_id, thread_id)
+                            if (
+                                destination_topic is None
+                                or destination_topic.project_id != row["project_id"]
+                            ):
+                                failure = "connect_code_project_mismatch"
+                            else:
+                                current = self.state.active_session(destination_topic.topic_id)
+                                if current is not None and current.agent_id != "codex":
+                                    failure = "active_provider_is_not_codex"
+                                elif current is not None and current.writer_mode != "telegram":
+                                    failure = "local_writer"
+                        if failure is None:
+                            workflow_id = _token()
+                            self.connection.execute(
+                                """UPDATE session_connect_workflows SET stage='cancelled',updated_at=?
+                                   WHERE owner_user_id=? AND stage NOT IN
+                                   ('completed','cancelled','expired','failed','marker_unknown')""",
+                                (now, owner_user_id),
+                            )
+                            self.connection.execute(
+                                """INSERT INTO session_connect_workflows
+                                   (workflow_id,owner_user_id,entrypoint,project_id,canonical_root,
+                                    source_thread_id,source_label,source_updated_at,
+                                    destination_chat_id,destination_thread_id,expected_session_id,
+                                    replaces_session_id,model,effort,stage,code_id,expires_at,
+                                    created_at,updated_at)
+                                   VALUES (?,?,'code',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                (
+                                    workflow_id,
+                                    owner_user_id,
+                                    row["project_id"],
+                                    row["canonical_root"],
+                                    row["provider_thread_id"],
+                                    row["safe_label"],
+                                    row["source_updated_at"],
+                                    chat_id,
+                                    thread_id,
+                                    None if current is None else current.session_id,
+                                    (
+                                        current.session_id
+                                        if current is not None
+                                        and current.provider_session_id is not None
+                                        else None
+                                    ),
+                                    row["model"],
+                                    row["effort"],
+                                    "confirming"
+                                    if destination_topic is not None
+                                    else "choosing_destination",
+                                    row["code_id"],
+                                    min(
+                                        _parse_time(str(row["expires_at"])), now_dt + WORKFLOW_TTL
+                                    ).isoformat(),
+                                    now,
+                                    now,
+                                ),
+                            )
+                            self.connection.execute(
+                                "UPDATE session_connect_codes SET claimed_workflow_id=? WHERE code_id=?",
+                                (workflow_id, row["code_id"]),
+                            )
+                            created = self.connection.execute(
+                                "SELECT * FROM session_connect_workflows WHERE workflow_id=?",
+                                (workflow_id,),
+                            ).fetchone()
+                            redemption = CodeRedemption(self._workflow(created), False, None)
+        if failure is not None:
+            raise StateError(failure)
+        assert redemption is not None
+        return redemption
 
     def lease_worker(self, worker_id: str) -> ConnectWorkflow | None:
         now = datetime.now(timezone.utc)
@@ -872,8 +1115,13 @@ class SessionConnectStore:
             if workflow.code_id is not None:
                 self.connection.execute(
                     """UPDATE session_connect_codes SET consumed_at=?,result_session_id=?
-                       WHERE code_id=? AND consumed_at IS NULL""",
-                    (now, attached.session.session_id, workflow.code_id),
+                       WHERE code_id=? AND consumed_at IS NULL AND claimed_workflow_id=?""",
+                    (
+                        now,
+                        attached.session.session_id,
+                        workflow.code_id,
+                        workflow.workflow_id,
+                    ),
                 )
             replacement = (
                 " Прежняя Hub-привязка архивирована; истории разговоров не объединялись."
@@ -954,6 +1202,12 @@ class SessionConnectStore:
                    ('completed','cancelled','expired','failed','marker_unknown')""",
                 (_now(), workflow_id, owner_user_id),
             )
+            if cursor.rowcount == 1:
+                self.connection.execute(
+                    """UPDATE session_connect_codes SET claimed_workflow_id=NULL
+                       WHERE claimed_workflow_id=? AND consumed_at IS NULL""",
+                    (workflow_id,),
+                )
             return cursor.rowcount == 1
 
     def confirmation_text(self, workflow: ConnectWorkflow) -> str:

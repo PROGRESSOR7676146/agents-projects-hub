@@ -117,9 +117,7 @@ class TelegramUpdateTests(unittest.TestCase):
             "call",
             return_value={"message_thread_id": 88, "name": "Saved work"},
         ) as api_call:
-            self.assertEqual(
-                telegram.create_forum_topic(-1001234567890, "Saved work"), 88
-            )
+            self.assertEqual(telegram.create_forum_topic(-1001234567890, "Saved work"), 88)
         api_call.assert_called_once_with(
             "createForumTopic", chat_id=-1001234567890, name="Saved work"
         )

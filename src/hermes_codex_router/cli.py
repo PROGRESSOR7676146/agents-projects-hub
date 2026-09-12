@@ -68,6 +68,14 @@ def _parser() -> argparse.ArgumentParser:
     attach.add_argument("--apply", action="store_true")
     attach.add_argument("--confirm-cli-closed", action="store_true")
     attach.add_argument("--json", action="store_true")
+    connect = session_commands.add_parser(
+        "connect", help="choose a saved Codex session and issue a Telegram code"
+    )
+    connect.add_argument("config", nargs="?", type=Path)
+    connect.add_argument("--owner-user-id", type=int)
+    connect.add_argument("--project")
+    connect.add_argument("--codex-thread-id")
+    connect.add_argument("--json", action="store_true")
 
     validate = commands.add_parser("validate", help="validate a local project registry")
     validate.add_argument("registry", type=Path)
@@ -339,6 +347,41 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "session":
+            if args.session_command == "connect":
+                from .session_connect_cli import ConnectCliError, prepare_connect_code
+
+                if args.config is None:
+                    _print(
+                        {
+                            "format_version": 1,
+                            "ok": False,
+                            "reason_code": "configuration_required",
+                        }
+                    )
+                    return 2
+                try:
+                    config = load_external_worker_config(args.config)
+                    result = prepare_connect_code(
+                        config,
+                        owner_user_id=args.owner_user_id,
+                        project_id=args.project,
+                        codex_thread_id=args.codex_thread_id,
+                        interactive=not args.json,
+                    )
+                except ConnectCliError as exc:
+                    _print({"format_version": 1, "ok": False, "reason_code": exc.reason})
+                    return exc.exit_code
+                except (ValueError, KeyError, OSError):
+                    _print(
+                        {
+                            "format_version": 1,
+                            "ok": False,
+                            "reason_code": "configuration_invalid",
+                        }
+                    )
+                    return 2
+                _print(result)
+                return 0
             from .codex_session_adoption import AdoptionError, attach_codex_session
 
             try:

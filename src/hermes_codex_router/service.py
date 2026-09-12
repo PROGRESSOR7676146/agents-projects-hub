@@ -1808,8 +1808,7 @@ class ProjectHubService:
             for project in self.registry.projects
             if project.enabled
             and any(
-                binding.project_id == project.project_id
-                and binding.telegram_chat_id is not None
+                binding.project_id == project.project_id and binding.telegram_chat_id is not None
                 for binding in self.config.projects
             )
         )
@@ -1957,7 +1956,39 @@ class ProjectHubService:
             return True
         if command and command.name == "connect":
             if command.arguments:
-                self._send_text(message, "Использование: /connect")
+                if len(command.arguments) != 1:
+                    self._send_text(message, "Использование: /connect КОД")
+                    return True
+                try:
+                    redemption = connect.redeem_code_direct(
+                        owner_user_id=message.sender_id, code=command.arguments[0]
+                    )
+                except StateError as exc:
+                    detail = (
+                        "Слишком много попыток. Подождите минуту."
+                        if str(exc) == "connect_code_rate_limited"
+                        else "Код недействителен или истёк."
+                    )
+                    self._send_text(message, detail)
+                    return True
+                if redemption.already_consumed:
+                    self._send_text(
+                        message,
+                        "Этот код уже использован; связанная сессия уже подключена.",
+                    )
+                    return True
+                workflow = redemption.workflow
+                assert workflow is not None and workflow.project_id is not None
+                chat_id = self._registered_project_chat(workflow.project_id)
+                connect.prepare_destinations(
+                    message.sender_id, workflow.workflow_id, chat_id=chat_id
+                )
+                self.telegram.send_html(
+                    message.chat_id,
+                    1,
+                    "Код принят. Выберите существующую тему или создайте новую:",
+                    reply_markup=connect.destination_markup(workflow.workflow_id),
+                )
                 return True
             return self._start_direct_connect(message)
         if command and command.name == "cancel":
@@ -1982,7 +2013,10 @@ class ProjectHubService:
             try:
                 thread_id = self.telegram.create_forum_topic(chat_id, title)
             except TelegramError as exc:
-                if exc.failure_class.startswith("network_") or exc.failure_class == "invalid_response":
+                if (
+                    exc.failure_class.startswith("network_")
+                    or exc.failure_class == "invalid_response"
+                ):
                     connect.topic_creation_unknown(message.sender_id, active.workflow_id)
                     self._send_text(
                         message,
@@ -1991,7 +2025,9 @@ class ProjectHubService:
                     )
                 else:
                     connect.fail_topic_creation(message.sender_id, active.workflow_id)
-                    self._send_text(message, "Telegram отклонил создание темы. Подключение остановлено.")
+                    self._send_text(
+                        message, "Telegram отклонил создание темы. Подключение остановлено."
+                    )
                 return True
             workflow = connect.complete_topic_creation(
                 message.sender_id,
@@ -2135,13 +2171,47 @@ class ProjectHubService:
             self._send_text(message, f"Codex topic session is {status}.")
             return True
         if command and command.name == "connect":
-            if command.arguments:
-                self._send_text(message, "Usage: /connect")
-                return True
             if self.config.hub_bot is None:
                 self._send_text(message, "Подключение через Telegram требует Hub bot.")
                 return True
             project = self.registry.require_project(binding.project_id)
+            if command.arguments:
+                if len(command.arguments) != 1:
+                    self._send_text(message, "Использование: /connect КОД")
+                    return True
+                try:
+                    redemption = SessionConnectStore(self.state).redeem_code_topic(
+                        owner_user_id=message.sender_id,
+                        code=command.arguments[0],
+                        project_id=project.project_id,
+                        canonical_root=project.root,
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                    )
+                except StateError as exc:
+                    detail = (
+                        "Слишком много попыток. Подождите минуту."
+                        if str(exc) == "connect_code_rate_limited"
+                        else "Код недействителен, истёк или относится к другому проекту."
+                    )
+                    self._send_text(message, detail)
+                    return True
+                if redemption.already_consumed:
+                    self._send_text(
+                        message,
+                        "Этот код уже использован; связанная сессия уже подключена.",
+                    )
+                    return True
+                workflow = redemption.workflow
+                assert workflow is not None
+                connect = SessionConnectStore(self.state)
+                self.telegram.send_html(
+                    message.chat_id,
+                    message.thread_id,
+                    connect.confirmation_text(workflow),
+                    reply_markup=connect.confirmation_markup(workflow),
+                )
+                return True
             workflow = SessionConnectStore(self.state).start_topic(
                 owner_user_id=message.sender_id,
                 project_id=project.project_id,
