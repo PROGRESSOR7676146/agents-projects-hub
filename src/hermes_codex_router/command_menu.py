@@ -18,7 +18,15 @@ PUBLIC_COMMANDS: tuple[tuple[str, str], ...] = (
 
 GROUP_COMMANDS: tuple[tuple[str, str], ...] = (
     ("menu", "Open project controls"),
+    ("connect", "Connect a saved Codex session"),
     ("stop", "Emergency stop active work"),
+)
+
+DIRECT_HUB_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("start", "Open Hub controls"),
+    ("projects", "List registered projects"),
+    ("connect", "Connect a saved Codex session"),
+    ("cancel", "Cancel the current connection"),
 )
 
 DIRECT_PROVIDER_COMMANDS: tuple[tuple[str, str], ...] = (
@@ -56,6 +64,14 @@ def configure_public_commands(
         api = api_factory(config.hub_bot.token_file.read_text(encoding="utf-8").strip())
         hub_matches = True
         changed = False
+        direct_expected = _desired(DIRECT_HUB_COMMANDS)
+        direct_current = api.call("getMyCommands")
+        direct_matches = direct_current == direct_expected
+        if sync and not direct_matches:
+            api.call("setMyCommands", commands=json.dumps(direct_expected))
+            changed = True
+            direct_matches = api.call("getMyCommands") == direct_expected
+        hub_matches = hub_matches and direct_matches
         for project in config.projects:
             if project.telegram_chat_id is None:
                 continue

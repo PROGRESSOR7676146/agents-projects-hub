@@ -41,6 +41,18 @@ class ConnectCandidate:
 
 
 @dataclass(frozen=True, slots=True)
+class ConnectOption:
+    option_id: str
+    workflow_id: str
+    kind: str
+    project_id: str
+    canonical_root: Path
+    destination_chat_id: int | None
+    destination_thread_id: int | None
+    safe_label: str
+
+
+@dataclass(frozen=True, slots=True)
 class ConnectWorkflow:
     workflow_id: str
     owner_user_id: int
@@ -154,6 +166,118 @@ class SessionConnectStore:
                 )
             return None
         return workflow
+
+    def start_direct(
+        self,
+        *,
+        owner_user_id: int,
+        projects: tuple[tuple[str, Path, str], ...],
+        model: str,
+        effort: str,
+    ) -> ConnectWorkflow:
+        if owner_user_id <= 0 or not projects:
+            raise StateError("connect_projects_unavailable")
+        workflow_id = _token()
+        now = _now()
+        with self.state._immediate_transaction():
+            self.connection.execute(
+                """UPDATE session_connect_workflows SET stage='cancelled', updated_at=?
+                   WHERE owner_user_id=? AND stage NOT IN
+                   ('completed','cancelled','expired','failed','marker_unknown')""",
+                (now, owner_user_id),
+            )
+            self.connection.execute(
+                """INSERT INTO session_connect_workflows (
+                   workflow_id,owner_user_id,entrypoint,project_id,canonical_root,
+                   model,effort,stage,expires_at,created_at,updated_at)
+                   VALUES (?,?,'direct',NULL,NULL,?,?,'choosing_project',?,?,?)""",
+                (
+                    workflow_id,
+                    owner_user_id,
+                    model,
+                    effort,
+                    _deadline(WORKFLOW_TTL),
+                    now,
+                    now,
+                ),
+            )
+            for project_id, canonical_root, label in projects[:MAX_CANDIDATES]:
+                self.connection.execute(
+                    """INSERT INTO session_connect_options
+                       (option_id,workflow_id,kind,project_id,canonical_root,safe_label,created_at)
+                       VALUES (?,?,'project',?,?,?,?)""",
+                    (
+                        _token(),
+                        workflow_id,
+                        project_id,
+                        str(canonical_root),
+                        " ".join(label.split())[:160] or project_id,
+                        now,
+                    ),
+                )
+        return self.get(workflow_id)
+
+    def options(self, workflow_id: str, kind: str) -> tuple[ConnectOption, ...]:
+        if kind not in {"project", "destination"}:
+            raise StateError("invalid_connect_option_kind")
+        rows = self.connection.execute(
+            """SELECT * FROM session_connect_options WHERE workflow_id=? AND kind=?
+               ORDER BY created_at, option_id""",
+            (workflow_id, kind),
+        ).fetchall()
+        return tuple(
+            ConnectOption(
+                str(row["option_id"]),
+                str(row["workflow_id"]),
+                str(row["kind"]),
+                str(row["project_id"]),
+                Path(str(row["canonical_root"])),
+                (
+                    None
+                    if row["destination_chat_id"] is None
+                    else int(row["destination_chat_id"])
+                ),
+                (
+                    None
+                    if row["destination_thread_id"] is None
+                    else int(row["destination_thread_id"])
+                ),
+                str(row["safe_label"]),
+            )
+            for row in rows
+        )
+
+    def select_project(self, owner_user_id: int, option_id: str) -> ConnectWorkflow:
+        with self.state._immediate_transaction():
+            row = self.connection.execute(
+                """SELECT o.*,w.owner_user_id,w.stage FROM session_connect_options o
+                   JOIN session_connect_workflows w ON w.workflow_id=o.workflow_id
+                   WHERE o.option_id=? AND o.kind='project'""",
+                (option_id,),
+            ).fetchone()
+            if (
+                row is None
+                or int(row["owner_user_id"]) != owner_user_id
+                or str(row["stage"]) != "choosing_project"
+            ):
+                raise StateError("connect_selection_stale")
+            self.connection.execute(
+                """UPDATE session_connect_workflows SET project_id=?,canonical_root=?,
+                   stage='discovering',updated_at=? WHERE workflow_id=?""",
+                (row["project_id"], row["canonical_root"], _now(), row["workflow_id"]),
+            )
+            workflow_id = str(row["workflow_id"])
+        return self.get(workflow_id)
+
+    def project_markup(self, workflow_id: str) -> dict[str, object]:
+        options = self.options(workflow_id, "project")
+        return {
+            "inline_keyboard": [
+                [{"text": item.safe_label, "callback_data": f"cx:p:{item.option_id}"}]
+                for item in options
+            ]
+            + [[{"text": "Отмена", "callback_data": f"cx:x:{workflow_id}"}]]
+        }
 
     def start_topic(
         self,
@@ -364,6 +488,191 @@ class SessionConnectStore:
                 ),
             )
             workflow_id = str(row["workflow_id"])
+        return self.get(workflow_id)
+
+    def prepare_destinations(
+        self, owner_user_id: int, workflow_id: str, *, chat_id: int
+    ) -> tuple[ConnectOption, ...]:
+        if chat_id >= 0:
+            raise StateError("invalid_project_chat")
+        now = _now()
+        with self.state._immediate_transaction():
+            workflow = self.get(workflow_id)
+            if (
+                workflow.owner_user_id != owner_user_id
+                or workflow.stage != "choosing_destination"
+                or workflow.project_id is None
+                or workflow.canonical_root is None
+            ):
+                raise StateError("connect_destination_stale")
+            self.connection.execute(
+                """DELETE FROM session_connect_options
+                   WHERE workflow_id=? AND kind='destination'""",
+                (workflow_id,),
+            )
+            rows = self.connection.execute(
+                """SELECT chat_id,thread_id,title FROM topics
+                   WHERE project_id=? AND chat_id=? ORDER BY updated_at DESC,topic_id DESC LIMIT ?""",
+                (workflow.project_id, chat_id, MAX_CANDIDATES),
+            ).fetchall()
+            for row in rows:
+                self.connection.execute(
+                    """INSERT INTO session_connect_options
+                       (option_id,workflow_id,kind,project_id,canonical_root,
+                        destination_chat_id,destination_thread_id,safe_label,created_at)
+                       VALUES (?,?,'destination',?,?,?,?,?,?)""",
+                    (
+                        _token(),
+                        workflow_id,
+                        workflow.project_id,
+                        str(workflow.canonical_root),
+                        row["chat_id"],
+                        row["thread_id"],
+                        " ".join(str(row["title"]).split())[:160] or "Тема",
+                        now,
+                    ),
+                )
+        return self.options(workflow_id, "destination")
+
+    def destination_markup(self, workflow_id: str) -> dict[str, object]:
+        options = self.options(workflow_id, "destination")
+        return {
+            "inline_keyboard": [
+                [{"text": item.safe_label, "callback_data": f"cx:d:{item.option_id}"}]
+                for item in options
+            ]
+            + [
+                [{"text": "Новая тема", "callback_data": f"cx:n:{workflow_id}"}],
+                [{"text": "Отмена", "callback_data": f"cx:x:{workflow_id}"}],
+            ]
+        }
+
+    def select_destination(self, owner_user_id: int, option_id: str) -> ConnectWorkflow:
+        with self.state._immediate_transaction():
+            row = self.connection.execute(
+                """SELECT o.*,w.owner_user_id,w.stage FROM session_connect_options o
+                   JOIN session_connect_workflows w ON w.workflow_id=o.workflow_id
+                   WHERE o.option_id=? AND o.kind='destination'""",
+                (option_id,),
+            ).fetchone()
+            if (
+                row is None
+                or int(row["owner_user_id"]) != owner_user_id
+                or str(row["stage"]) != "choosing_destination"
+                or row["destination_chat_id"] is None
+                or row["destination_thread_id"] is None
+            ):
+                raise StateError("connect_destination_stale")
+            self._set_destination_locked(
+                str(row["workflow_id"]),
+                int(row["destination_chat_id"]),
+                int(row["destination_thread_id"]),
+            )
+            workflow_id = str(row["workflow_id"])
+        return self.get(workflow_id)
+
+    def _set_destination_locked(self, workflow_id: str, chat_id: int, thread_id: int) -> None:
+        topic = self.state.find_topic(chat_id, thread_id)
+        if topic is None:
+            raise StateError("connect_destination_missing")
+        current = self.state.active_session(topic.topic_id)
+        if current is not None and current.agent_id != "codex":
+            raise StateError("active_provider_is_not_codex")
+        if current is not None and current.writer_mode != "telegram":
+            raise StateError("local_writer")
+        self.connection.execute(
+            """UPDATE session_connect_workflows SET destination_chat_id=?,destination_thread_id=?,
+               expected_session_id=?,replaces_session_id=?,stage='confirming',updated_at=?
+               WHERE workflow_id=?""",
+            (
+                chat_id,
+                thread_id,
+                None if current is None else current.session_id,
+                (
+                    current.session_id
+                    if current is not None and current.provider_session_id is not None
+                    else None
+                ),
+                _now(),
+                workflow_id,
+            ),
+        )
+
+    def request_new_topic(self, owner_user_id: int, workflow_id: str) -> ConnectWorkflow:
+        with self.state._immediate_transaction():
+            workflow = self.get(workflow_id)
+            if workflow.owner_user_id != owner_user_id or workflow.stage != "choosing_destination":
+                raise StateError("connect_destination_stale")
+            self.connection.execute(
+                """UPDATE session_connect_workflows SET stage='awaiting_topic_title',updated_at=?
+                   WHERE workflow_id=?""",
+                (_now(), workflow_id),
+            )
+        return self.get(workflow_id)
+
+    def begin_topic_creation(self, owner_user_id: int, workflow_id: str) -> ConnectWorkflow:
+        with self.state._immediate_transaction():
+            workflow = self.get(workflow_id)
+            if workflow.owner_user_id != owner_user_id or workflow.stage != "awaiting_topic_title":
+                raise StateError("connect_topic_creation_stale")
+            self.connection.execute(
+                """UPDATE session_connect_workflows SET stage='creating_topic',updated_at=?
+                   WHERE workflow_id=?""",
+                (_now(), workflow_id),
+            )
+        return self.get(workflow_id)
+
+    def complete_topic_creation(
+        self,
+        owner_user_id: int,
+        workflow_id: str,
+        *,
+        chat_id: int,
+        thread_id: int,
+        title: str,
+    ) -> ConnectWorkflow:
+        workflow = self.get(workflow_id)
+        if (
+            workflow.owner_user_id != owner_user_id
+            or workflow.stage != "creating_topic"
+            or workflow.project_id is None
+        ):
+            raise StateError("connect_topic_creation_stale")
+        self.state.observe_topic(
+            project_id=workflow.project_id,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            title=title,
+        )
+        with self.state._immediate_transaction():
+            current = self.get(workflow_id)
+            if current.stage != "creating_topic":
+                raise StateError("connect_topic_creation_stale")
+            self._set_destination_locked(workflow_id, chat_id, thread_id)
+        return self.get(workflow_id)
+
+    def topic_creation_unknown(self, owner_user_id: int, workflow_id: str) -> ConnectWorkflow:
+        with self.state._immediate_transaction():
+            workflow = self.get(workflow_id)
+            if workflow.owner_user_id != owner_user_id or workflow.stage != "creating_topic":
+                raise StateError("connect_topic_creation_stale")
+            self.connection.execute(
+                """UPDATE session_connect_workflows SET stage='topic_create_unknown',
+                   error_code='topic_create_outcome_unknown',updated_at=? WHERE workflow_id=?""",
+                (_now(), workflow_id),
+            )
+        return self.get(workflow_id)
+
+    def fail_topic_creation(self, owner_user_id: int, workflow_id: str) -> ConnectWorkflow:
+        with self.state._immediate_transaction():
+            workflow = self.get(workflow_id)
+            if workflow.owner_user_id != owner_user_id or workflow.stage != "creating_topic":
+                raise StateError("connect_topic_creation_stale")
+            self.connection.execute(
+                """UPDATE session_connect_workflows SET stage='failed',
+                   error_code='topic_create_rejected',updated_at=? WHERE workflow_id=?""",
+                (_now(), workflow_id),
+            )
         return self.get(workflow_id)
 
     def request_activation(self, owner_user_id: int, workflow_id: str) -> ConnectWorkflow:
@@ -647,17 +956,22 @@ class SessionConnectStore:
             )
             return cursor.rowcount == 1
 
-    @staticmethod
-    def confirmation_text(workflow: ConnectWorkflow) -> str:
+    def confirmation_text(self, workflow: ConnectWorkflow) -> str:
         source = html.escape(workflow.source_label or "Сохранённая сессия")
-        destination = f"{workflow.destination_chat_id}:{workflow.destination_thread_id}"
+        topic = (
+            self.state.find_topic(workflow.destination_chat_id, workflow.destination_thread_id)
+            if workflow.destination_chat_id is not None
+            and workflow.destination_thread_id is not None
+            else None
+        )
+        destination = html.escape(topic.title if topic is not None else "выбранной теме")
         replacement = (
             " Текущая Codex-привязка будет архивирована."
             if workflow.replaces_session_id is not None
             else ""
         )
         return (
-            f"Подключить <b>{source}</b> к теме <code>{destination}</code>? "
+            f"Подключить <b>{source}</b> к теме <b>{destination}</b>? "
             "Закройте CLI. Истории не объединяются." + replacement
         )
 

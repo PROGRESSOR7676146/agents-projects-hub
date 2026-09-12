@@ -110,6 +110,20 @@ class TelegramUpdateTests(unittest.TestCase):
             ],
         )
 
+    def test_create_forum_topic_returns_exact_thread_id(self) -> None:
+        telegram = TelegramBotApi("123456:example")
+        with patch.object(
+            telegram,
+            "call",
+            return_value={"message_thread_id": 88, "name": "Saved work"},
+        ) as api_call:
+            self.assertEqual(
+                telegram.create_forum_topic(-1001234567890, "Saved work"), 88
+            )
+        api_call.assert_called_once_with(
+            "createForumTopic", chat_id=-1001234567890, name="Saved work"
+        )
+
     def test_thinking_draft_targets_private_chat_and_topic(self) -> None:
         telegram = TelegramBotApi("123456:example")
         with patch.object(telegram, "_call_with_timeout", return_value=True) as api_call:

@@ -1613,6 +1613,14 @@ class ProjectHubService:
         if not self.config.is_authorized(callback.sender_id, callback.chat_id, callback.thread_id):
             self.telegram.answer_callback(callback.callback_id, "Not authorized")
             return False
+        if not self.state.claim_callback(
+            callback.callback_id,
+            observer_agent_id=getattr(self, "ingress_identity", self.agent.agent_id),
+        ):
+            self.telegram.answer_callback(callback.callback_id)
+            return False
+        if callback.data.startswith("cx:"):
+            return self._handle_connect_callback(callback)
         try:
             binding = self.config.project_for_chat(callback.chat_id)
         except KeyError:
@@ -1623,12 +1631,6 @@ class ProjectHubService:
             binding = next(
                 item for item in self.config.projects if item.project_id == direct_project
             )
-        if not self.state.claim_callback(
-            callback.callback_id,
-            observer_agent_id=getattr(self, "ingress_identity", self.agent.agent_id),
-        ):
-            self.telegram.answer_callback(callback.callback_id)
-            return False
         topic = self.state.find_topic(callback.chat_id, callback.thread_id)
         if topic is None:
             topic = self.state.observe_topic(
@@ -1649,42 +1651,6 @@ class ProjectHubService:
         )
         try:
             from dataclasses import replace
-
-            if callback.data.startswith("cx:"):
-                parts = callback.data.split(":", 2)
-                if len(parts) != 3:
-                    raise ServiceError("Недействительное действие подключения")
-                _, action, value = parts
-                connect = SessionConnectStore(self.state)
-                if action == "s":
-                    workflow = connect.select_candidate(callback.sender_id, value)
-                    self.telegram.answer_callback(callback.callback_id, "Подтвердите подключение")
-                    self.telegram.send_html(
-                        callback.chat_id,
-                        callback.thread_id,
-                        connect.confirmation_text(workflow),
-                        reply_markup=connect.confirmation_markup(workflow),
-                    )
-                    return True
-                if action == "ok":
-                    connect.request_activation(callback.sender_id, value)
-                    self.telegram.answer_callback(callback.callback_id, "Проверяю сессию…")
-                    self._send_text(
-                        message,
-                        "Проверяю сохранённую сессию. Hub сообщит результат в этой теме.",
-                    )
-                    return True
-                if action == "x":
-                    cancelled = connect.cancel(callback.sender_id, value)
-                    self.telegram.answer_callback(
-                        callback.callback_id, "Отменено" if cancelled else "Уже завершено"
-                    )
-                    if cancelled:
-                        self._send_text(
-                            message, "Подключение отменено; текущая сессия не изменена."
-                        )
-                    return True
-                raise ServiceError("Недействительное действие подключения")
 
             data, expected_control_session = validate_control(
                 self.state, topic.topic_id, callback.data
@@ -1830,13 +1796,230 @@ class ProjectHubService:
         self.telegram.answer_callback(callback.callback_id, "Unknown action")
         return False
 
+    def _registered_project_chat(self, project_id: str) -> int:
+        for binding in self.config.projects:
+            if binding.project_id == project_id and binding.telegram_chat_id is not None:
+                return binding.telegram_chat_id
+        raise ServiceError("Для проекта не зарегистрирована Telegram-группа")
+
+    def _start_direct_connect(self, message: TopicMessage) -> bool:
+        projects = tuple(
+            (project.project_id, project.root, project.display_name)
+            for project in self.registry.projects
+            if project.enabled
+            and any(
+                binding.project_id == project.project_id
+                and binding.telegram_chat_id is not None
+                for binding in self.config.projects
+            )
+        )
+        if not projects:
+            self._send_text(message, "Нет проектов с зарегистрированной Telegram-группой.")
+            return True
+        workflow = SessionConnectStore(self.state).start_direct(
+            owner_user_id=message.sender_id,
+            projects=projects,
+            model=self.agent.default_model,
+            effort=self.agent.default_effort,
+        )
+        connect = SessionConnectStore(self.state)
+        self.telegram.send_html(
+            message.chat_id,
+            1,
+            "Выберите проект, которому принадлежит сохранённая Codex-сессия:",
+            reply_markup=connect.project_markup(workflow.workflow_id),
+        )
+        return True
+
+    def _handle_connect_callback(self, callback: TopicCallback) -> bool:
+        message = TopicMessage(
+            update_id=0,
+            message_id=callback.message_id,
+            chat_id=callback.chat_id,
+            thread_id=callback.thread_id,
+            chat_title="Direct" if callback.chat_id > 0 else "Project",
+            sender_id=callback.sender_id,
+            text="",
+            reply_to_username=None,
+        )
+        try:
+            parts = callback.data.split(":", 2)
+            if len(parts) != 3:
+                raise ServiceError("Недействительное действие подключения")
+            _, action, value = parts
+            connect = SessionConnectStore(self.state)
+            if action == "b" and value == "start":
+                self.telegram.answer_callback(callback.callback_id, "Выберите проект")
+                return self._start_direct_connect(message)
+            if action == "p":
+                connect.select_project(callback.sender_id, value)
+                self.telegram.answer_callback(callback.callback_id, "Ищу сессии…")
+                self._send_text(message, "Ищу сохранённые Codex-сессии выбранного проекта.")
+                return True
+            if action == "s":
+                workflow = connect.select_candidate(callback.sender_id, value)
+                if workflow.stage == "choosing_destination":
+                    assert workflow.project_id is not None
+                    chat_id = self._registered_project_chat(workflow.project_id)
+                    connect.prepare_destinations(
+                        callback.sender_id, workflow.workflow_id, chat_id=chat_id
+                    )
+                    self.telegram.answer_callback(callback.callback_id, "Выберите тему")
+                    self.telegram.send_html(
+                        callback.chat_id,
+                        callback.thread_id,
+                        "Выберите существующую тему или создайте новую:",
+                        reply_markup=connect.destination_markup(workflow.workflow_id),
+                    )
+                    return True
+                self.telegram.answer_callback(callback.callback_id, "Подтвердите подключение")
+                self.telegram.send_html(
+                    callback.chat_id,
+                    callback.thread_id,
+                    connect.confirmation_text(workflow),
+                    reply_markup=connect.confirmation_markup(workflow),
+                )
+                return True
+            if action == "d":
+                workflow = connect.select_destination(callback.sender_id, value)
+                self.telegram.answer_callback(callback.callback_id, "Подтвердите подключение")
+                self.telegram.send_html(
+                    callback.chat_id,
+                    callback.thread_id,
+                    connect.confirmation_text(workflow),
+                    reply_markup=connect.confirmation_markup(workflow),
+                )
+                return True
+            if action == "n":
+                connect.request_new_topic(callback.sender_id, value)
+                self.telegram.answer_callback(callback.callback_id, "Введите название")
+                self._send_text(message, "Пришлите название новой темы одним сообщением.")
+                return True
+            if action == "ok":
+                workflow = connect.request_activation(callback.sender_id, value)
+                self.telegram.answer_callback(callback.callback_id, "Проверяю сессию…")
+                destination = (
+                    "выбранной теме"
+                    if workflow.destination_chat_id != callback.chat_id
+                    else "этой теме"
+                )
+                self._send_text(
+                    message,
+                    f"Проверяю сохранённую сессию. Hub сообщит результат в {destination}.",
+                )
+                return True
+            if action == "x":
+                cancelled = connect.cancel(callback.sender_id, value)
+                self.telegram.answer_callback(
+                    callback.callback_id, "Отменено" if cancelled else "Уже завершено"
+                )
+                if cancelled:
+                    self._send_text(message, "Подключение отменено; текущая сессия не изменена.")
+                return True
+            raise ServiceError("Недействительное действие подключения")
+        except (KeyError, ValueError, ServiceError, StateError) as exc:
+            self.telegram.answer_callback(callback.callback_id, str(exc)[:180])
+            return True
+
+    def _handle_hub_direct(self, message: TopicMessage) -> bool:
+        if not self.state.claim_message(
+            message.chat_id,
+            message.message_id,
+            observer_agent_id=getattr(self, "ingress_identity", "hub"),
+        ):
+            return False
+        command = parse_command(message.text)
+        connect = SessionConnectStore(self.state)
+        if command and command.name in {"start", "projects"}:
+            projects = [
+                project.display_name
+                for project in self.registry.projects
+                if project.enabled
+                and any(
+                    binding.project_id == project.project_id
+                    and binding.telegram_chat_id is not None
+                    for binding in self.config.projects
+                )
+            ]
+            listing = "\n".join(f"• {html.escape(name)}" for name in projects)
+            self.telegram.send_html(
+                message.chat_id,
+                1,
+                "<b>Проекты</b>\n"
+                + (listing or "Нет доступных проектов")
+                + "\n\nСоздание проекта появится в следующем пакете.",
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "Подключить сессию", "callback_data": "cx:b:start"}]
+                    ]
+                },
+            )
+            return True
+        if command and command.name == "connect":
+            if command.arguments:
+                self._send_text(message, "Использование: /connect")
+                return True
+            return self._start_direct_connect(message)
+        if command and command.name == "cancel":
+            cancelled = connect.cancel(message.sender_id)
+            self._send_text(
+                message,
+                "Подключение отменено; текущая сессия не изменена."
+                if cancelled
+                else "Активного подключения нет.",
+            )
+            return True
+        active = connect.active_for_owner(message.sender_id)
+        if active is not None and active.stage == "awaiting_topic_title":
+            title = " ".join(message.text.split())
+            if not 1 <= len(title) <= 128 or "/" in title or "\\" in title:
+                self._send_text(message, "Название должно содержать 1–128 символов без / и \\.")
+                return True
+            if active.project_id is None:
+                raise ServiceError("Проект подключения не выбран")
+            chat_id = self._registered_project_chat(active.project_id)
+            connect.begin_topic_creation(message.sender_id, active.workflow_id)
+            try:
+                thread_id = self.telegram.create_forum_topic(chat_id, title)
+            except TelegramError as exc:
+                if exc.failure_class.startswith("network_") or exc.failure_class == "invalid_response":
+                    connect.topic_creation_unknown(message.sender_id, active.workflow_id)
+                    self._send_text(
+                        message,
+                        "Не удалось определить, создана ли тема. Автоповтора нет: проверьте группу; "
+                        "если тема появилась, запустите в ней /connect, иначе начните заново.",
+                    )
+                else:
+                    connect.fail_topic_creation(message.sender_id, active.workflow_id)
+                    self._send_text(message, "Telegram отклонил создание темы. Подключение остановлено.")
+                return True
+            workflow = connect.complete_topic_creation(
+                message.sender_id,
+                active.workflow_id,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                title=title,
+            )
+            self.telegram.send_html(
+                message.chat_id,
+                1,
+                connect.confirmation_text(workflow),
+                reply_markup=connect.confirmation_markup(workflow),
+            )
+            return True
+        self._send_text(
+            message,
+            "Здесь работает только управление Hub. Используйте /projects, /connect или /cancel.",
+        )
+        return True
+
     def handle_update(self, update: dict[str, object]) -> bool:
         direct_messages_only = getattr(self, "direct_messages_only", False)
         ingress_identity = getattr(self, "ingress_identity", self.agent.agent_id)
         if direct_messages_only:
             callback = parse_direct_callback(update)
         elif ingress_identity == "hub":
-            callback = parse_topic_callback(update)
+            callback = parse_topic_callback(update) or parse_direct_callback(update)
         else:
             callback = parse_topic_callback(update) or parse_direct_callback(update)
         if callback is not None:
@@ -1844,13 +2027,15 @@ class ProjectHubService:
         if direct_messages_only:
             message = parse_direct_message(update)
         elif ingress_identity == "hub":
-            message = parse_topic_message(update)
+            message = parse_topic_message(update) or parse_direct_message(update)
         else:
             message = parse_topic_message(update) or parse_direct_message(update)
         if message is None:
             return False
         if not self.config.is_authorized(message.sender_id, message.chat_id, message.thread_id):
             return False
+        if ingress_identity == "hub" and message.chat_id == message.sender_id:
+            return self._handle_hub_direct(message)
         try:
             binding = self.config.project_for_chat(message.chat_id)
         except KeyError:

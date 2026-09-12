@@ -110,6 +110,64 @@ class SessionConnectStateTests(unittest.TestCase):
         )
         self.assertEqual(self.store.get(workflow.workflow_id).stage, "marker_unknown")
 
+    def test_direct_workflow_selects_project_and_existing_destination(self) -> None:
+        workflow = self.store.start_direct(
+            owner_user_id=42,
+            projects=(("example-project", self.root, "Example project"),),
+            model="gpt-5.6-sol",
+            effort="high",
+        )
+        self.assertEqual(workflow.stage, "choosing_project")
+        option = self.store.options(workflow.workflow_id, "project")[0]
+        discovering = self.store.select_project(42, option.option_id)
+        self.assertEqual(discovering.project_id, "example-project")
+        self.assertEqual(discovering.stage, "discovering")
+
+        leased = self.store.lease_worker("worker-1")
+        candidates = self.store.finish_discovery(
+            workflow.workflow_id,
+            leased.lease_token,
+            (ConnectCandidate("candidate-3", "saved-thread", "Сессия · saved", 10),),
+        )
+        choosing = self.store.select_candidate(42, candidates[0].candidate_id)
+        self.assertEqual(choosing.stage, "choosing_destination")
+        destinations = self.store.prepare_destinations(
+            42, workflow.workflow_id, chat_id=-1001234567890
+        )
+        selected = self.store.select_destination(42, destinations[0].option_id)
+        self.assertEqual(selected.stage, "confirming")
+        self.assertEqual(selected.destination_thread_id, 77)
+
+    def test_direct_workflow_records_created_topic_before_confirmation(self) -> None:
+        workflow = self.store.start_direct(
+            owner_user_id=42,
+            projects=(("example-project", self.root, "Example project"),),
+            model="gpt-5.6-sol",
+            effort="high",
+        )
+        project = self.store.options(workflow.workflow_id, "project")[0]
+        self.store.select_project(42, project.option_id)
+        leased = self.store.lease_worker("worker-1")
+        candidates = self.store.finish_discovery(
+            workflow.workflow_id,
+            leased.lease_token,
+            (ConnectCandidate("candidate-4", "saved-thread", "Сессия · saved", 10),),
+        )
+        self.store.select_candidate(42, candidates[0].candidate_id)
+        self.store.request_new_topic(42, workflow.workflow_id)
+        self.store.begin_topic_creation(42, workflow.workflow_id)
+        completed = self.store.complete_topic_creation(
+            42,
+            workflow.workflow_id,
+            chat_id=-1001234567890,
+            thread_id=88,
+            title="Saved work",
+        )
+        self.assertEqual(completed.stage, "confirming")
+        self.assertEqual(
+            self.state.find_topic(-1001234567890, 88).project_id, "example-project"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

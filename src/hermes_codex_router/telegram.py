@@ -433,6 +433,30 @@ class TelegramBotApi:
             )
         return result["message_id"]
 
+    def create_forum_topic(self, chat_id: int, name: str) -> int:
+        normalized = " ".join(name.split())
+        if chat_id >= 0 or not 1 <= len(normalized) <= 128:
+            raise TelegramError(
+                "invalid forum topic request",
+                operation="create_topic",
+                failure_class="local_validation",
+            )
+        result = self.call("createForumTopic", chat_id=chat_id, name=normalized)
+        if not isinstance(result, dict) or not isinstance(result.get("message_thread_id"), int):
+            raise TelegramError(
+                "createForumTopic returned an invalid result",
+                operation="create_topic",
+                failure_class="invalid_response",
+            )
+        thread_id = int(result["message_thread_id"])
+        if thread_id <= 0:
+            raise TelegramError(
+                "createForumTopic returned an invalid result",
+                operation="create_topic",
+                failure_class="invalid_response",
+            )
+        return thread_id
+
     def send_chat_action(self, chat_id: int, thread_id: int, action: str = "typing") -> None:
         params: dict[str, Any] = {"chat_id": chat_id, "action": action}
         if thread_id != 1:
