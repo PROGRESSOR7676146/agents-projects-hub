@@ -42,6 +42,10 @@ does not require a source-config edit. The registry remains the authority for
 the canonical Git root. A state binding is admitted only when its project exists,
 is enabled, and resolves to the exact recorded root.
 
+Several confirmed workflows may wait in the durable queue, but provisioning is
+globally serialized. Even if a second worker is started accidentally, it cannot
+lease another workflow while root, Telegram or registry work is in progress.
+
 ## Private configuration
 
 Install the `provisioning` extra and keep every credential outside Git. A
