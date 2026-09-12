@@ -25,6 +25,7 @@ are intentionally excluded.
 - [Risk register](risks/RISK_REGISTER.md)
 - [Quality and stability review](operations/QUALITY_AND_STABILITY_REVIEW.md)
 - [Reliability implementation plan](operations/RELIABILITY_PLAN.md)
+- [CLI-to-Telegram session transfer implementation plan](operations/SESSION_TRANSFER_IMPLEMENTATION_PLAN.md)
 - [Testing and privacy gate](testing/README.md)
 
 ## Truth rules
