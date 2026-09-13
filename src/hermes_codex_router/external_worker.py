@@ -33,7 +33,7 @@ from .external_runtime import (
 )
 from .hub_config import HubConfig
 from .metadata import format_agent_response, format_telegram_response
-from .registry import ExecutionRootError, ProjectRegistry, load_registry, validate_execution_root
+from .registry import ExecutionRootError, ProjectRegistry, load_registry
 from .session_adoption_policy import validate_adoption_mode
 from .session_adoption_state import CodexSessionOrigins
 from .state import HubState, ProviderJobRecord
@@ -44,7 +44,7 @@ from .telegram_interaction import (
     telegram_turn_prompt,
     telegram_user_turn_prompt,
 )
-from .worktrees import validate_worktree_execution_root
+from .topic_execution import resolve_topic_execution_root
 
 
 class ExternalQueueWorkerError(RuntimeError):
@@ -95,6 +95,9 @@ class ExternalQueueWorker:
         validate_adoption_mode(config)
         self.registry = registry or load_registry(config.registry_path)
         self.state = HubState.open(config.state_path)
+        self.state.reconcile_legacy_execution_scopes(
+            {project.project_id: project.root for project in self.registry.projects}
+        )
         self.worker_id = worker_id or f"{self.agent.agent_id}-worker"
         self._started_at = datetime.now(timezone.utc)
         self._process_start_marker = uuid.uuid4().hex
@@ -265,7 +268,6 @@ class ExternalQueueWorker:
         assert token is not None
         topic = self.state.get_topic(executing.topic_id)
         project = self.registry.require_project(topic.project_id)
-        lane = self.state.active_lane_for_topic(topic.topic_id)
         heartbeat_stop = threading.Event()
 
         def maintain_lease() -> None:
@@ -296,21 +298,8 @@ class ExternalQueueWorker:
         )
         heartbeat.start()
         try:
-            if lane is None:
-                validate_execution_root(self.registry, project)
-            else:
-                lane_root = validate_worktree_execution_root(
-                    self.registry,
-                    project,
-                    str(lane["lane_id"]),
-                    Path(str(lane["worktree_path"])),
-                )
-                if (
-                    str(lane["project_id"]) != project.project_id
-                    or topic.execution_scope != f"root:{lane_root}"
-                ):
-                    raise ExecutionRootError()
-                project = replace(project, root=lane_root)
+            execution_root = resolve_topic_execution_root(self.state, self.registry, topic)
+            project = replace(project, root=execution_root)
             if self.agent.runtime == "codex":
                 self._execute_codex(executing, token, project, topic)
             else:

@@ -19,6 +19,7 @@ from hermes_codex_router.hub_config import (
 from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.service import ProjectHubService, QueueAcceptanceError
 from hermes_codex_router.state import HubState
+from hermes_codex_router.worktrees import create_worktree
 from tests.git_fixtures import init_git_root
 
 
@@ -48,10 +49,12 @@ class QueueClient:
         self.entered = threading.Event()
         self.release = threading.Event()
         self.turn_threads: list[int] = []
+        self.cwds: list[Path] = []
         self.started_threads = 0
 
     def start_thread(self, **kwargs: object) -> CodexThread:
         self.started_threads += 1
+        self.cwds.append(Path(str(kwargs["cwd"])))
         return CodexThread("thread-1", Path(str(kwargs["cwd"])), "gpt-5.6-sol", "openai")
 
     def resume_thread(self, **kwargs: object) -> CodexThread:
@@ -211,6 +214,37 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
             [(-1001234567890, 77, "typing")],
         )
         service.close()
+
+    def test_embedded_lane_uses_the_validated_lane_for_staging_and_provider(self) -> None:
+        client = QueueClient()
+        service, _ = self.service(client)
+        project = self.registry.projects[0]
+        lane_root, branch = create_worktree(project, "embedded")
+        try:
+            self.assertTrue(service.handle_update(update(1, "/menu")))
+            topic = service.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            service.state.register_lane(
+                lane_id="embedded",
+                project_id=project.project_id,
+                worktree_path=lane_root,
+                branch_name=branch,
+            )
+            service.state.bind_lane("embedded", topic.topic_id)
+
+            self.assertTrue(service.handle_update(update(2, "fictional lane task")))
+            self.assertTrue(service.run_embedded_queue_cycle())
+
+            self.assertEqual(client.cwds, [lane_root])
+            self.assertTrue((lane_root / ".hub" / "staging").exists())
+            self.assertFalse((project.root / ".hub" / "staging").exists())
+            self.assertTrue(service.handle_update(update(3, "/local")))
+            session = service.state.active_session(topic.topic_id)
+            assert session is not None
+            self.assertEqual(session.writer_mode, "local")
+            self.assertIn(str(lane_root), service.telegram.sent[-1])
+        finally:
+            service.close()
 
     def test_consecutive_productive_messages_form_one_durable_provider_turn(self) -> None:
         client = QueueClient()

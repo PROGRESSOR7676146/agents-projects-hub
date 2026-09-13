@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterator, Sequence, TypedDict
+from typing import Iterator, Mapping, Sequence, TypedDict
 
 from .artifacts import ValidatedArtifact
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
@@ -894,6 +894,45 @@ class HubState:
         if row is None:
             raise StateError("failed to persist Telegram topic")
         return self._topic(row)
+
+    def reconcile_legacy_execution_scopes(self, project_roots: Mapping[str, Path]) -> int:
+        """Atomically replace trusted legacy project scopes with canonical roots.
+
+        The mapping is supplied only by the locally loaded registry.  Active
+        worktree bindings are evidence of a distinct lane and are never
+        rewritten by this compatibility pass.
+        """
+        canonical = {
+            _bounded(project_id, name="project id", maximum=48): "root:"
+            + _bounded(str(root.resolve(strict=True)), name="execution root", maximum=4096)
+            for project_id, root in project_roots.items()
+        }
+        changed = 0
+        with self._immediate_transaction():
+            rows = self._connection.execute(
+                """SELECT topics.topic_id, topics.project_id, topics.execution_scope,
+                          lanes.worktree_path
+                   FROM topics LEFT JOIN worktree_lanes lanes
+                     ON lanes.topic_id = topics.topic_id AND lanes.status = 'active'"""
+            ).fetchall()
+            for row in rows:
+                project_id = str(row["project_id"])
+                current = str(row["execution_scope"] or f"project:{project_id}")
+                lane_root = row["worktree_path"]
+                if lane_root is not None:
+                    if current != f"root:{lane_root}":
+                        raise StateError("active lane execution scope mismatch")
+                    continue
+                expected = canonical.get(project_id)
+                if expected is None or current != f"project:{project_id}":
+                    continue
+                cursor = self._connection.execute(
+                    """UPDATE topics SET execution_scope = ?, updated_at = ?
+                       WHERE topic_id = ? AND execution_scope = ?""",
+                    (expected, _now(), row["topic_id"], current),
+                )
+                changed += cursor.rowcount
+        return changed
 
     def get_topic(self, topic_id: int) -> TopicRecord:
         row = self._connection.execute(

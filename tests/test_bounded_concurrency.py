@@ -434,7 +434,9 @@ class BoundedConcurrencyTests(unittest.TestCase):
         clock = datetime.now(timezone.utc)
         agents = ("opencode", "antigravity")
         jobs = []
-        for number, agent_id in enumerate(("opencode", "antigravity", "opencode", "antigravity"), 1):
+        for number, agent_id in enumerate(
+            ("opencode", "antigravity", "opencode", "antigravity"), 1
+        ):
             topic, session = self.topic_session(
                 project_id=f"example-project-{number}",
                 thread_id=120 + number,
@@ -446,25 +448,37 @@ class BoundedConcurrencyTests(unittest.TestCase):
             self.publish_worker(agent_id, clock)
 
         slow = self.state.lease_provider_job(
-            "opencode", "opencode-worker", max_parallel_roots=2,
-            scheduler_agents=agents, now=clock,
+            "opencode",
+            "opencode-worker",
+            max_parallel_roots=2,
+            scheduler_agents=agents,
+            now=clock,
         )
         fast = self.state.lease_provider_job(
-            "antigravity", "antigravity-worker", max_parallel_roots=2,
-            scheduler_agents=agents, now=clock,
+            "antigravity",
+            "antigravity-worker",
+            max_parallel_roots=2,
+            scheduler_agents=agents,
+            now=clock,
         )
         assert slow is not None and slow.lease_token is not None
         assert fast is not None and fast.lease_token is not None
         self.state.mark_provider_job_executing(slow.job_id, slow.lease_token, now=clock)
         self.state.mark_provider_job_executing(fast.job_id, fast.lease_token, now=clock)
         self.state.commit_provider_result(
-            fast.job_id, fast.lease_token, visible_response="fictional result",
-            sender_agent_id="antigravity", telegram_html="fictional result",
+            fast.job_id,
+            fast.lease_token,
+            visible_response="fictional result",
+            sender_agent_id="antigravity",
+            telegram_html="fictional result",
         )
 
         available = self.state.lease_provider_job(
-            "antigravity", "antigravity-worker", max_parallel_roots=2,
-            scheduler_agents=agents, now=clock,
+            "antigravity",
+            "antigravity-worker",
+            max_parallel_roots=2,
+            scheduler_agents=agents,
+            now=clock,
         )
 
         self.assertIsNotNone(available)

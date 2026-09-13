@@ -46,11 +46,16 @@ or native CLI processes are outside this coordination boundary.
 ## Migration and rollback
 
 Migration 26 adds the nullable column transactionally, backfills existing rows
-to `project:<project_id>`, and adds a lookup index. The next normal observation
-through a registry-aware Hub path upgrades that fallback to
-`root:<canonical-root>`. A conflicting later root is rejected. Rollback requires
-an artifact whose maximum supported schema is at least 26; retaining the column
-and its values is safer than a destructive downgrade.
+to `project:<project_id>`, and adds a lookup index. On Controller and worker
+startup, a registry-aware transaction upgrades every retained non-lane fallback
+whose immutable project ID is still registered to `root:<canonical-root>`. This
+prevents a worker started before the Controller from comparing a new canonical
+scope to a retained legacy string. Active lane scopes are preserved and a
+mismatched lane binding fails closed; a stored canonical scope is never rebound
+only because the registry later changes. Unknown historical IDs retain their
+legacy evidence rather than being guessed from titles or paths. Rollback
+requires an artifact whose maximum supported schema is at least 26; retaining
+the column and its values is safer than a destructive downgrade.
 
 ## Evidence
 

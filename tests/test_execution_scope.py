@@ -116,6 +116,27 @@ class ExecutionScopeTests(unittest.TestCase):
         self.assertEqual(leased.job_id, waiting.job_id)
         self.assertEqual(local_topic.execution_scope, work_topic.execution_scope)
 
+    def test_reconcile_legacy_scope_keeps_local_writer_on_canonical_root(self) -> None:
+        local_topic, local_session = self.topic_session(
+            project_id="example-project", thread_id=741, agent_id="codex", root=self.base
+        )
+        self.state.set_writer_mode(local_session.session_id, "local")
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE topics SET execution_scope = ? WHERE topic_id = ?",
+                ("project:example-project", local_topic.topic_id),
+            )
+        work_topic, work_session = self.topic_session(
+            project_id="example-project", thread_id=742, agent_id="opencode", root=self.base
+        )
+        self.state.reconcile_legacy_execution_scopes({"example-project": self.base})
+        self.enqueue(work_topic, work_session, 742)
+
+        self.assertIsNone(self.state.lease_provider_job("opencode", "opencode-worker"))
+        self.assertEqual(
+            self.state.get_topic(local_topic.topic_id).execution_scope, f"root:{self.base}"
+        )
+
     def test_unresolved_indeterminate_job_holds_the_root_until_resolution(self) -> None:
         first_topic, first_session = self.topic_session(
             project_id="example-project",
@@ -449,6 +470,56 @@ class ExecutionScopeTests(unittest.TestCase):
             self.assertEqual(local_topic.execution_scope, work_topic.execution_scope)
         finally:
             worker.close()
+
+    def test_worker_reconciles_a_retained_legacy_local_writer_before_leasing(self) -> None:
+        harness = FaultMatrixHarness(self.base)
+        state = HubState.open(harness.config.state_path)
+        root = harness.registry.require_project("example-project").root
+        try:
+            old = state.observe_topic(
+                project_id="example-project",
+                chat_id=harness.chat_id,
+                thread_id=91,
+                title="Fictional old",
+                execution_root=root,
+            )
+            local = state.activate_agent(old.topic_id, "codex", "fictional", "high")
+            state.set_writer_mode(local.session_id, "local")
+            with state._connection:
+                state._connection.execute(
+                    "UPDATE topics SET execution_scope=? WHERE topic_id=?",
+                    ("project:example-project", old.topic_id),
+                )
+            new = state.observe_topic(
+                project_id="example-project",
+                chat_id=harness.chat_id,
+                thread_id=92,
+                title="Fictional new",
+                execution_root=root,
+            )
+            session = state.activate_agent(new.topic_id, "opencode", "fictional", "high")
+            state.enqueue_provider_job(
+                idempotency_key="legacy:719",
+                chat_id=harness.chat_id,
+                message_id=719,
+                topic_id=new.topic_id,
+                agent_id=session.agent_id,
+                session_id=session.session_id,
+                session_generation=session.generation,
+                model=session.model,
+                effort=session.effort,
+                payload_text="fictional legacy scope task",
+            )
+            adapter = RecordingAdapter("opencode")
+            worker = harness.worker("opencode", adapter)
+            try:
+                self.assertFalse(worker.run_cycle())
+                self.assertEqual(adapter.calls, [])
+                self.assertEqual(state.get_topic(old.topic_id).execution_scope, f"root:{root}")
+            finally:
+                worker.close()
+        finally:
+            state.close()
 
     def test_controller_observation_upgrades_topic_to_canonical_root_scope(self) -> None:
         harness = FaultMatrixHarness(self.base)

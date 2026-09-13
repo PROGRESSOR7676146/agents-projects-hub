@@ -87,6 +87,7 @@ from .telegram_interaction import (
 from .telegram_multipart import send_telegram_html_parts
 from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
+from .topic_execution import resolve_topic_execution_root
 
 
 class ServiceError(RuntimeError):
@@ -113,6 +114,9 @@ class ProjectHubService:
         validate_adoption_mode(config)
         self.registry = load_registry(config.registry_path)
         self.state = HubState.open(config.state_path)
+        self.state.reconcile_legacy_execution_scopes(
+            {project.project_id: project.root for project in self.registry.projects}
+        )
         self.agent = config.require_agent("codex")
         if self.agent.runtime != "codex" or self.agent.token_file is None:
             raise ServiceError("managed Codex bot is not configured")
@@ -746,9 +750,10 @@ class ProjectHubService:
             daemon=True,
         )
         heartbeat.start()
-        staging_dir = project.root / ".hub" / "staging" / executing.job_id
         try:
-            validate_execution_root(self.registry, project)
+            execution_root = resolve_topic_execution_root(queue_state, self.registry, topic)
+            project = replace(project, root=execution_root)
+            staging_dir = project.root / ".hub" / "staging" / executing.job_id
             staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             contract_version = telegram_contract_version(agent.runtime)
             full_contract = (
@@ -2223,9 +2228,9 @@ class ProjectHubService:
             project = self.registry.require_project(binding.project_id)
             agent = self.config.require_agent(session.agent_id)
             try:
-                validate_execution_root(self.registry, project)
+                execution_root = resolve_topic_execution_root(self.state, self.registry, topic)
                 resume = local_resume_command(
-                    agent.runtime, agent.executable, session.provider_session_id, project.root
+                    agent.runtime, agent.executable, session.provider_session_id, execution_root
                 )
             except (LocalTransferError, ExecutionRootError) as exc:
                 self._send_text(message, str(exc))

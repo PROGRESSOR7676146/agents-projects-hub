@@ -23,7 +23,10 @@ Explicit local worktree binding now atomically moves an idle topic to the lane's
 canonical scope. Bind and archive refuse pending, active, local-writer and
 unresolved work. Before provider access the worker revalidates the exact derived
 path, allowlist membership, Git worktree registration and Git top level, then
-uses that lane as cwd. Each provider worker still owns one SQLite connection and
+uses that lane as cwd. The same validated root is used for embedded execution,
+staging, local resume preparation, and read-only Codex recovery. Retained
+legacy project scopes are atomically reconciled from trusted registry roots at
+Controller and worker startup, while active lane scopes stay distinct. Each provider worker still owns one SQLite connection and
 one adapter/client/process lifecycle, so configured worker count is a second
 parallelism bound. Offline capacity, fairness, contention, targeted-stop,
 process-recovery, lane execution, migration and rollback tests cover this
@@ -403,7 +406,7 @@ checkpoints above describe their own milestones; the current target is schema 27
   reapers. Runtime-proxy monitoring remains independent and never restarts a
   shared app-server underneath an active Codex or tlive session.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
-- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-24
+- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-27
   immutable-deployment triage guide, source revision, timestamp, and content
   hashes into a neutral local store for the independent Hermes channel. It
   carries no private deployment inventory and creates no service dependency.
@@ -413,7 +416,7 @@ checkpoints above describe their own milestones; the current target is schema 27
   immutable runtime artifacts remains the deployment identity.
 - Privacy gate that rejects deployment identities, raw histories/session dumps,
   owner-specific paths, Telegram secrets/identifiers, and local runtime files.
-- Documentation validation inventories all 91 normative product requirement IDs,
+- Documentation validation inventories all 94 normative product requirement IDs,
   protects all 20 numbered baseline sections by content hash, and checks local
   Markdown files/anchors repository-wide. The product baseline is split into a
   short normative index and five stable capability modules; the guarded move

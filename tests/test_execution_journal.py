@@ -243,6 +243,70 @@ class ExecutionJournalTests(unittest.TestCase):
         finally:
             worker.close()
 
+    def test_completed_lane_checkpoint_recovers_without_provider_access(self) -> None:
+        from hermes_codex_router.codex_recovery import recover_codex_job
+        from hermes_codex_router.execution_journal import ExecutionJournal
+        from hermes_codex_router.worktrees import create_worktree
+
+        state = HubState.open(self.fixture.config.state_path)
+        project = self.fixture.registry.projects[0]
+        lane_root, branch = create_worktree(project, "recovery")
+        try:
+            topic = state.observe_topic(
+                project_id=project.project_id,
+                chat_id=-1001234567890,
+                thread_id=78,
+                title="Fictional lane",
+                execution_root=project.root,
+            )
+            state.register_lane(
+                lane_id="recovery",
+                project_id=project.project_id,
+                worktree_path=lane_root,
+                branch_name=branch,
+            )
+            state.bind_lane("recovery", topic.topic_id)
+            session = state.activate_agent(topic.topic_id, "codex", "gpt-5.6-sol", "high")
+            job, _ = state.enqueue_provider_job(
+                idempotency_key="lane:recovery",
+                chat_id=-1001234567890,
+                message_id=78,
+                topic_id=topic.topic_id,
+                agent_id="codex",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                model=session.model,
+                effort=session.effort,
+                payload_text="fictional recovery task",
+            )
+            lease = state.lease_provider_job("codex", "lost-worker")
+            assert lease is not None and lease.lease_token is not None
+            state.mark_provider_job_executing(job.job_id, lease.lease_token)
+            journal = ExecutionJournal(state)
+            journal.record_thread(job.job_id, lease.lease_token, "lane-thread", lane_root)
+            journal.record_turn(job.job_id, lease.lease_token, "lane-turn")
+            journal.record_completion(job.job_id, lease.lease_token, "Recovered lane result")
+            state.heartbeat_provider_job(
+                job.job_id,
+                lease.lease_token,
+                lease_seconds=1,
+                now=datetime.now(timezone.utc) - timedelta(seconds=10),
+            )
+
+            self.assertTrue(
+                recover_codex_job(
+                    state,
+                    self.fixture.config,
+                    self.fixture.registry,
+                    "codex",
+                    "recovery-worker",
+                    lambda: self.fail("completed checkpoint must not access a provider"),
+                )
+            )
+            self.assertEqual(state.get_provider_job(job.job_id).status, "result_ready")
+        finally:
+            state.close()
+
     def test_wrong_thread_root_and_unfinished_turn_never_become_success(self) -> None:
         from hermes_codex_router.codex_appserver import RpcError
 
