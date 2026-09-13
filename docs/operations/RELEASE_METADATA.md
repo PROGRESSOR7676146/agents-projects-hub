@@ -1,6 +1,6 @@
 # Release metadata synchronization
 
-Status: accepted policy  
+Status: accepted policy
 Last updated: 2026-09-05
 
 This policy keeps reusable release claims consistent without treating a version

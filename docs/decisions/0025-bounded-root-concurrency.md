@@ -1,6 +1,6 @@
 # ADR 0025: Bounded concurrency across independent roots
 
-Status: repository implementation; deployment acceptance pending  
+Status: repository implementation; deployment acceptance pending
 Date: 2026-09-13
 
 ## Decision
