@@ -1,12 +1,76 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
+from unittest import mock
 
+from hermes_codex_router import state as state_module
 from hermes_codex_router.state import HubState
+
+
+class HubStateOpenFailureTests(unittest.TestCase):
+    @staticmethod
+    def _assert_closed(connection: sqlite3.Connection) -> None:
+        try:
+            with unittest.TestCase().assertRaises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
+        finally:
+            try:
+                connection.close()
+            except sqlite3.Error:
+                pass
+
+    def test_open_closes_connection_when_migration_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            original_connect = sqlite3.connect
+            created: list[sqlite3.Connection] = []
+
+            def capture_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+                connection = original_connect(*args, **kwargs)
+                created.append(connection)
+                return connection
+
+            with (
+                mock.patch.object(state_module.sqlite3, "connect", side_effect=capture_connect),
+                mock.patch.object(
+                    state_module, "migrate_connection", side_effect=RuntimeError("migration fault")
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "migration fault"):
+                    HubState.open(path)
+
+            self.assertEqual(len(created), 1)
+            self._assert_closed(created[0])
+
+    def test_open_closes_connection_when_database_permissions_cannot_be_set(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            original_connect = sqlite3.connect
+            created: list[sqlite3.Connection] = []
+
+            def capture_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+                connection = original_connect(*args, **kwargs)
+                created.append(connection)
+                return connection
+
+            with (
+                mock.patch.object(state_module.sqlite3, "connect", side_effect=capture_connect),
+                mock.patch.object(
+                    state_module.os, "chmod", side_effect=PermissionError("chmod fault")
+                ),
+            ):
+                with self.assertRaisesRegex(PermissionError, "chmod fault"):
+                    HubState.open(path)
+
+            self.assertEqual(len(created), 1)
+            self._assert_closed(created[0])
 
 
 class HubStateTests(unittest.TestCase):
@@ -106,6 +170,51 @@ class HubStateTests(unittest.TestCase):
         updated = self.state.set_context_remaining(session.session_id, 73.25)
         self.assertEqual(updated.context_remaining_percent, 73.25)
 
+    def test_contract_provenance_lists_only_current_provider_sessions(self) -> None:
+        previous = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
+        self.state.bind_provider_session(previous.session_id, "thread-previous", None)
+        self.state.acknowledge_telegram_contract(previous.session_id, 1)
+        current = self.state.new_active_session(self.topic.topic_id)
+        satellite = self.state.ensure_satellite(
+            self.topic.topic_id, "opencode", "provider-selected", "high"
+        )
+        self.state.bind_provider_session(satellite.session_id, "thread-satellite", None)
+        self.state.acknowledge_telegram_contract(satellite.session_id, 2)
+
+        provenance = self.state.telegram_contract_provenance()
+
+        self.assertEqual(
+            provenance,
+            (
+                {
+                    "session_id": current.session_id,
+                    "agent_id": "codex",
+                    "status": "active",
+                    "provider_bound": False,
+                    "acknowledged_version": 0,
+                },
+                {
+                    "session_id": satellite.session_id,
+                    "agent_id": "opencode",
+                    "status": "satellite",
+                    "provider_bound": True,
+                    "acknowledged_version": 2,
+                },
+            ),
+        )
+        self.assertNotIn(previous.session_id, {item["session_id"] for item in provenance})
+
+    def test_contract_provenance_is_deterministically_bounded(self) -> None:
+        self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
+        self.state.ensure_satellite(self.topic.topic_id, "opencode", "provider-selected", "high")
+
+        provenance = self.state.telegram_contract_provenance(limit=1)
+
+        self.assertEqual(len(provenance), 1)
+        self.assertEqual(provenance[0]["agent_id"], "codex")
+        with self.assertRaisesRegex(ValueError, "contract provenance limit"):
+            self.state.telegram_contract_provenance(limit=0)
+
     def test_bot_update_offset_is_persisted_monotonically_by_caller(self) -> None:
         self.assertIsNone(self.state.get_bot_offset("codex"))
         self.state.set_bot_offset("codex", 514951014)
@@ -119,6 +228,39 @@ class HubStateTests(unittest.TestCase):
         self.assertEqual(local.writer_mode, "local")
         telegram = self.state.set_writer_mode(session.session_id, "telegram")
         self.assertEqual(telegram.writer_mode, "telegram")
+
+    def test_codex_return_claim_and_writer_transition_are_atomic_and_idempotent(self) -> None:
+        session = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
+        session = self.state.bind_provider_session(session.session_id, "thread-123", None)
+        self.state.set_writer_mode(session.session_id, "local")
+
+        returned, created = self.state.return_codex_local_writer(
+            chat_id=self.topic.chat_id,
+            message_id=501,
+            topic_id=self.topic.topic_id,
+            session_id=session.session_id,
+            observer_agent_id="codex",
+        )
+        self.assertTrue(created)
+        self.assertEqual(returned.writer_mode, "telegram")
+        self.assertEqual(returned.provider_session_id, "thread-123")
+
+        duplicate, created = self.state.return_codex_local_writer(
+            chat_id=self.topic.chat_id,
+            message_id=501,
+            topic_id=self.topic.topic_id,
+            session_id=session.session_id,
+            observer_agent_id="codex",
+        )
+        self.assertFalse(created)
+        self.assertEqual(duplicate.writer_mode, "telegram")
+        self.assertFalse(
+            self.state.claim_message(
+                self.topic.chat_id,
+                501,
+                observer_agent_id="codex",
+            )
+        )
 
     def test_topic_running_dispatch_is_detected(self) -> None:
         session = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
@@ -147,21 +289,14 @@ class HubStateTests(unittest.TestCase):
         self.assertTrue(self.state.claim_callback("cb-1", observer_agent_id="codex"))
         self.assertFalse(self.state.claim_callback("cb-1", observer_agent_id="codex"))
 
-    def test_handoff_is_bounded_and_replaced_per_target(self) -> None:
-        first = self.state.stage_handoff(
-            self.topic.topic_id,
-            target_agent_id="hermes",
-            source_agent_id="codex",
-            text="first",
-        )
-        second = self.state.stage_handoff(
-            self.topic.topic_id,
-            target_agent_id="hermes",
-            source_agent_id="codex",
-            text="x" * 25000,
-        )
-        self.assertNotEqual(first.handoff_id, second.handoff_id)
-        self.assertEqual(len(second.text), 20000)
+    def test_automatic_handoff_is_disabled(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "automatic handoff is disabled"):
+            self.state.stage_handoff(
+                self.topic.topic_id,
+                target_agent_id="hermes",
+                source_agent_id="codex",
+                text="context",
+            )
 
     def test_recent_external_context_is_chronological_and_bounded(self) -> None:
         with self.state._connection:
@@ -218,6 +353,32 @@ class HubStateTests(unittest.TestCase):
             (None, None),
         )
 
+    def test_explicit_context_snapshot_is_repeatable_and_source_scoped(self) -> None:
+        self.state.record_visible_turn(
+            self.topic.topic_id,
+            agent_id="antigravity",
+            provider="antigravity",
+            model="example-model",
+            user_excerpt="other question",
+            response_excerpt="other answer",
+        )
+        context = self.state.visible_context_snapshot(
+            self.topic.topic_id,
+            "codex",
+            source_agent_id="antigravity",
+            limit=8,
+        )
+        self.assertIsNotNone(context)
+        self.assertEqual(
+            context,
+            self.state.visible_context_snapshot(
+                self.topic.topic_id,
+                "codex",
+                source_agent_id="antigravity",
+                limit=8,
+            ),
+        )
+
     def test_dispatch_health_tracks_running_and_completed_turns(self) -> None:
         dispatch_id = self.state.start_dispatch(
             chat_id=self.topic.chat_id,
@@ -262,6 +423,25 @@ class HubStateTests(unittest.TestCase):
         self.state.release_alert_delivery("codex:quota")
         self.assertTrue(self.state.claim_alert_delivery("codex:quota", cooldown_seconds=3600))
 
+    def test_alert_transition_is_claimed_once_until_released(self) -> None:
+        self.assertTrue(self.state.claim_alert_transition("codex:quota-band"))
+        self.assertFalse(self.state.claim_alert_transition("codex:quota-band"))
+        self.state.release_alert_delivery("codex:quota-band")
+        self.assertTrue(self.state.claim_alert_transition("codex:quota-band"))
+
+    def test_reconcile_alert_transitions_rearms_only_resolved_conditions(self) -> None:
+        self.assertTrue(self.state.claim_alert_transition("catalog:codex:stale:operations"))
+        self.assertTrue(self.state.claim_alert_transition("runtime:sender:operations"))
+        self.state.claim_alert_delivery("repair:hermes", cooldown_seconds=3600)
+
+        self.state.reconcile_alert_transitions(
+            active_keys=("runtime:sender:operations",), suffix=":operations"
+        )
+
+        self.assertTrue(self.state.claim_alert_transition("catalog:codex:stale:operations"))
+        self.assertFalse(self.state.claim_alert_transition("runtime:sender:operations"))
+        self.assertFalse(self.state.claim_alert_delivery("repair:hermes", cooldown_seconds=3600))
+
     def test_concurrent_alert_delivery_has_exactly_one_winner(self) -> None:
         barrier = threading.Barrier(2)
 
@@ -282,6 +462,98 @@ class HubStateTests(unittest.TestCase):
         self.assertIsNone(self.state.observe_runtime_counter("codex:429", 4))
         self.assertEqual(self.state.observe_runtime_counter("codex:429", 6), 4)
         self.assertEqual(self.state.observe_runtime_counter("codex:429", 5), 6)
+
+    def test_runtime_counter_can_be_rebaselined_after_process_restart(self) -> None:
+        self.state.set_runtime_counter("codex:429", 8)
+        self.state.replace_runtime_counter("codex:429", 0)
+        self.assertEqual(self.state.runtime_counter("codex:429"), 0)
+
+    def test_runtime_event_retention_enforces_age_boundary_and_preserves_state(self) -> None:
+        now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+        self.state.upsert_runtime_health(
+            component="controller",
+            instance_id="controller-test",
+            pid=1234,
+            process_start_marker="start-marker",
+            started_at=now,
+            heartbeat_at=now,
+        )
+        self.assertTrue(self.state.claim_alert_transition("runtime:test"))
+        self.state.replace_runtime_counter("runtime:test", 7)
+        self.state.record_runtime_event(
+            "controller",
+            "warning",
+            "expired",
+            "expired event",
+            recorded_at=now - timedelta(days=30, microseconds=1),
+        )
+        self.state.record_runtime_event(
+            "controller",
+            "warning",
+            "boundary",
+            "boundary event",
+            recorded_at=now - timedelta(days=30),
+        )
+
+        self.state.record_runtime_event(
+            "controller", "info", "current", "current event", recorded_at=now
+        )
+
+        events = self.state.status_snapshot()["runtime_events"]
+        assert isinstance(events, list)
+        self.assertEqual({item["code"] for item in events}, {"boundary", "current"})
+        self.assertIsNotNone(self.state.get_runtime_health("controller", "controller-test"))
+        self.assertFalse(self.state.claim_alert_transition("runtime:test"))
+        self.assertEqual(self.state.runtime_counter("runtime:test"), 7)
+
+    def test_runtime_event_retention_keeps_newest_count_with_stable_tie_breaker(self) -> None:
+        now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+        timestamp = now.isoformat()
+        with self.state._connection:
+            self.state._connection.executemany(
+                """INSERT INTO runtime_events
+                   (component, level, code, detail, created_at)
+                   VALUES ('controller', 'info', ?, 'event', ?)""",
+                ((f"event-{index}", timestamp) for index in range(10_000)),
+            )
+
+        self.state.record_runtime_event(
+            "controller", "info", "newest", "newest event", recorded_at=now
+        )
+
+        rows = self.state._connection.execute(
+            "SELECT code FROM runtime_events ORDER BY event_id"
+        ).fetchall()
+        self.assertEqual(len(rows), 10_000)
+        self.assertEqual(rows[0]["code"], "event-1")
+        self.assertEqual(rows[-1]["code"], "newest")
+
+    def test_runtime_event_retention_fault_rolls_back_new_event(self) -> None:
+        now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+        with self.state._connection:
+            self.state._connection.execute(
+                """INSERT INTO runtime_events
+                   (component, level, code, detail, created_at)
+                   VALUES ('controller', 'info', 'expired', 'old event', ?)""",
+                ((now - timedelta(days=31)).isoformat(),),
+            )
+            self.state._connection.execute(
+                """CREATE TRIGGER reject_runtime_event_delete
+                   BEFORE DELETE ON runtime_events
+                   BEGIN
+                     SELECT RAISE(ABORT, 'retention fault');
+                   END"""
+            )
+
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "retention fault"):
+            self.state.record_runtime_event(
+                "controller", "info", "new", "new event", recorded_at=now
+            )
+
+        rows = self.state._connection.execute(
+            "SELECT code FROM runtime_events ORDER BY event_id"
+        ).fetchall()
+        self.assertEqual([row["code"] for row in rows], ["expired"])
 
     def test_lists_only_topics_where_agent_is_active(self) -> None:
         self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")

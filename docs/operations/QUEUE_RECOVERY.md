@@ -1,7 +1,7 @@
 # Queue and process recovery
 
 Status: active runbook  
-Last updated: 2026-08-30
+Last updated: 2026-09-13
 
 This runbook covers the durable Controller, provider-worker, and Telegram-outbox
 topology. It contains reusable procedures only; deployment identities, paths,
@@ -25,6 +25,8 @@ chat IDs, account hints, and live evidence stay in private operator records.
 agents-projects-hub doctor HUB_CONFIG
 agents-projects-hub status HUB_CONFIG
 agents-projects-hub monitor HUB_CONFIG
+agents-projects-hub indeterminate-audit HUB_CONFIG
+agents-projects-hub indeterminate-resolve HUB_CONFIG JOB_ID --resolution acknowledged
 systemctl --user status agents-projects-hub.service
 systemctl --user status agents-projects-hub-sender.service
 systemctl --user status 'agents-projects-hub-worker@*.service'
@@ -34,8 +36,12 @@ Interpret the components independently:
 
 - Controller down: new Telegram ingress and local commands stop; committed
   queue work and independent recovery channels remain.
-- One worker down: only that provider stops taking new jobs; other workers and
-  Controller commands remain available.
+- One worker down: only that provider stops taking new jobs; other workers with
+  eligible independent execution scopes and Controller commands remain
+  available.
+- Capacity is cache-only in `status.execution_capacity`: `occupied` names only
+  bounded worker/agent/phase owners, while `blocked_uncertain_scopes` is an
+  aggregate and never reveals roots or topics.
 - Sender down: completed provider results remain `result_ready`; workers MUST
   NOT repeat provider execution to compensate for missing Telegram delivery.
 - Hermes or tlive down: the other channels remain independent; no timeout is an
@@ -60,10 +66,13 @@ uses the conservative rules below.
 ## Provider-job recovery
 
 - Expired `leased` means provider invocation was not recorded as possible. The
-  owning worker may safely return it to `queued` through normal stale recovery.
+  scope may be claimed by another eligible job; normal stale recovery returns
+  the old job to `queued`, and the expired token cannot start it late.
 - Expired `executing` means invocation may have begun. Normal stale recovery
   marks it `indeterminate` unless a provider-specific structured reconciliation
-  proves a result or proves that execution never began.
+  proves a result or proves that execution never began. Unresolved uncertainty
+  retains its canonical-root execution scope across topics and providers, but
+  does not consume the global worker-capacity count or block another root.
 - `failed` and `cancelled` are terminal. Do not reinterpret them as pending.
 - `result_ready` means provider work already succeeded. Only Telegram delivery
   remains; never submit another provider turn for the same job.
@@ -71,7 +80,45 @@ uses the conservative rules below.
 If a provider has no safe reconciliation capability, retain the
 `indeterminate` record, inspect the project and provider session locally, and
 create a new explicit user request only after deciding whether duplicate side
-effects are acceptable.
+effects are acceptable. Resolve the reviewed exact old job before expecting new
+work for the same root to execute; resolution releases only the scope and never
+replays the old job.
+
+`indeterminate-audit` classifies all retained uncertain jobs from read-only
+SQLite evidence and prints only aggregate counts. To preserve a detailed local
+record, pass `--output PRIVATE_PATH`; the command creates a new mode-`0600` JSON
+file and refuses to overwrite an earlier report. The report never authorizes
+productive replay. Its evidence classes distinguish a persisted result, saved
+completion, partial text, accepted turn without visible output, thread creation
+without accepted turn, and absence of an execution checkpoint. Notification
+status is reported separately so an undelivered uncertainty notice is visible.
+
+After reviewing one exact job, `indeterminate-resolve` can append one fixed
+operator classification: `acknowledged` means the uncertainty was reviewed,
+`superseded` means a later explicit request made the old outcome irrelevant,
+and `externally_completed` means completion was confirmed outside Hub. The
+command is idempotent for the same value and rejects replacement. It does not
+change the original job or error, send a message, or authorize provider replay.
+The audit reports these annotations separately and recommends no further action
+for resolved records. Schema 27 uses the immutable annotation to release the
+canonical-root scope for unrelated future work.
+
+## Capacity and lane changes
+
+`max_parallel_roots` defaults to 1. Raising it requires external queue mode and
+does not create extra processes: actual parallelism is also limited by the
+configured provider-worker units. Lowering it never cancels active work. Restart
+workers with the smaller configuration; once the first restarted worker polls,
+all fresh workers use the lowest advertised value and take no new lease until
+occupied execution falls below it. An increase remains conservatively at the
+old advertised value until each old worker restarts or its declaration ages out.
+
+Create and bind a lane only through the local CLI. Binding and archival refuse
+queued, leased, executing, retrying, result-ready, unresolved, dispatch-owned,
+local-writer-owned, or provider-bound topics. Start a fresh unbound session
+before changing its root; archive first, then clean up. A lane is never
+selected from Telegram input, and a worker refuses a path that is not the exact
+derived, allowlisted and currently registered Git worktree.
 
 ## Changing provider ownership
 
@@ -92,6 +139,12 @@ gateway and a local worker as competing consumers for the same provider.
 
 ## Telegram outbox recovery
 
+- Diagnose the cached sender health before changing queue state. A current
+  `transport_operation` plus `transport_failure_class` distinguishes delivery
+  timeout/DNS/TLS/I/O from an API rejection; safe status and retry-after may be
+  present. The consecutive count describes the current episode and resets only
+  after a successful Telegram request. Runtime events are edge-triggered, so
+  one recorded error can represent many retries.
 - An expired `sending` lease returns to `pending` through sender-scoped stale
   recovery. The provider result is not recomputed.
 - Telegram may have accepted a message immediately before sender loss. A retry
@@ -107,6 +160,13 @@ gateway and a local worker as competing consumers for the same provider.
 The managed app-server holds an exclusive mode-`0600` sidecar lock containing
 only PID and process-start metadata. Startup refuses to unlink an existing
 socket it cannot prove it owns.
+
+At boot, do not use `[ -S PATH ]` as a readiness check. An abrupt host or WSL
+stop may preserve the socket inode even though no process is listening. When an
+optional rotating app-server and tlive share the default socket, install the
+provided ordering drop-ins and require a successful bounded Unix connection
+before tlive starts. This avoids two app-servers racing for one path without
+adding `Requires=` coupling.
 
 For a stale path, first verify locally that the recorded PID/start marker is
 not a live matching process and that no process accepts the socket. Stop the
@@ -135,8 +195,11 @@ it.
    restore a migration backup for an ordinary runtime rollback.
 5. Validate and run fault acceptance before resuming routine work.
 
-Migration backup restoration is reserved for a failed migration. Runtime
-rollback retains accepted jobs, results, outbox rows, and diagnostic history.
+A migration fault rolls its SQLite transaction back in place; it does not copy
+the earlier backup over concurrent state. Manual backup restoration is reserved
+for a separately proven database-integrity failure after all database users are
+stopped. Runtime rollback retains accepted jobs, results, outbox rows, and
+diagnostic history.
 
 ## Automated fault gate
 
@@ -144,6 +207,7 @@ Before a live queue cutover, run the full repository validation gate. Its
 fictional subprocess matrix terminates child actors after Controller commit but
 before offset persistence, during provider execution, and after fake Telegram
 acceptance but before delivery persistence. It also covers pre-execution lease
-recovery, concurrent provider isolation, and separate Hub/provider polling
-offsets. This automated evidence does not replace the owner-driven Telegram and
+recovery, same-root provider exclusion, explicit uncertainty resolution, and
+separate Hub/provider polling offsets. This automated evidence does not replace
+the owner-driven Telegram and
 provider acceptance required for a deployment.

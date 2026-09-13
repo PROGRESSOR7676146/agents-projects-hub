@@ -5,12 +5,13 @@ import unittest
 from pathlib import Path
 
 from hermes_codex_router.external_admission import (
+    acknowledge_telegram_contract_for_topic,
     acknowledge_unseen_visible_context,
-    consume_pending_handoff,
     is_active_agent,
-    peek_pending_handoff,
     peek_unseen_visible_context,
+    read_visible_context_snapshot,
     record_external_turn,
+    telegram_contract_required,
 )
 from hermes_codex_router.state import HubState
 
@@ -50,23 +51,28 @@ class ExternalAdmissionTests(unittest.TestCase):
         broken.write_text("not sqlite", encoding="utf-8")
         self.assertFalse(is_active_agent(broken, -1001234567890, 73, agent_id="hermes"))
 
-    def test_handoff_is_peeked_then_consumed_explicitly(self) -> None:
+    def test_visible_context_is_read_only_after_explicit_request(self) -> None:
         state = HubState.open(self.path)
-        staged = state.stage_handoff(
+        state.record_visible_turn(
             self.topic.topic_id,
-            target_agent_id="hermes",
-            source_agent_id="codex",
-            text="context",
+            agent_id="codex",
+            provider="openai",
+            model="example-model",
+            user_excerpt="question",
+            response_excerpt="answer",
         )
         state.close()
-        found = peek_pending_handoff(self.path, -1001234567890, 73, target_agent_id="hermes")
-        self.assertIsNotNone(found)
-        assert found is not None
-        self.assertEqual(found.text, "context")
-        self.assertTrue(consume_pending_handoff(self.path, staged.handoff_id))
-        self.assertIsNone(
-            peek_pending_handoff(self.path, -1001234567890, 73, target_agent_id="hermes")
+        context = read_visible_context_snapshot(
+            self.path,
+            -1001234567890,
+            73,
+            observer_agent_id="hermes",
+            source_agent_id="codex",
         )
+        self.assertIsNotNone(context)
+        assert context is not None
+        self.assertIn("question", context)
+        self.assertIn("answer", context)
 
     def test_records_visible_turns_for_active_and_satellite_agents_in_known_topic(self) -> None:
         self.assertTrue(
@@ -134,6 +140,44 @@ class ExternalAdmissionTests(unittest.TestCase):
         )
         self.assertIsNone(
             peek_unseen_visible_context(self.path, -1001234567890, 73, observer_agent_id="hermes")
+        )
+
+    def test_external_agent_receives_each_contract_version_once(self) -> None:
+        self.assertTrue(
+            telegram_contract_required(
+                self.path,
+                -1001234567890,
+                73,
+                agent_id="hermes",
+                version=1,
+            )
+        )
+        self.assertTrue(
+            acknowledge_telegram_contract_for_topic(
+                self.path,
+                -1001234567890,
+                73,
+                agent_id="hermes",
+                version=1,
+            )
+        )
+        self.assertFalse(
+            telegram_contract_required(
+                self.path,
+                -1001234567890,
+                73,
+                agent_id="hermes",
+                version=1,
+            )
+        )
+        self.assertTrue(
+            telegram_contract_required(
+                self.path,
+                -1001234567890,
+                73,
+                agent_id="hermes",
+                version=2,
+            )
         )
 
 

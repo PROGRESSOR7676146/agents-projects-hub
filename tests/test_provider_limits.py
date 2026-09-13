@@ -34,6 +34,14 @@ class ProviderLimitTests(unittest.TestCase):
                 )
         self.assertEqual(raised.exception.limit.window, "monthly")
 
+    def test_parses_opencode_durable_log_without_http_status(self) -> None:
+        now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        value = parse_opencode_limit(
+            "AI_APICallError: Monthly usage limit reached. Resets in 14 days.", now=now
+        )
+        assert value is not None
+        self.assertEqual(value.window, "monthly")
+
     def test_parses_antigravity_individual_quota_reset(self) -> None:
         now = datetime(2026, 8, 30, 0, 0, tzinfo=timezone.utc)
         value = parse_antigravity_limit("Individual quota reached. Resets in 118h31m10s.", now=now)

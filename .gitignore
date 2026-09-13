@@ -7,8 +7,10 @@ __pycache__/
 *.sqlite3
 *.db
 .env
+.hub/
 config/hub.json
 config/projects.json
+/USER.md
 *.sock
 *.pid
 *.log

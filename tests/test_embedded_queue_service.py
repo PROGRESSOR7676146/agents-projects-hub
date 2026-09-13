@@ -12,17 +12,21 @@ from hermes_codex_router.codex_appserver import CodexThread, RateLimits, TurnRes
 from hermes_codex_router.hub_config import (
     AgentDefinition,
     HubConfig,
+    HubTelegramBot,
     ProjectBinding,
     TerminalSettings,
 )
 from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.service import ProjectHubService, QueueAcceptanceError
 from hermes_codex_router.state import HubState
+from hermes_codex_router.worktrees import create_worktree
+from tests.git_fixtures import init_git_root
 
 
 class FakeTelegram:
     def __init__(self) -> None:
         self.sent: list[str] = []
+        self.chat_actions: list[tuple[int, int, str]] = []
 
     def send_html(self, _chat_id: int, _thread_id: int, text: str, **_kwargs: object) -> int:
         self.sent.append(text)
@@ -30,6 +34,9 @@ class FakeTelegram:
 
     def answer_callback(self, _callback_id: str, _text: str = "") -> None:
         pass
+
+    def send_chat_action(self, chat_id: int, thread_id: int, action: str = "typing") -> None:
+        self.chat_actions.append((chat_id, thread_id, action))
 
 
 class QueueClient:
@@ -42,10 +49,12 @@ class QueueClient:
         self.entered = threading.Event()
         self.release = threading.Event()
         self.turn_threads: list[int] = []
+        self.cwds: list[Path] = []
         self.started_threads = 0
 
     def start_thread(self, **kwargs: object) -> CodexThread:
         self.started_threads += 1
+        self.cwds.append(Path(str(kwargs["cwd"])))
         return CodexThread("thread-1", Path(str(kwargs["cwd"])), "gpt-5.6-sol", "openai")
 
     def resume_thread(self, **kwargs: object) -> CodexThread:
@@ -105,7 +114,7 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         base = Path(self.tempdir.name)
         root = base / "project"
-        (root / ".git").mkdir(parents=True)
+        init_git_root(root)
         self.config = HubConfig(
             schema_version=1,
             owner_user_ids=(42,),
@@ -192,7 +201,7 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
 
     def test_duplicate_update_creates_one_job_and_one_turn(self) -> None:
         client = QueueClient()
-        service, _ = self.service(client)
+        service, telegram = self.service(client)
         self.assertTrue(service.handle_update(update(1, "one task")))
         self.assertFalse(service.handle_update(update(1, "one task")))
         topic = service.state.find_topic(-1001234567890, 77)
@@ -200,6 +209,232 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         self.assertEqual(len(service.state.provider_jobs_for_topic(topic.topic_id)), 1)
         self.assertTrue(service.run_embedded_queue_cycle())
         self.assertEqual(len(client.turn_threads), 1)
+        self.assertEqual(
+            telegram.chat_actions,
+            [(-1001234567890, 77, "typing")],
+        )
+        service.close()
+
+    def test_embedded_lane_uses_the_validated_lane_for_staging_and_provider(self) -> None:
+        client = QueueClient()
+        service, telegram = self.service(client)
+        project = self.registry.projects[0]
+        lane_root, branch = create_worktree(project, "embedded")
+        try:
+            self.assertTrue(service.handle_update(update(1, "/menu")))
+            topic = service.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            service.state.register_lane(
+                lane_id="embedded",
+                project_id=project.project_id,
+                worktree_path=lane_root,
+                branch_name=branch,
+            )
+            service.state.bind_lane("embedded", topic.topic_id)
+
+            self.assertTrue(service.handle_update(update(2, "fictional lane task")))
+            self.assertTrue(service.run_embedded_queue_cycle())
+
+            self.assertEqual(client.cwds, [lane_root])
+            self.assertTrue((lane_root / ".hub" / "staging").exists())
+            self.assertFalse((project.root / ".hub" / "staging").exists())
+            self.assertTrue(service.handle_update(update(3, "/local")))
+            session = service.state.active_session(topic.topic_id)
+            assert session is not None
+            self.assertEqual(session.writer_mode, "local")
+            self.assertIn(str(lane_root), telegram.sent[-1])
+        finally:
+            service.close()
+
+    def test_local_lane_resume_uses_the_validated_lane_root(self) -> None:
+        service, telegram = self.service(QueueClient())
+        project = self.registry.projects[0]
+        lane_root, branch = create_worktree(project, "local")
+        try:
+            self.assertTrue(service.handle_update(update(1, "/menu")))
+            topic = service.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            service.state.register_lane(
+                lane_id="local",
+                project_id=project.project_id,
+                worktree_path=lane_root,
+                branch_name=branch,
+            )
+            service.state.bind_lane("local", topic.topic_id)
+            session = service.state.activate_agent(topic.topic_id, "codex", "gpt-5.6-sol", "high")
+            service.state.bind_provider_session(session.session_id, "lane-thread", None)
+
+            self.assertTrue(service.handle_update(update(2, "/local")))
+
+            self.assertEqual(service.state.get_session(session.session_id).writer_mode, "local")
+            self.assertIn(f"-C {lane_root}", telegram.sent[-1])
+        finally:
+            service.close()
+
+    def test_terminal_takeover_refuses_a_bound_lane_before_provider_access(self) -> None:
+        client = QueueClient()
+        service, telegram = self.service(client)
+        project = self.registry.projects[0]
+        lane_root, branch = create_worktree(project, "terminal")
+        try:
+            self.assertTrue(service.handle_update(update(1, "/menu")))
+            topic = service.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            service.state.register_lane(
+                lane_id="terminal",
+                project_id=project.project_id,
+                worktree_path=lane_root,
+                branch_name=branch,
+            )
+            service.state.bind_lane("terminal", topic.topic_id)
+            service.config = replace(service.config, dispatch_mode="inline")
+
+            self.assertTrue(service.handle_update(update(2, "/terminal")))
+
+            self.assertEqual(client.started_threads, 0)
+            self.assertIn("unavailable for a worktree lane", telegram.sent[-1])
+        finally:
+            service.close()
+
+    def test_inline_retained_lane_refuses_before_session_preparation_and_staging(self) -> None:
+        for bound in (False, True):
+            with self.subTest(bound=bound):
+                self.config = replace(
+                    self.config, state_path=Path(self.tempdir.name) / f"state-{bound}.db"
+                )
+                client = QueueClient()
+                service, telegram = self.service(client)
+                project = self.registry.projects[0]
+                lane_id = "inline-bound" if bound else "inline-empty"
+                lane_root, branch = create_worktree(project, lane_id)
+                try:
+                    service.handle_update(update(1, "/menu"))
+                    topic = service.state.find_topic(-1001234567890, 77)
+                    assert topic is not None
+                    service.state.register_lane(
+                        lane_id=lane_id,
+                        project_id=project.project_id,
+                        worktree_path=lane_root,
+                        branch_name=branch,
+                        topic_id=topic.topic_id,
+                    )
+                    if bound:
+                        session = service.state.activate_agent(
+                            topic.topic_id, "codex", "fictional", "high"
+                        )
+                        service.state.bind_provider_session(
+                            session.session_id, "fictional-retained", None
+                        )
+                    before = service.state.active_session(topic.topic_id)
+                    service.config = replace(service.config, dispatch_mode="inline")
+                    self.assertTrue(
+                        service.handle_update(update(2, "Fictional retained lane task"))
+                    )
+                    self.assertEqual(client.cwds, [])
+                    self.assertEqual(client.turn_threads, [])
+                    self.assertFalse(
+                        service.handle_update(update(2, "Fictional retained lane task"))
+                    )
+                    self.assertEqual(service.state.active_session(topic.topic_id), before)
+                    self.assertFalse((project.root / ".hub" / "staging").exists())
+                    self.assertTrue(telegram.sent)
+                finally:
+                    service.close()
+
+    def test_consecutive_productive_messages_form_one_durable_provider_turn(self) -> None:
+        client = QueueClient()
+        service, _ = self.service(client)
+        service.config = replace(
+            service.config, message_batch_quiet_ms=1500, message_batch_max_ms=8000
+        )
+        self.assertTrue(service.handle_update(update(1, "first part")))
+        self.assertTrue(service.handle_update(update(2, "second part")))
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        jobs = service.state.provider_jobs_for_topic(topic.topic_id)
+        self.assertEqual(len(jobs), 1)
+        self.assertIn("first part", jobs[0].payload_text)
+        self.assertIn(
+            "FOLLOW-UP USER MESSAGE (same Telegram burst):\nsecond part", jobs[0].payload_text
+        )
+        self.assertFalse(service.run_embedded_queue_cycle())
+        service.close()
+
+    def test_satellite_mention_keeps_its_target_for_the_rest_of_the_burst(self) -> None:
+        client = QueueClient()
+        service, _ = self.service(client)
+        satellite = AgentDefinition(
+            "antigravity",
+            "Antigravity",
+            "example_antigravity_bot",
+            "antigravity",
+            None,
+            True,
+            False,
+            "gemini-example",
+            "high",
+        )
+        service.config = replace(
+            service.config,
+            agents=service.config.agents + (satellite,),
+            external_worker_agent_ids=("codex", "antigravity"),
+            message_batch_quiet_ms=3000,
+            message_batch_max_ms=8000,
+        )
+        service.usernames = {
+            "codex": "example_codex_bot",
+            "antigravity": "example_antigravity_bot",
+        }
+
+        self.assertTrue(service.handle_update(update(1, "@example_antigravity_bot do this")))
+        self.assertTrue(service.handle_update(update(2, "using this second part")))
+
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        jobs = service.state.provider_jobs_for_topic(topic.topic_id)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].agent_id, "antigravity")
+        self.assertIn("FOLLOW-UP USER MESSAGE", jobs[0].payload_text)
+        service.close()
+
+    def test_plain_emergency_word_cancels_queued_work_without_provider_call(self) -> None:
+        client = QueueClient()
+        service, telegram = self.service(client)
+        self.assertTrue(service.handle_update(update(1, "queued task")))
+        self.assertTrue(service.handle_update(update(2, "СтОп")))
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        self.assertEqual(
+            service.state.provider_jobs_for_topic(topic.topic_id)[0].status, "cancelled"
+        )
+        self.assertFalse(service.run_embedded_queue_cycle())
+        self.assertEqual(client.turn_threads, [])
+        self.assertTrue(any("отменено задач в очереди: 1" in item for item in telegram.sent))
+        service.close()
+
+    def test_hub_mode_persists_stop_acknowledgement_for_external_sender(self) -> None:
+        client = QueueClient()
+        service, telegram = self.service(client)
+        token = Path(self.tempdir.name) / "hub.token"
+        token.write_text("fictional-token", encoding="utf-8")
+        token.chmod(0o600)
+        service.config = replace(
+            service.config,
+            hub_bot=HubTelegramBot("example_hub_bot", token),
+            queue_runtime="external",
+            outbox_runtime="external",
+            external_worker_agent_ids=("codex",),
+        )
+        self.assertTrue(service.handle_update(update(1, "queued task")))
+        self.assertTrue(service.handle_update(update(2, "stop")))
+
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        job = service.state.provider_jobs_for_topic(topic.topic_id)[0]
+        notice = service.state.get_telegram_outbox_for_job(job.job_id)
+        self.assertEqual((job.status, notice.sender_agent_id), ("cancelled", "hub"))
+        self.assertIn("отменено задач в очереди: 1", notice.telegram_html)
+        self.assertEqual(telegram.sent, [])
         service.close()
 
     def test_queued_work_survives_recreation_and_commands_do_not_enqueue(self) -> None:
@@ -240,9 +475,9 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         self.assertTrue(job.payload_text.endswith("current request"))
         service.close()
 
-    def test_return_transfers_local_writer_and_queues_summary_atomically(self) -> None:
+    def test_return_is_model_free_and_idempotent(self) -> None:
         client = QueueClient()
-        service, _ = self.service(client)
+        service, telegram = self.service(client)
         self.assertTrue(service.handle_update(update(1, "initial task")))
         self.assertTrue(service.run_embedded_queue_cycle())
         self.assertTrue(service.handle_update(update(2, "/local")))
@@ -256,11 +491,109 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         returned = service.state.active_session(topic.topic_id)
         assert returned is not None
         self.assertEqual(returned.writer_mode, "telegram")
-        self.assertEqual(len(service.state.provider_jobs_for_topic(topic.topic_id)), 2)
+        self.assertEqual(len(service.state.provider_jobs_for_topic(topic.topic_id)), 1)
         self.assertEqual(len(client.turn_threads), 1)
-        self.assertTrue(service.run_embedded_queue_cycle())
-        self.assertEqual(len(client.turn_threads), 2)
+        self.assertFalse(service.run_embedded_queue_cycle())
+        self.assertIn("Ownership returned to Telegram", telegram.sent[-1])
+
+        self.assertFalse(service.handle_update(update(3, "/return")))
+        self.assertTrue(service.handle_update(update(4, "/return")))
+        self.assertIn("already owns", telegram.sent[-1])
+        self.assertEqual(len(service.state.provider_jobs_for_topic(topic.topic_id)), 1)
+        self.assertEqual(len(client.turn_threads), 1)
         service.close()
+
+    def test_return_rejects_pending_work_and_preserves_local_lease(self) -> None:
+        client = QueueClient()
+        service, telegram = self.service(client)
+        self.assertTrue(service.handle_update(update(1, "initial task")))
+        self.assertTrue(service.run_embedded_queue_cycle())
+        self.assertTrue(service.handle_update(update(2, "pending task")))
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        active = service.state.active_session(topic.topic_id)
+        assert active is not None
+        # Simulate a pre-v26/partially upgraded state. New ownership transfers
+        # atomically reject this combination before it can be created.
+        with service.state._connection:
+            service.state._connection.execute(
+                "UPDATE agent_sessions SET writer_mode='local' WHERE session_id=?",
+                (active.session_id,),
+            )
+
+        self.assertTrue(service.handle_update(update(3, "/return")))
+        rejected = service.state.active_session(topic.topic_id)
+        assert rejected is not None
+        self.assertEqual(rejected.writer_mode, "local")
+        self.assertIn("still running", telegram.sent[-1])
+        self.assertEqual(len(client.turn_threads), 1)
+        service.close()
+
+    def test_summary_free_return_is_scoped_to_codex(self) -> None:
+        service, _ = self.service(QueueClient())
+        antigravity = AgentDefinition(
+            "antigravity",
+            "Antigravity",
+            "example_antigravity_bot",
+            "antigravity",
+            None,
+            True,
+            False,
+            "gemini-example",
+            "high",
+        )
+        service.config = replace(service.config, agents=service.config.agents + (antigravity,))
+        service.usernames[antigravity.agent_id] = antigravity.telegram_username
+        self.assertTrue(service.handle_update(update(1, "/menu")))
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        session = service.state.activate_agent(
+            topic.topic_id,
+            antigravity.agent_id,
+            antigravity.default_model,
+            antigravity.default_effort,
+        )
+        service.state.bind_provider_session(session.session_id, "conversation-1", None)
+        service.state.set_writer_mode(session.session_id, "local")
+
+        self.assertTrue(service.handle_update(update(2, "/return")))
+        jobs = service.state.provider_jobs_for_topic(topic.topic_id)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].agent_id, "antigravity")
+        self.assertIn("Summarize only", jobs[0].payload_text)
+        returned = service.state.active_session(topic.topic_id)
+        assert returned is not None
+        self.assertEqual(returned.writer_mode, "telegram")
+        service.close()
+
+    def test_local_lease_survives_restart_and_blocks_telegram_until_return(self) -> None:
+        client = QueueClient()
+        first, _ = self.service(client)
+        self.assertTrue(first.handle_update(update(1, "initial task")))
+        self.assertTrue(first.run_embedded_queue_cycle())
+        self.assertTrue(first.handle_update(update(2, "/local")))
+        first.close()
+
+        resumed, telegram = self.service(client)
+        topic = resumed.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        local = resumed.state.active_session(topic.topic_id)
+        assert local is not None
+        self.assertEqual(local.writer_mode, "local")
+        jobs_before = len(resumed.state.provider_jobs_for_topic(topic.topic_id))
+
+        self.assertTrue(resumed.handle_update(update(3, "must not run")))
+        self.assertIn("/return", telegram.sent[-1])
+        self.assertEqual(len(resumed.state.provider_jobs_for_topic(topic.topic_id)), jobs_before)
+        self.assertEqual(len(client.turn_threads), 1)
+
+        self.assertTrue(resumed.handle_update(update(4, "/return")))
+        returned = resumed.state.active_session(topic.topic_id)
+        assert returned is not None
+        self.assertEqual(returned.writer_mode, "telegram")
+        self.assertEqual(len(resumed.state.provider_jobs_for_topic(topic.topic_id)), jobs_before)
+        self.assertEqual(len(client.turn_threads), 1)
+        resumed.close()
 
     def test_terminal_without_completed_session_does_not_call_provider(self) -> None:
         client = QueueClient()

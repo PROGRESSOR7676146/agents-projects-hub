@@ -31,7 +31,10 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
 
     def spawn(self, mode: str, *arguments: object) -> subprocess.Popen[str]:
         environment = dict(os.environ)
-        environment["PYTHONPATH"] = os.pathsep.join((str(ROOT / "src"), str(ROOT)))
+        paths = [str(ROOT / "src"), str(ROOT)]
+        if "PYTHONPATH" in os.environ:
+            paths.append(os.environ["PYTHONPATH"])
+        environment["PYTHONPATH"] = os.pathsep.join(paths)
         child = subprocess.Popen(
             [sys.executable, str(ACTOR), mode, str(self.base), *(str(arg) for arg in arguments)],
             cwd=ROOT,
@@ -137,7 +140,9 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         try:
             self.assertTrue(worker.run_cycle())
             self.assertFalse(worker.run_cycle())
-            self.assertEqual(adapter.calls, ["durable request"])
+            self.assertEqual(len(adapter.calls), 1)
+            self.assertIn("TELEGRAM INTERACTION CONTRACT v1", adapter.calls[0])
+            self.assertTrue(adapter.calls[0].endswith("CURRENT USER TURN:\ndurable request"))
             self.assertEqual(worker.state.get_provider_job(original.job_id).status, "result_ready")
             self.assertEqual(
                 worker.state.get_telegram_outbox_for_job(original.job_id).status,
@@ -167,7 +172,13 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         replacement = self.harness.worker("opencode", recovered_adapter)
         try:
             self.assertTrue(replacement.run_cycle())
-            self.assertEqual(recovered_adapter.calls, ["recover pre-execution lease"])
+            self.assertEqual(len(recovered_adapter.calls), 1)
+            self.assertIn("TELEGRAM INTERACTION CONTRACT v1", recovered_adapter.calls[0])
+            self.assertTrue(
+                recovered_adapter.calls[0].endswith(
+                    "CURRENT USER TURN:\nrecover pre-execution lease"
+                )
+            )
         finally:
             replacement.close()
 
@@ -239,18 +250,12 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         finally:
             state.close()
 
-    def test_hung_provider_process_does_not_block_peer_worker_or_controller_status(self) -> None:
+    def test_hung_provider_holds_root_but_not_controller_and_resolution_releases_it(self) -> None:
         hung_job_id = self.admit(205, 805, "example_opencode_bot", "hung provider task")
         healthy_job_id = self.admit(206, 806, "example_antigravity_bot", "healthy provider task")
         hung_marker = self.base / "hung-provider.marker"
         hung = self.spawn("worker-block-in-adapter", "opencode", hung_marker)
         self.wait_marker(hung, hung_marker)
-
-        healthy_marker = self.base / "healthy-provider.marker"
-        healthy = self.spawn("worker-once", "antigravity", healthy_marker)
-        self.wait_marker(healthy, healthy_marker)
-        self.wait_exit(healthy)
-        self.assertIsNone(hung.poll())
 
         status_marker = self.base / "controller-status.marker"
         status = self.spawn("controller-once", "hub", "group", 207, 805, "/status", status_marker)
@@ -261,11 +266,33 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         state = HubState.open(self.harness.config.state_path)
         try:
             self.assertEqual(state.get_provider_job(hung_job_id).status, "executing")
-            self.assertEqual(state.get_provider_job(healthy_job_id).status, "result_ready")
+            self.assertEqual(state.get_provider_job(healthy_job_id).status, "queued")
+            self.assertIsNone(state.lease_provider_job("antigravity", "blocked-peer"))
             self.assertIn("No active agent session", status_marker.read_text(encoding="utf-8"))
         finally:
             state.close()
         self.terminate(hung)
+
+        state = HubState.open(self.harness.config.state_path)
+        try:
+            recovered = state.recover_stale_provider_jobs(
+                now=datetime.now(timezone.utc) + timedelta(minutes=5)
+            )
+            self.assertEqual(recovered.indeterminate_job_ids, (hung_job_id,))
+            self.assertIsNone(state.lease_provider_job("antigravity", "blocked-peer"))
+            state.resolve_indeterminate_job(hung_job_id, "acknowledged")
+        finally:
+            state.close()
+
+        healthy_marker = self.base / "healthy-provider.marker"
+        healthy = self.spawn("worker-once", "antigravity", healthy_marker)
+        self.wait_marker(healthy, healthy_marker)
+        self.wait_exit(healthy)
+        state = HubState.open(self.harness.config.state_path)
+        try:
+            self.assertEqual(state.get_provider_job(healthy_job_id).status, "result_ready")
+        finally:
+            state.close()
 
     def test_real_polling_loops_keep_hub_and_direct_provider_ingress_distinct(self) -> None:
         state = HubState.open(self.harness.config.state_path)

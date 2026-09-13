@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from .models import Project
+
+if TYPE_CHECKING:
+    from .models import ProjectRegistry
 
 LANE_ID = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
 Run = Callable[..., subprocess.CompletedProcess[str]]
@@ -41,6 +45,66 @@ def create_worktree(
         text=True,
     )
     return path.resolve(strict=True), branch
+
+
+def validate_worktree_execution_root(
+    registry: ProjectRegistry,
+    project: Project,
+    lane_id: str,
+    recorded_path: Path,
+    *,
+    run: Run = subprocess.run,
+) -> Path:
+    """Revalidate an explicitly registered linked worktree before execution."""
+    from .registry import ExecutionRootError, validate_execution_root
+
+    try:
+        base_root = validate_execution_root(registry, project)
+        expected_absolute = lane_path(project, lane_id).absolute()
+        recorded_absolute = recorded_path.expanduser().absolute()
+        if recorded_absolute != expected_absolute or recorded_absolute.is_symlink():
+            raise ExecutionRootError()
+        lane_root = recorded_absolute.resolve(strict=True)
+        if lane_root != expected_absolute or not lane_root.is_dir():
+            raise ExecutionRootError()
+        if not any(
+            allowed.resolve(strict=True) == allowed
+            and lane_root.is_relative_to(allowed)
+            and allowed.is_dir()
+            for allowed in registry.allowed_roots
+        ):
+            raise ExecutionRootError()
+        clean_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        listed = run(
+            ("git", "-C", str(base_root), "worktree", "list", "--porcelain"),
+            env=clean_env,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        registered = {
+            Path(line.removeprefix("worktree ")).resolve(strict=True)
+            for line in listed.stdout.splitlines()
+            if line.startswith("worktree ")
+        }
+        if lane_root not in registered:
+            raise ExecutionRootError()
+        top = run(
+            ("git", "-C", str(lane_root), "rev-parse", "--show-toplevel"),
+            env=clean_env,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if Path(top.stdout.strip()).resolve(strict=True) != lane_root:
+            raise ExecutionRootError()
+        return lane_root
+    except ExecutionRootError:
+        raise
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        raise ExecutionRootError() from None
 
 
 def cleanup_worktree(

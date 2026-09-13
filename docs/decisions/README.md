@@ -1,7 +1,7 @@
 # Decision map
 
 Status: active  
-Last updated: 2026-08-30
+Last updated: 2026-09-13
 
 This directory is the durable entry point for consequential product and
 architecture decisions. New records should be named `NNNN-short-title.md`.
@@ -15,15 +15,35 @@ with a new record.
 | Product identity | Agents Projects Hub; internal `hermes_codex_router` remains for compatibility. | Product requirements |
 | Project topology | One private forum group per registered local project; numeric topic identity. | Product requirements and tests |
 | Routing | One central ingress; ordinary → active, Reply → author, mention → target, selected/pasted quote → active. | Product requirements; tests and commit history |
-| Context | Bounded completed visible turns are delivered on the next productive turn; passive observation does not call models. | Product requirements; tests and commit history |
+| Context | No automatic handoff or unseen-dialogue injection; bounded visible history is supplied only by explicit user request. | [ADR 0009](0009-explicit-context-no-automatic-handoff.md) |
 | Provider identity | One bot identity per runtime, not per model or account. | Product requirements and tests |
 | Codex accounts | Multi-auth is optional; official Codex app-server is the fallback. | Product requirements; `RECOVERY_PLANE.ru.md` |
+| Headless Codex approvals | Shared sockets use companion-backed `on-request`; isolated stdio fallback denies escalation instead of waiting on an unreachable approval channel. | [ADR 0006](0006-headless-codex-fallback-approvals.md) |
+| Shared Codex socket boot | Readiness requires a successful Unix connection; stale socket inodes cannot release tlive ordering. | [ADR 0007](0007-connectable-shared-socket-readiness.md) |
+| Resident Codex proxy lifetime | systemd owns resident helper cleanup; CLI-oriented proxy reapers are disabled for the service launch. | [ADR 0008](0008-resident-codex-proxy-lifetime.md) |
 | Recovery plane | Hermes Gateway and Agent Session Remote/tlive are independent service channels, not project groups or mandatory Hub dependencies. | Product requirements; `RECOVERY_PLANE.ru.md` |
-| Operational alerts | One explicit Hub Operations/Alerts topic; Codex primary, Hermes fallback to the same topic; masked account hints. | Product requirements REQ-OPS-006 |
+| Operational alerts | One explicit Hub Operations/Alerts topic; configured Hub bot primary, legacy Codex fallback when no Hub bot exists, Hermes recovery fallback to the same topic; no automatic session-size advice. | Product requirements REQ-OPS-006 |
 | Local frontend | Native CLI is preferred; one-writer lease is mandatory; tmux remains fallback. | Product requirements and tests |
 | Publication privacy | Deployment identities and live transcripts remain outside Git; automated privacy scan is mandatory. | Product requirements and security policy |
 | Durable execution isolation | Planned deterministic Controller, SQLite queue, strict topic FIFO, isolated provider workers, and outbox; unknown in-flight turns become `indeterminate`, not automatic retries. | [ADR 0001](0001-durable-provider-job-queue.md) |
+| Live input semantics | Durable burst collection, capability-aware Codex steering, FIFO fallback, and model-free emergency stop. | [ADR 0004](0004-durable-input-batching-steering-and-stop.md) |
 | Runtime health | Components publish bounded last-known state to SQLite; status classifies the cache without provider or model calls. | [ADR 0002](0002-durable-runtime-health-cache.md) |
+| Telegram transport health | The third consecutive transport failure degrades health once; a proven success recovers and re-arms the episode. | [ADR 0015](0015-telegram-transport-health-threshold.md) |
+| Runtime-event retention | Diagnostic events retain at most 30 days and 10,000 newest rows without touching current health, alerts, or provider work. | [ADR 0014](0014-bounded-runtime-event-retention.md) |
+| Telegram interaction | Providers own conversational meaning; the Hub owns Telegram UI effects and delivery guarantees. | [ADR 0005](0005-telegram-interaction-contract.md) |
+| Provider instruction channel | Codex receives Telegram Contract v2 through native thread developer instructions; prompt fallback remains only for providers without an accepted native channel. | [ADR 0013](0013-native-provider-interaction-instructions.md) |
+| Messenger task start | Complex work publishes a concise approach and proceeds without a mandatory timer; pause only for a real decision or authority boundary. | [ADR 0010](0010-no-mandatory-grace-period.md) |
+| Native session transfer | `/local` and `/return` transfer exclusive ownership of the same provider session; return performs no automatic summary or handoff. | [ADR 0011](0011-explicit-native-session-ownership-transfer.md) |
+| Deployment provenance | Every runtime reports an immutable Git revision; production never executes from a mutable development checkout. | [ADR 0012](0012-verifiable-immutable-deployments.md) |
+| Hub sessions in tlive | Hub owns project conversation and continuation; tlive remains approval-only for marked Hub Codex turns while retaining full UX for interactive Codex. | [ADR 0017](0017-tlive-approval-only-hub-sessions.md) |
+| Handled provider failure | Retain bounded visible partial text in an incomplete outbox notice, distinguish preparation failure, and persist Telegram cooldowns without replaying work. | [ADR 0018](0018-visible-results-on-provider-failure.md) |
+| Codex process-loss recovery | Schema-22 execution/visible checkpoints and exact-turn read-only reconciliation preserve results without productive replay; rollback must support schema 22. | [ADR 0019](0019-durable-codex-execution-checkpoints.md) |
+| Uncertain-work resolution | Schema-23 immutable operator annotations close reviewed `indeterminate` cases without changing evidence or authorizing replay. | [ADR 0020](0020-immutable-indeterminate-resolutions.md) |
+| Long-task progress | Schema-24 provider progress queue delivers bounded commentary without completing or replaying work, and supersedes stale pending progress at terminal state. | [ADR 0021](0021-durable-rate-limited-progress.md) |
+| Saved Codex session adoption | Schema-25 immutable origins, local preview/apply, atomic replacement and first-return boundary; exact resume without conversation substitution. | [ADR 0022](0022-explicit-codex-session-adoption.md) |
+| Execution root validation | Recheck the registered canonical allowlisted Git root before Hub-owned execution; invalid roots fail before invocation with no automatic replay. | [ADR 0023](0023-execution-time-root-validation.md) |
+| Root execution exclusion | Schema-26 transactional ownership permits at most one Hub-owned productive writer per canonical root across topics/providers; unresolved uncertainty retains the scope. | [ADR 0024](0024-canonical-root-execution-exclusion.md) |
+| Bounded root concurrency | Schema-27 global capacity and durable fairness permit parallel Hub workers only on independent canonical roots or explicitly bound and revalidated worktree lanes. | [ADR 0025](0025-bounded-root-concurrency.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

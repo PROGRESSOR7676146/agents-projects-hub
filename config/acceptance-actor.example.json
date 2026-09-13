@@ -10,11 +10,22 @@
     "example_codex_bot",
     "example_opencode_bot"
   ],
+  "provider_agent_ids": [
+    "codex",
+    "opencode"
+  ],
   "checks": [
     "status",
     "accounts",
     "model_menu",
-    "provider_ping"
+    "provider_ping",
+    "codex_interaction_v2",
+    "reply_route",
+    "forwarded_quote",
+    "artifact_delivery",
+    "context_contract",
+    "burst_route",
+    "stop_route"
   ],
   "timeout_seconds": 30,
   "artifacts_dir": "/var/lib/agents-projects-hub/private/acceptance-results"
