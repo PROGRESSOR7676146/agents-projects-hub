@@ -429,6 +429,49 @@ class BoundedConcurrencyTests(unittest.TestCase):
         assert leased is not None
         self.assertEqual(leased.job_id, ready.job_id)
 
+    def test_busy_worker_does_not_reserve_a_free_fairness_slot(self) -> None:
+        """A live worker with an executing job cannot win another worker's slot."""
+        clock = datetime.now(timezone.utc)
+        agents = ("opencode", "antigravity")
+        jobs = []
+        for number, agent_id in enumerate(("opencode", "antigravity", "opencode", "antigravity"), 1):
+            topic, session = self.topic_session(
+                project_id=f"example-project-{number}",
+                thread_id=120 + number,
+                agent_id=agent_id,
+                root=self.base / f"fairness-root-{number}",
+            )
+            jobs.append(self.enqueue(topic, session, 900 + number))
+        for agent_id in agents:
+            self.publish_worker(agent_id, clock)
+
+        slow = self.state.lease_provider_job(
+            "opencode", "opencode-worker", max_parallel_roots=2,
+            scheduler_agents=agents, now=clock,
+        )
+        fast = self.state.lease_provider_job(
+            "antigravity", "antigravity-worker", max_parallel_roots=2,
+            scheduler_agents=agents, now=clock,
+        )
+        assert slow is not None and slow.lease_token is not None
+        assert fast is not None and fast.lease_token is not None
+        self.state.mark_provider_job_executing(slow.job_id, slow.lease_token, now=clock)
+        self.state.mark_provider_job_executing(fast.job_id, fast.lease_token, now=clock)
+        self.state.commit_provider_result(
+            fast.job_id, fast.lease_token, visible_response="fictional result",
+            sender_agent_id="antigravity", telegram_html="fictional result",
+        )
+
+        available = self.state.lease_provider_job(
+            "antigravity", "antigravity-worker", max_parallel_roots=2,
+            scheduler_agents=agents, now=clock,
+        )
+
+        self.assertIsNotNone(available)
+        assert available is not None
+        self.assertEqual(available.job_id, jobs[3].job_id)
+        self.assertEqual(self.state.get_provider_job(slow.job_id).status, "executing")
+
     def test_passive_capacity_snapshot_has_bounded_owner_identity(self) -> None:
         topic, session = self.topic_session(
             project_id="example-project",

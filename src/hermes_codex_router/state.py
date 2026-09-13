@@ -1902,6 +1902,21 @@ class HubState:
             )
             if occupied >= effective_capacity:
                 return None
+            busy_agents = {
+                str(item["agent_id"])
+                for item in self._connection.execute(
+                    """SELECT DISTINCT agent_id FROM provider_jobs
+                       WHERE status IN ('leased', 'executing')
+                         AND lease_expires_at > ?""",
+                    (timestamp,),
+                ).fetchall()
+            }
+            # Each configured provider worker owns one adapter/client/process
+            # lifecycle.  A durable live lease is therefore evidence that its
+            # worker cannot take another productive slot; do not let a fresh
+            # heartbeat reserve fairness for work it cannot execute.
+            if target_agent in busy_agents:
+                return None
             row = self._connection.execute(
                 _ELIGIBLE_PROVIDER_JOB_SQL,
                 (target_agent, timestamp, timestamp, timestamp),
@@ -1920,6 +1935,8 @@ class HubState:
                 live_agents.update(str(item["agent_id"]) for item in health_rows)
                 contenders: list[tuple[int, str, int, int, sqlite3.Row]] = []
                 for contender_agent in sorted(live_agents.intersection(scheduled_agents)):
+                    if contender_agent in busy_agents:
+                        continue
                     candidate = self._connection.execute(
                         _ELIGIBLE_PROVIDER_JOB_SQL,
                         (contender_agent, timestamp, timestamp, timestamp),
