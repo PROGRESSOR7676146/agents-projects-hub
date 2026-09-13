@@ -52,8 +52,10 @@ whose immutable project ID is still registered to `root:<canonical-root>`. This
 prevents a worker started before the Controller from comparing a new canonical
 scope to a retained legacy string. Active lane scopes are preserved and a
 mismatched lane binding fails closed; a stored canonical scope is never rebound
-only because the registry later changes. Unknown historical IDs retain their
-legacy evidence rather than being guessed from titles or paths. Rollback
+only because the registry later changes. An unknown historical ID is normalized
+only from one retained origin/checkpoint root; conflicting evidence or active
+ownership without it fails closed for local resolution rather than guessing from
+titles or paths. Rollback
 requires an artifact whose maximum supported schema is at least 26; retaining
 the column and its values is safer than a destructive downgrade.
 

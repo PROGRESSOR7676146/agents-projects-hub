@@ -137,6 +137,23 @@ class ExecutionScopeTests(unittest.TestCase):
             self.state.get_topic(local_topic.topic_id).execution_scope, f"root:{self.base}"
         )
 
+    def test_unknown_legacy_active_scope_fails_closed_without_root_evidence(self) -> None:
+        topic, session = self.topic_session(
+            project_id="retired-project", thread_id=743, agent_id="codex", root=self.base
+        )
+        self.state.set_writer_mode(session.session_id, "local")
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE topics SET execution_scope=? WHERE topic_id=?",
+                ("project:retired-project", topic.topic_id),
+            )
+
+        with self.assertRaisesRegex(StateError, "ambiguous legacy execution scope"):
+            self.state.reconcile_legacy_execution_scopes({"example-project": self.base})
+        self.assertEqual(
+            self.state.get_topic(topic.topic_id).execution_scope, "project:retired-project"
+        )
+
     def test_unresolved_indeterminate_job_holds_the_root_until_resolution(self) -> None:
         first_topic, first_session = self.topic_session(
             project_id="example-project",

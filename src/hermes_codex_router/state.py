@@ -924,8 +924,55 @@ class HubState:
                         raise StateError("active lane execution scope mismatch")
                     continue
                 expected = canonical.get(project_id)
-                if expected is None or current != f"project:{project_id}":
+                if current != f"project:{project_id}":
                     continue
+                if expected is None:
+                    evidence = {
+                        str(item["root"])
+                        for item in self._connection.execute(
+                            """SELECT origins.canonical_root AS root
+                               FROM agent_sessions sessions
+                               JOIN codex_session_origins origins
+                                 ON origins.session_id = sessions.session_id
+                               WHERE sessions.topic_id = ?
+                               UNION
+                               SELECT checkpoints.project_root AS root
+                               FROM provider_jobs jobs
+                               JOIN provider_execution_checkpoints checkpoints
+                                 ON checkpoints.job_id = jobs.job_id
+                               WHERE jobs.topic_id = ?""",
+                            (row["topic_id"], row["topic_id"]),
+                        ).fetchall()
+                    }
+                    if len(evidence) == 1:
+                        expected = "root:" + _bounded(
+                            evidence.pop(), name="execution root", maximum=4096
+                        )
+                    elif len(evidence) > 1:
+                        raise StateError("ambiguous legacy execution root evidence")
+                    else:
+                        active = self._connection.execute(
+                            """SELECT 1 FROM agent_sessions
+                               WHERE topic_id = ? AND status IN ('active', 'satellite')
+                                 AND writer_mode != 'telegram'
+                               UNION SELECT 1 FROM provider_jobs
+                               WHERE topic_id = ? AND (
+                                 status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                                 OR (status = 'indeterminate' AND NOT EXISTS (
+                                   SELECT 1 FROM provider_job_resolutions resolutions
+                                   WHERE resolutions.job_id = provider_jobs.job_id
+                                 ))
+                               )
+                               UNION SELECT 1 FROM turn_dispatches
+                               WHERE topic_id = ? AND status = 'running'
+                               LIMIT 1""",
+                            (row["topic_id"], row["topic_id"], row["topic_id"]),
+                        ).fetchone()
+                        if active is not None:
+                            raise StateError(
+                                "ambiguous legacy execution scope requires local resolution"
+                            )
+                        continue
                 cursor = self._connection.execute(
                     """UPDATE topics SET execution_scope = ?, updated_at = ?
                        WHERE topic_id = ? AND execution_scope = ?""",
