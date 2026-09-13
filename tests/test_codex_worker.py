@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -71,7 +73,8 @@ class CodexQueueWorkerTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         base = Path(self.tempdir.name)
         root = base / "project"
-        (root / ".git").mkdir(parents=True)
+        root.mkdir()
+        subprocess.run(("git", "init", "-q", str(root)), check=True)
         self.config = HubConfig(
             schema_version=1,
             owner_user_ids=(42,),
@@ -99,6 +102,23 @@ class CodexQueueWorkerTests(unittest.TestCase):
         )
         self.registry = ProjectRegistry(
             1, (base,), (Project("example-project", "Example", "Example", root),)
+        )
+        self.config.registry_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "allowed_roots": [str(base)],
+                    "projects": [
+                        {
+                            "project_id": "example-project",
+                            "display_name": "Example",
+                            "topic_name": "Example",
+                            "root": str(root),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
         )
 
     def tearDown(self) -> None:

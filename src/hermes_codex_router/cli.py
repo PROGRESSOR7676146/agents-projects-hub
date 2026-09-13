@@ -216,6 +216,21 @@ def _parser() -> argparse.ArgumentParser:
     project_provision_reconcile.add_argument("--chat-id", required=True, type=int)
     project_provision_reconcile.add_argument("--access-hash", required=True, type=int)
     project_provision_reconcile.add_argument("--confirm", required=True)
+    project_provision_resume = commands.add_parser(
+        "project-provision-resume",
+        help="resume one blocked provisioning workflow after local correction",
+    )
+    project_provision_resume.add_argument("config", type=Path)
+    project_provision_resume.add_argument("workflow_id")
+    project_provision_resume.add_argument("--confirm", required=True)
+    project_command_retry = commands.add_parser(
+        "project-command-retry",
+        help="reset one exhausted project command-scope task after local correction",
+    )
+    project_command_retry.add_argument("config", type=Path)
+    project_command_retry.add_argument("--chat-id", required=True, type=int)
+    project_command_retry.add_argument("--bot-identity", required=True)
+    project_command_retry.add_argument("--confirm", required=True)
 
     project = commands.add_parser("project", help="manage the local project registry")
     project_commands = project.add_subparsers(dest="project_command", required=True)
@@ -650,11 +665,51 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.workflow_id,
                     telegram_chat_id=args.chat_id,
                     telegram_access_hash=args.access_hash,
+                    required_owner_user_ids=config.owner_user_ids,
                     confirm=args.confirm,
                 )
             finally:
                 state.close()
             _print({"ok": True, "workflow_id": workflow.workflow_id, "stage": workflow.stage})
+            return 0
+        if args.command == "project-provision-resume":
+            config = load_project_provisioner_config(args.config)
+            state = HubState.open(config.state_path)
+            try:
+                workflow = ProjectOnboardingStore(state).resume_blocked(
+                    args.workflow_id,
+                    required_owner_user_ids=config.owner_user_ids,
+                    confirm=args.confirm,
+                )
+            finally:
+                state.close()
+            _print({"ok": True, "workflow_id": workflow.workflow_id, "stage": workflow.stage})
+            return 0
+        if args.command == "project-command-retry":
+            config = load_hub_config(args.config)
+            expected = f"{args.chat_id}:{args.bot_identity}"
+            if args.confirm != expected:
+                raise StateError("project_command_scope_confirmation_invalid")
+            identities = set(config.external_worker_agent_ids)
+            if config.hub_bot is not None:
+                identities.add("hub")
+            if args.bot_identity not in identities:
+                raise StateError("project_command_scope_identity_invalid")
+            state = HubState.open(config.state_path)
+            try:
+                ProjectOnboardingStore(state).reset_failed_command_scope(
+                    args.chat_id, args.bot_identity
+                )
+            finally:
+                state.close()
+            _print(
+                {
+                    "ok": True,
+                    "chat_id": args.chat_id,
+                    "bot_identity": args.bot_identity,
+                    "status": "pending",
+                }
+            )
             return 0
         if args.command == "project":
             return _project_command(args)

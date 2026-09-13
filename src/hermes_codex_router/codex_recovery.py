@@ -14,6 +14,7 @@ from .codex_appserver import CodexAppServerClient, CodexTurnError, RpcError
 from .codex_failure import CodexPreparationError, codex_failure_notice
 from .execution_journal import ExecutionJournal
 from .hub_config import HubConfig
+from .project_resolution import resolve_project_context
 from .registry import ProjectRegistry
 from .state import RECOVERED_RESULT_METADATA_JSON, HubState, StateError
 
@@ -125,7 +126,12 @@ def recover_codex_job(
     artifacts: tuple[ValidatedArtifact, ...] = ()
     try:
         topic = state.get_topic(job.topic_id)
-        project = registry.require_project(topic.project_id)
+        project = resolve_project_context(
+            config,
+            state,
+            chat_id=topic.chat_id,
+            expected_project_id=topic.project_id,
+        ).project
         checkpoint = journal.read(job.job_id)
         if checkpoint is None:
             raise StateError("no durable execution identity")

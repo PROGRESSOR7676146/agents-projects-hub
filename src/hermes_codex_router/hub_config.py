@@ -771,9 +771,13 @@ def load_hub_config(
             "project_provisioning.session_path",
             must_exist=False,
         )
+        if provisioning_session_path.suffix != ".session":
+            raise HubConfigError("project_provisioning.session_path must end in .session")
         if _validate_project_provisioning_secret:
             if not provisioning_session_path.parent.is_dir():
                 raise HubConfigError("project_provisioning.session_path parent must exist")
+            if provisioning_session_path.parent.stat().st_mode & 0o077:
+                raise HubConfigError("project_provisioning.session_path parent must be private")
             if provisioning_session_path.exists() and (
                 not provisioning_session_path.is_file()
                 or provisioning_session_path.stat().st_mode & 0o077

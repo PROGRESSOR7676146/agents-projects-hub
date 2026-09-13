@@ -7,6 +7,7 @@ import tempfile
 import unittest
 import zipfile
 from contextlib import closing
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -238,6 +239,47 @@ class ExecutionJournalTests(unittest.TestCase):
         try:
             self.assertTrue(worker.run_cycle())
             self.assertEqual(client.reads, 1)
+            self.assertEqual(client.turns, 0)
+            self.assertEqual(worker.state.get_provider_job(job_id).status, "result_ready")
+        finally:
+            worker.close()
+
+    def test_owner_direct_job_recovery_uses_exact_configured_project(self) -> None:
+        from hermes_codex_router.execution_journal import ExecutionJournal
+
+        self.fixture.config = replace(
+            self.fixture.config, direct_message_project_id="example-project"
+        )
+        job_id = self.fixture.enqueue()
+        state = HubState.open(self.fixture.config.state_path)
+        job = state.get_provider_job(job_id)
+        state._connection.execute("UPDATE topics SET chat_id=42 WHERE topic_id=?", (job.topic_id,))
+        state._connection.execute("UPDATE provider_jobs SET chat_id=42 WHERE job_id=?", (job_id,))
+        state._connection.commit()
+        lease = state.lease_provider_job("codex", "old-direct-worker")
+        assert lease and lease.lease_token
+        state.mark_provider_job_executing(job_id, lease.lease_token)
+        journal = ExecutionJournal(state)
+        journal.record_thread(
+            job_id, lease.lease_token, "thread-direct", self.fixture.registry.projects[0].root
+        )
+        journal.record_turn(job_id, lease.lease_token, "turn-direct")
+        state.heartbeat_provider_job(
+            job_id,
+            lease.lease_token,
+            lease_seconds=1,
+            now=datetime.now(timezone.utc) - timedelta(seconds=10),
+        )
+        state.close()
+
+        class Reader(fixtures.WorkerClient):
+            def read_completed_turn(self, **kwargs: Any) -> TurnResult:
+                return TurnResult("Recovered direct result", None, None)
+
+        client = Reader()
+        worker = self.fixture.worker(client)
+        try:
+            self.assertTrue(worker.run_cycle())
             self.assertEqual(client.turns, 0)
             self.assertEqual(worker.state.get_provider_job(job_id).status, "result_ready")
         finally:

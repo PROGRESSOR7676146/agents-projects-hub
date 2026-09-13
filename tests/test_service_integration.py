@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -157,6 +159,28 @@ def callback_values(markup: object) -> list[str]:
     ]
 
 
+def persist_registry(path: Path, registry: ProjectRegistry) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "allowed_roots": [str(root) for root in registry.allowed_roots],
+                "projects": [
+                    {
+                        "project_id": project.project_id,
+                        "display_name": project.display_name,
+                        "topic_name": project.topic_name,
+                        "root": str(project.root),
+                        "enabled": project.enabled,
+                    }
+                    for project in registry.projects
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 class ServiceIntegrationTests(unittest.TestCase):
     def test_external_controller_reads_codex_accounts_from_durable_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -247,7 +271,8 @@ class ServiceIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project"
-            (project_root / ".git").mkdir(parents=True)
+            project_root.mkdir()
+            subprocess.run(("git", "init", "-q", str(project_root)), check=True)
             config = HubConfig(
                 schema_version=1,
                 owner_user_ids=(42,),
@@ -288,6 +313,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             value.registry = ProjectRegistry(
                 1, (base,), (Project("project", "Project", "Project", project_root),)
             )
+            persist_registry(config.registry_path, value.registry)
             value.state = HubState.open(config.state_path)
             value.agent = config.agents[0]
             telegram = FakeTelegram()
@@ -370,7 +396,8 @@ class ServiceIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project"
-            (project_root / ".git").mkdir(parents=True)
+            project_root.mkdir()
+            subprocess.run(("git", "init", "-q", str(project_root)), check=True)
             state_path = base / "state.db"
             config = HubConfig(
                 schema_version=1,
@@ -398,6 +425,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             registry = ProjectRegistry(
                 1, (base,), (Project("project", "Project", "Project", project_root),)
             )
+            persist_registry(config.registry_path, registry)
             client = FakeClient()
             value = ProjectHubService.__new__(ProjectHubService)
             value.config = config
@@ -434,7 +462,8 @@ class ServiceIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project"
-            (project_root / ".git").mkdir(parents=True)
+            project_root.mkdir()
+            subprocess.run(("git", "init", "-q", str(project_root)), check=True)
             state_path = base / "state.db"
             config = HubConfig(
                 schema_version=1,
@@ -462,6 +491,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             registry = ProjectRegistry(
                 1, (base,), (Project("project", "Project", "Project", project_root),)
             )
+            persist_registry(config.registry_path, registry)
             client = FakeClient()
             telegram = FakeTelegram()
             value = ProjectHubService.__new__(ProjectHubService)
@@ -498,7 +528,8 @@ class ServiceIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project"
-            (project_root / ".git").mkdir(parents=True)
+            project_root.mkdir()
+            subprocess.run(("git", "init", "-q", str(project_root)), check=True)
             state_path = base / "state.db"
             config = HubConfig(
                 schema_version=1,
@@ -539,6 +570,7 @@ class ServiceIntegrationTests(unittest.TestCase):
                 (base,),
                 (Project("project", "Project", "Project", project_root),),
             )
+            persist_registry(config.registry_path, registry)
             client = FakeClient()
             external = FakeExternalService()
             value = ProjectHubService.__new__(ProjectHubService)
@@ -599,6 +631,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             )
             value = ProjectHubService.__new__(ProjectHubService)
             value.config = config
+            persist_registry(config.registry_path, ProjectRegistry(1, (base,), ()))
             value.state = HubState.open(config.state_path)
             value.agent = config.agents[0]
             value.telegram = cast(Any, FakeTelegram())
@@ -624,7 +657,8 @@ class ServiceIntegrationTests(unittest.TestCase):
             base = Path(directory)
             roots = (base / "First", base / "Second")
             for root in roots:
-                (root / ".git").mkdir(parents=True)
+                root.mkdir()
+                subprocess.run(("git", "init", "-q", str(root)), check=True)
             state_path = base / "state.db"
             config = HubConfig(
                 schema_version=1,
@@ -660,6 +694,7 @@ class ServiceIntegrationTests(unittest.TestCase):
                     Project("second", "Second", "Second", roots[1]),
                 ),
             )
+            persist_registry(config.registry_path, registry)
             client = FakeClient()
             value = ProjectHubService.__new__(ProjectHubService)
             value.config = config
@@ -693,7 +728,8 @@ class ServiceIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project"
-            (project_root / ".git").mkdir(parents=True)
+            project_root.mkdir()
+            subprocess.run(("git", "init", "-q", str(project_root)), check=True)
             state_path = base / "state.db"
             config = HubConfig(
                 schema_version=1,
@@ -723,6 +759,7 @@ class ServiceIntegrationTests(unittest.TestCase):
                 (base,),
                 (Project("project", "Project", "Project", project_root),),
             )
+            persist_registry(config.registry_path, registry)
             client = FakeClient()
             telegram = FakeTelegram()
 
@@ -764,7 +801,8 @@ class ServiceIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project With Space"
-            (project_root / ".git").mkdir(parents=True)
+            project_root.mkdir()
+            subprocess.run(("git", "init", "-q", str(project_root)), check=True)
             config = HubConfig(
                 schema_version=1,
                 owner_user_ids=(42,),
@@ -791,6 +829,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             registry = ProjectRegistry(
                 1, (base,), (Project("project", "Project", "Project", project_root),)
             )
+            persist_registry(config.registry_path, registry)
             client = FakeClient()
             telegram = FakeTelegram()
             value = ProjectHubService.__new__(ProjectHubService)

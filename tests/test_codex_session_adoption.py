@@ -193,6 +193,54 @@ class CodexSessionAdoptionTests(unittest.TestCase):
             )
         self.inspector.assert_not_called()
 
+    def test_dynamic_binding_rejects_registry_root_replacement_before_inspection(self) -> None:
+        self.config = replace(self.config, projects=())
+        state = HubState.open(self.config.state_path)
+        try:
+            with state._immediate_transaction():
+                state._connection.execute(
+                    """INSERT INTO project_onboarding_workflows
+                       (workflow_id,owner_user_id,display_name,project_id,base_root,
+                        canonical_root,stage,telegram_chat_id,telegram_access_hash,
+                        expires_at,created_at,updated_at)
+                       VALUES ('dynamic-adoption',42,'Example','example-project',?,?,
+                               'completed',-1001234567890,123,
+                               '2099-01-01T00:00:00+00:00','2026-01-01T00:00:00+00:00',
+                               '2026-01-01T00:00:00+00:00')""",
+                    (str(self.root.parent), str(self.root)),
+                )
+                state._connection.execute(
+                    """INSERT INTO project_group_bindings
+                       (project_id,telegram_chat_id,canonical_root,workflow_id,created_at)
+                       VALUES ('example-project',-1001234567890,?,'dynamic-adoption',
+                               '2026-01-01T00:00:00+00:00')""",
+                    (str(self.root),),
+                )
+        finally:
+            state.close()
+        replacement = self.root.parent / "replacement"
+        replacement.mkdir()
+        subprocess.run(("git", "init", "-q", str(replacement)), check=True)
+        self.config.registry_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "allowed_roots": [str(self.root.parent)],
+                    "projects": [
+                        {
+                            "project_id": "example-project",
+                            "display_name": "Example",
+                            "topic_name": "Example",
+                            "root": str(replacement),
+                        }
+                    ],
+                }
+            )
+        )
+        with self.assertRaisesRegex(AdoptionError, "project_binding_mismatch"):
+            self.run_attach()
+        self.inspector.assert_not_called()
+
     def test_inspector_failure_leaves_binding_unchanged(self) -> None:
         before = self.config.state_path.read_bytes()
         self.inspector.side_effect = RpcError("secret provider payload")

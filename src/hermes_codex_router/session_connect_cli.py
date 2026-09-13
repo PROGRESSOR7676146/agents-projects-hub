@@ -12,7 +12,7 @@ from .codex_session_adoption import (
     open_adoption_state,
 )
 from .hub_config import HubConfig
-from .project_onboarding import registered_project_ids
+from .project_resolution import ProjectResolutionError, list_resolved_project_groups
 from .registry import load_registry
 from .session_adoption_policy import supports_adoption
 from .session_connect import ConnectCandidate, SessionConnectStore
@@ -72,9 +72,13 @@ def prepare_connect_code(
     registry = load_registry(config.registry_path)
     try:
         with open_adoption_state(config.state_path) as state:
-            registered = registered_project_ids(config, state)
+            registered = frozenset(
+                item.project.project_id for item in list_resolved_project_groups(config, state)
+            )
     except AdoptionError as exc:
         raise ConnectCliError(exc.reason, temporary=exc.exit_code == 3) from None
+    except ProjectResolutionError as exc:
+        raise ConnectCliError(str(exc)) from None
     projects = tuple(
         project
         for project in registry.projects

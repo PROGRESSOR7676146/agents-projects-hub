@@ -1042,6 +1042,54 @@ ON project_onboarding_outbox(status, available_at, created_at);
 """
 
 
+MIGRATION_28 = """
+ALTER TABLE project_onboarding_workflows
+ADD COLUMN required_owner_ids_json TEXT NOT NULL DEFAULT '[]'
+    CHECK(length(required_owner_ids_json) BETWEEN 2 AND 4096 AND json_valid(required_owner_ids_json));
+ALTER TABLE project_onboarding_workflows
+ADD COLUMN resume_stage TEXT
+    CHECK(resume_stage IS NULL OR resume_stage IN ('preparing_root','configuring_group'));
+
+CREATE TABLE project_command_scopes (
+    telegram_chat_id INTEGER NOT NULL
+        REFERENCES project_group_bindings(telegram_chat_id) ON DELETE CASCADE,
+    bot_identity TEXT NOT NULL CHECK(length(bot_identity) BETWEEN 1 AND 64),
+    phase TEXT NOT NULL CHECK(phase IN ('set','verify')),
+    status TEXT NOT NULL CHECK(status IN ('pending','leased','ready','failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 20),
+    total_attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(total_attempt_count BETWEEN 0 AND 40),
+    available_at TEXT NOT NULL,
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) <= 128),
+    updated_at TEXT NOT NULL,
+    ready_at TEXT,
+    PRIMARY KEY(telegram_chat_id, bot_identity)
+);
+CREATE INDEX project_command_scopes_ready
+ON project_command_scopes(status, available_at, bot_identity, telegram_chat_id);
+
+CREATE TABLE project_command_cooldowns (
+    bot_identity TEXT PRIMARY KEY CHECK(length(bot_identity) BETWEEN 1 AND 64),
+    available_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX project_onboarding_reserved_project
+ON project_onboarding_workflows(project_id)
+WHERE project_id IS NOT NULL
+  AND stage NOT IN ('completed','cancelled','expired')
+  AND (stage<>'failed' OR resume_stage IS NOT NULL);
+CREATE UNIQUE INDEX project_onboarding_reserved_root
+ON project_onboarding_workflows(canonical_root)
+WHERE canonical_root IS NOT NULL
+  AND stage NOT IN ('completed','cancelled','expired')
+  AND (stage<>'failed' OR resume_stage IS NOT NULL);
+
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -1163,6 +1211,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_25,
         MIGRATION_26,
         MIGRATION_27,
+        MIGRATION_28,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:

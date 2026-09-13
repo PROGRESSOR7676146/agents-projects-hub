@@ -14,11 +14,20 @@ This normative module is part of the
 - **REQ-ONBOARD-002 (Implemented):** A Telegram group may be discovered only as
   bounded numeric/title metadata. A newly created group is bound only through
   the exact durable workflow receipt for its numeric identity and canonical
-  root; titles and invite links never authorize a binding.
+  root; titles and invite links never authorize a binding. Controller ingress,
+  provider execution, recovery, saved-session connection and command audit MUST
+  resolve static and dynamic bindings through the same current-registry,
+  allowlisted-root and real-Git-toplevel checks. Direct-message work additionally
+  requires the exact configured direct project and a configured owner chat ID.
+  Resolving one project MUST NOT fail because an unrelated project is disabled;
+  listing/audit MUST retain healthy groups and report bounded per-group errors.
 - **REQ-ONBOARD-003 (Implemented offline; live acceptance required):** The group
   MUST be a private forum supergroup,
-  contain the intended bot identities, and provide topic IDs. Bot permissions
-  MUST be the minimum needed; lack of Manage Topics does not block General.
+  contain the intended bot identities and every owner captured when the action
+  was confirmed, and provide topic IDs. The creating technical owner remains
+  creator; every other captured owner MUST be invited, granted the documented
+  administrative rights, and verified by readback. Bot permissions MUST be the
+  minimum needed; lack of Manage Topics does not block General.
 - **REQ-ONBOARD-004 (Accepted):** Privacy Mode and bot re-add requirements are
   deployment steps, not runtime routing actions.
 - **REQ-ONBOARD-005 (Planned acceptance):** Every new project must pass a canary
@@ -29,12 +38,24 @@ This normative module is part of the
   operations, full automation MAY use a separate explicitly enabled local user
   session. Its API hash and session remain private files, its numeric identity
   MUST be pinned to an owner, and the long-running provisioner MUST refuse an
-  unpinned or different identity. The acceptance actor is not reused.
+  unpinned or different identity. The user session and its sidecars MUST remain
+  private and one nonblocking process lock MUST cover login and the whole worker
+  lifetime. Mutation RPCs MUST use bounded deadlines with client retry and
+  reconnect disabled. The acceptance actor is not reused.
 - **REQ-ONBOARD-007 (Implemented):** Project onboarding MUST persist external
   operation boundaries. Root preparation is idempotent; an unknown group create
   or bot-configuration outcome MUST pause without blind retry or deletion.
-  Recovery requires an exact local workflow/group confirmation and MUST reject
-  conflicting project, group or root identities.
+  A preflight or proven configuration rejection MUST remain explicitly resumable
+  without inventing a group identity. Recovery requires an exact local
+  workflow/group confirmation, a fresh owner snapshot, and MUST reject
+  conflicting project, group or root identities. Completion notices and new
+  group command scopes MUST retain durable retry deadlines. A recoverable block
+  MUST continue reserving its project ID and root. Command convergence MUST use
+  one bot/group API operation per leased step, persist per-bot cooldowns that
+  apply to bindings created during the cooldown, fail exhausted work safely,
+  and permit only explicit local reset. Command audit MUST open existing state
+  read-only without initialization or migration. An ambiguous completion send
+  without a positive Telegram message ID MUST remain unknown.
 
 ## 15. Functional acceptance criteria
 
@@ -142,7 +163,7 @@ necessary but not sufficient for items marked live.
 | Optional Codex account pool/fallback | Implemented | Natural exhaustion E2E remains an acceptance item. |
 | Telegram E2E baseline | Bounded actor implemented; live authorization pending | Results remain private deployment evidence. |
 | `/local` and `/return` | Implemented | Codex return is model-free and same-session; other providers retain prior behavior pending acceptance. |
-| Project/group onboarding | Implemented offline; deployment opt-in and live canary required | Owner-only Hub wizard, schema-27 receipts, bounded Git-root preparation and a separately authorized user-session provisioner; unknown Telegram outcomes stop without blind retry. |
+| Project/group onboarding | Implemented offline; deployment opt-in and live canary required | Owner-only Hub wizard, schema-28 owner/lease/command receipts, bounded Git-root preparation and a separately authorized owner user-session provisioner; unknown Telegram outcomes stop without blind retry. |
 | Compact command surface | Implemented | Provider defaults remain bounded; project Hub scope exposes `/menu`, `/connect`, `/stop`, and Hub private scope exposes `/start`, `/projects`, `/connect`, `/cancel`. |
 | Saved Codex session connect | Implemented; live Telegram acceptance pending | One durable workflow serves topic selection, Hub-private selection/new-topic creation, and owner-scoped local one-time codes. |
 | Summary-free Codex return | Implemented | Local lease change; no model, transcript, handoff, or session change. |

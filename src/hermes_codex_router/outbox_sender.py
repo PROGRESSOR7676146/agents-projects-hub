@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -14,11 +15,12 @@ from .artifacts import (
     remove_spooled_artifact,
     verify_spooled_artifact,
 )
-from .command_menu import configure_project_group_commands
+from .command_menu import GROUP_COMMANDS
 from .delivery_retry import delivery_retry_delay
 from .hub_config import HubConfig
 from .progress_delivery import ProgressDeliveryQueue
 from .project_onboarding import ProjectOnboardingStore
+from .project_resolution import resolve_project_context
 from .session_connect import SessionConnectStore
 from .state import HubState
 from .telegram import TELEGRAM_HEALTH_FAILURE_THRESHOLD, TelegramBotApi, TelegramError
@@ -28,7 +30,13 @@ class TelegramOutboxSenderError(RuntimeError):
     pass
 
 
+class ProjectCommandScopeMismatch(RuntimeError):
+    pass
+
+
 class TelegramSender(Protocol):
+    def call(self, method: str, **params: object) -> object: ...
+
     def send_chat_action(self, chat_id: int, thread_id: int, action: str = "typing") -> None: ...
     def send_html(self, chat_id: int, thread_id: int, html: str) -> int: ...
     def send_document(
@@ -124,8 +132,7 @@ class TelegramOutboxSender:
         self._last_health_publish_monotonic = 0.0
         self._chat_action_due: dict[tuple[str, int, int], float] = {}
         self._chat_action_failures: dict[tuple[str, int, int], tuple[str, str, int | None]] = {}
-        self._synced_project_command_scopes: set[int] = set()
-        self._command_scope_retry_at = 0.0
+        self._final_deliveries_since_command_scope = 0
         self._publish_health()
 
     def close(self) -> None:
@@ -254,40 +261,66 @@ class TelegramOutboxSender:
         except KeyboardInterrupt:
             return
 
-    def _sync_onboarded_project_commands(self) -> None:
-        now = time.monotonic()
-        if now < self._command_scope_retry_at:
-            return
-        static_chat_ids = {
-            item.telegram_chat_id
-            for item in self.config.projects
-            if item.telegram_chat_id is not None
-        }
-        pending = tuple(
-            binding.telegram_chat_id
-            for binding in ProjectOnboardingStore(self.state).bindings()
-            if binding.telegram_chat_id not in static_chat_ids
-            and binding.telegram_chat_id not in self._synced_project_command_scopes
-        )
-        for chat_id in pending:
-            try:
-                configure_project_group_commands(self.telegram_bots, chat_id=chat_id)
-            except Exception as exc:
-                self._record_event("warning", "project_command_scope_error", type(exc).__name__)
-                self._command_scope_retry_at = now + 30.0
-                return
-            self._synced_project_command_scopes.add(chat_id)
-        self._command_scope_retry_at = 0.0
+    def _sync_onboarded_project_commands(self) -> bool:
+        store = ProjectOnboardingStore(self.state)
+        identities = tuple(sorted(self.telegram_bots))
+        store.ensure_command_scope_tasks(identities)
+        task = store.claim_command_scope(self.sender_id, identities)
+        if task is None:
+            return False
+        if self._stop.is_set():
+            store.release_command_scope(task)
+            return False
+        try:
+            resolve_project_context(self.config, self.state, chat_id=task.telegram_chat_id)
+            api = self.telegram_bots[task.bot_identity]
+            scope = json.dumps(
+                {"type": "chat", "chat_id": task.telegram_chat_id}, separators=(",", ":")
+            )
+            expected = (
+                [
+                    {"command": command, "description": description}
+                    for command, description in GROUP_COMMANDS
+                ]
+                if task.bot_identity == "hub"
+                else []
+            )
+            if task.phase == "set":
+                api.call("setMyCommands", commands=json.dumps(expected), scope=scope)
+                store.advance_command_scope_to_verify(task)
+            elif api.call("getMyCommands", scope=scope) == expected:
+                store.complete_command_scope(task)
+            else:
+                raise ProjectCommandScopeMismatch("Telegram project command scope did not converge")
+        except Exception as exc:
+            self._record_event("warning", "project_command_scope_error", type(exc).__name__)
+            store.retry_command_scope(
+                task,
+                type(exc).__name__,
+                delay_seconds=delivery_retry_delay(exc, task.attempt_count),
+                restart_set=isinstance(exc, ProjectCommandScopeMismatch),
+                defer_identity=isinstance(exc, TelegramError) and exc.retry_after is not None,
+            )
+            if isinstance(exc, TelegramError):
+                self._record_transport_failure(exc)
+        else:
+            self._record_transport_success()
+        self._final_deliveries_since_command_scope = 0
+        return True
 
     def run_cycle(self, *, now: datetime | None = None) -> bool:
         """Recover stale leases and fairly deliver at most one prepared row."""
         if self._stop.is_set():
             return False
         self._publish_health()
-        self._sync_onboarded_project_commands()
         self.state.recover_stale_telegram_outbox(sender_agent_ids=self.agent_ids, now=now)
         self.progress.recover_stale(self.provider_agent_ids, now=now)
         self.progress.supersede_terminal(self.provider_agent_ids, now=now)
+        if (
+            self._final_deliveries_since_command_scope >= 10
+            and self._sync_onboarded_project_commands()
+        ):
+            return True
         start = self._cursor % len(self.agent_ids)
         for offset in range(len(self.agent_ids)):
             if self._stop.is_set():
@@ -296,7 +329,10 @@ class TelegramOutboxSender:
             agent_id = self.agent_ids[position]
             if self._deliver_one(agent_id, now=now):
                 self._cursor = (position + 1) % len(self.agent_ids)
+                self._final_deliveries_since_command_scope += 1
                 return True
+        if self._sync_onboarded_project_commands():
+            return True
         progress_start = self._progress_cursor % len(self.provider_agent_ids)
         for offset in range(len(self.provider_agent_ids)):
             if self._stop.is_set():

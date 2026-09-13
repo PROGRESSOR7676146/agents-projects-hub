@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 import tempfile
 import unittest
 from dataclasses import replace
@@ -17,18 +19,38 @@ from hermes_codex_router.hub_config import (
     TerminalSettings,
 )
 from hermes_codex_router.outbox_sender import TelegramOutboxSender
+from hermes_codex_router.project_onboarding import ProjectOnboardingStore
 from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.state import HubState
 from hermes_codex_router.telegram import TelegramError
 
 
 class Bot:
-    def __init__(self, *, fail: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail: bool = False,
+        command_errors: dict[str, BaseException] | None = None,
+    ) -> None:
         self.fail = fail
+        self.command_errors = command_errors or {}
         self.sent: list[tuple[int, int, str]] = []
         self.documents: list[tuple[int, int, Path, str | None]] = []
         self.actions: list[tuple[int, int, str]] = []
         self.drafts: list[tuple[int, int, int, str]] = []
+        self.commands: dict[str | None, list[dict[str, str]]] = {}
+
+    def call(self, method: str, **params: object) -> object:
+        scope = cast(str | None, params.get("scope"))
+        error = self.command_errors.get(scope or "")
+        if error is not None:
+            raise error
+        if method == "setMyCommands":
+            self.commands[scope] = cast(list[dict[str, str]], json.loads(str(params["commands"])))
+            return True
+        if method == "getMyCommands":
+            return self.commands.get(scope, [])
+        raise AssertionError(method)
 
     def send_chat_action(self, chat_id: int, thread_id: int, action: str = "typing") -> None:
         self.actions.append((chat_id, thread_id, action))
@@ -77,6 +99,8 @@ class TelegramOutboxSenderTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         base = Path(self.tempdir.name)
+        self.base = base
+        self.dynamic_projects: list[dict[str, object]] = []
         self.config = HubConfig(
             schema_version=1,
             owner_user_ids=(42,),
@@ -166,6 +190,303 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             telegram_bots=cast(dict[str, Any], bots),
             sender_id="test-sender",
         )
+
+    def add_dynamic_binding(self, project_id: str, chat_id: int) -> str:
+        root = self.base / project_id
+        root.mkdir()
+        subprocess.run(("git", "init", "-q", str(root)), check=True)
+        self.dynamic_projects.append(
+            {
+                "project_id": project_id,
+                "display_name": project_id.title(),
+                "topic_name": project_id.title(),
+                "root": str(root),
+            }
+        )
+        self.config.registry_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "allowed_roots": [str(self.base)],
+                    "projects": self.dynamic_projects,
+                }
+            ),
+            encoding="utf-8",
+        )
+        state = HubState.open(self.config.state_path)
+        try:
+            now = datetime.now(timezone.utc)
+            workflow_id = f"workflow-{project_id}"
+            state._connection.execute(
+                """INSERT INTO project_onboarding_workflows
+                   (workflow_id,owner_user_id,display_name,project_id,base_root,canonical_root,
+                    stage,expires_at,created_at,updated_at,required_owner_ids_json)
+                   VALUES (?,?,?,?,?,?,'completed',?,?,?,'[42]')""",
+                (
+                    workflow_id,
+                    42,
+                    project_id.title(),
+                    project_id,
+                    str(self.base),
+                    str(root),
+                    (now + timedelta(hours=1)).isoformat(),
+                    now.isoformat(),
+                    now.isoformat(),
+                ),
+            )
+            state._connection.execute(
+                """INSERT INTO project_group_bindings
+                   (project_id,telegram_chat_id,canonical_root,workflow_id,created_at)
+                   VALUES (?,?,?,?,?)""",
+                (project_id, chat_id, str(root), workflow_id, now.isoformat()),
+            )
+            state._connection.commit()
+            return workflow_id
+        finally:
+            state.close()
+
+    def test_final_result_precedes_new_project_command_scope(self) -> None:
+        chat_id = -1002222222222
+        self.add_dynamic_binding("dynamic", chat_id)
+        job_id = self.ready_outbox("opencode", 901)
+        opencode = Bot()
+        antigravity = Bot()
+        sender = self.sender(opencode=opencode, antigravity=antigravity)
+        try:
+            self.assertTrue(sender.run_cycle())
+            self.assertEqual(sender.state.get_provider_job(job_id).status, "completed")
+            self.assertEqual(opencode.commands, {})
+            for _ in range(4):
+                self.assertTrue(sender.run_cycle())
+            rows = sender.state._connection.execute(
+                "SELECT status FROM project_command_scopes WHERE telegram_chat_id=?", (chat_id,)
+            ).fetchall()
+            self.assertEqual([row["status"] for row in rows], ["ready", "ready"])
+        finally:
+            sender.close()
+
+    def test_broken_project_command_scope_does_not_block_another_group(self) -> None:
+        broken_chat = -1002222222222
+        healthy_chat = -1001111111111
+        self.add_dynamic_binding("broken", broken_chat)
+        self.add_dynamic_binding("healthy", healthy_chat)
+        broken_scope = f'{{"type":"chat","chat_id":{broken_chat}}}'
+        sender = self.sender(
+            opencode=Bot(command_errors={broken_scope: RuntimeError("scope failure")}),
+            antigravity=Bot(),
+        )
+        try:
+            for _ in range(10):
+                sender.run_cycle()
+            rows = {
+                (int(row["telegram_chat_id"]), str(row["bot_identity"])): str(row["status"])
+                for row in sender.state._connection.execute(
+                    "SELECT telegram_chat_id,bot_identity,status FROM project_command_scopes"
+                )
+            }
+            self.assertEqual(rows[(broken_chat, "opencode")], "pending")
+            self.assertEqual(rows[(healthy_chat, "antigravity")], "ready")
+            self.assertEqual(rows[(healthy_chat, "opencode")], "ready")
+        finally:
+            sender.close()
+
+    def test_project_command_429_cooldown_survives_sender_restart(self) -> None:
+        chat_id = -1002222222222
+        self.add_dynamic_binding("dynamic", chat_id)
+        scope = f'{{"type":"chat","chat_id":{chat_id}}}'
+        rate_limit = TelegramError(
+            "rate limited",
+            operation="api_call",
+            failure_class="api_rejection",
+            status_code=429,
+            retry_after=60,
+        )
+        config = replace(
+            self.config,
+            agents=(self.config.require_agent("antigravity"),),
+            external_worker_agent_ids=("antigravity",),
+        )
+        sender = TelegramOutboxSender(
+            config,
+            telegram_bots=cast(Any, {"antigravity": Bot(command_errors={scope: rate_limit})}),
+            sender_id="test-sender",
+        )
+        try:
+            self.assertTrue(sender.run_cycle())
+            row = sender.state._connection.execute(
+                """SELECT status,attempt_count,available_at FROM project_command_scopes
+                   WHERE telegram_chat_id=? AND bot_identity='antigravity'""",
+                (chat_id,),
+            ).fetchone()
+            self.assertEqual((row["status"], row["attempt_count"]), ("pending", 1))
+            self.assertGreater(
+                datetime.fromisoformat(str(row["available_at"])), datetime.now(timezone.utc)
+            )
+        finally:
+            sender.close()
+
+        second_chat = -1001111111111
+        self.add_dynamic_binding("second", second_chat)
+        restarted = TelegramOutboxSender(
+            config,
+            telegram_bots=cast(Any, {"antigravity": Bot()}),
+            sender_id="test-sender-2",
+        )
+        try:
+            self.assertFalse(restarted.run_cycle())
+            rows = restarted.state._connection.execute(
+                """SELECT telegram_chat_id,attempt_count,available_at
+                   FROM project_command_scopes WHERE bot_identity='antigravity'"""
+            ).fetchall()
+            self.assertEqual({int(row["telegram_chat_id"]) for row in rows}, {chat_id, second_chat})
+            self.assertTrue(all(int(row["attempt_count"]) <= 1 for row in rows))
+            self.assertTrue(
+                all(
+                    datetime.fromisoformat(str(row["available_at"])) > datetime.now(timezone.utc)
+                    for row in rows
+                )
+            )
+            restarted.state._connection.execute(
+                "UPDATE project_command_cooldowns SET available_at='2020-01-01T00:00:00+00:00'"
+            )
+            restarted.state._connection.execute(
+                "UPDATE project_command_scopes SET available_at='2020-01-01T00:00:00+00:00'"
+            )
+            restarted.state._connection.commit()
+            self.assertTrue(restarted.run_cycle())
+            self.assertTrue(restarted.run_cycle())
+        finally:
+            restarted.close()
+
+    def test_exhausted_stale_command_task_fails_without_blocking_another(self) -> None:
+        exhausted_chat = -1002222222222
+        healthy_chat = -1001111111111
+        self.add_dynamic_binding("exhausted", exhausted_chat)
+        self.add_dynamic_binding("healthy", healthy_chat)
+        state = HubState.open(self.config.state_path)
+        try:
+            store = ProjectOnboardingStore(state)
+            store.ensure_command_scope_tasks(("opencode",))
+            state._connection.execute(
+                """UPDATE project_command_scopes SET status='leased',attempt_count=20,
+                   lease_token='expired-token',lease_owner='dead',
+                   lease_expires_at='2020-01-01T00:00:00+00:00'
+                   WHERE telegram_chat_id=? AND bot_identity='opencode'""",
+                (exhausted_chat,),
+            )
+            state._connection.commit()
+            task = store.claim_command_scope("replacement", ("opencode",))
+            assert task is not None
+            self.assertEqual(task.telegram_chat_id, healthy_chat)
+            exhausted = state._connection.execute(
+                """SELECT status,attempt_count FROM project_command_scopes
+                   WHERE telegram_chat_id=? AND bot_identity='opencode'""",
+                (exhausted_chat,),
+            ).fetchone()
+            self.assertEqual((exhausted["status"], exhausted["attempt_count"]), ("failed", 20))
+            store.release_command_scope(task)
+            store.reset_failed_command_scope(exhausted_chat, "opencode")
+            reset = state._connection.execute(
+                """SELECT status,phase,attempt_count FROM project_command_scopes
+                   WHERE telegram_chat_id=? AND bot_identity='opencode'""",
+                (exhausted_chat,),
+            ).fetchone()
+            self.assertEqual(
+                (reset["status"], reset["phase"], reset["attempt_count"]), ("pending", "set", 0)
+            )
+        finally:
+            state.close()
+
+    def test_successful_final_set_attempt_gets_a_fresh_verify_budget(self) -> None:
+        chat_id = -1002222222222
+        self.add_dynamic_binding("final-set", chat_id)
+        state = HubState.open(self.config.state_path)
+        try:
+            store = ProjectOnboardingStore(state)
+            store.ensure_command_scope_tasks(("opencode",))
+            state._connection.execute(
+                """UPDATE project_command_scopes SET attempt_count=19,total_attempt_count=19
+                   WHERE telegram_chat_id=? AND bot_identity='opencode'""",
+                (chat_id,),
+            )
+            state._connection.commit()
+            setting = store.claim_command_scope("sender", ("opencode",))
+            assert setting is not None
+            self.assertEqual((setting.phase, setting.attempt_count), ("set", 20))
+            store.advance_command_scope_to_verify(setting)
+            verifying = store.claim_command_scope("sender", ("opencode",))
+            assert verifying is not None
+            self.assertEqual((verifying.phase, verifying.attempt_count), ("verify", 1))
+            self.assertEqual(verifying.total_attempt_count, 21)
+            store.complete_command_scope(verifying)
+        finally:
+            state.close()
+
+    def test_repeated_set_verify_mismatch_has_a_total_attempt_limit(self) -> None:
+        chat_id = -1002222222222
+        self.add_dynamic_binding("bounded-mismatch", chat_id)
+        state = HubState.open(self.config.state_path)
+        try:
+            store = ProjectOnboardingStore(state)
+            store.ensure_command_scope_tasks(("opencode",))
+            state._connection.execute(
+                """UPDATE project_command_scopes SET phase='verify',total_attempt_count=39
+                   WHERE telegram_chat_id=? AND bot_identity='opencode'""",
+                (chat_id,),
+            )
+            state._connection.commit()
+            verifying = store.claim_command_scope("sender", ("opencode",))
+            assert verifying is not None
+            self.assertEqual(verifying.total_attempt_count, 40)
+            store.retry_command_scope(
+                verifying,
+                "ProjectCommandScopeMismatch",
+                delay_seconds=0,
+                restart_set=True,
+            )
+            exhausted = state._connection.execute(
+                """SELECT status,phase,total_attempt_count FROM project_command_scopes
+                   WHERE telegram_chat_id=? AND bot_identity='opencode'""",
+                (chat_id,),
+            ).fetchone()
+            self.assertEqual(
+                (exhausted["status"], exhausted["phase"], exhausted["total_attempt_count"]),
+                ("failed", "set", 40),
+            )
+            store.reset_failed_command_scope(chat_id, "opencode")
+        finally:
+            state.close()
+
+    def test_successful_set_at_total_limit_becomes_explicitly_resettable(self) -> None:
+        chat_id = -1002222222222
+        self.add_dynamic_binding("final-total-set", chat_id)
+        state = HubState.open(self.config.state_path)
+        try:
+            store = ProjectOnboardingStore(state)
+            store.ensure_command_scope_tasks(("opencode",))
+            state._connection.execute(
+                """UPDATE project_command_scopes SET attempt_count=5,total_attempt_count=39
+                   WHERE telegram_chat_id=? AND bot_identity='opencode'""",
+                (chat_id,),
+            )
+            state._connection.commit()
+            setting = store.claim_command_scope("sender", ("opencode",))
+            assert setting is not None
+            self.assertEqual(setting.total_attempt_count, 40)
+            store.advance_command_scope_to_verify(setting)
+            exhausted = state._connection.execute(
+                """SELECT status,phase,attempt_count,total_attempt_count,error_code
+                   FROM project_command_scopes
+                   WHERE telegram_chat_id=? AND bot_identity='opencode'""",
+                (chat_id,),
+            ).fetchone()
+            self.assertEqual(
+                tuple(exhausted),
+                ("failed", "verify", 0, 40, "command_verify_budget_exhausted"),
+            )
+            store.reset_failed_command_scope(chat_id, "opencode")
+        finally:
+            state.close()
 
     def test_fair_polling_delivers_each_agent_with_its_own_bot(self) -> None:
         open_first = self.ready_outbox("opencode", 1)

@@ -33,6 +33,11 @@ from .external_runtime import (
 )
 from .hub_config import HubConfig
 from .metadata import format_agent_response, format_telegram_response
+from .project_resolution import (
+    ProjectResolutionError,
+    resolve_project_context,
+    resolve_project_group,
+)
 from .registry import ProjectRegistry, load_registry
 from .session_adoption_policy import validate_adoption_mode
 from .session_adoption_state import CodexSessionOrigins
@@ -260,6 +265,25 @@ class ExternalQueueWorker:
         try:
             if workflow.canonical_root is None:
                 raise ExternalQueueWorkerError("connect project is missing")
+            if workflow.project_id is None:
+                raise ExternalQueueWorkerError("connect project is missing")
+            resolved = (
+                resolve_project_context(
+                    self.config,
+                    self.state,
+                    chat_id=workflow.destination_chat_id,
+                    expected_project_id=workflow.project_id,
+                    expected_root=workflow.canonical_root,
+                )
+                if workflow.destination_chat_id is not None
+                else resolve_project_group(
+                    self.config,
+                    self.state,
+                    project_id=workflow.project_id,
+                    expected_root=workflow.canonical_root,
+                )
+            )
+            self.registry = resolved.registry
             client = self._client()
             client.initialize()
             if workflow.stage == "discovering":
@@ -293,12 +317,36 @@ class ExternalQueueWorker:
     def _execute(self, job: ProviderJobRecord) -> None:
         if job.lease_token is None:
             raise ExternalQueueWorkerError("leased provider job has no lease token")
+        topic = self.state.get_topic(job.topic_id)
+        try:
+            resolved = resolve_project_context(
+                self.config,
+                self.state,
+                chat_id=topic.chat_id,
+                expected_project_id=topic.project_id,
+            )
+        except ProjectResolutionError as exc:
+            self.state.terminate_provider_job_with_notice(
+                job.job_id,
+                job.lease_token,
+                status="failed",
+                expected_status="leased",
+                error_class="pre_execution",
+                error_code=str(exc),
+                sender_agent_id=self.agent.agent_id,
+                telegram_html=(
+                    f"{self.agent.display_name} did not start: the project binding is invalid."
+                ),
+            )
+            self._last_error_code = str(exc)[:128]
+            self._provider_state = "unavailable"
+            return
+        self.registry = resolved.registry
+        project = resolved.project
         executing = self.state.mark_provider_job_executing(job.job_id, job.lease_token)
         self._publish_health(activity_state="executing", active_job=executing)
         token = executing.lease_token
         assert token is not None
-        topic = self.state.get_topic(executing.topic_id)
-        project = self.registry.require_project(topic.project_id)
         heartbeat_stop = threading.Event()
 
         def maintain_lease() -> None:

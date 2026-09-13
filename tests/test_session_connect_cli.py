@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
 import unittest
 from contextlib import redirect_stdout
 from dataclasses import replace
@@ -22,6 +23,7 @@ class SessionConnectCliTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.tearDown)
         self.root = fixture.registry.projects[0].root
+        subprocess.run(("git", "init", "-q", str(self.root)), check=True)
         self.config = replace(
             fixture.config,
             hub_bot=HubTelegramBot("example_hub_bot", Path("/tmp/example-token")),

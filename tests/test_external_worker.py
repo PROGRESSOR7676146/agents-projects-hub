@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 import tempfile
 import unittest
 from dataclasses import replace
@@ -71,7 +73,8 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         base = Path(self.tempdir.name)
         root = base / "project"
-        (root / ".git").mkdir(parents=True)
+        root.mkdir()
+        subprocess.run(("git", "init", "-q", str(root)), check=True)
         self.config = HubConfig(
             schema_version=1,
             owner_user_ids=(42,),
@@ -114,6 +117,22 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         self.registry = ProjectRegistry(
             1, (base,), (Project("example-project", "Example", "Example", root),)
         )
+        self.config.registry_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "allowed_roots": [str(base)],
+                    "projects": [
+                        {
+                            "project_id": "example-project",
+                            "display_name": "Example",
+                            "topic_name": "Example",
+                            "root": str(root),
+                        }
+                    ],
+                }
+            )
+        )
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
@@ -150,9 +169,152 @@ class ExternalQueueWorkerTests(unittest.TestCase):
                 context_watermark=None,
                 handoff_id=None,
             )
-            return job.job_id
         finally:
             state.close()
+        return job.job_id
+
+    def bind_dynamic_project(self, project_id: str, root: Path, chat_id: int) -> None:
+        document = json.loads(self.config.registry_path.read_text())
+        document["projects"].append(
+            {
+                "project_id": project_id,
+                "display_name": "Dynamic",
+                "topic_name": "Dynamic",
+                "root": str(root),
+            }
+        )
+        self.config.registry_path.write_text(json.dumps(document))
+        state = HubState.open(self.config.state_path)
+        try:
+            with state._immediate_transaction():
+                state._connection.execute(
+                    """INSERT INTO project_onboarding_workflows
+                       (workflow_id,owner_user_id,display_name,project_id,base_root,
+                        canonical_root,stage,telegram_chat_id,telegram_access_hash,
+                        expires_at,created_at,updated_at)
+                       VALUES ('dynamic-workflow',42,'Dynamic',?,?,?,'completed',?,123,
+                               '2099-01-01T00:00:00+00:00','2026-01-01T00:00:00+00:00',
+                               '2026-01-01T00:00:00+00:00')""",
+                    (project_id, str(root.parent), str(root), chat_id),
+                )
+                state._connection.execute(
+                    """INSERT INTO project_group_bindings
+                       (project_id,telegram_chat_id,canonical_root,workflow_id,created_at)
+                       VALUES (?,?,?,'dynamic-workflow','2026-01-01T00:00:00+00:00')""",
+                    (project_id, chat_id, str(root)),
+                )
+        finally:
+            state.close()
+
+    def test_running_worker_loads_new_dynamic_project_before_provider_boundary(self) -> None:
+        adapter = Adapter("opencode")
+        worker = ExternalQueueWorker(
+            self.config, "opencode", registry=self.registry, adapter=cast(Any, adapter)
+        )
+        dynamic_root = self.config.registry_path.parent / "dynamic"
+        dynamic_root.mkdir()
+        subprocess.run(("git", "init", "-q", str(dynamic_root)), check=True)
+        self.bind_dynamic_project("dynamic", dynamic_root, -1002222222222)
+        state = HubState.open(self.config.state_path)
+        try:
+            topic = state.observe_topic(
+                project_id="dynamic", chat_id=-1002222222222, thread_id=7, title="Dynamic"
+            )
+            session = state.activate_agent(topic.topic_id, "opencode", "model-1", "high")
+            job, _ = state.enqueue_provider_job(
+                idempotency_key="dynamic:first",
+                chat_id=topic.chat_id,
+                message_id=1,
+                topic_id=topic.topic_id,
+                agent_id="opencode",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                provider_session_id=None,
+                model=session.model,
+                effort=session.effort,
+                payload_text="first dynamic turn",
+            )
+        finally:
+            state.close()
+        try:
+            self.assertTrue(worker.run_cycle())
+            self.assertEqual(adapter.calls, 1)
+            self.assertEqual(worker.state.get_provider_job(job.job_id).status, "result_ready")
+        finally:
+            worker.close()
+
+    def test_owner_direct_message_job_reaches_provider_with_exact_project(self) -> None:
+        config = replace(self.config, direct_message_project_id="example-project")
+        state = HubState.open(config.state_path)
+        try:
+            topic = state.observe_topic(
+                project_id="example-project", chat_id=42, thread_id=1, title="Direct"
+            )
+            session = state.activate_agent(topic.topic_id, "opencode", "model-1", "high")
+            job, _ = state.enqueue_provider_job(
+                idempotency_key="direct:42:1",
+                chat_id=42,
+                message_id=1,
+                topic_id=topic.topic_id,
+                agent_id="opencode",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                provider_session_id=None,
+                model=session.model,
+                effort=session.effort,
+                payload_text="direct owner turn",
+            )
+        finally:
+            state.close()
+        adapter = Adapter("opencode")
+        worker = ExternalQueueWorker(config, "opencode", adapter=cast(Any, adapter))
+        try:
+            self.assertTrue(worker.run_cycle())
+            self.assertEqual(adapter.calls, 1)
+            self.assertEqual(worker.state.get_provider_job(job.job_id).status, "result_ready")
+        finally:
+            worker.close()
+
+    def test_dynamic_root_drift_fails_while_leased_without_provider_call(self) -> None:
+        dynamic_root = self.config.registry_path.parent / "dynamic"
+        replacement = self.config.registry_path.parent / "replacement"
+        for root in (dynamic_root, replacement):
+            root.mkdir()
+            subprocess.run(("git", "init", "-q", str(root)), check=True)
+        self.bind_dynamic_project("dynamic", dynamic_root, -1002222222222)
+        adapter = Adapter("opencode")
+        worker = ExternalQueueWorker(self.config, "opencode", adapter=cast(Any, adapter))
+        state = HubState.open(self.config.state_path)
+        try:
+            topic = state.observe_topic(
+                project_id="dynamic", chat_id=-1002222222222, thread_id=7, title="Dynamic"
+            )
+            session = state.activate_agent(topic.topic_id, "opencode", "model-1", "high")
+            job, _ = state.enqueue_provider_job(
+                idempotency_key="dynamic:drift",
+                chat_id=topic.chat_id,
+                message_id=2,
+                topic_id=topic.topic_id,
+                agent_id="opencode",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                provider_session_id=None,
+                model=session.model,
+                effort=session.effort,
+                payload_text="must not run",
+            )
+        finally:
+            state.close()
+        document = json.loads(self.config.registry_path.read_text())
+        document["projects"][-1]["root"] = str(replacement)
+        self.config.registry_path.write_text(json.dumps(document))
+        try:
+            self.assertTrue(worker.run_cycle())
+            failed = worker.state.get_provider_job(job.job_id)
+            self.assertEqual((failed.status, failed.error_class), ("failed", "pre_execution"))
+            self.assertEqual(adapter.calls, 0)
+        finally:
+            worker.close()
 
     def worker(self, agent_id: str, adapter: Adapter) -> ExternalQueueWorker:
         return ExternalQueueWorker(

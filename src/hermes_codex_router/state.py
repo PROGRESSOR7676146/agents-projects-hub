@@ -275,6 +275,30 @@ class HubState:
                 pass
             raise
 
+    @classmethod
+    def open_read_only(cls, path: Path) -> "HubState":
+        """Open an existing current-schema database without creating or migrating it."""
+        try:
+            resolved = path.expanduser().resolve(strict=True)
+            if not resolved.is_file():
+                raise StateError("state_unavailable")
+            connection = sqlite3.connect(
+                resolved.as_uri() + "?mode=ro",
+                uri=True,
+                timeout=5.0,
+            )
+            connection.execute("PRAGMA query_only=ON")
+            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if version != LATEST_SCHEMA_VERSION:
+                connection.close()
+                raise StateError("state_schema_unsupported")
+            connection.execute("PRAGMA foreign_keys=ON")
+            return cls(connection)
+        except StateError:
+            raise
+        except (OSError, sqlite3.Error):
+            raise StateError("state_unavailable") from None
+
     @property
     def schema_version(self) -> int:
         return int(self._connection.execute("PRAGMA user_version").fetchone()[0])
@@ -2064,12 +2088,17 @@ class HubState:
         error_code: str,
         sender_agent_id: str,
         telegram_html: str,
+        expected_status: str = "executing",
         error_detail: str | None = None,
         now: datetime | None = None,
     ) -> ProviderJobRecord:
         """Atomically terminalize invoked work and queue one visible failure notice."""
         if status not in {"failed", "indeterminate"}:
             raise StateError("provider failure notice requires a terminal failure status")
+        if expected_status not in {"leased", "executing"}:
+            raise StateError("provider failure notice has an invalid expected status")
+        if expected_status == "leased" and status != "failed":
+            raise StateError("pre-execution provider work cannot become indeterminate")
         failure_class = _bounded(error_class, name="error class", maximum=64)
         code = _bounded(error_code, name="error code", maximum=128)
         sender = _bounded(sender_agent_id, name="sender agent id", maximum=64)
@@ -2084,9 +2113,9 @@ class HubState:
             row = self._connection.execute(
                 """SELECT jobs.*, topics.thread_id FROM provider_jobs jobs
                    JOIN topics ON topics.topic_id = jobs.topic_id
-                   WHERE jobs.job_id = ? AND jobs.status = 'executing'
+                   WHERE jobs.job_id = ? AND jobs.status = ?
                      AND jobs.lease_token = ? AND jobs.lease_expires_at > ?""",
-                (job_id, lease_token, timestamp),
+                (job_id, expected_status, lease_token, timestamp),
             ).fetchone()
             if row is None:
                 raise StateError("provider job lease is missing or invalid")
@@ -2116,7 +2145,7 @@ class HubState:
                    SET status = ?, lease_owner = NULL, lease_token = NULL,
                        lease_expires_at = NULL, error_class = ?, error_code = ?,
                        error_detail = ?, updated_at = ?
-                   WHERE job_id = ? AND status = 'executing' AND lease_token = ?""",
+                   WHERE job_id = ? AND status = ? AND lease_token = ?""",
                 (
                     status,
                     failure_class,
@@ -2124,6 +2153,7 @@ class HubState:
                     detail,
                     timestamp,
                     job_id,
+                    expected_status,
                     lease_token,
                 ),
             )

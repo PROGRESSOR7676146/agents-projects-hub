@@ -41,6 +41,11 @@ from .local_transfer import LocalTransferError, local_resume_command
 from .metadata import format_agent_response, format_telegram_response
 from .model_selection import ModelSelectionError, available_models
 from .project_onboarding import ProjectOnboardingStore
+from .project_resolution import (
+    ProjectResolutionError,
+    list_resolved_project_groups,
+    resolve_project_context,
+)
 from .provider_catalog import (
     ANTIGRAVITY_FALLBACK,
     DEFAULT_CATALOG_TTL,
@@ -1806,26 +1811,20 @@ class ProjectHubService:
         raise ServiceError("Для проекта не зарегистрирована Telegram-группа")
 
     def _all_project_bindings(self) -> tuple[ProjectBinding, ...]:
-        by_project = {item.project_id: item for item in self.config.projects}
-        for item in ProjectOnboardingStore(self.state).bindings():
-            by_project.setdefault(
-                item.project_id, ProjectBinding(item.project_id, item.telegram_chat_id)
-            )
-        return tuple(by_project.values())
+        return tuple(
+            ProjectBinding(item.project.project_id, item.chat_id)
+            for item in list_resolved_project_groups(self.config, self.state)
+        )
 
     def _project_binding_for_chat(self, chat_id: int) -> ProjectBinding:
         try:
-            return self.config.project_for_chat(chat_id)
-        except KeyError:
-            dynamic = ProjectOnboardingStore(self.state).binding_for_chat(chat_id)
-            if dynamic is None:
-                raise
-            registry = load_registry(self.config.registry_path)
-            project = registry.require_project(dynamic.project_id)
-            if project.root != dynamic.canonical_root:
-                raise ServiceError("Onboarded project root no longer matches its binding")
-            self.registry = registry
-            return ProjectBinding(dynamic.project_id, dynamic.telegram_chat_id)
+            resolved = resolve_project_context(self.config, self.state, chat_id=chat_id)
+        except ProjectResolutionError as exc:
+            if str(exc) == "project_binding_missing":
+                raise KeyError(chat_id) from None
+            raise ServiceError("Project group binding is invalid") from None
+        self.registry = resolved.registry
+        return ProjectBinding(resolved.project.project_id, resolved.chat_id)
 
     def _reload_registry_if_available(self) -> None:
         if self.config.registry_path.is_file():
@@ -1909,7 +1908,11 @@ class ProjectHubService:
                 )
                 return True
             if action == "ok":
-                workflow = store.confirm(callback.sender_id, value)
+                workflow = store.confirm(
+                    callback.sender_id,
+                    value,
+                    required_owner_user_ids=self.config.owner_user_ids,
+                )
                 self.telegram.answer_callback(callback.callback_id, "Задание принято")
                 self._send_text(
                     message,
@@ -2050,11 +2053,14 @@ class ProjectHubService:
                 )
             ]
             listing = "\n".join(f"• {html.escape(name)}" for name in projects)
+            latest = onboarding.latest_for_owner(message.sender_id)
+            latest_status = "\n\n" + onboarding.status_text(latest) if latest is not None else ""
             self.telegram.send_html(
                 message.chat_id,
                 1,
                 "<b>Проекты</b>\n"
                 + (listing or "Нет доступных проектов")
+                + latest_status
                 + (
                     "\n\nСоздание группы выполняется локальной пользовательской Telegram-сессией."
                     if self.config.project_provisioning.enabled
@@ -2218,9 +2224,25 @@ class ProjectHubService:
         try:
             message_id = self.telegram.send_html(outbox.chat_id, 1, outbox.telegram_html)
         except TelegramError as exc:
-            store.mark_outbox_unknown(outbox.outbox_id, outbox.lease_token, type(exc).__name__)
+            code = exc.health_code
+            if exc.retry_after is not None:
+                store.retry_outbox(
+                    outbox.outbox_id,
+                    outbox.lease_token,
+                    code,
+                    delay_seconds=delivery_retry_delay(exc, outbox.attempt_count),
+                )
+            elif exc.failure_class in {"api_rejection", "local_validation", "local_io"}:
+                store.fail_outbox(outbox.outbox_id, outbox.lease_token, code)
+            else:
+                store.mark_outbox_unknown(outbox.outbox_id, outbox.lease_token, code)
             return True
-        store.mark_outbox_delivered(outbox.outbox_id, outbox.lease_token, message_id or 1)
+        if not isinstance(message_id, int) or isinstance(message_id, bool) or message_id <= 0:
+            store.mark_outbox_unknown(
+                outbox.outbox_id, outbox.lease_token, "telegram_message_id_invalid"
+            )
+            return True
+        store.mark_outbox_delivered(outbox.outbox_id, outbox.lease_token, message_id)
         return True
 
     def handle_update(self, update: dict[str, object]) -> bool:

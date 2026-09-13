@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -60,7 +62,8 @@ class FaultMatrixHarness:
     def __init__(self, base: Path) -> None:
         self.base = base
         project_root = base / "example-project"
-        (project_root / ".git").mkdir(parents=True, exist_ok=True)
+        project_root.mkdir(parents=True, exist_ok=True)
+        subprocess.run(("git", "init", "-q", str(project_root)), check=True)
         agents = (
             AgentDefinition(
                 "codex",
@@ -118,6 +121,23 @@ class FaultMatrixHarness:
             1,
             (base,),
             (Project("example-project", "Example Project", "Example", project_root),),
+        )
+        self.config.registry_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "allowed_roots": [str(base)],
+                    "projects": [
+                        {
+                            "project_id": "example-project",
+                            "display_name": "Example Project",
+                            "topic_name": "Example",
+                            "root": str(project_root),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
         )
 
     def controller(

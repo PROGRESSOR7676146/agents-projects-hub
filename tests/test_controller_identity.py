@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -38,7 +39,8 @@ class ControllerIdentityTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         self.base = Path(self.tempdir.name)
         project_root = self.base / "project"
-        (project_root / ".git").mkdir(parents=True)
+        project_root.mkdir()
+        subprocess.run(("git", "init", "-q", str(project_root)), check=True)
         self.registry = self.base / "projects.json"
         self.registry.write_text(
             json.dumps(

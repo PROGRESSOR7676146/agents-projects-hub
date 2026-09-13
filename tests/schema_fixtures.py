@@ -6,6 +6,8 @@ import sqlite3
 def remove_adoption_schema(connection: sqlite3.Connection) -> None:
     # This is not a downgrade mechanism: retained origins must never be deleted.
     assert connection.execute("SELECT COUNT(*) FROM codex_session_origins").fetchone()[0] == 0
+    connection.execute("DROP TABLE project_command_cooldowns")
+    connection.execute("DROP TABLE project_command_scopes")
     connection.execute("DROP TABLE project_onboarding_outbox")
     connection.execute("DROP TABLE project_group_bindings")
     connection.execute("DROP TABLE project_onboarding_options")

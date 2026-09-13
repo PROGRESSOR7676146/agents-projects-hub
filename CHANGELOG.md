@@ -25,6 +25,16 @@ and releases use semantic versioning while the public API is still evolving.
   retry or deletion.
 - Converge the Hub command menu and clear locally managed provider command
   scopes after a dynamic project-group binding is committed.
+- Harden project-group provisioning with schema-28 owner snapshots, verified
+  non-creator owner administration, private session locking, bounded no-retry
+  MTProto mutations, lease heartbeats, recoverable preflight/configuration
+  blocks, and one fail-closed project resolver at execution boundaries.
+- Persist project command-scope work and completion-notice cooldowns, preserve
+  final-result delivery priority, isolate a broken group, and refuse fabricated
+  Telegram message receipts.
+- Split command convergence into one durable bot/group API operation per lease,
+  preserve per-bot cooldowns for future bindings, keep blocked project/root
+  reservations, and make global command audit read-only and per-group isolated.
 
 ## [0.7.0] - 2026-09-05
 

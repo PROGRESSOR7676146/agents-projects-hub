@@ -21,9 +21,9 @@ from .codex_appserver import (
 )
 from .hub_config import HubConfig
 from .migrations import LATEST_SCHEMA_VERSION
-from .project_onboarding import project_id_for_chat
+from .project_resolution import ProjectResolutionError, resolve_project_context
 from .provider_catalog_cache import ProviderCatalogCache
-from .registry import RegistryError, load_registry
+from .registry import RegistryError
 from .session_adoption_policy import supports_adoption
 from .session_adoption_state import AdoptionRequest, AdoptionTarget, CodexSessionOrigins
 from .state import HubState, StateError
@@ -40,11 +40,21 @@ class AdoptionError(ValueError):
 def open_adoption_state(path: Path, *, writable: bool = False) -> Iterator[HubState]:
     """Open an existing private database without migration, chmod or creation."""
     connection = None
+    state = None
     try:
         if not path.is_file() or path.stat().st_mode & 0o077:
             raise AdoptionError("state_unavailable")
+        if not writable:
+            try:
+                state = HubState.open_read_only(path)
+            except StateError as exc:
+                if str(exc) == "state_schema_unsupported":
+                    raise AdoptionError("schema_upgrade_required") from None
+                raise AdoptionError("state_unavailable") from None
+            yield state
+            return
         connection = sqlite3.connect(
-            path.resolve(strict=True).as_uri() + ("?mode=rw" if writable else "?mode=ro"),
+            path.resolve(strict=True).as_uri() + "?mode=rw",
             uri=True,
             timeout=5,
         )
@@ -55,6 +65,8 @@ def open_adoption_state(path: Path, *, writable: bool = False) -> Iterator[HubSt
     except (OSError, sqlite3.Error):
         raise AdoptionError("state_unavailable") from None
     finally:
+        if state is not None:
+            state.close()
         if connection is not None:
             connection.close()
 
@@ -107,30 +119,17 @@ def list_connectable_codex_sessions(
 
 def _project_root(config: HubConfig, project_id: str, chat_id: int) -> Path:
     try:
-        try:
-            bound_project_id = config.project_for_chat(chat_id).project_id
-        except KeyError:
-            with open_adoption_state(config.state_path) as state:
-                bound_project_id = project_id_for_chat(config, state, chat_id)
-        if bound_project_id != project_id:
-            raise AdoptionError("project_binding_mismatch")
-        registry = load_registry(config.registry_path)
-        project = registry.require_project(project_id)
-        root = project.root.resolve(strict=True)
-        if not any(
-            root.is_relative_to(allowed.resolve(strict=True)) for allowed in registry.allowed_roots
-        ):
-            raise AdoptionError("project_root_invalid")
-        result = subprocess.run(
-            ("git", "-C", str(root), "rev-parse", "--show-toplevel"),
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=True,
-        )
-        if Path(result.stdout.strip()).resolve(strict=True) != root:
-            raise AdoptionError("project_root_invalid")
-        return root
+        with open_adoption_state(config.state_path) as state:
+            return resolve_project_context(
+                config,
+                state,
+                chat_id=chat_id,
+                expected_project_id=project_id,
+            ).project.root
+    except ProjectResolutionError as exc:
+        if str(exc) == "project_binding_mismatch":
+            raise AdoptionError("project_binding_mismatch") from None
+        raise AdoptionError("project_root_invalid") from None
     except AdoptionError:
         raise
     except (KeyError, RegistryError, OSError, ValueError, subprocess.SubprocessError):

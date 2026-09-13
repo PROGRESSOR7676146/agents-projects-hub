@@ -84,14 +84,19 @@ Project/group onboarding is implemented offline behind explicit
 `project_provisioning.enabled` configuration. The owner-only Hub wizard accepts
 a display name, an opaque configured root choice and a safe direct-child project
 ID. A separate pinned Telegram user-session worker creates the private forum,
-adds configured bots, grants the Hub minimum topic/invite rights, prepares an
-empty Git root, updates the registry and records the immutable numeric binding.
-The sender then converges the new group's Hub command menu and clears locally
-managed provider command scopes without repeating group creation.
-Schema 27 persists the workflow, opaque options, binding and result notices.
+preflights and snapshots all configured owners and bot identities, adds the
+non-creator owners as administrators, grants the Hub minimum topic/invite
+rights, prepares an empty Git root, updates the registry and records the
+immutable numeric binding. Session files are private and protected by one
+process lock; mutation RPCs have bounded deadlines and no client retry. The
+  sender converges one durable bot/group command operation per cycle after
+  final-result priority, with persisted per-bot Telegram cooldowns that cover
+  newly created bindings. Schema 28 adds the owner snapshot,
+recoverable blocked stage, lease heartbeat and durable command-scope work.
 Unknown Telegram creation/configuration outcomes stop without automatic retry;
-an exact local reconciliation is required. See
-[ADR 0024](../decisions/0024-user-authorized-project-group-provisioning.md).
+proven preflight/configuration blocks can be resumed explicitly. See
+[ADR 0024](../decisions/0024-user-authorized-project-group-provisioning.md) and
+[ADR 0025](../decisions/0025-provisioning-fencing-and-owner-membership.md).
 No user session, group, project, credential, service or live canary has been
 created by this repository change.
 
@@ -100,7 +105,7 @@ available for recovery. Schema 25 introduced immutable origins and the original
 first-return boundary. External workers continue the exact thread through socket
 or stdio; unsupported modes fail closed. Automated evidence uses fictional
 provider and Telegram adapters. Live continuity and a production rollback
-artifact for schema 27 remain unaccepted; the current target is schema 27.
+artifact for schema 28 remain unaccepted; the current target is schema 28.
 
 - Numeric project/topic identity, canonical allowlisted roots, idempotent
   routing, persistent provider sessions, bounded visible context, and writer
@@ -370,7 +375,7 @@ artifact for schema 27 remain unaccepted; the current target is schema 27.
   reapers. Runtime-proxy monitoring remains independent and never restarts a
   shared app-server underneath an active Codex or tlive session.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
-- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-27
+- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-28
   immutable-deployment triage guide, source revision, timestamp, and content
   hashes into a neutral local store for the independent Hermes channel. It
   carries no private deployment inventory and creates no service dependency.

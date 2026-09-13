@@ -21,7 +21,57 @@ from hermes_codex_router.migrations import (
 
 
 class MigrationTests(unittest.TestCase):
-    def test_schema_27_adds_project_onboarding_without_private_values(self) -> None:
+    def test_schema_27_upgrade_preserves_workflows_and_adds_command_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            connection = sqlite3.connect(path)
+            try:
+                for version in range(1, 28):
+                    migrations_module._execute_migration_script(
+                        connection, getattr(migrations_module, f"MIGRATION_{version}")
+                    )
+                    if version == 1:
+                        migrations_module._ensure_legacy_columns(connection)
+                    connection.execute(f"PRAGMA user_version={version}")
+                now = "2026-09-13T00:00:00+00:00"
+                connection.execute(
+                    """INSERT INTO project_onboarding_workflows
+                       (workflow_id,owner_user_id,display_name,project_id,base_root,canonical_root,
+                        stage,expires_at,created_at,updated_at)
+                       VALUES ('existing-workflow',42,'Existing','existing','/home/example',
+                               '/home/example/existing','completed',?,?,?)""",
+                    (now, now, now),
+                )
+                connection.execute(
+                    """INSERT INTO project_group_bindings
+                       (project_id,telegram_chat_id,canonical_root,workflow_id,created_at)
+                       VALUES ('existing',-1001234567890,'/home/example/existing',
+                               'existing-workflow',?)""",
+                    (now,),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            result = migrate_database(path, create_backup=False)
+            self.assertEqual((result.previous_version, result.current_version), (27, 28))
+            connection = sqlite3.connect(path)
+            try:
+                self.assertEqual(
+                    connection.execute(
+                        """SELECT required_owner_ids_json,resume_stage
+                           FROM project_onboarding_workflows WHERE workflow_id='existing-workflow'"""
+                    ).fetchone(),
+                    ("[]", None),
+                )
+                self.assertEqual(
+                    connection.execute("SELECT COUNT(*) FROM project_command_scopes").fetchone()[0],
+                    0,
+                )
+            finally:
+                connection.close()
+
+    def test_schema_28_adds_recoverable_onboarding_and_durable_command_scope(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
             result = migrate_database(path, create_backup=False)
@@ -40,8 +90,15 @@ class MigrationTests(unittest.TestCase):
                         "project_onboarding_options",
                         "project_group_bindings",
                         "project_onboarding_outbox",
+                        "project_command_scopes",
+                        "project_command_cooldowns",
                     }.issubset(tables)
                 )
+                columns = {
+                    str(row[1])
+                    for row in connection.execute("PRAGMA table_info(project_onboarding_workflows)")
+                }
+                self.assertTrue({"required_owner_ids_json", "resume_stage"}.issubset(columns))
                 connection.execute(
                     """INSERT INTO runtime_health (
                        component,instance_id,runtime,pid,process_start_marker,
