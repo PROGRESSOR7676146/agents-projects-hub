@@ -145,6 +145,7 @@ class CodexSessionAdoptionTests(unittest.TestCase):
         connection = sqlite3.connect(self.config.state_path)
         connection.execute("PRAGMA user_version=24")
         connection.close()
+        self.config.state_path.chmod(0o600)
         before = self.config.state_path.read_bytes()
         with self.assertRaisesRegex(AdoptionError, "schema_upgrade_required"):
             self.run_attach()
