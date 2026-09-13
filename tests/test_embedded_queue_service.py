@@ -246,6 +246,31 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         finally:
             service.close()
 
+    def test_local_lane_resume_uses_the_validated_lane_root(self) -> None:
+        service, telegram = self.service(QueueClient())
+        project = self.registry.projects[0]
+        lane_root, branch = create_worktree(project, "local")
+        try:
+            self.assertTrue(service.handle_update(update(1, "/menu")))
+            topic = service.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            service.state.register_lane(
+                lane_id="local",
+                project_id=project.project_id,
+                worktree_path=lane_root,
+                branch_name=branch,
+            )
+            service.state.bind_lane("local", topic.topic_id)
+            session = service.state.activate_agent(topic.topic_id, "codex", "gpt-5.6-sol", "high")
+            service.state.bind_provider_session(session.session_id, "lane-thread", None)
+
+            self.assertTrue(service.handle_update(update(2, "/local")))
+
+            self.assertEqual(service.state.get_session(session.session_id).writer_mode, "local")
+            self.assertIn(f"-C {lane_root}", telegram.sent[-1])
+        finally:
+            service.close()
+
     def test_consecutive_productive_messages_form_one_durable_provider_turn(self) -> None:
         client = QueueClient()
         service, _ = self.service(client)
