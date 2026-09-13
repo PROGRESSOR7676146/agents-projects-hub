@@ -23,6 +23,8 @@ and releases use semantic versioning while the public API is still evolving.
   user-only forum creation and bot invitation methods. Ambiguous group or bot
   configuration outcomes stop for exact local reconciliation without blind
   retry or deletion.
+- Converge the Hub command menu and clear locally managed provider command
+  scopes after a dynamic project-group binding is committed.
 
 ## [0.7.0] - 2026-09-05
 

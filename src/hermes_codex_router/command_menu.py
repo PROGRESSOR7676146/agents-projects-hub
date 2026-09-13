@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import Callable
+from collections.abc import Mapping
+from typing import Any, Callable
 
 from .hub_config import HubConfig
 from .telegram import TelegramBotApi
@@ -49,6 +50,16 @@ def _scope(scope_type: str, *, chat_id: int | None = None) -> str:
     if chat_id is not None:
         value["chat_id"] = chat_id
     return json.dumps(value, separators=(",", ":"))
+
+
+def configure_project_group_commands(telegram_bots: Mapping[str, Any], *, chat_id: int) -> None:
+    """Idempotently apply the shared-group command policy to one new binding."""
+    scope = _scope("chat", chat_id=chat_id)
+    for identity, api in telegram_bots.items():
+        expected = _desired(GROUP_COMMANDS) if identity == "hub" else []
+        api.call("setMyCommands", commands=json.dumps(expected), scope=scope)
+        if api.call("getMyCommands", scope=scope) != expected:
+            raise RuntimeError("Telegram project command scope did not converge")
 
 
 def configure_public_commands(

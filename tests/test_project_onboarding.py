@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
+from hermes_codex_router.command_menu import GROUP_COMMANDS
 from hermes_codex_router.hub_config import (
     AgentDefinition,
     HubConfig,
@@ -13,6 +15,7 @@ from hermes_codex_router.hub_config import (
     ProjectProvisioningSettings,
     TerminalSettings,
 )
+from hermes_codex_router.outbox_sender import TelegramOutboxSender
 from hermes_codex_router.project_onboarding import ProjectOnboardingStore
 from hermes_codex_router.project_provisioner import (
     CreatedForum,
@@ -63,6 +66,7 @@ class FakeTelegram:
     def __init__(self) -> None:
         self.sent: list[tuple[int, int, str, object | None]] = []
         self.callbacks: list[tuple[str, str]] = []
+        self.commands: dict[str | None, list[dict[str, str]]] = {}
 
     def send_html(self, chat_id: int, thread_id: int, text: str, **kwargs: object) -> int:
         self.sent.append((chat_id, thread_id, text, kwargs.get("reply_markup")))
@@ -70,6 +74,15 @@ class FakeTelegram:
 
     def answer_callback(self, callback_id: str, text: str = "") -> None:
         self.callbacks.append((callback_id, text))
+
+    def call(self, method: str, **params: object) -> object:
+        scope = cast(str | None, params.get("scope"))
+        if method == "setMyCommands":
+            self.commands[scope] = cast(list[dict[str, str]], json.loads(str(params["commands"])))
+            return True
+        if method == "getMyCommands":
+            return self.commands.get(scope, [])
+        raise AssertionError(method)
 
 
 def direct_update(message_id: int, text: str) -> dict[str, object]:
@@ -233,6 +246,29 @@ class ProjectOnboardingTests(unittest.TestCase):
             self.assertIn("создана и подключена", outbox.telegram_html)
         finally:
             state.close()
+
+        hub_api = FakeTelegram()
+        codex_api = FakeTelegram()
+        sender = TelegramOutboxSender(
+            replace(
+                self.config,
+                dispatch_mode="queue",
+                queue_runtime="external",
+                outbox_runtime="external",
+                external_worker_agent_ids=("codex",),
+            ),
+            telegram_bots=cast(Any, {"hub": hub_api, "codex": codex_api}),
+        )
+        try:
+            sender.run_cycle()
+        finally:
+            sender.close()
+        scope = '{"type":"chat","chat_id":-1001234567890}'
+        self.assertEqual(
+            [item["command"] for item in hub_api.commands[scope]],
+            [item[0] for item in GROUP_COMMANDS],
+        )
+        self.assertEqual(codex_api.commands[scope], [])
 
     def test_unknown_group_creation_is_not_retried(self) -> None:
         workflow_id = self.prepare_workflow()

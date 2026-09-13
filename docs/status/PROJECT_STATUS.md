@@ -86,6 +86,8 @@ a display name, an opaque configured root choice and a safe direct-child project
 ID. A separate pinned Telegram user-session worker creates the private forum,
 adds configured bots, grants the Hub minimum topic/invite rights, prepares an
 empty Git root, updates the registry and records the immutable numeric binding.
+The sender then converges the new group's Hub command menu and clears locally
+managed provider command scopes without repeating group creation.
 Schema 27 persists the workflow, opaque options, binding and result notices.
 Unknown Telegram creation/configuration outcomes stop without automatic retry;
 an exact local reconciliation is required. See

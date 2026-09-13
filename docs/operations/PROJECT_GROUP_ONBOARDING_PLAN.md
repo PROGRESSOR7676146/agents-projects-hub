@@ -37,6 +37,12 @@ atomically adds the project to the local registry, and records the immutable
 numeric group binding in schema 27 state. Provider bots remain ordinary members;
 their group pollers are not enabled.
 
+After the binding is committed, the standalone sender idempotently applies the
+Hub project command scope (`/menu`, `/connect`, `/stop`) and clears project
+command scopes for locally managed provider bots, matching existing groups.
+Failure is retried as an idempotent Bot API configuration operation and never
+repeats group creation.
+
 The completed binding is read dynamically by the Controller, so the new group
 does not require a source-config edit. The registry remains the authority for
 the canonical Git root. A state binding is admitted only when its project exists,
