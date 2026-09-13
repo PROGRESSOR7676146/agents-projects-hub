@@ -904,7 +904,7 @@ class HubState:
         """
         canonical = {
             _bounded(project_id, name="project id", maximum=48): "root:"
-            + _bounded(str(root.resolve(strict=True)), name="execution root", maximum=4096)
+            + _bounded(str(root.resolve()), name="execution root", maximum=4096)
             for project_id, root in project_roots.items()
         }
         changed = 0
