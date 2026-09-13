@@ -384,7 +384,13 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         assert topic is not None
         active = service.state.active_session(topic.topic_id)
         assert active is not None
-        service.state.set_writer_mode(active.session_id, "local")
+        # Simulate a pre-v26/partially upgraded state. New ownership transfers
+        # atomically reject this combination before it can be created.
+        with service.state._connection:
+            service.state._connection.execute(
+                "UPDATE agent_sessions SET writer_mode='local' WHERE session_id=?",
+                (active.session_id,),
+            )
 
         self.assertTrue(service.handle_update(update(3, "/return")))
         rejected = service.state.active_session(topic.topic_id)

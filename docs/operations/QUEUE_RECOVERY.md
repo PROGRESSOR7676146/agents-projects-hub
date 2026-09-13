@@ -1,7 +1,7 @@
 # Queue and process recovery
 
 Status: active runbook  
-Last updated: 2026-08-30
+Last updated: 2026-09-13
 
 This runbook covers the durable Controller, provider-worker, and Telegram-outbox
 topology. It contains reusable procedures only; deployment identities, paths,
@@ -36,8 +36,9 @@ Interpret the components independently:
 
 - Controller down: new Telegram ingress and local commands stop; committed
   queue work and independent recovery channels remain.
-- One worker down: only that provider stops taking new jobs; other workers and
-  Controller commands remain available.
+- One worker down: only that provider stops taking new jobs; other workers with
+  eligible independent execution scopes and Controller commands remain
+  available.
 - Sender down: completed provider results remain `result_ready`; workers MUST
   NOT repeat provider execution to compensate for missing Telegram delivery.
 - Hermes or tlive down: the other channels remain independent; no timeout is an
@@ -62,10 +63,12 @@ uses the conservative rules below.
 ## Provider-job recovery
 
 - Expired `leased` means provider invocation was not recorded as possible. The
-  owning worker may safely return it to `queued` through normal stale recovery.
+  scope may be claimed by another eligible job; normal stale recovery returns
+  the old job to `queued`, and the expired token cannot start it late.
 - Expired `executing` means invocation may have begun. Normal stale recovery
   marks it `indeterminate` unless a provider-specific structured reconciliation
-  proves a result or proves that execution never began.
+  proves a result or proves that execution never began. Unresolved uncertainty
+  retains the canonical-root execution scope across topics and providers.
 - `failed` and `cancelled` are terminal. Do not reinterpret them as pending.
 - `result_ready` means provider work already succeeded. Only Telegram delivery
   remains; never submit another provider turn for the same job.
@@ -73,7 +76,9 @@ uses the conservative rules below.
 If a provider has no safe reconciliation capability, retain the
 `indeterminate` record, inspect the project and provider session locally, and
 create a new explicit user request only after deciding whether duplicate side
-effects are acceptable.
+effects are acceptable. Resolve the reviewed exact old job before expecting new
+work for the same root to execute; resolution releases only the scope and never
+replays the old job.
 
 `indeterminate-audit` classifies all retained uncertain jobs from read-only
 SQLite evidence and prints only aggregate counts. To preserve a detailed local
@@ -91,7 +96,8 @@ and `externally_completed` means completion was confirmed outside Hub. The
 command is idempotent for the same value and rejects replacement. It does not
 change the original job or error, send a message, or authorize provider replay.
 The audit reports these annotations separately and recommends no further action
-for resolved records.
+for resolved records. Schema 26 uses the immutable annotation to release the
+canonical-root scope for unrelated future work.
 
 ## Changing provider ownership
 
@@ -180,6 +186,7 @@ Before a live queue cutover, run the full repository validation gate. Its
 fictional subprocess matrix terminates child actors after Controller commit but
 before offset persistence, during provider execution, and after fake Telegram
 acceptance but before delivery persistence. It also covers pre-execution lease
-recovery, concurrent provider isolation, and separate Hub/provider polling
-offsets. This automated evidence does not replace the owner-driven Telegram and
+recovery, same-root provider exclusion, explicit uncertainty resolution, and
+separate Hub/provider polling offsets. This automated evidence does not replace
+the owner-driven Telegram and
 provider acceptance required for a deployment.

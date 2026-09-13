@@ -16,6 +16,11 @@ attempting to replace it must fail. This preserves the original uncertainty and
 error evidence while allowing passive audits to distinguish unresolved work
 from cases the operator has already handled.
 
+[ADR 0024](0024-canonical-root-execution-exclusion.md) adds one downstream
+scheduling consequence: unresolved uncertainty retains its canonical-root
+execution scope, while the immutable resolution releases that scope for new
+work. It does not change this record's no-mutation and no-replay decision.
+
 ## Migration and rollout
 
 The additive table uses the provider job as a foreign-key parent and shares the

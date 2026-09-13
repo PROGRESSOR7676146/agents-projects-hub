@@ -1063,14 +1063,18 @@ class ProjectHubService:
 
     def _topic(self, message: TopicMessage, project_id: str) -> TopicRecord:
         existing = self.state.find_topic(message.chat_id, message.thread_id)
-        if existing is not None:
-            return existing
-        title = "General" if message.thread_id == 1 else f"Topic {message.thread_id}"
+        title = (
+            existing.title
+            if existing is not None
+            else ("General" if message.thread_id == 1 else f"Topic {message.thread_id}")
+        )
+        project = self.registry.require_project(project_id)
         return self.state.observe_topic(
             project_id=project_id,
             chat_id=message.chat_id,
             thread_id=message.thread_id,
             title=title,
+            execution_root=project.root,
         )
 
     def _explicit_context_prompt(self, topic: TopicRecord, target_agent_id: str, text: str) -> str:
@@ -1646,13 +1650,17 @@ class ProjectHubService:
             self.telegram.answer_callback(callback.callback_id)
             return False
         topic = self.state.find_topic(callback.chat_id, callback.thread_id)
-        if topic is None:
-            topic = self.state.observe_topic(
-                project_id=binding.project_id,
-                chat_id=callback.chat_id,
-                thread_id=callback.thread_id,
-                title="General" if callback.thread_id == 1 else f"Topic {callback.thread_id}",
-            )
+        topic = self.state.observe_topic(
+            project_id=binding.project_id,
+            chat_id=callback.chat_id,
+            thread_id=callback.thread_id,
+            title=(
+                topic.title
+                if topic is not None
+                else ("General" if callback.thread_id == 1 else f"Topic {callback.thread_id}")
+            ),
+            execution_root=self.registry.require_project(binding.project_id).root,
+        )
         message = TopicMessage(
             update_id=0,
             message_id=callback.message_id,

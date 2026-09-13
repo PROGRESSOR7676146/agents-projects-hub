@@ -183,6 +183,71 @@ class MigrationTests(unittest.TestCase):
             finally:
                 migrated.close()
 
+    def test_execution_scope_migration_backfills_v25_topics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            migrate_database(path, create_backup=False)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute("DROP INDEX topics_execution_scope")
+                connection.execute("ALTER TABLE topics DROP COLUMN execution_scope")
+                connection.execute(
+                    """INSERT INTO topics
+                       (project_id, chat_id, thread_id, title, created_at, updated_at)
+                       VALUES ('example-project', -1001234567890, 7, 'Topic', 'now', 'now')"""
+                )
+                connection.execute("PRAGMA user_version = 25")
+                connection.commit()
+            finally:
+                connection.close()
+
+            result = migrate_database(path, create_backup=False)
+
+            self.assertEqual((result.previous_version, result.current_version), (25, 26))
+            migrated = sqlite3.connect(path)
+            try:
+                self.assertEqual(
+                    migrated.execute("SELECT execution_scope FROM topics").fetchone()[0],
+                    "project:example-project",
+                )
+                self.assertIsNotNone(
+                    migrated.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='index' "
+                        "AND name='topics_execution_scope'"
+                    ).fetchone()
+                )
+            finally:
+                migrated.close()
+
+    def test_execution_scope_migration_fault_rolls_back_added_column(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            migrate_database(path, create_backup=False)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute("DROP INDEX topics_execution_scope")
+                connection.execute("ALTER TABLE topics DROP COLUMN execution_scope")
+                connection.execute("PRAGMA user_version = 25")
+                connection.commit()
+            finally:
+                connection.close()
+
+            with mock.patch.object(
+                migrations_module,
+                "_execute_migration_script",
+                side_effect=RuntimeError("fictional migration fault"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "fictional migration fault"):
+                    migrate_database(path, create_backup=False)
+
+            restored = sqlite3.connect(path)
+            try:
+                self.assertEqual(restored.execute("PRAGMA user_version").fetchone()[0], 25)
+                columns = {row[1] for row in restored.execute("PRAGMA table_info(topics)")}
+                self.assertNotIn("execution_scope", columns)
+            finally:
+                restored.close()
+
     def test_indeterminate_resolution_migration_is_additive_from_v22(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"

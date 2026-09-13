@@ -14,6 +14,7 @@ from hermes_codex_router.hub_config import (
     ProjectBinding,
     TerminalSettings,
 )
+from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.provider_catalog_cache import CachedProviderModel, CatalogSnapshot
 from hermes_codex_router.state import HubState
 from hermes_codex_router.telegram import TelegramError
@@ -132,6 +133,7 @@ class ExternalDirectModelTests(unittest.TestCase):
             service.state_path = base / "opencode-dm.db"
             service.state = HubState.open(service.state_path)
             service.telegram = cast(Any, FakeTelegram())
+            service.registry = ProjectRegistry(1, (base,), (Project("hub", "Hub", "Hub", base),))
 
             message = {
                 "update_id": 1,
@@ -243,6 +245,7 @@ class ExternalDirectModelTests(unittest.TestCase):
             service.state = HubState.open(service.state_path)
             telegram = FakeTelegram()
             service.telegram = cast(Any, telegram)
+            service.registry = ProjectRegistry(1, (base,), (Project("hub", "Hub", "Hub", base),))
 
             with patch.object(ExternalAgentService, "_catalog", return_value=snapshot):
                 self.assertTrue(

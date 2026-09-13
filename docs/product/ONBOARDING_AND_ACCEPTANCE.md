@@ -53,7 +53,9 @@ necessary but not sufficient for items marked live.
   REQ-QUEUE-001..006):** A committed request survives Controller restart; an
   interrupted unknown provider turn is not repeated; Telegram delivery retry
   does not repeat provider work; and provider failure does not make controller
-  commands or another eligible provider unavailable. The fictional
+  commands or another eligible provider on an independent execution scope
+  unavailable. Same-root work remains blocked behind an unresolved uncertain
+  invocation until immutable operator resolution. The fictional
   subprocess fault matrix terminates fictional Controller, worker, and sender
   actors at the durable boundaries and covers these invariants without provider
   or Telegram network access.

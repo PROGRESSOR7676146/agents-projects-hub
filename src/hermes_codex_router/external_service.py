@@ -195,13 +195,16 @@ class ExternalAgentService:
 
     def _direct_topic(self, chat_id: int, thread_id: int, project_id: str):
         topic = self.state.find_topic(chat_id, thread_id)
-        if topic is not None:
-            return topic
         return self.state.observe_topic(
             project_id=project_id,
             chat_id=chat_id,
             thread_id=thread_id,
-            title="General" if thread_id == 1 else f"Topic {thread_id}",
+            title=(
+                topic.title
+                if topic is not None
+                else ("General" if thread_id == 1 else f"Topic {thread_id}")
+            ),
+            execution_root=self.registry.require_project(project_id).root,
         )
 
     def _show_direct_models(
@@ -441,14 +444,7 @@ class ExternalAgentService:
                 )
                 return False
         if message.is_forwarded:
-            topic = self.state.find_topic(message.chat_id, message.thread_id)
-            if topic is None:
-                topic = self.state.observe_topic(
-                    project_id=binding.project_id,
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    title="General" if message.thread_id == 1 else f"Topic {message.thread_id}",
-                )
+            topic = self._direct_topic(message.chat_id, message.thread_id, binding.project_id)
             return self.state.record_forwarded_quote(
                 topic_id=topic.topic_id,
                 chat_id=message.chat_id,
@@ -460,14 +456,7 @@ class ExternalAgentService:
         if command is not None:
             if not self.direct_messages_only:
                 return False
-            topic = self.state.find_topic(message.chat_id, message.thread_id)
-            if topic is None:
-                topic = self.state.observe_topic(
-                    project_id=binding.project_id,
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    title="General" if message.thread_id == 1 else f"Topic {message.thread_id}",
-                )
+            topic = self._direct_topic(message.chat_id, message.thread_id, binding.project_id)
             active = self.state.active_session(topic.topic_id)
             if command.name == "status":
                 detail = (
@@ -503,14 +492,7 @@ class ExternalAgentService:
                 ),
             )
             return True
-        topic = self.state.find_topic(message.chat_id, message.thread_id)
-        if topic is None:
-            topic = self.state.observe_topic(
-                project_id=binding.project_id,
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                title="General" if message.thread_id == 1 else f"Topic {message.thread_id}",
-            )
+        topic = self._direct_topic(message.chat_id, message.thread_id, binding.project_id)
         active = self.state.active_session(topic.topic_id)
         if self.direct_messages_only and active is None:
             active = self.state.activate_agent(

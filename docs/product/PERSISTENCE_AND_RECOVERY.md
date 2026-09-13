@@ -135,12 +135,19 @@ recreate unsaved provider context or a partially executed turn.
   Antigravity are enabled independently through `external_worker_agent_ids`.
   Hermes remains externally managed and is not a queue-worker runtime. Failure,
   quota exhaustion, or restart of one worker MUST NOT block Controller commands
-  or another provider's eligible work. This stage covers the shared project-group
+  or another provider's eligible work on an independent execution scope. This
+  stage covers the shared project-group
   queue only; provider direct-message services remain separate legacy inline
   endpoints with their own state database.
-- **REQ-QUEUE-003 (Implemented for the embedded compatibility consumer):** Productive jobs MUST execute strict FIFO within
-  one numeric topic; different topics MAY execute concurrently. The target
-  provider/session/model/effort snapshot MUST be immutable after enqueue.
+- **REQ-QUEUE-003 (Implemented for Hub-owned queue consumers):** Productive jobs
+  MUST execute strict FIFO within one numeric topic. Across topics and providers,
+  at most one Hub-owned productive writer MAY own a canonical project root at a
+  time. A registered Git worktree with its own canonical root is an independent
+  execution scope; topic identity alone does not create one. Lease selection,
+  local-writer transfer, and saved-session adoption MUST claim or reject that
+  scope in the same SQLite transaction. Different execution scopes MAY proceed
+  independently. The target provider/session/model/effort snapshot MUST be
+  immutable after enqueue.
 - **REQ-QUEUE-004 (Implemented for the embedded compatibility consumer):** A durable job state machine MUST distinguish work
   not yet invoked from `executing`, result delivery, terminal failure, and
   `indeterminate` execution. An unproven in-flight turn MUST NOT be retried
@@ -171,7 +178,10 @@ recreate unsaved provider context or a partially executed turn.
   `superseded`, or `externally_completed`. Repeating the same resolution MUST be
   idempotent; replacing it or resolving another job state MUST fail. Resolution
   MUST leave the job status, error evidence, delivery state, and replay policy
-  unchanged, and the audit MUST report resolved and unresolved counts. Failure
+  unchanged, and the audit MUST report resolved and unresolved counts. An
+  unresolved `indeterminate` job MUST retain its execution scope; its immutable
+  resolution MAY release the scope only for new work and MUST NOT replay or
+  mutate the uncertain job. Failure
   notices MUST state what happened, what Hub saved, and the next safe action.
   For an uncertain outcome that action MUST be an explicit new user request to
   inspect current project state before continuing; the notice itself MUST NOT

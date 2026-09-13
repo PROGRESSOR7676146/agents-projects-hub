@@ -99,7 +99,8 @@ This normative module is part of the
 ### Current behavior
 
 - **REQ-WRITER-001 (Implemented):** One provider topic session MUST have only one
-  active writer.
+  active writer, and Hub-owned productive execution across all topic sessions
+  MUST have at most one writer for the same canonical project root.
 - **REQ-WRITER-002 (Implemented for Codex tmux takeover):** `/terminal` transfers
   writer ownership from Telegram to a named tmux-backed Codex CLI; `/release`
   returns it to Telegram without changing the thread.
@@ -118,8 +119,10 @@ This normative module is part of the
 
 ### Implemented minimal native transfer
 
-- **REQ-WRITER-006 (Implemented):** `/local` validates that no Hub dispatch is
-  running and that a completed provider session exists, changes `writer_mode`
+- **REQ-WRITER-006 (Implemented):** `/local` validates that no Hub dispatch,
+  queued/in-flight work, unresolved uncertain outcome, or other local writer
+  owns the same canonical root and that a completed provider session exists,
+  changes `writer_mode`
   from `telegram` to `local`, and returns a reviewed
   provider-specific resume command for the canonical root and session ID.
 - **REQ-WRITER-007 (Implemented for Codex with explicit owner assertion):**
@@ -137,7 +140,8 @@ This normative module is part of the
   assertion and external Codex workers/external outbox. It atomically creates a
   fresh Hub identity and immutable origin with writer `local`. Replacement
   requires the exact previous active Codex session ID; busy or unresolved work,
-  unfinished deliveries and known local writers block it. Only the old Hub
+  unfinished deliveries and known local writers on the canonical root, including
+  known prior project registrations, block it. Only the old Hub
   binding is archived; idle satellites and history remain.
 - **REQ-WRITER-010 (Implemented):** First `/return` on an adopted session MUST
   atomically persist the activation message ID, forwarded-context floor, writer
