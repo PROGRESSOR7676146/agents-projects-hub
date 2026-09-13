@@ -137,6 +137,7 @@ def project_runtime_health(
         "monitor": monitor,
         "sender": sender,
         "provider_workers": workers,
+        "execution_capacity": state.execution_capacity_snapshot(config.max_parallel_roots, now=now),
         "deployment_revision": {
             "status": deployment_status,
             "required_components": len(required),

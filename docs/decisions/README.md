@@ -43,6 +43,7 @@ with a new record.
 | Saved Codex session adoption | Schema-25 immutable origins, local preview/apply, atomic replacement and first-return boundary; exact resume without conversation substitution. | [ADR 0022](0022-explicit-codex-session-adoption.md) |
 | Execution root validation | Recheck the registered canonical allowlisted Git root before Hub-owned execution; invalid roots fail before invocation with no automatic replay. | [ADR 0023](0023-execution-time-root-validation.md) |
 | Root execution exclusion | Schema-26 transactional ownership permits at most one Hub-owned productive writer per canonical root across topics/providers; unresolved uncertainty retains the scope. | [ADR 0024](0024-canonical-root-execution-exclusion.md) |
+| Bounded root concurrency | Schema-27 global capacity and durable fairness permit parallel Hub workers only on independent canonical roots or explicitly bound and revalidated worktree lanes. | [ADR 0025](0025-bounded-root-concurrency.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

@@ -787,6 +787,34 @@ ON topics(execution_scope, topic_id);
 """
 
 
+MIGRATION_27 = """
+CREATE TABLE IF NOT EXISTS worktree_lanes (
+    lane_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    topic_id INTEGER REFERENCES topics(topic_id),
+    worktree_path TEXT NOT NULL UNIQUE,
+    branch_name TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL CHECK(status IN ('active', 'archived')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    cleaned_at TEXT
+);
+CREATE TABLE IF NOT EXISTS execution_scheduler_grants (
+    agent_id TEXT PRIMARY KEY,
+    last_grant_sequence INTEGER NOT NULL CHECK(last_grant_sequence >= 0),
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS execution_scheduler_workers (
+    agent_id TEXT PRIMARY KEY,
+    declared_capacity INTEGER NOT NULL CHECK(declared_capacity BETWEEN 1 AND 16),
+    observed_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS worktree_lanes_one_active_topic
+ON worktree_lanes(topic_id)
+WHERE status = 'active' AND topic_id IS NOT NULL;
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -913,6 +941,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_24,
         MIGRATION_25,
         MIGRATION_26,
+        MIGRATION_27,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:

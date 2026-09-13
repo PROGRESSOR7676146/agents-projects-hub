@@ -110,6 +110,9 @@ class HubConfig:
     # External workers are deliberately selected per provider.  This avoids a
     # global runtime switch accidentally stranding providers without a worker.
     external_worker_agent_ids: tuple[str, ...] = ()
+    # Global Hub-owned productive capacity across independent canonical roots.
+    # One preserves the serialized rollout and remains the safe default.
+    max_parallel_roots: int = 1
     # Consecutive productive messages with identical routing are collected
     # into one provider turn.  Zero keeps legacy one-message/one-turn behavior.
     message_batch_quiet_ms: int = 0
@@ -656,6 +659,15 @@ def load_hub_config(
             )
         if agent.managed_externally:
             raise HubConfigError(f"external worker agent {agent_id} must be locally managed")
+    max_parallel_roots = root.get("max_parallel_roots", 1)
+    if (
+        not isinstance(max_parallel_roots, int)
+        or isinstance(max_parallel_roots, bool)
+        or not 1 <= max_parallel_roots <= 16
+    ):
+        raise HubConfigError("max_parallel_roots must be an integer from 1 to 16")
+    if max_parallel_roots > 1 and queue_runtime != "external":
+        raise HubConfigError("max_parallel_roots above 1 requires queue_runtime external")
     message_batch_quiet_ms = root.get("message_batch_quiet_ms", 0)
     message_batch_max_ms = root.get("message_batch_max_ms", 8000)
     if (
@@ -720,6 +732,7 @@ def load_hub_config(
         queue_runtime=queue_runtime,
         outbox_runtime=outbox_runtime,
         external_worker_agent_ids=external_worker_agent_ids,
+        max_parallel_roots=max_parallel_roots,
         message_batch_quiet_ms=message_batch_quiet_ms,
         message_batch_max_ms=message_batch_max_ms,
         direct_message_project_id=direct_message_project_id,

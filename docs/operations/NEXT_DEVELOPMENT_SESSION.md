@@ -1,12 +1,14 @@
 # Следующая сессия: release gate и владение SQLite-ресурсами
 
-Статус: пакет A реализован и прошёл локальное review; hosted Actions ещё не подтверждены.
+Статус: пакеты A и F реализованы в репозитории; hosted Actions для F проверяются отдельно.
 
 Это подробная инструкция и review к пакету A из
 [RELIABILITY_PLAN.md](RELIABILITY_PLAN.md). Пакет A реализован в репозитории:
 failing regressions подтвердили SQLite failure boundaries, затем минимальные
 исправления и reusable workflow прошли полный canonical gate на Python 3.11,
-3.12 и 3.13. Следующий агент не должен повторять A; B–F остаются в
+3.12 и 3.13. Package F позднее добавил schema-27 bounded concurrency и явные
+исполняемые worktree lanes; его текущие доказательства перечислены в status и
+ADR 0025. Следующий агент не должен повторять A/F; B–E остаются в
 плане и не запускаются автоматически. Деплой, публикация, изменение тегов,
 live-вызовы и управление сервисами в эту работу не входят.
 
@@ -290,7 +292,7 @@ crash после commit до Telegram acknowledgement. Opaque callback не со
 additive schema migration, race tests и compatible rollback. Никакой timer-based
 authority, automatic approval или parsing произвольных model commands.
 
-**F — concurrency.** Сначала рассмотреть минимальное расширение: независимые
+**F — concurrency (реализовано в schema 27).** Минимальное расширение: независимые
 проекты с разными roots; same-project parallelism — только явные worktree lanes.
 Весь provider output потенциально меняет файлы: не определять безопасность по
 тексту prompt. Проверять один lane/root lock между разными темами, провайдерами
@@ -299,6 +301,7 @@ heartbeat identity, targeted stop и точное recovery после смерт
 Задать проверяемую fairness и поведение при уменьшении capacity до 1 во время
 работы. FIFO включает существующую границу final outbox; отдельно решить, когда
 можно отпустить filesystem lock. Написать contention matrix до реализации.
-Schema 24 сохранять только если доказанно достаточно её контракта; не использовать
-generic state поле для скрытой новой схемы. Для этого пакета требуется отдельный
-архитектурный review, а затем синтетическая fault-приёмка.
+Schema 27 хранит только durable fairness cursor и уникальность активной
+topic-to-lane привязки; capacity остаётся конфигурацией. Архитектурный review и
+синтетическая fault-приёмка покрывают contention, stale-worker fairness,
+уменьшение capacity, targeted stop, crash/uncertainty, миграцию и rollback.

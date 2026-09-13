@@ -161,8 +161,12 @@ class ExecutionScopeTests(unittest.TestCase):
         first = self.enqueue(first_topic, first_session, 706)
         second = self.enqueue(second_topic, second_session, 707)
 
-        first_lease = self.state.lease_provider_job("opencode", "opencode-worker")
-        second_lease = self.state.lease_provider_job("antigravity", "agy-worker")
+        first_lease = self.state.lease_provider_job(
+            "opencode", "opencode-worker", max_parallel_roots=2
+        )
+        second_lease = self.state.lease_provider_job(
+            "antigravity", "agy-worker", max_parallel_roots=2
+        )
 
         self.assertIsNotNone(first_lease)
         self.assertIsNotNone(second_lease)
@@ -193,7 +197,7 @@ class ExecutionScopeTests(unittest.TestCase):
         assert blocker_lease is not None and blocker_lease.lease_token is not None
         self.state.mark_provider_job_executing(blocker.job_id, blocker_lease.lease_token)
 
-        leased = self.state.lease_provider_job("opencode", "opencode-worker")
+        leased = self.state.lease_provider_job("opencode", "opencode-worker", max_parallel_roots=2)
 
         self.assertIsNotNone(leased)
         assert leased is not None

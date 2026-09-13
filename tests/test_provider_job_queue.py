@@ -461,10 +461,10 @@ class ProviderJobQueueTests(unittest.TestCase):
         )
         past = datetime(2026, 1, 1, tzinfo=timezone.utc)
         leased_first = self.state.lease_provider_job(
-            "codex", "worker-one", lease_seconds=1, now=past
+            "codex", "worker-one", lease_seconds=1, max_parallel_roots=2, now=past
         )
         leased_second = self.state.lease_provider_job(
-            "codex", "worker-two", lease_seconds=1, now=past
+            "codex", "worker-two", lease_seconds=1, max_parallel_roots=2, now=past
         )
         assert leased_first is not None and leased_first.lease_token is not None
         assert leased_second is not None and leased_second.lease_token is not None

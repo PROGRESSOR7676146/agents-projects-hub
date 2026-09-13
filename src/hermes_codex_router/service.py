@@ -683,7 +683,11 @@ class ProjectHubService:
                 queue_state.recover_stale_provider_jobs(agent_id=agent.agent_id)
                 if queue_stop is not None and queue_stop.is_set():
                     return False
-                job = queue_state.lease_provider_job(agent.agent_id, "embedded-consumer")
+                job = queue_state.lease_provider_job(
+                    agent.agent_id,
+                    "embedded-consumer",
+                    max_parallel_roots=self.config.max_parallel_roots,
+                )
                 if job is not None:
                     if queue_stop is not None and queue_stop.is_set():
                         assert job.lease_token is not None
