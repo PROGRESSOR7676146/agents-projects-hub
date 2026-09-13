@@ -985,8 +985,8 @@ class HubState:
                     continue
                 cursor = self._connection.execute(
                     """UPDATE topics SET execution_scope = ?, updated_at = ?
-                       WHERE topic_id = ? AND execution_scope = ?""",
-                    (expected, _now(), row["topic_id"], current),
+                       WHERE topic_id = ? AND execution_scope IS ?""",
+                    (expected, _now(), row["topic_id"], row["execution_scope"]),
                 )
                 changed += cursor.rowcount
         return changed

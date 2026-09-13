@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hermes_codex_router.execution_journal import ExecutionJournal
+from hermes_codex_router.external_service import ExternalAgentService
 from hermes_codex_router.external_worker import ExternalQueueWorker
 from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.registry import ExecutionRootError
@@ -20,8 +21,105 @@ from tests.test_bounded_concurrency import CapturingAdapter
 
 
 class LegacyScopeEvidenceTests(unittest.TestCase):
+    def test_external_startup_normalizes_shared_and_direct_message_state(self) -> None:
+        for direct in (False, True):
+            with self.subTest(direct=direct), tempfile.TemporaryDirectory() as directory:
+                harness = FaultMatrixHarness(Path(directory))
+                config = replace(
+                    harness.config,
+                    agents=tuple(
+                        replace(agent, token_file=Path(directory) / "fictional-unused-token")
+                        for agent in harness.config.agents
+                    ),
+                )
+                state_path = config.state_path
+                if direct:
+                    state_path = state_path.with_name(
+                        f"{state_path.stem}-opencode-dm{state_path.suffix}"
+                    )
+                state = HubState.open(state_path)
+                topic = state.observe_topic(
+                    project_id="example-project",
+                    chat_id=harness.chat_id,
+                    thread_id=77,
+                    title="Fictional legacy topic",
+                )
+                session = state.activate_agent(topic.topic_id, "codex", "fictional", "high")
+                state.set_writer_mode(session.session_id, "local")
+                historical = Path(directory) / "historical-root"
+                with state._connection:
+                    state._connection.execute(
+                        """INSERT INTO codex_session_origins
+                           (session_id, provider_thread_id, project_id, canonical_root,
+                            model_provider, created_at)
+                           VALUES (?, 'fictional-thread', 'example-project', ?, 'openai', 'fictional')""",
+                        (session.session_id, str(historical)),
+                    )
+                before = list(state._connection.execute("SELECT * FROM codex_session_origins"))
+                with patch(
+                    "hermes_codex_router.external_service.load_registry",
+                    return_value=harness.registry,
+                ):
+                    service = ExternalAgentService(
+                        config, "opencode", direct_messages_only=direct, response_transport=False
+                    )
+                try:
+                    self.assertEqual(
+                        state.get_topic(topic.topic_id).execution_scope, f"root:{historical}"
+                    )
+                    with self.assertRaises(StateError):
+                        service.state.observe_topic(
+                            project_id=topic.project_id,
+                            chat_id=topic.chat_id,
+                            thread_id=topic.thread_id,
+                            title=topic.title,
+                            execution_root=harness.registry.projects[0].root,
+                        )
+                    self.assertEqual(state.get_session(session.session_id).writer_mode, "local")
+                    self.assertEqual(
+                        list(state._connection.execute("SELECT * FROM codex_session_origins")),
+                        before,
+                    )
+                finally:
+                    service.close()
+                    state.close()
+
+    def test_null_and_empty_legacy_scope_are_normalized(self) -> None:
+        for stored in (None, ""):
+            with self.subTest(stored=stored), tempfile.TemporaryDirectory() as directory:
+                state = HubState.open(Path(directory) / "state.db")
+                try:
+                    topic = state.observe_topic(
+                        project_id="example-project",
+                        chat_id=-1001234567890,
+                        thread_id=77,
+                        title="Fictional topic",
+                    )
+                    with state._connection:
+                        state._connection.execute(
+                            "UPDATE topics SET execution_scope=? WHERE topic_id=?",
+                            (stored, topic.topic_id),
+                        )
+                    self.assertEqual(
+                        state.reconcile_legacy_execution_scopes(
+                            {"example-project": Path(directory)}
+                        ),
+                        1,
+                    )
+                    self.assertEqual(
+                        state.get_topic(topic.topic_id).execution_scope, f"root:{directory}"
+                    )
+                    self.assertEqual(
+                        state.reconcile_legacy_execution_scopes(
+                            {"example-project": Path(directory)}
+                        ),
+                        0,
+                    )
+                finally:
+                    state.close()
+
     def test_normalization_refusal_closes_startup_connection(self) -> None:
-        for kind in ("controller", "worker"):
+        for kind in ("controller", "worker", "external"):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
                 harness = FaultMatrixHarness(Path(directory))
                 state = HubState.open(harness.config.state_path)
@@ -38,15 +136,39 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
                             "hermes_codex_router.service.load_registry",
                             return_value=harness.registry,
                         ),
+                        patch(
+                            "hermes_codex_router.external_service.load_registry",
+                            return_value=harness.registry,
+                        ),
+                        patch("hermes_codex_router.external_service.ExternalCliAdapter") as adapter,
+                        patch.object(
+                            Path,
+                            "read_text",
+                            side_effect=AssertionError("token read before normalization"),
+                        ),
                     ):
                         with self.assertRaisesRegex(StateError, "fictional conflict"):
                             if kind == "controller":
                                 ProjectHubService(harness.config)
-                            else:
+                            elif kind == "worker":
                                 ExternalQueueWorker(
                                     harness.config, "opencode", registry=harness.registry
                                 )
+                            else:
+                                config = replace(
+                                    harness.config,
+                                    agents=tuple(
+                                        replace(
+                                            agent,
+                                            token_file=Path(directory)
+                                            / "fictional-never-read-token",
+                                        )
+                                        for agent in harness.config.agents
+                                    ),
+                                )
+                                ExternalAgentService(config, "opencode")
                         close.assert_called_once()
+                        adapter.assert_not_called()
                 finally:
                     state.close()
 
@@ -56,7 +178,14 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
                 with self.subTest(schema=schema, ownership=ownership):
                     self.check_saved_root(schema, ownership)
 
-    def check_saved_root(self, schema: int, ownership: str) -> None:
+    def test_null_and_empty_scopes_preserve_saved_ownership(self) -> None:
+        for stored in (None, ""):
+            with self.subTest(stored=stored):
+                self.check_saved_root(27, "local", stored_scope=stored)
+
+    def check_saved_root(
+        self, schema: int, ownership: str, *, stored_scope: str | None = "project:example-project"
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             harness = FaultMatrixHarness(Path(directory))
             harness.config = replace(harness.config, max_parallel_roots=2)
@@ -117,7 +246,7 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
             with state._connection:
                 state._connection.execute(
                     "UPDATE topics SET execution_scope=? WHERE topic_id=?",
-                    ("project:example-project", old.topic_id),
+                    (stored_scope, old.topic_id),
                 )
             preserved_tables = (
                 "agent_sessions",

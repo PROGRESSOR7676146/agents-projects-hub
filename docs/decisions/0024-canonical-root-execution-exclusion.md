@@ -46,8 +46,9 @@ or native CLI processes are outside this coordination boundary.
 ## Migration and rollback
 
 Migration 26 adds the nullable column transactionally, backfills existing rows
-to `project:<project_id>`, and adds a lookup index. On Controller and worker
-startup, a registry-aware transaction upgrades every retained non-lane fallback
+to `project:<project_id>`, and adds a lookup index. On Controller, worker, and
+standalone external-service startup (including each separate direct-message
+database), a registry-aware transaction upgrades every retained non-lane fallback
 to `root:<canonical-root>` using retained origin/checkpoint identity first and
 the registry only when no such evidence exists. This
 prevents a worker started before the Controller from comparing a new canonical
@@ -63,9 +64,22 @@ no root evidence, fail the entire normalization transaction for local resolution
 rather than guessing from titles or paths. Checkpoints, origins, writer modes,
 jobs, resolutions and outbox records are unchanged. Startup refusal closes its
 SQLite connection. The procedure also applies to already-schema-27 databases;
-no historical migration is rewritten. Rollback
+no historical migration is rewritten. Null and empty fallback scopes are matched
+against their actual stored value using a null-safe comparison, without bypassing
+the same evidence and active-lane checks. Rollback
 requires an artifact whose maximum supported schema is at least 26; retaining
 the column and its values is safer than a destructive downgrade.
+
+## Managed terminal ownership
+
+Inline managed terminal takeover validates the root outside SQLite, then claims
+terminal ownership with the same persisted topic/session/lane snapshot check as
+local transfer, before provider-session preparation or process launch. The claim
+excludes other Hub writers while launch is pending. Preparation or launch failure
+retains ownership conservatively; neither a repeated takeover nor a negative
+process-liveness observation authorizes another launch or a Telegram turn. The
+operator inspects locally and explicitly uses `/release` to return ownership.
+No provider or filesystem operation runs inside the ownership transaction.
 
 ## Evidence
 

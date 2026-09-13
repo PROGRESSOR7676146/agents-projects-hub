@@ -2181,6 +2181,9 @@ class ProjectHubService:
             if session.writer_mode == "local":
                 self._send_text(message, "Use /return before starting a managed terminal.")
                 return True
+            if session.writer_mode == "terminal":
+                self._send_text(message, "Terminal owns this Codex session. Use /release first.")
+                return True
             if self.state.active_lane_for_topic(topic.topic_id) is not None:
                 self._send_text(
                     message,
@@ -2195,26 +2198,37 @@ class ProjectHubService:
                 return True
             project = self.registry.require_project(binding.project_id)
             try:
+                expected_transfer = self.state.writer_transfer_snapshot(topic, session)
+                execution_root = resolve_topic_execution_root(self.state, self.registry, topic)
+                session = self.state.set_writer_mode(
+                    session.session_id, "terminal", expected_transfer=expected_transfer
+                )
+            except (ExecutionRootError, StateError):
+                self._send_text(
+                    message,
+                    "Terminal takeover refused: execution root or session changed; inspect locally before retrying.",
+                )
+                return True
+            try:
                 session = self._ensure_provider_thread(
                     project=project, topic=topic, session=session
                 )
-            except ExecutionRootError as exc:
-                self._send_text(message, exc.public_message)
+                if not session.provider_session_id or not session.terminal_name:
+                    raise ServiceError("provider thread is not ready for terminal takeover")
+                self.terminal.start(
+                    name=session.terminal_name,
+                    title=f"{project.display_name} - {topic.title} - {self.agent.display_name}",
+                    thread_id=session.provider_session_id,
+                    cwd=execution_root,
+                )
+            except (ExecutionRootError, OSError, RuntimeError, subprocess.SubprocessError):
+                # Preparation/launch may already have crossed an external boundary.
+                # Keep the claim; liveness is not proof that it is safe to replay.
+                self._send_text(
+                    message,
+                    "Terminal preparation or launch was not confirmed. Ownership is retained; inspect locally and use /release before retrying.",
+                )
                 return True
-            if not session.provider_session_id or not session.terminal_name:
-                raise ServiceError("provider thread is not ready for terminal takeover")
-            if session.writer_mode == "terminal" and self.terminal.is_running(
-                session.terminal_name
-            ):
-                self._send_text(message, "Terminal already owns this Codex session.")
-                return True
-            self.terminal.start(
-                name=session.terminal_name,
-                title=f"{project.display_name} - {topic.title} - {self.agent.display_name}",
-                thread_id=session.provider_session_id,
-                cwd=project.root,
-            )
-            self.state.set_writer_mode(session.session_id, "terminal")
             self._send_text(
                 message,
                 "Terminal takeover started. Use /release here to return this session to Telegram.",
@@ -2544,17 +2558,15 @@ class ProjectHubService:
             )
             return True
         if session.writer_mode == "terminal":
-            if session.terminal_name and self.terminal.is_running(session.terminal_name):
-                if queue_mode:
-                    self.state.claim_message(
-                        message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
-                    )
-                self._send_text(
-                    message,
-                    "This Codex session is open in Terminal. Use /release before sending Telegram turns.",
+            if queue_mode:
+                self.state.claim_message(
+                    message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
                 )
-                return True
-            session = self.state.set_writer_mode(session.session_id, "telegram")
+            self._send_text(
+                message,
+                "This Codex session is owned by Terminal. Use /release before sending Telegram turns.",
+            )
+            return True
         project = self.registry.require_project(binding.project_id)
         clean_text = re.sub(
             rf"(?i)(?<![A-Za-z0-9_])@{re.escape(self.agent.telegram_username)}\b",

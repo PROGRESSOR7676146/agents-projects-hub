@@ -67,6 +67,13 @@ class ExternalAgentService:
             )
         self.state_path = state_path
         self.state = HubState.open(state_path)
+        try:
+            self.state.reconcile_legacy_execution_scopes(
+                {project.project_id: project.root for project in self.registry.projects}
+            )
+        except BaseException:
+            self.state.close()
+            raise
         self.response_transport_enabled = response_transport
         self._telegram = (
             TelegramBotApi(self.agent.token_file.read_text(encoding="utf-8").strip())
