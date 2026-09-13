@@ -248,7 +248,11 @@ agents-projects-hub sender config/hub.json
 The worker command is enabled only with `dispatch_mode: "queue"` and
 `queue_runtime: "external"`. `external_worker_agent_ids` selects Codex,
 OpenCode, and Antigravity independently; omitted providers keep the embedded
-compatibility path. `outbox_runtime` defaults to `"controller"`, preserving the
+compatibility path. `max_parallel_roots` is a global limit from 1 to 16 across
+Hub-owned workers and defaults to 1. Values above 1 require external queue mode
+and allow only distinct canonical project roots or explicitly bound worktree
+lanes; the number of configured provider workers remains an additional upper
+bound. `outbox_runtime` defaults to `"controller"`, preserving the
 stage-5 rollback path. Set it to `"external"` only when the standalone sender
 is deployed; then the controller does not deliver durable outbox rows or build
 isolated provider adapters. The standalone `sender` process fairly polls every
@@ -392,8 +396,11 @@ agents-projects-hub monitor config/hub.json --notify --cooldown-seconds 3600
 Project creation remains local: Telegram cannot submit or approve filesystem
 paths. Lane creation makes a sibling Git worktree and records it in state. Topic
 binding requires the exact numeric `chat_id:thread_id` confirmation locally.
-Cleanup requires prior archival and the exact lane ID; it removes only the
-derived worktree, retains the Git branch, and records completion in state.
+Binding and archival require an idle topic and atomically change its execution
+scope. A worker revalidates the derived path, allowlist, Git worktree registry,
+and top level before using the lane as its cwd. Cleanup requires prior archival
+and the exact lane ID; it removes only the derived worktree, retains the Git
+branch, and records completion in state.
 
 ## Hermes integration
 

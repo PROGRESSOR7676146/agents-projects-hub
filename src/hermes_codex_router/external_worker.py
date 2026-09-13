@@ -44,6 +44,7 @@ from .telegram_interaction import (
     telegram_turn_prompt,
     telegram_user_turn_prompt,
 )
+from .worktrees import validate_worktree_execution_root
 
 
 class ExternalQueueWorkerError(RuntimeError):
@@ -231,7 +232,12 @@ class ExternalQueueWorker:
         self.state.recover_stale_provider_jobs(agent_id=self.agent.agent_id)
         if self._stop.is_set():
             return False
-        job = self.state.lease_provider_job(self.agent.agent_id, self.worker_id)
+        job = self.state.lease_provider_job(
+            self.agent.agent_id,
+            self.worker_id,
+            max_parallel_roots=self.config.max_parallel_roots,
+            scheduler_agents=self.config.external_worker_agent_ids,
+        )
         if job is None:
             return False
         if self._stop.is_set():
@@ -259,6 +265,7 @@ class ExternalQueueWorker:
         assert token is not None
         topic = self.state.get_topic(executing.topic_id)
         project = self.registry.require_project(topic.project_id)
+        lane = self.state.active_lane_for_topic(topic.topic_id)
         heartbeat_stop = threading.Event()
 
         def maintain_lease() -> None:
@@ -289,7 +296,21 @@ class ExternalQueueWorker:
         )
         heartbeat.start()
         try:
-            validate_execution_root(self.registry, project)
+            if lane is None:
+                validate_execution_root(self.registry, project)
+            else:
+                lane_root = validate_worktree_execution_root(
+                    self.registry,
+                    project,
+                    str(lane["lane_id"]),
+                    Path(str(lane["worktree_path"])),
+                )
+                if (
+                    str(lane["project_id"]) != project.project_id
+                    or topic.execution_scope != f"root:{lane_root}"
+                ):
+                    raise ExecutionRootError()
+                project = replace(project, root=lane_root)
             if self.agent.runtime == "codex":
                 self._execute_codex(executing, token, project, topic)
             else:

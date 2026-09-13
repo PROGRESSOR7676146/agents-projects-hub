@@ -8,18 +8,33 @@ operator deployment inventory or live conversation evidence.
 
 ## Quality checkpoint
 
-Schema 26 now enforces one Hub-owned productive writer per canonical registered
+Package F is repository-complete at schema 27. `max_parallel_roots` defaults to
+one and transactionally bounds active Hub worker scopes across provider workers;
+values up to 16 require external queue mode. Durable least-recently-granted
+selection prevents a continuously polling live worker from starving another,
+while a stale worker leaves consideration after two minutes. Lowering capacity
+drains current turns without cancelling them. Expired execution becomes
+root-local uncertainty: it still excludes its own canonical root but no longer
+occupies a global slot or blocks an independent root. Cache-only status exposes
+only capacity totals, bounded worker/agent/phase owners and an aggregate
+uncertain-scope count.
+
+Explicit local worktree binding now atomically moves an idle topic to the lane's
+canonical scope. Bind and archive refuse pending, active, local-writer and
+unresolved work. Before provider access the worker revalidates the exact derived
+path, allowlist membership, Git worktree registration and Git top level, then
+uses that lane as cwd. Each provider worker still owns one SQLite connection and
+one adapter/client/process lifecycle, so configured worker count is a second
+parallelism bound. Offline capacity, fairness, contention, targeted-stop,
+process-recovery, lane execution, migration and rollback tests cover this
+checkpoint. Direct-message databases, unmanaged Hermes/native CLI processes,
+deployment and live provider acceptance remain outside the claim. See
+[ADR 0025](../decisions/0025-bounded-root-concurrency.md).
+
+Schema 26 established one Hub-owned productive writer per canonical registered
 root across Telegram topics and providers. Queue lease selection, local writer
 transfer, and saved Codex-session adoption share the transactional execution
-scope. Different registered roots, including separately registered Git
-worktrees, remain independent. A pre-execution expired lease releases the scope;
-an uncertain executed job retains it until immutable operator resolution, which
-does not replay or mutate the old job. Offline contention, real worker-loop,
-process-crash, adoption, migration and rollback tests cover this repository
-checkpoint. This is the exclusion prerequisite for bounded concurrency, not a
-worker-count increase or a claim about separate direct-message databases,
-unmanaged Hermes/CLI processes, deployment, or live acceptance. See
-[ADR 0024](../decisions/0024-canonical-root-execution-exclusion.md).
+scope. See [ADR 0024](../decisions/0024-canonical-root-execution-exclusion.md).
 
 Hub-owned execution now revalidates the cached canonical allowlisted Git root
 before provider access or project staging. Both queue modes reject filesystem
@@ -116,7 +131,7 @@ adopted history; explicit `/new` creates a normal new session. See
 failure boundaries and rollback limitations. Automated acceptance includes real
 queue/outbox flow with fictional provider/Telegram boundaries. Live continuity
 and a production rollback artifact remain unaccepted. Earlier schema-24
-checkpoints above describe their own milestones; the current target is schema 26.
+checkpoints above describe their own milestones; the current target is schema 27.
 
 - Numeric project/topic identity, canonical allowlisted roots, idempotent
   routing, persistent provider sessions, bounded visible context, and writer

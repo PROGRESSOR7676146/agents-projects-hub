@@ -121,6 +121,7 @@ necessary but not sufficient for items marked live.
 | Provider-limit rotation events | Implemented | Provider `429` drives Codex rotation visibility; natural exhaustion E2E remains pending. |
 | Durable embedded queue compatibility path | Implemented | `dispatch_mode: "inline"` remains default; `"queue"` with `queue_runtime: "embedded"` consumes work on a background thread. |
 | Isolated local provider workers | Implemented behind feature gate | `dispatch_mode: "queue"`, `queue_runtime: "external"`, explicit `external_worker_agent_ids`, and opt-in `outbox_runtime: "external"`; controller delivery remains the default rollback path. |
+| Bounded independent-root concurrency | Implemented behind feature gate | `max_parallel_roots` defaults to one; values up to 16 require external workers, durable fairness, canonical-root exclusion, and explicitly bound/revalidated Git worktree lanes. Deployment/live acceptance remains separate. |
 | Automatic Antigravity account rotation | Deferred | Await stable supported headless account-pool capability. |
 | Universal provider-neutral Session Bridge | Deferred | Add only if real adapters/companions cannot meet needs. |
 | Automatic OS terminal window/PID management | Rejected | Explicit resume commands and writer leases are simpler and safer. |

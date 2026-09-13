@@ -133,6 +133,10 @@ recreate unsaved provider context or a partially executed turn.
   and has no Telegram transport or token-reading capability. The default
   external-worker list remains Codex for rollback compatibility; OpenCode and
   Antigravity are enabled independently through `external_worker_agent_ids`.
+  `max_parallel_roots` MUST default to one and MUST bound simultaneous
+  Hub-owned productive execution across all external workers. A value above one
+  MUST require external queue mode; configured provider workers remain a second
+  upper bound because each worker retains one SQLite/client/process owner.
   Hermes remains externally managed and is not a queue-worker runtime. Failure,
   quota exhaustion, or restart of one worker MUST NOT block Controller commands
   or another provider's eligible work on an independent execution scope. This
@@ -142,12 +146,28 @@ recreate unsaved provider context or a partially executed turn.
 - **REQ-QUEUE-003 (Implemented for Hub-owned queue consumers):** Productive jobs
   MUST execute strict FIFO within one numeric topic. Across topics and providers,
   at most one Hub-owned productive writer MAY own a canonical project root at a
-  time. A registered Git worktree with its own canonical root is an independent
-  execution scope; topic identity alone does not create one. Lease selection,
+  time. A locally created and registered Git worktree may become an independent
+  execution scope only after an idle numeric topic is explicitly bound to it;
+  topic identity alone does not create one. Bind/archive MUST be transactional,
+  MUST refuse pending, active, provider-bound, local-writer, or unresolved work, and execution
+  MUST revalidate the exact derived allowlisted Git worktree immediately before
+  provider access. Lease selection,
   local-writer transfer, and saved-session adoption MUST claim or reject that
   scope in the same SQLite transaction. Different execution scopes MAY proceed
-  independently. The target provider/session/model/effort snapshot MUST be
-  immutable after enqueue.
+  independently up to configured capacity. Capacity reduction MUST drain
+  existing execution without cancellation and MUST refuse new slots until the
+  occupied count falls below the new limit. Eligible live provider workers MUST
+  receive durable least-recently-granted service; a stale worker MUST stop
+  blocking fairness after a bounded heartbeat window. Expired pre-execution
+  leases release capacity. Expired execution becomes unresolved uncertainty,
+  continues to block only its own scope, and MUST NOT consume global capacity.
+  Passive health MAY expose capacity, availability, bounded worker/agent/phase
+  owners, and an aggregate uncertain-scope count, but not project paths, topic
+  IDs, prompts, sessions, or provider output. The target
+  provider/session/model/effort snapshot MUST be immutable after enqueue.
+  A committed `result_ready` job MAY release its cross-topic filesystem scope
+  because only durable Telegram delivery remains, while the existing same-topic
+  FIFO boundary MUST continue through final-result delivery.
 - **REQ-QUEUE-004 (Implemented for the embedded compatibility consumer):** A durable job state machine MUST distinguish work
   not yet invoked from `executing`, result delivery, terminal failure, and
   `indeterminate` execution. An unproven in-flight turn MUST NOT be retried

@@ -203,7 +203,10 @@ class MigrationTests(unittest.TestCase):
 
             result = migrate_database(path, create_backup=False)
 
-            self.assertEqual((result.previous_version, result.current_version), (25, 26))
+            self.assertEqual(
+                (result.previous_version, result.current_version),
+                (25, LATEST_SCHEMA_VERSION),
+            )
             migrated = sqlite3.connect(path)
             try:
                 self.assertEqual(
@@ -247,6 +250,101 @@ class MigrationTests(unittest.TestCase):
                 self.assertNotIn("execution_scope", columns)
             finally:
                 restored.close()
+
+    def test_bounded_concurrency_migration_preserves_lanes_and_adds_scheduler(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            migrate_database(path, create_backup=False)
+            with sqlite3.connect(path) as connection:
+                connection.execute("DROP INDEX worktree_lanes_one_active_topic")
+                connection.execute("DROP TABLE execution_scheduler_grants")
+                connection.execute("DROP TABLE execution_scheduler_workers")
+                connection.execute(
+                    """INSERT INTO topics
+                       (project_id, chat_id, thread_id, title, execution_scope,
+                        created_at, updated_at)
+                       VALUES ('example-project', -1001234567890, 8, 'Lane',
+                               'project:example-project', 'now', 'now')"""
+                )
+                connection.execute(
+                    """INSERT INTO worktree_lanes
+                       (lane_id, project_id, topic_id, worktree_path, branch_name,
+                        status, created_at, updated_at)
+                       VALUES ('parallel', 'example-project', 1, '/example/lane',
+                               'lane/parallel', 'active', 'now', 'now')"""
+                )
+                connection.execute("PRAGMA user_version = 26")
+
+            result = migrate_database(path, create_backup=False)
+
+            self.assertEqual(
+                (result.previous_version, result.current_version),
+                (26, LATEST_SCHEMA_VERSION),
+            )
+            with sqlite3.connect(path) as migrated:
+                self.assertEqual(
+                    migrated.execute("SELECT lane_id FROM worktree_lanes").fetchone()[0],
+                    "parallel",
+                )
+                self.assertIsNotNone(
+                    migrated.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' "
+                        "AND name='execution_scheduler_grants'"
+                    ).fetchone()
+                )
+                self.assertIsNotNone(
+                    migrated.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' "
+                        "AND name='execution_scheduler_workers'"
+                    ).fetchone()
+                )
+                self.assertIsNotNone(
+                    migrated.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='index' "
+                        "AND name='worktree_lanes_one_active_topic'"
+                    ).fetchone()
+                )
+
+    def test_bounded_concurrency_migration_rolls_back_conflicting_lane_bindings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            migrate_database(path, create_backup=False)
+            with sqlite3.connect(path) as connection:
+                connection.execute("DROP INDEX worktree_lanes_one_active_topic")
+                connection.execute("DROP TABLE execution_scheduler_grants")
+                connection.execute("DROP TABLE execution_scheduler_workers")
+                connection.execute(
+                    """INSERT INTO topics
+                       (project_id, chat_id, thread_id, title, execution_scope,
+                        created_at, updated_at)
+                       VALUES ('example-project', -1001234567890, 9, 'Conflict',
+                               'project:example-project', 'now', 'now')"""
+                )
+                for lane_id in ("first", "second"):
+                    connection.execute(
+                        """INSERT INTO worktree_lanes
+                           (lane_id, project_id, topic_id, worktree_path, branch_name,
+                            status, created_at, updated_at)
+                           VALUES (?, 'example-project', 1, ?, ?, 'active', 'now', 'now')""",
+                        (lane_id, f"/example/{lane_id}", f"lane/{lane_id}"),
+                    )
+                connection.execute("PRAGMA user_version = 26")
+
+            with self.assertRaises(sqlite3.IntegrityError):
+                migrate_database(path, create_backup=False)
+
+            with sqlite3.connect(path) as rolled_back:
+                self.assertEqual(rolled_back.execute("PRAGMA user_version").fetchone()[0], 26)
+                self.assertIsNone(
+                    rolled_back.execute(
+                        "SELECT 1 FROM sqlite_master WHERE name='execution_scheduler_grants'"
+                    ).fetchone()
+                )
+                self.assertIsNone(
+                    rolled_back.execute(
+                        "SELECT 1 FROM sqlite_master WHERE name='execution_scheduler_workers'"
+                    ).fetchone()
+                )
 
     def test_indeterminate_resolution_migration_is_additive_from_v22(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

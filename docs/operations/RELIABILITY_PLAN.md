@@ -95,7 +95,7 @@ claims do not establish current remote or deployment health.
 | C | Extend existing project validation and acceptance machinery for onboarding. | A bounded result separates offline preflight/synthetic routing from live routing, real restart and response-identity evidence; unavailable live checks cannot make a project accepted. No second acceptance framework. |
 | D | One measured, cohesive extraction justified by work in B or C. | Preserve transaction boundaries, the current schema contract, public APIs and observable behavior; demonstrate a specific reduction in coupling or duplication. This is not a prerequisite for all other work and may be omitted if no useful seam is found. |
 | E | Durable controls for one concrete pending-decision scenario. | Define decision creation, action meanings, free-text correction, expiry, crash boundaries and atomic callback-to-job transition first; then prove owner/topic/session scoping, deduplication and first-valid-answer-wins. No timer or approval substitution. |
-| F — exclusion prerequisite locally complete; concurrency pending | Bounded concurrency across independent project roots/explicit worktree lanes, default one. | Schema 26 now provides transactional canonical-root exclusion across Hub queue providers, local ownership and adoption, with contention/crash/migration tests. Before increasing worker count, separately design and prove per-slot resource ownership, health identity, fairness, shutdown and recovery. |
+| F — repository complete; deployment acceptance pending | Bounded concurrency across independent project roots/explicit worktree lanes, default one. | Schema 27 adds global external-worker capacity, durable least-recently-granted fairness, draining reduction, passive slot ownership, root-local uncertainty and idle-only worktree bind/archive with execution-time validation. Offline contention, targeted-stop, crash/recovery, migration and rollback tests pass; live rollout remains separate. |
 
 Before E, reconcile the stale fixed-delay wording in REQ-UX-007 with accepted
 [ADR 0010](../decisions/0010-no-mandatory-grace-period.md). Start/Clarify/Cancel
@@ -108,9 +108,9 @@ which generic transport/telemetry capabilities remain. Preserve historical ADR
 rationale with explicit supersession; do not erase every textual mention.
 
 For F, a different Telegram topic does not prove a different filesystem lane.
-The current `lease_provider_job` query enforces topic ordering, not exclusion of
-different topics sharing a root. Do not turn up worker count until the exclusion
-contract is enforced for all productive providers and local writer ownership.
+Schema 27 permits concurrency only across canonical registered roots or an
+explicitly bound and revalidated Git worktree lane. Turning up capacity remains
+an explicit deployment task with private live acceptance.
 
 The 48–72 hour observation, real host reboot, and off-machine restore remain
 separate deployment work and evidence. Do not call the product operationally

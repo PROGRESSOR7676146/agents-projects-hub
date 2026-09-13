@@ -341,6 +341,7 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(load_hub_config(self.write_config()).dispatch_mode, "inline")
         self.assertEqual(load_hub_config(self.write_config()).queue_runtime, "embedded")
         self.assertEqual(load_hub_config(self.write_config()).outbox_runtime, "controller")
+        self.assertEqual(load_hub_config(self.write_config()).max_parallel_roots, 1)
         self.assertEqual(load_hub_config(self.write_config()).message_batch_quiet_ms, 0)
         self.assertEqual(load_hub_config(self.write_config()).message_batch_max_ms, 8000)
         batched = load_hub_config(
@@ -365,6 +366,16 @@ class HubConfigTests(unittest.TestCase):
             load_hub_config(self.write_config(queue_runtime="remote"))
         with self.assertRaisesRegex(HubConfigError, "queue_runtime external requires"):
             load_hub_config(self.write_config(queue_runtime="external"))
+        parallel = load_hub_config(
+            self.write_config(dispatch_mode="queue", queue_runtime="external", max_parallel_roots=3)
+        )
+        self.assertEqual(parallel.max_parallel_roots, 3)
+        for invalid in (0, 17, True, "2"):
+            with self.subTest(max_parallel_roots=invalid):
+                with self.assertRaisesRegex(HubConfigError, "max_parallel_roots"):
+                    load_hub_config(self.write_config(max_parallel_roots=invalid))
+        with self.assertRaisesRegex(HubConfigError, "requires queue_runtime external"):
+            load_hub_config(self.write_config(max_parallel_roots=2))
         self.assertEqual(
             load_hub_config(
                 self.write_config(

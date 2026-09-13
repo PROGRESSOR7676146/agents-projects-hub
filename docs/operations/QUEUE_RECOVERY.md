@@ -39,6 +39,9 @@ Interpret the components independently:
 - One worker down: only that provider stops taking new jobs; other workers with
   eligible independent execution scopes and Controller commands remain
   available.
+- Capacity is cache-only in `status.execution_capacity`: `occupied` names only
+  bounded worker/agent/phase owners, while `blocked_uncertain_scopes` is an
+  aggregate and never reveals roots or topics.
 - Sender down: completed provider results remain `result_ready`; workers MUST
   NOT repeat provider execution to compensate for missing Telegram delivery.
 - Hermes or tlive down: the other channels remain independent; no timeout is an
@@ -68,7 +71,8 @@ uses the conservative rules below.
 - Expired `executing` means invocation may have begun. Normal stale recovery
   marks it `indeterminate` unless a provider-specific structured reconciliation
   proves a result or proves that execution never began. Unresolved uncertainty
-  retains the canonical-root execution scope across topics and providers.
+  retains its canonical-root execution scope across topics and providers, but
+  does not consume the global worker-capacity count or block another root.
 - `failed` and `cancelled` are terminal. Do not reinterpret them as pending.
 - `result_ready` means provider work already succeeded. Only Telegram delivery
   remains; never submit another provider turn for the same job.
@@ -96,8 +100,25 @@ and `externally_completed` means completion was confirmed outside Hub. The
 command is idempotent for the same value and rejects replacement. It does not
 change the original job or error, send a message, or authorize provider replay.
 The audit reports these annotations separately and recommends no further action
-for resolved records. Schema 26 uses the immutable annotation to release the
+for resolved records. Schema 27 uses the immutable annotation to release the
 canonical-root scope for unrelated future work.
+
+## Capacity and lane changes
+
+`max_parallel_roots` defaults to 1. Raising it requires external queue mode and
+does not create extra processes: actual parallelism is also limited by the
+configured provider-worker units. Lowering it never cancels active work. Restart
+workers with the smaller configuration; once the first restarted worker polls,
+all fresh workers use the lowest advertised value and take no new lease until
+occupied execution falls below it. An increase remains conservatively at the
+old advertised value until each old worker restarts or its declaration ages out.
+
+Create and bind a lane only through the local CLI. Binding and archival refuse
+queued, leased, executing, retrying, result-ready, unresolved, dispatch-owned,
+local-writer-owned, or provider-bound topics. Start a fresh unbound session
+before changing its root; archive first, then clean up. A lane is never
+selected from Telegram input, and a worker refuses a path that is not the exact
+derived, allowlisted and currently registered Git worktree.
 
 ## Changing provider ownership
 
