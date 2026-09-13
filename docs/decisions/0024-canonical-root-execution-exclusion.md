@@ -48,14 +48,22 @@ or native CLI processes are outside this coordination boundary.
 Migration 26 adds the nullable column transactionally, backfills existing rows
 to `project:<project_id>`, and adds a lookup index. On Controller and worker
 startup, a registry-aware transaction upgrades every retained non-lane fallback
-whose immutable project ID is still registered to `root:<canonical-root>`. This
+to `root:<canonical-root>` using retained origin/checkpoint identity first and
+the registry only when no such evidence exists. This
 prevents a worker started before the Controller from comparing a new canonical
 scope to a retained legacy string. Active lane scopes are preserved and a
 mismatched lane binding fails closed; a stored canonical scope is never rebound
-only because the registry later changes. An unknown historical ID is normalized
-only from one retained origin/checkpoint root; conflicting evidence or active
-ownership without it fails closed for local resolution rather than guessing from
-titles or paths. Rollback
+only because the registry later changes. A single saved root protects the same
+historical checkout even if a known ID now maps elsewhere; execution and topic
+observation refuse the mismatched binding, while independent roots can proceed.
+This is not authorization to execute the saved path without registry/Git
+validation. An unknown historical ID is normalized only from one retained
+origin/checkpoint root. Multiple saved roots, or unknown active ownership with
+no root evidence, fail the entire normalization transaction for local resolution
+rather than guessing from titles or paths. Checkpoints, origins, writer modes,
+jobs, resolutions and outbox records are unchanged. Startup refusal closes its
+SQLite connection. The procedure also applies to already-schema-27 databases;
+no historical migration is rewritten. Rollback
 requires an artifact whose maximum supported schema is at least 26; retaining
 the column and its values is safer than a destructive downgrade.
 

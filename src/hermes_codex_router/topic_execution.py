@@ -9,6 +9,12 @@ from .state import HubState, TopicRecord
 from .worktrees import validate_worktree_execution_root
 
 
+def require_inline_topic(state: HubState, topic: TopicRecord) -> None:
+    """Legacy inline consumers cannot execute a retained worktree binding."""
+    if state.active_lane_for_topic(topic.topic_id) is not None:
+        raise ExecutionRootError()
+
+
 def resolve_topic_execution_root(
     state: HubState, registry: ProjectRegistry, topic: TopicRecord
 ) -> Path:
@@ -28,7 +34,12 @@ def resolve_topic_execution_root(
         }:
             raise ExecutionRootError()
         return base_root
-    if str(lane["project_id"]) != project.project_id or int(lane["topic_id"]) != topic.topic_id:
+    lane_topic_id = lane["topic_id"]
+    if (
+        str(lane["project_id"]) != project.project_id
+        or not isinstance(lane_topic_id, int)
+        or lane_topic_id != topic.topic_id
+    ):
         raise ExecutionRootError()
     lane_root = validate_worktree_execution_root(
         registry,

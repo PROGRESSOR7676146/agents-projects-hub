@@ -87,7 +87,7 @@ from .telegram_interaction import (
 from .telegram_multipart import send_telegram_html_parts
 from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
-from .topic_execution import resolve_topic_execution_root
+from .topic_execution import require_inline_topic, resolve_topic_execution_root
 
 
 class ServiceError(RuntimeError):
@@ -114,9 +114,13 @@ class ProjectHubService:
         validate_adoption_mode(config)
         self.registry = load_registry(config.registry_path)
         self.state = HubState.open(config.state_path)
-        self.state.reconcile_legacy_execution_scopes(
-            {project.project_id: project.root for project in self.registry.projects}
-        )
+        try:
+            self.state.reconcile_legacy_execution_scopes(
+                {project.project_id: project.root for project in self.registry.projects}
+            )
+        except BaseException:
+            self.state.close()
+            raise
         self.agent = config.require_agent("codex")
         if self.agent.runtime != "codex" or self.agent.token_file is None:
             raise ServiceError("managed Codex bot is not configured")
@@ -473,6 +477,10 @@ class ProjectHubService:
             marker = "[Earlier visible context was truncated for durable admission.]\n\n"
             payload = marker + payload[-(20000 - len(marker)) :]
         try:
+            expected_transfer = None
+            if take_local_writer:
+                expected_transfer = self.state.writer_transfer_snapshot(topic, session)
+                resolve_topic_execution_root(self.state, self.registry, topic)
             if batchable_user_text is not None and not take_local_writer:
                 _, created = self.state.enqueue_or_append_provider_job(
                     idempotency_key=f"telegram:{message.chat_id}:{message.message_id}",
@@ -508,8 +516,17 @@ class ProjectHubService:
                     context_watermark=context_watermark,
                     handoff_id=handoff_id,
                     take_local_writer=take_local_writer,
+                    expected_transfer=expected_transfer,
                 )
         except Exception as exc:
+            if take_local_writer and isinstance(exc, (StateError, ExecutionRootError)):
+                self._send_text(
+                    message,
+                    exc.public_message
+                    if isinstance(exc, ExecutionRootError)
+                    else "Local ownership was not transferred: session state changed. Retry /return.",
+                )
+                return True
             if isinstance(exc, StateError) and str(exc) == "input_before_session_activation":
                 self.state.claim_message(
                     message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
@@ -1129,6 +1146,7 @@ class ProjectHubService:
     def _ensure_provider_thread(
         self, *, project: Project, topic: TopicRecord, session: SessionRecord
     ) -> SessionRecord:
+        require_inline_topic(self.state, topic)
         validate_execution_root(self.registry, project)
         if session.provider_session_id:
             return session
@@ -1164,6 +1182,7 @@ class ProjectHubService:
         message: TopicMessage,
     ) -> str:
         self._require_legacy_codex_execution(self.state)
+        require_inline_topic(self.state, topic)
         validate_execution_root(self.registry, project)
         client = self._client()
         new_session = (
@@ -2234,14 +2253,22 @@ class ProjectHubService:
             project = self.registry.require_project(binding.project_id)
             agent = self.config.require_agent(session.agent_id)
             try:
+                expected_transfer = self.state.writer_transfer_snapshot(topic, session)
                 execution_root = resolve_topic_execution_root(self.state, self.registry, topic)
                 resume = local_resume_command(
                     agent.runtime, agent.executable, session.provider_session_id, execution_root
                 )
-            except (LocalTransferError, ExecutionRootError) as exc:
-                self._send_text(message, str(exc))
+                self.state.set_writer_mode(
+                    session.session_id, "local", expected_transfer=expected_transfer
+                )
+            except (LocalTransferError, ExecutionRootError, StateError) as exc:
+                self._send_text(
+                    message,
+                    "Session state changed; retry /local."
+                    if isinstance(exc, StateError)
+                    else str(exc),
+                )
                 return True
-            self.state.set_writer_mode(session.session_id, "local")
             self._send_text(
                 message,
                 "Local CLI now owns this provider session. Telegram turns are paused. "
@@ -2313,7 +2340,20 @@ class ProjectHubService:
                     "Local summary is unavailable for a worktree lane; return with the supported local workflow.",
                 )
                 return True
-            self.state.set_writer_mode(session.session_id, "telegram")
+            try:
+                expected_transfer = self.state.writer_transfer_snapshot(topic, session)
+                resolve_topic_execution_root(self.state, self.registry, topic)
+                self.state.set_writer_mode(
+                    session.session_id, "telegram", expected_transfer=expected_transfer
+                )
+            except (StateError, ExecutionRootError) as exc:
+                self._send_text(
+                    message,
+                    exc.public_message
+                    if isinstance(exc, ExecutionRootError)
+                    else "Local ownership was not transferred: session state changed. Retry /return.",
+                )
+                return True
             try:
                 external = getattr(self, "external_services", {}).get(session.agent_id)
                 if external is None:
@@ -2396,6 +2436,16 @@ class ProjectHubService:
         # message whose productive targets are all externally managed.
         if not local_targets:
             return False
+        if any(not self._queue_enabled(target) for target in local_targets):
+            try:
+                require_inline_topic(self.state, topic)
+            except ExecutionRootError as exc:
+                if not self.state.claim_message(
+                    message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
+                ):
+                    return False
+                self._send_text(message, exc.public_message)
+                return True
         if self._queue_enabled(self.agent.agent_id) and len(local_targets) > 1:
             if not self.state.claim_message(
                 message.chat_id,

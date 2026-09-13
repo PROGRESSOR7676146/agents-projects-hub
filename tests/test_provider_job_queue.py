@@ -445,14 +445,14 @@ class ProviderJobQueueTests(unittest.TestCase):
             title="Second topic",
         )
         second_session = self.state.activate_agent(
-            second_topic.topic_id, "codex", "gpt-example", "high"
+            second_topic.topic_id, "opencode", "gpt-example", "high"
         )
         second, _ = self.state.enqueue_provider_job(
             idempotency_key="telegram:-1001234567890:531",
             chat_id=second_topic.chat_id,
             message_id=531,
             topic_id=second_topic.topic_id,
-            agent_id="codex",
+            agent_id="opencode",
             session_id=second_session.session_id,
             session_generation=second_session.generation,
             model="gpt-example",
@@ -464,7 +464,7 @@ class ProviderJobQueueTests(unittest.TestCase):
             "codex", "worker-one", lease_seconds=1, max_parallel_roots=2, now=past
         )
         leased_second = self.state.lease_provider_job(
-            "codex", "worker-two", lease_seconds=1, max_parallel_roots=2, now=past
+            "opencode", "worker-two", lease_seconds=1, max_parallel_roots=2, now=past
         )
         assert leased_first is not None and leased_first.lease_token is not None
         assert leased_second is not None and leased_second.lease_token is not None

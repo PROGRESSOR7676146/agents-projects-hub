@@ -95,9 +95,13 @@ class ExternalQueueWorker:
         validate_adoption_mode(config)
         self.registry = registry or load_registry(config.registry_path)
         self.state = HubState.open(config.state_path)
-        self.state.reconcile_legacy_execution_scopes(
-            {project.project_id: project.root for project in self.registry.projects}
-        )
+        try:
+            self.state.reconcile_legacy_execution_scopes(
+                {project.project_id: project.root for project in self.registry.projects}
+            )
+        except BaseException:
+            self.state.close()
+            raise
         self.worker_id = worker_id or f"{self.agent.agent_id}-worker"
         self._started_at = datetime.now(timezone.utc)
         self._process_start_marker = uuid.uuid4().hex

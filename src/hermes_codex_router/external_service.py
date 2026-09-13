@@ -36,6 +36,7 @@ from .telegram import (
 from .telegram_activity import telegram_activity
 from .telegram_interaction import telegram_contract_version, telegram_turn_prompt
 from .telegram_multipart import send_telegram_html_parts
+from .topic_execution import require_inline_topic
 
 
 class ExternalAgentService:
@@ -361,6 +362,7 @@ class ExternalAgentService:
         project_id: str,
         session_id: str,
     ) -> None:
+        require_inline_topic(self.state, self.state.get_topic(topic_id))
         session = self.state.get_session(session_id)
         if not session.provider_session_id:
             raise RuntimeError("provider session is not started")
@@ -494,13 +496,6 @@ class ExternalAgentService:
             return True
         topic = self._direct_topic(message.chat_id, message.thread_id, binding.project_id)
         active = self.state.active_session(topic.topic_id)
-        if self.direct_messages_only and active is None:
-            active = self.state.activate_agent(
-                topic.topic_id,
-                self.agent.agent_id,
-                self.agent.default_model,
-                self.agent.default_effort,
-            )
         active_agent = (
             active.agent_id
             if active
@@ -524,6 +519,20 @@ class ExternalAgentService:
             observer_agent_id=self.agent.agent_id,
         ):
             return False
+        try:
+            require_inline_topic(self.state, topic)
+        except ExecutionRootError as exc:
+            send_telegram_html_parts(
+                self.telegram, message.chat_id, message.thread_id, exc.public_message
+            )
+            return True
+        if self.direct_messages_only and active is None:
+            active = self.state.activate_agent(
+                topic.topic_id,
+                self.agent.agent_id,
+                self.agent.default_model,
+                self.agent.default_effort,
+            )
         if active is not None and active.agent_id == self.agent.agent_id:
             session = active
         else:

@@ -46,8 +46,18 @@ root, is listed by Git as a linked worktree, and reports itself as Git top level
 The same resolver supplies that root to external and embedded execution,
 staging, local resume-command preparation, and read-only Codex recovery; a
 missing or mismatched retained binding fails before provider access or writer
-transfer. Legacy managed-terminal takeover and inline local-summary paths reject
-an active lane before changing ownership or reaching a provider. Archive restores a conservative project-ID fallback; the next registry-aware
+transfer. Local resume and non-Codex return capture topic/session/generation and
+lane identity, validate the filesystem outside SQLite, then recheck that snapshot
+inside the ownership transaction. Queued summary admission and writer transfer
+commit together; invalid roots or changed snapshots leave local ownership and
+session identity unchanged with no new summary job. Codex return remains
+model-free and does not add a filesystem or provider call.
+
+Legacy managed-terminal takeover, productive inline Codex/native/pilot consumers and
+inline local-summary paths reject an active lane before session preparation,
+staging, ownership transfer or provider access, including bindings retained
+after switching runtime configuration. Embedded/external lanes remain supported.
+Archive restores a conservative project-ID fallback; the next registry-aware
 topic observation upgrades it to the canonical base root. Cleanup remains a
 separate explicit local operation.
 

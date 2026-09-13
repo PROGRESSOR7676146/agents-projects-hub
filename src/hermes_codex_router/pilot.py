@@ -15,6 +15,7 @@ from .telegram_interaction import (
     telegram_user_turn_prompt,
 )
 from .terminal import terminal_session_name
+from .topic_execution import require_inline_topic
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,9 @@ def run_codex_pilot(
         stdio_executable=config.codex_stdio_executable,
     )
     try:
+        state.reconcile_legacy_execution_scopes(
+            {entry.project_id: entry.root for entry in registry.projects}
+        )
         topic = state.observe_topic(
             project_id=project_id,
             chat_id=chat_id,
@@ -58,6 +62,7 @@ def run_codex_pilot(
             title=topic_title,
             execution_root=project.root,
         )
+        require_inline_topic(state, topic)
         session = state.active_session(topic.topic_id)
         if session is None or session.agent_id != agent.agent_id:
             session = state.activate_agent(

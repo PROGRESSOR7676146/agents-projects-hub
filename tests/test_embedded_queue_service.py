@@ -217,7 +217,7 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
 
     def test_embedded_lane_uses_the_validated_lane_for_staging_and_provider(self) -> None:
         client = QueueClient()
-        service, _ = self.service(client)
+        service, telegram = self.service(client)
         project = self.registry.projects[0]
         lane_root, branch = create_worktree(project, "embedded")
         try:
@@ -242,7 +242,7 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
             session = service.state.active_session(topic.topic_id)
             assert session is not None
             self.assertEqual(session.writer_mode, "local")
-            self.assertIn(str(lane_root), service.telegram.sent[-1])
+            self.assertIn(str(lane_root), telegram.sent[-1])
         finally:
             service.close()
 
@@ -287,6 +287,7 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
                 branch_name=branch,
             )
             service.state.bind_lane("terminal", topic.topic_id)
+            service.config = replace(service.config, dispatch_mode="inline")
 
             self.assertTrue(service.handle_update(update(2, "/terminal")))
 
@@ -294,6 +295,51 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
             self.assertIn("unavailable for a worktree lane", telegram.sent[-1])
         finally:
             service.close()
+
+    def test_inline_retained_lane_refuses_before_session_preparation_and_staging(self) -> None:
+        for bound in (False, True):
+            with self.subTest(bound=bound):
+                self.config = replace(
+                    self.config, state_path=Path(self.tempdir.name) / f"state-{bound}.db"
+                )
+                client = QueueClient()
+                service, telegram = self.service(client)
+                project = self.registry.projects[0]
+                lane_id = "inline-bound" if bound else "inline-empty"
+                lane_root, branch = create_worktree(project, lane_id)
+                try:
+                    service.handle_update(update(1, "/menu"))
+                    topic = service.state.find_topic(-1001234567890, 77)
+                    assert topic is not None
+                    service.state.register_lane(
+                        lane_id=lane_id,
+                        project_id=project.project_id,
+                        worktree_path=lane_root,
+                        branch_name=branch,
+                        topic_id=topic.topic_id,
+                    )
+                    if bound:
+                        session = service.state.activate_agent(
+                            topic.topic_id, "codex", "fictional", "high"
+                        )
+                        service.state.bind_provider_session(
+                            session.session_id, "fictional-retained", None
+                        )
+                    before = service.state.active_session(topic.topic_id)
+                    service.config = replace(service.config, dispatch_mode="inline")
+                    self.assertTrue(
+                        service.handle_update(update(2, "Fictional retained lane task"))
+                    )
+                    self.assertEqual(client.cwds, [])
+                    self.assertEqual(client.turn_threads, [])
+                    self.assertFalse(
+                        service.handle_update(update(2, "Fictional retained lane task"))
+                    )
+                    self.assertEqual(service.state.active_session(topic.topic_id), before)
+                    self.assertFalse((project.root / ".hub" / "staging").exists())
+                    self.assertTrue(telegram.sent)
+                finally:
+                    service.close()
 
     def test_consecutive_productive_messages_form_one_durable_provider_turn(self) -> None:
         client = QueueClient()

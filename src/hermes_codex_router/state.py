@@ -104,6 +104,13 @@ class SessionRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class WriterTransferSnapshot:
+    topic: TopicRecord
+    session: SessionRecord
+    lane: tuple[tuple[str, object], ...] | None
+
+
+@dataclass(frozen=True, slots=True)
 class HandoffRecord:
     handoff_id: str
     topic_id: int
@@ -926,11 +933,10 @@ class HubState:
                 expected = canonical.get(project_id)
                 if current != f"project:{project_id}":
                     continue
-                if expected is None:
-                    evidence = {
-                        str(item["root"])
-                        for item in self._connection.execute(
-                            """SELECT origins.canonical_root AS root
+                evidence = {
+                    str(item["root"])
+                    for item in self._connection.execute(
+                        """SELECT origins.canonical_root AS root
                                FROM agent_sessions sessions
                                JOIN codex_session_origins origins
                                  ON origins.session_id = sessions.session_id
@@ -941,18 +947,22 @@ class HubState:
                                JOIN provider_execution_checkpoints checkpoints
                                  ON checkpoints.job_id = jobs.job_id
                                WHERE jobs.topic_id = ?""",
-                            (row["topic_id"], row["topic_id"]),
-                        ).fetchall()
-                    }
-                    if len(evidence) == 1:
-                        expected = "root:" + _bounded(
-                            evidence.pop(), name="execution root", maximum=4096
-                        )
-                    elif len(evidence) > 1:
-                        raise StateError("ambiguous legacy execution root evidence")
-                    else:
-                        active = self._connection.execute(
-                            """SELECT 1 FROM agent_sessions
+                        (row["topic_id"], row["topic_id"]),
+                    ).fetchall()
+                }
+                if len(evidence) > 1:
+                    raise StateError("ambiguous legacy execution root evidence")
+                if evidence:
+                    # Persisted identity protects the historical checkout even
+                    # when a known registry ID now points elsewhere. Execution
+                    # validation rejects that mismatch; unrelated roots remain
+                    # usable. Never resolve this path through today's filesystem.
+                    expected = "root:" + _bounded(
+                        evidence.pop(), name="execution root", maximum=4096
+                    )
+                if expected is None:
+                    active = self._connection.execute(
+                        """SELECT 1 FROM agent_sessions
                                WHERE topic_id = ? AND status IN ('active', 'satellite')
                                  AND writer_mode != 'telegram'
                                UNION SELECT 1 FROM provider_jobs
@@ -966,13 +976,13 @@ class HubState:
                                UNION SELECT 1 FROM turn_dispatches
                                WHERE topic_id = ? AND status = 'running'
                                LIMIT 1""",
-                            (row["topic_id"], row["topic_id"], row["topic_id"]),
-                        ).fetchone()
-                        if active is not None:
-                            raise StateError(
-                                "ambiguous legacy execution scope requires local resolution"
-                            )
-                        continue
+                        (row["topic_id"], row["topic_id"], row["topic_id"]),
+                    ).fetchone()
+                    if active is not None:
+                        raise StateError(
+                            "ambiguous legacy execution scope requires local resolution"
+                        )
+                    continue
                 cursor = self._connection.execute(
                     """UPDATE topics SET execution_scope = ?, updated_at = ?
                        WHERE topic_id = ? AND execution_scope = ?""",
@@ -1040,10 +1050,48 @@ class HubState:
             raise StateError(f"unknown session_id: {session_id}")
         return self.get_session(session_id)
 
-    def set_writer_mode(self, session_id: str, writer_mode: str) -> SessionRecord:
+    def writer_transfer_snapshot(
+        self, topic: TopicRecord, session: SessionRecord
+    ) -> WriterTransferSnapshot:
+        """Capture persisted identity before filesystem validation, without I/O."""
+        with self._immediate_transaction():
+            snapshot = WriterTransferSnapshot(
+                topic, session, self._writer_lane_snapshot(topic.topic_id)
+            )
+            self._require_writer_transfer_snapshot(snapshot)
+            return snapshot
+
+    def _writer_lane_snapshot(self, topic_id: int) -> tuple[tuple[str, object], ...] | None:
+        lane = self.active_lane_for_topic(topic_id)
+        return None if lane is None else tuple(sorted(lane.items()))
+
+    def _require_writer_transfer_snapshot(self, snapshot: WriterTransferSnapshot) -> None:
+        """Caller holds the ownership transaction; no Git/provider access here."""
+        if (
+            snapshot.session.topic_id != snapshot.topic.topic_id
+            or self.get_topic(snapshot.topic.topic_id) != snapshot.topic
+            or self.get_session(snapshot.session.session_id) != snapshot.session
+            or self._writer_lane_snapshot(snapshot.topic.topic_id) != snapshot.lane
+            or snapshot.session.status != "active"
+            or self.topic_has_running_dispatch(snapshot.topic.topic_id)
+            or self.topic_has_pending_provider_job(snapshot.topic.topic_id)
+        ):
+            raise StateError("writer transfer snapshot changed; retry the command")
+
+    def set_writer_mode(
+        self,
+        session_id: str,
+        writer_mode: str,
+        *,
+        expected_transfer: WriterTransferSnapshot | None = None,
+    ) -> SessionRecord:
         if writer_mode not in {"telegram", "local", "terminal"}:
             raise StateError("invalid writer mode")
         with self._immediate_transaction():
+            if expected_transfer is not None:
+                if expected_transfer.session.session_id != session_id:
+                    raise StateError("writer transfer session mismatch")
+                self._require_writer_transfer_snapshot(expected_transfer)
             session = self._connection.execute(
                 """SELECT sessions.session_id, sessions.writer_mode,
                           COALESCE(topics.execution_scope, 'project:' || topics.project_id)
@@ -1334,6 +1382,7 @@ class HubState:
         max_attempts: int = 5,
         take_local_writer: bool = False,
         available_at: datetime | None = None,
+        expected_transfer: WriterTransferSnapshot | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
         """Atomically accept one bounded provider request.
 
@@ -1430,6 +1479,12 @@ class HubState:
                     raise StateError("provider job handoff snapshot is not pending")
 
             if take_local_writer:
+                if (
+                    expected_transfer is None
+                    or expected_transfer.session.session_id != target_session
+                ):
+                    raise StateError("local writer transfer requires a validated snapshot")
+                self._require_writer_transfer_snapshot(expected_transfer)
                 pending_job = self._connection.execute(
                     """SELECT 1 FROM provider_jobs
                        WHERE topic_id = ? AND status IN

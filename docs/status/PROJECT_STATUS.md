@@ -25,8 +25,16 @@ unresolved work. Before provider access the worker revalidates the exact derived
 path, allowlist membership, Git worktree registration and Git top level, then
 uses that lane as cwd. The same validated root is used for embedded execution,
 staging, local resume preparation, and read-only Codex recovery. Retained
-legacy project scopes are atomically reconciled from trusted registry roots at
-Controller and worker startup, while active lane scopes stay distinct. Each provider worker still owns one SQLite connection and
+legacy project scopes are atomically reconciled at Controller and worker startup,
+using saved origin/checkpoint roots before registry fallback, including known
+IDs whose current registry root conflicts. Saved root protection and uncertainty
+are preserved; mismatched execution is refused without blocking unrelated roots.
+Ambiguous saved evidence fails normalization atomically. Active lane scopes stay
+distinct. Retained lanes fail closed in unsupported productive inline and managed
+terminal paths, even after a configuration change. `/local` and non-Codex summary
+return validate roots outside SQLite and recheck persisted identity inside the
+writer transaction; invalid lanes or stale snapshots cannot transfer ownership.
+Codex return stays model-free. Each provider worker still owns one SQLite connection and
 one adapter/client/process lifecycle, so configured worker count is a second
 parallelism bound. Offline capacity, fairness, contention, targeted-stop,
 process-recovery, lane execution, migration and rollback tests cover this

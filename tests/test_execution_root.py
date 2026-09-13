@@ -14,12 +14,131 @@ from hermes_codex_router.external_worker import ExternalQueueWorker
 from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.pilot import run_codex_pilot
 from hermes_codex_router.registry import ExecutionRootError, validate_execution_root
+from hermes_codex_router.worktrees import create_worktree
 from tests.fault_matrix_support import FaultMatrixHarness, RecordingAdapter, RecordingBot
 from tests.git_fixtures import init_git_root
 from tests.test_codex_worker import WorkerClient, WorkerSupervisor
 
 
 class ExecutionRootTests(unittest.TestCase):
+    def test_inline_pilot_refuses_retained_lane_before_provider_or_session_preparation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            harness = FaultMatrixHarness(Path(directory))
+            controller = harness.controller()
+            project = harness.registry.projects[0]
+            lane, branch = create_worktree(project, "pilot")
+            config = replace(
+                harness.config,
+                agents=tuple(
+                    replace(agent, token_file=Path(directory) / "fictional-never-read-token")
+                    if agent.agent_id == "codex"
+                    else agent
+                    for agent in harness.config.agents
+                ),
+            )
+            try:
+                topic = controller.state.observe_topic(
+                    project_id=project.project_id,
+                    chat_id=harness.chat_id,
+                    thread_id=77,
+                    title="Fictional lane",
+                    execution_root=project.root,
+                )
+                controller.state.register_lane(
+                    lane_id="pilot",
+                    project_id=project.project_id,
+                    worktree_path=lane,
+                    branch_name=branch,
+                    topic_id=topic.topic_id,
+                )
+                with (
+                    patch("hermes_codex_router.pilot.load_registry", return_value=harness.registry),
+                    patch("hermes_codex_router.pilot.CodexAppServerSupervisor") as supervisor,
+                ):
+                    supervisor.return_value.start.side_effect = AssertionError(
+                        "provider access before lane refusal"
+                    )
+                    with self.assertRaises(ExecutionRootError):
+                        run_codex_pilot(
+                            config,
+                            project_id=project.project_id,
+                            chat_id=harness.chat_id,
+                            thread_id=77,
+                            topic_title="Fictional lane",
+                        )
+                    supervisor.return_value.start.assert_not_called()
+                self.assertIsNone(controller.state.active_session(topic.topic_id))
+            finally:
+                controller.state.close()
+
+    def test_native_inline_consumers_refuse_retained_lane_before_provider_or_staging(self) -> None:
+        for runtime in ("opencode", "antigravity"):
+            with self.subTest(runtime=runtime), tempfile.TemporaryDirectory() as directory:
+                harness = FaultMatrixHarness(Path(directory))
+                controller = harness.controller()
+                service = ExternalAgentService.__new__(ExternalAgentService)
+                service.config = replace(harness.config, dispatch_mode="inline", hub_bot=None)
+                service.agent = harness.config.require_agent(runtime)
+                service.registry = harness.registry
+                service.state = controller.state
+                service.state_path = harness.config.state_path
+                service.direct_messages_only = False
+                service.usernames = {runtime: f"example_{runtime}_bot"}
+                adapter = RecordingAdapter(runtime)
+                service.adapter = cast(Any, adapter)
+                bot = RecordingBot()
+                service.telegram = cast(Any, bot)
+                project = harness.registry.projects[0]
+                root, branch = create_worktree(project, "retained")
+                try:
+                    topic = service.state.observe_topic(
+                        project_id=project.project_id,
+                        chat_id=harness.chat_id,
+                        thread_id=77,
+                        title="Fictional lane",
+                        execution_root=project.root,
+                    )
+                    service.state.register_lane(
+                        lane_id="retained",
+                        project_id=project.project_id,
+                        worktree_path=root,
+                        branch_name=branch,
+                        topic_id=topic.topic_id,
+                    )
+                    session = service.state.activate_agent(
+                        topic.topic_id, runtime, "fictional", "high"
+                    )
+                    service.state.bind_provider_session(
+                        session.session_id, "fictional-native-session", None
+                    )
+                    before = service.state.active_session(topic.topic_id)
+                    self.assertTrue(
+                        service.handle_update(
+                            harness.update(101, 77, "Fictional productive request")
+                        )
+                    )
+                    self.assertEqual(adapter.calls, [])
+                    self.assertFalse(
+                        service.handle_update(
+                            harness.update(101, 77, "Fictional productive request")
+                        )
+                    )
+                    self.assertEqual(service.state.active_session(topic.topic_id), before)
+                    self.assertFalse((project.root / ".hub").exists())
+                    with self.assertRaises(ExecutionRootError):
+                        service.publish_local_interval(
+                            chat_id=harness.chat_id,
+                            thread_id=77,
+                            topic_id=topic.topic_id,
+                            project_id=project.project_id,
+                            session_id=session.session_id,
+                        )
+                    self.assertEqual(adapter.calls, [])
+                finally:
+                    service.state.close()
+
     def test_pilot_rejects_fake_git_before_state_or_supervisor_creation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
