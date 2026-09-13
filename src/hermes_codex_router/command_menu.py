@@ -13,9 +13,13 @@ PUBLIC_COMMANDS: tuple[tuple[str, str], ...] = (
     ("new", "Start a new active session"),
     ("local", "Continue in the native CLI"),
     ("return", "Return to Telegram and publish"),
+    ("stop", "Emergency stop active work"),
 )
 
-GROUP_COMMANDS: tuple[tuple[str, str], ...] = (("menu", "Open project controls"),)
+GROUP_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("menu", "Open project controls"),
+    ("stop", "Emergency stop active work"),
+)
 
 DIRECT_PROVIDER_COMMANDS: tuple[tuple[str, str], ...] = (
     ("status", "Current provider and model"),

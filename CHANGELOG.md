@@ -5,6 +5,90 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Add schema-27 bounded concurrency across independent canonical roots with a
+  safe default of one, durable least-recently-granted worker fairness, draining
+  capacity reduction, passive slot-owner health, and root-local uncertainty.
+- Make explicit worktree lanes executable: idle-only bind/archive transitions
+  atomically change topic scope, and workers revalidate the exact derived,
+  allowlisted, registered Git worktree before using it as cwd.
+- Add schema-26 canonical-root execution scopes so Hub queue workers, local
+  writer transfer, and saved-session adoption cannot concurrently write one
+  checkout across different topics or providers; separately registered roots
+  and Git worktrees remain independent.
+- Retain a root after uncertain execution until immutable operator resolution,
+  while preserving the original indeterminate evidence and no-replay policy;
+  add contention, worker-loop, crash/recovery, adoption, and migration rollback
+  regressions.
+
+## [0.7.0] - 2026-09-05
+
+- Add durable, rate-limited Codex progress delivery through the provider bot,
+  with final-result priority, restart-safe retries, terminal supersession, and
+  passive stuck-progress monitoring.
+- Require a focused clarification before drafting a materially underspecified
+  deliverable, including in compact reminders for existing provider sessions.
+- Add passive reliability thresholds for stale provider work, delayed Telegram
+  delivery, and unresolved uncertain outcomes; resolved historical uncertainty
+  remains visible without keeping an operational alert active.
+- Add immutable operator resolution of exact indeterminate jobs and explicit
+  safe continuation wording that never authorizes automatic provider replay.
+- Deliver affected-work stop acknowledgements durably under the Hub identity,
+  and pin release/E2E dependencies with a checked hash-locked export.
+- Add a separate off-machine WSL backup and cold-restore drill plan covering
+  encrypted recovery sets, immutable release/schema checks, service/network
+  isolation, exact indeterminate preservation, and measurable private evidence;
+  no backup, WSL export, or private drill is performed by this release work.
+- Add a fully automated offline rollout/runtime-rollback rehearsal using only
+  generated temporary schema-20 state, release directories, activation pointer,
+  configuration, backup, and manifest, with durable-work comparison on schema
+  21 and no service or network actions.
+- Add a private, digest-bound deployment manifest and read-only compatibility
+  gate that inspects distinct immutable active/rollback wheels, configuration,
+  SQLite backup, and target schema without service or provider access.
+- Deliver Telegram Interaction Contract v2 to Codex through app-server
+  `developerInstructions` on thread start and resume, keeping the stable
+  contract out of user turn text and retaining bounded prompt fallback for
+  providers without an accepted native instruction channel.
+- Add a Codex-only scoped Telegram behavioural acceptance scenario for bounded
+  short, clarification, complex-progress, and exact artifact responses without
+  treating repository runner tests as live provider evidence.
+- Show the acknowledged Telegram interaction-contract version for each current
+  provider session in bounded local `doctor` diagnostics without expanding the
+  mobile `/status` response.
+- Bound `runtime_events` to 30 days and the newest 10,000 rows with atomic
+  insertion/pruning, deterministic timestamp/row-ID ordering, and a compatible
+  schema-21 migration that leaves health, alerts, and provider work untouched.
+- Distinguish an inaccessible user-service supervisor from a confirmed inactive
+  unit in local diagnostics while retaining independent Hermes heartbeat and
+  tlive runtime liveness as valid recovery-channel evidence.
+- Add a canonical release-metadata audit for package, changelog, project status,
+  and local Git tags; contradictions fail validation while missing tags remain
+  visible debt and are never created or rewritten automatically.
+- Add a test-first product-requirements split plan, an immutable inventory of 88
+  normative IDs and 20 section hashes, and repository-wide Markdown file/anchor
+  checks before moving the near-limit monolith.
+- Split the product requirements into a short normative index and five stable
+  capability modules with all 88 IDs and all 20 numbered sections preserved.
+- Embed package version, exact clean Git SHA, and build time in wheel artifacts;
+  publish release identity from every required Hub runtime and alert once when
+  cached deployment revisions are mixed or unknown.
+- Classify Telegram polling and delivery failures into bounded operation,
+  network/API class, safe status, retry-after, consecutive-failure, and
+  last-success fields. The third consecutive failure degrades health once; a
+  successful request recovers and re-arms the episode. Delivery retries still
+  never repeat provider execution.
+- Add a fixed two-provider acceptance scenario for switch isolation and explicit
+  bounded `/context` retrieval.
+- Make all operational warnings transition-triggered, suppress quota/auth alerts
+  for an exhausted inactive account after successful replacement, and keep the
+  condition visible in `/accounts` without repeated Telegram notifications.
+- Detect an unreachable loopback provider configured for Codex without probing
+  remote provider URLs or exposing configuration detail, and emit an
+  edge-triggered alert when the supported multi-auth report explicitly marks an
+  account token invalid even if another account remains ready.
+
+## [0.6.0] - 2026-09-03
+
 ### Added
 
 - Activate the optional separate Hub Telegram controller identity with its own
@@ -12,6 +96,57 @@ and releases use semantic versioning while the public API is still evolving.
   Codex as the default provider and preserving provider response/outbox and
   direct-message identity boundaries. Legacy configurations without `hub_bot`
   continue to use Codex ingress.
+- Add durable provider jobs, isolated Codex/OpenCode/Antigravity workers, a
+  standalone Telegram outbox sender, runtime-health snapshots, and bounded
+  fault-injection coverage for crash and retry boundaries.
+- Add a scoped MTProto acceptance actor with fixed checks for commands, complete
+  model selection, provider connectivity, Reply provenance, passive forwards,
+  multi-message bursts, and emergency-stop recovery.
+- Add the shared Telegram interaction contract, native private-chat
+  `Thinking…` drafts, group typing refresh, bounded burst collection,
+  same-turn Codex steering, and deterministic emergency stop.
+- Add optional Antigravity status-line telemetry and provider-neutral cached
+  account/limit presentation.
+- Add HTML-aware multipart Telegram replies with per-part durable delivery and
+  retry from the first part that has no recorded Telegram message ID.
+
+### Changed
+
+- Deliver the full current Telegram interaction contract once to existing
+  provider sessions after rollout, acknowledge it only after successful work,
+  and use the compact reminder on later turns.
+- Keep provider availability separate from cached quota: known runtime or
+  network failures now remain visibly unavailable even when cached quota exists.
+- Deliver provider failures through the durable outbox and compact all provider
+  reply/status metadata for mobile Telegram use.
+- Keep unaddressed burst continuations on the provider selected by the first
+  part, including satellite providers that are not active for the topic.
+
+### Fixed
+
+- Stop discarding valid staged artifacts merely because they appear after a
+  fixed attachment-count cutoff; retain per-file and aggregate byte bounds.
+- Deliver validated artifacts from Hub-owned direct-message and legacy inline
+  turns while keeping Hermes's native Gateway transport independent.
+- Attribute Hub-owned inline callbacks to the Hub ingress identity rather than
+  the default provider identity, keeping callback audit and diagnostics exact.
+- Prevent stale Unix socket inodes after abrupt host or WSL shutdown from
+  releasing tlive startup ordering before the rotating Codex app-server accepts
+  real connections.
+- Fail scoped Telegram acceptance checks promptly when unrelated traffic enters
+  the dedicated canary topic, and stop after the first failed scenario instead
+  of accumulating later work behind an unhealthy provider.
+- Prevent a provider/RPC failure from terminating central Telegram ingress or
+  cascading into unrelated providers.
+- Distinguish a forum topic's protocol reply anchor from a user-selected Reply,
+  preserving correct routing and burst collection.
+- Detect Antigravity unsupported-network failures from private per-turn logs and
+  terminate OpenCode quota-exhausted turns without leaving hung CLI processes.
+- Recover sender health after idle cycles and fall back from an unhealthy
+  optional Codex multi-auth upstream to the official stdio app-server.
+- Prevent the isolated Codex stdio fallback from deadlocking on an approval
+  request that no tlive companion connection can receive; escalation now fails
+  closed while `workspace-write` remains enforced.
 
 ## [0.5.1] - 2026-08-30
 

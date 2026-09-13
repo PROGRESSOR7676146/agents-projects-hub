@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import io
+import socket
+import ssl
 import unittest
+import urllib.error
+from email.message import Message
 from unittest.mock import call as mock_call
 from unittest.mock import patch
 
 from hermes_codex_router.telegram import (
     TelegramBotApi,
+    TelegramError,
     parse_direct_callback,
     parse_direct_message,
     parse_topic_callback,
@@ -14,6 +20,72 @@ from hermes_codex_router.telegram import (
 
 
 class TelegramUpdateTests(unittest.TestCase):
+    def test_transport_failures_are_classified_without_exposing_request_secrets(self) -> None:
+        cases = (
+            (urllib.error.URLError(socket.gaierror("secret DNS detail")), "network_dns"),
+            (urllib.error.URLError(socket.timeout("secret timeout detail")), "network_timeout"),
+            (urllib.error.URLError(ssl.SSLError("secret TLS detail")), "network_tls"),
+        )
+        for failure, expected_class in cases:
+            with self.subTest(expected_class=expected_class):
+                telegram = TelegramBotApi(
+                    "123456:super-secret-token",
+                    opener=lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+                )
+                with self.assertRaises(TelegramError) as raised:
+                    telegram.call("getMe")
+                error = raised.exception
+                self.assertEqual(
+                    (error.operation, error.failure_class), ("api_call", expected_class)
+                )
+                rendered = (
+                    f"{error}\n{error.safe_detail(consecutive_failures=2, last_success=None)}"
+                )
+                self.assertNotIn("super-secret-token", rendered)
+                self.assertNotIn("secret", rendered)
+                self.assertTrue(error.__suppress_context__)
+
+    def test_http_rejection_exposes_only_safe_status_and_retry_after(self) -> None:
+        headers = Message()
+        failure = urllib.error.HTTPError(
+            "https://api.telegram.org/bot123456:super-secret-token/sendMessage",
+            429,
+            "secret rejection detail",
+            headers,
+            io.BytesIO(b'{"parameters":{"retry_after":17}}'),
+        )
+        telegram = TelegramBotApi(
+            "123456:super-secret-token",
+            opener=lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+        )
+        with self.assertRaises(TelegramError) as raised:
+            telegram.send_html(-1001234567890, 77, "hello")
+        error = raised.exception
+        self.assertEqual(
+            (error.operation, error.failure_class, error.status_code, error.retry_after),
+            ("send_message", "api_http", 429, 17),
+        )
+        rendered = f"{error}\n{error.safe_detail(consecutive_failures=1, last_success=None)}"
+        self.assertNotIn("super-secret-token", rendered)
+        self.assertNotIn("secret rejection detail", rendered)
+
+    def test_untrusted_diagnostic_fields_fail_to_bounded_unknown_values(self) -> None:
+        error = TelegramError(
+            "safe failure",
+            operation="poll;token=secret",
+            failure_class="network_timeout;payload=secret",
+            status_code=True,
+            retry_after=True,
+        )
+        detail = error.safe_detail(
+            consecutive_failures=1,
+            last_success="2026-09-05T12:00:00+00:00;token=secret",
+        )
+        self.assertEqual((error.operation, error.failure_class), ("unknown", "unknown"))
+        self.assertIsNone(error.status_code)
+        self.assertIsNone(error.retry_after)
+        self.assertNotIn("secret", detail)
+
     def test_chat_action_targets_forum_topic_and_general_without_fake_thread(self) -> None:
         telegram = TelegramBotApi("123456:example")
         with patch.object(telegram, "_call_with_timeout", return_value=True) as api_call:
@@ -37,6 +109,25 @@ class TelegramUpdateTests(unittest.TestCase):
                 ),
             ],
         )
+
+    def test_thinking_draft_targets_private_chat_and_topic(self) -> None:
+        telegram = TelegramBotApi("123456:example")
+        with patch.object(telegram, "_call_with_timeout", return_value=True) as api_call:
+            telegram.send_message_draft(123456789, 77, draft_id=42)
+
+        api_call.assert_called_once_with(
+            "sendMessageDraft",
+            request_timeout=2,
+            chat_id=123456789,
+            draft_id=42,
+            text="",
+            message_thread_id=77,
+        )
+
+    def test_thinking_draft_rejects_group_chat(self) -> None:
+        telegram = TelegramBotApi("123456:example")
+        with self.assertRaisesRegex(Exception, "private"):
+            telegram.send_message_draft(-1001234567890, 1, draft_id=42)
 
     def test_long_poll_adds_only_a_bounded_transport_margin(self) -> None:
         telegram = TelegramBotApi("123456:example")
@@ -195,6 +286,39 @@ class TelegramUpdateTests(unittest.TestCase):
         assert parsed is not None
         self.assertEqual(parsed.reply_to_username, "example_antigravity_bot")
 
+    def test_forum_topic_anchor_is_not_treated_as_a_reply_to_its_bot_author(self) -> None:
+        parsed = parse_topic_message(
+            {
+                "update_id": 131,
+                "message": {
+                    "message_id": 23,
+                    "message_thread_id": 77,
+                    "is_topic_message": True,
+                    "chat": {
+                        "id": -1001234567890,
+                        "type": "supergroup",
+                        "title": "Example Project Beta",
+                        "is_forum": True,
+                    },
+                    "from": {"id": 123456789, "is_bot": False},
+                    "text": "second part of a burst",
+                    "reply_to_message": {
+                        "message_id": 77,
+                        "from": {
+                            "id": 8752263516,
+                            "is_bot": True,
+                            "username": "example_codex_bot",
+                        },
+                        "text": "topic created",
+                    },
+                },
+            }
+        )
+
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertIsNone(parsed.reply_to_username)
+
     def test_text_quote_is_not_mistaken_for_telegram_reply(self) -> None:
         parsed = parse_topic_message(
             {
@@ -251,6 +375,52 @@ class TelegramUpdateTests(unittest.TestCase):
         assert parsed is not None
         self.assertIsNone(parsed.reply_to_username)
 
+    def test_marks_modern_and_legacy_forwards_as_quoted_context(self) -> None:
+        modern = {
+            "update_id": 16,
+            "message": {
+                "message_id": 25,
+                "chat": {
+                    "id": -1001234567890,
+                    "type": "supergroup",
+                    "title": "Example Project Beta",
+                    "is_forum": True,
+                },
+                "from": {"id": 123456789, "is_bot": False},
+                "text": "/stop",
+                "forward_origin": {
+                    "type": "user",
+                    "sender_user": {"id": 8752263516, "is_bot": True},
+                    "date": 1788220000,
+                },
+            },
+        }
+        legacy = {
+            "update_id": 17,
+            "message": {
+                "message_id": 26,
+                "chat": {
+                    "id": -1001234567890,
+                    "type": "supergroup",
+                    "title": "Example Project Beta",
+                    "is_forum": True,
+                },
+                "from": {"id": 123456789, "is_bot": False},
+                "text": "/model",
+                "forward_sender_name": "Example Bot",
+                "forward_date": 1788220000,
+            },
+        }
+
+        parsed_modern = parse_topic_message(modern)
+        parsed_legacy = parse_topic_message(legacy)
+
+        self.assertIsNotNone(parsed_modern)
+        self.assertIsNotNone(parsed_legacy)
+        assert parsed_modern is not None and parsed_legacy is not None
+        self.assertTrue(parsed_modern.is_forwarded)
+        self.assertTrue(parsed_legacy.is_forwarded)
+
     def test_parses_inline_model_callback(self) -> None:
         parsed = parse_topic_callback(
             {
@@ -271,6 +441,47 @@ class TelegramUpdateTests(unittest.TestCase):
         assert parsed is not None
         self.assertEqual(parsed.data, "model:gpt-5.6-sol")
         self.assertEqual(parsed.thread_id, 73)
+
+    def test_send_document_multipart(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            file_path = Path(tempdir) / "output.md"
+            file_path.write_text("# Title\nData", encoding="utf-8")
+
+            telegram = TelegramBotApi("123456:example")
+            with patch.object(
+                telegram, "_call_multipart", return_value={"message_id": 999}
+            ) as api_call:
+                message_id = telegram.send_document(
+                    -1001234567890, 77, file_path, caption="<b>Artifact</b>"
+                )
+                self.assertEqual(message_id, 999)
+                api_call.assert_called_once()
+                call_args = api_call.call_args
+                self.assertEqual(call_args[0][0], "sendDocument")
+                self.assertEqual(call_args[1]["fields"]["chat_id"], "-1001234567890")
+                self.assertEqual(call_args[1]["fields"]["message_thread_id"], "77")
+                self.assertEqual(call_args[1]["fields"]["caption"], "<b>Artifact</b>")
+                self.assertIn("document", call_args[1]["files"])
+                self.assertEqual(call_args[1]["files"]["document"][0], "output.md")
+
+    def test_send_document_rejects_unsafe_upload_filename(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            file_path = Path(tempdir) / "safe.md"
+            file_path.write_text("safe", encoding="utf-8")
+            telegram = TelegramBotApi("123456:example")
+            with self.assertRaises(TelegramError):
+                telegram.send_document(
+                    -1001234567890,
+                    77,
+                    file_path,
+                    file_name='unsafe"\r\nInjected.md',
+                )
 
 
 if __name__ == "__main__":

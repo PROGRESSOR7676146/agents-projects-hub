@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
@@ -13,6 +14,10 @@ from .acceptance_actor import (
     run_acceptance_checks,
 )
 from .command_menu import configure_public_commands
+from .deployment_manifest import (
+    create_deployment_manifest,
+    verify_deployment_manifest,
+)
 from .diagnostics import run_doctor
 from .external_service import ExternalAgentService
 from .external_worker import ExternalQueueWorker
@@ -24,6 +29,10 @@ from .hub_config import (
     load_outbox_sender_config,
     load_provider_service_config,
 )
+from .indeterminate_audit import (
+    classify_indeterminate_jobs,
+    write_private_indeterminate_report,
+)
 from .lifecycle import stop_on_signals
 from .migrations import backup_database, migrate_database
 from .monitoring import run_monitor_once
@@ -31,6 +40,8 @@ from .outbox_sender import TelegramOutboxSender
 from .pilot import run_codex_pilot
 from .project_admin import add_project, set_project_enabled
 from .registry import RegistryError, load_registry
+from .release_dry_run import report_dict, run_release_dry_run
+from .release_identity import CURRENT_RELEASE
 from .runtime_health import project_runtime_health
 from .service import ProjectHubService
 from .state import HubState, StateError
@@ -40,6 +51,23 @@ from .worktrees import WorktreeError, cleanup_worktree, create_worktree
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agents-projects-hub")
     commands = parser.add_subparsers(dest="command", required=True)
+
+    session = commands.add_parser("session", help="explicit local provider-session binding")
+    session_commands = session.add_subparsers(dest="session_command", required=True)
+    attach = session_commands.add_parser(
+        "attach-codex", help="preview or attach an exact saved Codex thread"
+    )
+    attach.add_argument("config", type=Path)
+    attach.add_argument("--project", required=True)
+    attach.add_argument("--chat-id", required=True, type=int)
+    attach.add_argument("--thread-id", required=True, type=int)
+    attach.add_argument("--codex-thread-id", required=True)
+    attach.add_argument("--model")
+    attach.add_argument("--effort")
+    attach.add_argument("--replace-session")
+    attach.add_argument("--apply", action="store_true")
+    attach.add_argument("--confirm-cli-closed", action="store_true")
+    attach.add_argument("--json", action="store_true")
 
     validate = commands.add_parser("validate", help="validate a local project registry")
     validate.add_argument("registry", type=Path)
@@ -77,6 +105,47 @@ def _parser() -> argparse.ArgumentParser:
 
     status = commands.add_parser("status", help="print persisted topic/session status")
     status.add_argument("config", type=Path)
+
+    indeterminate_audit = commands.add_parser(
+        "indeterminate-audit",
+        help="classify uncertain provider jobs without replaying them",
+    )
+    indeterminate_audit.add_argument("config", type=Path)
+    indeterminate_audit.add_argument("--output", type=Path)
+
+    indeterminate_resolve = commands.add_parser(
+        "indeterminate-resolve",
+        help="record an immutable operator resolution for one uncertain job",
+    )
+    indeterminate_resolve.add_argument("config", type=Path)
+    indeterminate_resolve.add_argument("job_id")
+    indeterminate_resolve.add_argument(
+        "--resolution",
+        required=True,
+        choices=("acknowledged", "superseded", "externally_completed"),
+    )
+
+    commands.add_parser("release-info", help="print embedded package release identity")
+
+    release_manifest = commands.add_parser(
+        "release-manifest", help="create or verify an immutable deployment manifest"
+    )
+    manifest_commands = release_manifest.add_subparsers(dest="manifest_command", required=True)
+    manifest_create = manifest_commands.add_parser("create")
+    manifest_create.add_argument("manifest", type=Path)
+    manifest_create.add_argument("--active-artifact", required=True, type=Path)
+    manifest_create.add_argument("--rollback-artifact", required=True, type=Path)
+    manifest_create.add_argument("--config", required=True, type=Path)
+    manifest_create.add_argument("--backup", required=True, type=Path)
+    manifest_verify = manifest_commands.add_parser("verify")
+    manifest_verify.add_argument("manifest", type=Path)
+    manifest_verify.add_argument("--state", type=Path)
+
+    release_dry_run = commands.add_parser(
+        "release-dry-run", help="exercise rollout and rollback on generated temporary state"
+    )
+    release_dry_run.add_argument("--active-artifact", required=True, type=Path)
+    release_dry_run.add_argument("--rollback-artifact", required=True, type=Path)
 
     migrate = commands.add_parser("migrate", help="migrate a state database safely")
     migrate.add_argument("state", type=Path)
@@ -269,6 +338,31 @@ def _lane_command(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command == "session":
+            from .codex_session_adoption import AdoptionError, attach_codex_session
+
+            try:
+                config = load_external_worker_config(args.config)
+                result = attach_codex_session(
+                    config,
+                    project_id=args.project,
+                    chat_id=args.chat_id,
+                    thread_id=args.thread_id,
+                    codex_thread_id=args.codex_thread_id,
+                    model=args.model,
+                    effort=args.effort,
+                    replace_session=args.replace_session,
+                    apply=args.apply,
+                    confirm_cli_closed=args.confirm_cli_closed,
+                )
+            except AdoptionError as exc:
+                _print({"format_version": 1, "ok": False, "reason_code": exc.reason})
+                return exc.exit_code
+            except (ValueError, KeyError, OSError):
+                _print({"format_version": 1, "ok": False, "reason_code": "configuration_invalid"})
+                return 2
+            _print(result)
+            return 0
         if args.command == "validate-hub":
             config = load_hub_config(args.config, allow_unbound=args.allow_unbound)
             load_registry(config.registry_path)
@@ -356,6 +450,60 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _print(result)
             finally:
                 state.close()
+            return 0
+        if args.command == "indeterminate-audit":
+            config = load_external_worker_config(args.config)
+            report = classify_indeterminate_jobs(config.state_path)
+            if args.output is not None:
+                write_private_indeterminate_report(args.output, report)
+            _print(
+                {
+                    "ok": True,
+                    "total": report["total"],
+                    "evidence": report["evidence"],
+                    "notice_status": report["notice_status"],
+                    "resolution_status": report["resolution_status"],
+                    "resolutions": report["resolutions"],
+                    "productive_replay_authorized": False,
+                    "report_written": args.output is not None,
+                }
+            )
+            return 0
+        if args.command == "indeterminate-resolve":
+            config = load_external_worker_config(args.config)
+            state = HubState.open(config.state_path)
+            try:
+                created = state.resolve_indeterminate_job(args.job_id, args.resolution)
+            finally:
+                state.close()
+            _print(
+                {
+                    "ok": True,
+                    "job_id": args.job_id,
+                    "resolution": args.resolution,
+                    "created": created,
+                    "productive_replay_authorized": False,
+                }
+            )
+            return 0
+        if args.command == "release-info":
+            _print({"ok": CURRENT_RELEASE.verified, **asdict(CURRENT_RELEASE)})
+            return 0 if CURRENT_RELEASE.verified else 1
+        if args.command == "release-manifest":
+            if args.manifest_command == "create":
+                manifest = create_deployment_manifest(
+                    args.manifest,
+                    active_artifact=args.active_artifact,
+                    rollback_artifact=args.rollback_artifact,
+                    configuration=args.config,
+                    state_backup=args.backup,
+                )
+            else:
+                manifest = verify_deployment_manifest(args.manifest, state_path=args.state)
+            _print({"ok": True, **asdict(manifest)})
+            return 0
+        if args.command == "release-dry-run":
+            _print(report_dict(run_release_dry_run(args.active_artifact, args.rollback_artifact)))
             return 0
         if args.command == "migrate":
             result = migrate_database(args.state, create_backup=not args.no_backup)

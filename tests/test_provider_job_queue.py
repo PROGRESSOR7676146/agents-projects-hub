@@ -5,8 +5,22 @@ import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TypedDict
 
 from hermes_codex_router.state import HubState, StateError
+
+
+class BurstJobCommon(TypedDict):
+    chat_id: int
+    topic_id: int
+    agent_id: str
+    session_id: str
+    session_generation: int
+    model: str
+    effort: str
+    context_watermark: int | None
+    quiet_ms: int
+    max_ms: int
 
 
 class ProviderJobQueueTests(unittest.TestCase):
@@ -87,6 +101,211 @@ class ProviderJobQueueTests(unittest.TestCase):
             ).fetchone()[0],
             1,
         )
+        self.assertEqual(
+            [
+                tuple(row)
+                for row in self.state._connection.execute(
+                    "SELECT part_index FROM provider_job_inputs WHERE job_id = ?",
+                    (first.job_id,),
+                ).fetchall()
+            ],
+            [(1,)],
+        )
+
+    def test_burst_inputs_append_to_one_delayed_job_and_remain_idempotent(self) -> None:
+        common: BurstJobCommon = {
+            "chat_id": self.topic.chat_id,
+            "topic_id": self.topic.topic_id,
+            "agent_id": "codex",
+            "session_id": self.codex.session_id,
+            "session_generation": self.codex.generation,
+            "model": "gpt-example",
+            "effort": "high",
+            "context_watermark": self.context_turn_id,
+            "quiet_ms": 1500,
+            "max_ms": 8000,
+        }
+        first, first_accepted = self.state.enqueue_or_append_provider_job(
+            **common,
+            idempotency_key="telegram:burst:601",
+            message_id=601,
+            payload_text="context wrapper\nCURRENT USER MESSAGE:\nfirst",
+            appended_user_text="first",
+        )
+        second, second_accepted = self.state.enqueue_or_append_provider_job(
+            **common,
+            idempotency_key="telegram:burst:602",
+            message_id=602,
+            payload_text="duplicated context must not be used",
+            appended_user_text="second",
+        )
+        duplicate, duplicate_accepted = self.state.enqueue_or_append_provider_job(
+            **common,
+            idempotency_key="telegram:burst:602",
+            message_id=602,
+            payload_text="ignored duplicate",
+            appended_user_text="second",
+        )
+
+        self.assertTrue(first_accepted)
+        self.assertTrue(second_accepted)
+        self.assertFalse(duplicate_accepted)
+        self.assertEqual(first.job_id, second.job_id)
+        self.assertEqual(second.job_id, duplicate.job_id)
+        self.assertIn("CURRENT USER MESSAGE:\nfirst", second.payload_text)
+        self.assertIn("FOLLOW-UP USER MESSAGE (same Telegram burst):\nsecond", second.payload_text)
+        self.assertNotIn("duplicated context", second.payload_text)
+        self.assertIsNotNone(second.next_attempt_at)
+        self.assertEqual(
+            [
+                tuple(row)
+                for row in self.state._connection.execute(
+                    """SELECT message_id, part_index, input_text
+                       FROM provider_job_inputs WHERE job_id = ? ORDER BY part_index""",
+                    (first.job_id,),
+                ).fetchall()
+            ],
+            [(601, 1, "context wrapper\nCURRENT USER MESSAGE:\nfirst"), (602, 2, "second")],
+        )
+        self.assertIsNone(self.state.lease_provider_job("codex", "worker-now"))
+        assert second.next_attempt_at is not None
+        ready = datetime.fromisoformat(second.next_attempt_at) + timedelta(milliseconds=1)
+        leased = self.state.lease_provider_job("codex", "worker-later", now=ready)
+        self.assertIsNotNone(leased)
+        assert leased is not None
+        self.assertEqual(leased.job_id, first.job_id)
+
+    def test_burst_does_not_append_across_an_intervening_topic_job(self) -> None:
+        first, _ = self.state.enqueue_or_append_provider_job(
+            idempotency_key="telegram:burst:630",
+            chat_id=self.topic.chat_id,
+            message_id=630,
+            topic_id=self.topic.topic_id,
+            agent_id="codex",
+            session_id=self.codex.session_id,
+            session_generation=self.codex.generation,
+            model=self.codex.model,
+            effort=self.codex.effort,
+            payload_text="first",
+            appended_user_text="first",
+            quiet_ms=1500,
+            max_ms=8000,
+        )
+        other = self.state.ensure_satellite(
+            self.topic.topic_id, "opencode", "provider-selected", "high"
+        )
+        self.state.enqueue_provider_job(
+            idempotency_key="telegram:burst:631",
+            chat_id=self.topic.chat_id,
+            message_id=631,
+            topic_id=self.topic.topic_id,
+            agent_id="opencode",
+            session_id=other.session_id,
+            session_generation=other.generation,
+            model=other.model,
+            effort=other.effort,
+            payload_text="intervening",
+        )
+        last, _ = self.state.enqueue_or_append_provider_job(
+            idempotency_key="telegram:burst:632",
+            chat_id=self.topic.chat_id,
+            message_id=632,
+            topic_id=self.topic.topic_id,
+            agent_id="codex",
+            session_id=self.codex.session_id,
+            session_generation=self.codex.generation,
+            model=self.codex.model,
+            effort=self.codex.effort,
+            payload_text="last",
+            appended_user_text="last",
+            quiet_ms=1500,
+            max_ms=8000,
+        )
+        self.assertNotEqual(first.job_id, last.job_id)
+        self.assertEqual(last.topic_sequence, 3)
+
+    def test_emergency_stop_cancels_queue_and_remains_pending_for_active_job(self) -> None:
+        active, _ = self.enqueue(610)
+        queued, _ = self.enqueue(611)
+        leased = self.state.lease_provider_job("codex", "worker")
+        assert leased is not None and leased.lease_token is not None
+        executing = self.state.mark_provider_job_executing(leased.job_id, leased.lease_token)
+
+        request_id, cancelled, pending = self.state.request_emergency_stop(
+            topic_id=self.topic.topic_id,
+            chat_id=self.topic.chat_id,
+            message_id=612,
+            target_agent_id="codex",
+        )
+
+        self.assertEqual(executing.job_id, active.job_id)
+        self.assertEqual(cancelled, 1)
+        self.assertTrue(pending)
+        self.assertEqual(self.state.get_provider_job(queued.job_id).status, "cancelled")
+        self.assertEqual(
+            self.state.pending_emergency_stop(self.topic.topic_id, "codex"), request_id
+        )
+        self.state.cancel_active_provider_job(executing.job_id, leased.lease_token)
+        self.state.complete_emergency_stop(request_id)
+        self.assertEqual(self.state.get_provider_job(active.job_id).status, "cancelled")
+        self.assertIsNone(self.state.pending_emergency_stop(self.topic.topic_id, "codex"))
+
+    def test_emergency_stop_notice_is_durable_idempotent_and_keeps_cancelled_job(self) -> None:
+        active, _ = self.enqueue(613)
+        leased = self.state.lease_provider_job("codex", "worker")
+        assert leased is not None and leased.lease_token is not None
+        self.state.mark_provider_job_executing(leased.job_id, leased.lease_token)
+        request_id, _, _ = self.state.request_emergency_stop(
+            topic_id=self.topic.topic_id,
+            chat_id=self.topic.chat_id,
+            message_id=614,
+            target_agent_id="codex",
+        )
+
+        self.assertTrue(
+            self.state.enqueue_emergency_stop_notice(request_id, "Останавливаю активную работу.")
+        )
+        self.assertTrue(
+            self.state.enqueue_emergency_stop_notice(request_id, "Останавливаю активную работу.")
+        )
+        notice = self.state.get_telegram_outbox_for_job(active.job_id)
+        self.assertEqual((notice.sender_agent_id, notice.status), ("hub", "pending"))
+
+        self.state.cancel_active_provider_job(active.job_id, leased.lease_token)
+        self.state.complete_emergency_stop(request_id)
+        sending = self.state.lease_telegram_outbox("hub", "sender")
+        assert sending is not None and sending.lease_token is not None
+        self.state.mark_telegram_outbox_delivered(
+            sending.outbox_id, sending.lease_token, telegram_message_id=615
+        )
+        self.assertEqual(self.state.get_provider_job(active.job_id).status, "cancelled")
+
+    def test_compatible_fifo_successor_can_be_absorbed_into_active_turn(self) -> None:
+        parent, _ = self.enqueue(620)
+        child, _ = self.enqueue(621)
+        parent_lease = self.state.lease_provider_job("codex", "worker")
+        assert parent_lease is not None and parent_lease.lease_token is not None
+        self.state.mark_provider_job_executing(parent.job_id, parent_lease.lease_token)
+
+        followup = self.state.lease_steer_followup(parent.job_id, "steer-worker")
+        assert followup is not None and followup.lease_token is not None
+        self.assertEqual(followup.job_id, child.job_id)
+        self.state.mark_provider_job_executing(followup.job_id, followup.lease_token)
+        self.state.complete_steered_job(
+            followup.job_id,
+            followup.lease_token,
+            parent_job_id=parent.job_id,
+            provider_turn_id="turn-example",
+        )
+
+        self.assertEqual(self.state.get_provider_job(child.job_id).status, "completed")
+        self.assertEqual(
+            self.state._connection.execute(
+                "SELECT parent_job_id FROM provider_job_absorptions WHERE child_job_id = ?",
+                (child.job_id,),
+            ).fetchone()[0],
+            parent.job_id,
+        )
 
     def test_enqueue_rejects_oversized_or_mismatched_snapshot(self) -> None:
         with self.assertRaisesRegex(StateError, "payload"):
@@ -113,6 +332,7 @@ class ProviderJobQueueTests(unittest.TestCase):
             self.enqueue(505, provider_session_id="foreign-provider-session")
         with self.assertRaisesRegex(StateError, "model"):
             self.enqueue(506, model="different-model")
+        self.state.cancel_provider_job(derived.job_id)
         self.state.set_writer_mode(self.codex.session_id, "local")
         with self.assertRaisesRegex(StateError, "writer"):
             self.enqueue(507)
@@ -165,7 +385,7 @@ class ProviderJobQueueTests(unittest.TestCase):
         assert next_job is not None
         self.assertEqual(next_job.job_id, second.job_id)
 
-    def test_indeterminate_provider_does_not_block_other_provider_forever(self) -> None:
+    def test_indeterminate_provider_blocks_root_until_operator_resolution(self) -> None:
         first, _ = self.enqueue(512)
         satellite = self.state.ensure_satellite(
             self.topic.topic_id, "opencode", "provider-selected", "high"
@@ -186,6 +406,8 @@ class ProviderJobQueueTests(unittest.TestCase):
             first.job_id, leased.lease_token, error_code="provider_failure"
         )
 
+        self.assertIsNone(self.state.lease_provider_job("opencode", "worker-open"))
+        self.state.resolve_indeterminate_job(first.job_id, "acknowledged")
         next_job = self.state.lease_provider_job("opencode", "worker-open")
         self.assertIsNotNone(next_job)
         assert next_job is not None
@@ -217,7 +439,7 @@ class ProviderJobQueueTests(unittest.TestCase):
     def test_stale_leased_requeues_but_stale_executing_is_indeterminate(self) -> None:
         first, _ = self.enqueue(530)
         second_topic = self.state.observe_topic(
-            project_id="example-project",
+            project_id="second-example-project",
             chat_id=-1001234567890,
             thread_id=78,
             title="Second topic",
@@ -239,10 +461,10 @@ class ProviderJobQueueTests(unittest.TestCase):
         )
         past = datetime(2026, 1, 1, tzinfo=timezone.utc)
         leased_first = self.state.lease_provider_job(
-            "codex", "worker-one", lease_seconds=1, now=past
+            "codex", "worker-one", lease_seconds=1, max_parallel_roots=2, now=past
         )
         leased_second = self.state.lease_provider_job(
-            "codex", "worker-two", lease_seconds=1, now=past
+            "codex", "worker-two", lease_seconds=1, max_parallel_roots=2, now=past
         )
         assert leased_first is not None and leased_first.lease_token is not None
         assert leased_second is not None and leased_second.lease_token is not None
@@ -453,7 +675,7 @@ class ProviderJobQueueTests(unittest.TestCase):
         self.assertEqual(self.state.get_provider_job(queued.job_id).status, "indeterminate")
 
         ready_topic = self.state.observe_topic(
-            project_id="example-project",
+            project_id="ready-example-project",
             chat_id=self.topic.chat_id,
             thread_id=79,
             title="Ready outbox topic",

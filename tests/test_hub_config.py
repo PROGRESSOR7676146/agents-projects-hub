@@ -323,10 +323,33 @@ class HubConfigTests(unittest.TestCase):
     def test_hub_bot_remains_optional_for_backward_compatible_configs(self) -> None:
         self.assertIsNone(load_hub_config(self.write_config()).hub_bot)
 
+    def test_operational_alert_topic_requires_hub_bot(self) -> None:
+        projects = [
+            {"project_id": "alpha", "telegram_chat_id": -1001234567890},
+            {"project_id": "hub", "telegram_chat_id": -1000000000001},
+        ]
+
+        with self.assertRaisesRegex(HubConfigError, "operational_alerts requires hub_bot"):
+            load_hub_config(
+                self.write_config(
+                    projects=projects,
+                    operational_alerts={"project_id": "hub", "telegram_thread_id": 77},
+                )
+            )
+
     def test_dispatch_mode_defaults_to_inline_and_accepts_queue(self) -> None:
         self.assertEqual(load_hub_config(self.write_config()).dispatch_mode, "inline")
         self.assertEqual(load_hub_config(self.write_config()).queue_runtime, "embedded")
         self.assertEqual(load_hub_config(self.write_config()).outbox_runtime, "controller")
+        self.assertEqual(load_hub_config(self.write_config()).max_parallel_roots, 1)
+        self.assertEqual(load_hub_config(self.write_config()).message_batch_quiet_ms, 0)
+        self.assertEqual(load_hub_config(self.write_config()).message_batch_max_ms, 8000)
+        batched = load_hub_config(
+            self.write_config(message_batch_quiet_ms=1500, message_batch_max_ms=9000)
+        )
+        self.assertEqual(
+            (batched.message_batch_quiet_ms, batched.message_batch_max_ms), (1500, 9000)
+        )
         self.assertEqual(
             load_hub_config(self.write_config(dispatch_mode="queue")).dispatch_mode,
             "queue",
@@ -343,6 +366,16 @@ class HubConfigTests(unittest.TestCase):
             load_hub_config(self.write_config(queue_runtime="remote"))
         with self.assertRaisesRegex(HubConfigError, "queue_runtime external requires"):
             load_hub_config(self.write_config(queue_runtime="external"))
+        parallel = load_hub_config(
+            self.write_config(dispatch_mode="queue", queue_runtime="external", max_parallel_roots=3)
+        )
+        self.assertEqual(parallel.max_parallel_roots, 3)
+        for invalid in (0, 17, True, "2"):
+            with self.subTest(max_parallel_roots=invalid):
+                with self.assertRaisesRegex(HubConfigError, "max_parallel_roots"):
+                    load_hub_config(self.write_config(max_parallel_roots=invalid))
+        with self.assertRaisesRegex(HubConfigError, "requires queue_runtime external"):
+            load_hub_config(self.write_config(max_parallel_roots=2))
         self.assertEqual(
             load_hub_config(
                 self.write_config(
@@ -357,6 +390,12 @@ class HubConfigTests(unittest.TestCase):
             load_hub_config(self.write_config(outbox_runtime="remote"))
         with self.assertRaisesRegex(HubConfigError, "external queue runtime"):
             load_hub_config(self.write_config(outbox_runtime="external"))
+        with self.assertRaisesRegex(HubConfigError, "message_batch_quiet_ms"):
+            load_hub_config(self.write_config(message_batch_quiet_ms=6000))
+        with self.assertRaisesRegex(HubConfigError, "must not exceed"):
+            load_hub_config(
+                self.write_config(message_batch_quiet_ms=2000, message_batch_max_ms=1000)
+            )
 
     def test_rejects_inline_hub_bot_token(self) -> None:
         with self.assertRaisesRegex(HubConfigError, "inline token"):
@@ -413,6 +452,9 @@ class HubConfigTests(unittest.TestCase):
             load_hub_config(self.write_config(direct_message_project_id="missing"))
 
     def test_loads_single_operational_alert_topic_from_registered_hub_project(self) -> None:
+        hub_token = self.base / "hub-token"
+        hub_token.write_text("654321:hub-token-value", encoding="utf-8")
+        hub_token.chmod(0o600)
         config = load_hub_config(
             self.write_config(
                 projects=[
@@ -420,6 +462,13 @@ class HubConfigTests(unittest.TestCase):
                     {"project_id": "alpha", "telegram_chat_id": -1001234567890},
                 ],
                 operational_alerts={"project_id": "hub", "telegram_thread_id": 41},
+                hub_bot={
+                    "telegram_username": "project_hub_bot",
+                    "token_file": str(hub_token),
+                },
+                dispatch_mode="queue",
+                queue_runtime="external",
+                outbox_runtime="external",
             )
         )
         self.assertEqual(config.operational_alerts.telegram_chat_id, -1000000000001)

@@ -7,7 +7,10 @@ from pathlib import Path
 
 from hermes_codex_router.codex_accounts import CodexAccountStatus, CodexPoolStatus
 from hermes_codex_router.provider_events import (
+    CodexRotationObservation,
+    CodexRuntimeSnapshot,
     codex_rotation_targets,
+    detect_codex_rotation,
     format_codex_rotation_event,
     read_codex_runtime_snapshot,
 )
@@ -53,9 +56,65 @@ class ProviderEventTests(unittest.TestCase):
             1,
         )
         self.assertEqual(
-            format_codex_rotation_event(pool, 1),
-            "Codex quota exhausted for alt…; rotated to acc….",
+            format_codex_rotation_event(
+                pool,
+                CodexRotationObservation(1, 2, 1, 1),
+            ),
+            "Codex quota exhausted for alt…; switched to acc…. "
+            "Replacement status: available; 5h 90%, week 50%.",
         )
+
+    def test_detects_account_switch_even_before_provider_429(self) -> None:
+        pool = CodexPoolStatus(
+            True,
+            True,
+            (
+                account(1, active=False, remaining=5, hint="alt…"),
+                account(2, active=True, remaining=90, hint="acc…"),
+            ),
+            2,
+            0,
+        )
+        observation = detect_codex_rotation(
+            CodexRuntimeSnapshot(4, 2, 2),
+            pool=pool,
+            previous_rate_limits=4,
+            previous_rotations=2,
+            previous_account_index=1,
+        )
+        self.assertEqual(observation, CodexRotationObservation(1, 2, 0, 0))
+
+    def test_runtime_counter_reset_is_rebaselined_without_false_event(self) -> None:
+        observation = detect_codex_rotation(
+            CodexRuntimeSnapshot(0, 0, 1),
+            pool=CodexPoolStatus(
+                True, True, (account(1, active=True, remaining=80, hint="acc…"),), 1, 0
+            ),
+            previous_rate_limits=9,
+            previous_rotations=3,
+            previous_account_index=1,
+        )
+        self.assertIsNone(observation)
+
+    def test_ordinary_account_selection_change_is_not_a_quota_event(self) -> None:
+        pool = CodexPoolStatus(
+            True,
+            True,
+            (
+                account(1, active=False, remaining=80, hint="alt…"),
+                account(2, active=True, remaining=90, hint="acc…"),
+            ),
+            2,
+            0,
+        )
+        observation = detect_codex_rotation(
+            CodexRuntimeSnapshot(4, 2, 2),
+            pool=pool,
+            previous_rate_limits=4,
+            previous_rotations=2,
+            previous_account_index=1,
+        )
+        self.assertIsNone(observation)
 
     def test_work_topic_is_notified_only_when_exactly_one_codex_topic_is_active(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

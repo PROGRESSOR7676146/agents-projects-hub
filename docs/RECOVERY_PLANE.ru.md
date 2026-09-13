@@ -24,6 +24,26 @@ Project Hub, Hermes Gateway и tlive не должны образовывать 
   `~/.tlive/config.json`, Telegram tokens, web token, provider OAuth и SQLite.
 - В Telegram нельзя передавать локальные пути, OAuth tokens или дампы окружения.
 
+## Взаимные recovery capsules
+
+Каждый проект владеет только собственной инструкцией восстановления и после
+чистого принятого изменения публикует её в нейтральный локальный каталог
+`recovery-capsules`. Публикация содержит Git SHA, время, хеши manifest/runbook и
+атомарный указатель `current`. Hermes читает Hub-owned capsule, но не правит её;
+Hub аналогично читает Hermes-owned capsule. Установленная копия остаётся
+доступной при поломке исходного checkout или venv и не создаёт service
+dependency между каналами.
+
+Hub публикует свою capsule командой:
+
+```bash
+python scripts/publish-recovery-capsule.py
+```
+
+Dirty tree не публикуется. Capsule не содержит credentials, deployment paths,
+Telegram identities или private state и не заменяет immutable artifacts,
+backup либо deployment-local acceptance.
+
 ## Проверка
 
 ```bash
@@ -35,6 +55,11 @@ tlive status
 
 `doctor` показывает два независимых check: `recovery:hermes` и
 `recovery:tlive`. Один неработающий канал даёт warning мониторинга, оба — error.
+Поле `service` различает `active`, подтверждённый `inactive` (exit code 3) и
+`unavailable`, когда supervisor bus/команда недоступны или результат probe не
+доказывает состояние unit. Свежий Hermes heartbeat или bounded `tlive status`
+может независимо подтвердить healthy runtime даже при `service=unavailable`;
+эти факты показываются одновременно, а не подменяют друг друга.
 Monitor делает отдельные cooldown claims для Codex project groups и домашнего
 канала Hermes (`hermes_notify_target`), поэтому сбой одной доставки не помечает
 вторую как выполненную.

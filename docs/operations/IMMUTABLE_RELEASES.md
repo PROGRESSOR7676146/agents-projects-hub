@@ -1,0 +1,104 @@
+# Immutable release manifest and schema gate
+
+Status: repository tooling implemented; live activation not authorized
+Last updated: 2026-09-05
+
+The deployment manifest is private operational evidence. It binds two distinct
+clean-tree wheel artifacts—candidate and rollback—to the exact configuration,
+consistent state backup, and schema transition. It contains private paths and
+therefore must never be committed.
+
+## Artifact contract
+
+Each wheel is inspected without installing or importing it. The gate requires:
+
+- one wheel metadata version matching the embedded package version;
+- a complete clean-tree build identity with exact Git SHA and timezone-aware
+  build time;
+- literal minimum and maximum supported SQLite schema versions;
+- an exact SHA-256 digest of the wheel bytes.
+
+The active and rollback wheels must be distinct releases. The active wheel must
+support the backed-up schema and its own target schema. The rollback wheel must
+also support that target schema, because ordinary runtime rollback retains the
+migrated database and all accepted queue/outbox records.
+
+## Create and verify
+
+Prepare the two wheels, a mode-`0600` shadow configuration, and a
+SQLite-consistent mode-`0600` backup outside the repository. Then create the
+manifest without opening live state:
+
+```bash
+agents-projects-hub release-manifest create PRIVATE_MANIFEST \
+  --active-artifact CANDIDATE_WHEEL \
+  --rollback-artifact ROLLBACK_WHEEL \
+  --config SHADOW_CONFIG \
+  --backup STATE_BACKUP
+```
+
+Creation is exclusive: it refuses to overwrite an existing manifest and writes
+the new file as mode `0600`. Verify all bound bytes and compatibility again:
+
+```bash
+agents-projects-hub release-manifest verify PRIVATE_MANIFEST
+```
+
+After a migration on a disposable copy, add `--state DISPOSABLE_STATE` to prove
+that its exact `user_version` equals the manifest target and remains readable by
+both artifacts. This option is read-only; it does not perform the migration.
+
+## Stop conditions
+
+Stop before activation if either wheel is dirty, identities or digests differ,
+the configuration or backup changed, SQLite integrity is not `ok`, the backup
+schema is newer than the candidate target, or the rollback artifact cannot read
+the target schema. Do not compensate by restoring the pre-migration backup for
+an ordinary runtime rollback, weakening the manifest, or rebuilding an older
+release from a mutable checkout.
+
+Manifest verification proves artifact identity and schema compatibility only.
+It does not prove queue drain, service convergence, Telegram behavior, or a
+live rollout.
+
+## Reproducible runtime dependencies
+
+`requirements-release.lock` is the hash-locked runtime plus `e2e` dependency
+set exported from `uv.lock`. `scripts/validate.py` regenerates it offline and
+fails when the checked-in export is stale. Create a release environment from
+the lock at the exact candidate Git revision, then install the manifest-bound
+wheel without resolving dependencies again:
+
+```bash
+uv venv RELEASE/venv --python 3.12
+uv pip sync --python RELEASE/venv/bin/python --require-hashes requirements-release.lock
+uv pip install --python RELEASE/venv/bin/python --no-deps CANDIDATE_WHEEL
+```
+
+Do not install the wheel with an extra specifier during deployment: that asks
+the package index to resolve a new environment and can silently select newer
+dependencies than the tested candidate.
+
+## Automated offline rollout and rollback
+
+Run the candidate and rollback wheels through the synthetic gate:
+
+```bash
+agents-projects-hub release-dry-run \
+  --active-artifact CANDIDATE_WHEEL \
+  --rollback-artifact ROLLBACK_WHEEL
+```
+
+The command accepts no config or state path. It generates a production-shaped
+schema-20 database with queued, prepared-outbox, and indeterminate jobs under a
+new temporary root, creates a consistent backup and manifest, unpacks both
+wheels into digest-addressed release directories, and atomically switches a
+temporary `active` symlink to the candidate. Candidate code migrates the copy to
+its declared target schema. The manifest is verified against that migrated copy,
+the pointer is switched back, and rollback-artifact code opens the retained target
+schema. Exact durable work rows must match before, after rollout, and after rollback.
+
+The report states `temporary_state_only: true`, `service_actions: false`, and
+`network_actions: false`. The temporary root is removed on exit. Passing this
+gate is synthetic fault/release evidence, not permission or evidence for a live
+rollout.

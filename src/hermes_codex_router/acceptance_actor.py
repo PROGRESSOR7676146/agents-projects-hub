@@ -10,7 +10,19 @@ from pathlib import Path
 from typing import Any
 
 USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
-SUPPORTED_CHECKS = ("status", "accounts", "model_menu", "provider_ping")
+SUPPORTED_CHECKS = (
+    "status",
+    "accounts",
+    "model_menu",
+    "provider_ping",
+    "reply_route",
+    "burst_route",
+    "stop_route",
+    "forwarded_quote",
+    "artifact_delivery",
+    "context_contract",
+    "codex_interaction_v2",
+)
 
 
 class AcceptanceActorError(RuntimeError):
@@ -30,6 +42,7 @@ class AcceptanceActorConfig:
     checks: tuple[str, ...]
     timeout_seconds: int
     artifacts_dir: Path
+    provider_agent_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +140,15 @@ def load_acceptance_actor_config(
     )
     if len(set(name.casefold() for name in providers)) != len(providers):
         raise AcceptanceActorError("provider_usernames contains duplicates")
+    raw_agent_ids = raw.get("provider_agent_ids", [])
+    if not isinstance(raw_agent_ids, list) or not all(
+        isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", value)
+        for value in raw_agent_ids
+    ):
+        raise AcceptanceActorError("provider_agent_ids must contain safe agent ids")
+    provider_agent_ids = tuple(raw_agent_ids)
+    if provider_agent_ids and len(provider_agent_ids) != len(providers):
+        raise AcceptanceActorError("provider_agent_ids must align with provider_usernames")
     raw_checks = raw.get("checks", ["status", "accounts", "model_menu"])
     if (
         not isinstance(raw_checks, list)
@@ -136,8 +158,36 @@ def load_acceptance_actor_config(
     ):
         raise AcceptanceActorError("checks must be a unique non-empty list of supported checks")
     checks = tuple(raw_checks)
-    if "provider_ping" in checks and not providers:
-        raise AcceptanceActorError("provider_ping requires provider_usernames")
+    if (
+        any(
+            check
+            in {
+                "provider_ping",
+                "reply_route",
+                "burst_route",
+                "stop_route",
+                "forwarded_quote",
+                "artifact_delivery",
+                "context_contract",
+                "codex_interaction_v2",
+            }
+            for check in checks
+        )
+        and not providers
+    ):
+        raise AcceptanceActorError("provider checks require provider_usernames")
+    if "stop_route" in checks and (
+        "model_menu" not in checks or checks.index("model_menu") > checks.index("stop_route")
+    ):
+        raise AcceptanceActorError("model_menu must run before stop_route")
+    if "context_contract" in checks and (len(providers) < 2 or len(provider_agent_ids) < 2):
+        raise AcceptanceActorError("context_contract requires two aligned providers and agent ids")
+    if "codex_interaction_v2" in checks and (
+        len(provider_agent_ids) != len(providers) or provider_agent_ids.count("codex") != 1
+    ):
+        raise AcceptanceActorError(
+            "codex_interaction_v2 requires one aligned codex provider identity"
+        )
 
     return AcceptanceActorConfig(
         api_id=api_id,
@@ -151,6 +201,7 @@ def load_acceptance_actor_config(
         checks=checks,
         timeout_seconds=timeout,
         artifacts_dir=artifacts_dir,
+        provider_agent_ids=provider_agent_ids,
     )
 
 
@@ -169,6 +220,18 @@ def _topic_id(message: Any) -> int | None:
     return reply_id if isinstance(reply_id, int) else None
 
 
+def _allowed_canary_sender(sender: Any, config: AcceptanceActorConfig) -> bool:
+    sender_id = getattr(sender, "id", None)
+    if sender_id == config.expected_user_id:
+        return True
+    username = str(getattr(sender, "username", "")).casefold()
+    allowed_usernames = {
+        config.hub_username.casefold(),
+        *(value.casefold() for value in config.provider_usernames),
+    }
+    return username in allowed_usernames
+
+
 async def _wait_for_response(
     client: Any,
     config: AcceptanceActorConfig,
@@ -176,8 +239,12 @@ async def _wait_for_response(
     after_id: int,
     username: str,
     require_buttons: bool = False,
+    require_document: bool = False,
+    timeout_seconds: int | None = None,
 ) -> Any:
-    deadline = asyncio.get_running_loop().time() + config.timeout_seconds
+    deadline = asyncio.get_running_loop().time() + (
+        config.timeout_seconds if timeout_seconds is None else timeout_seconds
+    )
     while asyncio.get_running_loop().time() < deadline:
         async for message in client.iter_messages(
             config.telegram_chat_id, min_id=after_id, reverse=True
@@ -185,20 +252,457 @@ async def _wait_for_response(
             if _topic_id(message) != config.telegram_thread_id:
                 continue
             sender = await message.get_sender()
-            if str(getattr(sender, "username", "")).casefold() != username.casefold():
-                continue
-            if require_buttons and not getattr(message, "buttons", None):
-                continue
-            return message
+            sender_username = str(getattr(sender, "username", "")).casefold()
+            if sender_username == username.casefold():
+                if require_buttons and not getattr(message, "buttons", None):
+                    continue
+                if require_document and getattr(message, "document", None) is None:
+                    continue
+                return message
+            if not _allowed_canary_sender(sender, config):
+                raise AcceptanceActorError(
+                    "canary topic received unrelated traffic during acceptance"
+                )
         await asyncio.sleep(0.5)
     raise AcceptanceActorError(f"timed out waiting for @{username}")
+
+
+async def _click_callback_prefix(message: Any, prefix: bytes) -> None:
+    for row in getattr(message, "buttons", None) or ():
+        for button in row:
+            data = getattr(button, "data", None)
+            if isinstance(data, bytes) and data.startswith(prefix):
+                await button.click()
+                return
+    raise AcceptanceActorError(
+        f"model menu has no {prefix.decode('ascii', errors='replace')} callback"
+    )
+
+
+async def _click_callback_exact(message: Any, data: bytes) -> None:
+    for row in getattr(message, "buttons", None) or ():
+        for button in row:
+            if getattr(button, "data", None) == data:
+                await button.click()
+                return
+    raise AcceptanceActorError(
+        f"model menu has no {data.decode('ascii', errors='replace')} callback"
+    )
+
+
+def _stop_acknowledged(text: str) -> bool:
+    if "Останавливаю активную работу" in text:
+        return True
+    return (
+        "Активной работы нет" in text
+        and re.search(r"отменено задач в очереди: [1-9][0-9]*", text) is not None
+    )
+
+
+async def _complete_model_selection(
+    client: Any,
+    config: AcceptanceActorConfig,
+    menu: Any,
+) -> Any:
+    current = menu
+    for prefix in (b"provider:", b"choose:", b"use:"):
+        await _click_callback_prefix(current, prefix)
+        current = await _wait_for_response(
+            client,
+            config,
+            after_id=int(current.id),
+            username=config.hub_username,
+            require_buttons=prefix != b"use:",
+        )
+    return current
+
+
+async def _select_provider(client: Any, config: AcceptanceActorConfig, agent_id: str) -> Any:
+    request = await client.send_message(
+        config.telegram_chat_id,
+        f"/model@{config.hub_username}",
+        reply_to=config.telegram_thread_id,
+    )
+    menu = await _wait_for_response(
+        client,
+        config,
+        after_id=int(request.id),
+        username=config.hub_username,
+        require_buttons=True,
+    )
+    await _click_callback_exact(menu, f"provider:{agent_id}".encode())
+    models = await _wait_for_response(
+        client,
+        config,
+        after_id=int(menu.id),
+        username=config.hub_username,
+        require_buttons=True,
+    )
+    await _click_callback_prefix(models, b"choose:")
+    efforts = await _wait_for_response(
+        client,
+        config,
+        after_id=int(models.id),
+        username=config.hub_username,
+        require_buttons=True,
+    )
+    await _click_callback_prefix(efforts, b"use:")
+    return await _wait_for_response(
+        client,
+        config,
+        after_id=int(efforts.id),
+        username=config.hub_username,
+    )
 
 
 async def _run_check(
     client: Any, config: AcceptanceActorConfig, check: str, target: str
 ) -> AcceptanceCheckResult:
+    if check == "codex_interaction_v2":
+        try:
+            await _select_provider(client, config, "codex")
+            short_request = await client.send_message(
+                config.telegram_chat_id,
+                f"@{target} What is 2 + 2? Answer for a phone in one short sentence. Use no tools.",
+                reply_to=config.telegram_thread_id,
+            )
+            short_response = await _wait_for_response(
+                client, config, after_id=int(short_request.id), username=target
+            )
+            short_text = str(getattr(short_response, "raw_text", "")).strip()
+            if "4" not in short_text or len(short_text) > 400:
+                return AcceptanceCheckResult(
+                    check,
+                    target,
+                    False,
+                    int(short_response.id),
+                    "short task response was empty, incorrect, or not bounded",
+                )
+
+            ambiguous_request = await client.send_message(
+                config.telegram_chat_id,
+                (
+                    f"@{target} Without tools or file changes, prepare the fictional launch "
+                    "note. The request is intentionally underspecified: no audience, facts, "
+                    "format, or language are given."
+                ),
+                reply_to=config.telegram_thread_id,
+            )
+            ambiguous_response = await _wait_for_response(
+                client, config, after_id=int(ambiguous_request.id), username=target
+            )
+            ambiguous_text = str(getattr(ambiguous_response, "raw_text", "")).strip()
+            question_count = ambiguous_text.count("?")
+            if (
+                not 1 <= question_count <= 2
+                or len(ambiguous_text) > 800
+                or getattr(ambiguous_response, "document", None) is not None
+            ):
+                return AcceptanceCheckResult(
+                    check,
+                    target,
+                    False,
+                    int(ambiguous_response.id),
+                    "ambiguous task did not produce a bounded focused clarification",
+                )
+
+            progress_request = await client.send_message(
+                config.telegram_chat_id,
+                (
+                    f"@{target} Use no tools. Compare three fictional options: A is fast but "
+                    "irreversible, B is slower and reversible, C is untested. Start with one "
+                    "brief line labelled Approach, then continue immediately with a concise "
+                    "recommendation labelled Recommendation."
+                ),
+                reply_to=config.telegram_thread_id,
+            )
+            progress_response = await _wait_for_response(
+                client, config, after_id=int(progress_request.id), username=target
+            )
+            progress_text = str(getattr(progress_response, "raw_text", "")).strip()
+            lowered = progress_text.casefold()
+            approach_at = lowered.find("approach")
+            recommendation_at = lowered.find("recommendation")
+            if (
+                approach_at < 0
+                or recommendation_at <= approach_at
+                or len(progress_text) > 2_000
+                or getattr(progress_response, "document", None) is not None
+            ):
+                return AcceptanceCheckResult(
+                    check,
+                    target,
+                    False,
+                    int(progress_response.id),
+                    "complex task did not expose a bounded approach before its recommendation",
+                )
+
+            filename = "hub-contract-v2-e2e.md"
+            artifact_request = await client.send_message(
+                config.telegram_chat_id,
+                (
+                    f"@{target} Create {filename} in the exact Hub artifact delivery directory "
+                    "for this turn. Its complete UTF-8 content must be "
+                    "HUB_CONTRACT_V2_E2E_OK followed by one newline. Reply briefly; do no "
+                    "other work."
+                ),
+                reply_to=config.telegram_thread_id,
+            )
+            artifact_response = await _wait_for_response(
+                client,
+                config,
+                after_id=int(artifact_request.id),
+                username=target,
+                require_document=True,
+            )
+            received_name = str(getattr(getattr(artifact_response, "file", None), "name", ""))
+            payload = await artifact_response.download_media(file=bytes)
+            if received_name != filename or payload != b"HUB_CONTRACT_V2_E2E_OK\n":
+                return AcceptanceCheckResult(
+                    check,
+                    target,
+                    False,
+                    int(artifact_response.id),
+                    "artifact task returned an unexpected document",
+                )
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        return AcceptanceCheckResult(
+            check,
+            target,
+            True,
+            int(artifact_response.id),
+            "short, clarification, complex-progress, and artifact behavior verified",
+        )
+    if check == "context_contract":
+        source_username, target_username = config.provider_usernames[:2]
+        source_agent_id, target_agent_id = config.provider_agent_ids[:2]
+        try:
+            await _select_provider(client, config, source_agent_id)
+            source = await client.send_message(
+                config.telegram_chat_id,
+                f"@{source_username} Reply exactly CONTEXT_SOURCE_E2E_7391. Use no tools.",
+                reply_to=config.telegram_thread_id,
+            )
+            source_reply = await _wait_for_response(
+                client, config, after_id=int(source.id), username=source_username
+            )
+            if "CONTEXT_SOURCE_E2E_7391" not in str(source_reply.raw_text):
+                raise AcceptanceActorError("source marker was not returned")
+
+            applied = await _select_provider(client, config, target_agent_id)
+            if "No prior agent history was injected" not in str(applied.raw_text):
+                raise AcceptanceActorError("model switch did not confirm context isolation")
+
+            isolated = await client.send_message(
+                config.telegram_chat_id,
+                "Reply exactly CONTEXT_SWITCH_ISOLATED_OK. Use no tools.",
+                reply_to=config.telegram_thread_id,
+            )
+            isolated_reply = await _wait_for_response(
+                client, config, after_id=int(isolated.id), username=target_username
+            )
+            if "CONTEXT_SWITCH_ISOLATED_OK" not in str(isolated_reply.raw_text):
+                raise AcceptanceActorError("switched provider did not respond in isolation")
+
+            context = await client.send_message(
+                config.telegram_chat_id,
+                f"/context@{config.hub_username} {source_agent_id} 8",
+                reply_to=config.telegram_thread_id,
+            )
+            context_reply = await _wait_for_response(
+                client, config, after_id=int(context.id), username=target_username
+            )
+            context_text = str(context_reply.raw_text).strip()
+            if not context_text or any(
+                marker in context_text.casefold()
+                for marker in (
+                    "no matching prior dialogue",
+                    "no prior dialogue is stored",
+                    "no matching history",
+                )
+            ):
+                raise AcceptanceActorError("explicit context was reported missing")
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        return AcceptanceCheckResult(
+            check,
+            target,
+            True,
+            int(context_reply.id),
+            "switch isolation and explicit context verified",
+        )
+    if check == "artifact_delivery":
+        filename = "hub-artifact-e2e.md"
+        expected = b"HUB_ARTIFACT_E2E_OK\n"
+        sent = await client.send_message(
+            config.telegram_chat_id,
+            (
+                f"@{target} Create {filename} in the exact Hub artifact delivery directory "
+                "for this turn. Its complete UTF-8 content must be HUB_ARTIFACT_E2E_OK "
+                "followed by one newline. Reply briefly; do no other work."
+            ),
+            reply_to=config.telegram_thread_id,
+        )
+        try:
+            response = await _wait_for_response(
+                client,
+                config,
+                after_id=int(sent.id),
+                username=target,
+                require_document=True,
+            )
+            received_name = str(getattr(getattr(response, "file", None), "name", ""))
+            payload = await response.download_media(file=bytes)
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        ok = received_name == filename and payload == expected
+        return AcceptanceCheckResult(
+            check,
+            target,
+            ok,
+            int(response.id),
+            "document filename and content verified" if ok else "unexpected document",
+        )
+    if check == "forwarded_quote":
+        sent = await client.send_message(
+            config.telegram_chat_id,
+            f"@{target} Reply with exactly FORWARD_SOURCE_OK. Use no tools.",
+            reply_to=config.telegram_thread_id,
+        )
+        try:
+            source = await _wait_for_response(
+                client, config, after_id=int(sent.id), username=target
+            )
+            if "FORWARD_SOURCE_OK" not in str(getattr(source, "raw_text", "")):
+                return AcceptanceCheckResult(
+                    check, target, False, int(source.id), "unexpected source response"
+                )
+            forwarded_id = await _forward_to_topic(client, config, source)
+            try:
+                unexpected = await _wait_for_response(
+                    client,
+                    config,
+                    after_id=forwarded_id,
+                    username=target,
+                    timeout_seconds=5,
+                )
+            except AcceptanceActorError:
+                unexpected = None
+            if unexpected is not None:
+                return AcceptanceCheckResult(
+                    check,
+                    target,
+                    False,
+                    int(unexpected.id),
+                    "provider answered a passive forward",
+                )
+            follow_up = await client.send_message(
+                config.telegram_chat_id,
+                (
+                    f"@{target} Reply with exactly FORWARD_CONTEXT_OK if the immediately "
+                    "preceding forwarded message was shown only as quoted context. Use no tools."
+                ),
+                reply_to=config.telegram_thread_id,
+            )
+            response = await _wait_for_response(
+                client, config, after_id=int(follow_up.id), username=target
+            )
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        ok = "FORWARD_CONTEXT_OK" in str(getattr(response, "raw_text", ""))
+        return AcceptanceCheckResult(
+            check,
+            target,
+            ok,
+            int(response.id),
+            "response received" if ok else "forward was not visible as quoted context",
+        )
+    if check == "burst_route":
+        sent = []
+        for text in (
+            f"@{target} Reply with exactly",
+            "BURST_E2E_OK",
+            "after reading all three messages together. Use no tools.",
+        ):
+            sent.append(
+                await client.send_message(
+                    config.telegram_chat_id,
+                    text,
+                    reply_to=config.telegram_thread_id,
+                )
+            )
+        try:
+            response = await _wait_for_response(
+                client,
+                config,
+                after_id=max(int(message.id) for message in sent),
+                username=target,
+            )
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        response_text = str(getattr(response, "raw_text", "")).strip()
+        ok = "BURST_E2E_OK" in response_text
+        return AcceptanceCheckResult(
+            check,
+            target,
+            ok,
+            int(response.id),
+            "response received" if ok else "unexpected response",
+        )
+    if check == "stop_route":
+        await client.send_message(
+            config.telegram_chat_id,
+            f"@{target} Run the harmless command `sleep 60`, then reply STOP_TOO_LATE.",
+            reply_to=config.telegram_thread_id,
+        )
+        await asyncio.sleep(3)
+        stopped = await client.send_message(
+            config.telegram_chat_id,
+            "stop",
+            reply_to=config.telegram_thread_id,
+        )
+        try:
+            stop_response = await _wait_for_response(
+                client,
+                config,
+                after_id=int(stopped.id),
+                username=config.hub_username,
+            )
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        stop_text = str(getattr(stop_response, "raw_text", "")).strip()
+        recovery = await client.send_message(
+            config.telegram_chat_id,
+            f"@{target} Reply with exactly AFTER_STOP_E2E_OK. Use no tools.",
+            reply_to=config.telegram_thread_id,
+        )
+        try:
+            response = await _wait_for_response(
+                client,
+                config,
+                after_id=int(recovery.id),
+                username=target,
+            )
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        response_text = str(getattr(response, "raw_text", "")).strip()
+        ok = _stop_acknowledged(stop_text) and "AFTER_STOP_E2E_OK" in response_text
+        return AcceptanceCheckResult(
+            check,
+            target,
+            ok,
+            int(response.id),
+            "response received" if ok else "unexpected response",
+        )
     if check == "provider_ping":
         text = f"@{target} Reply with exactly E2E_OK. This is a connectivity check; use no tools."
+        require_buttons = False
+    elif check == "reply_route":
+        text = (
+            f"@{target} Reply with exactly REPLY_PARENT_OK. "
+            "This is a reply-routing check; use no tools."
+        )
         require_buttons = False
     else:
         command = {"status": "status", "accounts": "accounts", "model_menu": "model"}[check]
@@ -221,6 +725,36 @@ async def _run_check(
         return AcceptanceCheckResult(check, target, False, None, str(exc))
     response_text = str(getattr(response, "raw_text", "")).strip()
     ok = bool(response_text) or require_buttons
+    if check == "model_menu":
+        try:
+            response = await _complete_model_selection(client, config, response)
+        except AcceptanceActorError as exc:
+            return AcceptanceCheckResult(check, target, False, None, str(exc))
+        response_text = str(getattr(response, "raw_text", "")).strip()
+        ok = any(
+            phrase in response_text
+            for phrase in ("will start on the next message", "already active", "is now active")
+        )
+    if check == "reply_route":
+        if "REPLY_PARENT_OK" not in response_text:
+            ok = False
+        else:
+            follow_up = await client.send_message(
+                config.telegram_chat_id,
+                "Reply with exactly REPLY_CHILD_OK. Use no tools.",
+                reply_to=int(response.id),
+            )
+            try:
+                response = await _wait_for_response(
+                    client,
+                    config,
+                    after_id=int(follow_up.id),
+                    username=target,
+                )
+            except AcceptanceActorError as exc:
+                return AcceptanceCheckResult(check, target, False, None, str(exc))
+            response_text = str(getattr(response, "raw_text", "")).strip()
+            ok = "REPLY_CHILD_OK" in response_text
     if check == "provider_ping":
         ok = "E2E_OK" in response_text
     return AcceptanceCheckResult(
@@ -237,7 +771,9 @@ async def login_acceptance_actor(config: AcceptanceActorConfig) -> dict[str, obj
         from telethon import TelegramClient
     except ImportError as exc:
         raise AcceptanceActorError("install the project with the 'e2e' extra") from exc
-    client = TelegramClient(str(config.session_path), config.api_id, _api_hash(config))
+    # Telethon's generated sync/async overloads vary across releases; this
+    # module intentionally uses the runtime async API throughout.
+    client: Any = TelegramClient(str(config.session_path), config.api_id, _api_hash(config))
     try:
         await client.start()
         identity = await client.get_me()
@@ -252,12 +788,26 @@ async def login_acceptance_actor(config: AcceptanceActorConfig) -> dict[str, obj
     return {"ok": True, "authorized": True, "user_id": user_id}
 
 
+async def _run_configured_checks(
+    client: Any, config: AcceptanceActorConfig
+) -> list[AcceptanceCheckResult]:
+    results: list[AcceptanceCheckResult] = []
+    for check in config.checks:
+        targets = _targets_for_check(config, check)
+        for target in targets:
+            result = await _run_check(client, config, check, target)
+            results.append(result)
+            if not result.ok:
+                return results
+    return results
+
+
 async def run_acceptance_checks(config: AcceptanceActorConfig) -> dict[str, object]:
     try:
         from telethon import TelegramClient
     except ImportError as exc:
         raise AcceptanceActorError("install the project with the 'e2e' extra") from exc
-    client = TelegramClient(str(config.session_path), config.api_id, _api_hash(config))
+    client: Any = TelegramClient(str(config.session_path), config.api_id, _api_hash(config))
     results: list[AcceptanceCheckResult] = []
     await client.connect()
     try:
@@ -270,12 +820,7 @@ async def run_acceptance_checks(config: AcceptanceActorConfig) -> dict[str, obje
             raise AcceptanceActorError(
                 "authorized Telegram account does not match expected_user_id"
             )
-        for check in config.checks:
-            targets = (
-                config.provider_usernames if check == "provider_ping" else (config.hub_username,)
-            )
-            for target in targets:
-                results.append(await _run_check(client, config, check, target))
+        results = await _run_configured_checks(client, config)
     finally:
         await client.disconnect()
 
@@ -297,3 +842,44 @@ async def run_acceptance_checks(config: AcceptanceActorConfig) -> dict[str, obje
         "passed": sum(item.ok for item in results),
         "artifact": str(destination),
     }
+
+
+def _targets_for_check(config: AcceptanceActorConfig, check: str) -> tuple[str, ...]:
+    if check == "codex_interaction_v2":
+        try:
+            index = config.provider_agent_ids.index("codex")
+            return (config.provider_usernames[index],)
+        except (IndexError, ValueError) as exc:
+            raise AcceptanceActorError(
+                "codex_interaction_v2 requires one aligned codex provider identity"
+            ) from exc
+    if check in {"stop_route", "artifact_delivery"}:
+        return config.provider_usernames[:1]
+    if check in {"provider_ping", "reply_route", "burst_route", "forwarded_quote"}:
+        return config.provider_usernames
+    return (config.hub_username,)
+
+
+async def _forward_to_topic(client: Any, config: AcceptanceActorConfig, source: Any) -> int:
+    try:
+        from telethon import functions, helpers
+    except ImportError as exc:
+        raise AcceptanceActorError("install the project with the 'e2e' extra") from exc
+    peer = await client.get_input_entity(config.telegram_chat_id)
+    result = await client(
+        functions.messages.ForwardMessagesRequest(
+            from_peer=peer,
+            id=[int(source.id)],
+            to_peer=peer,
+            random_id=[helpers.generate_random_long()],
+            top_msg_id=config.telegram_thread_id,
+        )
+    )
+    message_ids = [
+        int(update.message.id)
+        for update in getattr(result, "updates", ())
+        if getattr(update, "message", None) is not None
+    ]
+    if not message_ids:
+        raise AcceptanceActorError("Telegram did not confirm the forwarded message")
+    return max(message_ids)

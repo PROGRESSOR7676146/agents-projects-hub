@@ -10,6 +10,7 @@
   "manage_codex_server": false,
   "dispatch_mode": "inline",
   "queue_runtime": "embedded",
+  "max_parallel_roots": 1,
   "codex_stdio_executable": "/home/example/.local/bin/codex",
   "codex_multi_auth_dir": "/home/example/.codex/multi-auth",
   "codex_multi_auth_executable": "/home/example/.local/bin/codex-multi-auth",

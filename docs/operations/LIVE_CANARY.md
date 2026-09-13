@@ -43,7 +43,10 @@ delete a socket merely to make the canary continue.
    backed-up database, never the live file. Do not launch `controller`, `serve`,
    `worker`, or `sender` for this compatibility check. If an older binary cannot
    read the schema, rollback must use the current binary with the previous
-   runtime gates.
+   runtime gates. Bind the candidate wheel, distinct rollback wheel, shadow
+   configuration, and backup with `agents-projects-hub release-manifest create`,
+   then require `release-manifest verify` to pass. The gate rejects a rollback
+   wheel that cannot read the candidate target schema.
 3. Create a mode-`0600` shadow configuration outside Git. Do not replace the
    active configuration yet. It must set:
 
@@ -67,7 +70,9 @@ delete a socket merely to make the canary continue.
    token. Run `agents-projects-hub status SHADOW_CONFIG` only after the backup
    and intended schema migration. Status makes no provider/network request, but
    opening state may initialize or migrate SQLite. Missing processes may be
-   `unknown` before launch.
+   `unknown` before launch. Repeat `release-manifest verify --state` only against
+   the disposable migrated copy during preparation; the live-state gate belongs
+   inside the separately authorized controlled rollout.
 5. Confirm the service topology before changing Telegram settings: one central
    Controller, one standalone sender, one worker per local provider, and only
    the desired provider direct-message ingress units. No provider group ingress
@@ -134,9 +139,23 @@ The bounded baseline may be driven by the dedicated MTProto acceptance user
 defined in [ADR 0003](../decisions/0003-scoped-telegram-acceptance-actor.md).
 Validate its private configuration before the run and confirm its exact
 user/chat/topic scope in the active Hub configuration. Its fixed checks cover
-steps 1 and the harmless provider connectivity part of step 2. The remaining
-routing, failure, restart, and recovery tests below are still explicit
-operator-controlled operations.
+step 1, the harmless provider connectivity part of step 2, the complete
+provider/model/effort callback ladder, real Reply provenance, and passive
+forwarded-quote semantics for allowlisted providers. It also covers a rapid
+three-message burst and a bounded stop/recovery cycle for the first selected
+provider. That cycle accepts an active-work stop acknowledgement or an explicit
+nonzero queued-job cancellation, then requires a new visible provider result.
+The Codex-only `codex_interaction_v2` check requires an exact aligned
+`codex` agent ID and verifies four observable responses: a bounded short answer,
+a focused clarification for an intentionally underspecified harmless request,
+an ordered bounded approach and recommendation for a fictional complex task,
+and an attached document with exact filename and bytes. It does not run against
+other providers and its repository tests prove the runner, not a live provider
+result. The fixed artifact check remains available separately. With two aligned
+provider usernames and agent IDs, the context contract check verifies a
+context-free switch followed by explicit bounded `/context` retrieval. The
+remaining manually selected quote, failure, restart, and recovery tests below
+are still explicit operator-controlled operations.
 
 1. Run `/status` and `/accounts`. They must remain compact and responsive
    without a productive model turn.

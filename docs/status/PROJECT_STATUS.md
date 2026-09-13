@@ -1,19 +1,145 @@
 # Project status
 
 Status: active alpha
-Release: v0.5.0
+Release: v0.7.0
 
 This file describes repository capabilities only. It intentionally contains no
 operator deployment inventory or live conversation evidence.
 
+## Quality checkpoint
+
+Package F is repository-complete at schema 27. `max_parallel_roots` defaults to
+one and transactionally bounds active Hub worker scopes across provider workers;
+values up to 16 require external queue mode. Durable least-recently-granted
+selection prevents a continuously polling live worker from starving another,
+while a stale worker leaves consideration after two minutes. Lowering capacity
+drains current turns without cancelling them. Expired execution becomes
+root-local uncertainty: it still excludes its own canonical root but no longer
+occupies a global slot or blocks an independent root. Cache-only status exposes
+only capacity totals, bounded worker/agent/phase owners and an aggregate
+uncertain-scope count.
+
+Explicit local worktree binding now atomically moves an idle topic to the lane's
+canonical scope. Bind and archive refuse pending, active, local-writer and
+unresolved work. Before provider access the worker revalidates the exact derived
+path, allowlist membership, Git worktree registration and Git top level, then
+uses that lane as cwd. Each provider worker still owns one SQLite connection and
+one adapter/client/process lifecycle, so configured worker count is a second
+parallelism bound. Offline capacity, fairness, contention, targeted-stop,
+process-recovery, lane execution, migration and rollback tests cover this
+checkpoint. Direct-message databases, unmanaged Hermes/native CLI processes,
+deployment and live provider acceptance remain outside the claim. See
+[ADR 0025](../decisions/0025-bounded-root-concurrency.md).
+
+Schema 26 established one Hub-owned productive writer per canonical registered
+root across Telegram topics and providers. Queue lease selection, local writer
+transfer, and saved Codex-session adoption share the transactional execution
+scope. See [ADR 0024](../decisions/0024-canonical-root-execution-exclusion.md).
+
+Hub-owned execution now revalidates the cached canonical allowlisted Git root
+before provider access or project staging. Both queue modes reject filesystem
+drift as a terminal pre-execution failure with a durable, path-free notice and
+no automatic retry. Inline/native execution and local-transfer preparation use
+the same guard; real linked Git worktrees remain supported. Offline regressions
+first reproduced invocation through a replaced root and now cover refusal in
+all three local queue runtimes. See [ADR 0023](../decisions/0023-execution-time-root-validation.md).
+That checkpoint used schema 25 and did not itself provide root/lane-wide
+execution exclusion, protection against every filesystem race, or acceptance
+of unmanaged CLI/Hermes execution.
+Deployment and live continuity remain unverified for this change.
+
+Queue-owned productive ingress now retains the Telegram offset when a transient
+SQLite fault prevents session preparation or leaves enqueue disposition
+uncertain. It stops the current batch, waits with a bounded backoff, and returns
+the update through the existing idempotent queue admission; a committed job or
+input membership is not duplicated after Controller recreation or offset-write
+failure. Diagnostic-event failure cannot turn the original admission fault into
+an acknowledgement. Deterministic terminal/ignored inputs keep their existing
+disposition, and inline turns remain outside this retry boundary after provider
+invocation may have begun. Schema remains 25. Offline polling/SQLite tests cover
+these boundaries; no live Telegram or deployment acceptance is claimed.
+
+The [quality and stability review](../operations/QUALITY_AND_STABILITY_REVIEW.md)
+records the initial findings. Milestone one of the
+[reliability plan](../operations/RELIABILITY_PLAN.md) now consumes buffered Codex
+turn events, deduplicates completed visible items, retains bounded partial text
+in durable notices after handled failures, distinguishes caught preparation
+failures, and respects Telegram cooldowns in both senders. These notices never
+mark uncertain work successful or replay the provider. New offline regressions
+cover both queue paths and restart during delivery cooldown.
+
+Milestone two adds schema-22 execution identity and visible-item checkpoints for
+both Codex queue paths. Expired invocations and handled post-acceptance failures
+first recover a saved completed result or perform an exact-turn read-only lookup;
+unconfirmed work retains an indeterminate notice and eligible saved partial text,
+without productive replay. Abrupt-process and handled-disconnect tests cover
+accepted/partial/completed boundaries. Milestone three bounds stdio reads and
+propagates clean WebSocket closure without stranding its sender. Passive monitor
+output now reports aggregate outcomes, recovery counts, delivery delay and queue
+ages without provider access or task identity. Runtime rollback after the
+progress-delivery migration requires an artifact that supports schema 24.
+The read-only `indeterminate-audit` command now classifies retained uncertain work
+and its notification state without outputting content, mutating state, or authorizing
+provider replay. Schema 23 adds immutable, fixed-value operator resolutions for an
+exact indeterminate job; they preserve the original status and error evidence, and
+the audit reports resolved and unresolved work separately. Failure notices use a
+consistent what happened / saved / next action structure. Privacy, formatting,
+typing, documentation, history, and full test gates pass in the current repository
+history. Live deployment evidence remains private and is not implied by this
+repository checkpoint.
+
+Passive reliability thresholds now alert on provider work older than 15
+minutes, committed Telegram final or progress delivery older than 5 minutes,
+and unresolved indeterminate outcomes. The evaluator is isolated from the broader alert module
+and reads only aggregate SQLite telemetry. Uncertain-result notices give a
+copyable explicit continuation request while preserving the no-replay boundary.
+Schema 24 now backs a separate progress-delivery queue. In external-outbox mode,
+completed visible Codex commentary can be delivered immediately and then at
+most once per job every 120 seconds through the provider identity. Progress is
+bounded, restart-safe, deduplicated, superseded after terminal job state, and
+cannot complete or replay provider work. Final results retain delivery priority.
+The queue implementation lives outside the already large state module.
+
+Package A now closes SQLite connections whenever `HubState.open()` fails before
+transferring ownership, when a backup cannot open its destination, and when a
+pre-backup migration failure occurs after the original connection is closed.
+Focused regressions exercise those resource/error boundaries without changing
+schema 24 or migration ordering. CI and tag-release workflows now share one
+reusable Python 3.11–3.13 canonical validator; publication depends on its full
+matrix and alone has write permission. Structural tests prove the checked-in
+wiring, while a hosted Actions execution remains separate evidence.
+Review regressions also require backup handles to close before failed-output
+cleanup, preserve a destination that was never opened, and reject skipped or
+error-tolerant validation. A temporary Git fixture executes the release revision
+guard against matching and mismatched HEAD/event/annotated-tag commits.
+Read-only alert metadata lookups and execution-journal migration fixtures now
+explicitly close their SQLite connections; the latter were independently
+identified by Python 3.13 ResourceWarning allocation traces. These fixes retain
+the existing alert output, transaction semantics, and schema.
+
 ## Implemented
+
+Saved Codex CLI sessions can now be attached locally using `session attach-codex`
+with read-only preview, explicit apply and a CLI-closed assertion. An occupied
+topic additionally requires the exact previous active Codex session ID. Schema
+25 persists immutable origins and a first-return input/context boundary. The old
+Hub binding is archived without deleting its provider thread or merging history.
+External workers continue the exact thread through socket or stdio; unsupported
+Codex modes fail closed while origins remain. Model/effort changes preserve
+adopted history; explicit `/new` creates a normal new session. See
+[ADR 0022](../decisions/0022-explicit-codex-session-adoption.md) for protocol,
+failure boundaries and rollback limitations. Automated acceptance includes real
+queue/outbox flow with fictional provider/Telegram boundaries. Live continuity
+and a production rollback artifact remain unaccepted. Earlier schema-24
+checkpoints above describe their own milestones; the current target is schema 27.
 
 - Numeric project/topic identity, canonical allowlisted roots, idempotent
   routing, persistent provider sessions, bounded visible context, and writer
   leases backed by versioned SQLite migrations.
 - Additive durable provider-job, result, and Telegram-outbox schema with atomic
-  idempotent enqueue, strict per-topic FIFO leases, conservative stale-job
-  recovery, and a feature-gated embedded compatibility consumer. `dispatch_mode`
+  idempotent enqueue, strict per-topic FIFO leases, canonical-root execution
+  exclusion, conservative stale-job recovery, and a feature-gated embedded
+  compatibility consumer. `dispatch_mode`
   defaults to `inline`; `queue_runtime` defaults to `embedded`.
 - Isolated queue workers are available for locally managed Codex, OpenCode, and
   Antigravity behind `dispatch_mode: "queue"` and `queue_runtime: "external"`.
@@ -37,18 +163,77 @@ operator deployment inventory or live conversation evidence.
   conservative ambiguity recovery. Managed-socket ownership guards remain part
   of the service/recovery stage.
 - Additive SQLite runtime-health cache and bounded state APIs cover Controller,
-  sender, and provider-worker identities. Classification is derived only from
-  cached heartbeat/error/provider state and never calls a model or provider.
-  Controller, standalone Telegram sender, and external provider workers publish
-  startup, heartbeat, activity, bounded error, and success snapshots as
-  applicable. Local `status` projects every configured component from this cache,
-  and monitoring distinguishes unknown, stale, and degraded components without
-  probing their provider. General notifications retain the single configured Hub
-  Operations destination.
+  sender, monitor, and provider-worker identities. Wheel builds embed package
+  version, exact Git SHA, build time, and a clean-tree assertion; each required
+  process publishes that identity with its heartbeat. Cache-only `status`
+  deterministically reports a converged, mixed, or unknown deployment without a
+  provider/runtime probe. Monitoring emits one transition alert for a mixed or
+  unknown revision episode and re-arms only after convergence. Existing
+  heartbeat/error/provider-state classification and the single configured Hub
+  Operations destination remain unchanged.
+- A private mode-`0600` deployment manifest binds distinct active and rollback
+  wheel digests and embedded clean-tree identities, the private configuration
+  digest, the SQLite-consistent backup digest/schema, and the intended target
+  schema. Its read-only gate re-inspects both wheels and rejects promotion or
+  runtime rollback unless both immutable artifacts support the target schema;
+  it never migrates state, starts services, or contacts a provider.
+- The automated release dry-run creates its production-shaped schema-20 state,
+  configuration, backup, manifest, unpacked immutable release directories, and
+  activation pointer under one temporary root. It switches to the candidate,
+  migrates to the candidate's target schema using candidate code, verifies the
+  manifest, switches back, runs the rollback artifact against the retained target, and compares
+  queued/outbox/indeterminate rows byte-for-value. It has no service, provider,
+  Telegram, credential, or live-state capability.
+- Telegram polling and durable-send failures are classified without raw
+  exception text as bounded operation, network/API class, optional safe HTTP
+  status/retry-after, consecutive-failure count, and last-success time.
+  The first two consecutive failures remain visible without falsely degrading
+  the component; the third degrades health and emits one edge for the whole
+  episode. A successful request emits one recovery only for a degraded episode,
+  clears it, and re-arms the threshold. Direct-provider pollers use the same
+  threshold/recovery contract without becoming required deployment-health
+  components.
+  Advisory chat-action failures remain best-effort and do not block or repeat
+  provider work.
 - Central Telegram ingress with deterministic ordinary, Reply, mention, and
-  quote routing; non-target providers are not invoked merely to observe. An
+  quote routing; forwarded messages are passive durable context and bypass all
+  command/stop/provider parsing. Non-target providers are not invoked merely to observe. An
   explicit Codex mention while another provider is active uses a satellite
   Codex session and does not silently change the active provider.
+- Versioned provider-neutral Telegram interaction instructions now seed new
+  Codex, OpenCode, Antigravity, Gemini-compatible, and Hermes sessions. Codex
+  receives Contract v2 through native app-server `developerInstructions` on
+  thread start and resume; its stable contract is no longer embedded in the
+  user turn. Other providers retain the bounded prompt fallback until their
+  native channel passes separate capability and behavioral acceptance. Existing
+  sessions receive the full current contract once after rollout; its version is
+  acknowledged only after a successful provider turn, then compact reminders
+  avoid paying the full contract cost repeatedly. Both forms explicitly require
+  one focused question before drafting when missing audience, facts, format, or
+  language materially changes the requested deliverable. Provider-specific notes tune
+  presentation without changing safety authority. Local `doctor` diagnostics
+  list the acknowledged version and binding state for at most 100 current
+  active/satellite provider sessions, identified by their Hub session ID;
+  archived sessions and raw provider thread IDs are omitted. This provenance is
+  informational and does not expand the ordinary mobile `/status`. Private-chat
+  queue admission and external sender refresh use Telegram's native ephemeral
+  `Thinking…` draft; project groups retain the bounded `typing` action because
+  Bot API drafts are private-chat only. Receipt ticks remain Telegram-owned and
+  are not imitated with reactions.
+- Long provider results are split into ordered, independently valid Telegram
+  HTML messages instead of being truncated. Queue-backed delivery persists each
+  part and resumes at the first part without a recorded Telegram message ID;
+  provider execution is never repeated for a delivery retry.
+- Queue-backed project turns accept deliberate artifacts only from the exact
+  per-job staging directory. Accepted files are copied into a private Hub-owned
+  spool and bound to the durable outbox by size and SHA-256; the sender verifies
+  the snapshot again immediately before upload and removes it only after Telegram
+  acceptance. Valid files are bounded by aggregate bytes rather than an arbitrary
+  attachment count. Shared stale files, symlinks, unsafe filenames, archives, and
+  secret-like names are rejected with a bounded visible notice. Hub-owned
+  direct-message and legacy inline turns use the same isolated staging,
+  validation, and immutable spool boundary with immediate delivery. Hermes retains
+  its independent native Gateway transport rather than sharing Hub credentials.
 - Providers declared `managed_externally` retain their native admission path
   and are never enqueued into the local worker queue, preventing accepted jobs
   without an eligible consumer. All-external productive routes remain unclaimed
@@ -68,43 +253,197 @@ operator deployment inventory or live conversation evidence.
   operational timer schedules its first run relative to activation and every
   later run relative to the monitored unit, including a post-cutover start.
 - A reusable fictional subprocess fault matrix exercises Controller admission,
-  durable SQLite handoff, isolated external workers, and standalone outbox
+  durable SQLite jobs, isolated external workers, and standalone outbox
   delivery together. Parent tests terminate child actors after enqueue but
   before offset persistence, during provider invocation, and after Telegram
   acceptance but before delivery persistence. It proves redelivery
   idempotency, conservative recovery on both sides of `executing`, outbox-only
-  retry, concurrent provider isolation, responsive cached Controller status,
+  retry, same-root provider exclusion with explicit uncertainty resolution,
+  responsive cached Controller status,
   and distinct Hub/provider polling offsets without network, credentials, or
   live services.
+- Automatic inter-agent handoff and unseen-dialogue injection are disabled at
+  both routing and SQLite boundaries. Provider/model switches are deterministic
+  local state changes. The bounded topic journal remains available only through
+  the explicit advanced `/context [agent_id] [1..20]` request; it is intentionally
+  absent from the compact Telegram command menu. User-forwarded messages retain
+  their separate passive-quote semantics for the next productive turn.
+- The scoped MTProto acceptance actor has fixed checks for deterministic
+  commands, full model selection, provider connectivity, Reply provenance,
+  passive forwarded quotes, rapid multi-message bursts, and bounded
+  emergency-stop recovery. The stop check accepts either an active-turn stop
+  acknowledgement or an explicit nonzero queued-job cancellation before it
+  verifies a fresh provider response. A Codex-only Contract v2 scenario selects
+  the exact aligned Codex identity and evaluates four delivered behaviours: a bounded
+  short answer, focused clarification, ordered complex-task approach and
+  recommendation, and exact artifact attachment. Repository tests cover the
+  evaluator; each deployment still requires its own private live evidence. An
+  aligned two-provider scenario verifies that a
+  switch injects no history and `/context` retrieves only explicitly selected
+  visible history. It accepts no arbitrary prompt from configuration
+  and fails fast on the first failed scenario or when unrelated senders
+  contaminate the dedicated canary topic.
+- Hub-owned stop acknowledgements for affected work are persisted through the
+  shared Telegram outbox and delivered by the Hub identity. Idle stop replies
+  remain immediate. Release environments use the checked-in hash-locked
+  runtime dependency export, whose exact derivation from `uv.lock` is enforced
+  by the repository validation gate.
 - Codex app-server, Hermes Gateway integration, OpenCode, and Antigravity
-  adapters with isolated failure boundaries.
+  adapters with isolated failure boundaries. Contract tests pin structured CLI
+  output, safe argv/approval modes, app-server RPC shapes, Hermes hook fields,
+  and Antigravity statusline cache safety; incompatible output fails only the
+  owning adapter/worker.
+- Codex worker admission probes the multi-auth runtime proxy behind a shared
+  app-server socket and selects the official stdio fallback before `turn/start`
+  when the socket is alive but its model upstream is not. Transport transfer
+  starts a new thread with bounded visible context instead of attempting to
+  resume a thread still writer-locked by the shared server.
+- Shared Codex sockets retain `on-request` approvals for their companion client.
+  The isolated stdio fallback uses `never` inside `workspace-write` and
+  explicitly declines any unexpected server approval request, preventing a
+  headless turn from waiting forever on a companion that cannot reach it.
+- Hub-owned Codex turns carry an approval-only transport marker. A compatible
+  tlive companion still forwards their Allow/Deny requests, but suppresses
+  duplicate prompt/completion cards and reply-to-continue. Interactive Codex
+  sessions on the same shared socket retain the full Agent Session Remote UX.
 - Compact `/status`, `/accounts`, cached and paginated `/model`, confirmed
-  single-session `/new`, `/local`, and `/return` controls.
-- Private last-known-good provider catalogs with bounded callback keys and
-  stale-after-failed-refresh monitoring.
+  single-session `/new`, `/local`, and `/return` controls. Codex `/return` is an
+  idempotent local lease transition with no provider invocation, summary,
+  transcript copy, or session-ID change. OpenCode and Antigravity retain their
+  prior bounded-summary return pending separate native-resume acceptance.
+- Private last-known-good provider catalogs with bounded callback keys. The
+  deterministic monitor refreshes stale Codex, OpenCode, and Antigravity
+  catalogs every 12 hours without invoking a model; failed discovery preserves
+  the last good snapshot and raises one edge-triggered warning. With Codex
+  multi-auth omitted, the monitor never executes a leftover multi-auth binary
+  and replaces its cached matrix with the configured Codex default, preventing
+  selection of models unsupported by the active ChatGPT account transport.
 - Event-driven Codex quota rotation telemetry and provider-supplied OpenCode
-  reset telemetry.
+  reset telemetry. The isolated OpenCode worker watches only runtime-log bytes
+  appended after its owned process starts, recognizes the provider's exact
+  usage-limit/reset phrase even when the CLI omits HTTP status, terminates a CLI
+  that otherwise remains alive, and releases topic FIFO with a cached quota
+  failure instead of waiting for the general turn timeout.
+- Codex quota monitoring reads passive account/cache status outside the Controller,
+  warns once when a fresh window first reaches 5% remaining, re-arms only after
+  confirmed recovery, and reports provider-driven or quota-driven account
+  transitions with the replacement account's fresh status. Ordinary account
+  selection changes are not mislabeled as quota rotation.
+- Operational notifications are edge-triggered: unchanged deployment, catalog,
+  provider, and account conditions are sent once and re-arm only after recovery.
+  A configured Hub bot owns these service messages, including Codex account
+  rotation events. Provider bot identities are never used for Hub-owned
+  operational notifications, and an operations topic without `hub_bot` is
+  rejected during configuration loading. Automatic Codex session context-size advice is
+  disabled; compaction remains user initiated. An intentionally unconfigured
+  optional Codex account pool is silent rather than reported as unavailable.
+  Exhausted inactive accounts remain status data after a successful rotation;
+  they are not reported as authentication failures while a replacement is ready.
+  Explicit token-invalidation markers from the supported redacted Codex
+  multi-auth report alert independently even when another account is ready.
+  Doctor also checks a configured loopback Codex provider proxy without probing
+  remote provider URLs or disclosing the configured endpoint; monitoring emits
+  one alert per unreachable episode and re-arms after recovery.
 - Durable masked Codex account snapshots for provider-free Controller status,
   plus private masked account hints and honest unknown-limit display for other
-  providers.
+  providers. Cached quota and live worker availability remain separate signals:
+  `/status` and `/accounts` surface a known provider/network failure in red even
+  when a telemetry cache still reports unused quota; a newly started worker
+  remains yellow/unknown until a provider turn proves availability. Stale quota
+  values remain labeled as cached and cannot trigger low-quota alerts.
+- Provider replies share one compact Telegram identity line: session and agent
+  are not duplicated, model and effort use one label, and runtime implementation
+  details are hidden. Available context and quota telemetry uses short follow-up
+  lines with mobile-friendly reset timestamps; unavailable fields are omitted.
+- Provider failure notices use the same durable Telegram outbox without being
+  misclassified as successful model results. Antigravity consumes only a
+  per-turn private diagnostic log, recognizes the provider's unsupported-network
+  precondition without exposing raw logs, and reports the safe cause promptly;
+  unknown post-invocation failures remain non-retryable and visibly uncertain.
+  All generic uncertain notices state what happened, what Hub saved, and the next
+  safe action.
 - Declarative Telegram command-menu synchronization.
+- Durable bounded Telegram burst collection keeps an unaddressed continuation
+  with the first part's provider, including a satellite provider; socket-backed
+  Codex same-turn steering, deterministic queued follow-up for runtimes without
+  steering, and exact-utterance emergency stop with provider/process
+  interruption are also implemented.
+- Schema version 21 bounds diagnostic `runtime_events` to 30 days and the newest
+  10,000 rows, pruning atomically with each insertion and independently of
+  current health, alert state, and provider work. Version 20 added bounded
+  Telegram transport state to runtime-health snapshots; version 19 added
+  immutable release identity; version 15 added durable per-message Telegram
+  outbox parts; and version 14 repairs early version-13 deployments that had
+  durable input membership but had not yet created stop-request and
+  turn-absorption tables. Upgrades create a private SQLite-consistent backup
+  first. The full migration and `user_version` update share one immediate
+  transaction, so a fault rolls back in place without overwriting concurrent
+  commits from an older backup. A temporary production-shaped rehearsal covers
+  schema 20→21, concurrent access, injected DDL failure, backup rollback,
+  queued/outbox rows, and preserved indeterminate work.
+- Optional read-only Antigravity structured status/quota cache integration for
+  compact `/status` and `/accounts`; private-file and freshness checks fail to
+  unknown without invoking a model, and `doctor` reports each cache as fresh,
+  stale, missing, malformed, oversized, or permission-unsafe.
+- Recovery diagnostics accept the independently managed Hermes Gateway's fresh
+  local heartbeat and bounded tlive status markers as liveness evidence while
+  reporting supervisor state separately as active, confirmed inactive, or
+  unavailable. A failed supervisor-bus probe is never labeled as an inactive
+  unit, and independently healthy runtime evidence remains visible alongside
+  it. Token-bearing tlive dashboard URLs are neither returned nor logged by the
+  probe.
 - Sandboxed Antigravity `accept-edits` mode; dangerous permission bypass is
   rejected.
 - Optional `codex-multi-auth` with official Codex stdio fallback.
+- Optional shared-socket boot integration orders tlive after the rotating Codex
+  app-server and verifies an accepting Unix listener, rejecting stale socket
+  inodes left by abrupt host or WSL shutdown.
+- The resident multi-auth app-server drop-in delegates proxy-helper lifetime to
+  the systemd cgroup instead of CLI-oriented detached and maximum-lifetime
+  reapers. Runtime-proxy monitoring remains independent and never restarts a
+  shared app-server underneath an active Codex or tlive session.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
+- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-24
+  immutable-deployment triage guide, source revision, timestamp, and content
+  hashes into a neutral local store for the independent Hermes channel. It
+  carries no private deployment inventory and creates no service dependency.
+- Canonical validation and CI audit package version, the newest changelog
+  release, project-status release, and local `vX.Y.Z` tags for contradictions.
+  Missing release tags are reported as non-mutating debt; Git SHA reported by
+  immutable runtime artifacts remains the deployment identity.
 - Privacy gate that rejects deployment identities, raw histories/session dumps,
   owner-specific paths, Telegram secrets/identifiers, and local runtime files.
+- Documentation validation inventories all 91 normative product requirement IDs,
+  protects all 20 numbered baseline sections by content hash, and checks local
+  Markdown files/anchors repository-wide. The product baseline is split into a
+  short normative index and five stable capability modules; the guarded move
+  changed no numbered normative section content.
 
 ## Acceptance still required per deployment
 
+- Summary-free same-session Codex return from ADR 0011 has automated coverage
+  for active-work rejection, local-writer Telegram rejection, duplicate return,
+  restart persistence, absence of a model call, and same-session continuation.
+  Each deployed revision still requires its own Telegram → native CLI →
+  Telegram acceptance. Other providers are outside this acceptance claim.
 - Dedicated-user bounded Telegram baseline after deployment-local MTProto
-  authorization; model/effort selection still needs owner-driven click-through.
+  authorization. Repository checks define the safe scenarios; each deployment
+  must still produce its own private live evidence.
 - Natural or controlled Codex quota transition.
 - Telegram privacy/admin policy, restart continuity, and reply provenance after
   any material provider or routing upgrade.
 
 Live acceptance results belong in private operational records, not this public
 repository.
+
+## Planned recovery exercise
+
+- The separate off-machine WSL recovery plan defines encrypted versioned
+  application snapshots, periodic cold exports stored away from the physical
+  source machine, exact recovery-set inventory, network/service isolation,
+  preservation of all indeterminate work, and measurable cold-restore gates.
+  Backup automation, WSL shutdown/export, and the first private timed drill were
+  intentionally not executed during v0.7.0 repository preparation.
 
 ## Deferred
 

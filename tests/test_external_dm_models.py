@@ -14,8 +14,10 @@ from hermes_codex_router.hub_config import (
     ProjectBinding,
     TerminalSettings,
 )
+from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.provider_catalog_cache import CachedProviderModel, CatalogSnapshot
 from hermes_codex_router.state import HubState
+from hermes_codex_router.telegram import TelegramError
 
 
 class FakeTelegram:
@@ -48,6 +50,41 @@ def callbacks(markup: object) -> list[str]:
 
 
 class ExternalDirectModelTests(unittest.TestCase):
+    def test_direct_poller_transport_threshold_recovers_and_rearms(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = ExternalAgentService.__new__(ExternalAgentService)
+            service.agent = cast(Any, type("Agent", (), {"agent_id": "opencode"})())
+            service.state = HubState.open(Path(directory) / "direct.db")
+            service._transport_consecutive_failures = 0
+            service._transport_reported_signature = None
+            service._transport_success_at = None
+            error = TelegramError("safe failure", operation="poll", failure_class="network_dns")
+            try:
+                service._record_telegram_poll_failure(error)
+                service._record_telegram_poll_failure(error)
+                self.assertEqual(service.state.status_snapshot()["runtime_events"], [])
+                service._record_telegram_poll_failure(error)
+                service._record_telegram_poll_success()
+                for _ in range(3):
+                    service._record_telegram_poll_failure(error)
+                service._record_telegram_poll_success()
+                events = cast(
+                    list[dict[str, object]],
+                    service.state.status_snapshot()["runtime_events"],
+                )
+                self.assertEqual(
+                    [event["code"] for event in reversed(events)],
+                    [
+                        "telegram_transport_error",
+                        "telegram_recovered",
+                        "telegram_transport_error",
+                        "telegram_recovered",
+                    ],
+                )
+                self.assertIn("consecutive_failures=3", str(events[0]["detail"]))
+            finally:
+                service.state.close()
+
     def test_model_and_effort_are_applied_in_direct_chat(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
@@ -96,6 +133,7 @@ class ExternalDirectModelTests(unittest.TestCase):
             service.state_path = base / "opencode-dm.db"
             service.state = HubState.open(service.state_path)
             service.telegram = cast(Any, FakeTelegram())
+            service.registry = ProjectRegistry(1, (base,), (Project("hub", "Hub", "Hub", base),))
 
             message = {
                 "update_id": 1,
@@ -154,6 +192,89 @@ class ExternalDirectModelTests(unittest.TestCase):
                 (active.model, active.effort),
                 ("opencode-go/example-model", "medium"),
             )
+            service.state.close()
+
+    def test_dmrefresh_refreshes_catalog_and_highlights_new_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(42,),
+                registry_path=base / "projects.json",
+                state_path=base / "state.db",
+                codex_socket_path=base / "codex.sock",
+                manage_codex_server=False,
+                terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+                projects=(ProjectBinding("hub", -1001234567890),),
+                agents=(
+                    AgentDefinition(
+                        "antigravity",
+                        "Antigravity",
+                        "project_antigravity_bot",
+                        "antigravity",
+                        None,
+                        True,
+                        False,
+                        "provider-selected",
+                        "high",
+                    ),
+                ),
+                direct_message_project_id="hub",
+            )
+            now = datetime.now(timezone.utc)
+            snapshot = CatalogSnapshot(
+                "antigravity",
+                (
+                    CachedProviderModel(
+                        "gemini-3.8-flash",
+                        "Gemini 3.8 Flash",
+                        ("high", "medium"),
+                        "abcdef123456",
+                        first_seen_at=now,
+                    ),
+                ),
+                now,
+                "test",
+                None,
+            )
+            service = ExternalAgentService.__new__(ExternalAgentService)
+            service.config = config
+            service.agent = config.agents[0]
+            service.direct_messages_only = True
+            service.state_path = base / "antigravity-dm.db"
+            service.state = HubState.open(service.state_path)
+            telegram = FakeTelegram()
+            service.telegram = cast(Any, telegram)
+            service.registry = ProjectRegistry(1, (base,), (Project("hub", "Hub", "Hub", base),))
+
+            with patch.object(ExternalAgentService, "_catalog", return_value=snapshot):
+                self.assertTrue(
+                    service.handle_update(
+                        {
+                            "update_id": 1,
+                            "callback_query": {
+                                "id": "refresh_cb",
+                                "from": {"id": 42},
+                                "data": "dmrefresh:0",
+                                "message": {
+                                    "message_id": 10,
+                                    "chat": {"id": 42, "type": "private"},
+                                },
+                            },
+                        }
+                    )
+                )
+            markup = telegram.markups[-1]
+            assert isinstance(markup, dict)
+            buttons = [
+                b["text"]
+                for row in markup.get("inline_keyboard", [])
+                if isinstance(row, list)
+                for b in row
+                if isinstance(b, dict) and "text" in b
+            ]
+            self.assertIn("🆕 Gemini 3.8 Flash", buttons)
+            self.assertIn("🔄 Обновить", buttons)
             service.state.close()
 
 

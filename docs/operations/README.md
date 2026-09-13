@@ -9,25 +9,60 @@ Operational truth is split by purpose:
   [`README.md`](../../README.md).
 - Independent Hermes/tlive health and recovery:
   [`RECOVERY_PLANE.ru.md`](../RECOVERY_PLANE.ru.md).
+- Self-contained Hub recovery knowledge published for an independent Hermes
+  channel: [`../../recovery/agents-projects-hub/RUNBOOK.md`](../../recovery/agents-projects-hub/RUNBOOK.md).
+  Validate an installed copy with `scripts/verify-recovery-capsule.py` before
+  using it; the owner project alone publishes new generations.
+- Reciprocal ownership, freshness, and Hermes recovery:
+  [`RECOVERY_CAPSULES.md`](RECOVERY_CAPSULES.md).
+- Off-machine WSL backup and isolated cold-restore drill plan:
+  [`WSL_OFF_MACHINE_RECOVERY.md`](WSL_OFF_MACHINE_RECOVERY.md).
 - Threat response and fail-closed behavior:
   [`SECURITY.ru.md`](../SECURITY.ru.md) and [`SECURITY.md`](../../SECURITY.md).
 - Planned post-baseline sequence: [`ROADMAP.ru.md`](../ROADMAP.ru.md).
+- Engineering debt and exact evidence rules:
+  [`ENGINEERING_BASELINE.md`](ENGINEERING_BASELINE.md).
 - Complete validation gate: `python scripts/validate.py`.
+- Artifact provenance: `agents-projects-hub release-info` succeeds only for a
+  wheel with complete clean-tree release identity; run it before promotion.
+- Release/version/tag truth and promotion order:
+  [`RELEASE_METADATA.md`](RELEASE_METADATA.md). The canonical gate fails
+  contradictions and reports missing tags as visible debt without creating or
+  rewriting them.
+- Immutable artifact manifest and schema-compatibility gate:
+  [`IMMUTABLE_RELEASES.md`](IMMUTABLE_RELEASES.md).
 - Read-only deployment diagnostics: `agents-projects-hub doctor HUB_CONFIG` and
   `agents-projects-hub monitor HUB_CONFIG`.
 - Cache-only status and component health: `agents-projects-hub status HUB_CONFIG` reports
-  the expected Controller, the standalone sender when configured, and every
-  configured external provider worker as `healthy`, `degraded`, `stale`, or
-  `unknown`. This projection reads SQLite only and never invokes a provider or
-  model or optional account helper. Account/provider probes belong to their
-  dedicated command and monitoring paths. Monitoring uses the same projection; general notifications still go
-  only to the explicitly configured Hub Operations topic.
+  the expected Controller and monitor, the standalone sender when configured,
+  and every configured external provider worker as `healthy`, `degraded`,
+  `stale`, or `unknown`. Their bounded release fields produce one deterministic
+  deployment status: `converged`, `mixed`, or `unknown`. Only `converged` names
+  one clean package version, exact Git SHA, and build time. This projection reads
+  SQLite only and never invokes a provider, model, or optional account helper.
+  Monitoring uses the same projection and sends one transition alert for a
+  mixed/unknown episode to the configured Hub Operations topic, re-arming only
+  after convergence.
+- Telegram transport diagnosis is cache-first. Controller and standalone-sender
+  health expose only `transport_operation`, `transport_failure_class`, optional
+  safe status/retry-after, `transport_consecutive_failures`, and
+  `transport_success_at`. `poll` identifies update ingress;
+  `send_message`/`send_document` identify durable outbox delivery. Repeated
+  identical failures create one `telegram_transport_error` event and one
+  `telegram_recovered` event after success. Direct-provider pollers publish the
+  same bounded events in their isolated state database. Raw exception text,
+  token-bearing URLs, payloads, local paths, and chat identifiers are
+  intentionally unavailable; do not reconstruct them in shared logs.
 - External queue delivery: run one `agents-projects-hub sender HUB_CONFIG`
   alongside the selected provider workers, then set `outbox_runtime` to
   `external`. The default `controller` value preserves the previous deployment
   until that sender is ready. In external mode, the sender is the only process
   that delivers shared project-group outbox rows for all locally managed queue
   providers, including providers whose execution remains embedded.
+  Attachment payloads are private immutable files under `artifact-spool` beside
+  the configured state database. Do not relocate, edit, or clean a queued spool
+  file manually; successful Telegram delivery removes it. Investigate retained
+  files together with pending or failed outbox rows before reclaiming space.
 - Optional Hub ingress: when `hub_bot` is configured, `agents-projects-hub
   controller HUB_CONFIG` polls project groups as Hub and stores its Telegram offset
   separately from Codex. Controller startup reads only that ingress token;
@@ -49,6 +84,11 @@ Operational truth is split by purpose:
   provider sessions outside Git with restrictive permissions.
 - Repair only the failed component. Do not make Hub, Hermes, tlive, or optional
   multi-auth mandatory dependencies of each other.
+- A systemd-managed multi-auth app-server owns its runtime proxy for the whole
+  unit lifetime. Keep the installed resident-helper lifetime overrides; if the
+  proxy is already unavailable, install/reload first and coordinate a later
+  restart from an independent recovery channel rather than disconnecting an
+  active Codex/tlive session.
 - Back up SQLite consistently before migration and verify recovery artifacts.
 - Do not restart services, alter bot/privacy settings, or run live Telegram E2E
   as part of a documentation-only task.

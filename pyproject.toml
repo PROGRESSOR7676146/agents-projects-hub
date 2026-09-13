@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agents-projects-hub"
-version = "0.5.1"
+version = "0.7.0"
 description = "Privacy-first orchestration hub for persistent agent sessions in Telegram project topics"
 readme = "README.md"
 license = "MIT"
@@ -24,6 +24,8 @@ e2e = [
   "Telethon>=1.44,<2",
 ]
 dev = [
+  "PyYAML>=6,<7",
+  "Telethon>=1.44,<2",
   "pyright>=1.1.400,<2",
   "ruff>=0.12,<1",
 ]
@@ -31,6 +33,7 @@ dev = [
 [project.scripts]
 hcr = "hermes_codex_router.cli:main"
 agents-projects-hub = "hermes_codex_router.cli:main"
+agents-projects-hub-wait-socket = "hermes_codex_router.socket_ready:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

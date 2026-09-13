@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import html
+import os
 import subprocess
 import time
+import uuid
 from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import Any, Callable
 
-from .alerts import OperationalAlert, evaluate_operational_alerts
-from .codex_accounts import encode_codex_pool_snapshot, read_codex_pool_status
+from .alerts import DEFAULT_LOW_QUOTA_PERCENT, OperationalAlert, evaluate_operational_alerts
+from .catalog_refresh import refresh_provider_catalogs
+from .codex_accounts import CodexPoolStatus, encode_codex_pool_snapshot, read_codex_pool_status
 from .diagnostics import run_doctor
 from .hermes_health import (
     HermesBotApiHealth,
@@ -19,14 +23,15 @@ from .hermes_health import (
     restart_hermes_gateway,
     sync_hermes_group_policy,
 )
-from .hub_config import HubConfig, OperationalAlertSettings
+from .hub_config import HubConfig, OperationalAlertSettings, read_telegram_token
 from .provider_catalog_cache import ProviderCatalogCache
 from .provider_events import (
     codex_rotation_targets,
+    detect_codex_rotation,
     format_codex_rotation_event,
     read_codex_runtime_snapshot,
 )
-from .runtime_health import project_runtime_health
+from .runtime_health import MONITOR_INSTANCE_ID, project_runtime_health
 from .state import HubState
 from .telegram import TelegramBotApi, TelegramError
 
@@ -42,6 +47,44 @@ def _destination(settings: OperationalAlertSettings) -> tuple[int, int] | None:
     if settings.telegram_chat_id is None or settings.telegram_thread_id is None:
         return None
     return settings.telegram_chat_id, settings.telegram_thread_id
+
+
+def _operational_telegram(config: HubConfig) -> tuple[TelegramBotApi, str]:
+    """Open the controller identity used for Hub-owned operational messages."""
+    if config.hub_bot is None:
+        raise RuntimeError("Hub bot is required for operational notifications")
+    identity = "hub"
+    token_file = config.hub_bot.token_file
+    return TelegramBotApi(read_telegram_token(token_file, identity)), identity
+
+
+def _claim_operational_alert(
+    state: HubState, alert: OperationalAlert, *, cooldown_seconds: int
+) -> bool:
+    del cooldown_seconds
+    return state.claim_alert_transition(f"{alert.key}:operations")
+
+
+def _release_recovered_quota_alerts(state: HubState, pool: CodexPoolStatus) -> None:
+    for account in pool.accounts:
+        if account.quota_stale:
+            continue
+        windows = (
+            ("5h-low", account.five_hour_remaining),
+            ("week-low", account.weekly_remaining),
+        )
+        for suffix, remaining in windows:
+            if remaining is not None and remaining > DEFAULT_LOW_QUOTA_PERCENT:
+                state.release_alert_delivery(f"codex:account:{account.index}:{suffix}:operations")
+
+
+def _release_resolved_operational_alerts(
+    state: HubState, alerts: tuple[OperationalAlert, ...]
+) -> None:
+    state.reconcile_alert_transitions(
+        active_keys=tuple(f"{alert.key}:operations" for alert in alerts),
+        suffix=":operations",
+    )
 
 
 def _send_hermes(
@@ -107,8 +150,20 @@ def run_monitor_once(
     cooldown_seconds: int = 60 * 60,
 ) -> dict[str, object]:
     state = HubState.open(config.state_path)
+    monitor_started = datetime.now(timezone.utc)
+    monitor_marker = uuid.uuid4().hex
+    monitor_completed = False
+    state.upsert_runtime_health(
+        component="monitor",
+        instance_id=MONITOR_INSTANCE_ID,
+        pid=os.getpid(),
+        process_start_marker=monitor_marker,
+        started_at=monitor_started,
+        heartbeat_at=monitor_started,
+    )
     try:
         snapshot = state.status_snapshot()
+        catalog_refresh = refresh_provider_catalogs(config)
         hermes_health = _hermes_health(config)
         repairs: list[str] = []
         if repair and hermes_health is not None:
@@ -157,6 +212,8 @@ def run_monitor_once(
                     else "codex-multi-auth"
                 ),
                 identity_hints=config.codex_account_hints,
+                live=False,
+                timezone_name="Europe/Moscow",
             )
             if config.codex_multi_auth_dir is not None
             else None
@@ -176,19 +233,46 @@ def run_monitor_once(
                 or str(previous_pool_snapshot["detail"]) != pool_snapshot
             ):
                 state.record_runtime_event("codex", "info", "account_pool_snapshot", pool_snapshot)
-        provider_limit_count = 0
+        rotation_observation = None
         runtime_snapshot = (
             read_codex_runtime_snapshot(config.codex_multi_auth_dir)
             if config.codex_multi_auth_dir is not None
             else None
         )
         if runtime_snapshot is not None:
-            current_429 = runtime_snapshot.rate_limited_responses
             previous_429 = state.runtime_counter("codex:provider-429")
-            if previous_429 is None:
-                state.set_runtime_counter("codex:provider-429", current_429)
-            elif current_429 > previous_429:
-                provider_limit_count = current_429 - previous_429
+            previous_rotations = state.runtime_counter("codex:account-rotations")
+            previous_account = state.runtime_counter("codex:active-account")
+            if previous_429 is None or previous_rotations is None or previous_account is None:
+                state.replace_runtime_counter(
+                    "codex:provider-429", runtime_snapshot.rate_limited_responses
+                )
+                state.replace_runtime_counter(
+                    "codex:account-rotations", runtime_snapshot.account_rotations
+                )
+                if runtime_snapshot.active_account_index is not None:
+                    state.replace_runtime_counter(
+                        "codex:active-account", runtime_snapshot.active_account_index
+                    )
+            else:
+                rotation_observation = detect_codex_rotation(
+                    runtime_snapshot,
+                    pool=pool,
+                    previous_rate_limits=previous_429,
+                    previous_rotations=previous_rotations,
+                    previous_account_index=previous_account,
+                )
+                if rotation_observation is None:
+                    state.replace_runtime_counter(
+                        "codex:provider-429", runtime_snapshot.rate_limited_responses
+                    )
+                    state.replace_runtime_counter(
+                        "codex:account-rotations", runtime_snapshot.account_rotations
+                    )
+                    if runtime_snapshot.active_account_index is not None:
+                        state.replace_runtime_counter(
+                            "codex:active-account", runtime_snapshot.active_account_index
+                        )
         doctor = run_doctor(config)
         raw_checks = doctor.get("checks")
         doctor_checks = raw_checks if isinstance(raw_checks, list) else []
@@ -217,6 +301,14 @@ def run_monitor_once(
             telegram_access=_telegram_access(config),
             hermes_telegram=hermes_telegram,
             runtime_health=project_runtime_health(state, config),
+            codex_config_proxy_ok=next(
+                (
+                    bool(check.get("ok"))
+                    for check in doctor_checks
+                    if isinstance(check, dict) and check.get("name") == "codex_config_proxy"
+                ),
+                None,
+            ),
         )
         proxy_check = next(
             (
@@ -250,15 +342,12 @@ def run_monitor_once(
             for agent_id in stale_catalogs
         )
         delivered: list[str] = []
-        if notify and provider_limit_count:
+        if notify and rotation_observation is not None:
             destination = _destination(config.operational_alerts)
             targets = codex_rotation_targets(state, destination)
             if targets:
-                agent = config.require_agent("codex")
-                if agent.token_file is None:
-                    raise RuntimeError("managed Codex bot token is unavailable")
-                telegram = TelegramBotApi(agent.token_file.read_text(encoding="utf-8").strip())
-                event_text = format_codex_rotation_event(pool, provider_limit_count)
+                telegram, sender_identity = _operational_telegram(config)
+                event_text = format_codex_rotation_event(pool, rotation_observation)
                 operations_sent = False
                 for target in targets:
                     try:
@@ -274,35 +363,40 @@ def run_monitor_once(
                             f"telegram:{target[0]}:{target[1]}",
                             event_text,
                         )
-                        delivered.append("codex_provider_limit:hermes-fallback")
+                        delivered.append("codex_rotation:hermes-fallback")
                         operations_sent = True
                     else:
-                        delivered.append("codex_provider_limit:codex")
+                        delivered.append(f"codex_rotation:{sender_identity}")
                         if target == destination:
                             operations_sent = True
                 if operations_sent or destination is None:
                     assert runtime_snapshot is not None
-                    state.set_runtime_counter(
+                    state.replace_runtime_counter(
                         "codex:provider-429", runtime_snapshot.rate_limited_responses
                     )
+                    state.replace_runtime_counter(
+                        "codex:account-rotations", runtime_snapshot.account_rotations
+                    )
+                    if runtime_snapshot.active_account_index is not None:
+                        state.replace_runtime_counter(
+                            "codex:active-account", runtime_snapshot.active_account_index
+                        )
+        if notify:
+            _release_recovered_quota_alerts(state, pool)
+            _release_resolved_operational_alerts(state, alerts)
         if notify and alerts:
             destination = _destination(config.operational_alerts)
             operations_due = tuple(
                 alert
                 for alert in alerts
                 if destination is not None
-                and state.claim_alert_delivery(
-                    f"{alert.key}:operations", cooldown_seconds=cooldown_seconds
-                )
+                and _claim_operational_alert(state, alert, cooldown_seconds=cooldown_seconds)
             )
             if operations_due and destination is not None:
                 chat_id, thread_id = destination
                 rendered = _render(operations_due)
                 try:
-                    agent = config.require_agent("codex")
-                    if agent.token_file is None:
-                        raise RuntimeError("managed Codex bot token is unavailable")
-                    telegram = TelegramBotApi(agent.token_file.read_text(encoding="utf-8").strip())
+                    telegram, sender_identity = _operational_telegram(config)
                     telegram.send_html(chat_id, thread_id, rendered[:4090])
                 except Exception:
                     try:
@@ -320,12 +414,39 @@ def run_monitor_once(
                             f"{alert.code}:hermes-fallback" for alert in operations_due
                         )
                 else:
-                    delivered.extend(f"{alert.code}:codex" for alert in operations_due)
-        return {
+                    delivered.extend(f"{alert.code}:{sender_identity}" for alert in operations_due)
+        result = {
             "ok": not any(alert.severity == "error" for alert in alerts),
             "alerts": [asdict(alert) for alert in alerts],
             "delivered": delivered,
             "repairs": repairs,
+            "catalog_refresh": asdict(catalog_refresh),
+            "reliability": snapshot["reliability"],
         }
+        completed_at = datetime.now(timezone.utc)
+        state.upsert_runtime_health(
+            component="monitor",
+            instance_id=MONITOR_INSTANCE_ID,
+            pid=os.getpid(),
+            process_start_marker=monitor_marker,
+            started_at=monitor_started,
+            heartbeat_at=completed_at,
+            success_at=completed_at,
+        )
+        monitor_completed = True
+        return result
     finally:
+        if not monitor_completed:
+            try:
+                state.upsert_runtime_health(
+                    component="monitor",
+                    instance_id=MONITOR_INSTANCE_ID,
+                    pid=os.getpid(),
+                    process_start_marker=monitor_marker,
+                    started_at=monitor_started,
+                    heartbeat_at=datetime.now(timezone.utc),
+                    error_code="monitor_cycle_error",
+                )
+            except Exception:
+                pass
         state.close()

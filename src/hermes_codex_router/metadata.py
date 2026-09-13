@@ -6,17 +6,100 @@ from zoneinfo import ZoneInfo
 
 from .codex_appserver import LimitWindow, RateLimits, TurnResult
 
+_ABSENT_DETAIL_VALUES = {"", "unavailable", "unknown", "none", "n/a"}
+_MONTH_LABELS = (
+    "",
+    "Jan.",
+    "Feb.",
+    "Mar.",
+    "Apr.",
+    "May",
+    "June",
+    "July",
+    "Aug.",
+    "Sept.",
+    "Oct.",
+    "Nov.",
+    "Dec.",
+)
+
+
+def _available_detail(value: str | None) -> bool:
+    return value is not None and value.strip().casefold() not in _ABSENT_DETAIL_VALUES
+
+
+def _compact_details(details: dict[str, str]) -> str:
+    session = details.get("Session", "").strip()
+    agent = details.get("Agent", "").strip()
+    model = details.get("Model", "").strip()
+    effort = details.get("Effort", "").strip()
+
+    # Older callers included the agent in both fields.  Accept that shape while
+    # keeping the user-facing footer free of duplicate information.
+    if session and agent and session.endswith(f" · {agent}"):
+        session = session[: -len(f" · {agent}")]
+
+    identity = f"Session: {session}" if _available_detail(session) else ""
+    if _available_detail(agent):
+        identity += f" / Agent: {agent}" if identity else f"Agent: {agent}"
+    if _available_detail(model):
+        model_label = model
+        if _available_detail(effort):
+            model_label = f"{model_label}-{effort.casefold()}"
+        identity += f" · {model_label}" if identity else model_label
+
+    telemetry: list[str] = []
+    context = details.get("Context remaining")
+    if _available_detail(context):
+        telemetry.append(f"Context remaining: {context}")
+
+    for remaining_key, reset_key, label in (
+        ("5-hour remaining", "5-hour reset", "5-hour remaining"),
+        ("Weekly remaining", "Weekly reset", "Weekly remaining"),
+    ):
+        remaining = details.get(remaining_key)
+        reset = details.get(reset_key)
+        if not _available_detail(remaining) and not _available_detail(reset):
+            continue
+        value = remaining.strip() if _available_detail(remaining) and remaining else ""
+        if _available_detail(reset) and reset:
+            value = f"{value}, reset: {reset.strip()}" if value else f"reset: {reset.strip()}"
+        telemetry.append(f"{label}: {value}")
+
+    consumed = {
+        "Session",
+        "Agent",
+        "Runtime",
+        "Model",
+        "Effort",
+        "Context remaining",
+        "5-hour remaining",
+        "5-hour reset",
+        "Weekly remaining",
+        "Weekly reset",
+    }
+    for key, value in details.items():
+        if key in consumed or not _available_detail(value):
+            continue
+        label = "Usage" if key == "Usage windows" else key
+        telemetry.append(f"{label}: {value.strip()}")
+
+    return "\n".join(part for part in (identity, *telemetry) if part)
+
 
 def format_agent_response(answer: str, details: dict[str, str]) -> str:
     visible = html.escape(answer or "The agent completed without a visible text response.")
-    block = "\n".join(f"{key}: {value}" for key, value in details.items())
+    block = _compact_details(details)
+    if not block:
+        return visible
     return f"{visible}\n\n<blockquote expandable>{html.escape(block)}</blockquote>"
 
 
 def _reset_text(window: LimitWindow | None, timezone: ZoneInfo) -> str:
     if window is None or window.resets_at is None:
         return "unavailable"
-    return datetime.fromtimestamp(window.resets_at, timezone).strftime("%Y-%m-%d %H:%M %Z")
+    reset = datetime.fromtimestamp(window.resets_at, timezone)
+    return f"{_MONTH_LABELS[reset.month]} {reset.day}, {reset:%H:%M}"
 
 
 def _remaining_text(window: LimitWindow | None) -> str:

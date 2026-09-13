@@ -5,17 +5,103 @@ Roadmap содержит только переносимые продуктов�
 
 ## Ближайшие задачи
 
-1. Завершить owner-driven E2E для выбора provider/model/effort и естественного
-   исчерпания лимита Codex.
-2. Сохранять стабильные contract tests для Codex, Hermes, OpenCode и
-   Antigravity при обновлении их CLI/API.
+### Активный checkpoint: repository roadmap завершён
+
+Запланированная безопасная repository-only последовательность выполнена. Перед
+следующим live/deployment checkpoint требуется отдельное разрешение и свежая
+проверка приватного operational handoff; этот roadmap не подразумевает rollout.
+
+### Telegram Interaction Contract v2
+
+Работа выполняется по
+[ADR 0013](decisions/0013-native-provider-interaction-instructions.md).
+Контракт v2 становится основной продуктовой функцией, а не текстовой
+подсказкой внутри пользовательского сообщения:
+
+- Codex получает контракт через штатный `developerInstructions` при
+  `thread/start` и `thread/resume`;
+- OpenCode и Antigravity получают channel-specific agent/profile там, где
+  runtime предоставляет поддерживаемый интерфейс, с безопасным prompt fallback
+  только при отсутствии такого интерфейса;
+- для сложной задачи агент кратко сообщает понимание и подход, после чего
+  продолжает без искусственной задержки; Hub предлагает Start/Clarify/Cancel
+  только когда действительно требуется решение пользователя, а простые
+  однозначные задачи выполняются сразу;
+- транспорт отдельно владеет semantic message splitting, copyable blocks,
+  inline choices, progress/activity и прикреплением артефактов;
+- E2E behavioural eval проверяет фактические ответы каждого provider на
+  короткие, неоднозначные, длительные и artifact-producing задачи. Проверки
+  наличия строки контракта в prompt недостаточно.
+
+Codex repository wiring, bounded behavioural runner и локальная doctor-
+provenance принятой версии по текущим provider sessions реализованы. Обычный
+мобильный `/status` не расширен. Для принятия Codex v2 всё ещё требуется
+отдельный разрешённый deployment-local прогон; проверка native channels других
+providers остаётся вне текущего scope.
+
+### Последующие задачи
+
+1. Завершить E2E естественного исчерпания лимита Codex; выбор
+   provider/model/effort уже покрыт выделенным Telegram acceptance actor.
+2. Поддерживать уже добавленные contract tests при обновлении Codex app-server,
+   Hermes Gateway hook, OpenCode/Antigravity CLI и Antigravity statusline.
 3. Реализовать автоматическую ротацию Antigravity только после появления
    поддерживаемого headless account-pool интерфейса.
 4. Расширять terminal backends только argv-безопасными адаптерами.
+5. Реализовать команду `/steer`: передача агенту накопленных сообщений пользователя
+   с приостановкой/прерыванием выполнения предыдущих инструкций.
+
+## Резервирование и восстановление WSL
+
+Подробный исполнимый план, recovery sets, stop conditions и критерии cold drill
+вынесены в [отдельный runbook](operations/WSL_OFF_MACHINE_RECOVERY.md). Ни
+backup automation, ни работа с приватными данными, ни остановка/экспорт WSL в
+рамках подготовки v0.7.0 не выполнялись.
+
+1. Считать весь WSL-дистрибутив критичными данными: исходники, Git worktrees,
+   provider session stores, Hub SQLite, OAuth/configuration state, Hermes/tlive,
+   локальные инструменты и пользовательские файлы не должны оставаться в одном
+   экземпляре на системном диске.
+2. Сделать два независимых слоя:
+   - частый зашифрованный инкрементальный backup критичных каталогов во внешнее
+     off-machine хранилище с retention и проверкой целостности;
+   - периодический полный cold image/export WSL-дистрибутива после согласованной
+     остановки WSL, также вне физического диска ноутбука.
+3. Не считать синхронизацию, backup на том же SSD или единственный cloud mirror
+   резервной копией. Ключ восстановления хранить отдельно от backup и ноутбука.
+4. Автоматизировать расписание, bounded logs, уведомление о первом сбое и
+   контроль возраста последней успешной копии без постоянного спама.
+5. Документировать bare-machine restore и регулярно выполнять тестовое
+   восстановление в отдельный WSL-дистрибутив с проверкой Hub, session UUID,
+   секретов, Git-состояния и provider logins. Backup без restore drill не
+   считается принятым.
+
+## Недавно завершено
+
+- Product requirements разделены на короткий normative index и пять стабильных
+  capability modules. Manifest и canonical gate подтверждают текущие 91 ID,
+  hashes 20 секций и Markdown links/anchors.
+- Canonical gate проверяет согласованность package version, changelog, project
+  status и Git tags. Отсутствующие tags видны как debt, но audit не создаёт и не
+  переписывает Git history; deployed SHA остаётся отдельным доказательством.
+- Recovery diagnostics различают недоступный supervisor bus, подтверждённо
+  inactive unit и независимо healthy Hermes/tlive runtime; probe failure больше
+  не подписывается как `service=inactive`.
+- Schema 21 ограничивает `runtime_events` одновременно 30 сутками и 10 000
+  newest rows. Миграция и runtime pruning атомарны, детерминированы и не меняют
+  health/alert state или provider work.
+- Нативная передача Codex принята на immutable release: `/local` и model-free
+  `/return` сохраняют provider thread и режим единственного writer.
+- Автоматический межагентный handoff и фоновая инъекция непрочитанного диалога
+  удалены. Сохраняемый журнал доступен провайдеру только по явной ограниченной
+  команде пользователя `/context [agent_id] [1..20]`; команда намеренно не
+  загромождает основное Telegram-меню.
 
 ## Отложено
 
 - provider-neutral Session Bridge;
+- постоянная supervisor-managed `tlive run` сессия: она не нужна для принятой
+  попеременной передачи владения Telegram ↔ native CLI;
 - полное восстановление незавершённого turn после потери машины;
 - дополнительные providers до прохождения acceptance текущего набора.
 

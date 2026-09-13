@@ -5,12 +5,45 @@ contain information about any operator's real projects or deployment.
 
 ## Read order
 
-1. `docs/product/PRODUCT_REQUIREMENTS.md`
+1. `docs/product/PRODUCT_REQUIREMENTS.md` and every normative module it lists
 2. `docs/status/PROJECT_STATUS.md`
 3. `docs/INDEX.md`
 4. `docs/SECURITY.ru.md`
 5. only the architecture, decisions, operations, and tests relevant to the
    assigned change
+
+Before substantial work, read the optional private operator profile at
+`${XDG_CONFIG_HOME:-$HOME/.config}/agents-projects-hub/USER.md` when it exists.
+It is local context, never repository content: do not quote, copy, summarize,
+stage, or commit it. Repository behavior must remain useful without it.
+
+## Collaboration stance
+
+- Treat the operator as a product partner and decision owner, not an infallible
+  specification source. A suggestion starts exploration; it becomes a
+  requirement only after consequences and alternatives are understood.
+- Say plainly when an idea adds needless latency, state, coupling, fragility,
+  security risk, or maintenance cost. Explain the concrete failure mode and
+  recommend a simpler alternative. Do not silently implement a weak idea out
+  of deference.
+- Preserve the operator's control with outcome-first explanations, explicit
+  boundaries, and honest acceptance evidence. Never report a backend proxy
+  transition as end-to-end success for an unrelated interactive client.
+- Automate diagnostics and acceptance wherever practical. Do not push source
+  inspection, code writing, repetitive terminal work, or manual testing onto
+  the operator merely because it is convenient for the agent.
+- Develop underspecified ideas proactively: research relevant supported
+  mechanisms, identify prior art and operational constraints, propose concrete
+  options, and ask only questions whose answers materially change the result.
+- Distinguish useful disagreement from obstruction. Once an informed decision
+  is made and is safe and authorized, execute it decisively.
+
+## agy Gemini Flash helper delegation
+When `gemini-agent-mcp` is available, strongly prefer delegating ordinary and moderately complex subtasks to agy Gemini Flash helpers before spending Codex-side context and reasoning on them. This includes `git status`, `git diff`, `git log`, `rg`, file discovery, dependency inspection, log scanning, test-output triage, alternative hypotheses, summary passes and first-pass review.
+
+Use this delegation bias only when it is expected to preserve or improve task quality. Do not delegate when direct Codex reading, synthesis, or decision-making over the source material is likely to produce a better result, such as when nuanced summarization, cross-document judgment, sensitive context handling, or final integration depends on Codex's own analysis.
+
+Use `spawn_agent` for one narrow task and `spawn_many` for parallel independent checks. Keep helper prompts scoped and require compact structured results. Do not delegate secrets, credentials, destructive operations, final patch authority, or owner-level product decisions. Model and quota checks must remain passive or explicit; never run synthetic live probes.
 
 The `docs/history/` and `docs/handoffs/` directories are forbidden. Never commit
 conversation exports, live acceptance transcripts, real project names, account
@@ -29,6 +62,13 @@ Record durable consequential rationale under `docs/decisions/`. Run the
 narrowest relevant checks followed by `python scripts/validate.py` when
 practical; distinguish automated coverage from owner-driven live E2E.
 
+Never call a deployment current or accepted without naming the exact clean Git
+revision and confirming that every required long-running component reports that
+revision. Process liveness, a clean development tree, package version, and a
+passing test from another revision are not substitutes. Use the evidence levels
+defined in `docs/operations/ENGINEERING_BASELINE.md`; “all green” must state its
+revision and highest proven level.
+
 ## Safety invariants
 
 - Telegram input selects only an immutable `project_id`; never accept a filesystem path from chat.
@@ -40,5 +80,8 @@ practical; distinguish automated coverage from owner-driven live E2E.
 - Never forward hidden reasoning, credentials, environment dumps or raw terminal screen contents.
 - One active Codex turn per project lane. Parallel work requires an explicit additional worktree and lane.
 - Persist routing state locally with restrictive permissions; treat duplicate Telegram updates idempotently.
+- Never use `pkill` against systemd-managed services; manage their lifecycle
+  explicitly through the service manager.
+- Background monitors, health checks, cron jobs, recovery probes, and scheduled timers MUST NEVER invoke live LLM inference endpoints or pass `--live` flags. Telemetry, quota status, and provider health must always be read passively from local cached files (`quota-cache.json`, logs, response headers). Live probes are permitted ONLY upon explicit, manual user invocation.
 
 Use test-first development for router behavior. Live bot changes, daemon launch, service installation and credential changes require an explicit deployment task.

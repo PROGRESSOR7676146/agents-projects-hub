@@ -1,15 +1,76 @@
 from __future__ import annotations
 
+import html
 import os
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterator, Sequence
+from typing import Iterator, Sequence, TypedDict
 
+from .artifacts import ValidatedArtifact
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
+from .release_identity import CURRENT_RELEASE, ReleaseIdentity
+from .telegram import TELEGRAM_HEALTH_FAILURE_THRESHOLD
+from .telegram_multipart import split_telegram_html
+
+MAX_PROVIDER_RESPONSE_LENGTH = 200_000
+RECOVERED_RESULT_METADATA_JSON = '{"hub_recovered":true}'
+RUNTIME_EVENT_MAX_AGE = timedelta(days=30)
+RUNTIME_EVENT_MAX_COUNT = 10_000
+PROVIDER_WORKER_FAIRNESS_FRESHNESS = timedelta(minutes=2)
+
+_ELIGIBLE_PROVIDER_JOB_SQL = """SELECT candidate.* FROM provider_jobs candidate
+   JOIN topics candidate_topic ON candidate_topic.topic_id = candidate.topic_id
+   WHERE candidate.agent_id = ?
+     AND candidate.attempt_count < candidate.max_attempts
+     AND (
+       (candidate.status = 'queued'
+           AND (candidate.next_attempt_at IS NULL OR candidate.next_attempt_at <= ?))
+       OR (candidate.status = 'retry_wait'
+           AND candidate.next_attempt_at IS NOT NULL AND candidate.next_attempt_at <= ?)
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM provider_jobs earlier
+       WHERE earlier.topic_id = candidate.topic_id
+         AND earlier.topic_sequence < candidate.topic_sequence
+         AND earlier.status NOT IN ('completed', 'failed', 'cancelled', 'indeterminate')
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM provider_jobs active
+       JOIN topics active_topic ON active_topic.topic_id = active.topic_id
+       WHERE active.job_id != candidate.job_id
+         AND COALESCE(active_topic.execution_scope, 'project:' || active_topic.project_id) =
+             COALESCE(candidate_topic.execution_scope, 'project:' || candidate_topic.project_id)
+         AND (
+           active.status = 'executing'
+           OR (active.status = 'leased' AND active.lease_expires_at > ?)
+           OR (active.status = 'indeterminate' AND NOT EXISTS (
+             SELECT 1 FROM provider_job_resolutions resolutions
+             WHERE resolutions.job_id = active.job_id
+           ))
+         )
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM agent_sessions writer
+       JOIN topics writer_topic ON writer_topic.topic_id = writer.topic_id
+       WHERE writer.status IN ('active', 'satellite')
+         AND writer.writer_mode != 'telegram'
+         AND COALESCE(writer_topic.execution_scope, 'project:' || writer_topic.project_id) =
+             COALESCE(candidate_topic.execution_scope, 'project:' || candidate_topic.project_id)
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM turn_dispatches dispatch
+       JOIN topics dispatch_topic ON dispatch_topic.topic_id = dispatch.topic_id
+       WHERE dispatch.status = 'running'
+         AND COALESCE(dispatch_topic.execution_scope, 'project:' || dispatch_topic.project_id) =
+             COALESCE(candidate_topic.execution_scope, 'project:' || candidate_topic.project_id)
+     )
+   ORDER BY candidate.created_at, candidate.topic_id, candidate.topic_sequence
+   LIMIT 1"""
 
 
 class StateError(RuntimeError):
@@ -24,6 +85,7 @@ class TopicRecord:
     thread_id: int
     title: str
     active_agent_id: str | None
+    execution_scope: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +179,20 @@ class TelegramOutboxRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class TelegramOutboxPartRecord:
+    outbox_id: str
+    part_index: int
+    telegram_html: str
+    part_type: str = "text"
+    file_path: str | None = None
+    file_name: str | None = None
+    file_size: int | None = None
+    file_sha256: str | None = None
+    telegram_message_id: int | None = None
+    delivered_at: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderJobRecovery:
     requeued_job_ids: tuple[str, ...]
     indeterminate_job_ids: tuple[str, ...]
@@ -127,6 +203,7 @@ class ProviderChatActivity:
     agent_id: str
     chat_id: int
     thread_id: int
+    message_id: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +224,16 @@ class RuntimeHealthRecord:
     provider_state: str
     quota_remaining_percent: float | None
     quota_reset_at: str | None
+    release_version: str | None
+    release_git_sha: str | None
+    release_built_at: str | None
+    release_clean: bool
+    transport_operation: str | None
+    transport_failure_class: str | None
+    transport_status_code: int | None
+    transport_retry_after: int | None
+    transport_consecutive_failures: int
+    transport_success_at: str | None
     updated_at: str
 
 
@@ -154,6 +241,14 @@ class RuntimeHealthRecord:
 class RuntimeHealthStatus:
     status: str
     record: RuntimeHealthRecord | None
+
+
+class TelegramContractProvenance(TypedDict):
+    session_id: str
+    agent_id: str
+    status: str
+    provider_bound: bool
+    acknowledged_version: int
 
 
 def _now() -> str:
@@ -220,9 +315,16 @@ class HubState:
             if version < LATEST_SCHEMA_VERSION:
                 migrate_database(path, create_backup=True)
         connection = sqlite3.connect(path, timeout=5.0)
-        os.chmod(path, 0o600)
-        migrate_connection(connection)
-        return cls(connection)
+        try:
+            os.chmod(path, 0o600)
+            migrate_connection(connection)
+            return cls(connection)
+        except BaseException:
+            try:
+                connection.close()
+            except sqlite3.Error:
+                pass
+            raise
 
     @property
     def schema_version(self) -> int:
@@ -246,6 +348,9 @@ class HubState:
 
     @staticmethod
     def _topic(row: sqlite3.Row) -> TopicRecord:
+        execution_scope = row["execution_scope"]
+        if execution_scope is None:
+            execution_scope = f"project:{row['project_id']}"
         return TopicRecord(
             topic_id=row["topic_id"],
             project_id=row["project_id"],
@@ -253,6 +358,7 @@ class HubState:
             thread_id=row["thread_id"],
             title=row["title"],
             active_agent_id=row["active_agent_id"],
+            execution_scope=str(execution_scope),
         )
 
     @staticmethod
@@ -331,6 +437,34 @@ class HubState:
                 else float(row["quota_remaining_percent"])
             ),
             quota_reset_at=(None if row["quota_reset_at"] is None else str(row["quota_reset_at"])),
+            release_version=(
+                None if row["release_version"] is None else str(row["release_version"])
+            ),
+            release_git_sha=(
+                None if row["release_git_sha"] is None else str(row["release_git_sha"])
+            ),
+            release_built_at=(
+                None if row["release_built_at"] is None else str(row["release_built_at"])
+            ),
+            release_clean=bool(row["release_clean"]),
+            transport_operation=(
+                None if row["transport_operation"] is None else str(row["transport_operation"])
+            ),
+            transport_failure_class=(
+                None
+                if row["transport_failure_class"] is None
+                else str(row["transport_failure_class"])
+            ),
+            transport_status_code=(
+                None if row["transport_status_code"] is None else int(row["transport_status_code"])
+            ),
+            transport_retry_after=(
+                None if row["transport_retry_after"] is None else int(row["transport_retry_after"])
+            ),
+            transport_consecutive_failures=int(row["transport_consecutive_failures"]),
+            transport_success_at=(
+                None if row["transport_success_at"] is None else str(row["transport_success_at"])
+            ),
             updated_at=str(row["updated_at"]),
         )
 
@@ -353,9 +487,16 @@ class HubState:
         provider_state: str = "unknown",
         quota_remaining_percent: float | None = None,
         quota_reset_at: datetime | None = None,
+        release_identity: ReleaseIdentity = CURRENT_RELEASE,
+        transport_operation: str | None = None,
+        transport_failure_class: str | None = None,
+        transport_status_code: int | None = None,
+        transport_retry_after: int | None = None,
+        transport_consecutive_failures: int = 0,
+        transport_success_at: datetime | None = None,
     ) -> RuntimeHealthRecord:
         """Replace one bounded runtime snapshot without probing its provider."""
-        if component not in {"controller", "sender", "provider_worker"}:
+        if component not in {"controller", "sender", "monitor", "provider_worker"}:
             raise StateError("invalid runtime health component")
         instance_id = _bounded(instance_id, name="instance id", maximum=128)
         process_start_marker = _bounded(
@@ -394,14 +535,79 @@ class HubState:
             None if active_lease_expires_at is None else _timestamp(active_lease_expires_at)
         )
         quota_reset = None if quota_reset_at is None else _timestamp(quota_reset_at)
+        release_version = _bounded(
+            release_identity.package_version, name="release version", maximum=64
+        )
+        release_git_sha = release_identity.git_sha
+        if (
+            release_git_sha is not None
+            and re.fullmatch(r"[0-9a-f]{40,64}", release_git_sha) is None
+        ):
+            raise StateError("invalid release Git SHA")
+        release_built_at = release_identity.built_at
+        if release_built_at is not None:
+            _parse_timestamp(release_built_at, name="release build time")
+        transport_operation = _optional_bounded(
+            transport_operation, name="transport operation", maximum=32
+        )
+        transport_failure_class = _optional_bounded(
+            transport_failure_class, name="transport failure class", maximum=64
+        )
+        if (
+            transport_operation is not None
+            and re.fullmatch(r"[a-z_]+", transport_operation) is None
+        ):
+            raise StateError("invalid transport operation")
+        if (
+            transport_failure_class is not None
+            and re.fullmatch(r"[a-z_]+", transport_failure_class) is None
+        ):
+            raise StateError("invalid transport failure class")
+        if transport_status_code is not None and (
+            isinstance(transport_status_code, bool) or not 100 <= transport_status_code <= 599
+        ):
+            raise StateError("invalid transport status code")
+        if transport_retry_after is not None and (
+            isinstance(transport_retry_after, bool) or not 0 <= transport_retry_after <= 86_400
+        ):
+            raise StateError("invalid transport retry-after")
+        if isinstance(transport_consecutive_failures, bool) or not (
+            0 <= transport_consecutive_failures <= 1_000_000
+        ):
+            raise StateError("invalid transport consecutive failures")
+        if transport_consecutive_failures == 0 and any(
+            value is not None
+            for value in (
+                transport_operation,
+                transport_failure_class,
+                transport_status_code,
+                transport_retry_after,
+            )
+        ):
+            raise StateError("transport failure detail requires a positive failure count")
+        if transport_consecutive_failures > 0 and (
+            transport_operation is None or transport_failure_class is None
+        ):
+            raise StateError("transport failures require operation and failure class")
+        if transport_status_code is not None and transport_failure_class is None:
+            raise StateError("transport status requires a failure class")
+        if transport_retry_after is not None and transport_failure_class is None:
+            raise StateError("transport retry-after requires a failure class")
+        transport_success = (
+            None if transport_success_at is None else _timestamp(transport_success_at)
+        )
         with self._connection:
             self._connection.execute(
                 """INSERT INTO runtime_health (
                        component, instance_id, runtime, agent_id, pid, process_start_marker,
                        started_at, heartbeat_at, success_at, error_code, activity_state,
                        active_job_id, active_lease_expires_at, provider_state,
-                       quota_remaining_percent, quota_reset_at, updated_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       quota_remaining_percent, quota_reset_at, release_version,
+                       release_git_sha, release_built_at, release_clean,
+                       transport_operation, transport_failure_class, transport_status_code,
+                       transport_retry_after, transport_consecutive_failures,
+                       transport_success_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(component, instance_id) DO UPDATE SET
                      runtime = excluded.runtime,
                      agent_id = excluded.agent_id,
@@ -419,6 +625,16 @@ class HubState:
                      provider_state = excluded.provider_state,
                      quota_remaining_percent = excluded.quota_remaining_percent,
                      quota_reset_at = excluded.quota_reset_at,
+                     release_version = excluded.release_version,
+                     release_git_sha = excluded.release_git_sha,
+                     release_built_at = excluded.release_built_at,
+                     release_clean = excluded.release_clean,
+                     transport_operation = excluded.transport_operation,
+                     transport_failure_class = excluded.transport_failure_class,
+                     transport_status_code = excluded.transport_status_code,
+                     transport_retry_after = excluded.transport_retry_after,
+                     transport_consecutive_failures = excluded.transport_consecutive_failures,
+                     transport_success_at = excluded.transport_success_at,
                      updated_at = excluded.updated_at""",
                 (
                     component,
@@ -437,6 +653,16 @@ class HubState:
                     provider_state,
                     quota_remaining_percent,
                     quota_reset,
+                    release_version,
+                    release_git_sha,
+                    release_built_at,
+                    int(release_identity.clean_tree),
+                    transport_operation,
+                    transport_failure_class,
+                    transport_status_code,
+                    transport_retry_after,
+                    transport_consecutive_failures,
+                    transport_success,
                     heartbeat,
                 ),
             )
@@ -482,11 +708,11 @@ class HubState:
             status = "stale"
         elif age > degraded_after:
             status = "degraded"
-        elif record.error_code is not None or record.provider_state in {
-            "limited",
-            "exhausted",
-            "unavailable",
-        }:
+        elif (
+            record.error_code is not None
+            or record.transport_consecutive_failures >= TELEGRAM_HEALTH_FAILURE_THRESHOLD
+            or record.provider_state in {"limited", "exhausted", "unavailable"}
+        ):
             status = "degraded"
         else:
             status = "healthy"
@@ -528,6 +754,73 @@ class HubState:
             delivered_at=row["delivered_at"],
         )
 
+    @staticmethod
+    def _telegram_outbox_part(row: sqlite3.Row) -> TelegramOutboxPartRecord:
+        keys = row.keys() if hasattr(row, "keys") else ()
+        return TelegramOutboxPartRecord(
+            outbox_id=str(row["outbox_id"]),
+            part_index=int(row["part_index"]),
+            telegram_html=str(row["telegram_html"]),
+            part_type=str(row["part_type"]) if "part_type" in keys else "text",
+            file_path=(
+                str(row["file_path"])
+                if "file_path" in keys and row["file_path"] is not None
+                else None
+            ),
+            file_name=(
+                str(row["file_name"])
+                if "file_name" in keys and row["file_name"] is not None
+                else None
+            ),
+            file_size=(
+                int(row["file_size"])
+                if "file_size" in keys and row["file_size"] is not None
+                else None
+            ),
+            file_sha256=(
+                str(row["file_sha256"])
+                if "file_sha256" in keys and row["file_sha256"] is not None
+                else None
+            ),
+            telegram_message_id=row["telegram_message_id"],
+            delivered_at=row["delivered_at"],
+        )
+
+    def _insert_telegram_outbox_parts(
+        self,
+        outbox_id: str,
+        telegram_html: str,
+        artifacts: tuple[ValidatedArtifact, ...] = (),
+    ) -> None:
+        parts = split_telegram_html(telegram_html)
+        for part_index, part in enumerate(parts, start=1):
+            self._connection.execute(
+                """INSERT INTO telegram_outbox_parts
+                   (outbox_id, part_index, telegram_html, part_type, file_path, file_name,
+                    file_size, file_sha256)
+                   VALUES (?, ?, ?, 'text', NULL, NULL, NULL, NULL)""",
+                (outbox_id, part_index, part),
+            )
+        start_index = len(parts) + 1
+        for offset, artifact in enumerate(artifacts):
+            idx = start_index + offset
+            caption = f"📄 <b>{html.escape(artifact.name)}</b>"
+            self._connection.execute(
+                """INSERT INTO telegram_outbox_parts
+                   (outbox_id, part_index, telegram_html, part_type, file_path, file_name,
+                    file_size, file_sha256)
+                   VALUES (?, ?, ?, 'document', ?, ?, ?, ?)""",
+                (
+                    outbox_id,
+                    idx,
+                    caption,
+                    str(artifact.path),
+                    artifact.name,
+                    artifact.size,
+                    artifact.sha256,
+                ),
+            )
+
     def observe_topic(
         self,
         *,
@@ -535,13 +828,24 @@ class HubState:
         chat_id: int,
         thread_id: int,
         title: str,
+        execution_root: Path | None = None,
     ) -> TopicRecord:
         # Supergroups use negative IDs; direct bot chats use the positive user
         # ID. Zero is never a valid Telegram chat identity.
         if chat_id == 0 or thread_id <= 0 or not title.strip():
             raise StateError("invalid Telegram topic identity")
+        project = _bounded(project_id, name="project id", maximum=48)
+        fallback_scope = f"project:{project}"
+        requested_scope = fallback_scope
+        if execution_root is not None:
+            if not execution_root.is_absolute():
+                raise StateError("execution root must be absolute")
+            canonical_root = execution_root.resolve()
+            requested_scope = "root:" + _bounded(
+                str(canonical_root), name="execution root", maximum=4096
+            )
         now = _now()
-        with self._connection:
+        with self._immediate_transaction():
             existing = self._connection.execute(
                 "SELECT * FROM topics WHERE chat_id = ? AND thread_id = ?",
                 (chat_id, thread_id),
@@ -551,14 +855,37 @@ class HubState:
             if existing is None:
                 self._connection.execute(
                     """INSERT INTO topics
-                       (project_id, chat_id, thread_id, title, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (project_id, chat_id, thread_id, title.strip(), now, now),
+                       (project_id, chat_id, thread_id, title, execution_scope,
+                        created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (project, chat_id, thread_id, title.strip(), requested_scope, now, now),
                 )
             else:
+                stored_scope = existing["execution_scope"] or fallback_scope
+                if execution_root is not None and stored_scope not in {
+                    fallback_scope,
+                    requested_scope,
+                }:
+                    lane = self._connection.execute(
+                        """SELECT worktree_path FROM worktree_lanes
+                           WHERE topic_id = ? AND project_id = ? AND status = 'active'""",
+                        (existing["topic_id"], project_id),
+                    ).fetchone()
+                    if lane is None or stored_scope != f"root:{lane['worktree_path']}":
+                        raise StateError("Telegram topic execution root changed")
+                next_scope = (
+                    stored_scope
+                    if execution_root is not None
+                    and stored_scope not in {fallback_scope, requested_scope}
+                    else requested_scope
+                    if execution_root is not None
+                    else stored_scope
+                )
                 self._connection.execute(
-                    "UPDATE topics SET title = ?, updated_at = ? WHERE topic_id = ?",
-                    (title.strip(), now, existing["topic_id"]),
+                    """UPDATE topics
+                       SET title = ?, execution_scope = ?, updated_at = ?
+                       WHERE topic_id = ?""",
+                    (title.strip(), next_scope, now, existing["topic_id"]),
                 )
         row = self._connection.execute(
             "SELECT * FROM topics WHERE chat_id = ? AND thread_id = ?",
@@ -630,7 +957,62 @@ class HubState:
     def set_writer_mode(self, session_id: str, writer_mode: str) -> SessionRecord:
         if writer_mode not in {"telegram", "local", "terminal"}:
             raise StateError("invalid writer mode")
-        with self._connection:
+        with self._immediate_transaction():
+            session = self._connection.execute(
+                """SELECT sessions.session_id, sessions.writer_mode,
+                          COALESCE(topics.execution_scope, 'project:' || topics.project_id)
+                            AS execution_scope
+                   FROM agent_sessions sessions
+                   JOIN topics ON topics.topic_id = sessions.topic_id
+                   WHERE sessions.session_id = ?""",
+                (session_id,),
+            ).fetchone()
+            if session is None:
+                raise StateError(f"unknown session_id: {session_id}")
+            if writer_mode != "telegram" and session["writer_mode"] == "telegram":
+                scope = str(session["execution_scope"])
+                conflicting_writer = self._connection.execute(
+                    """SELECT 1 FROM agent_sessions other
+                       JOIN topics ON topics.topic_id = other.topic_id
+                       WHERE other.session_id != ?
+                         AND other.status IN ('active', 'satellite')
+                         AND other.writer_mode != 'telegram'
+                         AND COALESCE(topics.execution_scope,
+                                      'project:' || topics.project_id) = ?
+                       LIMIT 1""",
+                    (session_id, scope),
+                ).fetchone()
+                conflicting_job = self._connection.execute(
+                    """SELECT 1 FROM provider_jobs jobs
+                       JOIN topics ON topics.topic_id = jobs.topic_id
+                       WHERE COALESCE(topics.execution_scope,
+                                      'project:' || topics.project_id) = ?
+                         AND (
+                           jobs.status IN (
+                             'queued', 'leased', 'executing', 'retry_wait', 'result_ready'
+                           )
+                           OR (jobs.status = 'indeterminate' AND NOT EXISTS (
+                             SELECT 1 FROM provider_job_resolutions resolutions
+                             WHERE resolutions.job_id = jobs.job_id
+                           ))
+                         )
+                       LIMIT 1""",
+                    (scope,),
+                ).fetchone()
+                conflicting_dispatch = self._connection.execute(
+                    """SELECT 1 FROM turn_dispatches dispatches
+                       JOIN topics ON topics.topic_id = dispatches.topic_id
+                       WHERE dispatches.status = 'running'
+                         AND COALESCE(topics.execution_scope,
+                                      'project:' || topics.project_id) = ?
+                       LIMIT 1""",
+                    (scope,),
+                ).fetchone()
+                if any(
+                    conflict is not None
+                    for conflict in (conflicting_writer, conflicting_job, conflicting_dispatch)
+                ):
+                    raise StateError("execution root is owned by another writer")
             cursor = self._connection.execute(
                 "UPDATE agent_sessions SET writer_mode = ?, updated_at = ? WHERE session_id = ?",
                 (writer_mode, _now(), session_id),
@@ -638,6 +1020,77 @@ class HubState:
         if cursor.rowcount != 1:
             raise StateError(f"unknown session_id: {session_id}")
         return self.get_session(session_id)
+
+    def return_codex_local_writer(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        topic_id: int,
+        session_id: str,
+        observer_agent_id: str,
+    ) -> tuple[SessionRecord, bool]:
+        """Atomically claim a Codex /return and restore Telegram ownership."""
+        from .session_adoption_state import CodexSessionOrigins
+
+        observer = _bounded(observer_agent_id, name="observer agent id", maximum=64)
+        if chat_id == 0 or message_id <= 0:
+            raise StateError("invalid Telegram message identity")
+        with self._immediate_transaction():
+            existing = self._connection.execute(
+                "SELECT 1 FROM observed_messages WHERE chat_id = ? AND message_id = ?",
+                (chat_id, message_id),
+            ).fetchone()
+            if existing is not None:
+                return self.get_session(session_id), False
+            topic = self._connection.execute(
+                "SELECT chat_id FROM topics WHERE topic_id = ?", (topic_id,)
+            ).fetchone()
+            if topic is None or int(topic["chat_id"]) != chat_id:
+                raise StateError("Codex return does not match topic")
+            session = self._connection.execute(
+                """SELECT topic_id, agent_id, status, writer_mode
+                   FROM agent_sessions WHERE session_id = ?""",
+                (session_id,),
+            ).fetchone()
+            if (
+                session is None
+                or int(session["topic_id"]) != topic_id
+                or str(session["agent_id"]) != "codex"
+                or str(session["status"]) != "active"
+                or str(session["writer_mode"]) != "local"
+            ):
+                raise StateError("Codex local writer state changed during return")
+            running_dispatch = self._connection.execute(
+                """SELECT 1 FROM turn_dispatches
+                   WHERE topic_id = ? AND status = 'running' LIMIT 1""",
+                (topic_id,),
+            ).fetchone()
+            pending_job = self._connection.execute(
+                """SELECT 1 FROM provider_jobs
+                   WHERE topic_id = ? AND status IN
+                     ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                   LIMIT 1""",
+                (topic_id,),
+            ).fetchone()
+            if running_dispatch is not None or pending_job is not None:
+                raise StateError("provider work is already pending for this topic")
+            now = _now()
+            cursor = self._connection.execute(
+                """UPDATE agent_sessions SET writer_mode = 'telegram', updated_at = ?
+                   WHERE session_id = ? AND writer_mode = 'local'""",
+                (now, session_id),
+            )
+            if cursor.rowcount != 1:
+                raise StateError("Codex local writer ownership changed during return")
+            CodexSessionOrigins(self).activate(session_id, message_id, topic_id)
+            self._connection.execute(
+                """INSERT INTO observed_messages
+                   (chat_id, message_id, observer_agent_id, observed_at)
+                   VALUES (?, ?, ?, ?)""",
+                (chat_id, message_id, observer, now),
+            )
+        return self.get_session(session_id), True
 
     def set_context_remaining(self, session_id: str, percent: float) -> SessionRecord:
         bounded = max(0.0, min(100.0, percent))
@@ -650,6 +1103,59 @@ class HubState:
         if cursor.rowcount != 1:
             raise StateError(f"unknown session_id: {session_id}")
         return self.get_session(session_id)
+
+    def telegram_contract_version(self, session_id: str) -> int:
+        self.get_session(session_id)
+        row = self._connection.execute(
+            "SELECT integer_value FROM runtime_checkpoints WHERE checkpoint_key = ?",
+            (f"telegram-contract:{session_id}",),
+        ).fetchone()
+        return 0 if row is None else max(0, int(row["integer_value"]))
+
+    def telegram_contract_provenance(
+        self, *, limit: int = 100
+    ) -> tuple[TelegramContractProvenance, ...]:
+        """Return bounded local diagnostics for non-archived provider sessions."""
+        if not 1 <= limit <= 100:
+            raise ValueError("contract provenance limit must be between 1 and 100")
+        rows = self._connection.execute(
+            """SELECT s.session_id, s.agent_id, s.status,
+                      s.provider_session_id,
+                      COALESCE(c.integer_value, 0) AS acknowledged_version
+               FROM agent_sessions AS s
+               LEFT JOIN runtime_checkpoints AS c
+                 ON c.checkpoint_key = 'telegram-contract:' || s.session_id
+               WHERE s.status IN ('active', 'satellite')
+               ORDER BY s.topic_id,
+                        CASE s.status WHEN 'active' THEN 0 ELSE 1 END,
+                        s.agent_id, s.session_id
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return tuple(
+            {
+                "session_id": str(row["session_id"]),
+                "agent_id": str(row["agent_id"]),
+                "status": str(row["status"]),
+                "provider_bound": row["provider_session_id"] is not None,
+                "acknowledged_version": max(0, int(row["acknowledged_version"])),
+            }
+            for row in rows
+        )
+
+    def acknowledge_telegram_contract(self, session_id: str, version: int) -> None:
+        if version <= 0:
+            raise StateError("Telegram contract version must be positive")
+        self.get_session(session_id)
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO runtime_checkpoints
+                   (checkpoint_key, integer_value, updated_at) VALUES (?, ?, ?)
+                   ON CONFLICT(checkpoint_key) DO UPDATE SET
+                     integer_value = MAX(integer_value, excluded.integer_value),
+                     updated_at = excluded.updated_at""",
+                (f"telegram-contract:{session_id}", version, _now()),
+            )
 
     def topic_has_running_dispatch(self, topic_id: int) -> bool:
         row = self._connection.execute(
@@ -697,7 +1203,7 @@ class HubState:
             return ()
         placeholders = ", ".join("?" for _ in bounded_ids)
         rows = self._connection.execute(
-            f"""SELECT current.agent_id, current.chat_id, topics.thread_id
+            f"""SELECT current.agent_id, current.chat_id, current.message_id, topics.thread_id
                 FROM provider_jobs current
                 JOIN topics ON topics.topic_id = current.topic_id
                 WHERE current.agent_id IN ({placeholders})
@@ -718,6 +1224,7 @@ class HubState:
                 agent_id=str(row["agent_id"]),
                 chat_id=int(row["chat_id"]),
                 thread_id=int(row["thread_id"]),
+                message_id=int(row["message_id"]),
             )
             for row in rows
         )
@@ -740,6 +1247,7 @@ class HubState:
         handoff_id: str | None = None,
         max_attempts: int = 5,
         take_local_writer: bool = False,
+        available_at: datetime | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
         """Atomically accept one bounded provider request.
 
@@ -748,6 +1256,8 @@ class HubState:
         network or provider operation. A duplicate idempotency key returns the
         original immutable snapshot without allocating another topic sequence.
         """
+        from .session_adoption_state import CodexSessionOrigins
+
         key = _bounded(idempotency_key, name="idempotency key", maximum=256)
         target_agent = _bounded(agent_id, name="agent id", maximum=64)
         target_session = _bounded(session_id, name="session id", maximum=128)
@@ -802,6 +1312,7 @@ class HubState:
                 raise StateError("provider job session snapshot does not match persisted session")
             if str(session["status"]) not in {"active", "satellite"}:
                 raise StateError("provider job session is not routable")
+            CodexSessionOrigins(self).require_admission(target_session, message_id)
             expected_writer = "local" if take_local_writer else "telegram"
             if str(session["writer_mode"]) != expected_writer:
                 raise StateError(f"provider job session writer is not {expected_writer}")
@@ -851,6 +1362,7 @@ class HubState:
                     raise StateError("local writer ownership changed during provider admission")
 
             now = _now()
+            ready_at = _timestamp(available_at) if available_at is not None else None
             self._connection.execute(
                 """INSERT OR IGNORE INTO observed_messages
                    (chat_id, message_id, observer_agent_id, observed_at)
@@ -884,9 +1396,9 @@ class HubState:
                          topic_sequence, agent_id, session_id, session_generation,
                          provider_session_id, model, effort, payload_text,
                          context_watermark, handoff_id, status, attempt_count,
-                         max_attempts, created_at, updated_at
+                         max_attempts, next_attempt_at, created_at, updated_at
                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                 'queued', 0, ?, ?, ?)""",
+                                 'queued', 0, ?, ?, ?, ?)""",
                     (
                         job_id,
                         key,
@@ -904,9 +1416,16 @@ class HubState:
                         context_watermark,
                         handoff,
                         max_attempts,
+                        ready_at,
                         now,
                         now,
                     ),
+                )
+                self._connection.execute(
+                    """INSERT INTO provider_job_inputs (
+                           job_id, chat_id, message_id, part_index, input_text, received_at
+                       ) VALUES (?, ?, ?, 1, ?, ?)""",
+                    (job_id, chat_id, message_id, payload, now),
                 )
             except sqlite3.IntegrityError as exc:
                 duplicate = self._connection.execute(
@@ -928,6 +1447,179 @@ class HubState:
             job = self._provider_job(row)
         return job, created
 
+    def enqueue_or_append_provider_job(
+        self,
+        *,
+        idempotency_key: str,
+        chat_id: int,
+        message_id: int,
+        topic_id: int,
+        agent_id: str,
+        session_id: str,
+        session_generation: int,
+        model: str,
+        effort: str,
+        payload_text: str,
+        appended_user_text: str,
+        provider_session_id: str | None = None,
+        context_watermark: int | None = None,
+        handoff_id: str | None = None,
+        quiet_ms: int,
+        max_ms: int,
+    ) -> tuple[ProviderJobRecord, bool]:
+        """Durably collect one compatible Telegram burst into one queued turn.
+
+        Every Telegram message remains independently idempotent in
+        ``provider_job_inputs``.  Only an unleased job inside both the quiet and
+        absolute batch windows can be extended; otherwise a new FIFO job is
+        created.  Provider context/handoffs belong to the first part only.
+        """
+        from .session_adoption_state import CodexSessionOrigins
+
+        if quiet_ms <= 0:
+            return self.enqueue_provider_job(
+                idempotency_key=idempotency_key,
+                chat_id=chat_id,
+                message_id=message_id,
+                topic_id=topic_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                session_generation=session_generation,
+                provider_session_id=provider_session_id,
+                model=model,
+                effort=effort,
+                payload_text=payload_text,
+                context_watermark=context_watermark,
+                handoff_id=handoff_id,
+            )
+        user_text = _bounded(appended_user_text, name="batch input", maximum=20000)
+        current = datetime.now(timezone.utc)
+        timestamp = _timestamp(current)
+        quiet_until = current + timedelta(milliseconds=quiet_ms)
+        absolute_floor = _timestamp(current - timedelta(milliseconds=max_ms))
+        separator = "\n\nFOLLOW-UP USER MESSAGE (same Telegram burst):\n"
+        with self._immediate_transaction():
+            existing = self._connection.execute(
+                """SELECT jobs.* FROM provider_job_inputs inputs
+                   JOIN provider_jobs jobs ON jobs.job_id = inputs.job_id
+                   WHERE inputs.chat_id = ? AND inputs.message_id = ?""",
+                (chat_id, message_id),
+            ).fetchone()
+            if existing is not None:
+                return self._provider_job(existing), False
+            CodexSessionOrigins(self).require_admission(session_id, message_id)
+            session = self.get_session(session_id)
+            if (
+                session.topic_id != topic_id
+                or session.agent_id != agent_id
+                or session.generation != session_generation
+                or session.status not in {"active", "satellite"}
+                or session.writer_mode != "telegram"
+                or session.model != model
+                or session.effort != effort
+                or (
+                    provider_session_id is not None
+                    and session.provider_session_id != provider_session_id
+                )
+                or self.get_topic(topic_id).chat_id != chat_id
+            ):
+                raise StateError("provider batch session snapshot changed")
+            candidate = self._connection.execute(
+                """SELECT * FROM provider_jobs
+                   WHERE topic_id = ? AND agent_id = ? AND session_id = ?
+                     AND session_generation = ? AND model = ? AND effort = ?
+                     AND status = 'queued' AND next_attempt_at > ?
+                     AND created_at >= ?
+                     AND topic_sequence = (
+                         SELECT MAX(tail.topic_sequence) FROM provider_jobs tail
+                         WHERE tail.topic_id = provider_jobs.topic_id
+                     )
+                   ORDER BY topic_sequence DESC LIMIT 1""",
+                (
+                    topic_id,
+                    agent_id,
+                    session_id,
+                    session_generation,
+                    model,
+                    effort,
+                    timestamp,
+                    absolute_floor,
+                ),
+            ).fetchone()
+            if candidate is not None:
+                combined = str(candidate["payload_text"]) + separator + user_text
+                if len(combined) <= 20000:
+                    part = (
+                        int(
+                            self._connection.execute(
+                                "SELECT COUNT(*) FROM provider_job_inputs WHERE job_id = ?",
+                                (candidate["job_id"],),
+                            ).fetchone()[0]
+                        )
+                        + 1
+                    )
+                    hard_deadline = datetime.fromisoformat(
+                        str(candidate["created_at"])
+                    ) + timedelta(milliseconds=max_ms)
+                    next_attempt = min(quiet_until, hard_deadline)
+                    self._connection.execute(
+                        """INSERT INTO observed_messages
+                           (chat_id, message_id, observer_agent_id, observed_at)
+                           VALUES (?, ?, 'hub', ?)""",
+                        (chat_id, message_id, timestamp),
+                    )
+                    self._connection.execute(
+                        """INSERT INTO provider_job_inputs
+                           (job_id, chat_id, message_id, part_index, input_text, received_at)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (candidate["job_id"], chat_id, message_id, part, user_text, timestamp),
+                    )
+                    self._connection.execute(
+                        """UPDATE provider_jobs
+                           SET payload_text = ?, next_attempt_at = ?, updated_at = ?
+                           WHERE job_id = ? AND status = 'queued'""",
+                        (
+                            combined,
+                            _timestamp(next_attempt),
+                            timestamp,
+                            candidate["job_id"],
+                        ),
+                    )
+                    return self.get_provider_job(str(candidate["job_id"])), True
+        return self.enqueue_provider_job(
+            idempotency_key=idempotency_key,
+            chat_id=chat_id,
+            message_id=message_id,
+            topic_id=topic_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            session_generation=session_generation,
+            provider_session_id=provider_session_id,
+            model=model,
+            effort=effort,
+            payload_text=payload_text,
+            context_watermark=context_watermark,
+            handoff_id=handoff_id,
+            available_at=quiet_until,
+        )
+
+    def pending_message_batch_agent(
+        self, topic_id: int, *, now: datetime | None = None
+    ) -> str | None:
+        """Return the target of the still-open tail burst, if one exists."""
+        timestamp = _timestamp(now)
+        row = self._connection.execute(
+            """SELECT agent_id FROM provider_jobs
+               WHERE topic_id = ? AND status = 'queued' AND next_attempt_at > ?
+                 AND topic_sequence = (
+                   SELECT MAX(tail.topic_sequence) FROM provider_jobs tail
+                   WHERE tail.topic_id = provider_jobs.topic_id
+                 )
+               LIMIT 1""",
+            (topic_id, timestamp),
+        ).fetchone()
+        return str(row["agent_id"]) if row is not None else None
+
     def get_provider_job(self, job_id: str) -> ProviderJobRecord:
         row = self._connection.execute(
             "SELECT * FROM provider_jobs WHERE job_id = ?", (job_id,)
@@ -936,6 +1628,35 @@ class HubState:
             raise StateError(f"unknown provider job: {job_id}")
         return self._provider_job(row)
 
+    def resolve_indeterminate_job(self, job_id: str, resolution: str) -> bool:
+        """Append one immutable operator classification without changing the job."""
+        identifier = _bounded(job_id, name="provider job id", maximum=128)
+        classification = _bounded(resolution, name="resolution", maximum=32)
+        if classification not in {"acknowledged", "superseded", "externally_completed"}:
+            raise StateError("invalid indeterminate job resolution")
+        with self._immediate_transaction():
+            job = self._connection.execute(
+                "SELECT status FROM provider_jobs WHERE job_id = ?", (identifier,)
+            ).fetchone()
+            if job is None:
+                raise StateError(f"unknown provider job: {identifier}")
+            if str(job["status"]) != "indeterminate":
+                raise StateError("only an indeterminate provider job can be resolved")
+            existing = self._connection.execute(
+                "SELECT resolution FROM provider_job_resolutions WHERE job_id = ?",
+                (identifier,),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["resolution"]) == classification:
+                    return False
+                raise StateError("indeterminate provider job already has a different resolution")
+            self._connection.execute(
+                """INSERT INTO provider_job_resolutions (job_id, resolution, resolved_at)
+                   VALUES (?, ?, ?)""",
+                (identifier, classification, _now()),
+            )
+        return True
+
     def provider_jobs_for_topic(self, topic_id: int) -> tuple[ProviderJobRecord, ...]:
         rows = self._connection.execute(
             "SELECT * FROM provider_jobs WHERE topic_id = ? ORDER BY topic_sequence",
@@ -943,47 +1664,288 @@ class HubState:
         ).fetchall()
         return tuple(self._provider_job(row) for row in rows)
 
+    def flush_message_batch(self, topic_id: int) -> int:
+        """Make collecting queued inputs eligible before a control boundary."""
+        timestamp = _now()
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs SET next_attempt_at = ?, updated_at = ?
+                   WHERE topic_id = ? AND status = 'queued'
+                     AND next_attempt_at IS NOT NULL AND next_attempt_at > ?""",
+                (timestamp, timestamp, topic_id, timestamp),
+            )
+        return cursor.rowcount
+
+    def request_emergency_stop(
+        self,
+        *,
+        topic_id: int,
+        chat_id: int,
+        message_id: int,
+        target_agent_id: str,
+    ) -> tuple[str, int, bool]:
+        """Persist a stop request and cancel work that has not started."""
+        target = _bounded(target_agent_id, name="agent id", maximum=64)
+        timestamp = _now()
+        with self._immediate_transaction():
+            duplicate = self._connection.execute(
+                """SELECT request_id, cancelled_queued_count, status
+                   FROM provider_stop_requests WHERE chat_id = ? AND message_id = ?""",
+                (chat_id, message_id),
+            ).fetchone()
+            if duplicate is not None:
+                return (
+                    str(duplicate["request_id"]),
+                    int(duplicate["cancelled_queued_count"]),
+                    str(duplicate["status"]) == "pending",
+                )
+            self._connection.execute(
+                """INSERT OR IGNORE INTO observed_messages
+                   (chat_id, message_id, observer_agent_id, observed_at)
+                   VALUES (?, ?, 'hub', ?)""",
+                (chat_id, message_id, timestamp),
+            )
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'cancelled', next_attempt_at = NULL,
+                       error_class = 'user_stop', error_code = 'emergency_stop',
+                       updated_at = ?
+                   WHERE topic_id = ? AND agent_id = ?
+                     AND status IN ('queued', 'retry_wait')""",
+                (timestamp, topic_id, target),
+            )
+            active = self._connection.execute(
+                """SELECT 1 FROM provider_jobs
+                   WHERE topic_id = ? AND agent_id = ?
+                     AND status IN ('leased', 'executing') LIMIT 1""",
+                (topic_id, target),
+            ).fetchone()
+            pending = active is not None
+            request_id = str(uuid.uuid4())
+            self._connection.execute(
+                """INSERT INTO provider_stop_requests (
+                       request_id, topic_id, chat_id, message_id, target_agent_id,
+                       status, cancelled_queued_count, created_at, completed_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    request_id,
+                    topic_id,
+                    chat_id,
+                    message_id,
+                    target,
+                    "pending" if pending else "completed",
+                    cursor.rowcount,
+                    timestamp,
+                    None if pending else timestamp,
+                ),
+            )
+            return request_id, cursor.rowcount, pending
+
+    def enqueue_emergency_stop_notice(self, request_id: str, telegram_html: str) -> bool:
+        """Durably queue a Hub-owned stop acknowledgement when work was affected."""
+        identifier = _bounded(request_id, name="stop request id", maximum=128)
+        body = _bounded(
+            telegram_html,
+            name="Telegram outbox text",
+            maximum=MAX_PROVIDER_RESPONSE_LENGTH,
+        )
+        timestamp = _now()
+        with self._immediate_transaction():
+            request = self._connection.execute(
+                """SELECT topic_id, chat_id, target_agent_id, created_at
+                   FROM provider_stop_requests WHERE request_id = ?""",
+                (identifier,),
+            ).fetchone()
+            if request is None:
+                raise StateError("emergency stop request does not exist")
+            candidate = self._connection.execute(
+                """SELECT jobs.job_id, topics.thread_id
+                   FROM provider_jobs jobs
+                   JOIN topics ON topics.topic_id = jobs.topic_id
+                   WHERE jobs.topic_id = ? AND jobs.agent_id = ? AND (
+                       jobs.status IN ('leased', 'executing') OR (
+                           jobs.status = 'cancelled'
+                           AND jobs.error_class = 'user_stop'
+                           AND jobs.error_code = 'emergency_stop'
+                           AND jobs.updated_at >= ?
+                       )
+                   )
+                   ORDER BY CASE WHEN jobs.status IN ('leased', 'executing') THEN 0 ELSE 1 END,
+                            jobs.updated_at DESC, jobs.created_at DESC
+                   LIMIT 1""",
+                (
+                    request["topic_id"],
+                    request["target_agent_id"],
+                    request["created_at"],
+                ),
+            ).fetchone()
+            if candidate is None:
+                return False
+            existing = self._connection.execute(
+                "SELECT sender_agent_id FROM telegram_outbox WHERE job_id = ?",
+                (candidate["job_id"],),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["sender_agent_id"]) != "hub":
+                    raise StateError("stopped provider job already has a non-Hub outbox row")
+                return True
+            outbox_id = str(uuid.uuid4())
+            self._connection.execute(
+                """INSERT INTO telegram_outbox (
+                     outbox_id, job_id, sender_agent_id, chat_id, thread_id,
+                     telegram_html, status, available_at, created_at, updated_at
+                   ) VALUES (?, ?, 'hub', ?, ?, ?, 'pending', ?, ?, ?)""",
+                (
+                    outbox_id,
+                    candidate["job_id"],
+                    request["chat_id"],
+                    candidate["thread_id"],
+                    body,
+                    timestamp,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            self._insert_telegram_outbox_parts(outbox_id, body)
+        return True
+
+    def pending_emergency_stop(self, topic_id: int, agent_id: str) -> str | None:
+        row = self._connection.execute(
+            """SELECT request_id FROM provider_stop_requests
+               WHERE topic_id = ? AND target_agent_id = ? AND status = 'pending'
+               ORDER BY created_at LIMIT 1""",
+            (topic_id, agent_id),
+        ).fetchone()
+        return None if row is None else str(row["request_id"])
+
+    def complete_emergency_stop(self, request_id: str) -> None:
+        with self._connection:
+            self._connection.execute(
+                """UPDATE provider_stop_requests SET status = 'completed', completed_at = ?
+                   WHERE request_id = ? AND status = 'pending'""",
+                (_now(), request_id),
+            )
+
+    def cancel_active_provider_job(
+        self, job_id: str, lease_token: str, *, error_code: str = "emergency_stop"
+    ) -> None:
+        timestamp = _now()
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'cancelled', lease_owner = NULL, lease_token = NULL,
+                       lease_expires_at = NULL, next_attempt_at = NULL,
+                       error_class = 'user_stop', error_code = ?, updated_at = ?
+                   WHERE job_id = ? AND lease_token = ?
+                     AND status IN ('leased', 'executing')""",
+                (error_code, timestamp, job_id, lease_token),
+            )
+        if cursor.rowcount != 1:
+            raise StateError("active provider job cannot be cancelled")
+
     def lease_provider_job(
         self,
         agent_id: str,
         worker_id: str,
         *,
         lease_seconds: int = 90,
+        max_parallel_roots: int = 1,
+        scheduler_agents: Sequence[str] = (),
         now: datetime | None = None,
     ) -> ProviderJobRecord | None:
         target_agent = _bounded(agent_id, name="agent id", maximum=64)
         worker = _bounded(worker_id, name="worker id", maximum=128)
         if not 1 <= lease_seconds <= 3600:
             raise StateError("invalid provider lease duration")
+        if not 1 <= max_parallel_roots <= 16:
+            raise StateError("invalid parallel root capacity")
+        scheduled_agents = tuple(
+            _bounded(value, name="scheduler agent id", maximum=64) for value in scheduler_agents
+        )
+        if len(set(scheduled_agents)) != len(scheduled_agents):
+            raise StateError("scheduler agents contain duplicates")
+        if scheduled_agents and target_agent not in scheduled_agents:
+            raise StateError("scheduler agents must include the target agent")
         current = now or datetime.now(timezone.utc)
         timestamp = _timestamp(current)
         expires_at = _timestamp(current + timedelta(seconds=lease_seconds))
         with self._immediate_transaction():
+            effective_capacity = max_parallel_roots
+            freshness = _timestamp(current - PROVIDER_WORKER_FAIRNESS_FRESHNESS)
+            placeholders = ", ".join("?" for _ in scheduled_agents)
+            if scheduled_agents:
+                self._connection.execute(
+                    """INSERT INTO execution_scheduler_workers
+                       (agent_id, declared_capacity, observed_at) VALUES (?, ?, ?)
+                       ON CONFLICT(agent_id) DO UPDATE SET
+                         declared_capacity = excluded.declared_capacity,
+                         observed_at = excluded.observed_at""",
+                    (target_agent, max_parallel_roots, timestamp),
+                )
+                advertised = self._connection.execute(
+                    f"""SELECT MIN(declared_capacity) FROM execution_scheduler_workers
+                         WHERE agent_id IN ({placeholders}) AND observed_at >= ?""",
+                    (*scheduled_agents, freshness),
+                ).fetchone()[0]
+                if advertised is not None:
+                    effective_capacity = min(effective_capacity, int(advertised))
+            occupied = int(
+                self._connection.execute(
+                    """SELECT COUNT(DISTINCT COALESCE(
+                         topics.execution_scope, 'project:' || topics.project_id))
+                       FROM provider_jobs jobs
+                       JOIN topics ON topics.topic_id = jobs.topic_id
+                       WHERE jobs.status IN ('leased', 'executing')
+                         AND jobs.lease_expires_at > ?""",
+                    (timestamp,),
+                ).fetchone()[0]
+            )
+            if occupied >= effective_capacity:
+                return None
             row = self._connection.execute(
-                """SELECT candidate.* FROM provider_jobs candidate
-                   WHERE candidate.agent_id = ?
-                     AND candidate.attempt_count < candidate.max_attempts
-                     AND (
-                       candidate.status = 'queued'
-                       OR (candidate.status = 'retry_wait'
-                           AND candidate.next_attempt_at IS NOT NULL
-                           AND candidate.next_attempt_at <= ?)
-                     )
-                     AND NOT EXISTS (
-                       SELECT 1 FROM provider_jobs earlier
-                       WHERE earlier.topic_id = candidate.topic_id
-                         AND earlier.topic_sequence < candidate.topic_sequence
-                         AND earlier.status NOT IN (
-                           'completed', 'failed', 'cancelled', 'indeterminate'
-                         )
-                     )
-                   ORDER BY candidate.created_at, candidate.topic_id,
-                            candidate.topic_sequence
-                   LIMIT 1""",
-                (target_agent, timestamp),
+                _ELIGIBLE_PROVIDER_JOB_SQL,
+                (target_agent, timestamp, timestamp, timestamp),
             ).fetchone()
             if row is None:
                 return None
+            if scheduled_agents:
+                health_rows = self._connection.execute(
+                    f"""SELECT DISTINCT agent_id FROM runtime_health
+                         WHERE component = 'provider_worker'
+                           AND agent_id IN ({placeholders})
+                           AND heartbeat_at >= ?""",
+                    (*scheduled_agents, freshness),
+                ).fetchall()
+                live_agents = {target_agent}
+                live_agents.update(str(item["agent_id"]) for item in health_rows)
+                contenders: list[tuple[int, str, int, int, sqlite3.Row]] = []
+                for contender_agent in sorted(live_agents.intersection(scheduled_agents)):
+                    candidate = self._connection.execute(
+                        _ELIGIBLE_PROVIDER_JOB_SQL,
+                        (contender_agent, timestamp, timestamp, timestamp),
+                    ).fetchone()
+                    if candidate is None:
+                        continue
+                    grant = self._connection.execute(
+                        """SELECT last_grant_sequence FROM execution_scheduler_grants
+                           WHERE agent_id = ?""",
+                        (contender_agent,),
+                    ).fetchone()
+                    contenders.append(
+                        (
+                            0 if grant is None else int(grant["last_grant_sequence"]),
+                            str(candidate["created_at"]),
+                            int(candidate["topic_id"]),
+                            int(candidate["topic_sequence"]),
+                            candidate,
+                        )
+                    )
+                if not contenders:
+                    return None
+                winner = min(contenders, key=lambda item: item[:4])
+                if str(winner[4]["agent_id"]) != target_agent:
+                    return None
+                row = winner[4]
             token = str(uuid.uuid4())
             cursor = self._connection.execute(
                 """UPDATE provider_jobs
@@ -996,12 +1958,159 @@ class HubState:
             )
             if cursor.rowcount != 1:
                 raise StateError("provider job lease race")
+            if scheduled_agents:
+                next_grant = int(
+                    self._connection.execute(
+                        """SELECT COALESCE(MAX(last_grant_sequence), 0) + 1
+                           FROM execution_scheduler_grants"""
+                    ).fetchone()[0]
+                )
+                self._connection.execute(
+                    """INSERT INTO execution_scheduler_grants
+                       (agent_id, last_grant_sequence, updated_at) VALUES (?, ?, ?)
+                       ON CONFLICT(agent_id) DO UPDATE SET
+                         last_grant_sequence = excluded.last_grant_sequence,
+                         updated_at = excluded.updated_at""",
+                    (target_agent, next_grant, timestamp),
+                )
             leased = self._connection.execute(
                 "SELECT * FROM provider_jobs WHERE job_id = ?", (row["job_id"],)
             ).fetchone()
             if leased is None:
                 raise StateError("leased provider job disappeared")
             return self._provider_job(leased)
+
+    def lease_steer_followup(
+        self,
+        parent_job_id: str,
+        worker_id: str,
+        *,
+        lease_seconds: int = 90,
+        now: datetime | None = None,
+    ) -> ProviderJobRecord | None:
+        """Lease the immediate compatible FIFO successor for same-turn steering."""
+        worker = _bounded(worker_id, name="worker id", maximum=128)
+        current = now or datetime.now(timezone.utc)
+        timestamp = _timestamp(current)
+        expires_at = _timestamp(current + timedelta(seconds=lease_seconds))
+        with self._immediate_transaction():
+            parent = self._connection.execute(
+                "SELECT * FROM provider_jobs WHERE job_id = ? AND status = 'executing'",
+                (parent_job_id,),
+            ).fetchone()
+            if parent is None:
+                return None
+            candidate = self._connection.execute(
+                """SELECT * FROM provider_jobs
+                   WHERE topic_id = ? AND topic_sequence = (
+                       SELECT MIN(topic_sequence) FROM provider_jobs
+                       WHERE topic_id = ? AND topic_sequence > ?
+                         AND status NOT IN ('completed', 'failed', 'cancelled', 'indeterminate')
+                   )""",
+                (parent["topic_id"], parent["topic_id"], parent["topic_sequence"]),
+            ).fetchone()
+            if candidate is None or any(
+                candidate[field] != parent[field]
+                for field in ("agent_id", "session_id", "session_generation", "model", "effort")
+            ):
+                return None
+            if str(candidate["status"]) != "queued":
+                return None
+            available = candidate["next_attempt_at"]
+            if available is not None and str(available) > timestamp:
+                return None
+            token = str(uuid.uuid4())
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'leased', lease_owner = ?, lease_token = ?,
+                       lease_expires_at = ?, next_attempt_at = NULL, updated_at = ?
+                   WHERE job_id = ? AND status = 'queued'""",
+                (worker, token, expires_at, timestamp, candidate["job_id"]),
+            )
+            if cursor.rowcount != 1:
+                return None
+            return self.get_provider_job(str(candidate["job_id"]))
+
+    def reject_unaccepted_steer(self, job_id: str, lease_token: str) -> None:
+        """Requeue a steer only after app-server proved it was not accepted."""
+        timestamp = _now()
+        with self._connection:
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'queued', attempt_count = MAX(0, attempt_count - 1),
+                       provider_started_at = NULL, lease_owner = NULL, lease_token = NULL,
+                       lease_expires_at = NULL, updated_at = ?
+                   WHERE job_id = ? AND status = 'executing' AND lease_token = ?""",
+                (timestamp, job_id, lease_token),
+            )
+        if cursor.rowcount != 1:
+            raise StateError("rejected steer job lease is missing or invalid")
+
+    def complete_steered_job(
+        self,
+        child_job_id: str,
+        lease_token: str,
+        *,
+        parent_job_id: str,
+        provider_turn_id: str,
+    ) -> None:
+        """Record that one queued input was accepted into an active provider turn."""
+        turn_id = _bounded(provider_turn_id, name="provider turn id", maximum=256)
+        timestamp = _now()
+        with self._immediate_transaction():
+            child = self._connection.execute(
+                """SELECT * FROM provider_jobs WHERE job_id = ? AND status = 'executing'
+                   AND lease_token = ?""",
+                (child_job_id, lease_token),
+            ).fetchone()
+            parent = self._connection.execute(
+                "SELECT * FROM provider_jobs WHERE job_id = ? AND status = 'executing'",
+                (parent_job_id,),
+            ).fetchone()
+            if (
+                child is None
+                or parent is None
+                or any(
+                    child[field] != parent[field]
+                    for field in ("topic_id", "agent_id", "session_id", "session_generation")
+                )
+            ):
+                raise StateError("steered job does not match its active parent")
+            self._connection.execute(
+                """INSERT INTO provider_job_absorptions
+                   (child_job_id, parent_job_id, provider_turn_id, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (child_job_id, parent_job_id, turn_id, timestamp),
+            )
+            if child["context_watermark"] is not None:
+                self._connection.execute(
+                    """INSERT INTO visible_context_cursors
+                       (topic_id, observer_agent_id, last_turn_id, updated_at)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(topic_id, observer_agent_id) DO UPDATE SET
+                         last_turn_id = MAX(last_turn_id, excluded.last_turn_id),
+                         updated_at = excluded.updated_at""",
+                    (
+                        child["topic_id"],
+                        child["agent_id"],
+                        child["context_watermark"],
+                        timestamp,
+                    ),
+                )
+            if child["handoff_id"] is not None:
+                self._connection.execute(
+                    "DELETE FROM pending_handoffs WHERE handoff_id = ?",
+                    (child["handoff_id"],),
+                )
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = 'completed', lease_owner = NULL, lease_token = NULL,
+                       lease_expires_at = NULL, updated_at = ?
+                   WHERE job_id = ? AND status = 'executing' AND lease_token = ?""",
+                (timestamp, child_job_id, lease_token),
+            )
+            if cursor.rowcount != 1:
+                raise StateError("steered job lease changed during completion")
 
     def mark_provider_job_executing(
         self,
@@ -1158,6 +2267,83 @@ class HubState:
             raise StateError("provider job lease is missing or invalid")
         return self.get_provider_job(job_id)
 
+    def terminate_provider_job_with_notice(
+        self,
+        job_id: str,
+        lease_token: str,
+        *,
+        status: str,
+        error_class: str,
+        error_code: str,
+        sender_agent_id: str,
+        telegram_html: str,
+        error_detail: str | None = None,
+        now: datetime | None = None,
+    ) -> ProviderJobRecord:
+        """Atomically terminalize invoked work and queue one visible failure notice."""
+        if status not in {"failed", "indeterminate"}:
+            raise StateError("provider failure notice requires a terminal failure status")
+        failure_class = _bounded(error_class, name="error class", maximum=64)
+        code = _bounded(error_code, name="error code", maximum=128)
+        sender = _bounded(sender_agent_id, name="sender agent id", maximum=64)
+        html = _bounded(
+            telegram_html,
+            name="Telegram outbox text",
+            maximum=MAX_PROVIDER_RESPONSE_LENGTH,
+        )
+        detail = error_detail.strip()[:1000] if error_detail else None
+        timestamp = _timestamp(now)
+        with self._immediate_transaction():
+            row = self._connection.execute(
+                """SELECT jobs.*, topics.thread_id FROM provider_jobs jobs
+                   JOIN topics ON topics.topic_id = jobs.topic_id
+                   WHERE jobs.job_id = ? AND jobs.status = 'executing'
+                     AND jobs.lease_token = ? AND jobs.lease_expires_at > ?""",
+                (job_id, lease_token, timestamp),
+            ).fetchone()
+            if row is None:
+                raise StateError("provider job lease is missing or invalid")
+            if sender != str(row["agent_id"]):
+                raise StateError("Telegram outbox sender does not match provider job agent")
+            outbox_id = str(uuid.uuid4())
+            self._connection.execute(
+                """INSERT INTO telegram_outbox (
+                     outbox_id, job_id, sender_agent_id, chat_id, thread_id,
+                     telegram_html, status, available_at, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
+                (
+                    outbox_id,
+                    job_id,
+                    sender,
+                    row["chat_id"],
+                    row["thread_id"],
+                    html,
+                    timestamp,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            self._insert_telegram_outbox_parts(outbox_id, html)
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET status = ?, lease_owner = NULL, lease_token = NULL,
+                       lease_expires_at = NULL, error_class = ?, error_code = ?,
+                       error_detail = ?, updated_at = ?
+                   WHERE job_id = ? AND status = 'executing' AND lease_token = ?""",
+                (
+                    status,
+                    failure_class,
+                    code,
+                    detail,
+                    timestamp,
+                    job_id,
+                    lease_token,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise StateError("provider job lease changed during failure commit")
+        return self.get_provider_job(job_id)
+
     def cancel_provider_job(self, job_id: str) -> ProviderJobRecord:
         with self._connection:
             cursor = self._connection.execute(
@@ -1230,12 +2416,22 @@ class HubState:
         user_excerpt: str | None = None,
         acknowledge_context: bool = False,
         acknowledge_handoff: bool = False,
+        telegram_contract_version: int | None = None,
+        artifacts: tuple[ValidatedArtifact, ...] = (),
         now: datetime | None = None,
     ) -> ProviderJobResultRecord:
         """Commit result, acknowledgements, and outbox without a network call."""
-        response = _bounded(visible_response, name="visible response", maximum=12000)
+        response = _bounded(
+            visible_response,
+            name="visible response",
+            maximum=MAX_PROVIDER_RESPONSE_LENGTH,
+        )
         sender = _bounded(sender_agent_id, name="sender agent id", maximum=64)
-        html = _bounded(telegram_html, name="Telegram outbox text", maximum=12000)
+        html = _bounded(
+            telegram_html,
+            name="Telegram outbox text",
+            maximum=MAX_PROVIDER_RESPONSE_LENGTH,
+        )
         provider_session = (
             _bounded(provider_session_id, name="provider session id", maximum=256)
             if provider_session_id is not None
@@ -1250,6 +2446,8 @@ class HubState:
         if metadata is not None and len(metadata) > 4000:
             raise StateError("invalid safe metadata")
         excerpt = _visible_excerpt(user_excerpt) if user_excerpt is not None else None
+        if telegram_contract_version is not None and telegram_contract_version <= 0:
+            raise StateError("Telegram contract version must be positive")
         timestamp = _timestamp(now)
         with self._immediate_transaction():
             job_row = self._connection.execute(
@@ -1299,7 +2497,17 @@ class HubState:
                 )
                 if cursor.rowcount != 1:
                     raise StateError("provider job session generation changed")
-            visible_user_excerpt = excerpt or _visible_excerpt(str(job_row["payload_text"]))
+            absorbed_payloads = [
+                str(row["payload_text"])
+                for row in self._connection.execute(
+                    """SELECT child.payload_text FROM provider_job_absorptions absorption
+                       JOIN provider_jobs child ON child.job_id = absorption.child_job_id
+                       WHERE absorption.parent_job_id = ? ORDER BY absorption.created_at""",
+                    (job_id,),
+                ).fetchall()
+            ]
+            combined_excerpt = "\n\n".join([str(job_row["payload_text"]), *absorbed_payloads])
+            visible_user_excerpt = excerpt or _visible_excerpt(combined_excerpt)
             self._connection.execute(
                 """INSERT INTO external_turn_excerpts
                    (topic_id, agent_id, provider_session_id, model, provider,
@@ -1344,6 +2552,19 @@ class HubState:
                     "DELETE FROM pending_handoffs WHERE handoff_id = ?",
                     (job_row["handoff_id"],),
                 )
+            if telegram_contract_version is not None:
+                self._connection.execute(
+                    """INSERT INTO runtime_checkpoints
+                       (checkpoint_key, integer_value, updated_at) VALUES (?, ?, ?)
+                       ON CONFLICT(checkpoint_key) DO UPDATE SET
+                         integer_value = MAX(integer_value, excluded.integer_value),
+                         updated_at = excluded.updated_at""",
+                    (
+                        f"telegram-contract:{job_row['session_id']}",
+                        telegram_contract_version,
+                        timestamp,
+                    ),
+                )
             outbox_id = str(uuid.uuid4())
             self._connection.execute(
                 """INSERT INTO telegram_outbox (
@@ -1362,6 +2583,7 @@ class HubState:
                     timestamp,
                 ),
             )
+            self._insert_telegram_outbox_parts(outbox_id, html, artifacts=artifacts)
             cursor = self._connection.execute(
                 """UPDATE provider_jobs
                    SET status = 'result_ready', lease_owner = NULL,
@@ -1402,6 +2624,35 @@ class HubState:
         if row is None:
             raise StateError(f"provider job has no Telegram outbox row: {job_id}")
         return self._telegram_outbox(row)
+
+    def get_telegram_outbox_parts(self, outbox_id: str) -> tuple[TelegramOutboxPartRecord, ...]:
+        rows = self._connection.execute(
+            """SELECT * FROM telegram_outbox_parts
+               WHERE outbox_id = ? ORDER BY part_index""",
+            (outbox_id,),
+        ).fetchall()
+        return tuple(self._telegram_outbox_part(row) for row in rows)
+
+    def next_telegram_outbox_part(
+        self,
+        outbox_id: str,
+        lease_token: str,
+        *,
+        now: datetime | None = None,
+    ) -> TelegramOutboxPartRecord:
+        timestamp = _timestamp(now)
+        row = self._connection.execute(
+            """SELECT parts.* FROM telegram_outbox_parts parts
+               JOIN telegram_outbox outbox ON outbox.outbox_id = parts.outbox_id
+               WHERE parts.outbox_id = ? AND parts.telegram_message_id IS NULL
+                 AND outbox.status = 'sending' AND outbox.lease_token = ?
+                 AND outbox.lease_expires_at > ?
+               ORDER BY parts.part_index LIMIT 1""",
+            (outbox_id, lease_token, timestamp),
+        ).fetchone()
+        if row is None:
+            raise StateError("Telegram outbox has no sendable part for this lease")
+        return self._telegram_outbox_part(row)
 
     def lease_telegram_outbox(
         self,
@@ -1552,28 +2803,73 @@ class HubState:
         timestamp = _timestamp(now)
         with self._immediate_transaction():
             row = self._connection.execute(
-                """SELECT job_id FROM telegram_outbox
+                """SELECT job_id, sender_agent_id FROM telegram_outbox
                    WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
                      AND lease_expires_at > ?""",
                 (outbox_id, lease_token, timestamp),
             ).fetchone()
             if row is None:
                 raise StateError("Telegram outbox lease is missing or invalid")
+            part = self._connection.execute(
+                """SELECT part_index FROM telegram_outbox_parts
+                   WHERE outbox_id = ? AND telegram_message_id IS NULL
+                   ORDER BY part_index LIMIT 1""",
+                (outbox_id,),
+            ).fetchone()
+            if part is None:
+                raise StateError("Telegram outbox has no undelivered part")
             self._connection.execute(
-                """UPDATE telegram_outbox
-                   SET status = 'delivered', telegram_message_id = ?, delivered_at = ?,
-                       lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
-                       updated_at = ? WHERE outbox_id = ? AND status = 'sending'
-                         AND lease_token = ? AND lease_expires_at > ?""",
-                (telegram_message_id, timestamp, timestamp, outbox_id, lease_token, timestamp),
+                """UPDATE telegram_outbox_parts
+                   SET telegram_message_id = ?, delivered_at = ?
+                   WHERE outbox_id = ? AND part_index = ? AND telegram_message_id IS NULL""",
+                (telegram_message_id, timestamp, outbox_id, part["part_index"]),
             )
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs SET status = 'completed', updated_at = ?
-                   WHERE job_id = ? AND status = 'result_ready'""",
-                (timestamp, row["job_id"]),
-            )
-            if cursor.rowcount != 1:
-                raise StateError("provider job is not ready for Telegram completion")
+            remaining = self._connection.execute(
+                """SELECT 1 FROM telegram_outbox_parts
+                   WHERE outbox_id = ? AND telegram_message_id IS NULL LIMIT 1""",
+                (outbox_id,),
+            ).fetchone()
+            if remaining is not None:
+                self._connection.execute(
+                    """UPDATE telegram_outbox
+                       SET status = 'pending', attempt_count = MAX(attempt_count - 1, 0),
+                           available_at = ?, lease_owner = NULL,
+                           lease_token = NULL, lease_expires_at = NULL, error_code = NULL,
+                           updated_at = ? WHERE outbox_id = ? AND status = 'sending'
+                             AND lease_token = ? AND lease_expires_at > ?""",
+                    (timestamp, timestamp, outbox_id, lease_token, timestamp),
+                )
+            else:
+                self._connection.execute(
+                    """UPDATE telegram_outbox
+                       SET status = 'delivered', telegram_message_id = ?, delivered_at = ?,
+                           lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+                           updated_at = ? WHERE outbox_id = ? AND status = 'sending'
+                             AND lease_token = ? AND lease_expires_at > ?""",
+                    (
+                        telegram_message_id,
+                        timestamp,
+                        timestamp,
+                        outbox_id,
+                        lease_token,
+                        timestamp,
+                    ),
+                )
+                cursor = self._connection.execute(
+                    """UPDATE provider_jobs SET status = 'completed', updated_at = ?
+                       WHERE job_id = ? AND status = 'result_ready'""",
+                    (timestamp, row["job_id"]),
+                )
+                if cursor.rowcount != 1:
+                    terminal = self._connection.execute(
+                        "SELECT status FROM provider_jobs WHERE job_id = ?",
+                        (row["job_id"],),
+                    ).fetchone()
+                    allowed_terminal = {"failed", "indeterminate"}
+                    if str(row["sender_agent_id"]) == "hub":
+                        allowed_terminal.add("cancelled")
+                    if terminal is None or str(terminal["status"]) not in allowed_terminal:
+                        raise StateError("provider job is not ready for Telegram completion")
             delivered = self._connection.execute(
                 "SELECT * FROM telegram_outbox WHERE outbox_id = ?", (outbox_id,)
             ).fetchone()
@@ -1635,31 +2931,7 @@ class HubState:
         source_agent_id: str,
         text: str,
     ) -> HandoffRecord:
-        self.get_topic(topic_id)
-        bounded = text.strip()[:20000]
-        if not target_agent_id or not source_agent_id or not bounded:
-            raise StateError("invalid handoff")
-        handoff_id = str(uuid.uuid4())
-        with self._connection:
-            self._connection.execute(
-                """INSERT INTO pending_handoffs
-                   (handoff_id, topic_id, target_agent_id, source_agent_id, text, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(topic_id, target_agent_id) DO UPDATE SET
-                     handoff_id = excluded.handoff_id,
-                     source_agent_id = excluded.source_agent_id,
-                     text = excluded.text,
-                     created_at = excluded.created_at""",
-                (
-                    handoff_id,
-                    topic_id,
-                    target_agent_id,
-                    source_agent_id,
-                    bounded,
-                    _now(),
-                ),
-            )
-        return HandoffRecord(handoff_id, topic_id, target_agent_id, source_agent_id, bounded)
+        raise StateError("automatic handoff is disabled; use an explicit bounded context request")
 
     def recent_external_context(
         self, topic_id: int, agent_id: str, *, limit: int = 8
@@ -1758,6 +3030,80 @@ class HubState:
             )
         return "\n\n".join(parts), max(int(row["turn_id"]) for row in rows)
 
+    def visible_context_snapshot(
+        self,
+        topic_id: int,
+        observer_agent_id: str,
+        *,
+        source_agent_id: str | None = None,
+        limit: int = 8,
+    ) -> str | None:
+        """Return bounded prior dialogue only after an explicit user request."""
+        if not observer_agent_id or limit <= 0 or limit > 20:
+            raise StateError("invalid visible context request")
+        if source_agent_id is not None and not source_agent_id:
+            raise StateError("invalid visible context source")
+        clauses = ["topic_id = ?"]
+        parameters: list[object] = [topic_id]
+        if source_agent_id is None:
+            clauses.append("agent_id != ?")
+            parameters.append(observer_agent_id)
+        else:
+            clauses.append("agent_id = ?")
+            parameters.append(source_agent_id)
+        parameters.append(limit)
+        rows = self._connection.execute(
+            f"""SELECT turn_id, agent_id, user_excerpt, response_excerpt, model, provider
+                FROM external_turn_excerpts
+                WHERE {" AND ".join(clauses)}
+                ORDER BY turn_id DESC LIMIT ?""",
+            parameters,
+        ).fetchall()
+        if not rows:
+            return None
+        parts: list[str] = []
+        for row in reversed(rows):
+            label = "/".join(
+                value for value in (row["agent_id"], row["provider"], row["model"]) if value
+            )
+            parts.append(
+                f"USER → {row['agent_id']}: {row['user_excerpt']}\n"
+                f"{label.upper()}: {row['response_excerpt']}"
+            )
+        return "\n\n".join(parts)
+
+    def unseen_forwarded_context(
+        self, topic_id: int, observer_agent_id: str, *, limit: int = 8
+    ) -> tuple[str | None, int | None]:
+        """Return passive user-forwarded quotes, excluding ordinary agent dialogue."""
+        from .session_adoption_state import CodexSessionOrigins
+
+        if not observer_agent_id or not 1 <= limit <= 20:
+            raise StateError("invalid forwarded context request")
+        cursor = self._connection.execute(
+            """SELECT last_turn_id FROM visible_context_cursors
+               WHERE topic_id = ? AND observer_agent_id = ?""",
+            (topic_id, observer_agent_id),
+        ).fetchone()
+        last_turn_id = int(cursor["last_turn_id"]) if cursor is not None else 0
+        floor, activation = CodexSessionOrigins(self).forwarded_boundary(
+            topic_id, observer_agent_id
+        )
+        rows = self._connection.execute(
+            """SELECT turn_id, response_excerpt FROM external_turn_excerpts
+               WHERE topic_id = ? AND agent_id = 'forwarded-quote' AND turn_id > ?
+                 AND (? = 0 OR source_message_id > ?)
+               ORDER BY turn_id DESC LIMIT ?""",
+            (topic_id, max(last_turn_id, floor), activation, activation, limit),
+        ).fetchall()
+        if not rows:
+            return None, None
+        text = "\n\n".join(
+            f"FORWARDED-QUOTE/TELEGRAM/QUOTED-CONTEXT:\n{row['response_excerpt']}"
+            for row in reversed(rows)
+        )
+        return text, max(int(row["turn_id"]) for row in rows)
+
     def acknowledge_visible_context(
         self, topic_id: int, observer_agent_id: str, last_turn_id: int
     ) -> None:
@@ -1802,12 +3148,31 @@ class HubState:
         )
         return self.get_session(session_id)
 
+    def _require_control_snapshot(self, topic_id: int, expected_session_id: str | None) -> None:
+        if expected_session_id is not None:
+            current = self.active_session(topic_id)
+            if (current.session_id if current else "") != expected_session_id:
+                raise StateError("active session changed; open controls again")
+            if current is not None and current.writer_mode != "telegram":
+                raise StateError("return the local writer before changing session settings")
+            if self.topic_has_running_dispatch(topic_id) or self.topic_has_pending_provider_job(
+                topic_id
+            ):
+                raise StateError("provider work is pending; retry controls after it completes")
+
     def activate_agent(
-        self, topic_id: int, agent_id: str, model: str, effort: str
+        self,
+        topic_id: int,
+        agent_id: str,
+        model: str,
+        effort: str,
+        *,
+        expected_session_id: str | None = None,
     ) -> SessionRecord:
         self.get_topic(topic_id)
         now = _now()
-        with self._connection:
+        with self._immediate_transaction():
+            self._require_control_snapshot(topic_id, expected_session_id)
             current = self._connection.execute(
                 "SELECT * FROM agent_sessions WHERE topic_id = ? AND status = 'active'",
                 (topic_id,),
@@ -1864,15 +3229,14 @@ class HubState:
             session = self._insert_session(topic_id, agent_id, model, effort, "satellite")
         return self.get_session(session.session_id)
 
-    def new_active_session(self, topic_id: int) -> SessionRecord:
-        row = self._connection.execute(
-            "SELECT * FROM agent_sessions WHERE topic_id = ? AND status = 'active'",
-            (topic_id,),
-        ).fetchone()
-        if row is None:
-            raise StateError("topic has no active session")
-        previous = self._session(row)
-        with self._connection:
+    def new_active_session(
+        self, topic_id: int, *, expected_session_id: str | None = None
+    ) -> SessionRecord:
+        with self._immediate_transaction():
+            self._require_control_snapshot(topic_id, expected_session_id)
+            previous = self.active_session(topic_id)
+            if previous is None:
+                raise StateError("topic has no active session")
             self._connection.execute(
                 "UPDATE agent_sessions SET status = 'archived', updated_at = ? WHERE session_id = ?",
                 (_now(), previous.session_id),
@@ -1882,15 +3246,29 @@ class HubState:
             )
         return self.get_session(replacement.session_id)
 
-    def replace_active_session(self, topic_id: int, *, model: str, effort: str) -> SessionRecord:
-        row = self._connection.execute(
-            "SELECT * FROM agent_sessions WHERE topic_id = ? AND status = 'active'",
-            (topic_id,),
-        ).fetchone()
-        if row is None:
-            raise StateError("topic has no active session")
-        previous = self._session(row)
-        with self._connection:
+    def replace_active_session(
+        self, topic_id: int, *, model: str, effort: str, expected_session_id: str | None = None
+    ) -> SessionRecord:
+        from .session_adoption_state import CodexSessionOrigins
+
+        with self._immediate_transaction():
+            self._require_control_snapshot(topic_id, expected_session_id)
+            previous = self.active_session(topic_id)
+            if previous is None:
+                raise StateError("topic has no active session")
+            if CodexSessionOrigins(self).get(previous.session_id) is not None:
+                if previous.writer_mode != "telegram":
+                    raise StateError("return the local writer before changing session settings")
+                self._connection.execute(
+                    "UPDATE agent_sessions SET model=?, effort=?, updated_at=? WHERE session_id=?",
+                    (
+                        _bounded(model, name="model", maximum=200),
+                        _bounded(effort, name="effort", maximum=64),
+                        _now(),
+                        previous.session_id,
+                    ),
+                )
+                return self.get_session(previous.session_id)
             self._connection.execute(
                 "UPDATE agent_sessions SET status = 'archived', updated_at = ? "
                 "WHERE session_id = ?",
@@ -1905,6 +3283,48 @@ class HubState:
                 self._connection.execute(
                     "INSERT INTO observed_messages VALUES (?, ?, ?, ?)",
                     (chat_id, message_id, observer_agent_id, _now()),
+                )
+        except sqlite3.IntegrityError:
+            return False
+        return True
+
+    def record_forwarded_quote(
+        self,
+        *,
+        topic_id: int,
+        chat_id: int,
+        message_id: int,
+        observer_agent_id: str,
+        text: str,
+    ) -> bool:
+        """Persist a Telegram forward as passive visible context, never as work."""
+        quote = _bounded(text, name="forwarded quote", maximum=4000)
+        observer = _bounded(observer_agent_id, name="observer agent id", maximum=64)
+        topic = self.get_topic(topic_id)
+        if topic.chat_id != chat_id or message_id <= 0:
+            raise StateError("forwarded quote does not match topic")
+        timestamp = _now()
+        try:
+            with self._immediate_transaction():
+                self._connection.execute(
+                    "INSERT INTO observed_messages VALUES (?, ?, ?, ?)",
+                    (chat_id, message_id, observer, timestamp),
+                )
+                self._connection.execute(
+                    """INSERT INTO external_turn_excerpts
+                       (topic_id, agent_id, provider_session_id, model, provider,
+                        user_excerpt, response_excerpt, created_at, source_message_id)
+                       VALUES (?, 'forwarded-quote', '', 'quoted-context', 'telegram',
+                               'Forwarded message', ?, ?, ?)""",
+                    (topic_id, quote, timestamp, message_id),
+                )
+                self._connection.execute(
+                    """DELETE FROM external_turn_excerpts
+                       WHERE topic_id = ? AND turn_id NOT IN (
+                         SELECT turn_id FROM external_turn_excerpts
+                         WHERE topic_id = ? ORDER BY turn_id DESC LIMIT 100
+                       )""",
+                    (topic_id, topic_id),
                 )
         except sqlite3.IntegrityError:
             return False
@@ -1972,7 +3392,192 @@ class HubState:
             "bot_offsets": [dict(row) for row in offsets],
             "dispatch_counts": {row["status"]: row["count"] for row in dispatch_counts},
             "pending_dispatches": [dict(row) for row in running],
+            "reliability": self.reliability_snapshot(),
             "runtime_events": [dict(row) for row in runtime_events],
+        }
+
+    def execution_capacity_snapshot(
+        self, capacity: int, *, now: datetime | None = None
+    ) -> dict[str, object]:
+        """Return passive, bounded slot ownership without project or topic identity."""
+        if not 1 <= capacity <= 16:
+            raise StateError("invalid parallel root capacity")
+        timestamp = _timestamp(now or datetime.now(timezone.utc))
+        rows = self._connection.execute(
+            """SELECT jobs.lease_owner, jobs.agent_id, jobs.status,
+                      COALESCE(topics.execution_scope,
+                               'project:' || topics.project_id) AS execution_scope
+               FROM provider_jobs jobs
+               JOIN topics ON topics.topic_id = jobs.topic_id
+               WHERE jobs.status IN ('leased', 'executing')
+                 AND jobs.lease_expires_at > ?
+               ORDER BY jobs.lease_owner, jobs.agent_id, jobs.status
+               LIMIT 16""",
+            (timestamp,),
+        ).fetchall()
+        owners = [
+            {
+                "worker_instance": str(row["lease_owner"] or "unknown"),
+                "agent_id": str(row["agent_id"]),
+                "phase": str(row["status"]),
+            }
+            for row in rows
+        ]
+        occupied = int(
+            self._connection.execute(
+                """SELECT COUNT(DISTINCT COALESCE(
+                     topics.execution_scope, 'project:' || topics.project_id))
+                   FROM provider_jobs jobs
+                   JOIN topics ON topics.topic_id = jobs.topic_id
+                   WHERE jobs.status IN ('leased', 'executing')
+                     AND jobs.lease_expires_at > ?""",
+                (timestamp,),
+            ).fetchone()[0]
+        )
+        uncertain = int(
+            self._connection.execute(
+                """SELECT COUNT(DISTINCT COALESCE(
+                     topics.execution_scope, 'project:' || topics.project_id))
+                   FROM provider_jobs jobs
+                   JOIN topics ON topics.topic_id = jobs.topic_id
+                   WHERE (
+                     jobs.status = 'executing' AND jobs.lease_expires_at <= ?
+                   ) OR (
+                     jobs.status = 'indeterminate'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_job_resolutions resolutions
+                       WHERE resolutions.job_id = jobs.job_id
+                     )
+                   )""",
+                (timestamp,),
+            ).fetchone()[0]
+        )
+        return {
+            "capacity": capacity,
+            "occupied": occupied,
+            "available": max(0, capacity - occupied),
+            "owners": owners,
+            "blocked_uncertain_scopes": uncertain,
+        }
+
+    def reliability_snapshot(self, *, now: datetime | None = None) -> dict[str, int | None]:
+        """Return bounded aggregate outcome telemetry without provider or network access."""
+        current = now or datetime.now(timezone.utc)
+        _timestamp(current)
+        counts = {
+            str(row["status"]): int(row["count"])
+            for row in self._connection.execute(
+                "SELECT status, COUNT(*) AS count FROM provider_jobs GROUP BY status"
+            ).fetchall()
+        }
+        delivered_final_results = int(
+            self._connection.execute(
+                """SELECT COUNT(*) FROM provider_job_results results
+                   JOIN telegram_outbox outbox ON outbox.job_id = results.job_id
+                   WHERE outbox.status = 'delivered'"""
+            ).fetchone()[0]
+        )
+        partial_outcomes = int(
+            self._connection.execute(
+                """SELECT COUNT(*) FROM provider_jobs jobs
+                   WHERE jobs.status IN ('failed', 'indeterminate')
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_job_results results
+                       WHERE results.job_id = jobs.job_id
+                     )
+                     AND (
+                       EXISTS (
+                         SELECT 1 FROM provider_visible_items items
+                         WHERE items.job_id = jobs.job_id
+                           AND length(items.visible_text) > 0
+                       )
+                       OR EXISTS (
+                         SELECT 1 FROM provider_execution_checkpoints checkpoints
+                         WHERE checkpoints.job_id = jobs.job_id
+                           AND length(checkpoints.completed_text) > 0
+                       )
+                     )"""
+            ).fetchone()[0]
+        )
+        recovered_results = int(
+            self._connection.execute(
+                "SELECT COUNT(*) FROM provider_job_results WHERE safe_metadata_json = ?",
+                (RECOVERED_RESULT_METADATA_JSON,),
+            ).fetchone()[0]
+        )
+        unresolved_uncertain_execution = int(
+            self._connection.execute(
+                """SELECT COUNT(*) FROM provider_jobs jobs
+                   WHERE jobs.status = 'indeterminate'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_job_resolutions resolutions
+                       WHERE resolutions.job_id = jobs.job_id
+                     )"""
+            ).fetchone()[0]
+        )
+        pending_delivery = int(
+            self._connection.execute(
+                "SELECT COUNT(*) FROM telegram_outbox WHERE status IN ('pending', 'sending')"
+            ).fetchone()[0]
+        )
+        pending_progress_delivery = int(
+            self._connection.execute(
+                "SELECT COUNT(*) FROM provider_progress_deliveries "
+                "WHERE status IN ('pending', 'sending')"
+            ).fetchone()[0]
+        )
+        queued_statuses = ("queued", "leased", "executing", "retry_wait")
+        queued_work = sum(counts.get(status, 0) for status in queued_statuses)
+        oldest_queue = self._connection.execute(
+            """SELECT MIN(created_at) FROM provider_jobs
+               WHERE status IN ('queued', 'leased', 'executing', 'retry_wait')"""
+        ).fetchone()[0]
+        oldest_delivery = self._connection.execute(
+            """SELECT MIN(created_at) FROM telegram_outbox
+               WHERE status IN ('pending', 'sending')"""
+        ).fetchone()[0]
+        oldest_progress_delivery = self._connection.execute(
+            "SELECT MIN(created_at) FROM provider_progress_deliveries "
+            "WHERE status IN ('pending', 'sending')"
+        ).fetchone()[0]
+        latest_delivery = self._connection.execute(
+            """SELECT created_at, delivered_at FROM telegram_outbox
+               WHERE status = 'delivered' AND delivered_at IS NOT NULL
+               ORDER BY delivered_at DESC LIMIT 1"""
+        ).fetchone()
+
+        def age_seconds(value: object) -> int | None:
+            if not isinstance(value, str):
+                return None
+            parsed = datetime.fromisoformat(value)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return max(0, int((current - parsed.astimezone(timezone.utc)).total_seconds()))
+
+        delivery_delay: int | None = None
+        if latest_delivery is not None:
+            created = datetime.fromisoformat(str(latest_delivery["created_at"]))
+            delivered = datetime.fromisoformat(str(latest_delivery["delivered_at"]))
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            if delivered.tzinfo is None:
+                delivered = delivered.replace(tzinfo=timezone.utc)
+            delivery_delay = max(0, int((delivered - created).total_seconds()))
+
+        return {
+            "accepted_requests": sum(counts.values()),
+            "delivered_final_results": delivered_final_results,
+            "partial_outcomes": partial_outcomes,
+            "uncertain_execution": counts.get("indeterminate", 0),
+            "unresolved_uncertain_execution": unresolved_uncertain_execution,
+            "recovered_results": recovered_results,
+            "queued_work": queued_work,
+            "pending_delivery": pending_delivery,
+            "pending_progress_delivery": pending_progress_delivery,
+            "oldest_queue_age_seconds": age_seconds(oldest_queue),
+            "oldest_delivery_age_seconds": age_seconds(oldest_delivery),
+            "oldest_progress_delivery_age_seconds": age_seconds(oldest_progress_delivery),
+            "last_delivery_delay_seconds": delivery_delay,
         }
 
     def start_dispatch(
@@ -2009,14 +3614,37 @@ class HubState:
         if cursor.rowcount != 1:
             raise StateError(f"unknown dispatch_id: {dispatch_id}")
 
-    def record_runtime_event(self, component: str, level: str, code: str, detail: str) -> None:
+    def record_runtime_event(
+        self,
+        component: str,
+        level: str,
+        code: str,
+        detail: str,
+        *,
+        recorded_at: datetime | None = None,
+    ) -> None:
         if level not in {"info", "warning", "error"}:
             raise StateError("invalid runtime event level")
+        current = recorded_at or datetime.now(timezone.utc)
+        created_at = _timestamp(current)
+        cutoff = _timestamp(current - RUNTIME_EVENT_MAX_AGE)
         with self._connection:
             self._connection.execute(
                 """INSERT INTO runtime_events(component, level, code, detail, created_at)
                    VALUES (?, ?, ?, ?, ?)""",
-                (component[:64], level, code[:64], detail[:1000], _now()),
+                (component[:64], level, code[:64], detail[:1000], created_at),
+            )
+            self._connection.execute(
+                "DELETE FROM runtime_events WHERE created_at < ?",
+                (cutoff,),
+            )
+            self._connection.execute(
+                """DELETE FROM runtime_events
+                   WHERE event_id NOT IN (
+                     SELECT event_id FROM runtime_events
+                     ORDER BY created_at DESC, event_id DESC LIMIT ?
+                   )""",
+                (RUNTIME_EVENT_MAX_COUNT,),
             )
 
     def latest_runtime_event(self, component: str, code: str) -> dict[str, object] | None:
@@ -2056,6 +3684,19 @@ class HubState:
     def set_runtime_counter(self, key: str, value: int) -> None:
         self.observe_runtime_counter(key, value)
 
+    def replace_runtime_counter(self, key: str, value: int) -> None:
+        if not key.strip() or value < 0:
+            raise StateError("invalid runtime counter")
+        with self._connection:
+            self._connection.execute(
+                """INSERT INTO runtime_checkpoints
+                   (checkpoint_key, integer_value, updated_at) VALUES (?, ?, ?)
+                   ON CONFLICT(checkpoint_key) DO UPDATE SET
+                     integer_value = excluded.integer_value,
+                     updated_at = excluded.updated_at""",
+                (key[:128], value, _now()),
+            )
+
     def active_topics_for_agent(self, agent_id: str) -> tuple[TopicRecord, ...]:
         rows = self._connection.execute(
             """SELECT t.* FROM topics t
@@ -2092,11 +3733,39 @@ class HubState:
             )
         return True
 
+    def claim_alert_transition(self, alert_key: str) -> bool:
+        """Claim a state-transition alert once until its condition clears."""
+        key = _bounded(alert_key, name="alert delivery key", maximum=256)
+        with self._immediate_transaction():
+            cursor = self._connection.execute(
+                "INSERT OR IGNORE INTO alert_deliveries(alert_key, last_sent_at) VALUES (?, ?)",
+                (key, _now()),
+            )
+        return cursor.rowcount == 1
+
     def release_alert_delivery(self, alert_key: str) -> None:
         with self._connection:
             self._connection.execute(
                 "DELETE FROM alert_deliveries WHERE alert_key = ?",
                 (alert_key[:256],),
+            )
+
+    def reconcile_alert_transitions(self, *, active_keys: tuple[str, ...], suffix: str) -> None:
+        """Re-arm resolved transition alerts while leaving cooldown claims alone."""
+        if not suffix or len(suffix) > 64:
+            raise StateError("invalid alert transition suffix")
+        active = {key[:256] for key in active_keys}
+        with self._immediate_transaction():
+            rows = self._connection.execute(
+                "SELECT alert_key FROM alert_deliveries WHERE alert_key LIKE ?",
+                (f"%{suffix}",),
+            ).fetchall()
+            resolved = [
+                str(row["alert_key"]) for row in rows if str(row["alert_key"]) not in active
+            ]
+            self._connection.executemany(
+                "DELETE FROM alert_deliveries WHERE alert_key = ?",
+                ((key,) for key in resolved),
             )
 
     def register_lane(
@@ -2109,7 +3778,8 @@ class HubState:
         topic_id: int | None = None,
     ) -> None:
         now = _now()
-        with self._connection:
+        resolved_path = str(worktree_path.resolve(strict=True))
+        with self._immediate_transaction():
             self._connection.execute(
                 """INSERT INTO worktree_lanes
                    (lane_id, project_id, topic_id, worktree_path, branch_name,
@@ -2118,22 +3788,40 @@ class HubState:
                 (
                     lane_id,
                     project_id,
-                    topic_id,
-                    str(worktree_path.resolve(strict=True)),
+                    None,
+                    resolved_path,
                     branch_name,
                     now,
                     now,
                 ),
             )
+            if topic_id is not None:
+                self._bind_lane_locked(lane_id, topic_id, now=now)
 
     def archive_lane(self, lane_id: str) -> None:
-        with self._connection:
+        with self._immediate_transaction():
+            lane = self._connection.execute(
+                "SELECT * FROM worktree_lanes WHERE lane_id = ? AND status = 'active'",
+                (lane_id,),
+            ).fetchone()
+            if lane is None:
+                raise StateError(f"unknown or inactive lane_id: {lane_id}")
+            topic_id = lane["topic_id"]
+            if topic_id is not None:
+                self._require_topic_execution_idle_locked(int(topic_id))
+                self._require_execution_scope_idle_locked(f"root:{lane['worktree_path']}")
             cursor = self._connection.execute(
                 "UPDATE worktree_lanes SET status = 'archived', updated_at = ? WHERE lane_id = ?",
                 (_now(), lane_id),
             )
-        if cursor.rowcount != 1:
-            raise StateError(f"unknown lane_id: {lane_id}")
+            if cursor.rowcount != 1:
+                raise StateError(f"unknown lane_id: {lane_id}")
+            if topic_id is not None:
+                self._connection.execute(
+                    """UPDATE topics SET execution_scope = 'project:' || project_id,
+                              updated_at = ? WHERE topic_id = ?""",
+                    (_now(), topic_id),
+                )
 
     def mark_lane_cleaned(self, lane_id: str) -> None:
         with self._connection:
@@ -2146,11 +3834,23 @@ class HubState:
             raise StateError(f"lane is unknown, active, or already cleaned: {lane_id}")
 
     def bind_lane(self, lane_id: str, topic_id: int) -> dict[str, object]:
+        with self._immediate_transaction():
+            self._bind_lane_locked(lane_id, topic_id, now=_now())
+        bound = self._connection.execute(
+            "SELECT * FROM worktree_lanes WHERE lane_id = ?", (lane_id,)
+        ).fetchone()
+        if bound is None:
+            raise StateError(f"unknown lane_id: {lane_id}")
+        return dict(bound)
+
+    def _bind_lane_locked(self, lane_id: str, topic_id: int, *, now: str) -> None:
         lane = self._connection.execute(
             "SELECT * FROM worktree_lanes WHERE lane_id = ?", (lane_id,)
         ).fetchone()
         if lane is None or lane["status"] != "active":
             raise StateError(f"unknown or inactive lane_id: {lane_id}")
+        if lane["topic_id"] is not None:
+            raise StateError("active lane is already bound")
         topic = self._connection.execute(
             "SELECT * FROM topics WHERE topic_id = ?", (topic_id,)
         ).fetchone()
@@ -2165,17 +3865,96 @@ class HubState:
         ).fetchone()
         if conflict is not None:
             raise StateError("Telegram topic is already bound to another active lane")
-        with self._connection:
-            self._connection.execute(
-                "UPDATE worktree_lanes SET topic_id = ?, updated_at = ? WHERE lane_id = ?",
-                (topic_id, _now(), lane_id),
-            )
-        bound = self._connection.execute(
-            "SELECT * FROM worktree_lanes WHERE lane_id = ?", (lane_id,)
+        self._require_topic_execution_idle_locked(topic_id)
+        self._require_execution_scope_idle_locked(f"root:{lane['worktree_path']}")
+        self._connection.execute(
+            "UPDATE worktree_lanes SET topic_id = ?, updated_at = ? WHERE lane_id = ?",
+            (topic_id, now, lane_id),
+        )
+        self._connection.execute(
+            "UPDATE topics SET execution_scope = ?, updated_at = ? WHERE topic_id = ?",
+            (f"root:{lane['worktree_path']}", now, topic_id),
+        )
+
+    def _require_topic_execution_idle_locked(self, topic_id: int) -> None:
+        job = self._connection.execute(
+            """SELECT 1 FROM provider_jobs jobs
+               WHERE jobs.topic_id = ? AND (
+                 jobs.status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                 OR (jobs.status = 'indeterminate' AND NOT EXISTS (
+                   SELECT 1 FROM provider_job_resolutions resolutions
+                   WHERE resolutions.job_id = jobs.job_id
+                 ))
+               ) LIMIT 1""",
+            (topic_id,),
         ).fetchone()
-        if bound is None:
-            raise StateError(f"unknown lane_id: {lane_id}")
-        return dict(bound)
+        dispatch = self._connection.execute(
+            """SELECT 1 FROM turn_dispatches
+               WHERE topic_id = ? AND status IN ('queued', 'running') LIMIT 1""",
+            (topic_id,),
+        ).fetchone()
+        writer = self._connection.execute(
+            """SELECT 1 FROM agent_sessions
+               WHERE topic_id = ? AND status IN ('active', 'satellite')
+                 AND writer_mode != 'telegram' LIMIT 1""",
+            (topic_id,),
+        ).fetchone()
+        bound_session = self._connection.execute(
+            """SELECT 1 FROM agent_sessions
+               WHERE topic_id = ? AND status IN ('active', 'satellite')
+                 AND provider_session_id IS NOT NULL LIMIT 1""",
+            (topic_id,),
+        ).fetchone()
+        if any(item is not None for item in (job, dispatch, writer, bound_session)):
+            raise StateError("Telegram topic has active or unresolved execution")
+
+    def _require_execution_scope_idle_locked(self, execution_scope: str) -> None:
+        job = self._connection.execute(
+            """SELECT 1 FROM provider_jobs jobs
+               JOIN topics ON topics.topic_id = jobs.topic_id
+               WHERE COALESCE(topics.execution_scope, 'project:' || topics.project_id) = ?
+                 AND (
+                   jobs.status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                   OR (jobs.status = 'indeterminate' AND NOT EXISTS (
+                     SELECT 1 FROM provider_job_resolutions resolutions
+                     WHERE resolutions.job_id = jobs.job_id
+                   ))
+                 ) LIMIT 1""",
+            (execution_scope,),
+        ).fetchone()
+        dispatch = self._connection.execute(
+            """SELECT 1 FROM turn_dispatches dispatches
+               JOIN topics ON topics.topic_id = dispatches.topic_id
+               WHERE COALESCE(topics.execution_scope, 'project:' || topics.project_id) = ?
+                 AND dispatches.status IN ('queued', 'running') LIMIT 1""",
+            (execution_scope,),
+        ).fetchone()
+        writer = self._connection.execute(
+            """SELECT 1 FROM agent_sessions sessions
+               JOIN topics ON topics.topic_id = sessions.topic_id
+               WHERE COALESCE(topics.execution_scope, 'project:' || topics.project_id) = ?
+                 AND sessions.status IN ('active', 'satellite')
+                 AND sessions.writer_mode != 'telegram' LIMIT 1""",
+            (execution_scope,),
+        ).fetchone()
+        bound_session = self._connection.execute(
+            """SELECT 1 FROM agent_sessions sessions
+               JOIN topics ON topics.topic_id = sessions.topic_id
+               WHERE COALESCE(topics.execution_scope, 'project:' || topics.project_id) = ?
+                 AND sessions.status IN ('active', 'satellite')
+                 AND sessions.provider_session_id IS NOT NULL LIMIT 1""",
+            (execution_scope,),
+        ).fetchone()
+        if any(item is not None for item in (job, dispatch, writer, bound_session)):
+            raise StateError("execution scope has active or unresolved execution")
+
+    def active_lane_for_topic(self, topic_id: int) -> dict[str, object] | None:
+        row = self._connection.execute(
+            """SELECT * FROM worktree_lanes
+               WHERE topic_id = ? AND status = 'active'""",
+            (topic_id,),
+        ).fetchone()
+        return None if row is None else dict(row)
 
     def get_lane(self, lane_id: str) -> dict[str, object]:
         row = self._connection.execute(

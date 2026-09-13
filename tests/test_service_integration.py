@@ -21,6 +21,7 @@ from hermes_codex_router.hub_config import (
 from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.state import HubState
+from tests.git_fixtures import init_git_root
 
 
 class FakeTelegram:
@@ -41,6 +42,7 @@ class FakeClient:
     def __init__(self) -> None:
         self.started = 0
         self.resumed = 0
+        self.resumed_thread_ids: list[str] = []
         self.start_roots: list[Path] = []
         self.prompts: list[str] = []
 
@@ -50,8 +52,9 @@ class FakeClient:
         self.start_roots.append(root)
         return CodexThread(f"thread-{self.started}", root, "gpt-5.6-sol", "openai")
 
-    def resume_thread(self, **_: object) -> CodexThread:
+    def resume_thread(self, **kwargs: object) -> CodexThread:
         self.resumed += 1
+        self.resumed_thread_ids.append(str(kwargs["thread_id"]))
         return CodexThread("thread-1", Path.cwd(), "gpt-5.6-sol", "openai")
 
     def start_turn(self, **kwargs: object) -> str:
@@ -245,7 +248,7 @@ class ServiceIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project"
-            (project_root / ".git").mkdir(parents=True)
+            init_git_root(project_root)
             config = HubConfig(
                 schema_version=1,
                 owner_user_ids=(42,),
@@ -357,13 +360,18 @@ class ServiceIntegrationTests(unittest.TestCase):
             self.assertTrue(value.handle_update(update(8, "/status")))
             self.assertEqual(len(telegram.sent), codex_message_count)
             self.assertIn("OpenCode", external.telegram.sent[-1][2])
+
+            # Test model refresh callback in topic
+            self.assertTrue(value.handle_update(callback(9, "cb-refresh", "modelrefresh:codex:0")))
+            self.assertIn("Codex: choose model", telegram.sent[-1][2])
+            self.assertIn("modelrefresh:codex:0", callback_values(telegram.markups[-1]))
             value.state.close()
 
-    def test_main_receives_unseen_satellite_dialogue_on_next_productive_turn(self) -> None:
+    def test_main_receives_other_agent_dialogue_only_on_explicit_context_request(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project"
-            (project_root / ".git").mkdir(parents=True)
+            init_git_root(project_root)
             state_path = base / "state.db"
             config = HubConfig(
                 schema_version=1,
@@ -414,18 +422,84 @@ class ServiceIntegrationTests(unittest.TestCase):
             )
 
             self.assertTrue(value.handle_update(update(8, "Now continue the project")))
+            self.assertNotIn("relax, this is a connection test", client.prompts[0])
+            self.assertTrue(value.handle_update(update(9, "/context antigravity 8")))
+            value.state.close()
+
+        self.assertEqual(len(client.prompts), 2)
+        self.assertIn("relax, this is a connection test", client.prompts[1])
+        self.assertIn("understood, connection works", client.prompts[1])
+        self.assertIn("CURRENT USER COMMAND:\n/context antigravity 8", client.prompts[1])
+
+    def test_forwarded_command_is_passive_quote_for_the_next_user_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            project_root = base / "Project"
+            init_git_root(project_root)
+            state_path = base / "state.db"
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(42,),
+                registry_path=base / "projects.json",
+                state_path=state_path,
+                codex_socket_path=base / "codex.sock",
+                manage_codex_server=False,
+                terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+                projects=(ProjectBinding("project", -1001234567890),),
+                agents=(
+                    AgentDefinition(
+                        "codex",
+                        "Codex",
+                        "project_codex_bot",
+                        "codex",
+                        None,
+                        True,
+                        False,
+                        "gpt-5.6-sol",
+                        "high",
+                    ),
+                ),
+            )
+            registry = ProjectRegistry(
+                1, (base,), (Project("project", "Project", "Project", project_root),)
+            )
+            client = FakeClient()
+            telegram = FakeTelegram()
+            value = ProjectHubService.__new__(ProjectHubService)
+            value.config = config
+            value.registry = registry
+            value.state = HubState.open(state_path)
+            value.agent = config.agents[0]
+            value.telegram = cast(Any, telegram)
+            value.supervisor = cast(Any, FakeSupervisor(client))
+            value._codex_client = None
+            value.usernames = {"codex": "project_codex_bot"}
+            forwarded = update(18, "/stop")
+            cast(dict[str, Any], forwarded["message"])["forward_origin"] = {
+                "type": "user",
+                "sender_user": {"id": 9000000000, "is_bot": True},
+                "date": 1788220000,
+            }
+
+            self.assertTrue(value.handle_update(forwarded))
+            self.assertEqual(client.prompts, [])
+            self.assertEqual(telegram.sent, [])
+            topic = value.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            self.assertIsNone(value.state.pending_emergency_stop(topic.topic_id, "codex"))
+            self.assertTrue(value.handle_update(update(19, "What does that quote mean?")))
             value.state.close()
 
         self.assertEqual(len(client.prompts), 1)
-        self.assertIn("relax, this is a connection test", client.prompts[0])
-        self.assertIn("understood, connection works", client.prompts[0])
-        self.assertIn("Now continue the project", client.prompts[0])
+        self.assertIn("FORWARDED-QUOTE/TELEGRAM/QUOTED-CONTEXT", client.prompts[0])
+        self.assertIn("/stop", client.prompts[0])
+        self.assertIn("What does that quote mean?", client.prompts[0])
 
     def test_central_ingress_dispatches_reply_to_external_agent_without_codex_turn(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project"
-            (project_root / ".git").mkdir(parents=True)
+            init_git_root(project_root)
             state_path = base / "state.db"
             config = HubConfig(
                 schema_version=1,
@@ -551,7 +625,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             base = Path(directory)
             roots = (base / "First", base / "Second")
             for root in roots:
-                (root / ".git").mkdir(parents=True)
+                init_git_root(root)
             state_path = base / "state.db"
             config = HubConfig(
                 schema_version=1,
@@ -620,7 +694,7 @@ class ServiceIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project"
-            (project_root / ".git").mkdir(parents=True)
+            init_git_root(project_root)
             state_path = base / "state.db"
             config = HubConfig(
                 schema_version=1,
@@ -691,7 +765,7 @@ class ServiceIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project With Space"
-            (project_root / ".git").mkdir(parents=True)
+            init_git_root(project_root)
             config = HubConfig(
                 schema_version=1,
                 owner_user_ids=(42,),
@@ -748,17 +822,18 @@ class ServiceIntegrationTests(unittest.TestCase):
             active = value.state.active_session(topic.topic_id)
             assert active is not None
             self.assertEqual(active.writer_mode, "telegram")
+            self.assertEqual(active.provider_session_id, "thread-1")
+            self.assertEqual(len(client.prompts), prompt_count)
             self.assertTrue(value.handle_update(update(14, "continue")))
+            active = value.state.active_session(topic.topic_id)
+            assert active is not None
+            self.assertEqual(active.provider_session_id, "thread-1")
             value.state.close()
 
         self.assertEqual(client.started, 1)
-        self.assertEqual(client.resumed, 2)
-        self.assertTrue(
-            any(
-                "Summarize only the work completed through the local CLI" in item
-                for item in client.prompts
-            )
-        )
+        self.assertEqual(client.resumed, 1)
+        self.assertEqual(client.resumed_thread_ids, ["thread-1"])
+        self.assertFalse(any("Summarize only" in item for item in client.prompts))
 
 
 if __name__ == "__main__":

@@ -81,6 +81,12 @@ class AcceptanceActor:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderTelemetrySettings:
+    quota_cache: Path
+    status_state: Path
+
+
+@dataclass(frozen=True, slots=True)
 class HubConfig:
     schema_version: int
     owner_user_ids: tuple[int, ...]
@@ -104,6 +110,13 @@ class HubConfig:
     # External workers are deliberately selected per provider.  This avoids a
     # global runtime switch accidentally stranding providers without a worker.
     external_worker_agent_ids: tuple[str, ...] = ()
+    # Global Hub-owned productive capacity across independent canonical roots.
+    # One preserves the serialized rollout and remains the safe default.
+    max_parallel_roots: int = 1
+    # Consecutive productive messages with identical routing are collected
+    # into one provider turn.  Zero keeps legacy one-message/one-turn behavior.
+    message_batch_quiet_ms: int = 0
+    message_batch_max_ms: int = 8000
     direct_message_project_id: str | None = None
     recovery_plane: RecoveryPlaneSettings = field(
         default_factory=lambda: RecoveryPlaneSettings(
@@ -120,10 +133,12 @@ class HubConfig:
     )
     acceptance_actors: tuple[AcceptanceActor, ...] = ()
     codex_multi_auth_dir: Path | None = None
+    codex_sessions_dir: Path | None = None
     codex_multi_auth_executable: Path | None = None
     codex_stdio_executable: Path | None = None
     codex_account_hints: dict[int, str] = field(default_factory=dict)
     provider_account_hints: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    provider_telemetry: dict[str, ProviderTelemetrySettings] = field(default_factory=dict)
 
     def require_agent(self, agent_id: str) -> AgentDefinition:
         for agent in self.agents:
@@ -313,6 +328,14 @@ def load_hub_config(
             raise HubConfigError(
                 "manage_codex_server and codex_stdio_executable are mutually exclusive"
             )
+    sessions_dir_value = root.get("codex_sessions_dir")
+    codex_sessions_dir = None
+    if sessions_dir_value is not None:
+        codex_sessions_dir = _absolute_path(
+            sessions_dir_value, "codex_sessions_dir", must_exist=True
+        )
+        if not codex_sessions_dir.is_dir():
+            raise HubConfigError("codex_sessions_dir must be a directory")
 
     terminal_data = _object(root.get("terminal", {}), "terminal")
     terminal_backend = terminal_data.get("backend", "auto")
@@ -530,6 +553,32 @@ def load_hub_config(
         if len(set(raw_hints)) != len(raw_hints):
             raise HubConfigError("provider_account_hints contains duplicate prefixes")
         provider_account_hints[str(agent_id)] = tuple(raw_hints)
+    raw_provider_telemetry = root.get("provider_telemetry", {})
+    if not isinstance(raw_provider_telemetry, dict):
+        raise HubConfigError("provider_telemetry must be an object")
+    provider_telemetry: dict[str, ProviderTelemetrySettings] = {}
+    for agent_id, raw_settings in raw_provider_telemetry.items():
+        agent = next((item for item in agents if item.agent_id == agent_id), None)
+        if agent is None or agent.runtime != "antigravity":
+            raise HubConfigError("provider_telemetry requires a configured Antigravity agent")
+        settings = _object(raw_settings, f"provider_telemetry.{agent_id}")
+        quota_cache = _absolute_path(
+            settings.get("quota_cache"),
+            f"provider_telemetry.{agent_id}.quota_cache",
+            must_exist=True,
+        )
+        status_state = _absolute_path(
+            settings.get("status_state"),
+            f"provider_telemetry.{agent_id}.status_state",
+            must_exist=True,
+        )
+        for telemetry_file in (quota_cache, status_state):
+            if not telemetry_file.is_file() or telemetry_file.stat().st_mode & 0o077:
+                raise HubConfigError("provider telemetry files must have mode 0600")
+        provider_telemetry[str(agent_id)] = ProviderTelemetrySettings(
+            quota_cache=quota_cache,
+            status_state=status_state,
+        )
 
     hub_bot = None
     if raw_hub_bot is not None:
@@ -553,6 +602,8 @@ def load_hub_config(
         )
         if any(agent.token_file == hub_bot.token_file for agent in agents):
             raise HubConfigError("hub_bot.token_file duplicates an agent token_file")
+    if alerts_chat_id is not None and hub_bot is None:
+        raise HubConfigError("operational_alerts requires hub_bot")
 
     direct_message_project_id = root.get("direct_message_project_id")
     if direct_message_project_id is not None and (
@@ -608,6 +659,31 @@ def load_hub_config(
             )
         if agent.managed_externally:
             raise HubConfigError(f"external worker agent {agent_id} must be locally managed")
+    max_parallel_roots = root.get("max_parallel_roots", 1)
+    if (
+        not isinstance(max_parallel_roots, int)
+        or isinstance(max_parallel_roots, bool)
+        or not 1 <= max_parallel_roots <= 16
+    ):
+        raise HubConfigError("max_parallel_roots must be an integer from 1 to 16")
+    if max_parallel_roots > 1 and queue_runtime != "external":
+        raise HubConfigError("max_parallel_roots above 1 requires queue_runtime external")
+    message_batch_quiet_ms = root.get("message_batch_quiet_ms", 0)
+    message_batch_max_ms = root.get("message_batch_max_ms", 8000)
+    if (
+        not isinstance(message_batch_quiet_ms, int)
+        or isinstance(message_batch_quiet_ms, bool)
+        or not 0 <= message_batch_quiet_ms <= 5000
+    ):
+        raise HubConfigError("message_batch_quiet_ms must be an integer from 0 to 5000")
+    if (
+        not isinstance(message_batch_max_ms, int)
+        or isinstance(message_batch_max_ms, bool)
+        or not 1000 <= message_batch_max_ms <= 30000
+    ):
+        raise HubConfigError("message_batch_max_ms must be an integer from 1000 to 30000")
+    if message_batch_quiet_ms > message_batch_max_ms:
+        raise HubConfigError("message_batch_quiet_ms must not exceed message_batch_max_ms")
     if hub_bot is not None:
         unsupported_local = sorted(
             agent.agent_id
@@ -627,7 +703,7 @@ def load_hub_config(
                 f"hub_bot requires an isolated external worker for agent: {missing_workers[0]}"
             )
 
-    return HubConfig(
+    config = HubConfig(
         schema_version=1,
         owner_user_ids=tuple(raw_owners),
         registry_path=registry_path,
@@ -656,13 +732,25 @@ def load_hub_config(
         queue_runtime=queue_runtime,
         outbox_runtime=outbox_runtime,
         external_worker_agent_ids=external_worker_agent_ids,
+        max_parallel_roots=max_parallel_roots,
+        message_batch_quiet_ms=message_batch_quiet_ms,
+        message_batch_max_ms=message_batch_max_ms,
         direct_message_project_id=direct_message_project_id,
         codex_multi_auth_dir=codex_multi_auth_dir,
+        codex_sessions_dir=codex_sessions_dir,
         codex_multi_auth_executable=codex_multi_auth_executable,
         codex_stdio_executable=codex_stdio_executable,
         codex_account_hints=codex_account_hints,
         provider_account_hints=provider_account_hints,
+        provider_telemetry=provider_telemetry,
     )
+    from .session_adoption_policy import validate_adoption_mode
+
+    try:
+        validate_adoption_mode(config)
+    except ValueError as exc:
+        raise HubConfigError(str(exc)) from None
+    return config
 
 
 def load_codex_worker_config(path: Path) -> HubConfig:
