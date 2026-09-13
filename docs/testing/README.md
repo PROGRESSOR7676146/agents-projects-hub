@@ -9,9 +9,24 @@ python scripts/validate.py
 ```
 
 The gate performs the repository privacy scan, formatting, Ruff, Pyright,
-unit/integration tests, and publishable configuration validation. Automated
-tests use fake transports and temporary Git/SQLite fixtures. They must not
-contact real Telegram groups or consume provider tokens.
+unit/integration tests, release-lock verification, documentation/release
+metadata contracts, and publishable configuration validation. Automated tests
+use fake transports and temporary Git/SQLite fixtures. They must not contact
+real Telegram groups or consume provider tokens.
+
+GitHub CI and tag-release validation both call the same reusable
+`.github/workflows/validate.yml` matrix for Python 3.11, 3.12, and 3.13. Each
+matrix entry installs `.[dev]`, including the test-only Telegram client used by
+the acceptance-actor unit tests, and runs this full canonical command. The
+release publication job depends on the entire reusable validation job and alone
+has `contents: write`. `tests/test_workflows.py` parses the workflows
+structurally, including GitHub's `on` key, and has negative temporary-copy cases
+for a missing dependency, bypass condition, or Python 3.13. That offline
+contract test rejects skipped/error-tolerant validation as well. A temporary
+Git fixture executes the revision guard with matching and mismatched event,
+checkout and annotated-tag commits without publishing a release. These tests
+prove local wiring and guard behavior; a successful hosted Actions run remains
+separate evidence.
 
 `tests/test_fault_injection_matrix.py` is the subprocess queue acceptance gate.
 It uses marker-synchronized fictional child actors, bounded parent waits, and
@@ -70,3 +85,27 @@ For the first login only, `expected_user_id` may be omitted. `e2e-login` prints
 the authenticated numeric user ID locally; immediately add it to both the actor
 config and the matching Hub `acceptance_actors` entry. `e2e-validate` and
 `e2e-run` fail closed until that identity is pinned.
+
+Treat the canary topic as exclusive for the duration of a run. The runner fails
+fast when it observes in-topic traffic from a sender outside the pinned actor,
+Hub identity, and configured provider identities. Re-run only after the topic is
+quiet; an interrupted or contaminated artifact is not acceptance evidence.
+The runner stops after its first failed check; diagnose and drain that bounded
+scenario before starting another run.
+
+The `model_menu` check follows the complete callback ladder in the dedicated
+topic: it selects the first provider, first model, and first effort exposed by
+the Hub, then requires the deterministic final confirmation. This changes only
+the canary topic's active session and never sends a productive model prompt.
+The `reply_route` check first obtains a response through an explicit provider
+mention, then sends a real Telegram Reply without another mention and requires
+the response to come from the original provider identity.
+The `forwarded_quote` check forwards a harmless provider marker back into the
+topic, verifies that the forward alone receives no provider answer, then checks
+that it is visible to the next explicit turn as quoted context.
+
+The `burst_route` check sends one harmless instruction as three concurrent
+Telegram API requests and requires one coherent provider answer. The
+`stop_route` check must appear after `model_menu`: it targets only the first
+provider selected there, starts a harmless wait, sends deterministic `stop`,
+requires the Hub acknowledgement, and proves that a new turn works afterward.

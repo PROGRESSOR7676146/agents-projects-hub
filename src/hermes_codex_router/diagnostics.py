@@ -8,13 +8,23 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from .codex_proxy_health import probe_codex_runtime_proxy
+from .codex_proxy_health import (
+    probe_codex_config_proxy,
+    probe_codex_multi_auth_accounts,
+    probe_codex_runtime_proxy,
+)
 from .hermes_health import probe_gateway_heartbeat, probe_hermes_group_policy
 from .hub_config import HubConfig
 from .migrations import LATEST_SCHEMA_VERSION
-from .recovery_plane import RecoveryPlaneProbe, probe_recovery_plane
+from .provider_telemetry import probe_antigravity_telemetry
+from .recovery_plane import (
+    RecoveryPlaneProbe,
+    probe_recovery_plane,
+    probe_supervisor_service,
+    probe_tlive_runtime,
+)
 from .registry import load_registry
-from .state import HubState
+from .state import HubState, TelegramContractProvenance
 from .terminal_runtime import TerminalRuntime
 
 
@@ -46,19 +56,35 @@ def _service_check(
     *,
     run: Callable[..., Any] = subprocess.run,
 ) -> Check:
-    try:
-        completed = run(
-            ("systemctl", "--user", "is-active", "--quiet", unit),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-            check=False,
+    state = probe_supervisor_service(
+        ("systemctl", "--user", "is-active", "--quiet", unit),
+        run=run,
+    )
+    return Check(f"service:{unit}", state == "active", state)
+
+
+def _telegram_contract_checks(
+    provenance: tuple[TelegramContractProvenance, ...],
+) -> list[Check]:
+    checks: list[Check] = []
+    for item in provenance:
+        version = int(item["acknowledged_version"])
+        checks.append(
+            Check(
+                f"telegram_contract:{item['session_id']}",
+                True,
+                " ".join(
+                    (
+                        f"agent={item['agent_id']}",
+                        f"status={item['status']}",
+                        "provider_bound=" + ("yes" if item["provider_bound"] else "no"),
+                        f"acknowledged=v{version}",
+                    )
+                ),
+                required=False,
+            )
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return Check(f"service:{unit}", False, "probe failed")
-    active = completed.returncode == 0
-    return Check(f"service:{unit}", active, "active" if active else "inactive")
+    return checks
 
 
 def run_doctor(config: HubConfig) -> dict[str, object]:
@@ -87,6 +113,7 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
                     oct(config.state_path.stat().st_mode & 0o777),
                 )
             )
+            checks.extend(_telegram_contract_checks(state.telegram_contract_provenance()))
         finally:
             state.close()
     except Exception as exc:
@@ -111,6 +138,16 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
                 )
             else:
                 checks.append(_command(executable))
+    for agent_id, settings in config.provider_telemetry.items():
+        telemetry = probe_antigravity_telemetry(settings)
+        checks.append(
+            Check(
+                f"provider_telemetry:{agent_id}",
+                telemetry.ok,
+                telemetry.detail,
+                required=False,
+            )
+        )
     terminal = TerminalRuntime(
         socket_path=config.codex_socket_path,
         backend=config.terminal.backend,
@@ -140,6 +177,31 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
                 required=False,
             )
         )
+        ma_accounts = probe_codex_multi_auth_accounts(
+            config.codex_multi_auth_dir,
+            executable=(
+                str(config.codex_multi_auth_executable)
+                if config.codex_multi_auth_executable
+                else "codex-multi-auth"
+            ),
+        )
+        checks.append(
+            Check(
+                "codex_multi_auth_accounts",
+                ma_accounts.ok,
+                ma_accounts.detail,
+                required=False,
+            )
+        )
+    config_proxy = probe_codex_config_proxy()
+    checks.append(
+        Check(
+            "codex_config_proxy",
+            config_proxy.ok,
+            config_proxy.detail,
+            required=False,
+        )
+    )
     if config.codex_stdio_executable is not None:
         checks.append(
             Check(
@@ -161,22 +223,24 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
     if config.recovery_plane.enabled:
         assert config.recovery_plane.hermes_config_path is not None
         assert config.recovery_plane.tlive_config_path is not None
+        heartbeat = probe_gateway_heartbeat(
+            config.recovery_plane.hermes_config_path.parent / "state" / "gateway.heartbeat"
+        )
         recovery = probe_recovery_plane(
             RecoveryPlaneProbe(
                 hermes_service=config.recovery_plane.hermes_service,
                 tlive_service=config.recovery_plane.tlive_service,
                 hermes_config_path=config.recovery_plane.hermes_config_path,
                 tlive_config_path=config.recovery_plane.tlive_config_path,
-            )
+            ),
+            hermes_liveness=heartbeat.ok,
+            tlive_liveness=probe_tlive_runtime(),
         )
         recovery_available = recovery.available
         expected_chats = tuple(
             item.telegram_chat_id for item in config.projects if item.telegram_chat_id is not None
         )
         hermes_policy = probe_hermes_group_policy(expected_chats)
-        heartbeat = probe_gateway_heartbeat(
-            config.recovery_plane.hermes_config_path.parent / "state" / "gateway.heartbeat"
-        )
         checks.extend(
             (
                 Check(

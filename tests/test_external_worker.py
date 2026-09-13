@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 import tempfile
 import unittest
 from dataclasses import replace
@@ -9,7 +11,11 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from hermes_codex_router.cli import main
-from hermes_codex_router.external_runtime import ExternalTurnResult, ProviderLimitError
+from hermes_codex_router.external_runtime import (
+    ExternalTurnResult,
+    ProviderLimitError,
+    ProviderUnavailableError,
+)
 from hermes_codex_router.external_worker import ExternalQueueWorker
 from hermes_codex_router.hub_config import (
     AgentDefinition,
@@ -25,16 +31,35 @@ from hermes_codex_router.telegram import TopicMessage
 
 
 class Adapter:
-    def __init__(self, runtime: str, *, limit: bool = False, session_id: bool = True) -> None:
+    def __init__(
+        self,
+        runtime: str,
+        *,
+        limit: bool = False,
+        unavailable: bool = False,
+        session_id: bool = True,
+    ) -> None:
         self.runtime = runtime
         self.limit = limit
+        self.unavailable = unavailable
         self.session_id = session_id
+        self.generate_artifact = False
         self.calls = 0
+        self.last_prompt = ""
 
-    def run_turn(self, **_kwargs: object) -> ExternalTurnResult:
+    def run_turn(self, **kwargs: object) -> ExternalTurnResult:
         self.calls += 1
+        self.last_prompt = str(kwargs.get("prompt") or "")
         if self.limit:
             raise ProviderLimitError(ProviderLimit(self.runtime, "weekly", 0, 1))
+        if self.unavailable:
+            raise ProviderUnavailableError(
+                "unsupported_network_location",
+                "Antigravity is unavailable from the computer's current network location.",
+            )
+        if self.generate_artifact and kwargs.get("staging_dir"):
+            staging = Path(str(kwargs["staging_dir"]))
+            (staging / "diagram.png").write_bytes(b"\x89PNG\r\n\x1a\nfake-data")
         return ExternalTurnResult(
             self.runtime,
             f"{self.runtime} answer",
@@ -48,7 +73,8 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         base = Path(self.tempdir.name)
         root = base / "project"
-        (root / ".git").mkdir(parents=True)
+        root.mkdir()
+        subprocess.run(("git", "init", "-q", str(root)), check=True)
         self.config = HubConfig(
             schema_version=1,
             owner_user_ids=(42,),
@@ -91,11 +117,29 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         self.registry = ProjectRegistry(
             1, (base,), (Project("example-project", "Example", "Example", root),)
         )
+        self.config.registry_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "allowed_roots": [str(base)],
+                    "projects": [
+                        {
+                            "project_id": "example-project",
+                            "display_name": "Example",
+                            "topic_name": "Example",
+                            "root": str(root),
+                        }
+                    ],
+                }
+            )
+        )
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
-    def enqueue(self, agent_id: str, message_id: int) -> str:
+    def enqueue(
+        self, agent_id: str, message_id: int, *, provider_session_id: str | None = None
+    ) -> str:
         state = HubState.open(self.config.state_path)
         try:
             topic = state.observe_topic(
@@ -108,6 +152,8 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             session = state.activate_agent(
                 topic.topic_id, agent_id, agent.default_model, agent.default_effort
             )
+            if provider_session_id is not None:
+                session = state.bind_provider_session(session.session_id, provider_session_id, None)
             job, _ = state.enqueue_provider_job(
                 idempotency_key=f"telegram:-1001234567890:{message_id}",
                 chat_id=-1001234567890,
@@ -116,16 +162,159 @@ class ExternalQueueWorkerTests(unittest.TestCase):
                 agent_id=agent_id,
                 session_id=session.session_id,
                 session_generation=session.generation,
-                provider_session_id=None,
+                provider_session_id=session.provider_session_id,
                 model=session.model,
                 effort=session.effort,
                 payload_text="durable task",
                 context_watermark=None,
                 handoff_id=None,
             )
-            return job.job_id
         finally:
             state.close()
+        return job.job_id
+
+    def bind_dynamic_project(self, project_id: str, root: Path, chat_id: int) -> None:
+        document = json.loads(self.config.registry_path.read_text())
+        document["projects"].append(
+            {
+                "project_id": project_id,
+                "display_name": "Dynamic",
+                "topic_name": "Dynamic",
+                "root": str(root),
+            }
+        )
+        self.config.registry_path.write_text(json.dumps(document))
+        state = HubState.open(self.config.state_path)
+        try:
+            with state._immediate_transaction():
+                state._connection.execute(
+                    """INSERT INTO project_onboarding_workflows
+                       (workflow_id,owner_user_id,display_name,project_id,base_root,
+                        canonical_root,stage,telegram_chat_id,telegram_access_hash,
+                        expires_at,created_at,updated_at)
+                       VALUES ('dynamic-workflow',42,'Dynamic',?,?,?,'completed',?,123,
+                               '2099-01-01T00:00:00+00:00','2026-01-01T00:00:00+00:00',
+                               '2026-01-01T00:00:00+00:00')""",
+                    (project_id, str(root.parent), str(root), chat_id),
+                )
+                state._connection.execute(
+                    """INSERT INTO project_group_bindings
+                       (project_id,telegram_chat_id,canonical_root,workflow_id,created_at)
+                       VALUES (?,?,?,'dynamic-workflow','2026-01-01T00:00:00+00:00')""",
+                    (project_id, chat_id, str(root)),
+                )
+        finally:
+            state.close()
+
+    def test_running_worker_loads_new_dynamic_project_before_provider_boundary(self) -> None:
+        adapter = Adapter("opencode")
+        worker = ExternalQueueWorker(
+            self.config, "opencode", registry=self.registry, adapter=cast(Any, adapter)
+        )
+        dynamic_root = self.config.registry_path.parent / "dynamic"
+        dynamic_root.mkdir()
+        subprocess.run(("git", "init", "-q", str(dynamic_root)), check=True)
+        self.bind_dynamic_project("dynamic", dynamic_root, -1002222222222)
+        state = HubState.open(self.config.state_path)
+        try:
+            topic = state.observe_topic(
+                project_id="dynamic", chat_id=-1002222222222, thread_id=7, title="Dynamic"
+            )
+            session = state.activate_agent(topic.topic_id, "opencode", "model-1", "high")
+            job, _ = state.enqueue_provider_job(
+                idempotency_key="dynamic:first",
+                chat_id=topic.chat_id,
+                message_id=1,
+                topic_id=topic.topic_id,
+                agent_id="opencode",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                provider_session_id=None,
+                model=session.model,
+                effort=session.effort,
+                payload_text="first dynamic turn",
+            )
+        finally:
+            state.close()
+        try:
+            self.assertTrue(worker.run_cycle())
+            self.assertEqual(adapter.calls, 1)
+            self.assertEqual(worker.state.get_provider_job(job.job_id).status, "result_ready")
+        finally:
+            worker.close()
+
+    def test_owner_direct_message_job_reaches_provider_with_exact_project(self) -> None:
+        config = replace(self.config, direct_message_project_id="example-project")
+        state = HubState.open(config.state_path)
+        try:
+            topic = state.observe_topic(
+                project_id="example-project", chat_id=42, thread_id=1, title="Direct"
+            )
+            session = state.activate_agent(topic.topic_id, "opencode", "model-1", "high")
+            job, _ = state.enqueue_provider_job(
+                idempotency_key="direct:42:1",
+                chat_id=42,
+                message_id=1,
+                topic_id=topic.topic_id,
+                agent_id="opencode",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                provider_session_id=None,
+                model=session.model,
+                effort=session.effort,
+                payload_text="direct owner turn",
+            )
+        finally:
+            state.close()
+        adapter = Adapter("opencode")
+        worker = ExternalQueueWorker(config, "opencode", adapter=cast(Any, adapter))
+        try:
+            self.assertTrue(worker.run_cycle())
+            self.assertEqual(adapter.calls, 1)
+            self.assertEqual(worker.state.get_provider_job(job.job_id).status, "result_ready")
+        finally:
+            worker.close()
+
+    def test_dynamic_root_drift_fails_while_leased_without_provider_call(self) -> None:
+        dynamic_root = self.config.registry_path.parent / "dynamic"
+        replacement = self.config.registry_path.parent / "replacement"
+        for root in (dynamic_root, replacement):
+            root.mkdir()
+            subprocess.run(("git", "init", "-q", str(root)), check=True)
+        self.bind_dynamic_project("dynamic", dynamic_root, -1002222222222)
+        adapter = Adapter("opencode")
+        worker = ExternalQueueWorker(self.config, "opencode", adapter=cast(Any, adapter))
+        state = HubState.open(self.config.state_path)
+        try:
+            topic = state.observe_topic(
+                project_id="dynamic", chat_id=-1002222222222, thread_id=7, title="Dynamic"
+            )
+            session = state.activate_agent(topic.topic_id, "opencode", "model-1", "high")
+            job, _ = state.enqueue_provider_job(
+                idempotency_key="dynamic:drift",
+                chat_id=topic.chat_id,
+                message_id=2,
+                topic_id=topic.topic_id,
+                agent_id="opencode",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                provider_session_id=None,
+                model=session.model,
+                effort=session.effort,
+                payload_text="must not run",
+            )
+        finally:
+            state.close()
+        document = json.loads(self.config.registry_path.read_text())
+        document["projects"][-1]["root"] = str(replacement)
+        self.config.registry_path.write_text(json.dumps(document))
+        try:
+            self.assertTrue(worker.run_cycle())
+            failed = worker.state.get_provider_job(job.job_id)
+            self.assertEqual((failed.status, failed.error_class), ("failed", "pre_execution"))
+            self.assertEqual(adapter.calls, 0)
+        finally:
+            worker.close()
 
     def worker(self, agent_id: str, adapter: Adapter) -> ExternalQueueWorker:
         return ExternalQueueWorker(
@@ -149,6 +338,10 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             self.assertTrue(opencode.run_cycle())
             self.assertTrue(antigravity.run_cycle())
             self.assertEqual(opencode.state.get_provider_job(open_job).status, "failed")
+            self.assertIn(
+                "limit reached",
+                opencode.state.get_telegram_outbox_for_job(open_job).telegram_html,
+            )
             self.assertEqual(antigravity.state.get_provider_job(agy_job).status, "result_ready")
             open_health = opencode.state.get_runtime_health("provider_worker", "test-opencode")
             agy_health = antigravity.state.get_runtime_health("provider_worker", "test-antigravity")
@@ -170,6 +363,63 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         finally:
             opencode.close()
             antigravity.close()
+
+    def test_existing_session_receives_full_contract_once_after_contract_rollout(self) -> None:
+        job_id = self.enqueue("opencode", 40, provider_session_id="existing-session")
+        adapter = Adapter("opencode")
+        worker = self.worker("opencode", adapter)
+        try:
+            self.assertTrue(worker.run_cycle())
+            self.assertIn("TELEGRAM INTERACTION CONTRACT v1", adapter.last_prompt)
+            job = worker.state.get_provider_job(job_id)
+            self.assertEqual(worker.state.telegram_contract_version(job.session_id), 1)
+
+            outbox = worker.state.lease_telegram_outbox("opencode", "sender")
+            assert outbox is not None and outbox.lease_token is not None
+            worker.state.mark_telegram_outbox_delivered(
+                outbox.outbox_id, outbox.lease_token, telegram_message_id=400
+            )
+            session = worker.state.get_session(job.session_id)
+            second, _ = worker.state.enqueue_provider_job(
+                idempotency_key="telegram:-1001234567890:41",
+                chat_id=-1001234567890,
+                message_id=41,
+                topic_id=job.topic_id,
+                agent_id="opencode",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                provider_session_id=session.provider_session_id,
+                model=session.model,
+                effort=session.effort,
+                payload_text="next durable task",
+            )
+            self.assertTrue(worker.run_cycle())
+            self.assertIn("TELEGRAM TRANSPORT REMINDER v1", adapter.last_prompt)
+            self.assertNotIn("TELEGRAM INTERACTION CONTRACT v1", adapter.last_prompt)
+            self.assertEqual(worker.state.get_provider_job(second.job_id).status, "result_ready")
+        finally:
+            worker.close()
+
+    def test_known_provider_unavailability_fails_with_a_visible_notice(self) -> None:
+        job_id = self.enqueue("antigravity", 31)
+        worker = self.worker("antigravity", Adapter("antigravity", unavailable=True))
+        try:
+            self.assertTrue(worker.run_cycle())
+            job = worker.state.get_provider_job(job_id)
+            self.assertEqual((job.status, job.error_class), ("failed", "provider_unavailable"))
+            outbox = worker.state.get_telegram_outbox_for_job(job_id)
+            self.assertEqual(outbox.status, "pending")
+            self.assertIn("current network location", outbox.telegram_html)
+            leased = worker.state.lease_telegram_outbox("antigravity", "test-sender")
+            assert leased is not None and leased.lease_token is not None
+            worker.state.mark_telegram_outbox_delivered(
+                leased.outbox_id,
+                leased.lease_token,
+                telegram_message_id=123,
+            )
+            self.assertEqual(worker.state.get_provider_job(job_id).status, "failed")
+        finally:
+            worker.close()
 
     def test_stop_after_provider_lease_returns_unstarted_job_to_queue(self) -> None:
         job_id = self.enqueue("opencode", 30)
@@ -228,6 +478,11 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         try:
             self.assertTrue(worker.run_cycle())
             self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
+            notice = worker.state.get_telegram_outbox_for_job(job_id).telegram_html
+            self.assertIn("did not retry", notice)
+            self.assertIn("What happened:", notice)
+            self.assertIn("Saved:", notice)
+            self.assertIn("Next:", notice)
         finally:
             worker.close()
 
@@ -728,5 +983,29 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             self.assertEqual(main(["worker", str(config_path), "--agent", "opencode"]), 0)
         assert FakeWorker.instance is not None
         self.assertEqual(FakeWorker.instance.agent_id, "opencode")
+        self.assertEqual(FakeWorker.instance.poll_seconds, 0.2)
         self.assertTrue(FakeWorker.instance.closed)
         self.assertEqual(main(["worker", str(config_path), "--agent", "missing"]), 2)
+
+    def test_worker_collects_and_commits_staged_artifacts(self) -> None:
+        job_id = self.enqueue("antigravity", 55)
+        adapter = Adapter("antigravity")
+        adapter.generate_artifact = True
+        worker = self.worker("antigravity", adapter)
+        try:
+            self.assertTrue(worker.run_cycle())
+            job = worker.state.get_provider_job(job_id)
+            self.assertEqual(job.status, "result_ready")
+            outbox = worker.state.get_telegram_outbox_for_job(job_id)
+            parts = worker.state.get_telegram_outbox_parts(outbox.outbox_id)
+            self.assertEqual(len(parts), 2)
+            self.assertEqual(parts[0].part_type, "text")
+            self.assertEqual(parts[1].part_type, "document")
+            self.assertEqual(parts[1].file_name, "diagram.png")
+            self.assertIsNotNone(parts[1].file_path)
+            assert parts[1].file_path is not None
+            self.assertTrue(Path(parts[1].file_path).is_file())
+            self.assertIsNotNone(parts[1].file_size)
+            self.assertIsNotNone(parts[1].file_sha256)
+        finally:
+            worker.close()

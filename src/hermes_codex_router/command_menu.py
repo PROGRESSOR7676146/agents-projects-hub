@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
-from typing import Callable
+from collections.abc import Mapping
+from typing import Any, Callable
 
 from .hub_config import HubConfig
+from .project_resolution import ProjectResolutionIssue, list_resolved_project_groups
+from .state import HubState
 from .telegram import TelegramBotApi
 
 PUBLIC_COMMANDS: tuple[tuple[str, str], ...] = (
@@ -13,9 +16,21 @@ PUBLIC_COMMANDS: tuple[tuple[str, str], ...] = (
     ("new", "Start a new active session"),
     ("local", "Continue in the native CLI"),
     ("return", "Return to Telegram and publish"),
+    ("stop", "Emergency stop active work"),
 )
 
-GROUP_COMMANDS: tuple[tuple[str, str], ...] = (("menu", "Open project controls"),)
+GROUP_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("menu", "Open project controls"),
+    ("connect", "Connect a saved Codex session"),
+    ("stop", "Emergency stop active work"),
+)
+
+DIRECT_HUB_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("start", "Open Hub controls"),
+    ("projects", "List or create projects"),
+    ("connect", "Connect a saved Codex session"),
+    ("cancel", "Cancel the current Hub wizard"),
+)
 
 DIRECT_PROVIDER_COMMANDS: tuple[tuple[str, str], ...] = (
     ("status", "Current provider and model"),
@@ -39,6 +54,16 @@ def _scope(scope_type: str, *, chat_id: int | None = None) -> str:
     return json.dumps(value, separators=(",", ":"))
 
 
+def configure_project_group_commands(telegram_bots: Mapping[str, Any], *, chat_id: int) -> None:
+    """Idempotently apply the shared-group command policy to one new binding."""
+    scope = _scope("chat", chat_id=chat_id)
+    for identity, api in telegram_bots.items():
+        expected = _desired(GROUP_COMMANDS) if identity == "hub" else []
+        api.call("setMyCommands", commands=json.dumps(expected), scope=scope)
+        if api.call("getMyCommands", scope=scope) != expected:
+            raise RuntimeError("Telegram project command scope did not converge")
+
+
 def configure_public_commands(
     config: HubConfig,
     *,
@@ -47,15 +72,30 @@ def configure_public_commands(
 ) -> dict[str, object]:
     bots: list[dict[str, object]] = []
     identity_matches: list[bool] = []
+    state = HubState.open_read_only(config.state_path) if config.state_path.exists() else None
+    issues: list[ProjectResolutionIssue] = []
+    try:
+        project_chat_ids = tuple(
+            item.chat_id for item in list_resolved_project_groups(config, state, issues=issues)
+        )
+    finally:
+        if state is not None:
+            state.close()
 
     if config.hub_bot is not None:
         api = api_factory(config.hub_bot.token_file.read_text(encoding="utf-8").strip())
         hub_matches = True
         changed = False
-        for project in config.projects:
-            if project.telegram_chat_id is None:
-                continue
-            scope = _scope("chat", chat_id=project.telegram_chat_id)
+        direct_expected = _desired(DIRECT_HUB_COMMANDS)
+        direct_current = api.call("getMyCommands")
+        direct_matches = direct_current == direct_expected
+        if sync and not direct_matches:
+            api.call("setMyCommands", commands=json.dumps(direct_expected))
+            changed = True
+            direct_matches = api.call("getMyCommands") == direct_expected
+        hub_matches = hub_matches and direct_matches
+        for chat_id in project_chat_ids:
+            scope = _scope("chat", chat_id=chat_id)
             expected = _desired(GROUP_COMMANDS)
             current = api.call("getMyCommands", scope=scope)
             scope_matches = current == expected
@@ -87,18 +127,17 @@ def configure_public_commands(
             else _desired(DIRECT_PROVIDER_COMMANDS)
         )
         scoped: list[tuple[str | None, list[dict[str, str]]]] = [(None, direct)]
-        for project in config.projects:
-            if project.telegram_chat_id is not None:
-                scoped.append(
+        for chat_id in project_chat_ids:
+            scoped.append(
+                (
+                    _scope("chat", chat_id=chat_id),
                     (
-                        _scope("chat", chat_id=project.telegram_chat_id),
-                        (
-                            []
-                            if config.hub_bot is not None
-                            else (_desired(GROUP_COMMANDS) if agent.agent_id == "codex" else [])
-                        ),
-                    )
+                        []
+                        if config.hub_bot is not None
+                        else (_desired(GROUP_COMMANDS) if agent.agent_id == "codex" else [])
+                    ),
                 )
+            )
         agent_matches = True
         changed = False
         for scope, expected in scoped:
@@ -122,9 +161,12 @@ def configure_public_commands(
             }
         )
     return {
-        "ok": bool(identity_matches) and all(identity_matches),
+        "ok": bool(identity_matches) and all(identity_matches) and not issues,
         "sync": sync,
         "commands": [item[0] for item in PUBLIC_COMMANDS],
         "group_commands": [item[0] for item in GROUP_COMMANDS],
         "bots": bots,
+        "project_group_errors": [
+            {"chat_id": item.chat_id, "error_code": item.error_code} for item in issues
+        ],
     }

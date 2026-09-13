@@ -27,7 +27,12 @@ Telegram — удалённый транспорт, не файловая ACL. H
 11. Логи не содержат токены, environment dump, hidden reasoning и полный terminal buffer. Prompt хранится как digest, если полный текст не нужен для recovery.
 12. State/config имеют `0600`; service запускается непривилегированным пользователем без sudo.
 13. App-server слушает stdio или Unix socket. TCP — только loopback либо authenticated encrypted tunnel; capability token не пишется в Telegram.
-14. Все внешние сетевые и destructive действия по-прежнему проходят политику Codex.
+14. Автоматическое создание проектных групп отключено по умолчанию. Его
+    отдельная Telegram user-сессия хранится вне Git с режимом `0600`, привязана
+    к точному owner user ID и используется только provisioning worker. При
+    неизвестном результате создания группы или добавления ботов автоповтор
+    запрещён.
+15. Все внешние сетевые и destructive действия по-прежнему проходят политику Codex.
 
 ## Основные угрозы и ответы
 

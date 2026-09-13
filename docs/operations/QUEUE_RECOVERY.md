@@ -25,6 +25,8 @@ chat IDs, account hints, and live evidence stay in private operator records.
 agents-projects-hub doctor HUB_CONFIG
 agents-projects-hub status HUB_CONFIG
 agents-projects-hub monitor HUB_CONFIG
+agents-projects-hub indeterminate-audit HUB_CONFIG
+agents-projects-hub indeterminate-resolve HUB_CONFIG JOB_ID --resolution acknowledged
 systemctl --user status agents-projects-hub.service
 systemctl --user status agents-projects-hub-sender.service
 systemctl --user status 'agents-projects-hub-worker@*.service'
@@ -73,6 +75,24 @@ If a provider has no safe reconciliation capability, retain the
 create a new explicit user request only after deciding whether duplicate side
 effects are acceptable.
 
+`indeterminate-audit` classifies all retained uncertain jobs from read-only
+SQLite evidence and prints only aggregate counts. To preserve a detailed local
+record, pass `--output PRIVATE_PATH`; the command creates a new mode-`0600` JSON
+file and refuses to overwrite an earlier report. The report never authorizes
+productive replay. Its evidence classes distinguish a persisted result, saved
+completion, partial text, accepted turn without visible output, thread creation
+without accepted turn, and absence of an execution checkpoint. Notification
+status is reported separately so an undelivered uncertainty notice is visible.
+
+After reviewing one exact job, `indeterminate-resolve` can append one fixed
+operator classification: `acknowledged` means the uncertainty was reviewed,
+`superseded` means a later explicit request made the old outcome irrelevant,
+and `externally_completed` means completion was confirmed outside Hub. The
+command is idempotent for the same value and rejects replacement. It does not
+change the original job or error, send a message, or authorize provider replay.
+The audit reports these annotations separately and recommends no further action
+for resolved records.
+
 ## Changing provider ownership
 
 Before changing a locally queued provider to `managed_externally`, stop new
@@ -92,6 +112,12 @@ gateway and a local worker as competing consumers for the same provider.
 
 ## Telegram outbox recovery
 
+- Diagnose the cached sender health before changing queue state. A current
+  `transport_operation` plus `transport_failure_class` distinguishes delivery
+  timeout/DNS/TLS/I/O from an API rejection; safe status and retry-after may be
+  present. The consecutive count describes the current episode and resets only
+  after a successful Telegram request. Runtime events are edge-triggered, so
+  one recorded error can represent many retries.
 - An expired `sending` lease returns to `pending` through sender-scoped stale
   recovery. The provider result is not recomputed.
 - Telegram may have accepted a message immediately before sender loss. A retry
@@ -107,6 +133,13 @@ gateway and a local worker as competing consumers for the same provider.
 The managed app-server holds an exclusive mode-`0600` sidecar lock containing
 only PID and process-start metadata. Startup refuses to unlink an existing
 socket it cannot prove it owns.
+
+At boot, do not use `[ -S PATH ]` as a readiness check. An abrupt host or WSL
+stop may preserve the socket inode even though no process is listening. When an
+optional rotating app-server and tlive share the default socket, install the
+provided ordering drop-ins and require a successful bounded Unix connection
+before tlive starts. This avoids two app-servers racing for one path without
+adding `Requires=` coupling.
 
 For a stale path, first verify locally that the recorded PID/start marker is
 not a live matching process and that no process accepts the socket. Stop the
@@ -135,8 +168,11 @@ it.
    restore a migration backup for an ordinary runtime rollback.
 5. Validate and run fault acceptance before resuming routine work.
 
-Migration backup restoration is reserved for a failed migration. Runtime
-rollback retains accepted jobs, results, outbox rows, and diagnostic history.
+A migration fault rolls its SQLite transaction back in place; it does not copy
+the earlier backup over concurrent state. Manual backup restoration is reserved
+for a separately proven database-integrity failure after all database users are
+stopped. Runtime rollback retains accepted jobs, results, outbox rows, and
+diagnostic history.
 
 ## Automated fault gate
 

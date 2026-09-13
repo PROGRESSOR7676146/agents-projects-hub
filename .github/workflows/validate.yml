@@ -1,0 +1,28 @@
+name: Validate
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - uses: astral-sh/setup-uv@v7
+      - name: Install
+        run: python -m pip install -e '.[dev]'
+      - name: Canonical repository validation
+        run: python scripts/validate.py

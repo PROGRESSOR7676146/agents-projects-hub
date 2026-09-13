@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
@@ -13,6 +14,10 @@ from .acceptance_actor import (
     run_acceptance_checks,
 )
 from .command_menu import configure_public_commands
+from .deployment_manifest import (
+    create_deployment_manifest,
+    verify_deployment_manifest,
+)
 from .diagnostics import run_doctor
 from .external_service import ExternalAgentService
 from .external_worker import ExternalQueueWorker
@@ -22,7 +27,12 @@ from .hub_config import (
     load_external_worker_config,
     load_hub_config,
     load_outbox_sender_config,
+    load_project_provisioner_config,
     load_provider_service_config,
+)
+from .indeterminate_audit import (
+    classify_indeterminate_jobs,
+    write_private_indeterminate_report,
 )
 from .lifecycle import stop_on_signals
 from .migrations import backup_database, migrate_database
@@ -30,7 +40,15 @@ from .monitoring import run_monitor_once
 from .outbox_sender import TelegramOutboxSender
 from .pilot import run_codex_pilot
 from .project_admin import add_project, set_project_enabled
+from .project_onboarding import ProjectOnboardingStore
+from .project_provisioner import (
+    ProjectProvisioner,
+    ProjectProvisioningError,
+    login_project_provisioner,
+)
 from .registry import RegistryError, load_registry
+from .release_dry_run import report_dict, run_release_dry_run
+from .release_identity import CURRENT_RELEASE
 from .runtime_health import project_runtime_health
 from .service import ProjectHubService
 from .state import HubState, StateError
@@ -40,6 +58,31 @@ from .worktrees import WorktreeError, cleanup_worktree, create_worktree
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agents-projects-hub")
     commands = parser.add_subparsers(dest="command", required=True)
+
+    session = commands.add_parser("session", help="explicit local provider-session binding")
+    session_commands = session.add_subparsers(dest="session_command", required=True)
+    attach = session_commands.add_parser(
+        "attach-codex", help="preview or attach an exact saved Codex thread"
+    )
+    attach.add_argument("config", type=Path)
+    attach.add_argument("--project", required=True)
+    attach.add_argument("--chat-id", required=True, type=int)
+    attach.add_argument("--thread-id", required=True, type=int)
+    attach.add_argument("--codex-thread-id", required=True)
+    attach.add_argument("--model")
+    attach.add_argument("--effort")
+    attach.add_argument("--replace-session")
+    attach.add_argument("--apply", action="store_true")
+    attach.add_argument("--confirm-cli-closed", action="store_true")
+    attach.add_argument("--json", action="store_true")
+    connect = session_commands.add_parser(
+        "connect", help="choose a saved Codex session and issue a Telegram code"
+    )
+    connect.add_argument("config", nargs="?", type=Path)
+    connect.add_argument("--owner-user-id", type=int)
+    connect.add_argument("--project")
+    connect.add_argument("--codex-thread-id")
+    connect.add_argument("--json", action="store_true")
 
     validate = commands.add_parser("validate", help="validate a local project registry")
     validate.add_argument("registry", type=Path)
@@ -78,6 +121,47 @@ def _parser() -> argparse.ArgumentParser:
     status = commands.add_parser("status", help="print persisted topic/session status")
     status.add_argument("config", type=Path)
 
+    indeterminate_audit = commands.add_parser(
+        "indeterminate-audit",
+        help="classify uncertain provider jobs without replaying them",
+    )
+    indeterminate_audit.add_argument("config", type=Path)
+    indeterminate_audit.add_argument("--output", type=Path)
+
+    indeterminate_resolve = commands.add_parser(
+        "indeterminate-resolve",
+        help="record an immutable operator resolution for one uncertain job",
+    )
+    indeterminate_resolve.add_argument("config", type=Path)
+    indeterminate_resolve.add_argument("job_id")
+    indeterminate_resolve.add_argument(
+        "--resolution",
+        required=True,
+        choices=("acknowledged", "superseded", "externally_completed"),
+    )
+
+    commands.add_parser("release-info", help="print embedded package release identity")
+
+    release_manifest = commands.add_parser(
+        "release-manifest", help="create or verify an immutable deployment manifest"
+    )
+    manifest_commands = release_manifest.add_subparsers(dest="manifest_command", required=True)
+    manifest_create = manifest_commands.add_parser("create")
+    manifest_create.add_argument("manifest", type=Path)
+    manifest_create.add_argument("--active-artifact", required=True, type=Path)
+    manifest_create.add_argument("--rollback-artifact", required=True, type=Path)
+    manifest_create.add_argument("--config", required=True, type=Path)
+    manifest_create.add_argument("--backup", required=True, type=Path)
+    manifest_verify = manifest_commands.add_parser("verify")
+    manifest_verify.add_argument("manifest", type=Path)
+    manifest_verify.add_argument("--state", type=Path)
+
+    release_dry_run = commands.add_parser(
+        "release-dry-run", help="exercise rollout and rollback on generated temporary state"
+    )
+    release_dry_run.add_argument("--active-artifact", required=True, type=Path)
+    release_dry_run.add_argument("--rollback-artifact", required=True, type=Path)
+
     migrate = commands.add_parser("migrate", help="migrate a state database safely")
     migrate.add_argument("state", type=Path)
     migrate.add_argument("--no-backup", action="store_true")
@@ -110,6 +194,43 @@ def _parser() -> argparse.ArgumentParser:
         "e2e-run", help="run bounded checks from the dedicated Telegram acceptance user"
     )
     e2e_run.add_argument("config", type=Path)
+
+    project_provision_login = commands.add_parser(
+        "project-provision-login",
+        help="authorize the owner Telegram session used for project-group creation",
+    )
+    project_provision_login.add_argument("config", type=Path)
+    project_provisioner = commands.add_parser(
+        "project-provisioner",
+        help="run the durable project and Telegram-group provisioning worker",
+    )
+    project_provisioner.add_argument("config", type=Path)
+    project_provisioner.add_argument("--once", action="store_true")
+    project_provisioner.add_argument("--poll-seconds", type=float, default=2.0)
+    project_provision_reconcile = commands.add_parser(
+        "project-provision-reconcile",
+        help="resume one inspected unknown provisioning workflow",
+    )
+    project_provision_reconcile.add_argument("config", type=Path)
+    project_provision_reconcile.add_argument("workflow_id")
+    project_provision_reconcile.add_argument("--chat-id", required=True, type=int)
+    project_provision_reconcile.add_argument("--access-hash", required=True, type=int)
+    project_provision_reconcile.add_argument("--confirm", required=True)
+    project_provision_resume = commands.add_parser(
+        "project-provision-resume",
+        help="resume one blocked provisioning workflow after local correction",
+    )
+    project_provision_resume.add_argument("config", type=Path)
+    project_provision_resume.add_argument("workflow_id")
+    project_provision_resume.add_argument("--confirm", required=True)
+    project_command_retry = commands.add_parser(
+        "project-command-retry",
+        help="reset one exhausted project command-scope task after local correction",
+    )
+    project_command_retry.add_argument("config", type=Path)
+    project_command_retry.add_argument("--chat-id", required=True, type=int)
+    project_command_retry.add_argument("--bot-identity", required=True)
+    project_command_retry.add_argument("--confirm", required=True)
 
     project = commands.add_parser("project", help="manage the local project registry")
     project_commands = project.add_subparsers(dest="project_command", required=True)
@@ -269,6 +390,66 @@ def _lane_command(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command == "session":
+            if args.session_command == "connect":
+                from .session_connect_cli import ConnectCliError, prepare_connect_code
+
+                if args.config is None:
+                    _print(
+                        {
+                            "format_version": 1,
+                            "ok": False,
+                            "reason_code": "configuration_required",
+                        }
+                    )
+                    return 2
+                try:
+                    config = load_external_worker_config(args.config)
+                    result = prepare_connect_code(
+                        config,
+                        owner_user_id=args.owner_user_id,
+                        project_id=args.project,
+                        codex_thread_id=args.codex_thread_id,
+                        interactive=not args.json,
+                    )
+                except ConnectCliError as exc:
+                    _print({"format_version": 1, "ok": False, "reason_code": exc.reason})
+                    return exc.exit_code
+                except (ValueError, KeyError, OSError):
+                    _print(
+                        {
+                            "format_version": 1,
+                            "ok": False,
+                            "reason_code": "configuration_invalid",
+                        }
+                    )
+                    return 2
+                _print(result)
+                return 0
+            from .codex_session_adoption import AdoptionError, attach_codex_session
+
+            try:
+                config = load_external_worker_config(args.config)
+                result = attach_codex_session(
+                    config,
+                    project_id=args.project,
+                    chat_id=args.chat_id,
+                    thread_id=args.thread_id,
+                    codex_thread_id=args.codex_thread_id,
+                    model=args.model,
+                    effort=args.effort,
+                    replace_session=args.replace_session,
+                    apply=args.apply,
+                    confirm_cli_closed=args.confirm_cli_closed,
+                )
+            except AdoptionError as exc:
+                _print({"format_version": 1, "ok": False, "reason_code": exc.reason})
+                return exc.exit_code
+            except (ValueError, KeyError, OSError):
+                _print({"format_version": 1, "ok": False, "reason_code": "configuration_invalid"})
+                return 2
+            _print(result)
+            return 0
         if args.command == "validate-hub":
             config = load_hub_config(args.config, allow_unbound=args.allow_unbound)
             load_registry(config.registry_path)
@@ -357,6 +538,60 @@ def main(argv: Sequence[str] | None = None) -> int:
             finally:
                 state.close()
             return 0
+        if args.command == "indeterminate-audit":
+            config = load_external_worker_config(args.config)
+            report = classify_indeterminate_jobs(config.state_path)
+            if args.output is not None:
+                write_private_indeterminate_report(args.output, report)
+            _print(
+                {
+                    "ok": True,
+                    "total": report["total"],
+                    "evidence": report["evidence"],
+                    "notice_status": report["notice_status"],
+                    "resolution_status": report["resolution_status"],
+                    "resolutions": report["resolutions"],
+                    "productive_replay_authorized": False,
+                    "report_written": args.output is not None,
+                }
+            )
+            return 0
+        if args.command == "indeterminate-resolve":
+            config = load_external_worker_config(args.config)
+            state = HubState.open(config.state_path)
+            try:
+                created = state.resolve_indeterminate_job(args.job_id, args.resolution)
+            finally:
+                state.close()
+            _print(
+                {
+                    "ok": True,
+                    "job_id": args.job_id,
+                    "resolution": args.resolution,
+                    "created": created,
+                    "productive_replay_authorized": False,
+                }
+            )
+            return 0
+        if args.command == "release-info":
+            _print({"ok": CURRENT_RELEASE.verified, **asdict(CURRENT_RELEASE)})
+            return 0 if CURRENT_RELEASE.verified else 1
+        if args.command == "release-manifest":
+            if args.manifest_command == "create":
+                manifest = create_deployment_manifest(
+                    args.manifest,
+                    active_artifact=args.active_artifact,
+                    rollback_artifact=args.rollback_artifact,
+                    configuration=args.config,
+                    state_backup=args.backup,
+                )
+            else:
+                manifest = verify_deployment_manifest(args.manifest, state_path=args.state)
+            _print({"ok": True, **asdict(manifest)})
+            return 0
+        if args.command == "release-dry-run":
+            _print(report_dict(run_release_dry_run(args.active_artifact, args.rollback_artifact)))
+            return 0
         if args.command == "migrate":
             result = migrate_database(args.state, create_backup=not args.no_backup)
             _print(
@@ -403,6 +638,79 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = asyncio.run(run_acceptance_checks(load_acceptance_actor_config(args.config)))
             _print(result)
             return 0 if result["ok"] else 1
+        if args.command == "project-provision-login":
+            result = asyncio.run(
+                login_project_provisioner(
+                    load_project_provisioner_config(args.config, require_identity=False)
+                )
+            )
+            _print(result)
+            return 0
+        if args.command == "project-provisioner":
+            worker = ProjectProvisioner(load_project_provisioner_config(args.config))
+            try:
+                if args.once:
+                    _print({"ok": True, "processed": worker.run_cycle()})
+                else:
+                    with stop_on_signals(worker):
+                        worker.run_forever(poll_seconds=args.poll_seconds)
+            finally:
+                worker.close()
+            return 0
+        if args.command == "project-provision-reconcile":
+            config = load_project_provisioner_config(args.config)
+            state = HubState.open(config.state_path)
+            try:
+                workflow = ProjectOnboardingStore(state).reconcile_unknown(
+                    args.workflow_id,
+                    telegram_chat_id=args.chat_id,
+                    telegram_access_hash=args.access_hash,
+                    required_owner_user_ids=config.owner_user_ids,
+                    confirm=args.confirm,
+                )
+            finally:
+                state.close()
+            _print({"ok": True, "workflow_id": workflow.workflow_id, "stage": workflow.stage})
+            return 0
+        if args.command == "project-provision-resume":
+            config = load_project_provisioner_config(args.config)
+            state = HubState.open(config.state_path)
+            try:
+                workflow = ProjectOnboardingStore(state).resume_blocked(
+                    args.workflow_id,
+                    required_owner_user_ids=config.owner_user_ids,
+                    confirm=args.confirm,
+                )
+            finally:
+                state.close()
+            _print({"ok": True, "workflow_id": workflow.workflow_id, "stage": workflow.stage})
+            return 0
+        if args.command == "project-command-retry":
+            config = load_hub_config(args.config)
+            expected = f"{args.chat_id}:{args.bot_identity}"
+            if args.confirm != expected:
+                raise StateError("project_command_scope_confirmation_invalid")
+            identities = set(config.external_worker_agent_ids)
+            if config.hub_bot is not None:
+                identities.add("hub")
+            if args.bot_identity not in identities:
+                raise StateError("project_command_scope_identity_invalid")
+            state = HubState.open(config.state_path)
+            try:
+                ProjectOnboardingStore(state).reset_failed_command_scope(
+                    args.chat_id, args.bot_identity
+                )
+            finally:
+                state.close()
+            _print(
+                {
+                    "ok": True,
+                    "chat_id": args.chat_id,
+                    "bot_identity": args.bot_identity,
+                    "status": "pending",
+                }
+            )
+            return 0
         if args.command == "project":
             return _project_command(args)
         if args.command == "lane":
@@ -421,6 +729,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 130
     except (
         AcceptanceActorError,
+        ProjectProvisioningError,
         HubConfigError,
         RegistryError,
         StateError,
