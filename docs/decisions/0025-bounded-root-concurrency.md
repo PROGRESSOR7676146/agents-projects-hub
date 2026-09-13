@@ -46,7 +46,8 @@ root, is listed by Git as a linked worktree, and reports itself as Git top level
 The same resolver supplies that root to external and embedded execution,
 staging, local resume-command preparation, and read-only Codex recovery; a
 missing or mismatched retained binding fails before provider access or writer
-transfer. Archive restores a conservative project-ID fallback; the next registry-aware
+transfer. Legacy managed-terminal takeover and inline local-summary paths reject
+an active lane before changing ownership or reaching a provider. Archive restores a conservative project-ID fallback; the next registry-aware
 topic observation upgrades it to the canonical base root. Cleanup remains a
 separate explicit local operation.
 

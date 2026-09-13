@@ -271,6 +271,30 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         finally:
             service.close()
 
+    def test_terminal_takeover_refuses_a_bound_lane_before_provider_access(self) -> None:
+        client = QueueClient()
+        service, telegram = self.service(client)
+        project = self.registry.projects[0]
+        lane_root, branch = create_worktree(project, "terminal")
+        try:
+            self.assertTrue(service.handle_update(update(1, "/menu")))
+            topic = service.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            service.state.register_lane(
+                lane_id="terminal",
+                project_id=project.project_id,
+                worktree_path=lane_root,
+                branch_name=branch,
+            )
+            service.state.bind_lane("terminal", topic.topic_id)
+
+            self.assertTrue(service.handle_update(update(2, "/terminal")))
+
+            self.assertEqual(client.started_threads, 0)
+            self.assertIn("unavailable for a worktree lane", telegram.sent[-1])
+        finally:
+            service.close()
+
     def test_consecutive_productive_messages_form_one_durable_provider_turn(self) -> None:
         client = QueueClient()
         service, _ = self.service(client)

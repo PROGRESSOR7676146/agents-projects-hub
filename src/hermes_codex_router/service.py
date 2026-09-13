@@ -2162,6 +2162,12 @@ class ProjectHubService:
             if session.writer_mode == "local":
                 self._send_text(message, "Use /return before starting a managed terminal.")
                 return True
+            if self.state.active_lane_for_topic(topic.topic_id) is not None:
+                self._send_text(
+                    message,
+                    "Managed terminal takeover is unavailable for a worktree lane; use /local.",
+                )
+                return True
             if self._queue_enabled(session.agent_id):
                 self._send_text(
                     message,
@@ -2301,6 +2307,12 @@ class ProjectHubService:
                     handoff_id=None,
                     take_local_writer=True,
                 )
+            if self.state.active_lane_for_topic(topic.topic_id) is not None:
+                self._send_text(
+                    message,
+                    "Local summary is unavailable for a worktree lane; return with the supported local workflow.",
+                )
+                return True
             self.state.set_writer_mode(session.session_id, "telegram")
             try:
                 external = getattr(self, "external_services", {}).get(session.agent_id)
