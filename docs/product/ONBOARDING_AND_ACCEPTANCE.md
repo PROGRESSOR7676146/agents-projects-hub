@@ -26,7 +26,14 @@ This normative module is part of the
   contain the intended bot identities and every owner captured when the action
   was confirmed, and provide topic IDs. The creating technical owner remains
   creator; every other captured owner MUST be invited, granted the documented
-  administrative rights, and verified by readback. Bot permissions MUST be the
+  administrative rights, and verified before any bot invitation begins, so a
+  later bot-specific rejection leaves a human recovery authority in the group.
+  Before inviting a bot, the worker MUST read its exact active group membership
+  and skip the invitation when the expected identity is an active participant. It MUST invite only
+  after Telegram proves `UserNotParticipant`; other lookup failures MUST NOT be
+  treated as absence. Left, banned, unknown and mismatched participant results
+  MUST block configuration and final readiness.
+  Bot permissions MUST be the
   minimum needed; lack of Manage Topics does not block General.
 - **REQ-ONBOARD-004 (Accepted):** Privacy Mode and bot re-add requirements are
   deployment steps, not runtime routing actions.

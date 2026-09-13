@@ -84,8 +84,10 @@ Project/group onboarding is implemented offline behind explicit
 `project_provisioning.enabled` configuration. The owner-only Hub wizard accepts
 a display name, an opaque configured root choice and a safe direct-child project
 ID. A separate pinned Telegram user-session worker creates the private forum,
-preflights and snapshots all configured owners and bot identities, adds the
-non-creator owners as administrators, grants the Hub minimum topic/invite
+preflights and snapshots all configured owners and bot identities, adds and
+verifies the non-creator owners as administrators before inviting any bot,
+checks for exact active bot membership before each invitation so owner-assisted
+recovery survives resume, blocks left/banned/mismatched results, grants the Hub minimum topic/invite
 rights, prepares an empty Git root, updates the registry and records the
 immutable numeric binding. Session files are private and protected by one
 process lock; mutation RPCs have bounded deadlines and no client retry. The

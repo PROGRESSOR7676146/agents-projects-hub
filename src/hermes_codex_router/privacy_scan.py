@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,6 +57,12 @@ _RAW_SESSION_RES = (
     re.compile("<user" + "_action>"),
     re.compile("<permissions " + "instructions>"),
     re.compile(r"(?m)^## \d+\. (?:User|Assistant)\s+·"),
+)
+_GITHUB_WEB_FLOW_FINGERPRINTS = frozenset(
+    {
+        "5DE3E0509C47EA3CF04A42D34AEE18F83AFDEB23",
+        "968479A1AFF927E37D1A566BB5690EEEBB952194",
+    }
 )
 
 
@@ -186,16 +194,167 @@ def scan_repository(root: Path) -> list[PrivacyFinding]:
     return findings
 
 
-def _metadata_for_privacy_scan(metadata: str) -> str:
-    """Remove only the author line of GitHub's synthetic PR merge commit."""
-    parents = re.findall(r"(?m)^parent [0-9a-f]{40}$", metadata)
+def _metadata_for_privacy_scan(
+    metadata: str,
+    *,
+    github_signature_verified: bool = False,
+    github_owner: str | None = None,
+) -> str:
+    """Remove GitHub-generated identity fields from recognized PR merges."""
+    headers, separator, message = metadata.partition("\n\n")
+    if not separator:
+        return metadata
+    parents = re.findall(r"(?m)^parent [0-9a-f]{40}$", headers)
     github_committer = re.search(
-        r"(?m)^committer GitHub <noreply@github\.com> \d+ [+-]\d{4}$", metadata
+        r"(?m)^committer GitHub <noreply@github\.com> \d+ [+-]\d{4}$", headers
     )
-    synthetic_subject = re.search(r"(?m)^Merge [0-9a-f]{40} into [0-9a-f]{40}$", metadata)
-    if len(parents) == 2 and github_committer and synthetic_subject:
-        return re.sub(r"(?m)^author .*\n", "", metadata, count=1)
+    synthetic_subject = re.fullmatch(r"Merge [0-9a-f]{40} into [0-9a-f]{40}\n?", message)
+    hosted_subject = re.match(
+        r"^(Merge pull request #[0-9]+ from )([A-Za-z0-9-]{1,39})/([^\n]+)(\n|$)",
+        message,
+    )
+    hosted_owner_matches = bool(
+        hosted_subject
+        and github_owner
+        and not hosted_subject.group(2).startswith("-")
+        and not hosted_subject.group(2).endswith("-")
+        and "--" not in hosted_subject.group(2)
+        and hosted_subject.group(2).casefold() == github_owner.casefold()
+    )
+    recognized = synthetic_subject or (
+        hosted_subject and github_signature_verified and hosted_owner_matches
+    )
+    if len(parents) == 2 and github_committer and recognized:
+        headers = re.sub(r"(?m)^author .*\n", "", headers, count=1)
+        if hosted_subject:
+            message = (
+                message[: hosted_subject.start()]
+                + hosted_subject.group(1)
+                + hosted_subject.group(3)
+                + hosted_subject.group(4)
+                + message[hosted_subject.end() :]
+            )
+        return headers + separator + message
     return metadata
+
+
+def _github_signature_verified(root: Path, object_id: str) -> bool:
+    key_path = Path(__file__).with_name("github-web-flow.asc")
+    git_path = Path("/usr/bin/git")
+    gpg_path = Path("/usr/bin/gpg")
+    if not key_path.is_file() or not git_path.is_file() or not gpg_path.is_file():
+        return False
+    try:
+        with tempfile.TemporaryDirectory(prefix="hub-gpg-") as temporary:
+            os.chmod(temporary, 0o700)
+            environment = os.environ.copy()
+            environment["GNUPGHOME"] = temporary
+            environment["GIT_CONFIG_NOSYSTEM"] = "1"
+            environment["GIT_CONFIG_GLOBAL"] = os.devnull
+            environment["GIT_CONFIG_SYSTEM"] = os.devnull
+            environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+            environment.pop("GIT_CONFIG_PARAMETERS", None)
+            config_count = int(environment.pop("GIT_CONFIG_COUNT", "0"))
+            for index in range(config_count):
+                environment.pop(f"GIT_CONFIG_KEY_{index}", None)
+                environment.pop(f"GIT_CONFIG_VALUE_{index}", None)
+            imported = subprocess.run(
+                [
+                    str(gpg_path),
+                    "--batch",
+                    "--no-autostart",
+                    "--quiet",
+                    "--import",
+                    str(key_path),
+                ],
+                cwd=root,
+                env=environment,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=10,
+            )
+            if imported.returncode != 0:
+                return False
+            verified = subprocess.run(
+                [
+                    str(git_path),
+                    "-c",
+                    "gpg.format=openpgp",
+                    "-c",
+                    f"gpg.program={gpg_path}",
+                    "-c",
+                    f"gpg.openpgp.program={gpg_path}",
+                    "verify-commit",
+                    "--raw",
+                    object_id,
+                ],
+                cwd=root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+            valid_signatures = re.findall(
+                r"(?m)^\[GNUPG:\] VALIDSIG ([0-9A-F]{40}) ", verified.stderr
+            )
+            return (
+                verified.returncode == 0
+                and len(valid_signatures) == 1
+                and valid_signatures[0] in _GITHUB_WEB_FLOW_FINGERPRINTS
+            )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+
+
+def _is_hosted_github_pr_merge(metadata: str) -> bool:
+    headers, separator, message = metadata.partition("\n\n")
+    if not separator:
+        return False
+    return bool(
+        len(re.findall(r"(?m)^parent [0-9a-f]{40}$", headers)) == 2
+        and re.search(
+            r"(?m)^committer GitHub <noreply@github\.com> \d+ [+-]\d{4}$",
+            headers,
+        )
+        and re.match(
+            r"^Merge pull request #[0-9]+ from [A-Za-z0-9-]{1,39}/[^\n]+(?:\n|$)",
+            message,
+        )
+    )
+
+
+def _github_remote_owner(root: Path) -> str | None:
+    environment = os.environ.copy()
+    environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    environment["GIT_CONFIG_GLOBAL"] = os.devnull
+    environment["GIT_CONFIG_SYSTEM"] = os.devnull
+    try:
+        result = subprocess.run(
+            [str(Path("/usr/bin/git")), "config", "--local", "--get", "remote.origin.url"],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    match = re.fullmatch(
+        r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)"
+        r"([A-Za-z0-9-]{1,39})/[^/\s]+?(?:\.git)?\n?",
+        result.stdout,
+    )
+    if not match:
+        return None
+    owner = match.group(1)
+    if owner.startswith("-") or owner.endswith("-") or "--" in owner:
+        return None
+    return owner
 
 
 def scan_history(root: Path) -> list[PrivacyFinding]:
@@ -207,6 +366,7 @@ def scan_history(root: Path) -> list[PrivacyFinding]:
         text=True,
     )
     findings: list[PrivacyFinding] = []
+    github_owner = _github_remote_owner(root)
     inspected: set[str] = set()
     for line in result.stdout.splitlines():
         fields = line.split(" ", 1)
@@ -228,7 +388,14 @@ def scan_history(root: Path) -> list[PrivacyFinding]:
                 check=True,
                 capture_output=True,
             ).stdout.decode("utf-8", errors="replace")
-            metadata = _metadata_for_privacy_scan(metadata)
+            github_signature_verified = _is_hosted_github_pr_merge(
+                metadata
+            ) and _github_signature_verified(root, object_id)
+            metadata = _metadata_for_privacy_scan(
+                metadata,
+                github_signature_verified=github_signature_verified,
+                github_owner=github_owner,
+            )
             findings.extend(
                 PrivacyFinding(
                     Path(".git-metadata") / object_id[:12],

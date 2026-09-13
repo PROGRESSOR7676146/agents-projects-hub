@@ -343,7 +343,7 @@ class TelethonProvisioningClient:
     ) -> None:
         try:
             from telethon import functions, types, utils
-            from telethon.errors import UserAlreadyParticipantError
+            from telethon.errors import UserAlreadyParticipantError, UserNotParticipantError
 
             channel_id, _ = utils.resolve_id(group.telegram_chat_id)
             channel = types.InputChannel(channel_id=channel_id, access_hash=group.access_hash)
@@ -353,6 +353,28 @@ class TelethonProvisioningClient:
                 username.casefold(): self._bots[username.casefold()]
                 for username in (hub_username, *provider_usernames)
             }
+
+            def verified_active_participant(
+                membership: object,
+                identity: object,
+                error_code: str,
+            ) -> object:
+                participant = getattr(membership, "participant", None)
+                active_types = (
+                    types.ChannelParticipant,
+                    types.ChannelParticipantSelf,
+                    types.ChannelParticipantCreator,
+                    types.ChannelParticipantAdmin,
+                )
+                expected_user_id = getattr(identity, "user_id", None)
+                if (
+                    not isinstance(participant, active_types)
+                    or expected_user_id is None
+                    or getattr(participant, "user_id", None) != expected_user_id
+                ):
+                    raise ProvisioningUnknown(error_code)
+                return participant
+
             before_rpc()
             creator_id = int((await self._bounded(self._client.get_me())).id)
             creator_identity = self._owners.get(creator_id)
@@ -376,16 +398,17 @@ class TelethonProvisioningClient:
                     )
                 )
             )
-            creator_participant = getattr(creator_membership, "participant", None)
-            if not (
-                getattr(creator_participant, "creator", False)
-                or type(creator_participant).__name__ == "ChannelParticipantCreator"
-            ):
+            creator_participant = verified_active_participant(
+                creator_membership,
+                creator_identity,
+                "group_creator_invalid",
+            )
+            if not isinstance(creator_participant, types.ChannelParticipantCreator):
                 raise ProvisioningRejected("group_creator_invalid")
-            invitees = tuple(
+            owner_invitees = tuple(
                 identity for owner_id, identity in self._owners.items() if owner_id != creator_id
-            ) + tuple(identities.values())
-            for identity in invitees:
+            )
+            for identity in owner_invitees:
                 try:
                     before_rpc()
                     await self._bounded(
@@ -423,6 +446,67 @@ class TelethonProvisioningClient:
                         )
                     )
                 )
+            required_owner_rights = (
+                "change_info",
+                "delete_messages",
+                "ban_users",
+                "invite_users",
+                "pin_messages",
+                "add_admins",
+                "manage_call",
+                "manage_topics",
+            )
+            for owner_id, identity in self._owners.items():
+                if owner_id == creator_id:
+                    continue
+                before_rpc()
+                membership = await self._bounded(
+                    self._client(
+                        functions.channels.GetParticipantRequest(
+                            channel=channel,
+                            participant=identity,
+                        )
+                    )
+                )
+                participant = verified_active_participant(
+                    membership,
+                    identity,
+                    "owner_admin_rights_unknown",
+                )
+                rights = getattr(participant, "admin_rights", None)
+                if rights is None or not all(
+                    getattr(rights, name, False) for name in required_owner_rights
+                ):
+                    raise ProvisioningUnknown("owner_admin_rights_unknown")
+            for identity in identities.values():
+                try:
+                    before_rpc()
+                    membership = await self._bounded(
+                        self._client(
+                            functions.channels.GetParticipantRequest(
+                                channel=channel,
+                                participant=identity,
+                            )
+                        )
+                    )
+                    verified_active_participant(
+                        membership,
+                        identity,
+                        "bot_membership_unknown",
+                    )
+                except UserNotParticipantError:
+                    try:
+                        before_rpc()
+                        await self._bounded(
+                            self._client(
+                                functions.channels.InviteToChannelRequest(
+                                    channel=channel,
+                                    users=[identity],
+                                )
+                            )
+                        )
+                    except UserAlreadyParticipantError:
+                        pass
             before_rpc()
             await self._bounded(
                 self._client(
@@ -457,8 +541,12 @@ class TelethonProvisioningClient:
                         )
                     )
                 )
+                participant = verified_active_participant(
+                    membership,
+                    identity,
+                    "bot_membership_unknown",
+                )
                 if username == hub_username.casefold():
-                    participant = getattr(membership, "participant", None)
                     rights = getattr(participant, "admin_rights", None)
                     if rights is None or not getattr(rights, "manage_topics", False):
                         raise ProvisioningUnknown("hub_manage_topics_unknown")
@@ -472,26 +560,19 @@ class TelethonProvisioningClient:
                         )
                     )
                 )
-                participant = getattr(membership, "participant", None)
+                participant = verified_active_participant(
+                    membership,
+                    identity,
+                    "owner_membership_unknown",
+                )
                 if owner_id == creator_id:
-                    if not (
-                        getattr(participant, "creator", False)
-                        or type(participant).__name__ == "ChannelParticipantCreator"
-                    ):
+                    if not isinstance(participant, types.ChannelParticipantCreator):
                         raise ProvisioningUnknown("creator_membership_unknown")
                     continue
                 rights = getattr(participant, "admin_rights", None)
-                required = (
-                    "change_info",
-                    "delete_messages",
-                    "ban_users",
-                    "invite_users",
-                    "pin_messages",
-                    "add_admins",
-                    "manage_call",
-                    "manage_topics",
-                )
-                if rights is None or not all(getattr(rights, name, False) for name in required):
+                if rights is None or not all(
+                    getattr(rights, name, False) for name in required_owner_rights
+                ):
                     raise ProvisioningUnknown("owner_admin_rights_unknown")
         except ProjectProvisionerStopping:
             raise

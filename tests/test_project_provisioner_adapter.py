@@ -10,7 +10,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from telethon import types
-from telethon.errors import BadRequestError, ServerError
+from telethon.errors import BadRequestError, ServerError, UserNotParticipantError
 
 from hermes_codex_router.hub_config import (
     HubConfig,
@@ -168,6 +168,7 @@ class ProjectProvisionerAdapterTests(unittest.TestCase):
         class Client:
             def __init__(self) -> None:
                 self.requests: list[object] = []
+                self.invited: set[int] = set()
 
             async def get_me(self) -> object:
                 return SimpleNamespace(id=42)
@@ -180,9 +181,14 @@ class ProjectProvisionerAdapterTests(unittest.TestCase):
                 if type(request).__name__ == "GetParticipantRequest":
                     participant = cast(Any, request).participant
                     if participant == creator:
-                        return SimpleNamespace(participant=SimpleNamespace(creator=True))
+                        return SimpleNamespace(
+                            participant=types.ChannelParticipantCreator(
+                                user_id=creator.user_id,
+                                admin_rights=types.ChatAdminRights(other=True),
+                            )
+                        )
                     if participant == second_owner:
-                        rights = SimpleNamespace(
+                        rights = types.ChatAdminRights(
                             change_info=True,
                             delete_messages=True,
                             ban_users=True,
@@ -192,14 +198,34 @@ class ProjectProvisionerAdapterTests(unittest.TestCase):
                             manage_call=True,
                             manage_topics=True,
                         )
-                        return SimpleNamespace(participant=SimpleNamespace(admin_rights=rights))
-                    if participant == hub:
                         return SimpleNamespace(
-                            participant=SimpleNamespace(
-                                admin_rights=SimpleNamespace(manage_topics=True)
+                            participant=types.ChannelParticipantAdmin(
+                                user_id=second_owner.user_id,
+                                promoted_by=creator.user_id,
+                                date=None,
+                                admin_rights=rights,
                             )
                         )
-                    return SimpleNamespace(participant=SimpleNamespace())
+                    if participant == hub:
+                        if hub.user_id not in self.invited:
+                            raise UserNotParticipantError(request)
+                        return SimpleNamespace(
+                            participant=types.ChannelParticipantAdmin(
+                                user_id=hub.user_id,
+                                promoted_by=creator.user_id,
+                                date=None,
+                                admin_rights=types.ChatAdminRights(manage_topics=True),
+                            )
+                        )
+                    if participant == provider and provider.user_id not in self.invited:
+                        raise UserNotParticipantError(request)
+                    return SimpleNamespace(
+                        participant=types.ChannelParticipant(user_id=provider.user_id, date=None)
+                    )
+                if type(request).__name__ == "InviteToChannelRequest":
+                    self.invited.update(
+                        cast(Any, identity).user_id for identity in cast(Any, request).users
+                    )
                 return SimpleNamespace()
 
         transport = Client()
@@ -226,6 +252,307 @@ class ProjectProvisionerAdapterTests(unittest.TestCase):
             {cast(Any, item).user_id.user_id for item in promotions},
             {second_owner.user_id, hub.user_id},
         )
+        mutations = [
+            item
+            for item in transport.requests
+            if type(item).__name__ in {"InviteToChannelRequest", "EditAdminRequest"}
+        ]
+        self.assertEqual(
+            [
+                (
+                    type(item).__name__,
+                    cast(Any, item).users[0].user_id
+                    if type(item).__name__ == "InviteToChannelRequest"
+                    else cast(Any, item).user_id.user_id,
+                )
+                for item in mutations
+            ],
+            [
+                ("InviteToChannelRequest", second_owner.user_id),
+                ("EditAdminRequest", second_owner.user_id),
+                ("InviteToChannelRequest", hub.user_id),
+                ("InviteToChannelRequest", provider.user_id),
+                ("EditAdminRequest", hub.user_id),
+            ],
+        )
+        request_names_and_participants = [
+            (
+                type(item).__name__,
+                getattr(getattr(item, "participant", None), "user_id", None),
+            )
+            for item in transport.requests
+        ]
+        owner_readback = request_names_and_participants.index(
+            ("GetParticipantRequest", second_owner.user_id), 3
+        )
+        first_bot_invite = next(
+            index
+            for index, item in enumerate(transport.requests)
+            if type(item).__name__ == "InviteToChannelRequest"
+            and cast(Any, item).users[0].user_id == hub.user_id
+        )
+        self.assertLess(owner_readback, first_bot_invite)
+
+    def test_existing_bot_member_skips_rejected_reinvite_on_resume(self) -> None:
+        creator = types.InputUser(42, 420)
+        hub = types.InputUser(100, 1000)
+        provider = types.InputUser(101, 1010)
+
+        class Client:
+            def __init__(self) -> None:
+                self.requests: list[object] = []
+
+            async def get_me(self) -> object:
+                return SimpleNamespace(id=42)
+
+            async def get_entity(self, _entity: object) -> object:
+                return SimpleNamespace(forum=True, megagroup=True, username=None, creator=True)
+
+            async def __call__(self, request: object) -> object:
+                self.requests.append(request)
+                if type(request).__name__ == "InviteToChannelRequest":
+                    raise BadRequestError(request, "reinvite rejected")
+                if type(request).__name__ == "GetParticipantRequest":
+                    participant = cast(Any, request).participant
+                    if participant == creator:
+                        return SimpleNamespace(
+                            participant=types.ChannelParticipantCreator(
+                                user_id=creator.user_id,
+                                admin_rights=types.ChatAdminRights(other=True),
+                            )
+                        )
+                    if participant == hub:
+                        return SimpleNamespace(
+                            participant=types.ChannelParticipantAdmin(
+                                user_id=hub.user_id,
+                                promoted_by=creator.user_id,
+                                date=None,
+                                admin_rights=types.ChatAdminRights(manage_topics=True),
+                            )
+                        )
+                    return SimpleNamespace(
+                        participant=types.ChannelParticipant(user_id=provider.user_id, date=None)
+                    )
+                return SimpleNamespace()
+
+        transport = Client()
+        client = TelethonProvisioningClient.__new__(TelethonProvisioningClient)
+        client._client = transport
+        client._owners = {42: creator}
+        client._bots = {"hub_bot": hub, "provider_bot": provider}
+        asyncio.run(
+            client.configure_group(
+                CreatedForum(-1001234567890, 99),
+                hub_username="hub_bot",
+                provider_usernames=("provider_bot",),
+                before_rpc=lambda: None,
+            )
+        )
+        self.assertFalse(
+            any(type(item).__name__ == "InviteToChannelRequest" for item in transport.requests)
+        )
+
+    def test_non_active_or_mismatched_participant_does_not_permit_invite(self) -> None:
+        creator = types.InputUser(42, 420)
+        hub = types.InputUser(100, 1000)
+        invalid_participants = (
+            types.ChannelParticipantLeft(peer=types.PeerUser(hub.user_id)),
+            types.ChannelParticipantBanned(
+                peer=types.PeerUser(hub.user_id),
+                kicked_by=creator.user_id,
+                date=None,
+                banned_rights=types.ChatBannedRights(until_date=None, view_messages=True),
+                left=True,
+            ),
+            types.ChannelParticipant(user_id=999, date=None),
+            SimpleNamespace(user_id=hub.user_id),
+        )
+
+        for invalid_participant in invalid_participants:
+            with self.subTest(participant=type(invalid_participant).__name__):
+
+                class Client:
+                    def __init__(self) -> None:
+                        self.requests: list[object] = []
+
+                    async def get_me(self) -> object:
+                        return SimpleNamespace(id=creator.user_id)
+
+                    async def get_entity(self, _entity: object) -> object:
+                        return SimpleNamespace(
+                            forum=True,
+                            megagroup=True,
+                            username=None,
+                            creator=True,
+                        )
+
+                    async def __call__(self, request: object) -> object:
+                        self.requests.append(request)
+                        if type(request).__name__ == "GetParticipantRequest":
+                            if cast(Any, request).participant == creator:
+                                return SimpleNamespace(
+                                    participant=types.ChannelParticipantCreator(
+                                        user_id=creator.user_id,
+                                        admin_rights=types.ChatAdminRights(other=True),
+                                    )
+                                )
+                            return SimpleNamespace(participant=invalid_participant)
+                        return SimpleNamespace()
+
+                transport = Client()
+                client = TelethonProvisioningClient.__new__(TelethonProvisioningClient)
+                client._client = transport
+                client._owners = {creator.user_id: creator}
+                client._bots = {"hub_bot": hub}
+                with self.assertRaises(ProvisioningUnknown):
+                    asyncio.run(
+                        client.configure_group(
+                            CreatedForum(-1001234567890, 99),
+                            hub_username="hub_bot",
+                            provider_usernames=(),
+                            before_rpc=lambda: None,
+                        )
+                    )
+                self.assertFalse(
+                    any(
+                        type(item).__name__ in {"InviteToChannelRequest", "EditAdminRequest"}
+                        for item in transport.requests
+                    )
+                )
+
+    def test_lost_provider_membership_fails_final_readback(self) -> None:
+        creator = types.InputUser(42, 420)
+        hub = types.InputUser(100, 1000)
+        provider = types.InputUser(101, 1010)
+
+        class Client:
+            def __init__(self) -> None:
+                self.provider_reads = 0
+
+            async def get_me(self) -> object:
+                return SimpleNamespace(id=creator.user_id)
+
+            async def get_entity(self, _entity: object) -> object:
+                return SimpleNamespace(forum=True, megagroup=True, username=None, creator=True)
+
+            async def __call__(self, request: object) -> object:
+                if type(request).__name__ != "GetParticipantRequest":
+                    return SimpleNamespace()
+                if cast(Any, request).participant == creator:
+                    return SimpleNamespace(
+                        participant=types.ChannelParticipantCreator(
+                            user_id=creator.user_id,
+                            admin_rights=types.ChatAdminRights(other=True),
+                        )
+                    )
+                if cast(Any, request).participant == hub:
+                    return SimpleNamespace(
+                        participant=types.ChannelParticipantAdmin(
+                            user_id=hub.user_id,
+                            promoted_by=creator.user_id,
+                            date=None,
+                            admin_rights=types.ChatAdminRights(manage_topics=True),
+                        )
+                    )
+                self.provider_reads += 1
+                if self.provider_reads == 1:
+                    return SimpleNamespace(
+                        participant=types.ChannelParticipant(user_id=provider.user_id, date=None)
+                    )
+                return SimpleNamespace(
+                    participant=types.ChannelParticipantLeft(peer=types.PeerUser(provider.user_id))
+                )
+
+        client = TelethonProvisioningClient.__new__(TelethonProvisioningClient)
+        client._client = Client()
+        client._owners = {creator.user_id: creator}
+        client._bots = {"hub_bot": hub, "provider_bot": provider}
+        with self.assertRaises(ProvisioningUnknown):
+            asyncio.run(
+                client.configure_group(
+                    CreatedForum(-1001234567890, 99),
+                    hub_username="hub_bot",
+                    provider_usernames=("provider_bot",),
+                    before_rpc=lambda: None,
+                )
+            )
+
+    def test_provider_invite_failure_retains_verified_owner_admin(self) -> None:
+        creator = types.InputUser(42, 420)
+        second_owner = types.InputUser(43, 430)
+        hub = types.InputUser(100, 1000)
+        provider = types.InputUser(101, 1010)
+
+        class Client:
+            def __init__(self) -> None:
+                self.requests: list[object] = []
+                self.owner_verified = False
+
+            async def get_me(self) -> object:
+                return SimpleNamespace(id=42)
+
+            async def get_entity(self, _entity: object) -> object:
+                return SimpleNamespace(forum=True, megagroup=True, username=None, creator=True)
+
+            async def __call__(self, request: object) -> object:
+                self.requests.append(request)
+                name = type(request).__name__
+                if name == "GetParticipantRequest":
+                    participant = cast(Any, request).participant
+                    if participant == creator:
+                        return SimpleNamespace(
+                            participant=types.ChannelParticipantCreator(
+                                user_id=creator.user_id,
+                                admin_rights=types.ChatAdminRights(other=True),
+                            )
+                        )
+                    if participant == second_owner:
+                        self.owner_verified = True
+                        rights = types.ChatAdminRights(
+                            change_info=True,
+                            delete_messages=True,
+                            ban_users=True,
+                            invite_users=True,
+                            pin_messages=True,
+                            add_admins=True,
+                            manage_call=True,
+                            manage_topics=True,
+                        )
+                        return SimpleNamespace(
+                            participant=types.ChannelParticipantAdmin(
+                                user_id=second_owner.user_id,
+                                promoted_by=creator.user_id,
+                                date=None,
+                                admin_rights=rights,
+                            )
+                        )
+                    raise UserNotParticipantError(request)
+                if name == "InviteToChannelRequest":
+                    invited = cast(Any, request).users[0]
+                    if invited == provider:
+                        self.assert_owner_verified()
+                        raise BadRequestError(request, "provider rejected")
+                return SimpleNamespace()
+
+            def assert_owner_verified(self) -> None:
+                if not self.owner_verified:
+                    raise AssertionError("provider invite preceded owner verification")
+
+        transport = Client()
+        client = TelethonProvisioningClient.__new__(TelethonProvisioningClient)
+        client._client = transport
+        client._owners = {42: creator, 43: second_owner}
+        client._bots = {"hub_bot": hub, "provider_bot": provider}
+        with self.assertRaises(ProvisioningRejected):
+            asyncio.run(
+                client.configure_group(
+                    CreatedForum(-1001234567890, 99),
+                    hub_username="hub_bot",
+                    provider_usernames=("provider_bot",),
+                    before_rpc=lambda: None,
+                )
+            )
+        self.assertTrue(transport.owner_verified)
 
     def test_stop_after_first_invite_prevents_later_mutations(self) -> None:
         creator = types.InputUser(42, 420)
@@ -246,7 +573,12 @@ class ProjectProvisionerAdapterTests(unittest.TestCase):
             async def __call__(self, request: object) -> object:
                 self.requests.append(request)
                 if type(request).__name__ == "GetParticipantRequest":
-                    return SimpleNamespace(participant=SimpleNamespace(creator=True))
+                    return SimpleNamespace(
+                        participant=types.ChannelParticipantCreator(
+                            user_id=creator.user_id,
+                            admin_rights=types.ChatAdminRights(other=True),
+                        )
+                    )
                 return SimpleNamespace()
 
         transport = Client()
