@@ -81,6 +81,22 @@ class AcceptanceActor:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderTelemetrySettings:
+    quota_cache: Path
+    status_state: Path
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectProvisioningSettings:
+    enabled: bool
+    api_id: int | None
+    api_hash_file: Path | None
+    session_path: Path | None
+    expected_user_id: int | None
+    group_about: str
+
+
+@dataclass(frozen=True, slots=True)
 class HubConfig:
     schema_version: int
     owner_user_ids: tuple[int, ...]
@@ -104,6 +120,10 @@ class HubConfig:
     # External workers are deliberately selected per provider.  This avoids a
     # global runtime switch accidentally stranding providers without a worker.
     external_worker_agent_ids: tuple[str, ...] = ()
+    # Consecutive productive messages with identical routing are collected
+    # into one provider turn.  Zero keeps legacy one-message/one-turn behavior.
+    message_batch_quiet_ms: int = 0
+    message_batch_max_ms: int = 8000
     direct_message_project_id: str | None = None
     recovery_plane: RecoveryPlaneSettings = field(
         default_factory=lambda: RecoveryPlaneSettings(
@@ -120,10 +140,22 @@ class HubConfig:
     )
     acceptance_actors: tuple[AcceptanceActor, ...] = ()
     codex_multi_auth_dir: Path | None = None
+    codex_sessions_dir: Path | None = None
     codex_multi_auth_executable: Path | None = None
     codex_stdio_executable: Path | None = None
     codex_account_hints: dict[int, str] = field(default_factory=dict)
     provider_account_hints: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    provider_telemetry: dict[str, ProviderTelemetrySettings] = field(default_factory=dict)
+    project_provisioning: ProjectProvisioningSettings = field(
+        default_factory=lambda: ProjectProvisioningSettings(
+            False,
+            None,
+            None,
+            None,
+            None,
+            "Private project group managed by Agents Projects Hub",
+        )
+    )
 
     def require_agent(self, agent_id: str) -> AgentDefinition:
         for agent in self.agents:
@@ -210,6 +242,7 @@ def load_hub_config(
     _validate_telegram_secrets: bool = True,
     _controller_ingress_only: bool = False,
     _provider_ingress_agent_id: str | None = None,
+    _validate_project_provisioning_secret: bool = True,
 ) -> HubConfig:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
@@ -313,6 +346,14 @@ def load_hub_config(
             raise HubConfigError(
                 "manage_codex_server and codex_stdio_executable are mutually exclusive"
             )
+    sessions_dir_value = root.get("codex_sessions_dir")
+    codex_sessions_dir = None
+    if sessions_dir_value is not None:
+        codex_sessions_dir = _absolute_path(
+            sessions_dir_value, "codex_sessions_dir", must_exist=True
+        )
+        if not codex_sessions_dir.is_dir():
+            raise HubConfigError("codex_sessions_dir must be a directory")
 
     terminal_data = _object(root.get("terminal", {}), "terminal")
     terminal_backend = terminal_data.get("backend", "auto")
@@ -530,6 +571,32 @@ def load_hub_config(
         if len(set(raw_hints)) != len(raw_hints):
             raise HubConfigError("provider_account_hints contains duplicate prefixes")
         provider_account_hints[str(agent_id)] = tuple(raw_hints)
+    raw_provider_telemetry = root.get("provider_telemetry", {})
+    if not isinstance(raw_provider_telemetry, dict):
+        raise HubConfigError("provider_telemetry must be an object")
+    provider_telemetry: dict[str, ProviderTelemetrySettings] = {}
+    for agent_id, raw_settings in raw_provider_telemetry.items():
+        agent = next((item for item in agents if item.agent_id == agent_id), None)
+        if agent is None or agent.runtime != "antigravity":
+            raise HubConfigError("provider_telemetry requires a configured Antigravity agent")
+        settings = _object(raw_settings, f"provider_telemetry.{agent_id}")
+        quota_cache = _absolute_path(
+            settings.get("quota_cache"),
+            f"provider_telemetry.{agent_id}.quota_cache",
+            must_exist=True,
+        )
+        status_state = _absolute_path(
+            settings.get("status_state"),
+            f"provider_telemetry.{agent_id}.status_state",
+            must_exist=True,
+        )
+        for telemetry_file in (quota_cache, status_state):
+            if not telemetry_file.is_file() or telemetry_file.stat().st_mode & 0o077:
+                raise HubConfigError("provider telemetry files must have mode 0600")
+        provider_telemetry[str(agent_id)] = ProviderTelemetrySettings(
+            quota_cache=quota_cache,
+            status_state=status_state,
+        )
 
     hub_bot = None
     if raw_hub_bot is not None:
@@ -553,6 +620,8 @@ def load_hub_config(
         )
         if any(agent.token_file == hub_bot.token_file for agent in agents):
             raise HubConfigError("hub_bot.token_file duplicates an agent token_file")
+    if alerts_chat_id is not None and hub_bot is None:
+        raise HubConfigError("operational_alerts requires hub_bot")
 
     direct_message_project_id = root.get("direct_message_project_id")
     if direct_message_project_id is not None and (
@@ -608,6 +677,22 @@ def load_hub_config(
             )
         if agent.managed_externally:
             raise HubConfigError(f"external worker agent {agent_id} must be locally managed")
+    message_batch_quiet_ms = root.get("message_batch_quiet_ms", 0)
+    message_batch_max_ms = root.get("message_batch_max_ms", 8000)
+    if (
+        not isinstance(message_batch_quiet_ms, int)
+        or isinstance(message_batch_quiet_ms, bool)
+        or not 0 <= message_batch_quiet_ms <= 5000
+    ):
+        raise HubConfigError("message_batch_quiet_ms must be an integer from 0 to 5000")
+    if (
+        not isinstance(message_batch_max_ms, int)
+        or isinstance(message_batch_max_ms, bool)
+        or not 1000 <= message_batch_max_ms <= 30000
+    ):
+        raise HubConfigError("message_batch_max_ms must be an integer from 1000 to 30000")
+    if message_batch_quiet_ms > message_batch_max_ms:
+        raise HubConfigError("message_batch_quiet_ms must not exceed message_batch_max_ms")
     if hub_bot is not None:
         unsupported_local = sorted(
             agent.agent_id
@@ -627,7 +712,79 @@ def load_hub_config(
                 f"hub_bot requires an isolated external worker for agent: {missing_workers[0]}"
             )
 
-    return HubConfig(
+    provisioning_data = _object(root.get("project_provisioning", {}), "project_provisioning")
+    provisioning_enabled = provisioning_data.get("enabled", False)
+    if not isinstance(provisioning_enabled, bool):
+        raise HubConfigError("project_provisioning.enabled must be boolean")
+    provisioning_api_id: int | None = None
+    provisioning_api_hash_file: Path | None = None
+    provisioning_session_path: Path | None = None
+    provisioning_expected_user_id: int | None = None
+    provisioning_about = provisioning_data.get(
+        "group_about", "Private project group managed by Agents Projects Hub"
+    )
+    if not isinstance(provisioning_about, str) or not 1 <= len(provisioning_about.strip()) <= 255:
+        raise HubConfigError("project_provisioning.group_about must contain 1-255 characters")
+    if "api_hash" in provisioning_data:
+        raise HubConfigError("project_provisioning.api_hash is forbidden; use api_hash_file")
+    if provisioning_enabled:
+        if hub_bot is None:
+            raise HubConfigError("project_provisioning requires hub_bot")
+        provisioning_api_id = provisioning_data.get("api_id")
+        if (
+            not isinstance(provisioning_api_id, int)
+            or isinstance(provisioning_api_id, bool)
+            or provisioning_api_id <= 0
+        ):
+            raise HubConfigError("project_provisioning.api_id must be a positive integer")
+        provisioning_expected_user_id = provisioning_data.get("expected_user_id")
+        if provisioning_expected_user_id is not None and (
+            not isinstance(provisioning_expected_user_id, int)
+            or isinstance(provisioning_expected_user_id, bool)
+            or provisioning_expected_user_id <= 0
+        ):
+            raise HubConfigError("project_provisioning.expected_user_id must be positive")
+        if (
+            provisioning_expected_user_id is not None
+            and provisioning_expected_user_id not in raw_owners
+        ):
+            raise HubConfigError("project_provisioning.expected_user_id must be an owner")
+        provisioning_api_hash_file = _absolute_path(
+            provisioning_data.get("api_hash_file"),
+            "project_provisioning.api_hash_file",
+            must_exist=_validate_project_provisioning_secret,
+        )
+        if _validate_project_provisioning_secret:
+            if (
+                not provisioning_api_hash_file.is_file()
+                or provisioning_api_hash_file.stat().st_mode & 0o077
+            ):
+                raise HubConfigError("project_provisioning.api_hash_file must have mode 0600")
+            try:
+                api_hash = provisioning_api_hash_file.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise HubConfigError("cannot read project_provisioning.api_hash_file") from exc
+            if re.fullmatch(r"[0-9a-fA-F]{32}", api_hash) is None:
+                raise HubConfigError("project_provisioning.api_hash_file is malformed")
+        provisioning_session_path = _absolute_path(
+            provisioning_data.get("session_path"),
+            "project_provisioning.session_path",
+            must_exist=False,
+        )
+        if provisioning_session_path.suffix != ".session":
+            raise HubConfigError("project_provisioning.session_path must end in .session")
+        if _validate_project_provisioning_secret:
+            if not provisioning_session_path.parent.is_dir():
+                raise HubConfigError("project_provisioning.session_path parent must exist")
+            if provisioning_session_path.parent.stat().st_mode & 0o077:
+                raise HubConfigError("project_provisioning.session_path parent must be private")
+            if provisioning_session_path.exists() and (
+                not provisioning_session_path.is_file()
+                or provisioning_session_path.stat().st_mode & 0o077
+            ):
+                raise HubConfigError("project_provisioning.session_path must have mode 0600")
+
+    config = HubConfig(
         schema_version=1,
         owner_user_ids=tuple(raw_owners),
         registry_path=registry_path,
@@ -656,13 +813,46 @@ def load_hub_config(
         queue_runtime=queue_runtime,
         outbox_runtime=outbox_runtime,
         external_worker_agent_ids=external_worker_agent_ids,
+        message_batch_quiet_ms=message_batch_quiet_ms,
+        message_batch_max_ms=message_batch_max_ms,
         direct_message_project_id=direct_message_project_id,
         codex_multi_auth_dir=codex_multi_auth_dir,
+        codex_sessions_dir=codex_sessions_dir,
         codex_multi_auth_executable=codex_multi_auth_executable,
         codex_stdio_executable=codex_stdio_executable,
         codex_account_hints=codex_account_hints,
         provider_account_hints=provider_account_hints,
+        provider_telemetry=provider_telemetry,
+        project_provisioning=ProjectProvisioningSettings(
+            provisioning_enabled,
+            provisioning_api_id,
+            provisioning_api_hash_file,
+            provisioning_session_path,
+            provisioning_expected_user_id,
+            provisioning_about.strip(),
+        ),
     )
+    from .session_adoption_policy import validate_adoption_mode
+
+    try:
+        validate_adoption_mode(config)
+    except ValueError as exc:
+        raise HubConfigError(str(exc)) from None
+    return config
+
+
+def load_project_provisioner_config(path: Path, *, require_identity: bool = True) -> HubConfig:
+    """Load provisioning authority without opening unrelated bot tokens."""
+    config = load_hub_config(
+        path,
+        _validate_telegram_secrets=False,
+        _validate_project_provisioning_secret=True,
+    )
+    if not config.project_provisioning.enabled:
+        raise HubConfigError("project_provisioning is disabled")
+    if require_identity and config.project_provisioning.expected_user_id is None:
+        raise HubConfigError("project_provisioning.expected_user_id must be pinned")
+    return config
 
 
 def load_codex_worker_config(path: Path) -> HubConfig:
@@ -677,7 +867,14 @@ def load_controller_config(path: Path) -> HubConfig:
     compatibility ingress. Provider credentials belong to provider response or
     direct-message runtimes and are deliberately not opened by this loader.
     """
-    return load_hub_config(path, _controller_ingress_only=True)
+    config = load_hub_config(
+        path,
+        _controller_ingress_only=True,
+        _validate_project_provisioning_secret=False,
+    )
+    if config.project_provisioning.enabled and config.project_provisioning.expected_user_id is None:
+        raise HubConfigError("project_provisioning.expected_user_id must be pinned")
+    return config
 
 
 def load_provider_service_config(path: Path, agent_id: str) -> HubConfig:
@@ -686,6 +883,7 @@ def load_provider_service_config(path: Path, agent_id: str) -> HubConfig:
         path,
         _validate_telegram_secrets=True,
         _provider_ingress_agent_id=agent_id,
+        _validate_project_provisioning_secret=False,
     )
     config.require_agent(agent_id)
     return config
@@ -693,9 +891,17 @@ def load_provider_service_config(path: Path, agent_id: str) -> HubConfig:
 
 def load_external_worker_config(path: Path) -> HubConfig:
     """Load queue-worker metadata without opening Telegram credential files."""
-    return load_hub_config(path, _validate_telegram_secrets=False)
+    return load_hub_config(
+        path,
+        _validate_telegram_secrets=False,
+        _validate_project_provisioning_secret=False,
+    )
 
 
 def load_outbox_sender_config(path: Path) -> HubConfig:
     """Load sender metadata; the sender opens only its selected agent tokens."""
-    return load_hub_config(path, _validate_telegram_secrets=False)
+    return load_hub_config(
+        path,
+        _validate_telegram_secrets=False,
+        _validate_project_provisioning_secret=False,
+    )

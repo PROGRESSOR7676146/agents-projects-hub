@@ -64,6 +64,7 @@ class CodexAppServerTests(unittest.TestCase):
             cwd=self.cwd,
             model="gpt-5.6-sol",
             project_id="alpha",
+            developer_instructions="Telegram contract",
         )
 
         self.assertEqual(thread.thread_id, "thread-123")
@@ -74,6 +75,7 @@ class CodexAppServerTests(unittest.TestCase):
         self.assertEqual(request["params"]["cwd"], str(self.cwd))
         self.assertEqual(request["params"]["sandbox"], "workspace-write")
         self.assertEqual(request["params"]["approvalPolicy"], "on-request")
+        self.assertEqual(request["params"]["developerInstructions"], "Telegram contract")
         self.assertNotIn("projectId", request["params"])
         self.assertNotIn("danger-full-access", str(request))
 
@@ -92,6 +94,75 @@ class CodexAppServerTests(unittest.TestCase):
         params = transport.sent[0]["params"]
         self.assertEqual(params["input"], [{"type": "text", "text": "inspect; touch /tmp/no"}])
         self.assertEqual(params["effort"], "high")
+
+    def test_turn_steer_and_interrupt_use_active_turn_preconditions(self) -> None:
+        transport = FakeTransport(
+            [
+                {"id": 1, "result": {"turnId": "turn-9"}},
+                {"id": 2, "result": {}},
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True)
+
+        returned = client.steer_turn(
+            thread_id="thread-123",
+            turn_id="turn-9",
+            text="new direction",
+            client_user_message_id="telegram-message-2",
+        )
+        client.interrupt_turn(thread_id="thread-123", turn_id="turn-9")
+
+        self.assertEqual(returned, "turn-9")
+        self.assertEqual(transport.sent[0]["method"], "turn/steer")
+        self.assertEqual(transport.sent[0]["params"]["expectedTurnId"], "turn-9")
+        self.assertEqual(
+            transport.sent[0]["params"]["input"],
+            [{"type": "text", "text": "new direction"}],
+        )
+        self.assertEqual(transport.sent[1]["method"], "turn/interrupt")
+
+    def test_connectable_threads_include_cli_and_vscode_sessions(self) -> None:
+        def thread(thread_id: str, source: str) -> dict[str, object]:
+            return {
+                "id": thread_id,
+                "cwd": str(self.cwd),
+                "status": {"type": "notLoaded", "activeFlags": []},
+                "updatedAt": 1_800_000_000,
+                "ephemeral": False,
+                "modelProvider": "openai",
+                "source": source,
+                "name": f"Saved {source}",
+            }
+
+        transport = FakeTransport(
+            [
+                {
+                    "id": 1,
+                    "result": {
+                        "data": [
+                            thread("example-cli-thread", "cli"),
+                            thread("example-vscode-thread", "vscode"),
+                            thread("example-exec-thread", "exec"),
+                        ]
+                    },
+                }
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True)
+
+        sessions = client.list_connectable_threads(root=self.cwd)
+
+        self.assertEqual(
+            [item.thread_id for item in sessions],
+            [
+                "example-cli-thread",
+                "example-vscode-thread",
+            ],
+        )
+        self.assertEqual(
+            transport.sent[0]["params"]["sourceKinds"],
+            ["cli", "vscode"],
+        )
 
     def test_resume_thread_reasserts_safe_policy(self) -> None:
         transport = FakeTransport(
@@ -114,11 +185,13 @@ class CodexAppServerTests(unittest.TestCase):
             thread_id="thread-123",
             cwd=self.cwd,
             model="gpt-5.6-sol",
+            developer_instructions="Telegram reminder",
         )
         self.assertEqual(thread.thread_id, "thread-123")
         params = transport.sent[0]["params"]
         self.assertEqual(params["approvalPolicy"], "on-request")
         self.assertEqual(params["sandbox"], "workspace-write")
+        self.assertEqual(params["developerInstructions"], "Telegram reminder")
 
     def test_rpc_error_is_not_treated_as_result(self) -> None:
         transport = FakeTransport([{"id": 1, "error": {"code": -32602, "message": "bad"}}])
@@ -216,6 +289,53 @@ class CodexAppServerTests(unittest.TestCase):
         client = CodexAppServerClient(transport, initialized=True)
         client.wait_for_turn("turn-9")
         self.assertEqual(transport.sent, [])
+
+    def test_stdio_fallback_declines_unexpected_approval_instead_of_deadlocking(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "id": 81,
+                    "method": "item/commandExecution/requestApproval",
+                    "params": {"threadId": "thread-123", "turnId": "turn-9"},
+                },
+                {
+                    "method": "turn/completed",
+                    "params": {"threadId": "thread-123", "turn": {"id": "turn-9"}},
+                },
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True, approval_policy="never")
+
+        client.wait_for_turn("turn-9")
+
+        self.assertEqual(
+            transport.sent,
+            [{"id": 81, "result": {"decision": "decline"}}],
+        )
+
+    def test_never_policy_is_pinned_with_workspace_sandbox(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "id": 1,
+                    "result": {
+                        "thread": {"id": "thread-123"},
+                        "cwd": str(self.cwd),
+                        "model": "gpt-5.6-sol",
+                        "modelProvider": "openai",
+                        "approvalPolicy": "never",
+                        "sandbox": "workspace-write",
+                    },
+                }
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True, approval_policy="never")
+
+        client.start_thread(cwd=self.cwd, model="gpt-5.6-sol", project_id="alpha")
+
+        params = transport.sent[0]["params"]
+        self.assertEqual(params["approvalPolicy"], "never")
+        self.assertNotIn("approvalsReviewer", params)
 
     def test_wait_for_turn_uses_nested_terminal_error_message(self) -> None:
         transport = FakeTransport(

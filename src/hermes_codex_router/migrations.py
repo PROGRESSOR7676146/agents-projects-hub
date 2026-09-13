@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import fcntl
 import os
-import shutil
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -10,7 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-LATEST_SCHEMA_VERSION = 12
+from .schema_compatibility import TARGET_SCHEMA_VERSION
+
+LATEST_SCHEMA_VERSION = TARGET_SCHEMA_VERSION
 
 
 MIGRATION_1 = """
@@ -382,6 +383,713 @@ ON runtime_health(agent_id, heartbeat_at);
 """
 
 
+MIGRATION_13 = """
+CREATE TABLE IF NOT EXISTS provider_job_inputs (
+    job_id TEXT NOT NULL REFERENCES provider_jobs(job_id),
+    chat_id INTEGER NOT NULL CHECK(chat_id != 0),
+    message_id INTEGER NOT NULL CHECK(message_id > 0),
+    part_index INTEGER NOT NULL CHECK(part_index > 0),
+    input_text TEXT NOT NULL CHECK(length(input_text) BETWEEN 1 AND 20000),
+    received_at TEXT NOT NULL,
+    PRIMARY KEY(chat_id, message_id),
+    UNIQUE(job_id, part_index)
+);
+INSERT OR IGNORE INTO provider_job_inputs (
+    job_id, chat_id, message_id, part_index, input_text, received_at
+)
+SELECT job_id, chat_id, message_id, 1, payload_text, created_at
+FROM provider_jobs;
+CREATE INDEX IF NOT EXISTS provider_job_inputs_job
+ON provider_job_inputs(job_id, part_index);
+CREATE TABLE IF NOT EXISTS provider_stop_requests (
+    request_id TEXT PRIMARY KEY CHECK(length(request_id) BETWEEN 1 AND 128),
+    topic_id INTEGER NOT NULL REFERENCES topics(topic_id),
+    chat_id INTEGER NOT NULL CHECK(chat_id != 0),
+    message_id INTEGER NOT NULL CHECK(message_id > 0),
+    target_agent_id TEXT NOT NULL CHECK(length(target_agent_id) BETWEEN 1 AND 64),
+    status TEXT NOT NULL CHECK(status IN ('pending', 'completed')),
+    cancelled_queued_count INTEGER NOT NULL DEFAULT 0 CHECK(cancelled_queued_count >= 0),
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    UNIQUE(chat_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS provider_stop_requests_pending
+ON provider_stop_requests(topic_id, target_agent_id, status, created_at);
+CREATE TABLE IF NOT EXISTS provider_job_absorptions (
+    child_job_id TEXT PRIMARY KEY REFERENCES provider_jobs(job_id),
+    parent_job_id TEXT NOT NULL REFERENCES provider_jobs(job_id),
+    provider_turn_id TEXT NOT NULL CHECK(length(provider_turn_id) BETWEEN 1 AND 256),
+    created_at TEXT NOT NULL,
+    CHECK(child_job_id != parent_job_id)
+);
+CREATE INDEX IF NOT EXISTS provider_job_absorptions_parent
+ON provider_job_absorptions(parent_job_id, created_at);
+"""
+
+
+# Version 13 reached one live deployment after provider_job_inputs was added but
+# before the stop/absorption tables were appended to MIGRATION_13.  Migration 14
+# intentionally repeats the idempotent CREATE statements so upgraded databases
+# converge with clean installations.
+MIGRATION_14 = """
+CREATE TABLE IF NOT EXISTS provider_stop_requests (
+    request_id TEXT PRIMARY KEY CHECK(length(request_id) BETWEEN 1 AND 128),
+    topic_id INTEGER NOT NULL REFERENCES topics(topic_id),
+    chat_id INTEGER NOT NULL CHECK(chat_id != 0),
+    message_id INTEGER NOT NULL CHECK(message_id > 0),
+    target_agent_id TEXT NOT NULL CHECK(length(target_agent_id) BETWEEN 1 AND 64),
+    status TEXT NOT NULL CHECK(status IN ('pending', 'completed')),
+    cancelled_queued_count INTEGER NOT NULL DEFAULT 0 CHECK(cancelled_queued_count >= 0),
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    UNIQUE(chat_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS provider_stop_requests_pending
+ON provider_stop_requests(topic_id, target_agent_id, status, created_at);
+CREATE TABLE IF NOT EXISTS provider_job_absorptions (
+    child_job_id TEXT PRIMARY KEY REFERENCES provider_jobs(job_id),
+    parent_job_id TEXT NOT NULL REFERENCES provider_jobs(job_id),
+    provider_turn_id TEXT NOT NULL CHECK(length(provider_turn_id) BETWEEN 1 AND 256),
+    created_at TEXT NOT NULL,
+    CHECK(child_job_id != parent_job_id)
+);
+CREATE INDEX IF NOT EXISTS provider_job_absorptions_parent
+ON provider_job_absorptions(parent_job_id, created_at);
+"""
+
+
+MIGRATION_15 = """
+ALTER TABLE provider_job_results RENAME TO provider_job_results_v14;
+CREATE TABLE provider_job_results (
+    result_id TEXT PRIMARY KEY CHECK(length(result_id) BETWEEN 1 AND 128),
+    job_id TEXT NOT NULL UNIQUE REFERENCES provider_jobs(job_id),
+    visible_response TEXT NOT NULL CHECK(length(visible_response) BETWEEN 1 AND 200000),
+    provider_session_id TEXT CHECK(length(provider_session_id) <= 256),
+    actual_model TEXT CHECK(length(actual_model) <= 200),
+    safe_metadata_json TEXT CHECK(length(safe_metadata_json) <= 4000),
+    context_watermark INTEGER CHECK(context_watermark IS NULL OR context_watermark >= 0),
+    handoff_id TEXT CHECK(length(handoff_id) <= 128),
+    created_at TEXT NOT NULL
+);
+INSERT INTO provider_job_results SELECT * FROM provider_job_results_v14;
+DROP TABLE provider_job_results_v14;
+ALTER TABLE telegram_outbox RENAME TO telegram_outbox_v14;
+CREATE TABLE telegram_outbox (
+    outbox_id TEXT PRIMARY KEY CHECK(length(outbox_id) BETWEEN 1 AND 128),
+    job_id TEXT NOT NULL UNIQUE REFERENCES provider_jobs(job_id),
+    sender_agent_id TEXT NOT NULL CHECK(length(sender_agent_id) BETWEEN 1 AND 64),
+    chat_id INTEGER NOT NULL CHECK(chat_id != 0),
+    thread_id INTEGER NOT NULL CHECK(thread_id > 0),
+    telegram_html TEXT NOT NULL CHECK(length(telegram_html) BETWEEN 1 AND 200000),
+    status TEXT NOT NULL CHECK(status IN ('pending', 'sending', 'delivered', 'failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 20),
+    available_at TEXT NOT NULL,
+    lease_owner TEXT CHECK(length(lease_owner) <= 128),
+    lease_token TEXT CHECK(length(lease_token) <= 128),
+    lease_expires_at TEXT,
+    telegram_message_id INTEGER CHECK(telegram_message_id IS NULL OR telegram_message_id > 0),
+    error_code TEXT CHECK(length(error_code) <= 128),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    delivered_at TEXT,
+    CHECK(
+        (status = 'sending' AND lease_owner IS NOT NULL
+            AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)
+        OR
+        (status != 'sending' AND lease_owner IS NULL
+            AND lease_token IS NULL AND lease_expires_at IS NULL)
+    )
+);
+INSERT INTO telegram_outbox SELECT * FROM telegram_outbox_v14;
+DROP TABLE telegram_outbox_v14;
+CREATE INDEX telegram_outbox_sender_ready
+ON telegram_outbox(sender_agent_id, status, available_at, created_at);
+CREATE INDEX telegram_outbox_stale_lease
+ON telegram_outbox(status, lease_expires_at);
+CREATE TABLE IF NOT EXISTS telegram_outbox_parts (
+    outbox_id TEXT NOT NULL REFERENCES telegram_outbox(outbox_id) ON DELETE CASCADE,
+    part_index INTEGER NOT NULL CHECK(part_index > 0),
+    telegram_html TEXT NOT NULL CHECK(length(telegram_html) BETWEEN 1 AND 4090),
+    telegram_message_id INTEGER CHECK(telegram_message_id IS NULL OR telegram_message_id > 0),
+    delivered_at TEXT,
+    PRIMARY KEY(outbox_id, part_index)
+);
+INSERT OR IGNORE INTO telegram_outbox_parts (outbox_id, part_index, telegram_html)
+SELECT outbox_id, 1, telegram_html FROM telegram_outbox;
+"""
+
+
+MIGRATION_16 = """
+ALTER TABLE telegram_outbox_parts ADD COLUMN part_type TEXT NOT NULL DEFAULT 'text';
+ALTER TABLE telegram_outbox_parts ADD COLUMN file_path TEXT;
+ALTER TABLE telegram_outbox_parts ADD COLUMN file_name TEXT;
+"""
+
+
+MIGRATION_17 = """
+ALTER TABLE telegram_outbox_parts ADD COLUMN file_size INTEGER;
+ALTER TABLE telegram_outbox_parts ADD COLUMN file_sha256 TEXT;
+CREATE TRIGGER telegram_outbox_parts_artifact_insert
+BEFORE INSERT ON telegram_outbox_parts
+WHEN NOT COALESCE((
+    (NEW.part_type = 'text' AND NEW.file_path IS NULL AND NEW.file_name IS NULL
+        AND NEW.file_size IS NULL AND NEW.file_sha256 IS NULL)
+    OR
+    (NEW.part_type = 'document' AND length(NEW.file_path) BETWEEN 1 AND 4096
+        AND length(NEW.file_name) BETWEEN 1 AND 255
+        AND NEW.file_size BETWEEN 1 AND 52428800
+        AND length(NEW.file_sha256) = 64)
+), 0)
+BEGIN
+    SELECT RAISE(ABORT, 'invalid telegram outbox part');
+END;
+CREATE TRIGGER telegram_outbox_parts_artifact_update
+BEFORE UPDATE OF part_type, file_path, file_name, file_size, file_sha256
+ON telegram_outbox_parts
+WHEN NOT COALESCE((
+    (NEW.part_type = 'text' AND NEW.file_path IS NULL AND NEW.file_name IS NULL
+        AND NEW.file_size IS NULL AND NEW.file_sha256 IS NULL)
+    OR
+    (NEW.part_type = 'document' AND length(NEW.file_path) BETWEEN 1 AND 4096
+        AND length(NEW.file_name) BETWEEN 1 AND 255
+        AND NEW.file_size BETWEEN 1 AND 52428800
+        AND length(NEW.file_sha256) = 64)
+), 0)
+BEGIN
+    SELECT RAISE(ABORT, 'invalid telegram outbox part');
+END;
+"""
+
+
+MIGRATION_18 = """
+DELETE FROM pending_handoffs;
+CREATE TRIGGER IF NOT EXISTS pending_handoffs_disabled_insert
+BEFORE INSERT ON pending_handoffs
+BEGIN
+    SELECT RAISE(ABORT, 'automatic handoff is disabled');
+END;
+CREATE TRIGGER IF NOT EXISTS pending_handoffs_disabled_update
+BEFORE UPDATE ON pending_handoffs
+BEGIN
+    SELECT RAISE(ABORT, 'automatic handoff is disabled');
+END;
+"""
+
+
+MIGRATION_19 = """
+DROP INDEX IF EXISTS runtime_health_heartbeat;
+DROP INDEX IF EXISTS runtime_health_agent;
+ALTER TABLE runtime_health RENAME TO runtime_health_v18;
+CREATE TABLE runtime_health (
+    component TEXT NOT NULL CHECK(component IN (
+        'controller', 'sender', 'monitor', 'provider_worker'
+    )),
+    instance_id TEXT NOT NULL CHECK(length(instance_id) BETWEEN 1 AND 128),
+    runtime TEXT CHECK(runtime IS NULL OR length(runtime) BETWEEN 1 AND 64),
+    agent_id TEXT CHECK(agent_id IS NULL OR length(agent_id) BETWEEN 1 AND 64),
+    pid INTEGER NOT NULL CHECK(pid > 0),
+    process_start_marker TEXT NOT NULL
+        CHECK(length(process_start_marker) BETWEEN 1 AND 128),
+    started_at TEXT NOT NULL CHECK(length(started_at) BETWEEN 1 AND 64),
+    heartbeat_at TEXT NOT NULL CHECK(length(heartbeat_at) BETWEEN 1 AND 64),
+    success_at TEXT CHECK(success_at IS NULL OR length(success_at) BETWEEN 1 AND 64),
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) BETWEEN 1 AND 128),
+    activity_state TEXT NOT NULL DEFAULT 'idle' CHECK(activity_state IN (
+        'idle', 'leased', 'executing', 'sending', 'unknown'
+    )),
+    active_job_id TEXT CHECK(active_job_id IS NULL OR length(active_job_id) BETWEEN 1 AND 128),
+    active_lease_expires_at TEXT CHECK(
+        active_lease_expires_at IS NULL OR length(active_lease_expires_at) BETWEEN 1 AND 64
+    ),
+    provider_state TEXT NOT NULL DEFAULT 'unknown' CHECK(provider_state IN (
+        'unknown', 'ready', 'limited', 'exhausted', 'unavailable'
+    )),
+    quota_remaining_percent REAL CHECK(
+        quota_remaining_percent IS NULL
+        OR (quota_remaining_percent >= 0 AND quota_remaining_percent <= 100)
+    ),
+    quota_reset_at TEXT CHECK(quota_reset_at IS NULL OR length(quota_reset_at) BETWEEN 1 AND 64),
+    release_version TEXT CHECK(release_version IS NULL OR length(release_version) BETWEEN 1 AND 64),
+    release_git_sha TEXT CHECK(
+        release_git_sha IS NULL OR length(release_git_sha) BETWEEN 40 AND 64
+    ),
+    release_built_at TEXT CHECK(
+        release_built_at IS NULL OR length(release_built_at) BETWEEN 1 AND 64
+    ),
+    release_clean INTEGER NOT NULL DEFAULT 0 CHECK(release_clean IN (0, 1)),
+    updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64),
+    PRIMARY KEY(component, instance_id),
+    CHECK(active_job_id IS NOT NULL OR activity_state IN ('idle', 'unknown')),
+    CHECK(active_job_id IS NOT NULL OR active_lease_expires_at IS NULL),
+    CHECK(runtime IS NOT NULL OR provider_state = 'unknown'),
+    CHECK(runtime IS NOT NULL OR quota_remaining_percent IS NULL),
+    CHECK(runtime IS NOT NULL OR quota_reset_at IS NULL),
+    CHECK(release_clean = 0 OR (
+        release_version IS NOT NULL AND release_git_sha IS NOT NULL
+        AND release_built_at IS NOT NULL
+    ))
+);
+INSERT INTO runtime_health (
+    component, instance_id, runtime, agent_id, pid, process_start_marker,
+    started_at, heartbeat_at, success_at, error_code, activity_state,
+    active_job_id, active_lease_expires_at, provider_state,
+    quota_remaining_percent, quota_reset_at, updated_at
+)
+SELECT component, instance_id, runtime, agent_id, pid, process_start_marker,
+       started_at, heartbeat_at, success_at, error_code, activity_state,
+       active_job_id, active_lease_expires_at, provider_state,
+       quota_remaining_percent, quota_reset_at, updated_at
+FROM runtime_health_v18;
+DROP TABLE runtime_health_v18;
+CREATE INDEX runtime_health_heartbeat ON runtime_health(heartbeat_at);
+CREATE INDEX runtime_health_agent ON runtime_health(agent_id, heartbeat_at);
+"""
+
+
+MIGRATION_20 = """
+ALTER TABLE runtime_health ADD COLUMN transport_operation TEXT
+    CHECK(transport_operation IS NULL OR length(transport_operation) BETWEEN 1 AND 32);
+ALTER TABLE runtime_health ADD COLUMN transport_failure_class TEXT
+    CHECK(transport_failure_class IS NULL OR length(transport_failure_class) BETWEEN 1 AND 64);
+ALTER TABLE runtime_health ADD COLUMN transport_status_code INTEGER
+    CHECK(transport_status_code IS NULL OR transport_status_code BETWEEN 100 AND 599);
+ALTER TABLE runtime_health ADD COLUMN transport_retry_after INTEGER
+    CHECK(transport_retry_after IS NULL OR transport_retry_after BETWEEN 0 AND 86400);
+ALTER TABLE runtime_health ADD COLUMN transport_consecutive_failures INTEGER NOT NULL DEFAULT 0
+    CHECK(transport_consecutive_failures BETWEEN 0 AND 1000000);
+ALTER TABLE runtime_health ADD COLUMN transport_success_at TEXT
+    CHECK(transport_success_at IS NULL OR length(transport_success_at) BETWEEN 1 AND 64);
+"""
+
+
+MIGRATION_21 = """
+CREATE TABLE IF NOT EXISTS runtime_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    component TEXT NOT NULL,
+    level TEXT NOT NULL CHECK(level IN ('info', 'warning', 'error')),
+    code TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+DROP INDEX IF EXISTS runtime_events_created_at;
+CREATE INDEX IF NOT EXISTS runtime_events_retention
+ON runtime_events(created_at DESC, event_id DESC);
+DELETE FROM runtime_events
+WHERE julianday(created_at) < julianday('now', '-30 days');
+DELETE FROM runtime_events
+WHERE event_id NOT IN (
+    SELECT event_id FROM runtime_events
+    ORDER BY created_at DESC, event_id DESC LIMIT 10000
+);
+"""
+
+
+MIGRATION_22 = """
+CREATE TABLE IF NOT EXISTS provider_execution_checkpoints (
+    job_id TEXT PRIMARY KEY REFERENCES provider_jobs(job_id),
+    provider_thread_id TEXT NOT NULL CHECK(length(provider_thread_id) BETWEEN 1 AND 256),
+    project_root TEXT NOT NULL CHECK(length(project_root) BETWEEN 1 AND 4096),
+    provider_turn_id TEXT CHECK(length(provider_turn_id) BETWEEN 1 AND 256),
+    completed_text TEXT CHECK(length(completed_text) <= 200000),
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS provider_visible_items (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL REFERENCES provider_execution_checkpoints(job_id),
+    item_id TEXT NOT NULL CHECK(length(item_id) BETWEEN 1 AND 256),
+    phase TEXT NOT NULL CHECK(phase IN ('commentary', 'final_answer', 'unknown')),
+    visible_text TEXT NOT NULL CHECK(length(visible_text) BETWEEN 1 AND 200000),
+    created_at TEXT NOT NULL,
+    UNIQUE(job_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS provider_visible_items_job
+ON provider_visible_items(job_id, sequence);
+"""
+
+
+MIGRATION_23 = """
+CREATE TABLE IF NOT EXISTS provider_job_resolutions (
+    job_id TEXT PRIMARY KEY REFERENCES provider_jobs(job_id),
+    resolution TEXT NOT NULL
+        CHECK(resolution IN ('acknowledged', 'superseded', 'externally_completed')),
+    resolved_at TEXT NOT NULL
+);
+"""
+
+
+MIGRATION_24 = """
+CREATE TABLE IF NOT EXISTS provider_progress_deliveries (
+    progress_id TEXT PRIMARY KEY,
+    item_sequence INTEGER NOT NULL UNIQUE REFERENCES provider_visible_items(sequence),
+    job_id TEXT NOT NULL REFERENCES provider_jobs(job_id),
+    sender_agent_id TEXT NOT NULL,
+    chat_id INTEGER NOT NULL,
+    thread_id INTEGER NOT NULL,
+    telegram_html TEXT NOT NULL CHECK(length(telegram_html) BETWEEN 1 AND 4096),
+    status TEXT NOT NULL CHECK(status IN ('pending', 'sending', 'delivered', 'superseded', 'failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 20),
+    available_at TEXT NOT NULL,
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    telegram_message_id INTEGER,
+    error_code TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    delivered_at TEXT
+);
+CREATE INDEX IF NOT EXISTS provider_progress_delivery_ready
+ON provider_progress_deliveries(sender_agent_id, status, available_at, created_at);
+CREATE INDEX IF NOT EXISTS provider_progress_delivery_job
+ON provider_progress_deliveries(job_id, created_at);
+"""
+
+
+MIGRATION_25 = """
+CREATE TABLE codex_session_origins (
+    session_id TEXT PRIMARY KEY REFERENCES agent_sessions(session_id),
+    provider_thread_id TEXT NOT NULL UNIQUE CHECK(length(provider_thread_id) BETWEEN 1 AND 128),
+    project_id TEXT NOT NULL CHECK(length(project_id) BETWEEN 1 AND 48),
+    canonical_root TEXT NOT NULL CHECK(length(canonical_root) BETWEEN 1 AND 4096),
+    model_provider TEXT NOT NULL CHECK(model_provider = 'openai'),
+    created_at TEXT NOT NULL,
+    replaces_session_id TEXT REFERENCES agent_sessions(session_id),
+    activation_message_id INTEGER CHECK(activation_message_id > 0),
+    context_floor_turn_id INTEGER NOT NULL DEFAULT 0 CHECK(context_floor_turn_id >= 0)
+);
+ALTER TABLE external_turn_excerpts ADD COLUMN source_message_id INTEGER
+    CHECK(source_message_id > 0);
+CREATE TRIGGER codex_origin_identity_immutable
+BEFORE UPDATE OF session_id, provider_thread_id, project_id, canonical_root,
+    model_provider, created_at, replaces_session_id ON codex_session_origins
+BEGIN SELECT RAISE(ABORT, 'Codex origin identity is immutable'); END;
+CREATE TRIGGER codex_origin_reservation_retained
+BEFORE DELETE ON codex_session_origins
+BEGIN SELECT RAISE(ABORT, 'Codex origin reservation must be retained'); END;
+CREATE TRIGGER codex_origin_activation_immutable
+BEFORE UPDATE OF activation_message_id, context_floor_turn_id ON codex_session_origins
+WHEN OLD.activation_message_id IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'Codex first activation is immutable'); END;
+CREATE TRIGGER codex_origin_binding_guard
+BEFORE UPDATE OF provider_session_id ON agent_sessions
+WHEN EXISTS (SELECT 1 FROM codex_session_origins o WHERE o.session_id = OLD.session_id
+             AND o.provider_thread_id IS NOT NEW.provider_session_id)
+BEGIN SELECT RAISE(ABORT, 'Codex origin requires the exact provider thread'); END;
+"""
+
+
+MIGRATION_26 = """
+CREATE TABLE session_connect_workflows (
+    workflow_id TEXT PRIMARY KEY CHECK(length(workflow_id) BETWEEN 8 AND 32),
+    owner_user_id INTEGER NOT NULL CHECK(owner_user_id > 0),
+    entrypoint TEXT NOT NULL CHECK(entrypoint IN ('topic','direct','code')),
+    project_id TEXT CHECK(project_id IS NULL OR length(project_id) BETWEEN 1 AND 48),
+    canonical_root TEXT CHECK(canonical_root IS NULL OR length(canonical_root) BETWEEN 1 AND 4096),
+    source_thread_id TEXT CHECK(length(source_thread_id) BETWEEN 1 AND 128),
+    source_label TEXT CHECK(length(source_label) BETWEEN 1 AND 160),
+    source_updated_at INTEGER,
+    destination_chat_id INTEGER,
+    destination_thread_id INTEGER CHECK(destination_thread_id IS NULL OR destination_thread_id > 0),
+    expected_session_id TEXT REFERENCES agent_sessions(session_id),
+    replaces_session_id TEXT REFERENCES agent_sessions(session_id),
+    model TEXT NOT NULL CHECK(length(model) BETWEEN 1 AND 200),
+    effort TEXT NOT NULL CHECK(length(effort) BETWEEN 1 AND 64),
+    stage TEXT NOT NULL CHECK(stage IN (
+        'choosing_project','discovering','choosing_source','choosing_destination',
+        'awaiting_topic_title','creating_topic','topic_create_unknown','confirming',
+        'activation_requested','marker_ready','marker_unknown','completed',
+        'cancelled','expired','failed'
+    )),
+    code_id TEXT REFERENCES session_connect_codes(code_id),
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    result_session_id TEXT REFERENCES agent_sessions(session_id),
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) <= 128),
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX session_connect_worker_ready
+ON session_connect_workflows(stage, expires_at, created_at);
+CREATE INDEX session_connect_owner_active
+ON session_connect_workflows(owner_user_id, stage, updated_at);
+
+CREATE TABLE session_connect_candidates (
+    candidate_id TEXT PRIMARY KEY CHECK(length(candidate_id) BETWEEN 8 AND 32),
+    workflow_id TEXT NOT NULL REFERENCES session_connect_workflows(workflow_id) ON DELETE CASCADE,
+    provider_thread_id TEXT NOT NULL CHECK(length(provider_thread_id) BETWEEN 1 AND 128),
+    safe_label TEXT NOT NULL CHECK(length(safe_label) BETWEEN 1 AND 160),
+    updated_at_epoch INTEGER NOT NULL CHECK(updated_at_epoch >= 0),
+    created_at TEXT NOT NULL,
+    UNIQUE(workflow_id, provider_thread_id)
+);
+
+CREATE TABLE session_connect_options (
+    option_id TEXT PRIMARY KEY CHECK(length(option_id) BETWEEN 8 AND 32),
+    workflow_id TEXT NOT NULL REFERENCES session_connect_workflows(workflow_id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('project','destination')),
+    project_id TEXT NOT NULL CHECK(length(project_id) BETWEEN 1 AND 48),
+    canonical_root TEXT NOT NULL CHECK(length(canonical_root) BETWEEN 1 AND 4096),
+    destination_chat_id INTEGER,
+    destination_thread_id INTEGER CHECK(destination_thread_id IS NULL OR destination_thread_id > 0),
+    safe_label TEXT NOT NULL CHECK(length(safe_label) BETWEEN 1 AND 160),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX session_connect_options_workflow
+ON session_connect_options(workflow_id, kind, created_at);
+
+CREATE TABLE session_connect_outbox (
+    outbox_id TEXT PRIMARY KEY CHECK(length(outbox_id) BETWEEN 8 AND 32),
+    workflow_id TEXT NOT NULL REFERENCES session_connect_workflows(workflow_id),
+    kind TEXT NOT NULL CHECK(kind IN ('source_menu','activation_marker','result','notice')),
+    chat_id INTEGER NOT NULL,
+    thread_id INTEGER NOT NULL CHECK(thread_id > 0),
+    telegram_html TEXT NOT NULL CHECK(length(telegram_html) BETWEEN 1 AND 4096),
+    reply_markup_json TEXT,
+    status TEXT NOT NULL CHECK(status IN ('prepared','leased','delivered','unknown','failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 20),
+    available_at TEXT NOT NULL,
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    telegram_message_id INTEGER,
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) <= 128),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    delivered_at TEXT
+);
+CREATE INDEX session_connect_outbox_ready
+ON session_connect_outbox(status, available_at, created_at);
+
+CREATE TABLE session_connect_codes (
+    code_id TEXT PRIMARY KEY CHECK(length(code_id) BETWEEN 8 AND 32),
+    code_digest TEXT NOT NULL UNIQUE CHECK(length(code_digest) = 64),
+    owner_user_id INTEGER NOT NULL CHECK(owner_user_id > 0),
+    project_id TEXT NOT NULL CHECK(length(project_id) BETWEEN 1 AND 48),
+    canonical_root TEXT NOT NULL CHECK(length(canonical_root) BETWEEN 1 AND 4096),
+    provider_thread_id TEXT NOT NULL CHECK(length(provider_thread_id) BETWEEN 1 AND 128),
+    safe_label TEXT NOT NULL CHECK(length(safe_label) BETWEEN 1 AND 160),
+    source_updated_at INTEGER NOT NULL CHECK(source_updated_at >= 0),
+    model TEXT NOT NULL CHECK(length(model) BETWEEN 1 AND 200),
+    effort TEXT NOT NULL CHECK(length(effort) BETWEEN 1 AND 64),
+    claimed_workflow_id TEXT UNIQUE,
+    result_session_id TEXT REFERENCES agent_sessions(session_id),
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE session_connect_code_attempts (
+    owner_user_id INTEGER PRIMARY KEY CHECK(owner_user_id > 0),
+    window_started_at TEXT NOT NULL,
+    failure_count INTEGER NOT NULL CHECK(failure_count BETWEEN 0 AND 20)
+);
+"""
+
+
+MIGRATION_27 = """
+DROP INDEX IF EXISTS runtime_health_heartbeat;
+DROP INDEX IF EXISTS runtime_health_agent;
+ALTER TABLE runtime_health RENAME TO runtime_health_v26;
+CREATE TABLE runtime_health (
+    component TEXT NOT NULL CHECK(component IN (
+        'controller', 'sender', 'monitor', 'provider_worker', 'project_provisioner'
+    )),
+    instance_id TEXT NOT NULL CHECK(length(instance_id) BETWEEN 1 AND 128),
+    runtime TEXT CHECK(runtime IS NULL OR length(runtime) BETWEEN 1 AND 64),
+    agent_id TEXT CHECK(agent_id IS NULL OR length(agent_id) BETWEEN 1 AND 64),
+    pid INTEGER NOT NULL CHECK(pid > 0),
+    process_start_marker TEXT NOT NULL
+        CHECK(length(process_start_marker) BETWEEN 1 AND 128),
+    started_at TEXT NOT NULL CHECK(length(started_at) BETWEEN 1 AND 64),
+    heartbeat_at TEXT NOT NULL CHECK(length(heartbeat_at) BETWEEN 1 AND 64),
+    success_at TEXT CHECK(success_at IS NULL OR length(success_at) BETWEEN 1 AND 64),
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) BETWEEN 1 AND 128),
+    activity_state TEXT NOT NULL DEFAULT 'idle' CHECK(activity_state IN (
+        'idle', 'leased', 'executing', 'sending', 'unknown'
+    )),
+    active_job_id TEXT CHECK(active_job_id IS NULL OR length(active_job_id) BETWEEN 1 AND 128),
+    active_lease_expires_at TEXT CHECK(
+        active_lease_expires_at IS NULL OR length(active_lease_expires_at) BETWEEN 1 AND 64
+    ),
+    provider_state TEXT NOT NULL DEFAULT 'unknown' CHECK(provider_state IN (
+        'unknown', 'ready', 'limited', 'exhausted', 'unavailable'
+    )),
+    quota_remaining_percent REAL CHECK(
+        quota_remaining_percent IS NULL
+        OR (quota_remaining_percent >= 0 AND quota_remaining_percent <= 100)
+    ),
+    quota_reset_at TEXT CHECK(quota_reset_at IS NULL OR length(quota_reset_at) BETWEEN 1 AND 64),
+    release_version TEXT CHECK(release_version IS NULL OR length(release_version) BETWEEN 1 AND 64),
+    release_git_sha TEXT CHECK(
+        release_git_sha IS NULL OR length(release_git_sha) BETWEEN 40 AND 64
+    ),
+    release_built_at TEXT CHECK(
+        release_built_at IS NULL OR length(release_built_at) BETWEEN 1 AND 64
+    ),
+    release_clean INTEGER NOT NULL DEFAULT 0 CHECK(release_clean IN (0, 1)),
+    updated_at TEXT NOT NULL CHECK(length(updated_at) BETWEEN 1 AND 64),
+    transport_operation TEXT
+        CHECK(transport_operation IS NULL OR length(transport_operation) BETWEEN 1 AND 32),
+    transport_failure_class TEXT
+        CHECK(transport_failure_class IS NULL OR length(transport_failure_class) BETWEEN 1 AND 64),
+    transport_status_code INTEGER
+        CHECK(transport_status_code IS NULL OR transport_status_code BETWEEN 100 AND 599),
+    transport_retry_after INTEGER
+        CHECK(transport_retry_after IS NULL OR transport_retry_after BETWEEN 0 AND 86400),
+    transport_consecutive_failures INTEGER NOT NULL DEFAULT 0
+        CHECK(transport_consecutive_failures BETWEEN 0 AND 1000000),
+    transport_success_at TEXT
+        CHECK(transport_success_at IS NULL OR length(transport_success_at) BETWEEN 1 AND 64),
+    PRIMARY KEY(component, instance_id),
+    CHECK(active_job_id IS NOT NULL OR activity_state IN ('idle', 'unknown')),
+    CHECK(active_job_id IS NOT NULL OR active_lease_expires_at IS NULL),
+    CHECK(runtime IS NOT NULL OR provider_state = 'unknown'),
+    CHECK(runtime IS NOT NULL OR quota_remaining_percent IS NULL),
+    CHECK(runtime IS NOT NULL OR quota_reset_at IS NULL),
+    CHECK(release_clean = 0 OR (
+        release_version IS NOT NULL AND release_git_sha IS NOT NULL
+        AND release_built_at IS NOT NULL
+    ))
+);
+INSERT INTO runtime_health (
+    component, instance_id, runtime, agent_id, pid, process_start_marker,
+    started_at, heartbeat_at, success_at, error_code, activity_state,
+    active_job_id, active_lease_expires_at, provider_state,
+    quota_remaining_percent, quota_reset_at, release_version, release_git_sha,
+    release_built_at, release_clean, updated_at, transport_operation,
+    transport_failure_class, transport_status_code, transport_retry_after,
+    transport_consecutive_failures, transport_success_at
+)
+SELECT component, instance_id, runtime, agent_id, pid, process_start_marker,
+       started_at, heartbeat_at, success_at, error_code, activity_state,
+       active_job_id, active_lease_expires_at, provider_state,
+       quota_remaining_percent, quota_reset_at, release_version, release_git_sha,
+       release_built_at, release_clean, updated_at, transport_operation,
+       transport_failure_class, transport_status_code, transport_retry_after,
+       transport_consecutive_failures, transport_success_at
+FROM runtime_health_v26;
+DROP TABLE runtime_health_v26;
+CREATE INDEX runtime_health_heartbeat ON runtime_health(heartbeat_at);
+CREATE INDEX runtime_health_agent ON runtime_health(agent_id, heartbeat_at);
+
+CREATE TABLE project_onboarding_workflows (
+    workflow_id TEXT PRIMARY KEY CHECK(length(workflow_id) BETWEEN 8 AND 32),
+    owner_user_id INTEGER NOT NULL CHECK(owner_user_id > 0),
+    display_name TEXT CHECK(display_name IS NULL OR length(display_name) BETWEEN 1 AND 128),
+    project_id TEXT CHECK(project_id IS NULL OR length(project_id) BETWEEN 1 AND 48),
+    base_root TEXT CHECK(base_root IS NULL OR length(base_root) BETWEEN 1 AND 4096),
+    canonical_root TEXT CHECK(canonical_root IS NULL OR length(canonical_root) BETWEEN 1 AND 4096),
+    stage TEXT NOT NULL CHECK(stage IN (
+        'awaiting_name','choosing_root','awaiting_folder','confirming','queued',
+        'preparing_root','creating_group','group_unknown','configuring_group',
+        'configuration_unknown','committing_binding','completed','cancelled',
+        'expired','failed'
+    )),
+    telegram_chat_id INTEGER,
+    telegram_access_hash INTEGER,
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) <= 128),
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX project_onboarding_worker_ready
+ON project_onboarding_workflows(stage, expires_at, created_at);
+CREATE INDEX project_onboarding_owner_active
+ON project_onboarding_workflows(owner_user_id, stage, updated_at);
+
+CREATE TABLE project_onboarding_options (
+    option_id TEXT PRIMARY KEY CHECK(length(option_id) BETWEEN 8 AND 32),
+    workflow_id TEXT NOT NULL REFERENCES project_onboarding_workflows(workflow_id)
+        ON DELETE CASCADE,
+    base_root TEXT NOT NULL CHECK(length(base_root) BETWEEN 1 AND 4096),
+    safe_label TEXT NOT NULL CHECK(length(safe_label) BETWEEN 1 AND 160),
+    created_at TEXT NOT NULL,
+    UNIQUE(workflow_id, base_root)
+);
+
+CREATE TABLE project_group_bindings (
+    project_id TEXT PRIMARY KEY CHECK(length(project_id) BETWEEN 1 AND 48),
+    telegram_chat_id INTEGER NOT NULL UNIQUE,
+    canonical_root TEXT NOT NULL CHECK(length(canonical_root) BETWEEN 1 AND 4096),
+    workflow_id TEXT NOT NULL UNIQUE REFERENCES project_onboarding_workflows(workflow_id),
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE project_onboarding_outbox (
+    outbox_id TEXT PRIMARY KEY CHECK(length(outbox_id) BETWEEN 8 AND 32),
+    workflow_id TEXT NOT NULL REFERENCES project_onboarding_workflows(workflow_id),
+    chat_id INTEGER NOT NULL CHECK(chat_id > 0),
+    telegram_html TEXT NOT NULL CHECK(length(telegram_html) BETWEEN 1 AND 4096),
+    status TEXT NOT NULL CHECK(status IN ('prepared','leased','delivered','unknown','failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 20),
+    available_at TEXT NOT NULL,
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    telegram_message_id INTEGER,
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) <= 128),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    delivered_at TEXT
+);
+CREATE INDEX project_onboarding_outbox_ready
+ON project_onboarding_outbox(status, available_at, created_at);
+"""
+
+
+MIGRATION_28 = """
+ALTER TABLE project_onboarding_workflows
+ADD COLUMN required_owner_ids_json TEXT NOT NULL DEFAULT '[]'
+    CHECK(length(required_owner_ids_json) BETWEEN 2 AND 4096 AND json_valid(required_owner_ids_json));
+ALTER TABLE project_onboarding_workflows
+ADD COLUMN resume_stage TEXT
+    CHECK(resume_stage IS NULL OR resume_stage IN ('preparing_root','configuring_group'));
+
+CREATE TABLE project_command_scopes (
+    telegram_chat_id INTEGER NOT NULL
+        REFERENCES project_group_bindings(telegram_chat_id) ON DELETE CASCADE,
+    bot_identity TEXT NOT NULL CHECK(length(bot_identity) BETWEEN 1 AND 64),
+    phase TEXT NOT NULL CHECK(phase IN ('set','verify')),
+    status TEXT NOT NULL CHECK(status IN ('pending','leased','ready','failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 20),
+    total_attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(total_attempt_count BETWEEN 0 AND 40),
+    available_at TEXT NOT NULL,
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) <= 128),
+    updated_at TEXT NOT NULL,
+    ready_at TEXT,
+    PRIMARY KEY(telegram_chat_id, bot_identity)
+);
+CREATE INDEX project_command_scopes_ready
+ON project_command_scopes(status, available_at, bot_identity, telegram_chat_id);
+
+CREATE TABLE project_command_cooldowns (
+    bot_identity TEXT PRIMARY KEY CHECK(length(bot_identity) BETWEEN 1 AND 64),
+    available_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX project_onboarding_reserved_project
+ON project_onboarding_workflows(project_id)
+WHERE project_id IS NOT NULL
+  AND stage NOT IN ('completed','cancelled','expired')
+  AND (stage<>'failed' OR resume_stage IS NOT NULL);
+CREATE UNIQUE INDEX project_onboarding_reserved_root
+ON project_onboarding_workflows(canonical_root)
+WHERE canonical_root IS NOT NULL
+  AND stage NOT IN ('completed','cancelled','expired')
+  AND (stage<>'failed' OR resume_stage IS NOT NULL);
+
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -404,26 +1112,34 @@ def backup_database(source: Path, destination: Path | None = None) -> Path:
     if destination.exists():
         raise FileExistsError(destination)
     source_connection = sqlite3.connect(source)
-    destination_connection = sqlite3.connect(destination)
+    destination_connection: sqlite3.Connection | None = None
+    failed = False
     try:
+        destination_connection = sqlite3.connect(destination)
         source_connection.backup(destination_connection)
         check = destination_connection.execute("PRAGMA integrity_check").fetchone()
         if check is None or check[0] != "ok":
             raise RuntimeError("SQLite backup integrity check failed")
-    except Exception:
-        destination_connection.close()
-        source_connection.close()
-        destination.unlink(missing_ok=True)
+    except BaseException:
+        failed = True
         raise
     finally:
-        try:
-            destination_connection.close()
-        except sqlite3.Error:
-            pass
+        if destination_connection is not None:
+            try:
+                destination_connection.close()
+            except sqlite3.Error:
+                pass
         try:
             source_connection.close()
         except sqlite3.Error:
             pass
+        if failed and destination_connection is not None:
+            # Only remove a destination we opened, and only after releasing handles.
+            # Cleanup failure must not replace the original backup error.
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                pass
     os.chmod(destination, 0o600)
     return destination
 
@@ -436,6 +1152,28 @@ def _ensure_legacy_columns(connection: sqlite3.Connection) -> None:
         )
 
 
+def _execute_migration_script(connection: sqlite3.Connection, script: str) -> None:
+    """Execute one trusted migration script without sqlite3's implicit COMMIT.
+
+    ``Connection.executescript`` commits an open transaction before executing
+    its input.  Migrations must instead remain inside the surrounding
+    ``BEGIN IMMEDIATE`` so a DDL or retention fault restores the exact
+    pre-migration database, including writes which committed after the backup
+    snapshot was taken.
+    """
+    pending: list[str] = []
+    for line in script.splitlines(keepends=True):
+        pending.append(line)
+        statement = "".join(pending)
+        if not sqlite3.complete_statement(statement):
+            continue
+        if statement.strip():
+            connection.execute(statement)
+        pending.clear()
+    if "".join(pending).strip():
+        raise RuntimeError("incomplete SQLite migration statement")
+
+
 def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     connection.execute("PRAGMA busy_timeout = 5000")
     connection.execute("PRAGMA foreign_keys = ON")
@@ -445,44 +1183,53 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         raise RuntimeError(
             f"database schema {previous} is newer than supported {LATEST_SCHEMA_VERSION}"
         )
-    if previous < 1:
-        connection.executescript(MIGRATION_1)
-        _ensure_legacy_columns(connection)
-        connection.execute("PRAGMA user_version = 1")
-    if previous < 2:
-        connection.executescript(MIGRATION_2)
-        connection.execute("PRAGMA user_version = 2")
-    if previous < 3:
-        connection.executescript(MIGRATION_3)
-        connection.execute("PRAGMA user_version = 3")
-    if previous < 4:
-        connection.executescript(MIGRATION_4)
-        connection.execute("PRAGMA user_version = 4")
-    if previous < 5:
-        connection.executescript(MIGRATION_5)
-        connection.execute("PRAGMA user_version = 5")
-    if previous < 6:
-        connection.executescript(MIGRATION_6)
-        connection.execute("PRAGMA user_version = 6")
-    if previous < 7:
-        connection.executescript(MIGRATION_7)
-        connection.execute("PRAGMA user_version = 7")
-    if previous < 8:
-        connection.executescript(MIGRATION_8)
-        connection.execute("PRAGMA user_version = 8")
-    if previous < 9:
-        connection.executescript(MIGRATION_9)
-        connection.execute("PRAGMA user_version = 9")
-    if previous < 10:
-        connection.executescript(MIGRATION_10)
-        connection.execute("PRAGMA user_version = 10")
-    if previous < 11:
-        connection.executescript(MIGRATION_11)
-        connection.execute("PRAGMA user_version = 11")
-    if previous < 12:
-        connection.executescript(MIGRATION_12)
-        connection.execute("PRAGMA user_version = 12")
-    connection.commit()
+    migrations = (
+        MIGRATION_1,
+        MIGRATION_2,
+        MIGRATION_3,
+        MIGRATION_4,
+        MIGRATION_5,
+        MIGRATION_6,
+        MIGRATION_7,
+        MIGRATION_8,
+        MIGRATION_9,
+        MIGRATION_10,
+        MIGRATION_11,
+        MIGRATION_12,
+        MIGRATION_13,
+        MIGRATION_14,
+        MIGRATION_15,
+        MIGRATION_16,
+        MIGRATION_17,
+        MIGRATION_18,
+        MIGRATION_19,
+        MIGRATION_20,
+        MIGRATION_21,
+        MIGRATION_22,
+        MIGRATION_23,
+        MIGRATION_24,
+        MIGRATION_25,
+        MIGRATION_26,
+        MIGRATION_27,
+        MIGRATION_28,
+    )
+    if previous < LATEST_SCHEMA_VERSION:
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            for version, script in enumerate(migrations, start=1):
+                if previous >= version:
+                    continue
+                _execute_migration_script(connection, script)
+                if version == 1:
+                    _ensure_legacy_columns(connection)
+                connection.execute(f"PRAGMA user_version = {version}")
+            check = connection.execute("PRAGMA integrity_check").fetchone()
+            if check is None or check[0] != "ok":
+                raise RuntimeError("SQLite integrity check failed during migration")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
     current = int(connection.execute("PRAGMA user_version").fetchone()[0])
     return previous, current
 
@@ -506,11 +1253,12 @@ def migrate_database(path: Path, *, create_backup: bool = True) -> MigrationResu
     with _migration_lock(path):
         existed = path.exists() and path.stat().st_size > 0
         backup_path: Path | None = None
-        connection = sqlite3.connect(path)
+        connection: sqlite3.Connection | None = sqlite3.connect(path)
         try:
             previous = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if existed and previous < LATEST_SCHEMA_VERSION and create_backup:
                 connection.close()
+                connection = None
                 backup_path = backup_database(path)
                 connection = sqlite3.connect(path)
             _, current = migrate_connection(connection)
@@ -518,15 +1266,17 @@ def migrate_database(path: Path, *, create_backup: bool = True) -> MigrationResu
             if check is None or check[0] != "ok":
                 raise RuntimeError("SQLite integrity check failed after migration")
         except Exception:
-            connection.close()
-            if backup_path is not None:
-                shutil.copy2(backup_path, path)
-                os.chmod(path, 0o600)
+            if connection is not None:
+                try:
+                    connection.rollback()
+                except sqlite3.Error:
+                    pass
             raise
         finally:
-            try:
-                connection.close()
-            except sqlite3.Error:
-                pass
+            if connection is not None:
+                try:
+                    connection.close()
+                except sqlite3.Error:
+                    pass
     os.chmod(path, 0o600)
     return MigrationResult(previous, current, backup_path)

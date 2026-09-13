@@ -4,9 +4,12 @@ import json
 import subprocess
 from collections import OrderedDict
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Callable
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
+
+DEFAULT_CATALOG_TTL = timedelta(hours=12)
 
 
 class ProviderCatalogError(RuntimeError):
@@ -21,6 +24,7 @@ class ProviderModel:
 
 
 ANTIGRAVITY_FALLBACK = (
+    ProviderModel("gemini-3.8-flash", "Gemini 3.8 Flash", ("high", "medium", "low")),
     ProviderModel("gemini-3.7-flash", "Gemini 3.7 Flash", ("high", "medium", "low")),
     ProviderModel("gemini-3.6-flash", "Gemini 3.6 Flash", ("high", "medium", "low")),
     ProviderModel("gemini-3.5-flash", "Gemini 3.5 Flash", ("high", "medium", "low")),
@@ -120,4 +124,47 @@ def antigravity_models(executable: str, *, run: Run = subprocess.run) -> tuple[P
     )
     if not models:
         raise ProviderCatalogError("Antigravity returned no usable models")
+    return models
+
+
+def codex_models(executable: str, *, run: Run = subprocess.run) -> tuple[ProviderModel, ...]:
+    """Read the account-aware Codex model matrix without starting a model turn."""
+    output = _run_lines((executable, "models", "--json"), run)
+    try:
+        document = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise ProviderCatalogError("Codex returned an invalid model catalog") from exc
+    matrix = document.get("matrix") if isinstance(document, dict) else None
+    entries = matrix.get("entries") if isinstance(matrix, dict) else None
+    if not isinstance(entries, list):
+        raise ProviderCatalogError("Codex returned no usable model matrix")
+
+    grouped: OrderedDict[str, list[str]] = OrderedDict()
+    defaults: dict[str, str] = {}
+    for raw in entries:
+        if not isinstance(raw, dict) or raw.get("available") is not True:
+            continue
+        model_id = raw.get("normalizedModel") or raw.get("model")
+        if not isinstance(model_id, str) or not model_id:
+            continue
+        model_efforts = grouped.setdefault(model_id, [])
+        efforts = raw.get("supportedReasoningEfforts")
+        if isinstance(efforts, list):
+            for effort in efforts:
+                if isinstance(effort, str) and effort not in model_efforts:
+                    model_efforts.append(effort)
+        default = raw.get("defaultReasoningEffort")
+        if model_id not in defaults and isinstance(default, str):
+            defaults[model_id] = default
+
+    models = tuple(
+        ProviderModel(
+            model_id,
+            _pretty(model_id),
+            tuple(efforts) or ((defaults[model_id],) if model_id in defaults else ("medium",)),
+        )
+        for model_id, efforts in grouped.items()
+    )
+    if not models:
+        raise ProviderCatalogError("Codex returned no available models")
     return models

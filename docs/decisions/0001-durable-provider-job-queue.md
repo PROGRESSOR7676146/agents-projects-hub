@@ -149,6 +149,10 @@ bounded transport duplicate over repeating a productive provider turn.
 After the bounded outbox retry limit is exhausted, the outbox and its job become
 terminally `failed` with a delivery error. This releases strict topic FIFO while
 retaining the committed provider result for diagnosis and manual recovery.
+Known terminal provider failures and ambiguous execution outcomes also enqueue a
+bounded notice through the same durable outbox. Such a notice contains no raw
+provider log, does not acknowledge visible context, and leaves the job in its
+original `failed` or `indeterminate` state after Telegram delivery.
 
 ### Commands and writer ownership
 

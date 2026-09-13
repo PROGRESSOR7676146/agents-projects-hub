@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .hub_config import HubConfig
 from .metadata import format_telegram_response
 from .registry import load_registry
+from .session_adoption_policy import validate_adoption_mode
 from .state import HubState
 from .supervisor import CodexAppServerSupervisor
 from .telegram import TelegramBotApi
+from .telegram_interaction import (
+    CODEX_TELEGRAM_CONTRACT_VERSION,
+    telegram_developer_instructions,
+    telegram_user_turn_prompt,
+)
 from .terminal import terminal_session_name
 
 
@@ -27,6 +33,8 @@ def run_codex_pilot(
     thread_id: int,
     topic_title: str,
 ) -> PilotResult:
+    # Pilot is an inline thread/start path, even with a queue-shaped config.
+    validate_adoption_mode(replace(config, dispatch_mode="inline"))
     binding = config.project_for_chat(chat_id)
     if binding.project_id != project_id:
         raise ValueError("Telegram group is bound to a different project")
@@ -62,6 +70,9 @@ def run_codex_pilot(
             cwd=project.root,
             model=session.model,
             project_id=project.project_id,
+            developer_instructions=telegram_developer_instructions(
+                runtime="codex", new_session=True
+            ),
         )
         tab_name = terminal_session_name(
             project.display_name, topic.title, agent.display_name, topic.thread_id
@@ -70,15 +81,16 @@ def run_codex_pilot(
         turn_id = client.start_turn(
             thread_id=thread.thread_id,
             cwd=project.root,
-            text=(
+            text=telegram_user_turn_prompt(
                 "Connectivity pilot for Agents Projects Hub. Do not use tools and do not modify "
                 "files. Reply briefly that the Codex session for the requested topic "
-                f"'{topic.title}' is connected and ready."
+                f"'{topic.title}' is connected and ready.",
             ),
             model=session.model,
             effort=session.effort,
         )
         result = client.wait_for_turn(turn_id)
+        state.acknowledge_telegram_contract(session.session_id, CODEX_TELEGRAM_CONTRACT_VERSION)
         limits = client.read_rate_limits()
         html = format_telegram_response(
             result=result,

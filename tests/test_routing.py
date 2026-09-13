@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-from hermes_codex_router.routing import Command, decide_targets, parse_command
+from hermes_codex_router.routing import (
+    Command,
+    decide_targets,
+    is_emergency_stop,
+    parse_command,
+    parse_context_request,
+)
 
 
 class RoutingTests(unittest.TestCase):
@@ -87,6 +93,21 @@ class RoutingTests(unittest.TestCase):
         self.assertIsNone(
             parse_command("please inspect /home/example/projects/Example Project Alpha")
         )
+
+    def test_emergency_stop_matches_only_the_whole_utterance(self) -> None:
+        for value in ("/stop", "/STOP@example_hub_bot", " stop! ", "HALT", "СтОп", "стой"):
+            self.assertTrue(is_emergency_stop(value), value)
+        for value in ("не останавливайся", "stop after tests", "потом стоп", "/status"):
+            self.assertFalse(is_emergency_stop(value), value)
+
+    def test_explicit_context_request_is_bounded_and_deterministic(self) -> None:
+        self.assertEqual(parse_context_request("/context"), (None, 8))
+        self.assertEqual(
+            parse_context_request("/context@example_hub_bot Antigravity 20"),
+            ("antigravity", 20),
+        )
+        self.assertIsNone(parse_context_request("/context antigravity 21"))
+        self.assertIsNone(parse_context_request("please include context"))
 
 
 if __name__ == "__main__":
