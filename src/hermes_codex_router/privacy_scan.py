@@ -402,6 +402,22 @@ def _metadata_for_privacy_scan(
     return metadata
 
 
+def _parse_public_author_email(raw: bytes) -> bytes | None:
+    if len(raw) > _MAX_PUBLIC_AUTHOR_EMAIL_FILE_BYTES:
+        return None
+    if raw.endswith(b"\n"):
+        raw = raw[:-1]
+    if not raw or b"\n" in raw or b"\r" in raw or b"\x00" in raw:
+        return None
+    try:
+        text = raw.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    if _EMAIL_RE.fullmatch(text) is None:
+        return None
+    return raw
+
+
 def _read_public_author_email(root: Path) -> bytes | None:
     raw_path = os.environ.get(_PUBLIC_AUTHOR_EMAIL_FILE_ENV)
     if not raw_path:
@@ -461,17 +477,7 @@ def _read_public_author_email(root: Path) -> bytes | None:
             )
         ):
             return None
-        if raw.endswith(b"\n"):
-            raw = raw[:-1]
-        if not raw or b"\n" in raw or b"\r" in raw or b"\x00" in raw:
-            return None
-        try:
-            text = raw.decode("ascii")
-        except UnicodeDecodeError:
-            return None
-        if _EMAIL_RE.fullmatch(text) is None:
-            return None
-        return raw
+        return _parse_public_author_email(raw)
     except (OSError, RuntimeError, ValueError):
         return None
     finally:

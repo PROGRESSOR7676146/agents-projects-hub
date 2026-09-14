@@ -37,6 +37,16 @@ typing, documentation, history, and full test gates pass in the current reposito
 history. Live deployment evidence remains private and is not implied by this
 repository checkpoint.
 
+A versioned publication preflight can now install the repository's pre-push
+hook into the shared Git common directory so it covers every local worktree. It
+fails locally on a dirty or non-`HEAD` publication, a missing or
+mismatched external author-policy declaration, an unavailable GitHub repository
+variable, or canonical validation failure. The hook binds Python imports to the
+current worktree before validation so an editable environment from another
+branch cannot supply stale scanner code. Hosted exact-SHA checks remain required
+because a local hook is bypassable and cannot guarantee external runner or
+network availability.
+
 Passive reliability thresholds now alert on provider work older than 15
 minutes, committed Telegram final or progress delivery older than 5 minutes,
 and unresolved indeterminate outcomes. The evaluator is isolated from the broader alert module

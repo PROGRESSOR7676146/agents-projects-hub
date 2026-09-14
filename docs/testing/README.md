@@ -81,6 +81,48 @@ state only the reusable behavior tested and the kind of acceptance required.
 The reusable go/no-go sequence and rollback boundary are defined in
 [`LIVE_CANARY.md`](../operations/LIVE_CANARY.md).
 
+## Publication preflight
+
+Repository maintainers can install the versioned pre-push hook after creating
+the external author-policy file used by the canonical privacy scan:
+
+```bash
+HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE=/home/example/.config/agents-projects-hub/public-author-policy \
+  PYTHONPATH=src .venv/bin/python -m hermes_codex_router.publish_preflight --install
+```
+
+The installation records only the private file path in local Git configuration
+and copies `.githooks/pre-push` into a mode-`0700` directory under the shared
+Git common directory. It also records the validated Python executable used for
+installation so linked worktrees do not require separate virtual environments.
+The configured hook therefore covers every worktree, including a branch that
+predates the versioned hook. When per-worktree Git
+configuration is enabled, installation updates and verifies each registered
+active worktree's effective hook path so a stale override cannot bypass the
+shared hook. Git entries explicitly marked `prunable` are ignored because their
+worktree directories no longer exist. The copied file is local Git state and
+must be refreshed by running `--install` after a hook update.
+
+Before a push, the hook captures the current worktree root and unsets every
+repository-local environment variable reported by
+`git rev-parse --local-env-vars`. Nested Git commands in the canonical test
+suite therefore operate on their explicit temporary repositories rather than
+the caller's index, object database or worktree. The hook then requires a clean
+checkout and requires every published ref to resolve to the checked-out `HEAD`,
+validates the external declaration through the canonical
+scanner rules, and compares it exactly with the one named GitHub repository
+variable without printing either value. It then prepends the current checkout's
+`src` directory to `PYTHONPATH` and runs `python scripts/validate.py`. This
+prevents an editable environment from another worktree from silently supplying
+the validator implementation.
+
+The hook fails before publication when GitHub or the repository variable is
+unavailable. It reduces avoidable hosted-CI retries; it cannot promise that a
+remote runner, dependency service, or network will remain available, and Git's
+explicit `--no-verify` option can bypass a local hook. Exact-SHA hosted checks
+remain the publication evidence. Forks and reusable callers without the
+repository variable retain the fail-closed behavior described above.
+
 ## Dedicated acceptance user
 
 Telegram bots never receive messages sent by other bots, so a service bot cannot
