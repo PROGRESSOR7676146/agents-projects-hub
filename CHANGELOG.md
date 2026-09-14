@@ -33,9 +33,11 @@ and releases use semantic versioning while the public API is still evolving.
   bot-specific Telegram rejection retains a human administrator for recovery.
 - Preserve owner-assisted recovery on resume by skipping invitations for bots
   that Telegram already reports as group participants.
-- Keep the history privacy gate effective after GitHub-hosted PR merges by
-  narrowly excluding a signed merge's repeated configured-origin owner while
-  continuing to scan its branch, title and body.
+- Keep the history privacy gate effective after signed GitHub merges by
+  exempting only an externally declared exact author-email span and the
+  fingerprint rule on complete author-name or hosted source-owner spans that
+  exactly repeat the valid local origin owner, while scanning every other
+  metadata position and rule.
 - Persist project command-scope work and completion-notice cooldowns, preserve
   final-result delivery priority, isolate a broken group, and refuse fabricated
   Telegram message receipts.

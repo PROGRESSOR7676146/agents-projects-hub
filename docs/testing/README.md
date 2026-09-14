@@ -17,7 +17,14 @@ real Telegram groups or consume provider tokens.
 GitHub CI and tag-release validation both call the same reusable
 `.github/workflows/validate.yml` matrix for Python 3.11, 3.12, and 3.13. Each
 matrix entry installs `.[dev]`, including the test-only Telegram client used by
-the acceptance-actor unit tests, and runs this full canonical command. The
+the acceptance-actor unit tests, prepares an optional external public-author
+declaration from a repository Actions variable, and runs this full canonical
+command. The value enters through the step environment and is written without
+output to a temporary `0600` file outside the checkout. It is not a secret or a
+security boundary against candidate code running as the same runner user.
+When the variable is absent, including in a fork or reusable-workflow context
+where it is unavailable, no declaration is set and the required canonical
+privacy scan runs without an exception; history that needs it remains red. The
 release publication job depends on the entire reusable validation job and alone
 has `contents: write`. `tests/test_workflows.py` parses the workflows
 structurally, including GitHub's `on` key, and has negative temporary-copy cases
@@ -47,7 +54,23 @@ tree and every reachable Git blob plus commit/tag metadata. It rejects:
 - private deployment fingerprints retained only as one-way hashes.
 
 False positives must be resolved by using conspicuously fictional fixtures, not
-by allowlisting real deployment data.
+by allowlisting real deployment data. The sole external policy declaration
+permits one exact public author email only in its original author-email byte span
+after strict merge structure and pinned GitHub signature verification. It does
+not suppress body, trailer, file, credential, path, invite or other rule matches.
+The fingerprint rule alone may be suppressed on the complete author-name or
+hosted source-owner byte span when it exactly equals the valid local origin
+owner; case variants, substrings, whitespace, lookalikes and all other display
+names remain scanned. The scanner accepts zero or one final LF in the declaration
+without stripping, case-folding or Unicode normalization; an absent, malformed,
+linked, non-owner, non-`0600`, oversized or in-checkout file gives no exception.
+Regression coverage creates a real temporary Git replacement mapping and proves
+that history reads keep the original object bytes; the scanner also recomputes
+each SHA-1 object ID before any metadata exception is applied.
+An isolated canonical-history fixture combines a fictional declaration with
+real temporary Git objects and a mocked successful signature result to test
+policy wiring only. Pinned-key cryptographic verification has separate tests;
+the mock is not evidence that a fixture was cryptographically signed.
 
 ## Live acceptance boundary
 

@@ -13,7 +13,7 @@ from hermes_codex_router.privacy_scan import (
 
 
 class PrivacyScanTests(TestCase):
-    def test_ignores_only_author_of_github_synthetic_pr_merge(self) -> None:
+    def test_compatibility_filter_never_removes_synthetic_merge_metadata(self) -> None:
         metadata = (
             "tree " + "a" * 40 + "\n"
             "parent " + "b" * 40 + "\n"
@@ -23,8 +23,7 @@ class PrivacyScanTests(TestCase):
             "Merge " + "d" * 40 + " into " + "e" * 40 + "\n"
         )
         filtered = _metadata_for_privacy_scan(metadata)
-        self.assertNotIn("owner" + "@private.invalid", filtered)
-        self.assertIn("committer GitHub", filtered)
+        self.assertEqual(filtered, metadata)
 
     def test_does_not_ignore_author_of_an_ordinary_merge(self) -> None:
         metadata = (
@@ -36,7 +35,7 @@ class PrivacyScanTests(TestCase):
         )
         self.assertEqual(_metadata_for_privacy_scan(metadata), metadata)
 
-    def test_removes_generated_identity_from_hosted_github_pr_merge(self) -> None:
+    def test_compatibility_filter_never_removes_hosted_merge_metadata(self) -> None:
         metadata = (
             "tree "
             + "a" * 40
@@ -57,10 +56,7 @@ class PrivacyScanTests(TestCase):
             github_signature_verified=True,
             github_owner="private-owner",
         )
-        self.assertNotIn("author Private Owner", filtered)
-        self.assertNotIn("private-owner/", filtered)
-        self.assertIn("Merge pull request #40 from fix", filtered)
-        self.assertIn("Preserve body owner" + "@private.invalid", filtered)
+        self.assertEqual(filtered, metadata)
 
     def test_unverified_hosted_merge_is_unchanged(self) -> None:
         metadata = (

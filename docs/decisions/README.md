@@ -44,7 +44,7 @@ with a new record.
 | Deterministic saved-session connect | Schema-26 unifies topic, Hub-private and local-code selection; a real marker receipt atomically activates Telegram without `/return`, while unknown sends preserve the old binding. | [ADR 0023](0023-deterministic-session-connect.md) |
 | Project/group provisioning | Schema-27 lets the owner-only Hub queue bounded local-root and forum creation through a separately enabled, pinned Telegram user session; ambiguous external operations stop for exact local reconciliation. | [ADR 0024](0024-user-authorized-project-group-provisioning.md) |
 | Provisioning fencing and owner membership | Schema-28 snapshots every configured owner, fences the private user session and workflow lease, centralizes project resolution, and persists command/result delivery recovery. | [ADR 0025](0025-provisioning-fencing-and-owner-membership.md) |
-| Signed GitHub merge privacy boundary | Hosted merge metadata gets a narrow exception only after pinned OpenPGP verification and an exact match to the already-public origin owner; all user-authored content remains scanned. | [ADR 0026](0026-signed-github-merge-privacy-boundary.md) |
+| Signed GitHub merge privacy boundary | A pinned-signature merge may exempt an externally declared exact author-email span and only the fingerprint rule on a complete author-name or hosted source-owner span equal to local origin; all surrounding metadata remains scanned. | [ADR 0026](0026-signed-github-merge-privacy-boundary.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

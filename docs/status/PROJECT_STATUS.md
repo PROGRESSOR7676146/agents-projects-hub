@@ -387,6 +387,11 @@ artifact for schema 28 remain unaccepted; the current target is schema 28.
   immutable runtime artifacts remains the deployment identity.
 - Privacy gate that rejects deployment identities, raw histories/session dumps,
   owner-specific paths, Telegram secrets/identifiers, and local runtime files.
+  One external declaration can authorize only an exact public author-email span
+  in a strictly structured, pinned-signature GitHub merge. The fingerprint rule
+  alone may also be suppressed on a complete author-name or hosted source-owner
+  span that exactly repeats the valid local origin owner; all surrounding
+  metadata and unrelated rules remain scanned.
 - Documentation validation inventories all 96 normative product requirement IDs,
   protects all 20 numbered baseline sections by content hash, and checks local
   Markdown files/anchors repository-wide. The product baseline is split into a
