@@ -97,15 +97,32 @@ def _assert_validation_contract(workflows: Path) -> None:
         raise AssertionError("validation checkout must retain complete history")
     if "ref" in checkout_with:
         raise AssertionError("validation checkout must use the event commit")
+    prepare = next(
+        (
+            step
+            for step in steps
+            if isinstance(step, dict)
+            and step.get("name") == "Prepare optional public author policy"
+        ),
+        None,
+    )
+    if not isinstance(prepare, dict) or prepare.get("env") != {
+        "HUB_PUBLIC_GIT_AUTHOR_EMAIL": "${{ vars.HUB_PUBLIC_GIT_AUTHOR_EMAIL }}"
+    }:
+        raise AssertionError("public author policy must come only from the repository variable")
+    if "${{" in cast(str, prepare.get("run", "")):
+        raise AssertionError("Actions expressions must not be embedded in policy shell source")
     validation_commands: list[str] = [
         cast(str, step["run"])
         for step in steps
         if isinstance(step, dict) and isinstance(step.get("run"), str)
     ]
-    if validation_commands != ["python -m pip install -e '.[dev]'", "python scripts/validate.py"]:
-        raise AssertionError(
-            "validation must install dev dependencies and run only the canonical gate"
-        )
+    if validation_commands != [
+        "python -m pip install -e '.[dev]'",
+        "python scripts/prepare_public_author_policy.py",
+        "python scripts/validate.py",
+    ]:
+        raise AssertionError("validation must prepare policy input and run only the canonical gate")
 
     ci = _workflow(workflows / "ci.yml")
     if ci.get("on") != {"push": {"branches": ["main"]}, "pull_request": None}:
@@ -221,6 +238,33 @@ class WorkflowContractTests(unittest.TestCase):
                     target[key] = value
                     path.write_text(yaml.safe_dump(workflow), encoding="utf-8")
                     with self.assertRaisesRegex(AssertionError, "skip|tolerate"):
+                        _assert_validation_contract(workflows)
+
+    def test_contract_rejects_missing_or_shell_interpolated_policy_preparation(self) -> None:
+        for replacement, error in (
+            ("", "public author policy"),
+            (
+                "      - name: Prepare optional public author policy\n"
+                "        env:\n"
+                "          HUB_PUBLIC_GIT_AUTHOR_EMAIL: "
+                "${{ vars.HUB_PUBLIC_GIT_AUTHOR_EMAIL }}\n"
+                "        run: echo '${{ vars.HUB_PUBLIC_GIT_AUTHOR_EMAIL }}'\n",
+                "expressions",
+            ),
+        ):
+            with self.subTest(error=error):
+                with tempfile.TemporaryDirectory() as directory:
+                    workflows = Path(directory) / "workflows"
+                    shutil.copytree(WORKFLOWS, workflows)
+                    validation = workflows / "validate.yml"
+                    text = validation.read_text(encoding="utf-8")
+                    start = text.index("      - name: Prepare optional public author policy\n")
+                    end = text.index("      - name: Canonical repository validation\n")
+                    validation.write_text(
+                        text[:start] + replacement + text[end:],
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(AssertionError, error):
                         _assert_validation_contract(workflows)
 
     def test_release_revision_guard_checks_head_event_and_annotated_tag(self) -> None:

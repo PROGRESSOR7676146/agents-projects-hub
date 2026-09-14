@@ -1,11 +1,19 @@
+import os
+import subprocess
+import tempfile
 from pathlib import Path
 from unittest import TestCase
+from unittest.mock import patch
 
-from hermes_codex_router.privacy_scan import _metadata_for_privacy_scan, scan_text
+from hermes_codex_router.privacy_scan import (
+    _github_signature_verified,
+    _metadata_for_privacy_scan,
+    scan_text,
+)
 
 
 class PrivacyScanTests(TestCase):
-    def test_ignores_only_author_of_github_synthetic_pr_merge(self) -> None:
+    def test_compatibility_filter_never_removes_synthetic_merge_metadata(self) -> None:
         metadata = (
             "tree " + "a" * 40 + "\n"
             "parent " + "b" * 40 + "\n"
@@ -15,8 +23,7 @@ class PrivacyScanTests(TestCase):
             "Merge " + "d" * 40 + " into " + "e" * 40 + "\n"
         )
         filtered = _metadata_for_privacy_scan(metadata)
-        self.assertNotIn("owner" + "@private.invalid", filtered)
-        self.assertIn("committer GitHub", filtered)
+        self.assertEqual(filtered, metadata)
 
     def test_does_not_ignore_author_of_an_ordinary_merge(self) -> None:
         metadata = (
@@ -27,6 +34,225 @@ class PrivacyScanTests(TestCase):
             "Merge a feature branch\n"
         )
         self.assertEqual(_metadata_for_privacy_scan(metadata), metadata)
+
+    def test_compatibility_filter_never_removes_hosted_merge_metadata(self) -> None:
+        metadata = (
+            "tree "
+            + "a" * 40
+            + "\nparent "
+            + "b" * 40
+            + "\nparent "
+            + "c" * 40
+            + "\nauthor Private Owner <owner"
+            + "@private.invalid> 1 +0000\n"
+            + "committer GitHub <noreply"
+            + "@github.com> 1 +0000\n\n"
+            + "Merge pull request #40 from private-owner/fix\n\n"
+            + "Preserve body owner"
+            + "@private.invalid\n"
+        )
+        filtered = _metadata_for_privacy_scan(
+            metadata,
+            github_signature_verified=True,
+            github_owner="private-owner",
+        )
+        self.assertEqual(filtered, metadata)
+
+    def test_unverified_hosted_merge_is_unchanged(self) -> None:
+        metadata = (
+            "parent "
+            + "b" * 40
+            + "\nparent "
+            + "c" * 40
+            + "\nauthor Private Owner <owner"
+            + "@private.invalid> 1 +0000\n"
+            + "committer GitHub <noreply"
+            + "@github.com> 1 +0000\n\n"
+            + "Merge pull request #40 from private-owner/fix\n"
+        )
+        self.assertEqual(_metadata_for_privacy_scan(metadata), metadata)
+
+    def test_message_headers_do_not_activate_merge_exception(self) -> None:
+        metadata = (
+            "author Private Owner <owner"
+            + "@private.invalid> 1 +0000\n"
+            + "committer Contributor <contributors@example.com> 1 +0000\n\n"
+            + "parent "
+            + "b" * 40
+            + "\nparent "
+            + "c" * 40
+            + "\ncommitter GitHub <noreply"
+            + "@github.com> 1 +0000\n"
+            + "Merge pull request #40 from private-owner/fix\n"
+        )
+        self.assertEqual(
+            _metadata_for_privacy_scan(
+                metadata,
+                github_signature_verified=True,
+                github_owner="private-owner",
+            ),
+            metadata,
+        )
+
+    def test_verified_hosted_merge_preserves_private_branch_title_and_body(self) -> None:
+        metadata = (
+            "parent "
+            + "b" * 40
+            + "\nparent "
+            + "c" * 40
+            + "\nauthor Private Owner <owner"
+            + "@private.invalid> 1 +0000\n"
+            + "committer GitHub <noreply"
+            + "@github.com> 1 +0000\n\n"
+            + "Merge pull request #40 from private-owner/private"
+            + "@private.invalid\n\n"
+            + "Private title private"
+            + "@private.invalid\n\n"
+            + "author Body Owner <body"
+            + "@private.invalid> 1 +0000\n"
+        )
+        filtered = _metadata_for_privacy_scan(
+            metadata,
+            github_signature_verified=True,
+            github_owner="private-owner",
+        )
+        findings = scan_text(Path(".git-metadata/example"), filtered)
+        self.assertGreaterEqual(
+            sum(item.rule == "non-example email address" for item in findings),
+            3,
+        )
+
+    def test_verified_hosted_merge_keeps_unmatched_or_invalid_owner(self) -> None:
+        for source_owner in ("another-owner", "person" + "@private.invalid"):
+            with self.subTest(source_owner=source_owner):
+                metadata = (
+                    "parent "
+                    + "b" * 40
+                    + "\nparent "
+                    + "c" * 40
+                    + "\nauthor GitHub <noreply"
+                    + "@github.com> 1 +0000\n"
+                    + "committer GitHub <noreply"
+                    + "@github.com> 1 +0000\n\n"
+                    + f"Merge pull request #40 from {source_owner}/fix\n"
+                )
+                self.assertEqual(
+                    _metadata_for_privacy_scan(
+                        metadata,
+                        github_signature_verified=True,
+                        github_owner="public-owner",
+                    ),
+                    metadata,
+                )
+
+    def test_github_signature_requires_pinned_openpgp_fingerprint(self) -> None:
+        valid_status = (
+            "[GNUPG:] VALIDSIG 968479A1AFF927E37D1A566BB5690EEEBB952194 "
+            "2026-09-13 1 0 4 0 1 8 00 968479A1AFF927E37D1A566BB5690EEEBB952194\n"
+        )
+        with patch("hermes_codex_router.privacy_scan.subprocess.run") as run:
+            run.side_effect = (
+                subprocess.CompletedProcess([], 0),
+                subprocess.CompletedProcess([], 0, "", valid_status),
+            )
+            self.assertTrue(_github_signature_verified(Path("."), "a" * 40))
+        verify_argv = run.call_args_list[1].args[0]
+        self.assertEqual(verify_argv[0], "/usr/bin/git")
+        self.assertIn("gpg.format=openpgp", verify_argv)
+        self.assertIn("gpg.program=/usr/bin/gpg", verify_argv)
+
+    def test_github_signature_rejects_alternate_or_missing_validsig(self) -> None:
+        for status in (
+            "",
+            "[GNUPG:] VALIDSIG " + "A" * 40 + " 2026-09-13 1 0 4 0 1 8 00 " + "A" * 40,
+        ):
+            with self.subTest(status=bool(status)):
+                with patch("hermes_codex_router.privacy_scan.subprocess.run") as run:
+                    run.side_effect = (
+                        subprocess.CompletedProcess([], 0),
+                        subprocess.CompletedProcess([], 0, "", status),
+                    )
+                    self.assertFalse(_github_signature_verified(Path("."), "a" * 40))
+
+    def test_github_signature_import_failure_is_closed(self) -> None:
+        with patch("hermes_codex_router.privacy_scan.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess([], 2)
+            self.assertFalse(_github_signature_verified(Path("."), "a" * 40))
+            self.assertEqual(run.call_count, 1)
+
+    def test_repo_git_verifier_configuration_cannot_authorize_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["/usr/bin/git", "init", "-q", str(root)], check=True)
+            fake = root / "fake-verifier"
+            fake.write_text(
+                "#!/bin/sh\n"
+                "echo '[GNUPG:] NEWSIG'\n"
+                "echo '[GNUPG:] GOODSIG B5690EEEBB952194 GitHub'\n"
+                "echo '[GNUPG:] VALIDSIG 968479A1AFF927E37D1A566BB5690EEEBB952194 "
+                "2026-09-13 1 0 4 0 1 8 00 968479A1AFF927E37D1A566BB5690EEEBB952194'\n"
+                "exit 0\n"
+            )
+            os.chmod(fake, 0o700)
+            subprocess.run(
+                ["/usr/bin/git", "config", "--local", "gpg.program", str(fake)],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(
+                ["/usr/bin/git", "config", "--local", "gpg.openpgp.program", str(fake)],
+                cwd=root,
+                check=True,
+            )
+            tree = subprocess.run(
+                ["/usr/bin/git", "mktree"],
+                cwd=root,
+                input="",
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            fake_commit = subprocess.run(
+                ["/usr/bin/git", "hash-object", "-t", "commit", "-w", "--stdin"],
+                cwd=root,
+                input=(
+                    f"tree {tree}\n"
+                    "author Example <account@example.com> 1 +0000\n"
+                    "committer Example <account@example.com> 1 +0000\n"
+                    "gpgsig -----BEGIN PGP SIGNATURE-----\n"
+                    " fake\n"
+                    " -----END PGP SIGNATURE-----\n\n"
+                    "signed fixture\n"
+                ),
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            bypass = subprocess.run(
+                ["/usr/bin/git", "verify-commit", "--raw", fake_commit],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(bypass.returncode, 0)
+            subprocess.run(
+                ["/usr/bin/git", "config", "--local", "gpg.format", "ssh"],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "/usr/bin/git",
+                    "config",
+                    "--local",
+                    "gpg.ssh.allowedSignersFile",
+                    str(fake),
+                ],
+                cwd=root,
+                check=True,
+            )
+            self.assertFalse(_github_signature_verified(root, fake_commit))
 
     def assert_rule(self, text: str, rule: str) -> None:
         findings = scan_text(Path("fixture.txt"), text)

@@ -54,7 +54,15 @@ examples (`example.com`, `/home/example`, and documented placeholder IDs).
 
 Run `python -m hermes_codex_router.privacy_scan . --history` before every commit. The same
 privacy gate is mandatory in `scripts/validate.py` and CI. Do not bypass it or
-add an allowlist entry for real deployment data; fix the fixture or prose.
+add an allowlist entry for real deployment data; fix the fixture or prose. The
+only permitted disclosure declaration is one public author email supplied from
+a private file outside the checkout. It applies solely to the exact author-email
+byte span of a structurally recognized, pinned-signature GitHub merge as defined
+in ADR 0026. The same verified context may suppress only a private-deployment
+fingerprint on the complete author-name or hosted source-owner span when its
+bytes exactly equal the valid owner in the local GitHub `origin` URL. Never
+record a real value or its digest in this repository, and never extend these
+rules to another identity, field, finding type, or deployment datum.
 
 For behavior changes, update the product requirements or project status when
 observable behavior, scope, acceptance, or lifecycle classification changes.

@@ -25,7 +25,14 @@ explicit recoverable stage, and one durable command-scope state machine per bot
 and dynamic group. The pinned technical owner creates the group. Before creation, the worker
 resolves every captured owner and bot through its authorized user session. After
 creation it invites every non-creator owner, grants a fixed administrator-rights
-set, adds the bots, and verifies the forum, membership and rights by readback.
+set and verifies that authority before adding the bots. This order preserves a
+human recovery path when Telegram rejects one bot identity after the group was
+created. The worker then adds the bots and verifies the forum, membership and
+rights by readback.
+On resume, the worker reads each bot's exact active membership and expected
+identity before inviting it. An active participant is left in place, including one added by an owner during
+recovery. Only Telegram's explicit `UserNotParticipant` result permits an
+invitation; left, banned, mismatched and ambiguous results stop the workflow.
 Changing the configured owner set blocks an already confirmed workflow until an
 explicit local resume records a fresh snapshot.
 

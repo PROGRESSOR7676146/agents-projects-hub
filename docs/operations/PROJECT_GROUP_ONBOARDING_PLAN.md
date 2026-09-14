@@ -35,7 +35,13 @@ confirmation and every configured bot identity. It then creates a private forum
 supergroup, invites every non-creator owner and bot, grants the non-creator
 owners the documented administrator-rights set, grants only the Hub
 `invite_users`, `manage_topics` and the Telegram `other` compatibility right,
-and verifies forum mode, privacy, membership and rights. Only then does it
+and verifies forum mode, privacy, membership and rights. Non-creator owners are
+promoted before the first bot invitation, preserving an administrator who can
+correct a bot-specific Telegram restriction even when the workflow stops. On
+resume, exact active bot participants are detected before invitation, so an
+owner's manual correction is retained. Left, banned, mismatched and ambiguous
+membership results stop; only an explicit Telegram `UserNotParticipant` result
+permits an invitation. Only then does it
 atomically add the project to the local registry and record the immutable numeric
 group binding in schema 28 state. Provider bots remain ordinary members; their
 group pollers are not enabled.
