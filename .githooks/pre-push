@@ -1,0 +1,25 @@
+#!/usr/bin/env sh
+set -eu
+
+root="$(git rev-parse --show-toplevel)"
+local_git_environment="$(git rev-parse --local-env-vars)"
+for variable in $local_git_environment; do
+    unset "$variable"
+done
+
+python="$(git -C "$root" config --local --get hub.publishPython || true)"
+if [ -z "$python" ]; then
+    python="$root/.venv/bin/python"
+fi
+if [ ! -x "$python" ]; then
+    echo "Publication preflight failed: configured Python is unavailable." >&2
+    exit 1
+fi
+
+if [ -n "${PYTHONPATH:-}" ]; then
+    export PYTHONPATH="$root/src:$PYTHONPATH"
+else
+    export PYTHONPATH="$root/src"
+fi
+
+exec "$python" -m hermes_codex_router.publish_preflight "$@"
