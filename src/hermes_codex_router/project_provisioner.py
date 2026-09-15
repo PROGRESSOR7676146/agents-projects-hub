@@ -858,7 +858,9 @@ class ProjectProvisioner:
                     required_owner_ids=workflow.required_owner_user_ids,
                     hub_username=self.config.hub_bot.telegram_username,
                     provider_usernames=tuple(
-                        agent.telegram_username for agent in self.config.agents
+                        agent.telegram_username
+                        for agent in self.config.agents
+                        if not agent.managed_externally
                     ),
                     before_rpc=lambda: self._guard(workflow, lease, expected=workflow.stage),
                 )
@@ -911,7 +913,9 @@ class ProjectProvisioner:
                     group,
                     hub_username=self.config.hub_bot.telegram_username,
                     provider_usernames=tuple(
-                        agent.telegram_username for agent in self.config.agents
+                        agent.telegram_username
+                        for agent in self.config.agents
+                        if not agent.managed_externally
                     ),
                     before_rpc=lambda: self._guard(workflow, lease, expected="configuring_group"),
                 )

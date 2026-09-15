@@ -31,8 +31,10 @@ automation by itself.
 The worker creates the directory when absent and initializes an empty directory
 as a Git repository on branch `main`. It refuses a non-empty non-Git directory.
 Before creating a group it verifies the pinned creator, every owner captured at
-confirmation and every configured bot identity. It then creates a private forum
-supergroup, invites every non-creator owner and bot, grants the non-creator
+confirmation, the Hub bot and every locally managed provider bot identity.
+Providers declared `managed_externally` retain their native admission boundary
+and are not preflighted, invited or required for readiness. It then creates a
+private forum supergroup, invites every non-creator owner and bot, grants the non-creator
 owners the documented administrator-rights set, grants only the Hub
 `invite_users`, `manage_topics` and the Telegram `other` compatibility right,
 and verifies forum mode, privacy, membership and rights. Non-creator owners are
@@ -162,7 +164,10 @@ owner-driven live creation canary that verifies:
 - the resulting chat is a private forum supergroup owned by the intended user;
 - the other configured owner is present with the documented administrator rights;
 - the Hub is present with Manage Topics and can receive ordinary owner messages;
-- every configured provider bot is present and can send through its own identity;
+- every locally managed provider bot is present and can send through its own
+  identity;
+- externally managed providers remain usable through their native path; optional
+  membership in the new group is outside the provisioning workflow;
 - the new numeric chat maps to the intended project and exact canonical root;
 - restart preserves the binding and ordinary, mention and Reply routing;
 - no provider or LLM is invoked by the control-plane wizard itself.

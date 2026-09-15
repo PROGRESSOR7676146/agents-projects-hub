@@ -23,8 +23,11 @@ This normative module is part of the
   listing/audit MUST retain healthy groups and report bounded per-group errors.
 - **REQ-ONBOARD-003 (Implemented offline; live acceptance required):** The group
   MUST be a private forum supergroup,
-  contain the intended bot identities and every owner captured when the action
-  was confirmed, and provide topic IDs. The creating technical owner remains
+  contain the Hub and every locally managed provider bot identity, contain every
+  owner captured when the action was confirmed, and provide topic IDs. A
+  provider declared `managed_externally` retains its native admission boundary;
+  its group membership is optional and the provisioner MUST NOT preflight,
+  invite, promote or verify it. The creating technical owner remains
   creator; every other captured owner MUST be invited, granted the documented
   administrative rights, and verified before any bot invitation begins, so a
   later bot-specific rejection leaves a human recovery authority in the group.

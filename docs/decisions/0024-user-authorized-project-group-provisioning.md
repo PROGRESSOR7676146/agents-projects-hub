@@ -37,7 +37,9 @@ For one workflow, the worker:
 1. creates or validates the derived root and initializes an empty directory as
    a Git repository;
 2. creates a private forum supergroup through the pinned user identity;
-3. adds the Hub and configured provider bot identities;
+3. adds the Hub and locally managed provider bot identities; providers declared
+   `managed_externally` retain their native admission boundary and are not a
+   provisioning prerequisite;
 4. grants the Hub only invite, topic-management and compatibility rights, while
    provider bots remain ordinary members;
 5. verifies forum mode and membership;
@@ -67,3 +69,5 @@ Full automation now depends on a locally authorized Telegram user session and
 Telegram account limits. Privacy Mode and BotFather policy remain deployment
 settings; the provisioner cannot relax them. Unknown outcomes require operator
 inspection because duplicate avoidance is more important than automatic retry.
+Optional membership for an externally managed recovery provider remains an
+operator action and cannot block creation of the Hub-owned project group.
