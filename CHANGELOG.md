@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Project-group provisioning now requires and configures only the Hub and locally
+  managed provider bots; externally managed recovery providers retain their
+  independent admission path and cannot block project creation.
 - Add one durable, model-free saved-Codex-session connection workflow for
   project-topic `/connect`, the owner-only Hub private control plane, and
   expiring one-time codes issued by local `session connect [CONFIG]`.

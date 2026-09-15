@@ -269,14 +269,14 @@ class ProjectOnboardingTests(unittest.TestCase):
         self.assertEqual(client.create_calls, 1)
         self.assertEqual(
             client.preflight,
-            (42, (42,), "example_hub_bot", ("example_codex_bot", "example_hermes_bot")),
+            (42, (42,), "example_hub_bot", ("example_codex_bot",)),
         )
         self.assertEqual(
             client.configured,
             (
                 CreatedForum(-1001234567890, 987654321),
                 "example_hub_bot",
-                ("example_codex_bot", "example_hermes_bot"),
+                ("example_codex_bot",),
             ),
         )
         state = HubState.open(self.config.state_path)
