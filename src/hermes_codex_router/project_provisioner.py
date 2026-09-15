@@ -246,15 +246,22 @@ class TelethonProvisioningClient:
         before_rpc: Callable[[], None],
     ) -> None:
         try:
+            from telethon import types
+
             before_rpc()
             creator = await self._bounded(self._client.get_me())
             if int(getattr(creator, "id", 0)) != expected_creator_id:
                 raise ProjectProvisioningError("project provisioning identity mismatch")
             owners: dict[int, Any] = {}
             for owner_id in required_owner_ids:
-                reference = creator if owner_id == expected_creator_id else owner_id
-                before_rpc()
-                input_entity = await self._bounded(self._client.get_input_entity(reference))
+                if owner_id == expected_creator_id:
+                    access_hash = getattr(creator, "access_hash", None)
+                    if not isinstance(access_hash, int):
+                        raise ProvisioningUnknown("owner_identity_invalid")
+                    input_entity = types.InputUser(owner_id, access_hash)
+                else:
+                    before_rpc()
+                    input_entity = await self._bounded(self._client.get_input_entity(owner_id))
                 before_rpc()
                 entity = await self._bounded(self._client.get_entity(input_entity))
                 if (
