@@ -33,6 +33,9 @@ and releases use semantic versioning while the public API is still evolving.
   bot-specific Telegram rejection retains a human administrator for recovery.
 - Preserve owner-assisted recovery on resume by skipping invitations for bots
   that Telegram already reports as group participants.
+- Normalize the authenticated provisioning creator to an explicit Telegram
+  input user so Telethon's self-reference cannot fail creator-membership
+  verification after a forum is created.
 - Keep the history privacy gate effective after signed GitHub merges by
   exempting only an externally declared exact author-email span and the
   fingerprint rule on complete author-name or hosted source-owner spans that

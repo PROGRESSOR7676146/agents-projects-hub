@@ -102,21 +102,26 @@ class ProjectProvisionerAdapterTests(unittest.TestCase):
 
     def test_preflight_rejects_wrong_owner_and_bot_identities(self) -> None:
         class Client:
+            def __init__(self) -> None:
+                self.entity_references: list[object] = []
+
             async def get_me(self) -> object:
-                return SimpleNamespace(id=42, bot=False, deleted=False)
+                return SimpleNamespace(id=42, access_hash=420, bot=False, deleted=False)
 
             async def get_input_entity(self, reference: object) -> object:
                 return reference
 
             async def get_entity(self, reference: object) -> object:
-                if getattr(reference, "id", None) == 42:
+                self.entity_references.append(reference)
+                if getattr(reference, "user_id", None) == 42:
                     return SimpleNamespace(id=42, bot=False, deleted=False)
                 if reference == 43:
                     return SimpleNamespace(id=43, bot=True, deleted=False)
                 return SimpleNamespace(id=100, bot=True, deleted=False, username="wrong_bot")
 
+        transport = Client()
         client = TelethonProvisioningClient.__new__(TelethonProvisioningClient)
-        client._client = Client()
+        client._client = transport
         client._owners = {}
         client._bots = {}
         with self.assertRaises(ProvisioningRejected):
@@ -129,6 +134,7 @@ class ProjectProvisionerAdapterTests(unittest.TestCase):
                     before_rpc=lambda: None,
                 )
             )
+        self.assertIn(43, transport.entity_references)
 
         with self.assertRaises(ProvisioningRejected):
             asyncio.run(
@@ -140,6 +146,79 @@ class ProjectProvisionerAdapterTests(unittest.TestCase):
                     before_rpc=lambda: None,
                 )
             )
+        self.assertIn("hub_bot", transport.entity_references)
+
+    def test_preflight_uses_explicit_creator_identity_when_telethon_returns_self(self) -> None:
+        creator = SimpleNamespace(id=42, access_hash=420, bot=False, deleted=False)
+
+        class Client:
+            async def get_me(self) -> object:
+                return creator
+
+            async def get_input_entity(self, reference: object) -> object:
+                if reference is creator:
+                    return types.InputPeerSelf()
+                if reference == "hub_bot":
+                    return types.InputPeerUser(100, 1000)
+                raise AssertionError(reference)
+
+            async def get_entity(self, reference: object) -> object:
+                if isinstance(reference, (types.InputPeerSelf, types.InputUser)):
+                    return creator
+                if (
+                    isinstance(reference, types.InputPeerUser)
+                    and cast(Any, reference).user_id == 100
+                ):
+                    return SimpleNamespace(id=100, bot=True, deleted=False, username="hub_bot")
+                raise AssertionError(reference)
+
+        client = TelethonProvisioningClient.__new__(TelethonProvisioningClient)
+        client._client = Client()
+        client._owners = {}
+        client._bots = {}
+
+        asyncio.run(
+            client.preflight_members(
+                expected_creator_id=42,
+                required_owner_ids=(42,),
+                hub_username="hub_bot",
+                provider_usernames=(),
+                before_rpc=lambda: None,
+            )
+        )
+
+        creator_input = client._owners[42]
+        self.assertIsInstance(creator_input, types.InputUser)
+        self.assertEqual((creator_input.user_id, creator_input.access_hash), (42, 420))
+
+    def test_preflight_fails_closed_without_creator_access_hash(self) -> None:
+        class Client:
+            async def get_me(self) -> object:
+                return SimpleNamespace(id=42, bot=False, deleted=False)
+
+            async def get_input_entity(self, reference: object) -> object:
+                raise AssertionError(reference)
+
+            async def get_entity(self, reference: object) -> object:
+                raise AssertionError(reference)
+
+        client = TelethonProvisioningClient.__new__(TelethonProvisioningClient)
+        client._client = Client()
+        client._owners = {}
+        client._bots = {}
+
+        with self.assertRaisesRegex(ProvisioningUnknown, "owner_identity_invalid"):
+            asyncio.run(
+                client.preflight_members(
+                    expected_creator_id=42,
+                    required_owner_ids=(42,),
+                    hub_username="hub_bot",
+                    provider_usernames=(),
+                    before_rpc=lambda: None,
+                )
+            )
+        self.assertEqual(client._owners, {})
+        self.assertEqual(client._bots, {})
 
     def test_create_timeout_sends_exactly_one_request(self) -> None:
         class HangingClient:
