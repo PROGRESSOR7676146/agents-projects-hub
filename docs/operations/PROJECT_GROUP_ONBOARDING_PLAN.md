@@ -16,6 +16,12 @@ and adding participants through
 Both methods are user-only. A Bot API identity cannot provide the requested
 automation by itself.
 
+The same `/projects` menu also exposes editing of an existing registration.
+That workflow is local and does not use this MTProto provisioner: display-name
+changes do not rename Telegram groups, and root relocation preserves the numeric
+group binding. See
+[ADR 0027](../decisions/0027-no-silent-session-rebind-on-project-relocation.md).
+
 ## User flow
 
 1. In the private Hub chat, run `/projects` and choose **Create project**.

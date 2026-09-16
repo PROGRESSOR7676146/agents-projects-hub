@@ -40,6 +40,7 @@ from .hub_config import HubConfig, ProjectBinding, read_telegram_token
 from .local_transfer import LocalTransferError, local_resume_command
 from .metadata import format_agent_response, format_telegram_response
 from .model_selection import ModelSelectionError, available_models
+from .project_editing import ProjectEditStore
 from .project_onboarding import ProjectOnboardingStore
 from .project_resolution import (
     ProjectResolutionError,
@@ -57,7 +58,7 @@ from .provider_catalog import (
 from .provider_catalog_cache import CatalogSnapshot, ProviderCatalogCache
 from .provider_limits import ProviderLimit, decode_provider_limit
 from .provider_telemetry import load_antigravity_telemetry
-from .registry import Project, load_registry
+from .registry import Project, RegistryError, load_registry
 from .routing import (
     decide_targets,
     is_emergency_stop,
@@ -119,6 +120,11 @@ class ProjectHubService:
         validate_adoption_mode(config)
         self.registry = load_registry(config.registry_path)
         self.state = HubState.open(config.state_path)
+        # A process crash can occur after the atomic registry replacement but
+        # before the matching SQLite binding commit. Complete that durable,
+        # fail-closed boundary before accepting any new Telegram work.
+        ProjectEditStore(self.state, config.registry_path).recover_pending()
+        self.registry = load_registry(config.registry_path)
         self.agent = config.require_agent("codex")
         if self.agent.runtime != "codex" or self.agent.token_file is None:
             raise ServiceError("managed Codex bot is not configured")
@@ -1629,6 +1635,8 @@ class ProjectHubService:
             return self._handle_connect_callback(callback)
         if callback.data.startswith("po:"):
             return self._handle_project_onboarding_callback(callback)
+        if callback.data.startswith("pe:"):
+            return self._handle_project_edit_callback(callback)
         try:
             binding = self._project_binding_for_chat(callback.chat_id)
         except KeyError:
@@ -1875,6 +1883,108 @@ class ProjectHubService:
         )
         return workflow.stage == "awaiting_name"
 
+    def _start_project_edit(self, message: TopicMessage) -> bool:
+        self._reload_registry_if_available()
+        project_ids = tuple(binding.project_id for binding in self._all_project_bindings())
+        if not project_ids:
+            self._send_text(message, "Нет проектов с зарегистрированной Telegram-группой.")
+            return True
+        ProjectOnboardingStore(self.state).cancel(message.sender_id)
+        SessionConnectStore(self.state).cancel(message.sender_id)
+        edit = ProjectEditStore(self.state, self.config.registry_path)
+        workflow = edit.start(owner_user_id=message.sender_id, project_ids=project_ids)
+        self.telegram.send_html(
+            message.chat_id,
+            1,
+            "Выберите проект для штатного локального редактирования:",
+            reply_markup=edit.project_markup(workflow.workflow_id),
+        )
+        return True
+
+    def _handle_project_edit_callback(self, callback: TopicCallback) -> bool:
+        message = TopicMessage(
+            update_id=0,
+            message_id=callback.message_id,
+            chat_id=callback.chat_id,
+            thread_id=callback.thread_id,
+            chat_title="Direct",
+            sender_id=callback.sender_id,
+            text="",
+            reply_to_username=None,
+        )
+        if callback.chat_id != callback.sender_id:
+            self.telegram.answer_callback(callback.callback_id, "Только в личном чате Hub")
+            return True
+        try:
+            parts = callback.data.split(":", 2)
+            if len(parts) != 3:
+                raise StateError("project_edit_selection_stale")
+            _, action, value = parts
+            edit = ProjectEditStore(self.state, self.config.registry_path)
+            if action == "b" and value == "start":
+                self.telegram.answer_callback(callback.callback_id, "Выберите проект")
+                return self._start_project_edit(message)
+            if action == "p":
+                workflow = edit.select_project(callback.sender_id, value)
+                self.telegram.answer_callback(callback.callback_id, "Проект выбран")
+                self.telegram.send_html(
+                    message.chat_id,
+                    1,
+                    "Что изменить? Имя Hub не является названием Telegram-группы.",
+                    reply_markup=edit.operation_markup(workflow.workflow_id),
+                )
+                return True
+            if action == "n":
+                edit.choose_rename(callback.sender_id, value)
+                self.telegram.answer_callback(callback.callback_id, "Введите имя")
+                self._send_text(message, "Введите новое локальное display name проекта Hub.")
+                return True
+            if action == "r":
+                workflow = edit.choose_relocation(callback.sender_id, value)
+                self.telegram.answer_callback(callback.callback_id, "Выберите Git-root")
+                self.telegram.send_html(
+                    message.chat_id,
+                    1,
+                    "Выберите безопасно обнаруженный или локально выводимый Git-root. "
+                    "Путь текстом не принимается:",
+                    reply_markup=edit.root_markup(workflow.workflow_id),
+                )
+                return True
+            if action == "t":
+                workflow = edit.select_root(callback.sender_id, value)
+                self.telegram.answer_callback(callback.callback_id, "Проверьте влияние")
+                self.telegram.send_html(
+                    message.chat_id,
+                    1,
+                    edit.confirmation_text(workflow),
+                    reply_markup=edit.confirmation_markup(workflow.workflow_id),
+                )
+                return True
+            if action == "ok":
+                workflow = edit.confirm(callback.sender_id, value)
+                completed = edit.apply(workflow.workflow_id)
+                self.registry = load_registry(self.config.registry_path)
+                self.telegram.answer_callback(callback.callback_id, "Изменение сохранено")
+                detail = (
+                    "Локальное имя проекта Hub изменено. Название Telegram-группы не менялось."
+                    if completed.operation == "rename"
+                    else "Новая Git-root привязка сохранена. Файлы и старый root не перемещались."
+                )
+                self._send_text(message, detail)
+                return True
+            if action == "x":
+                cancelled = edit.cancel(callback.sender_id, value)
+                self.telegram.answer_callback(
+                    callback.callback_id, "Отменено" if cancelled else "Уже применяется"
+                )
+                if cancelled:
+                    self._send_text(message, "Редактирование отменено; регистрация не изменена.")
+                return True
+            raise StateError("project_edit_selection_stale")
+        except (OSError, RegistryError, StateError) as exc:
+            self.telegram.answer_callback(callback.callback_id, str(exc)[:180])
+            return True
+
     def _handle_project_onboarding_callback(self, callback: TopicCallback) -> bool:
         message = TopicMessage(
             update_id=0,
@@ -2040,6 +2150,7 @@ class ProjectHubService:
         command = parse_command(message.text)
         connect = SessionConnectStore(self.state)
         onboarding = ProjectOnboardingStore(self.state)
+        editing = ProjectEditStore(self.state, self.config.registry_path)
         if command and command.name in {"start", "projects"}:
             self._reload_registry_if_available()
             projects = [
@@ -2071,6 +2182,11 @@ class ProjectHubService:
                         *(
                             [[{"text": "Создать проект", "callback_data": "po:b:start"}]]
                             if self.config.project_provisioning.enabled
+                            else []
+                        ),
+                        *(
+                            [[{"text": "Редактировать проект", "callback_data": "pe:b:start"}]]
+                            if projects
                             else []
                         ),
                         [{"text": "Подключить сессию", "callback_data": "cx:b:start"}],
@@ -2116,12 +2232,40 @@ class ProjectHubService:
                 return True
             return self._start_direct_connect(message)
         if command and command.name == "cancel":
-            cancelled = onboarding.cancel(message.sender_id) or connect.cancel(message.sender_id)
+            cancelled = (
+                editing.cancel(message.sender_id)
+                or onboarding.cancel(message.sender_id)
+                or connect.cancel(message.sender_id)
+            )
             self._send_text(
                 message,
                 "Операция отменена; текущее состояние не изменено."
                 if cancelled
                 else "Активной операции нет.",
+            )
+            return True
+        active_edit = editing.active_for_owner(message.sender_id)
+        if active_edit is not None and active_edit.stage == "awaiting_name":
+            if message.is_forwarded:
+                self._send_text(message, "Введите имя обычным сообщением, не Forward.")
+                return True
+            try:
+                workflow = editing.set_name(
+                    message.sender_id, active_edit.workflow_id, message.text
+                )
+            except StateError as exc:
+                detail = (
+                    "Новое имя совпадает с текущим."
+                    if str(exc) == "project_edit_name_unchanged"
+                    else "Имя должно содержать 1–128 печатных символов."
+                )
+                self._send_text(message, detail)
+                return True
+            self.telegram.send_html(
+                message.chat_id,
+                1,
+                editing.confirmation_text(workflow),
+                reply_markup=editing.confirmation_markup(workflow.workflow_id),
             )
             return True
         active_onboarding = onboarding.active_for_owner(message.sender_id)

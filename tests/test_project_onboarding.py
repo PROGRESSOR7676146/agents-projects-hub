@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import subprocess
 import tempfile
 import unittest
 import urllib.error
@@ -17,6 +18,7 @@ from hermes_codex_router.hub_config import (
     AgentDefinition,
     HubConfig,
     HubTelegramBot,
+    ProjectBinding,
     ProjectProvisioningSettings,
     TerminalSettings,
 )
@@ -108,6 +110,7 @@ class FakeTelegram:
         self.sent: list[tuple[int, int, str, object | None]] = []
         self.callbacks: list[tuple[str, str]] = []
         self.commands: dict[str | None, list[dict[str, str]]] = {}
+        self.calls: list[str] = []
 
     def send_html(self, chat_id: int, thread_id: int, text: str, **kwargs: object) -> int:
         self.sent.append((chat_id, thread_id, text, kwargs.get("reply_markup")))
@@ -117,6 +120,7 @@ class FakeTelegram:
         self.callbacks.append((callback_id, text))
 
     def call(self, method: str, **params: object) -> object:
+        self.calls.append(method)
         scope = cast(str | None, params.get("scope"))
         if method == "setMyCommands":
             self.commands[scope] = cast(list[dict[str, str]], json.loads(str(params["commands"])))
@@ -628,6 +632,74 @@ class ProjectOnboardingTests(unittest.TestCase):
         self.assertEqual(active.stage, "queued")
         self.assertEqual(active.project_id, "new-project")
         self.assertFalse((self.allowed / "new-project").exists())
+
+    def test_private_hub_project_edit_changes_only_local_display_name(self) -> None:
+        root = self.allowed / "example-project"
+        root.mkdir()
+        subprocess.run(("git", "init", "-q", str(root)), check=True)
+        self.registry_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "allowed_roots": [str(self.allowed)],
+                    "projects": [
+                        {
+                            "project_id": "example-project",
+                            "display_name": "Example Project",
+                            "topic_name": "Telegram Group Title",
+                            "root": str(root),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        config = replace(
+            self.config,
+            projects=(ProjectBinding("example-project", -1001234567890),),
+        )
+        controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
+        controller.config = config
+        controller.registry = load_registry(self.registry_path)
+        controller.state = HubState.open(config.state_path)
+        self.addCleanup(controller.state.close)
+        controller.agent = config.agents[0]
+        controller.telegram = FakeTelegram()
+        controller.ingress_identity = "hub"
+        controller.direct_messages_only = False
+
+        self.assertTrue(controller.handle_update(direct_update(101, "/projects")))
+        start = next(
+            value
+            for value in callback_values(controller.telegram.sent[-1][3])
+            if value == "pe:b:start"
+        )
+        self.assertTrue(controller.handle_update(direct_callback(102, start)))
+        project = next(
+            value
+            for value in callback_values(controller.telegram.sent[-1][3])
+            if value.startswith("pe:p:")
+        )
+        self.assertTrue(controller.handle_update(direct_callback(103, project)))
+        rename = next(
+            value
+            for value in callback_values(controller.telegram.sent[-1][3])
+            if value.startswith("pe:n:")
+        )
+        self.assertTrue(controller.handle_update(direct_callback(104, rename)))
+        self.assertTrue(controller.handle_update(direct_update(105, "Renamed Project")))
+        confirm = next(
+            value
+            for value in callback_values(controller.telegram.sent[-1][3])
+            if value.startswith("pe:ok:")
+        )
+        self.assertTrue(controller.handle_update(direct_callback(106, confirm)))
+
+        edited = load_registry(self.registry_path).require_project("example-project")
+        self.assertEqual(edited.display_name, "Renamed Project")
+        self.assertEqual(edited.topic_name, "Telegram Group Title")
+        self.assertEqual(edited.root, root)
+        self.assertEqual(controller.telegram.calls, [])
 
     def test_stale_network_boundary_becomes_unknown_instead_of_retryable(self) -> None:
         workflow_id = self.prepare_workflow()

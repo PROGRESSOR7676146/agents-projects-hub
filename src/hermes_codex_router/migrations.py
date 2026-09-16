@@ -1090,6 +1090,60 @@ WHERE canonical_root IS NOT NULL
 """
 
 
+MIGRATION_29 = """
+CREATE TABLE project_edit_workflows (
+    workflow_id TEXT PRIMARY KEY CHECK(length(workflow_id) BETWEEN 8 AND 32),
+    owner_user_id INTEGER NOT NULL CHECK(owner_user_id > 0),
+    project_id TEXT CHECK(project_id IS NULL OR length(project_id) BETWEEN 1 AND 48),
+    old_display_name TEXT CHECK(old_display_name IS NULL OR length(old_display_name) >= 1),
+    new_display_name TEXT CHECK(
+        new_display_name IS NULL OR length(new_display_name) BETWEEN 1 AND 128
+    ),
+    old_root TEXT CHECK(old_root IS NULL OR length(old_root) BETWEEN 1 AND 4096),
+    old_binding_root TEXT CHECK(
+        old_binding_root IS NULL OR length(old_binding_root) BETWEEN 1 AND 4096
+    ),
+    new_root TEXT CHECK(new_root IS NULL OR length(new_root) BETWEEN 1 AND 4096),
+    operation TEXT CHECK(operation IS NULL OR operation IN ('rename','relocate')),
+    root_mode TEXT CHECK(root_mode IS NULL OR root_mode IN ('existing','initialize','create')),
+    stage TEXT NOT NULL CHECK(stage IN (
+        'choosing_project','choosing_operation','awaiting_name','choosing_root',
+        'confirming','applying','completed','cancelled','expired','failed'
+    )),
+    error_code TEXT CHECK(error_code IS NULL OR length(error_code) <= 128),
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE INDEX project_edit_owner_active
+ON project_edit_workflows(owner_user_id, stage, updated_at);
+CREATE INDEX project_edit_recovery
+ON project_edit_workflows(stage, updated_at);
+
+CREATE TABLE project_edit_project_options (
+    option_id TEXT PRIMARY KEY CHECK(length(option_id) BETWEEN 8 AND 32),
+    workflow_id TEXT NOT NULL REFERENCES project_edit_workflows(workflow_id)
+        ON DELETE CASCADE,
+    project_id TEXT NOT NULL CHECK(length(project_id) BETWEEN 1 AND 48),
+    safe_label TEXT NOT NULL CHECK(length(safe_label) BETWEEN 1 AND 160),
+    created_at TEXT NOT NULL,
+    UNIQUE(workflow_id, project_id)
+);
+
+CREATE TABLE project_edit_root_options (
+    option_id TEXT PRIMARY KEY CHECK(length(option_id) BETWEEN 8 AND 32),
+    workflow_id TEXT NOT NULL REFERENCES project_edit_workflows(workflow_id)
+        ON DELETE CASCADE,
+    canonical_root TEXT NOT NULL CHECK(length(canonical_root) BETWEEN 1 AND 4096),
+    root_mode TEXT NOT NULL CHECK(root_mode IN ('existing','initialize','create')),
+    safe_label TEXT NOT NULL CHECK(length(safe_label) BETWEEN 1 AND 160),
+    created_at TEXT NOT NULL,
+    UNIQUE(workflow_id, canonical_root)
+);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -1212,6 +1266,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_26,
         MIGRATION_27,
         MIGRATION_28,
+        MIGRATION_29,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:

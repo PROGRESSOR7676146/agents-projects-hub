@@ -136,6 +136,13 @@ those methods to user identities. See the
 [onboarding guide](docs/operations/PROJECT_GROUP_ONBOARDING_PLAN.md) for private
 credential setup, failure recovery and live acceptance.
 
+For an already registered project, `/projects` also offers owner-only local
+editing. A display-name change does not rename the Telegram group. Git-root
+relocation uses only opaque locally generated choices, preserves the numeric
+group binding and both directories, and refuses attached provider sessions or
+unfinished work. Provider history is never rebound to the new root. See
+[ADR 0027](docs/decisions/0027-no-silent-session-rebind-on-project-relocation.md).
+
 For a local assisted selection, run:
 
 ```text

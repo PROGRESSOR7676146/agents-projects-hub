@@ -24,6 +24,7 @@ from hermes_codex_router.hub_config import (
     TerminalSettings,
 )
 from hermes_codex_router.models import Project, ProjectRegistry
+from hermes_codex_router.project_editing import ProjectEditStore
 from hermes_codex_router.provider_limits import ProviderLimit
 from hermes_codex_router.service import ProjectHubService, QueueAcceptanceError, ServiceError
 from hermes_codex_router.state import HubState
@@ -46,10 +47,12 @@ class Adapter:
         self.generate_artifact = False
         self.calls = 0
         self.last_prompt = ""
+        self.last_cwd: Path | None = None
 
     def run_turn(self, **kwargs: object) -> ExternalTurnResult:
         self.calls += 1
         self.last_prompt = str(kwargs.get("prompt") or "")
+        self.last_cwd = cast(Path | None, kwargs.get("cwd"))
         if self.limit:
             raise ProviderLimitError(ProviderLimit(self.runtime, "weekly", 0, 1))
         if self.unavailable:
@@ -205,6 +208,34 @@ class ExternalQueueWorkerTests(unittest.TestCase):
                 )
         finally:
             state.close()
+
+    def test_running_worker_resolves_relocated_root_before_new_execution(self) -> None:
+        state = HubState.open(self.config.state_path)
+        try:
+            edit = ProjectEditStore(state, self.config.registry_path)
+            workflow = edit.start(owner_user_id=42, project_ids=("example-project",))
+            workflow = edit.select_project(
+                42, edit.project_options(workflow.workflow_id)[0].option_id
+            )
+            edit.choose_relocation(42, workflow.workflow_id)
+            target = self.config.registry_path.parent / "example-project"
+            option = next(
+                item for item in edit.root_options(workflow.workflow_id) if item.root == target
+            )
+            edit.select_root(42, option.option_id)
+            edit.confirm(42, workflow.workflow_id)
+            edit.apply(workflow.workflow_id)
+        finally:
+            state.close()
+
+        adapter = Adapter("opencode")
+        worker = ExternalQueueWorker(
+            self.config, "opencode", registry=self.registry, adapter=cast(Any, adapter)
+        )
+        self.addCleanup(worker.close)
+        self.enqueue("opencode", 61)
+        self.assertTrue(worker.run_cycle())
+        self.assertEqual(adapter.last_cwd, target)
 
     def test_running_worker_loads_new_dynamic_project_before_provider_boundary(self) -> None:
         adapter = Adapter("opencode")

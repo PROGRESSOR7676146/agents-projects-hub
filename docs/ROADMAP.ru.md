@@ -77,21 +77,27 @@ artifact delivery: не включать скрытые рассуждения, 
 соответствие отчёта фактически созданным артефактам и безопасную деградацию до
 структурированного текстового документа.
 
-### Управление жизненным циклом проектов (backlog)
+### Управление жизненным циклом проектов
 
-Добавить owner-only штатные операции редактирования и удаления регистрации
-проекта. Они должны работать через один durable workflow с preview, явным
-подтверждением, идемпотентным результатом и восстановлением после перезапуска.
+Owner-only штатное редактирование регистрации реализовано offline. В `/projects`
+владелец выбирает проект, операцию, видит влияние и явно подтверждает результат.
+Локальный display name не связан с title Telegram-группы. Перенос root принимает
+только opaque callback для безопасно обнаруженного либо локально выводимого
+кандидата внутри `allowed_roots`; текстовый путь не принимается. Сохраняются
+`project_id`, числовая Telegram-привязка и topic identity, а старый каталог,
+файлы и Git-история не перемещаются и не удаляются.
 
-- Редактирование позволяет изменить display name и перенести привязку на другой
-  существующий либо новый Git-root. Неизменяемый `project_id` и числовая
-  Telegram-привязка сохраняются. Новый root выбирается только из локально
-  настроенных `allowed_roots`, повторно проходит canonical Git-root validation
-  и не принимается из текста Telegram как произвольный путь.
-- Перенос блокируется при активном local writer, незавершённых provider jobs,
-  pending deliveries, unresolved outcomes или другой регистрации того же root.
-  Изменение registry, binding и связанных session references фиксируется
-  атомарно либо полностью откатывается.
+Relocation блокируется при подключённой provider-сессии, local/terminal writer,
+незавершённой работе, pending delivery или unresolved outcome. Provider-native
+history не перепривязывается: архивированная origin остаётся на старом root.
+Schema-29 workflow, registry lock и fail-closed recovery обеспечивают rollback
+обработанной ошибки и завершение commit после падения. Controller и workers
+разрешают новый root динамически. Offline acceptance использует только fictional
+fixtures; live Telegram canary и deployment не выполнялись.
+
+Удаление регистрации остаётся backlog и должно использовать совместимый durable
+preview/confirmation contract:
+
 - Удаление относится только к регистрации и Hub-owned control state проекта.
   Оно никогда не удаляет подключённый каталог, Git-репозиторий или его файлы.
   Удаление Telegram-группы является отдельным явно подтверждаемым действием и
@@ -101,10 +107,9 @@ artifact delivery: не включать скрытые рассуждения, 
   повторного запроса. Простое редактирование JSON или SQLite не считается
   поддерживаемой операцией.
 
-Acceptance должен покрывать занятый root, symlink/escape за `allowed_roots`,
-crash до и после commit, повтор callback, restart, сохранность каталога при
-удалении, отсутствие Telegram RPC без отдельного подтверждения и динамическое
-обновление Controller/worker resolution без ручного редактирования config.
+Будущий acceptance удаления должен покрывать crash до и после commit, повтор
+callback, restart, сохранность каталога и отсутствие Telegram RPC без отдельного
+подтверждения.
 
 ## Резервирование и восстановление WSL
 
@@ -134,7 +139,7 @@ backup automation, ни работа с приватными данными, н�
 ## Недавно завершено
 
 - Product requirements разделены на короткий normative index и пять стабильных
-  capability modules. Manifest и canonical gate подтверждают текущие 91 ID,
+  capability modules. Manifest и canonical gate подтверждают текущие 102 ID,
   hashes 20 секций и Markdown links/anchors.
 - Canonical gate проверяет согласованность package version, changelog, project
   status и Git tags. Отсутствующие tags видны как debt, но audit не создаёт и не

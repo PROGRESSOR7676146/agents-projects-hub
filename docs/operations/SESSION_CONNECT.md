@@ -28,7 +28,8 @@ or changed session stops the workflow without partial replacement.
 Open the configured Hub bot in a private chat owned by an allowlisted owner:
 
 - `/start` shows registered projects and the connection action;
-- `/projects` lists registered projects; project/group creation is not available;
+- `/projects` lists registered projects and offers owner-only local editing;
+  project/group creation is also available when provisioning is explicitly enabled;
 - `/connect` selects project, saved session, and destination;
 - `/cancel` cancels the active workflow without changing a topic session.
 
