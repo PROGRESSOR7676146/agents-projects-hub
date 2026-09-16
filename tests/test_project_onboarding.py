@@ -23,6 +23,7 @@ from hermes_codex_router.hub_config import (
     TerminalSettings,
 )
 from hermes_codex_router.outbox_sender import TelegramOutboxSender
+from hermes_codex_router.project_editing import ProjectEditStore
 from hermes_codex_router.project_onboarding import ProjectOnboardingStore
 from hermes_codex_router.project_provisioner import (
     CreatedForum,
@@ -633,6 +634,7 @@ class ProjectOnboardingTests(unittest.TestCase):
         self.assertEqual(active.project_id, "new-project")
         self.assertFalse((self.allowed / "new-project").exists())
 
+    @patch("hermes_codex_router.service.PROJECT_EDIT_ENABLED", True)
     def test_private_hub_project_edit_changes_only_local_display_name(self) -> None:
         root = self.allowed / "example-project"
         root.mkdir()
@@ -700,6 +702,63 @@ class ProjectOnboardingTests(unittest.TestCase):
         self.assertEqual(edited.topic_name, "Telegram Group Title")
         self.assertEqual(edited.root, root)
         self.assertEqual(controller.telegram.calls, [])
+
+    def test_schema_29_rollback_hides_and_rejects_project_editing(self) -> None:
+        root = self.allowed / "example-project"
+        root.mkdir()
+        subprocess.run(("git", "init", "-q", str(root)), check=True)
+        self.registry_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "allowed_roots": [str(self.allowed)],
+                    "projects": [
+                        {
+                            "project_id": "example-project",
+                            "display_name": "Example Project",
+                            "topic_name": "Telegram Group Title",
+                            "root": str(root),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        config = replace(
+            self.config,
+            projects=(ProjectBinding("example-project", -1001234567890),),
+        )
+        controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
+        controller.config = config
+        controller.registry = load_registry(self.registry_path)
+        controller.state = HubState.open(config.state_path)
+        self.addCleanup(controller.state.close)
+        controller.agent = config.agents[0]
+        controller.telegram = FakeTelegram()
+        controller.ingress_identity = "hub"
+        controller.direct_messages_only = False
+
+        self.assertTrue(controller.handle_update(direct_update(201, "/projects")))
+        callbacks = callback_values(controller.telegram.sent[-1][3])
+        self.assertFalse(any(value.startswith("pe:") for value in callbacks))
+        self.assertTrue(controller.handle_update(direct_callback(202, "pe:b:start")))
+        self.assertIn("недоступно", controller.telegram.callbacks[-1][1])
+        count = controller.state._connection.execute(
+            "SELECT COUNT(*) FROM project_edit_workflows"
+        ).fetchone()[0]
+        self.assertEqual(count, 0)
+
+        edit = ProjectEditStore(controller.state, self.registry_path)
+        workflow = edit.start(owner_user_id=42, project_ids=("example-project",))
+        option = edit.project_options(workflow.workflow_id)[0]
+        selected = edit.select_project(42, option.option_id)
+        edit.choose_rename(42, selected.workflow_id)
+        self.assertTrue(controller.handle_update(direct_update(203, "Must not rename")))
+        self.assertEqual(edit.get(selected.workflow_id).stage, "cancelled")
+        self.assertEqual(
+            load_registry(self.registry_path).require_project("example-project").display_name,
+            "Example Project",
+        )
 
     def test_stale_network_boundary_becomes_unknown_instead_of_retryable(self) -> None:
         workflow_id = self.prepare_workflow()

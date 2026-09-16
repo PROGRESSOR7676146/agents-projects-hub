@@ -95,6 +95,8 @@ from .telegram_multipart import send_telegram_html_parts
 from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
 
+PROJECT_EDIT_ENABLED = False
+
 
 class ServiceError(RuntimeError):
     pass
@@ -1636,6 +1638,11 @@ class ProjectHubService:
         if callback.data.startswith("po:"):
             return self._handle_project_onboarding_callback(callback)
         if callback.data.startswith("pe:"):
+            if not PROJECT_EDIT_ENABLED:
+                self.telegram.answer_callback(
+                    callback.callback_id, "Редактирование временно недоступно"
+                )
+                return True
             return self._handle_project_edit_callback(callback)
         try:
             binding = self._project_binding_for_chat(callback.chat_id)
@@ -2186,7 +2193,7 @@ class ProjectHubService:
                         ),
                         *(
                             [[{"text": "Редактировать проект", "callback_data": "pe:b:start"}]]
-                            if projects
+                            if projects and PROJECT_EDIT_ENABLED
                             else []
                         ),
                         [{"text": "Подключить сессию", "callback_data": "cx:b:start"}],
@@ -2245,6 +2252,13 @@ class ProjectHubService:
             )
             return True
         active_edit = editing.active_for_owner(message.sender_id)
+        if active_edit is not None and not PROJECT_EDIT_ENABLED:
+            editing.cancel(message.sender_id, active_edit.workflow_id)
+            self._send_text(
+                message,
+                "Редактирование временно недоступно; незавершённая операция отменена.",
+            )
+            return True
         if active_edit is not None and active_edit.stage == "awaiting_name":
             if message.is_forwarded:
                 self._send_text(message, "Введите имя обычным сообщением, не Forward.")

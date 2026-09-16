@@ -6,6 +6,15 @@ Release: v0.7.0
 This file describes repository capabilities only. It intentionally contains no
 operator deployment inventory or live conversation evidence.
 
+## Schema-29 compatibility rollback mode
+
+This rollback revision retains schema-29 migrations and unconditional recovery
+of durable project-edit intents, but deliberately disables the project-edit
+entry point and rejects its callbacks. Any non-applying edit journey encountered
+in owner DM is cancelled with a bounded notice. The mode exists only as a
+schema-compatible runtime rollback artifact; it is not the active feature
+candidate described below.
+
 ## Quality checkpoint
 
 The [quality and stability review](../operations/QUALITY_AND_STABILITY_REVIEW.md)
