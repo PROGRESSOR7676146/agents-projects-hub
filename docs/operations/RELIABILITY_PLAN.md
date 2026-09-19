@@ -1,6 +1,10 @@
 # Reliability implementation plan
 
-Status: repository reliability milestones, package A, and the package-F exclusion prerequisite complete locally; hosted Actions evidence remains pending
+Status: repository reliability milestones and packages A/F integrated; hosted Python 3.11–3.13 and CodeQL passed at `6f4f0e2e383711d9c595e5cdda4ebe381c29d300`. Deployment acceptance remains separate.
+
+The current priority is [inbound material completeness](INBOUND_MATERIALS_PLAN.md).
+Use [the next-session checkpoint](NEXT_DEVELOPMENT_SESSION.md); the package
+sequence below preserves earlier design rationale, not the current task order.
 
 Objective: each admitted task has a visible, accurately classified outcome;
 already-produced results survive delivery failures without replaying side effects.
@@ -78,7 +82,7 @@ reboot are recorded gradually and do not weaken the revision-specific evidence.
 The six approved directions remain in scope, but they are not one implementation
 session or one release. Package A and the root-exclusion prerequisite of package
 F are implemented and locally reviewed in the
-repository, as recorded in the [detailed execution plan and review](NEXT_DEVELOPMENT_SESSION.md).
+repository, as recorded in the [detailed execution plan and review](RELEASE_GATE_IMPLEMENTATION_REVIEW.md).
 Later packages have explicit readiness criteria; approval of a direction does
 not supply its missing state machine. This planning revision changes no
 implemented capability or normative requirement lifecycle label beyond package
@@ -91,7 +95,7 @@ claims do not establish current remote or deployment health.
 
 | Order | Package and deliverable | Completion boundary |
 | --- | --- | --- |
-| A — locally complete | One reusable Python 3.11–3.13 validation matrix, release publication dependent on its success, and demonstrated SQLite resource cleanup. | Canonical validator includes the release-lock check in CI; publication checks the same commit; focused failure tests and full local gates pass on Python 3.11, 3.12, and 3.13. Review covers failed-backup cleanup, metadata-reader/fixture connection ownership, and validation-bypass regressions. Hosted Actions execution remains unproven. No schema change. |
+| A — locally complete | One reusable Python 3.11–3.13 validation matrix, release publication dependent on its success, and demonstrated SQLite resource cleanup. | Canonical validator includes the release-lock check in CI; publication checks the same commit; focused failure tests and full local gates pass on Python 3.11, 3.12, and 3.13. Review covers failed-backup cleanup, metadata-reader/fixture connection ownership, and validation-bypass regressions. Hosted validation is confirmed at the integrated revision named above. No schema change. |
 | B | Retire multi-auth runtime/configuration integration with a supported-transport and configuration migration contract. | Preserve official stdio and independent shared-socket approval behavior; retired keys fail before filesystem/helper access; no stale pool catalogs or alerts. Update normative requirements and supersede affected ADRs explicitly. |
 | C | Extend existing project validation and acceptance machinery for onboarding. | A bounded result separates offline preflight/synthetic routing from live routing, real restart and response-identity evidence; unavailable live checks cannot make a project accepted. No second acceptance framework. |
 | D | One measured, cohesive extraction justified by work in B or C. | Preserve transaction boundaries, the current schema contract, public APIs and observable behavior; demonstrate a specific reduction in coupling or duplication. This is not a prerequisite for all other work and may be omitted if no useful seam is found. |
