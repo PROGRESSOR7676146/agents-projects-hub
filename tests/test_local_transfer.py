@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,36 @@ from hermes_codex_router.local_transfer import LocalTransferError, local_resume_
 
 
 class LocalTransferTests(unittest.TestCase):
+    def test_antigravity_pins_model_and_effort_without_duplicate_suffix(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="Project space ") as directory:
+            root = Path(directory)
+            for model, effort, expected in (
+                ("gemini-3.8-flash", "low", "gemini-3.8-flash-low"),
+                ("gemini-3.8-flash-high", "low", "gemini-3.8-flash-low"),
+                ("gemini-3.8-flash-low", "low", "gemini-3.8-flash-low"),
+                ("gemini-3.8-flash-high", "default", "gemini-3.8-flash-high"),
+                ("gemini-3.8-flash", "default", "gemini-3.8-flash"),
+                (None, "low", None),
+            ):
+                with self.subTest(model=model, effort=effort):
+                    command = local_resume_command(
+                        "antigravity",
+                        "agy-cpa",
+                        "conv-123",
+                        root,
+                        model=model,
+                        effort=effort,
+                    )
+                    self.assertEqual(command.cwd, str(root))
+                    self.assertEqual(command.argv[:3], ("agy-cpa", "--conversation", "conv-123"))
+                    self.assertEqual(
+                        shlex.split(command.display.split(" && ")[1]), list(command.argv)
+                    )
+                    if expected is None:
+                        self.assertNotIn("--model", command.argv)
+                    else:
+                        self.assertEqual(command.argv[-2:], ("--model", expected))
+
     def test_codex_shared_socket_attaches_without_second_writer(self) -> None:
         with tempfile.TemporaryDirectory(prefix="Shared Project ") as directory:
             root = Path(directory)

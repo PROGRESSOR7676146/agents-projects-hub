@@ -253,6 +253,13 @@ class ExternalRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(argv[argv.index("--model") + 1], "gemini-3.7-flash-medium")
 
+    def test_antigravity_replaces_existing_effort_suffix(self) -> None:
+        adapter = ExternalCliAdapter("antigravity", executable="agy")
+        argv = adapter.build_argv(
+            cwd=Path.cwd(), prompt="Inspect", model="gemini-3.8-flash-high", effort="low"
+        )
+        self.assertEqual(argv[argv.index("--model") + 1], "gemini-3.8-flash-low")
+
 
 if __name__ == "__main__":
     unittest.main()

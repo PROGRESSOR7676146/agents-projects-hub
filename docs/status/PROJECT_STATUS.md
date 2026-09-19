@@ -8,6 +8,12 @@ operator deployment inventory or live conversation evidence.
 
 ## Quality checkpoint
 
+Antigravity native `/local` now pins the session model and effort with the same
+argument builder used by productive turns. Existing effort suffixes are replaced
+without duplication. Local CPA/direct profile isolation remains deployment-owned;
+each deployment must prove migration, atomic settings persistence and a same-session
+Telegram/TUI/Telegram round trip separately from these offline regressions.
+
 Native Codex catalog discovery no longer requires the retired multi-auth helper.
 The monitor reads `model/list`; isolated Controller refresh callbacks request
 asynchronous discovery and retain last-good selectable models without provider RPC.

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from .antigravity_model import model_arguments
 from .provider_limits import ProviderLimit, parse_antigravity_limit, parse_opencode_limit
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
@@ -151,9 +152,6 @@ class ExternalCliAdapter:
             argv.extend(("--prompt", prompt))
             return tuple(argv)
         if self.runtime == "antigravity":
-            selected_model = model
-            if model and effort and effort != "default":
-                selected_model = f"{model}-{effort}"
             argv = [
                 self.executable,
                 "--print",
@@ -168,8 +166,7 @@ class ExternalCliAdapter:
             ]
             if session_id:
                 argv.extend(("--conversation", session_id))
-            if selected_model:
-                argv.extend(("--model", selected_model))
+            argv.extend(model_arguments(model, effort))
             return tuple(argv)
         argv = [
             self.executable,

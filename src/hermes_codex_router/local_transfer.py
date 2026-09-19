@@ -5,6 +5,8 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+from .antigravity_model import model_arguments
+
 
 class LocalTransferError(ValueError):
     pass
@@ -31,6 +33,7 @@ def local_resume_command(
     *,
     model_provider: str | None = None,
     model: str | None = None,
+    effort: str | None = None,
     codex_socket_path: Path | None = None,
 ) -> LocalResumeCommand:
     session_id = provider_session_id.strip()
@@ -63,6 +66,7 @@ def local_resume_command(
             "--sandbox",
             "--mode",
             "accept-edits",
+            *model_arguments(model, effort),
         )
     else:
         raise LocalTransferError(f"local resume is not supported for runtime: {runtime}")

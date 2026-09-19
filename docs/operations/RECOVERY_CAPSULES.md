@@ -52,3 +52,11 @@ verified direct Codex launcher and Hermes's native providers and credentials.
 Proxy recovery must preserve immutable thread identity, writer leases and
 uncertain work. Management, client and upstream credentials are distinct;
 never copy or print them. Monitoring remains passive, without live model probes.
+
+When Antigravity also uses CPA, its deployment may keep independent permanent
+CPA/direct stores. Both Hub turns and native local resume must select the same
+CPA executable/store and pin model/effort. Recovery must preserve that directory
+isolation and atomic settings rename, never restore a single-file bind, mirror
+histories, replace fresh OAuth from snapshots or overwrite live SQLite/WAL.
+Direct rescue is an independent history after the initial consistent migration.
+Document exact local paths and staging-restore evidence outside the repository.

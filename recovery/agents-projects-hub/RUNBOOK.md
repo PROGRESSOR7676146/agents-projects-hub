@@ -97,6 +97,16 @@ route Hermes/other runtimes through CPA. Consult the local proxy runbook for
 its passive doctor, pinned release and distinct management/client credentials.
 Never restart the shared Codex app-server under an active local writer.
 
+For deployments with separate Antigravity CPA and direct profiles, the configured
+executable must identify the CPA profile consistently for worker turns and `/local`.
+Preserve conversation ID, root, model, effort and one writer. Whole-directory
+profile mounts allow atomic settings saves; never restore a single-file settings
+mount or toggle a shared provider beneath running clients. Native direct history
+and CPA history diverge after migration. Do not synchronize stores or promise
+automatic continuation across them. Consult the deployment's AGY profile recovery
+guide for canonical paths, validated snapshots and manual versioned updates.
+Antigravity `/return` still invokes a bounded model summary. It is not model-free.
+
 Use the full repository runbooks when the checkout is available:
 
 - `docs/operations/QUEUE_RECOVERY.md`

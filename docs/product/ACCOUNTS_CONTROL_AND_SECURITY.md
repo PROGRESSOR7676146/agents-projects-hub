@@ -140,6 +140,9 @@ This normative module is part of the
   running and that a completed provider session exists, changes `writer_mode`
   from `telegram` to `local`, and returns a reviewed
   provider-specific resume command for the canonical root and session ID.
+  Antigravity MUST use the configured executable and the same model/effort
+  argument builder as productive turns. An explicit effort replaces a known
+  existing effort suffix; default effort preserves the selected model ID.
 - **REQ-WRITER-007 (Implemented for Codex with explicit owner assertion):**
   after the owner closes the CLI and Hub work is terminal, `/return` changes
   only the lease; it invokes no model and copies no summary or transcript. The
@@ -190,7 +193,7 @@ Initial reviewed resume shapes are `codex resume SESSION_ID -C ROOT`,
 with explicit provider/model `-c` overrides when local `codex_model_provider`
 is configured,
 `opencode ROOT --session SESSION_ID`, and
-`cd -- ROOT && agy --conversation SESSION_ID --sandbox --mode accept-edits`. They are version-sensitive
+`cd -- ROOT && agy --conversation SESSION_ID --sandbox --mode accept-edits --model MODEL_EFFORT`. They are version-sensitive
 adapter capabilities, not permanent user-input templates. Hermes requires a
 separate native capability check.
 
