@@ -78,6 +78,14 @@ the existing alert output, transaction semantics, and schema.
 
 ## Implemented
 
+Passive recovery diagnostics now compare the running Hermes Hub-plugin import
+source with the exact clean Hub release and live database schema. A mismatch
+is optional-channel degradation in doctor, but blocks deployment acceptance.
+Schema rollouts include the idle gateway as a database consumer without changing
+its native providers. Bootstrap refuses an existing Hub installation and no
+longer installs legacy multi-auth ordering. Both owners' recovery capsules must
+be republished after topology changes; see the recovery operations guide.
+
 Schema 30 prepares immutable Codex origins for bounded provider identifiers and
 persists the inspected provider across the connect marker transaction. Existing
 origins, activation boundaries and thread reservations remain unchanged. Runtime

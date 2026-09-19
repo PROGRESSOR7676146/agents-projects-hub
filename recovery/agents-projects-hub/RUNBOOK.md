@@ -77,6 +77,26 @@ separate evidence level.
 
 ## Immutable rollback and deeper recovery
 
+Hermes's Hub plugin and turn-export hook also consume this state. Include the
+idle gateway in every schema rollout/rollback. `HERMES_PROJECT_HUB_SOURCE`
+must select the same clean immutable release as Hub, never a mutable checkout.
+After changing it and restarting the affected gateway, require doctor's
+`hermes:hub_plugin_compatibility` check. A mismatch blocks deployment acceptance,
+but Hermes's independent private channel and native providers remain rescue
+routes. Do not overwrite its model/auth/fallback configuration.
+
+Do not rerun the bootstrap installer over a deployment or restore legacy
+multi-auth PATH/ordering from an older guide. The installer refuses an existing
+Hub unit before mutation. Republish both owners' capsules independently after
+topology changes; peers must not rewrite each other's published generations.
+
+When an explicit Codex route uses CLIProxyAPI, preserve the local provider
+definition, exact-session routing and a verified direct Codex rescue launcher.
+CPA failure is not permission to rewrite origins, start replacement sessions or
+route Hermes/other runtimes through CPA. Consult the local proxy runbook for
+its passive doctor, pinned release and distinct management/client credentials.
+Never restart the shared Codex app-server under an active local writer.
+
 Use the full repository runbooks when the checkout is available:
 
 - `docs/operations/QUEUE_RECOVERY.md`

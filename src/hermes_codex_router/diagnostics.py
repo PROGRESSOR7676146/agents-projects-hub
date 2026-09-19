@@ -14,6 +14,7 @@ from .codex_proxy_health import (
     probe_codex_runtime_proxy,
 )
 from .hermes_health import probe_gateway_heartbeat, probe_hermes_group_policy
+from .hermes_plugin_compatibility import probe_running_plugin
 from .hub_config import HubConfig
 from .migrations import LATEST_SCHEMA_VERSION
 from .provider_telemetry import probe_antigravity_telemetry
@@ -24,6 +25,7 @@ from .recovery_plane import (
     probe_tlive_runtime,
 )
 from .registry import load_registry
+from .release_identity import CURRENT_RELEASE
 from .state import HubState, TelegramContractProvenance
 from .terminal_runtime import TerminalRuntime
 
@@ -241,6 +243,12 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
             item.telegram_chat_id for item in config.projects if item.telegram_chat_id is not None
         )
         hermes_policy = probe_hermes_group_policy(expected_chats)
+        plugin = probe_running_plugin(
+            config.state_path, config.recovery_plane.hermes_service, CURRENT_RELEASE.git_sha
+        )
+        checks.append(
+            Check("hermes:hub_plugin_compatibility", plugin.ok, plugin.detail, required=False)
+        )
         checks.extend(
             (
                 Check(

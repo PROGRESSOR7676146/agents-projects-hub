@@ -448,12 +448,20 @@ The publishable integration sources live in:
 
 Install them using the Hermes user-plugin/hook mechanism, and provide:
 
-- `HERMES_PROJECT_HUB_SOURCE` — absolute path to this repository's `src`;
+- `HERMES_PROJECT_HUB_SOURCE` — the Python import root (`site-packages`) of the
+  same clean immutable release used by Hub, never a production source checkout;
 - `HERMES_PROJECT_HUB_STATE` — the same SQLite state path used by the hub;
 - `HERMES_PROJECT_HUB_OWNER_IDS` — comma-separated allowed Telegram user IDs.
 
 Admission fails closed when the database or binding is unavailable. Explicit
 Hermes mentions remain on Hermes's native exclusive-mention path.
+
+Hub doctor reports `hermes:hub_plugin_compatibility` from the running gateway's
+configured import root, clean revision and read-only state schema. Treat a
+mismatch as a deployment gate failure, not a reason to disable private Hermes
+rescue. Every schema rollout/rollback must include plugin/hook consumers, update
+their import root, restart the gateway at an idle boundary and recheck. Native
+Hermes model providers and credentials are not changed by this integration.
 
 For response provenance, merge `config/hermes-display.example.yaml` into the
 Hermes config. It enables Hermes's native runtime footer; the Hub hook does not

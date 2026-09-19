@@ -39,8 +39,8 @@ class SystemdTopologyTests(unittest.TestCase):
         self.assertIn("agents-projects-hub-project-provisioner.service", installer)
         provisioner = self.unit("agents-projects-hub-project-provisioner.service")
         self.assertIn("agents-projects-hub project-provisioner ", provisioner)
-        self.assertIn("codex-multi-auth-appserver.service.d/socket-ready.conf", installer)
-        self.assertIn("tlive.service.d/multi-auth-order.conf", installer)
+        self.assertNotIn("codex-multi-auth-appserver.service.d/socket-ready.conf", installer)
+        self.assertNotIn("tlive.service.d/multi-auth-order.conf", installer)
 
     def test_shared_codex_socket_order_waits_for_a_connectable_listener(self) -> None:
         readiness = self.unit("codex-multi-auth-appserver.service.d/socket-ready.conf")
