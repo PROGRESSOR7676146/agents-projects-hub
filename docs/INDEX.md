@@ -15,6 +15,8 @@ are intentionally excluded.
 ## Delivery and operation
 
 - [Roadmap](ROADMAP.ru.md)
+- [Next development session](operations/NEXT_DEVELOPMENT_SESSION.md)
+- [Inbound materials implementation plan](operations/INBOUND_MATERIALS_PLAN.md)
 - [Operations](operations/README.md)
 - [Queue and process recovery](operations/QUEUE_RECOVERY.md)
 - [Live canary and rollback](operations/LIVE_CANARY.md)
