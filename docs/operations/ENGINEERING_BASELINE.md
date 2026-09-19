@@ -1,6 +1,6 @@
 # Engineering baseline backlog
 
-Status: accepted findings; implementation evidence required  
+Status: accepted findings; implementation evidence required
 Date: 2026-09-04
 
 This backlog records reusable engineering defects discovered during the native

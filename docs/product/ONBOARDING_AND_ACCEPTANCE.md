@@ -88,7 +88,7 @@ This normative module is part of the
   provider-native identity and history remain bound to their original root and
   MUST NOT be rewritten or resumed under the new root.
 - **REQ-PROJECT-EDIT-004 (Implemented):** Editing MUST use a durable preview and
-  explicit confirmation workflow. Registry projection and dynamic root binding
+  explicit confirmation workflow. Registry projection, topic execution scope and dynamic root binding
   MUST commit under one locally serialized fail-closed boundary, roll back on a
   handled fault, and recover a crash after registry replacement before accepting
   new Telegram work. Repeated callbacks MUST return the same result without
@@ -130,7 +130,9 @@ necessary but not sufficient for items marked live.
   REQ-QUEUE-001..006):** A committed request survives Controller restart; an
   interrupted unknown provider turn is not repeated; Telegram delivery retry
   does not repeat provider work; and provider failure does not make controller
-  commands or another eligible provider unavailable. The fictional
+  commands or another eligible provider on an independent execution scope
+  unavailable. Same-root work remains blocked behind an unresolved uncertain
+  invocation until immutable operator resolution. The fictional
   subprocess fault matrix terminates fictional Controller, worker, and sender
   actors at the durable boundaries and covers these invariants without provider
   or Telegram network access.
@@ -215,6 +217,7 @@ necessary but not sufficient for items marked live.
 | Provider-limit rotation events | Implemented | Provider `429` drives Codex rotation visibility; natural exhaustion E2E remains pending. |
 | Durable embedded queue compatibility path | Implemented | `dispatch_mode: "inline"` remains default; `"queue"` with `queue_runtime: "embedded"` consumes work on a background thread. |
 | Isolated local provider workers | Implemented behind feature gate | `dispatch_mode: "queue"`, `queue_runtime: "external"`, explicit `external_worker_agent_ids`, and opt-in `outbox_runtime: "external"`; controller delivery remains the default rollback path. |
+| Bounded independent-root concurrency | Implemented behind feature gate | `max_parallel_roots` defaults to one; values up to 16 require external workers, durable fairness, canonical-root exclusion, and explicitly bound/revalidated Git worktree lanes. Deployment/live acceptance remains separate. |
 | Automatic Antigravity account rotation | Deferred | Await stable supported headless account-pool capability. |
 | Universal provider-neutral Session Bridge | Deferred | Add only if real adapters/companions cannot meet needs. |
 | Automatic OS terminal window/PID management | Rejected | Explicit resume commands and writer leases are simpler and safer. |

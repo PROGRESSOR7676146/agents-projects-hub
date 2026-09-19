@@ -77,6 +77,15 @@ The job's idempotency key is unique. A delivered duplicate update returns the
 existing record and MUST NOT create another provider turn. Persisted state and
 state files remain local and restrictive in permission.
 
+Queue-owned productive ingress treats SQLite failure before a durable
+disposition as retryable at the Telegram boundary. It retains the prior offset,
+stops before later updates in the same batch, and applies a bounded polling
+backoff. The same redelivery path is safe when enqueue commit succeeded but
+offset persistence did not: atomic input membership and the idempotency key
+return the existing job. A secondary diagnostic-write failure cannot authorize
+offset advancement. This retry rule is limited to the queue Controller; it does
+not make an inline turn retryable after provider invocation may have begun.
+
 ### Job state machine
 
 The planned durable job states are:

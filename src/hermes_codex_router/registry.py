@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,56 @@ ALLOWED_APPROVAL_POLICIES = {"on-request"}
 
 class RegistryError(ValueError):
     pass
+
+
+class ExecutionRootError(RegistryError):
+    """A fixed, public pre-execution refusal; never include filesystem details."""
+
+    code = "execution_root_invalid"
+    public_message = (
+        "Project root validation failed; no provider work was started. "
+        "Check the project registration and directory locally, then send a new request. "
+        "Hub will not rebind the project or retry automatically."
+    )
+
+    def __init__(self) -> None:
+        super().__init__(self.public_message)
+
+
+def validate_execution_root(registry: ProjectRegistry, project: Project) -> Path:
+    """Recheck a registered canonical binding just before project execution.
+
+    Registry loading is not a lasting filesystem authorization. Do not resolve
+    a changed allowlist into a new trusted boundary or silently follow a new
+    root. This is not a lock against concurrent filesystem changes or writers.
+    """
+    try:
+        if registry.require_project(project.project_id) != project:
+            raise ExecutionRootError()
+        root = project.root.resolve(strict=True)
+        if root != project.root or not root.is_dir():
+            raise ExecutionRootError()
+        if not any(
+            allowed.is_absolute()
+            and root.is_relative_to(allowed)
+            and allowed.resolve(strict=True) == allowed
+            and allowed.is_dir()
+            for allowed in registry.allowed_roots
+        ):
+            raise ExecutionRootError()
+        result = subprocess.run(
+            ("git", "-C", str(root), "rev-parse", "--show-toplevel"),
+            env={key: value for key, value in os.environ.items() if not key.startswith("GIT_")},
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+        if Path(result.stdout.strip()).resolve(strict=True) != root:
+            raise ExecutionRootError()
+        return root
+    except (OSError, ValueError, RuntimeError, KeyError, subprocess.SubprocessError):
+        raise ExecutionRootError() from None
 
 
 def _expect_dict(value: Any, label: str) -> dict[str, Any]:

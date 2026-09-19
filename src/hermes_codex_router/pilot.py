@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 
 from .hub_config import HubConfig
 from .metadata import format_telegram_response
-from .registry import load_registry
+from .registry import load_registry, validate_execution_root
 from .session_adoption_policy import validate_adoption_mode
 from .state import HubState
 from .supervisor import CodexAppServerSupervisor
@@ -15,6 +15,7 @@ from .telegram_interaction import (
     telegram_user_turn_prompt,
 )
 from .terminal import terminal_session_name
+from .topic_execution import require_inline_topic
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +39,9 @@ def run_codex_pilot(
     binding = config.project_for_chat(chat_id)
     if binding.project_id != project_id:
         raise ValueError("Telegram group is bound to a different project")
-    project = load_registry(config.registry_path).require_project(project_id)
+    registry = load_registry(config.registry_path)
+    project = registry.require_project(project_id)
+    validate_execution_root(registry, project)
     agent = config.require_agent("codex")
     if agent.runtime != "codex" or agent.token_file is None:
         raise ValueError("managed Codex bot is not configured")
@@ -50,12 +53,17 @@ def run_codex_pilot(
         model_provider=config.codex_model_provider,
     )
     try:
+        state.reconcile_legacy_execution_scopes(
+            {entry.project_id: entry.root for entry in registry.projects}
+        )
         topic = state.observe_topic(
             project_id=project_id,
             chat_id=chat_id,
             thread_id=thread_id,
             title=topic_title,
+            execution_root=project.root,
         )
+        require_inline_topic(state, topic)
         session = state.active_session(topic.topic_id)
         if session is None or session.agent_id != agent.agent_id:
             session = state.activate_agent(

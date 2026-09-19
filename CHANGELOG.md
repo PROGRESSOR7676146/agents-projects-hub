@@ -54,6 +54,20 @@ and releases use semantic versioning while the public API is still evolving.
 - Split command convergence into one durable bot/group API operation per lease,
   preserve per-bot cooldowns for future bindings, keep blocked project/root
   reservations, and make global command audit read-only and per-group isolated.
+- Add schema-32 bounded concurrency across independent canonical roots with a
+  safe default of one, durable least-recently-granted worker fairness, draining
+  capacity reduction, passive slot-owner health, and root-local uncertainty.
+- Make explicit worktree lanes executable: idle-only bind/archive transitions
+  atomically change topic scope, and workers revalidate the exact derived,
+  allowlisted, registered Git worktree before using it as cwd.
+- Add schema-31 canonical-root execution scopes so Hub queue workers, local
+  writer transfer, and saved-session adoption cannot concurrently write one
+  checkout across different topics or providers; separately registered roots
+  and Git worktrees remain independent.
+- Retain a root after uncertain execution until immutable operator resolution,
+  while preserving the original indeterminate evidence and no-replay policy;
+  add contention, worker-loop, crash/recovery, adoption, and migration rollback
+  regressions.
 
 ## [0.7.0] - 2026-09-05
 

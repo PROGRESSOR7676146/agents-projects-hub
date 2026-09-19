@@ -746,6 +746,11 @@ class ProjectEditStore:
                                     raise StateError("project_edit_binding_changed")
                             elif binding_root != target_binding_root:
                                 raise StateError("project_edit_binding_changed")
+                    if workflow.operation == "relocate":
+                        self.connection.execute(
+                            "UPDATE topics SET execution_scope=?, updated_at=? WHERE project_id=?",
+                            (f"root:{target_root}", _now(), workflow.project_id),
+                        )
                     now = _now()
                     self.connection.execute(
                         """UPDATE project_edit_workflows SET stage='completed',error_code=NULL,

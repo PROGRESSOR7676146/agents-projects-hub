@@ -1,6 +1,6 @@
 # ADR 0007: Shared Codex socket readiness requires a connection
 
-Status: accepted  
+Status: accepted
 Date: 2026-09-03
 
 ## Context

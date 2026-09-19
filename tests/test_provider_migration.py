@@ -32,11 +32,12 @@ class ProviderMigrationTests(unittest.TestCase):
                             migrations.migrate_database(path)
                 else:
                     result = migrations.migrate_database(path)
-                    self.assertEqual(result.current_version, 30)
+                    self.assertEqual(result.current_version, migrations.LATEST_SCHEMA_VERSION)
                 connection = sqlite3.connect(path)
                 try:
                     self.assertEqual(
-                        connection.execute("pragma user_version").fetchone()[0], 29 if fail else 30
+                        connection.execute("pragma user_version").fetchone()[0],
+                        29 if fail else migrations.LATEST_SCHEMA_VERSION,
                     )
                     self.assertEqual(
                         connection.execute("pragma integrity_check").fetchone()[0], "ok"

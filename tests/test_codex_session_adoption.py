@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import sqlite3
+import stat
 import subprocess
 import unittest
 from contextlib import redirect_stdout
@@ -146,6 +147,7 @@ class CodexSessionAdoptionTests(unittest.TestCase):
         connection.execute("PRAGMA user_version=24")
         connection.close()
         self.config.state_path.chmod(0o600)
+        self.assertEqual(stat.S_IMODE(self.config.state_path.stat().st_mode), 0o600)
         before = self.config.state_path.read_bytes()
         with self.assertRaisesRegex(AdoptionError, "schema_upgrade_required"):
             self.run_attach()

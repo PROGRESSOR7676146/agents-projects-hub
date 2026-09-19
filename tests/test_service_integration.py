@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,6 +22,7 @@ from hermes_codex_router.hub_config import (
 from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.state import HubState
+from tests.git_fixtures import init_git_root
 
 
 class FakeTelegram:
@@ -271,8 +271,7 @@ class ServiceIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project"
-            project_root.mkdir()
-            subprocess.run(("git", "init", "-q", str(project_root)), check=True)
+            init_git_root(project_root)
             config = HubConfig(
                 schema_version=1,
                 owner_user_ids=(42,),
@@ -396,8 +395,7 @@ class ServiceIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project"
-            project_root.mkdir()
-            subprocess.run(("git", "init", "-q", str(project_root)), check=True)
+            init_git_root(project_root)
             state_path = base / "state.db"
             config = HubConfig(
                 schema_version=1,
@@ -462,8 +460,7 @@ class ServiceIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project"
-            project_root.mkdir()
-            subprocess.run(("git", "init", "-q", str(project_root)), check=True)
+            init_git_root(project_root)
             state_path = base / "state.db"
             config = HubConfig(
                 schema_version=1,
@@ -528,8 +525,7 @@ class ServiceIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project"
-            project_root.mkdir()
-            subprocess.run(("git", "init", "-q", str(project_root)), check=True)
+            init_git_root(project_root)
             state_path = base / "state.db"
             config = HubConfig(
                 schema_version=1,
@@ -657,8 +653,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             base = Path(directory)
             roots = (base / "First", base / "Second")
             for root in roots:
-                root.mkdir()
-                subprocess.run(("git", "init", "-q", str(root)), check=True)
+                init_git_root(root)
             state_path = base / "state.db"
             config = HubConfig(
                 schema_version=1,
@@ -728,8 +723,7 @@ class ServiceIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project"
-            project_root.mkdir()
-            subprocess.run(("git", "init", "-q", str(project_root)), check=True)
+            init_git_root(project_root)
             state_path = base / "state.db"
             config = HubConfig(
                 schema_version=1,
@@ -801,8 +795,7 @@ class ServiceIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             project_root = base / "Project With Space"
-            project_root.mkdir()
-            subprocess.run(("git", "init", "-q", str(project_root)), check=True)
+            init_git_root(project_root)
             config = HubConfig(
                 schema_version=1,
                 owner_user_ids=(42,),

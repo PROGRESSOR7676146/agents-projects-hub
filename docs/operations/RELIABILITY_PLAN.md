@@ -1,6 +1,6 @@
 # Reliability implementation plan
 
-Status: repository reliability milestones and package A complete locally; hosted Actions evidence remains pending
+Status: repository reliability milestones, package A, and the package-F exclusion prerequisite complete locally; hosted Actions evidence remains pending
 
 Objective: each admitted task has a visible, accurately classified outcome;
 already-produced results survive delivery failures without replaying side effects.
@@ -54,7 +54,7 @@ Do not conflate them with history rewrite, publication, service activation or
 live acceptance. Finish a tested repository checkpoint before any deployment
 decision. Keep schema migration and release-artifact compatibility in one reviewed
 batch, rather than silently changing the existing schema version in place.
-The current schema is 29; later stateful features must not hide additive schema
+The current schema is 32; later stateful features must not hide additive schema
 changes under that version. Earlier milestone tables retain their historical
 schema-24 constraints.
 
@@ -76,7 +76,8 @@ reboot are recorded gradually and do not weaken the revision-specific evidence.
 ## Approved next development batch
 
 The six approved directions remain in scope, but they are not one implementation
-session or one release. Package A is implemented and locally reviewed in the
+session or one release. Package A and the root-exclusion prerequisite of package
+F are implemented and locally reviewed in the
 repository, as recorded in the [detailed execution plan and review](NEXT_DEVELOPMENT_SESSION.md).
 Later packages have explicit readiness criteria; approval of a direction does
 not supply its missing state machine. This planning revision changes no
@@ -93,9 +94,9 @@ claims do not establish current remote or deployment health.
 | A — locally complete | One reusable Python 3.11–3.13 validation matrix, release publication dependent on its success, and demonstrated SQLite resource cleanup. | Canonical validator includes the release-lock check in CI; publication checks the same commit; focused failure tests and full local gates pass on Python 3.11, 3.12, and 3.13. Review covers failed-backup cleanup, metadata-reader/fixture connection ownership, and validation-bypass regressions. Hosted Actions execution remains unproven. No schema change. |
 | B | Retire multi-auth runtime/configuration integration with a supported-transport and configuration migration contract. | Preserve official stdio and independent shared-socket approval behavior; retired keys fail before filesystem/helper access; no stale pool catalogs or alerts. Update normative requirements and supersede affected ADRs explicitly. |
 | C | Extend existing project validation and acceptance machinery for onboarding. | A bounded result separates offline preflight/synthetic routing from live routing, real restart and response-identity evidence; unavailable live checks cannot make a project accepted. No second acceptance framework. |
-| D | One measured, cohesive extraction justified by work in B or C. | Preserve transaction boundaries, schema 24, public APIs and observable behavior; demonstrate a specific reduction in coupling or duplication. This is not a prerequisite for all other work and may be omitted if no useful seam is found. |
+| D | One measured, cohesive extraction justified by work in B or C. | Preserve transaction boundaries, the current schema contract, public APIs and observable behavior; demonstrate a specific reduction in coupling or duplication. This is not a prerequisite for all other work and may be omitted if no useful seam is found. |
 | E | Durable controls for one concrete pending-decision scenario. | Define decision creation, action meanings, free-text correction, expiry, crash boundaries and atomic callback-to-job transition first; then prove owner/topic/session scoping, deduplication and first-valid-answer-wins. No timer or approval substitution. |
-| F | Bounded concurrency across independent project roots/explicit worktree lanes, default one. | First review root/lane exclusion across topics and providers, per-slot resource ownership, health identity, fairness, shutdown and recovery. Then prove them with contention and crash tests; new persisted state requires a versioned migration and compatible rollback. |
+| F — repository complete; deployment acceptance pending | Bounded concurrency across independent project roots/explicit worktree lanes, default one. | Schema 32 adds global external-worker capacity, durable least-recently-granted fairness, draining reduction, passive slot ownership, root-local uncertainty and idle-only worktree bind/archive with execution-time validation. Offline contention, targeted-stop, crash/recovery, migration and rollback tests pass; live rollout remains separate. |
 
 Before E, reconcile the stale fixed-delay wording in REQ-UX-007 with accepted
 [ADR 0010](../decisions/0010-no-mandatory-grace-period.md). Start/Clarify/Cancel
@@ -108,9 +109,9 @@ which generic transport/telemetry capabilities remain. Preserve historical ADR
 rationale with explicit supersession; do not erase every textual mention.
 
 For F, a different Telegram topic does not prove a different filesystem lane.
-The current `lease_provider_job` query enforces topic ordering, not exclusion of
-different topics sharing a root. Do not turn up worker count until the exclusion
-contract is enforced for all productive providers and local writer ownership.
+Schema 32 permits concurrency only across canonical registered roots or an
+explicitly bound and revalidated Git worktree lane. Turning up capacity remains
+an explicit deployment task with private live acceptance.
 
 The 48–72 hour observation, real host reboot, and off-machine restore remain
 separate deployment work and evidence. Do not call the product operationally

@@ -1,6 +1,6 @@
 # ADR 0009: Explicit context without automatic handoff
 
-Status: accepted  
+Status: accepted
 Date: 2026-09-03
 
 ## Context

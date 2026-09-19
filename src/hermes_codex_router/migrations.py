@@ -1168,6 +1168,43 @@ ALTER TABLE session_connect_workflows ADD COLUMN source_model_provider TEXT
 )
 
 
+MIGRATION_31 = """
+UPDATE topics
+SET execution_scope = 'project:' || project_id
+WHERE execution_scope IS NULL OR execution_scope = '';
+CREATE INDEX IF NOT EXISTS topics_execution_scope
+ON topics(execution_scope, topic_id);
+"""
+
+
+MIGRATION_32 = """
+CREATE TABLE IF NOT EXISTS worktree_lanes (
+    lane_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    topic_id INTEGER REFERENCES topics(topic_id),
+    worktree_path TEXT NOT NULL UNIQUE,
+    branch_name TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL CHECK(status IN ('active', 'archived')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    cleaned_at TEXT
+);
+CREATE TABLE IF NOT EXISTS execution_scheduler_grants (
+    agent_id TEXT PRIMARY KEY,
+    last_grant_sequence INTEGER NOT NULL CHECK(last_grant_sequence >= 0),
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS execution_scheduler_workers (
+    agent_id TEXT PRIMARY KEY,
+    declared_capacity INTEGER NOT NULL CHECK(declared_capacity BETWEEN 1 AND 16),
+    observed_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS worktree_lanes_one_active_topic
+ON worktree_lanes(topic_id)
+WHERE status = 'active' AND topic_id IS NOT NULL;
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -1228,6 +1265,12 @@ def _ensure_legacy_columns(connection: sqlite3.Connection) -> None:
         connection.execute(
             "ALTER TABLE agent_sessions ADD COLUMN writer_mode TEXT NOT NULL DEFAULT 'telegram'"
         )
+
+
+def _ensure_execution_scope_column(connection: sqlite3.Connection) -> None:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(topics)")}
+    if columns and "execution_scope" not in columns:
+        connection.execute("ALTER TABLE topics ADD COLUMN execution_scope TEXT")
 
 
 def _execute_migration_script(connection: sqlite3.Connection, script: str) -> None:
@@ -1292,6 +1335,8 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_28,
         MIGRATION_29,
         MIGRATION_30,
+        MIGRATION_31,
+        MIGRATION_32,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:
@@ -1299,6 +1344,8 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
             for version, script in enumerate(migrations, start=1):
                 if previous >= version:
                     continue
+                if version == 31:
+                    _ensure_execution_scope_column(connection)
                 _execute_migration_script(connection, script)
                 if version == 1:
                     _ensure_legacy_columns(connection)

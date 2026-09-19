@@ -4,6 +4,7 @@ import hashlib
 import html
 import os
 import re
+import sqlite3
 import subprocess
 import threading
 import time
@@ -58,7 +59,13 @@ from .provider_catalog import (
 from .provider_catalog_cache import CatalogSnapshot, ProviderCatalogCache
 from .provider_limits import ProviderLimit, decode_provider_limit
 from .provider_telemetry import load_antigravity_telemetry
-from .registry import Project, RegistryError, load_registry
+from .registry import (
+    ExecutionRootError,
+    Project,
+    RegistryError,
+    load_registry,
+    validate_execution_root,
+)
 from .routing import (
     decide_targets,
     is_emergency_stop,
@@ -94,6 +101,7 @@ from .telegram_interaction import (
 from .telegram_multipart import send_telegram_html_parts
 from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
+from .topic_execution import require_inline_topic, resolve_topic_execution_root
 
 
 class ServiceError(RuntimeError):
@@ -101,7 +109,7 @@ class ServiceError(RuntimeError):
 
 
 class QueueAcceptanceError(ServiceError):
-    """A productive update has not reached its durable enqueue commit."""
+    """A queued productive update must return through idempotent admission."""
 
 
 class ProjectHubService:
@@ -125,6 +133,14 @@ class ProjectHubService:
         # fail-closed boundary before accepting any new Telegram work.
         ProjectEditStore(self.state, config.registry_path).recover_pending()
         self.registry = load_registry(config.registry_path)
+
+        try:
+            self.state.reconcile_legacy_execution_scopes(
+                {project.project_id: project.root for project in self.registry.projects}
+            )
+        except BaseException:
+            self.state.close()
+            raise
         self.agent = config.require_agent("codex")
         if self.agent.runtime != "codex" or self.agent.token_file is None:
             raise ServiceError("managed Codex bot is not configured")
@@ -482,6 +498,10 @@ class ProjectHubService:
             marker = "[Earlier visible context was truncated for durable admission.]\n\n"
             payload = marker + payload[-(20000 - len(marker)) :]
         try:
+            expected_transfer = None
+            if take_local_writer:
+                expected_transfer = self.state.writer_transfer_snapshot(topic, session)
+                resolve_topic_execution_root(self.state, self.registry, topic)
             if batchable_user_text is not None and not take_local_writer:
                 _, created = self.state.enqueue_or_append_provider_job(
                     idempotency_key=f"telegram:{message.chat_id}:{message.message_id}",
@@ -517,8 +537,17 @@ class ProjectHubService:
                     context_watermark=context_watermark,
                     handoff_id=handoff_id,
                     take_local_writer=take_local_writer,
+                    expected_transfer=expected_transfer,
                 )
         except Exception as exc:
+            if take_local_writer and isinstance(exc, (StateError, ExecutionRootError)):
+                self._send_text(
+                    message,
+                    exc.public_message
+                    if isinstance(exc, ExecutionRootError)
+                    else "Local ownership was not transferred: session state changed. Retry /return.",
+                )
+                return True
             if isinstance(exc, StateError) and str(exc) == "input_before_session_activation":
                 self.state.claim_message(
                     message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
@@ -696,7 +725,11 @@ class ProjectHubService:
                 queue_state.recover_stale_provider_jobs(agent_id=agent.agent_id)
                 if queue_stop is not None and queue_stop.is_set():
                     return False
-                job = queue_state.lease_provider_job(agent.agent_id, "embedded-consumer")
+                job = queue_state.lease_provider_job(
+                    agent.agent_id,
+                    "embedded-consumer",
+                    max_parallel_roots=self.config.max_parallel_roots,
+                )
                 if job is not None:
                     if queue_stop is not None and queue_stop.is_set():
                         assert job.lease_token is not None
@@ -755,9 +788,11 @@ class ProjectHubService:
             daemon=True,
         )
         heartbeat.start()
-        staging_dir = project.root / ".hub" / "staging" / executing.job_id
-        staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
+            execution_root = resolve_topic_execution_root(queue_state, self.registry, topic)
+            project = replace(project, root=execution_root)
+            staging_dir = project.root / ".hub" / "staging" / executing.job_id
+            staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             contract_version = telegram_contract_version(agent.runtime)
             full_contract = (
                 executing.provider_session_id is None
@@ -893,7 +928,9 @@ class ProjectHubService:
             # provider-specific proof, even if an adapter reports an error.
             error_class = "quota" if isinstance(exc, ProviderLimitError) else "ambiguous_execution"
             recovered = False
-            if agent.runtime == "codex" and not isinstance(exc, CodexPreparationError):
+            if agent.runtime == "codex" and not isinstance(
+                exc, (CodexPreparationError, ExecutionRootError)
+            ):
                 assert self.supervisor is not None
                 try:
                     recovered = reconcile_codex_completion(
@@ -908,7 +945,18 @@ class ProjectHubService:
                 except Exception:
                     recovered = False
             try:
-                if recovered:
+                if isinstance(exc, ExecutionRootError):
+                    error_class = "pre_execution"
+                    queue_state.terminate_provider_job_with_notice(
+                        executing.job_id,
+                        token,
+                        status="failed",
+                        error_class=error_class,
+                        error_code=exc.code,
+                        sender_agent_id=agent.agent_id,
+                        telegram_html=exc.public_message,
+                    )
+                elif recovered:
                     queue_state.record_runtime_event(
                         agent.agent_id,
                         "info",
@@ -1062,14 +1110,18 @@ class ProjectHubService:
 
     def _topic(self, message: TopicMessage, project_id: str) -> TopicRecord:
         existing = self.state.find_topic(message.chat_id, message.thread_id)
-        if existing is not None:
-            return existing
-        title = "General" if message.thread_id == 1 else f"Topic {message.thread_id}"
+        title = (
+            existing.title
+            if existing is not None
+            else ("General" if message.thread_id == 1 else f"Topic {message.thread_id}")
+        )
+        project = self.registry.require_project(project_id)
         return self.state.observe_topic(
             project_id=project_id,
             chat_id=message.chat_id,
             thread_id=message.thread_id,
             title=title,
+            execution_root=project.root,
         )
 
     def _explicit_context_prompt(self, topic: TopicRecord, target_agent_id: str, text: str) -> str:
@@ -1115,6 +1167,8 @@ class ProjectHubService:
     def _ensure_provider_thread(
         self, *, project: Project, topic: TopicRecord, session: SessionRecord
     ) -> SessionRecord:
+        require_inline_topic(self.state, topic)
+        validate_execution_root(self.registry, project)
         if session.provider_session_id:
             return session
         self._require_legacy_codex_execution(self.state)
@@ -1149,6 +1203,8 @@ class ProjectHubService:
         message: TopicMessage,
     ) -> str:
         self._require_legacy_codex_execution(self.state)
+        require_inline_topic(self.state, topic)
+        validate_execution_root(self.registry, project)
         client = self._client()
         new_session = (
             session.provider_session_id is None
@@ -1665,13 +1721,17 @@ class ProjectHubService:
                 item for item in self.config.projects if item.project_id == direct_project
             )
         topic = self.state.find_topic(callback.chat_id, callback.thread_id)
-        if topic is None:
-            topic = self.state.observe_topic(
-                project_id=binding.project_id,
-                chat_id=callback.chat_id,
-                thread_id=callback.thread_id,
-                title="General" if callback.thread_id == 1 else f"Topic {callback.thread_id}",
-            )
+        topic = self.state.observe_topic(
+            project_id=binding.project_id,
+            chat_id=callback.chat_id,
+            thread_id=callback.thread_id,
+            title=(
+                topic.title
+                if topic is not None
+                else ("General" if callback.thread_id == 1 else f"Topic {callback.thread_id}")
+            ),
+            execution_root=self.registry.require_project(binding.project_id).root,
+        )
         message = TopicMessage(
             update_id=0,
             message_id=callback.message_id,
@@ -2411,7 +2471,62 @@ class ProjectHubService:
         store.mark_outbox_delivered(outbox.outbox_id, outbox.lease_token, message_id)
         return True
 
+    def _queue_ingress_can_retry_without_productive_replay(self, update: dict[str, object]) -> bool:
+        """Classify only queue-owned productive input before handling it again."""
+        if getattr(self.config, "dispatch_mode", "inline") != "queue":
+            return False
+        direct_messages_only = getattr(self, "direct_messages_only", False)
+        ingress_identity = getattr(self, "ingress_identity", self.agent.agent_id)
+        if direct_messages_only:
+            callback = parse_direct_callback(update)
+        elif ingress_identity == "hub":
+            callback = parse_topic_callback(update)
+        else:
+            callback = parse_topic_callback(update) or parse_direct_callback(update)
+        if callback is not None:
+            return False
+        if direct_messages_only:
+            message = parse_direct_message(update)
+        elif ingress_identity == "hub":
+            message = parse_topic_message(update)
+        else:
+            message = parse_topic_message(update) or parse_direct_message(update)
+        if message is None or not self.config.is_authorized(
+            message.sender_id, message.chat_id, message.thread_id
+        ):
+            return False
+        if message.is_forwarded or is_emergency_stop(message.text):
+            return False
+        if parse_command(message.text) is not None:
+            return False
+        try:
+            self.config.project_for_chat(message.chat_id)
+        except KeyError:
+            direct_project = self.config.direct_message_project_id
+            if direct_project is None or message.chat_id != message.sender_id:
+                try:
+                    binding = ProjectOnboardingStore(self.state).binding_for_chat(message.chat_id)
+                except sqlite3.Error:
+                    # An unavailable admission receipt cannot authorize dropping
+                    # an owner's productive input; retry through normal routing.
+                    return any(self._queue_enabled(agent.agent_id) for agent in self.config.agents)
+                if binding is None:
+                    return False
+        return any(self._queue_enabled(agent.agent_id) for agent in self.config.agents)
+
     def handle_update(self, update: dict[str, object]) -> bool:
+        try:
+            return self._handle_update(update)
+        except QueueAcceptanceError:
+            raise
+        except sqlite3.Error as exc:
+            if self._queue_ingress_can_retry_without_productive_replay(update):
+                raise QueueAcceptanceError(
+                    "queued productive admission has no durable disposition"
+                ) from exc
+            raise
+
+    def _handle_update(self, update: dict[str, object]) -> bool:
         direct_messages_only = getattr(self, "direct_messages_only", False)
         ingress_identity = getattr(self, "ingress_identity", self.agent.agent_id)
         if direct_messages_only:
@@ -2451,6 +2566,9 @@ class ProjectHubService:
                     f"chat_id={message.chat_id}; title={title}",
                 )
                 return False
+        except ServiceError:
+            self._send_text(message, "Project group binding is invalid; verify it locally.")
+            return True
         topic = self._topic(message, binding.project_id)
         if message.is_forwarded:
             return self.state.record_forwarded_quote(
@@ -2757,6 +2875,15 @@ class ProjectHubService:
             if session.writer_mode == "local":
                 self._send_text(message, "Use /return before starting a managed terminal.")
                 return True
+            if session.writer_mode == "terminal":
+                self._send_text(message, "Terminal owns this Codex session. Use /release first.")
+                return True
+            if self.state.active_lane_for_topic(topic.topic_id) is not None:
+                self._send_text(
+                    message,
+                    "Managed terminal takeover is unavailable for a worktree lane; use /local.",
+                )
+                return True
             if self._queue_enabled(session.agent_id):
                 self._send_text(
                     message,
@@ -2764,21 +2891,38 @@ class ProjectHubService:
                 )
                 return True
             project = self.registry.require_project(binding.project_id)
-            session = self._ensure_provider_thread(project=project, topic=topic, session=session)
-            if not session.provider_session_id or not session.terminal_name:
-                raise ServiceError("provider thread is not ready for terminal takeover")
-            if session.writer_mode == "terminal" and self.terminal.is_running(
-                session.terminal_name
-            ):
-                self._send_text(message, "Terminal already owns this Codex session.")
+            try:
+                expected_transfer = self.state.writer_transfer_snapshot(topic, session)
+                execution_root = resolve_topic_execution_root(self.state, self.registry, topic)
+                session = self.state.set_writer_mode(
+                    session.session_id, "terminal", expected_transfer=expected_transfer
+                )
+            except (ExecutionRootError, StateError):
+                self._send_text(
+                    message,
+                    "Terminal takeover refused: execution root or session changed; inspect locally before retrying.",
+                )
                 return True
-            self.terminal.start(
-                name=session.terminal_name,
-                title=f"{project.display_name} - {topic.title} - {self.agent.display_name}",
-                thread_id=session.provider_session_id,
-                cwd=project.root,
-            )
-            self.state.set_writer_mode(session.session_id, "terminal")
+            try:
+                session = self._ensure_provider_thread(
+                    project=project, topic=topic, session=session
+                )
+                if not session.provider_session_id or not session.terminal_name:
+                    raise ServiceError("provider thread is not ready for terminal takeover")
+                self.terminal.start(
+                    name=session.terminal_name,
+                    title=f"{project.display_name} - {topic.title} - {self.agent.display_name}",
+                    thread_id=session.provider_session_id,
+                    cwd=execution_root,
+                )
+            except (ExecutionRootError, OSError, RuntimeError, subprocess.SubprocessError):
+                # Preparation/launch may already have crossed an external boundary.
+                # Keep the claim; liveness is not proof that it is safe to replay.
+                self._send_text(
+                    message,
+                    "Terminal preparation or launch was not confirmed. Ownership is retained; inspect locally and use /release before retrying.",
+                )
+                return True
             self._send_text(
                 message,
                 "Terminal takeover started. Use /release here to return this session to Telegram.",
@@ -2817,20 +2961,29 @@ class ProjectHubService:
             project = self.registry.require_project(binding.project_id)
             agent = self.config.require_agent(session.agent_id)
             try:
+                expected_transfer = self.state.writer_transfer_snapshot(topic, session)
+                execution_root = resolve_topic_execution_root(self.state, self.registry, topic)
                 resume = local_resume_command(
                     agent.runtime,
                     agent.executable,
                     session.provider_session_id,
-                    project.root,
+                    execution_root,
                     model_provider=self.config.codex_model_provider,
                     model=session.model,
                     codex_socket_path=self.config.codex_socket_path,
                     effort=session.effort,
                 )
-            except LocalTransferError as exc:
-                self._send_text(message, str(exc))
+                self.state.set_writer_mode(
+                    session.session_id, "local", expected_transfer=expected_transfer
+                )
+            except (LocalTransferError, ExecutionRootError, StateError) as exc:
+                self._send_text(
+                    message,
+                    "Session state changed; retry /local."
+                    if isinstance(exc, StateError)
+                    else str(exc),
+                )
                 return True
-            self.state.set_writer_mode(session.session_id, "local")
             self._send_text(
                 message,
                 "Local CLI now owns this provider session. Telegram turns are paused. "
@@ -2896,7 +3049,26 @@ class ProjectHubService:
                     handoff_id=None,
                     take_local_writer=True,
                 )
-            self.state.set_writer_mode(session.session_id, "telegram")
+            if self.state.active_lane_for_topic(topic.topic_id) is not None:
+                self._send_text(
+                    message,
+                    "Local summary is unavailable for a worktree lane; return with the supported local workflow.",
+                )
+                return True
+            try:
+                expected_transfer = self.state.writer_transfer_snapshot(topic, session)
+                resolve_topic_execution_root(self.state, self.registry, topic)
+                self.state.set_writer_mode(
+                    session.session_id, "telegram", expected_transfer=expected_transfer
+                )
+            except (StateError, ExecutionRootError) as exc:
+                self._send_text(
+                    message,
+                    exc.public_message
+                    if isinstance(exc, ExecutionRootError)
+                    else "Local ownership was not transferred: session state changed. Retry /return.",
+                )
+                return True
             try:
                 external = getattr(self, "external_services", {}).get(session.agent_id)
                 if external is None:
@@ -2912,7 +3084,11 @@ class ProjectHubService:
                 self._send_text(
                     message,
                     "Ownership returned to Telegram, but the local summary failed safely "
-                    f"({type(exc).__name__}).",
+                    + (
+                        exc.public_message
+                        if isinstance(exc, ExecutionRootError)
+                        else f"({type(exc).__name__})."
+                    ),
                 )
             return True
         if command and command.name == "model":
@@ -2975,6 +3151,16 @@ class ProjectHubService:
         # message whose productive targets are all externally managed.
         if not local_targets:
             return False
+        if any(not self._queue_enabled(target) for target in local_targets):
+            try:
+                require_inline_topic(self.state, topic)
+            except ExecutionRootError as exc:
+                if not self.state.claim_message(
+                    message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
+                ):
+                    return False
+                self._send_text(message, exc.public_message)
+                return True
         if self._queue_enabled(self.agent.agent_id) and len(local_targets) > 1:
             if not self.state.claim_message(
                 message.chat_id,
@@ -3073,17 +3259,15 @@ class ProjectHubService:
             )
             return True
         if session.writer_mode == "terminal":
-            if session.terminal_name and self.terminal.is_running(session.terminal_name):
-                if queue_mode:
-                    self.state.claim_message(
-                        message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
-                    )
-                self._send_text(
-                    message,
-                    "This Codex session is open in Terminal. Use /release before sending Telegram turns.",
+            if queue_mode:
+                self.state.claim_message(
+                    message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
                 )
-                return True
-            session = self.state.set_writer_mode(session.session_id, "telegram")
+            self._send_text(
+                message,
+                "This Codex session is owned by Terminal. Use /release before sending Telegram turns.",
+            )
+            return True
         project = self.registry.require_project(binding.project_id)
         clean_text = re.sub(
             rf"(?i)(?<![A-Za-z0-9_])@{re.escape(self.agent.telegram_username)}\b",
@@ -3165,7 +3349,9 @@ class ProjectHubService:
             )
             self._send_text(
                 message,
-                f"Codex turn failed safely ({type(exc).__name__}); no permission was auto-approved.",
+                exc.public_message
+                if isinstance(exc, ExecutionRootError)
+                else f"Codex turn failed safely ({type(exc).__name__}); no permission was auto-approved.",
             )
             # A provider/RPC failure belongs to this one update. Letting it escape
             # terminates the Telegram poller and makes every bot appear offline.
@@ -3208,11 +3394,21 @@ class ProjectHubService:
                     try:
                         self.handle_update(update)
                     except QueueAcceptanceError as exc:
-                        # Retry the Telegram update: no durable acceptance occurred.
+                        # Queue admission is idempotent, so redelivery is safe
+                        # both before commit and when commit outcome is unclear.
                         advance_offset = False
-                        self.state.record_runtime_event(
-                            ingress_identity, "error", "queue_enqueue_error", type(exc).__name__
-                        )
+                        try:
+                            self.state.record_runtime_event(
+                                ingress_identity,
+                                "error",
+                                "queue_enqueue_error",
+                                type(exc).__name__,
+                            )
+                        except sqlite3.Error:
+                            # The admission fault may also make diagnostics
+                            # temporarily unavailable. Offset ownership must
+                            # not depend on recording the secondary event.
+                            pass
                         self._health_last_error_code = "queue_enqueue_error"
                     except Exception as exc:
                         self._discard_codex_client()
@@ -3220,14 +3416,26 @@ class ProjectHubService:
                             ingress_identity, "error", "update_error", type(exc).__name__
                         )
                         self._health_last_error_code = "update_error"
-                    self._publish_runtime_health(force=True)
+                    try:
+                        self._publish_runtime_health(force=True)
+                    except sqlite3.Error:
+                        if advance_offset:
+                            raise
                     if advance_offset:
-                        offset = update_id + 1
-                        self.state.set_bot_offset(ingress_identity, offset)
+                        next_offset = update_id + 1
+                        try:
+                            self.state.set_bot_offset(ingress_identity, next_offset)
+                        except sqlite3.Error:
+                            # A committed queue job makes redelivery safe; an
+                            # unpersisted offset must never be skipped locally.
+                            stop.wait(1)
+                            break
+                        offset = next_offset
                     else:
                         # Do not process later updates from this Telegram batch:
                         # advancing past any of them would also skip this
                         # unaccepted productive update on the next poll.
+                        stop.wait(1)
                         break
             except TelegramError as exc:
                 self._record_telegram_poll_failure(ingress_identity, exc)
