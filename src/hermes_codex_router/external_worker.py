@@ -38,7 +38,7 @@ from .project_resolution import (
     resolve_project_context,
     resolve_project_group,
 )
-from .registry import ProjectRegistry, load_registry
+from .registry import ExecutionRootError, ProjectRegistry, load_registry
 from .session_adoption_policy import validate_adoption_mode
 from .session_adoption_state import CodexSessionOrigins
 from .session_connect import ConnectCandidate, SessionConnectStore
@@ -50,6 +50,7 @@ from .telegram_interaction import (
     telegram_turn_prompt,
     telegram_user_turn_prompt,
 )
+from .topic_execution import resolve_topic_execution_root
 
 
 class ExternalQueueWorkerError(RuntimeError):
@@ -100,6 +101,13 @@ class ExternalQueueWorker:
         validate_adoption_mode(config)
         self.registry = registry or load_registry(config.registry_path)
         self.state = HubState.open(config.state_path)
+        try:
+            self.state.reconcile_legacy_execution_scopes(
+                {project.project_id: project.root for project in self.registry.projects}
+            )
+        except BaseException:
+            self.state.close()
+            raise
         self.worker_id = worker_id or f"{self.agent.agent_id}-worker"
         self._started_at = datetime.now(timezone.utc)
         self._process_start_marker = uuid.uuid4().hex
@@ -238,7 +246,12 @@ class ExternalQueueWorker:
         self.state.recover_stale_provider_jobs(agent_id=self.agent.agent_id)
         if self._stop.is_set():
             return False
-        job = self.state.lease_provider_job(self.agent.agent_id, self.worker_id)
+        job = self.state.lease_provider_job(
+            self.agent.agent_id,
+            self.worker_id,
+            max_parallel_roots=self.config.max_parallel_roots,
+            scheduler_agents=self.config.external_worker_agent_ids,
+        )
         if job is None:
             return self._run_connect_cycle() if self.agent.runtime == "codex" else False
         if self._stop.is_set():
@@ -340,7 +353,7 @@ class ExternalQueueWorker:
                 error_code=str(exc),
                 sender_agent_id=self.agent.agent_id,
                 telegram_html=(
-                    f"{self.agent.display_name} did not start: the project binding is invalid."
+                    f"{self.agent.display_name} did not start: the project binding is invalid; verify it locally."
                 ),
             )
             self._last_error_code = str(exc)[:128]
@@ -382,13 +395,27 @@ class ExternalQueueWorker:
         )
         heartbeat.start()
         try:
+            execution_root = resolve_topic_execution_root(self.state, self.registry, topic)
+            project = replace(project, root=execution_root)
             if self.agent.runtime == "codex":
                 self._execute_codex(executing, token, project, topic)
             else:
                 self._execute_external(executing, token, project, topic)
         except Exception as exc:
             try:
-                if isinstance(exc, ProviderTurnStopped):
+                if isinstance(exc, ExecutionRootError):
+                    self._last_error_code = exc.code
+                    self._provider_state = "unavailable"
+                    self.state.terminate_provider_job_with_notice(
+                        executing.job_id,
+                        token,
+                        status="failed",
+                        error_class="pre_execution",
+                        error_code=exc.code,
+                        sender_agent_id=self.agent.agent_id,
+                        telegram_html=exc.public_message,
+                    )
+                elif isinstance(exc, ProviderTurnStopped):
                     self.state.cancel_active_provider_job(
                         executing.job_id, token, error_code="emergency_stop"
                     )

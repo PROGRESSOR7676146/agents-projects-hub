@@ -29,9 +29,28 @@ class IndeterminateAuditTests(unittest.TestCase):
         self.fixture.tearDown()
 
     def _indeterminate(self, message_id: int, phase: str, *, notice: bool) -> str:
-        job_id = self.fixture.enqueue(message_id=message_id, payload=f"private-{phase}")
         state = HubState.open(self.fixture.config.state_path)
         try:
+            topic = state.observe_topic(
+                project_id=f"fictional-audit-{message_id}",
+                chat_id=-1001234567890,
+                thread_id=70 + message_id,
+                title=f"Fictional audit {message_id}",
+            )
+            session = state.activate_agent(topic.topic_id, "codex", "example-model", "high")
+            job, _ = state.enqueue_provider_job(
+                idempotency_key=f"fictional-audit:{message_id}",
+                chat_id=topic.chat_id,
+                message_id=message_id,
+                topic_id=topic.topic_id,
+                agent_id="codex",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                model=session.model,
+                effort=session.effort,
+                payload_text=f"private-{phase}",
+            )
+            job_id = job.job_id
             lease = state.lease_provider_job("codex", f"worker-{message_id}")
             assert lease is not None and lease.lease_token is not None
             state.mark_provider_job_executing(job_id, lease.lease_token)

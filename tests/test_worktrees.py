@@ -5,8 +5,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hermes_codex_router.models import Project
-from hermes_codex_router.worktrees import WorktreeError, cleanup_worktree, create_worktree
+from hermes_codex_router.models import Project, ProjectRegistry
+from hermes_codex_router.registry import ExecutionRootError
+from hermes_codex_router.worktrees import (
+    WorktreeError,
+    cleanup_worktree,
+    create_worktree,
+    validate_worktree_execution_root,
+)
+from tests.git_fixtures import init_git_root
 
 
 class WorktreeTests(unittest.TestCase):
@@ -82,6 +89,19 @@ class WorktreeTests(unittest.TestCase):
             project = Project("project", "Project", "Project", root)
             with self.assertRaisesRegex(WorktreeError, "symlinked"):
                 cleanup_worktree(project, "backend", recorded_path=lane)
+
+    def test_execution_validation_rejects_unregistered_sibling_git_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            allowed = Path(directory)
+            root = allowed / "Project"
+            lane = allowed / "Project-backend"
+            init_git_root(root)
+            init_git_root(lane)
+            project = Project("project", "Project", "Project", root)
+            registry = ProjectRegistry(1, (allowed,), (project,))
+
+            with self.assertRaises(ExecutionRootError):
+                validate_worktree_execution_root(registry, project, "backend", lane)
 
 
 if __name__ == "__main__":

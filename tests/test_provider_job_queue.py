@@ -332,6 +332,7 @@ class ProviderJobQueueTests(unittest.TestCase):
             self.enqueue(505, provider_session_id="foreign-provider-session")
         with self.assertRaisesRegex(StateError, "model"):
             self.enqueue(506, model="different-model")
+        self.state.cancel_provider_job(derived.job_id)
         self.state.set_writer_mode(self.codex.session_id, "local")
         with self.assertRaisesRegex(StateError, "writer"):
             self.enqueue(507)
@@ -384,7 +385,7 @@ class ProviderJobQueueTests(unittest.TestCase):
         assert next_job is not None
         self.assertEqual(next_job.job_id, second.job_id)
 
-    def test_indeterminate_provider_does_not_block_other_provider_forever(self) -> None:
+    def test_indeterminate_provider_blocks_root_until_operator_resolution(self) -> None:
         first, _ = self.enqueue(512)
         satellite = self.state.ensure_satellite(
             self.topic.topic_id, "opencode", "provider-selected", "high"
@@ -405,6 +406,8 @@ class ProviderJobQueueTests(unittest.TestCase):
             first.job_id, leased.lease_token, error_code="provider_failure"
         )
 
+        self.assertIsNone(self.state.lease_provider_job("opencode", "worker-open"))
+        self.state.resolve_indeterminate_job(first.job_id, "acknowledged")
         next_job = self.state.lease_provider_job("opencode", "worker-open")
         self.assertIsNotNone(next_job)
         assert next_job is not None
@@ -436,20 +439,20 @@ class ProviderJobQueueTests(unittest.TestCase):
     def test_stale_leased_requeues_but_stale_executing_is_indeterminate(self) -> None:
         first, _ = self.enqueue(530)
         second_topic = self.state.observe_topic(
-            project_id="example-project",
+            project_id="second-example-project",
             chat_id=-1001234567890,
             thread_id=78,
             title="Second topic",
         )
         second_session = self.state.activate_agent(
-            second_topic.topic_id, "codex", "gpt-example", "high"
+            second_topic.topic_id, "opencode", "gpt-example", "high"
         )
         second, _ = self.state.enqueue_provider_job(
             idempotency_key="telegram:-1001234567890:531",
             chat_id=second_topic.chat_id,
             message_id=531,
             topic_id=second_topic.topic_id,
-            agent_id="codex",
+            agent_id="opencode",
             session_id=second_session.session_id,
             session_generation=second_session.generation,
             model="gpt-example",
@@ -458,10 +461,10 @@ class ProviderJobQueueTests(unittest.TestCase):
         )
         past = datetime(2026, 1, 1, tzinfo=timezone.utc)
         leased_first = self.state.lease_provider_job(
-            "codex", "worker-one", lease_seconds=1, now=past
+            "codex", "worker-one", lease_seconds=1, max_parallel_roots=2, now=past
         )
         leased_second = self.state.lease_provider_job(
-            "codex", "worker-two", lease_seconds=1, now=past
+            "opencode", "worker-two", lease_seconds=1, max_parallel_roots=2, now=past
         )
         assert leased_first is not None and leased_first.lease_token is not None
         assert leased_second is not None and leased_second.lease_token is not None
@@ -672,7 +675,7 @@ class ProviderJobQueueTests(unittest.TestCase):
         self.assertEqual(self.state.get_provider_job(queued.job_id).status, "indeterminate")
 
         ready_topic = self.state.observe_topic(
-            project_id="example-project",
+            project_id="ready-example-project",
             chat_id=self.topic.chat_id,
             thread_id=79,
             title="Ready outbox topic",

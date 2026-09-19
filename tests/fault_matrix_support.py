@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -21,6 +20,7 @@ from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.outbox_sender import TelegramOutboxSender
 from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.state import HubState
+from tests.git_fixtures import init_git_root
 
 CHAT_ID = -1001234567890
 OWNER_ID = 42
@@ -62,8 +62,7 @@ class FaultMatrixHarness:
     def __init__(self, base: Path) -> None:
         self.base = base
         project_root = base / "example-project"
-        project_root.mkdir(parents=True, exist_ok=True)
-        subprocess.run(("git", "init", "-q", str(project_root)), check=True)
+        init_git_root(project_root)
         agents = (
             AgentDefinition(
                 "codex",

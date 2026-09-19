@@ -29,6 +29,7 @@ from hermes_codex_router.provider_limits import ProviderLimit
 from hermes_codex_router.service import ProjectHubService, QueueAcceptanceError, ServiceError
 from hermes_codex_router.state import HubState
 from hermes_codex_router.telegram import TopicMessage
+from tests.git_fixtures import init_git_root
 
 
 class Adapter:
@@ -76,8 +77,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         base = Path(self.tempdir.name)
         root = base / "project"
-        root.mkdir()
-        subprocess.run(("git", "init", "-q", str(root)), check=True)
+        init_git_root(root)
         self.config = HubConfig(
             schema_version=1,
             owner_user_ids=(42,),

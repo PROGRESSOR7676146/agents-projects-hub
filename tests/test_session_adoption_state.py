@@ -64,6 +64,7 @@ class SessionAdoptionStateTests(unittest.TestCase):
         self.assertIsNotNone(session)
         self.assertEqual(session.writer_mode, "local")
         self.assertEqual(session.provider_session_id, "example-thread")
+        self.assertEqual(result.topic.execution_scope, f"root:{self.root}")
         self.assertEqual(self.origins.require(session.session_id).canonical_root, self.root)
         with self.assertRaises(StateError):
             self.enqueue(session)
@@ -357,4 +358,29 @@ class SessionAdoptionStateTests(unittest.TestCase):
             )
         self.state.set_writer_mode(old.session_id, "local")
         with self.assertRaisesRegex(StateError, "local_writer"):
+            self.attach()
+
+    def test_same_execution_scope_queue_blocks_adoption_across_project_ids(self) -> None:
+        old_topic = self.state.observe_topic(
+            project_id="previous-registration",
+            chat_id=-1002,
+            thread_id=10,
+            title="Previous",
+            execution_root=self.root,
+        )
+        old = self.state.activate_agent(old_topic.topic_id, "opencode", "model", "high")
+        self.state.enqueue_provider_job(
+            idempotency_key="previous-registration-queue",
+            chat_id=-1002,
+            message_id=2,
+            topic_id=old_topic.topic_id,
+            agent_id="opencode",
+            session_id=old.session_id,
+            session_generation=old.generation,
+            model=old.model,
+            effort=old.effort,
+            payload_text="Previous work",
+        )
+
+        with self.assertRaisesRegex(StateError, "target_busy"):
             self.attach()

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import tempfile
 import threading
 import unittest
@@ -21,6 +20,8 @@ from hermes_codex_router.hub_config import (
 from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.service import ProjectHubService, QueueAcceptanceError
 from hermes_codex_router.state import HubState
+from hermes_codex_router.worktrees import create_worktree
+from tests.git_fixtures import init_git_root
 
 
 class FakeTelegram:
@@ -49,10 +50,12 @@ class QueueClient:
         self.entered = threading.Event()
         self.release = threading.Event()
         self.turn_threads: list[int] = []
+        self.cwds: list[Path] = []
         self.started_threads = 0
 
     def start_thread(self, **kwargs: object) -> CodexThread:
         self.started_threads += 1
+        self.cwds.append(Path(str(kwargs["cwd"])))
         return CodexThread("thread-1", Path(str(kwargs["cwd"])), "gpt-5.6-sol", "openai")
 
     def resume_thread(self, **kwargs: object) -> CodexThread:
@@ -112,8 +115,7 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         base = Path(self.tempdir.name)
         root = base / "project"
-        root.mkdir()
-        subprocess.run(("git", "init", "-q", str(root)), check=True)
+        init_git_root(root)
         self.config = HubConfig(
             schema_version=1,
             owner_user_ids=(42,),
@@ -230,6 +232,132 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
             [(-1001234567890, 77, "typing")],
         )
         service.close()
+
+    def test_embedded_lane_uses_the_validated_lane_for_staging_and_provider(self) -> None:
+        client = QueueClient()
+        service, telegram = self.service(client)
+        project = self.registry.projects[0]
+        lane_root, branch = create_worktree(project, "embedded")
+        try:
+            self.assertTrue(service.handle_update(update(1, "/menu")))
+            topic = service.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            service.state.register_lane(
+                lane_id="embedded",
+                project_id=project.project_id,
+                worktree_path=lane_root,
+                branch_name=branch,
+            )
+            service.state.bind_lane("embedded", topic.topic_id)
+
+            self.assertTrue(service.handle_update(update(2, "fictional lane task")))
+            self.assertTrue(service.run_embedded_queue_cycle())
+
+            self.assertEqual(client.cwds, [lane_root])
+            self.assertTrue((lane_root / ".hub" / "staging").exists())
+            self.assertFalse((project.root / ".hub" / "staging").exists())
+            self.assertTrue(service.handle_update(update(3, "/local")))
+            session = service.state.active_session(topic.topic_id)
+            assert session is not None
+            self.assertEqual(session.writer_mode, "local")
+            self.assertIn(str(lane_root), telegram.sent[-1])
+        finally:
+            service.close()
+
+    def test_local_lane_resume_uses_the_validated_lane_root(self) -> None:
+        service, telegram = self.service(QueueClient())
+        project = self.registry.projects[0]
+        lane_root, branch = create_worktree(project, "local")
+        try:
+            self.assertTrue(service.handle_update(update(1, "/menu")))
+            topic = service.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            service.state.register_lane(
+                lane_id="local",
+                project_id=project.project_id,
+                worktree_path=lane_root,
+                branch_name=branch,
+            )
+            service.state.bind_lane("local", topic.topic_id)
+            session = service.state.activate_agent(topic.topic_id, "codex", "gpt-5.6-sol", "high")
+            service.state.bind_provider_session(session.session_id, "lane-thread", None)
+
+            self.assertTrue(service.handle_update(update(2, "/local")))
+
+            self.assertEqual(service.state.get_session(session.session_id).writer_mode, "local")
+            self.assertIn(f"-C {lane_root}", telegram.sent[-1])
+        finally:
+            service.close()
+
+    def test_terminal_takeover_refuses_a_bound_lane_before_provider_access(self) -> None:
+        client = QueueClient()
+        service, telegram = self.service(client)
+        project = self.registry.projects[0]
+        lane_root, branch = create_worktree(project, "terminal")
+        try:
+            self.assertTrue(service.handle_update(update(1, "/menu")))
+            topic = service.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            service.state.register_lane(
+                lane_id="terminal",
+                project_id=project.project_id,
+                worktree_path=lane_root,
+                branch_name=branch,
+            )
+            service.state.bind_lane("terminal", topic.topic_id)
+            service.config = replace(service.config, dispatch_mode="inline")
+
+            self.assertTrue(service.handle_update(update(2, "/terminal")))
+
+            self.assertEqual(client.started_threads, 0)
+            self.assertIn("unavailable for a worktree lane", telegram.sent[-1])
+        finally:
+            service.close()
+
+    def test_inline_retained_lane_refuses_before_session_preparation_and_staging(self) -> None:
+        for bound in (False, True):
+            with self.subTest(bound=bound):
+                self.config = replace(
+                    self.config, state_path=Path(self.tempdir.name) / f"state-{bound}.db"
+                )
+                client = QueueClient()
+                service, telegram = self.service(client)
+                project = self.registry.projects[0]
+                lane_id = "inline-bound" if bound else "inline-empty"
+                lane_root, branch = create_worktree(project, lane_id)
+                try:
+                    service.handle_update(update(1, "/menu"))
+                    topic = service.state.find_topic(-1001234567890, 77)
+                    assert topic is not None
+                    service.state.register_lane(
+                        lane_id=lane_id,
+                        project_id=project.project_id,
+                        worktree_path=lane_root,
+                        branch_name=branch,
+                        topic_id=topic.topic_id,
+                    )
+                    if bound:
+                        session = service.state.activate_agent(
+                            topic.topic_id, "codex", "fictional", "high"
+                        )
+                        service.state.bind_provider_session(
+                            session.session_id, "fictional-retained", None
+                        )
+                    before = service.state.active_session(topic.topic_id)
+                    service.config = replace(service.config, dispatch_mode="inline")
+                    self.assertTrue(
+                        service.handle_update(update(2, "Fictional retained lane task"))
+                    )
+                    self.assertEqual(client.cwds, [])
+                    self.assertEqual(client.turn_threads, [])
+                    self.assertFalse(
+                        service.handle_update(update(2, "Fictional retained lane task"))
+                    )
+                    self.assertEqual(service.state.active_session(topic.topic_id), before)
+                    self.assertFalse((project.root / ".hub" / "staging").exists())
+                    self.assertTrue(telegram.sent)
+                finally:
+                    service.close()
 
     def test_consecutive_productive_messages_form_one_durable_provider_turn(self) -> None:
         client = QueueClient()
@@ -403,7 +531,13 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         assert topic is not None
         active = service.state.active_session(topic.topic_id)
         assert active is not None
-        service.state.set_writer_mode(active.session_id, "local")
+        # Simulate a pre-v26/partially upgraded state. New ownership transfers
+        # atomically reject this combination before it can be created.
+        with service.state._connection:
+            service.state._connection.execute(
+                "UPDATE agent_sessions SET writer_mode='local' WHERE session_id=?",
+                (active.session_id,),
+            )
 
         self.assertTrue(service.handle_update(update(3, "/return")))
         rejected = service.state.active_session(topic.topic_id)

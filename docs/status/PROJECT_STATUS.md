@@ -8,6 +8,19 @@ operator deployment inventory or live conversation evidence.
 
 ## Quality checkpoint
 
+The integrated development baseline retains released schemas 26–30 unchanged
+and adds root exclusion and bounded concurrency as schemas 31–32. Project
+relocation commits topic execution scopes with the registry/binding transition,
+including crash recovery. Transient admission faults in dynamically onboarded
+groups retain their Telegram offset and retry through idempotent queue admission.
+Native Codex route/model continuity and Antigravity model/effort pinning remain
+part of this baseline. Deployment and schema-compatible runtime rollback are
+separate gates; existing schema-30 executables cannot open schema-32 state.
+
+Open priorities are inbound attachment/caption/album completeness and accurate
+Codex context/quota-window labels; see the [roadmap](../ROADMAP.ru.md).
+
+
 Antigravity native `/local` now pins the session model and effort with the same
 argument builder used by productive turns. Existing effort suffixes are replaced
 without duplication. Local CPA/direct profile isolation remains deployment-owned;
@@ -19,6 +32,71 @@ The monitor reads `model/list`; isolated Controller refresh callbacks request
 asynchronous discovery and retain last-good selectable models without provider RPC.
 Codex `/local` now emits a native TUI attach to the configured shared Unix socket,
 preserving the same persisted thread instead of opening a competing standalone writer.
+Package F is repository-complete at schema 32. `max_parallel_roots` defaults to
+one and transactionally bounds active Hub worker scopes across provider workers;
+values up to 16 require external queue mode. Durable least-recently-granted
+selection prevents a continuously polling live worker from starving another,
+while a stale worker leaves consideration after two minutes. Lowering capacity
+drains current turns without cancelling them. Expired execution becomes
+root-local uncertainty: it still excludes its own canonical root but no longer
+occupies a global slot or blocks an independent root. Cache-only status exposes
+only capacity totals, bounded worker/agent/phase owners and an aggregate
+uncertain-scope count.
+
+Explicit local worktree binding now atomically moves an idle topic to the lane's
+canonical scope. Bind and archive refuse pending, active, local-writer and
+unresolved work. Before provider access the worker revalidates the exact derived
+path, allowlist membership, Git worktree registration and Git top level, then
+uses that lane as cwd. The same validated root is used for embedded execution,
+staging, local resume preparation, and read-only Codex recovery. Retained
+legacy project scopes (including null/empty fallbacks) are atomically reconciled
+at Controller, worker, and standalone external-service startup,
+using saved origin/checkpoint roots before registry fallback, including known
+IDs whose current registry root conflicts. Saved root protection and uncertainty
+are preserved; mismatched execution is refused without blocking unrelated roots.
+Ambiguous saved evidence fails normalization atomically. Active lane scopes stay
+distinct. Retained lanes fail closed in unsupported productive inline and managed
+terminal paths, even after a configuration change. `/local` and non-Codex summary
+return validate roots outside SQLite and recheck persisted identity inside the
+writer transaction; invalid lanes or stale snapshots cannot transfer ownership.
+Managed inline terminal takeover also claims ownership with a checked snapshot
+before provider preparation and process launch. Unconfirmed launch retains the
+claim until explicit `/release`; process liveness cannot automatically return it.
+Codex return stays model-free. Each provider worker still owns one SQLite connection and
+one adapter/client/process lifecycle, so configured worker count is a second
+parallelism bound. Offline capacity, fairness, contention, targeted-stop,
+process-recovery, lane execution, migration and rollback tests cover this
+checkpoint. Direct-message databases, unmanaged Hermes/native CLI processes,
+deployment and live provider acceptance remain outside the claim. See
+[ADR 0031](../decisions/0031-bounded-root-concurrency.md).
+
+Schema 31 established one Hub-owned productive writer per canonical registered
+root across Telegram topics and providers. Queue lease selection, local writer
+transfer, and saved Codex-session adoption share the transactional execution
+scope. See [ADR 0030](../decisions/0030-canonical-root-execution-exclusion.md).
+
+Hub-owned execution now revalidates the cached canonical allowlisted Git root
+before provider access or project staging. Both queue modes reject filesystem
+drift as a terminal pre-execution failure with a durable, path-free notice and
+no automatic retry. Inline/native execution and local-transfer preparation use
+the same guard; real linked Git worktrees remain supported. Offline regressions
+first reproduced invocation through a replaced root and now cover refusal in
+all three local queue runtimes. See [ADR 0029](../decisions/0029-execution-time-root-validation.md).
+That checkpoint used schema 25 and did not itself provide root/lane-wide
+execution exclusion, protection against every filesystem race, or acceptance
+of unmanaged CLI/Hermes execution.
+Deployment and live continuity remain unverified for this change.
+
+Queue-owned productive ingress now retains the Telegram offset when a transient
+SQLite fault prevents session preparation or leaves enqueue disposition
+uncertain. It stops the current batch, waits with a bounded backoff, and returns
+the update through the existing idempotent queue admission; a committed job or
+input membership is not duplicated after Controller recreation or offset-write
+failure. Diagnostic-event failure cannot turn the original admission fault into
+an acknowledgement. Deterministic terminal/ignored inputs keep their existing
+disposition, and inline turns remain outside this retry boundary after provider
+invocation may have begun. The ingress change adds no schema. Offline polling/SQLite tests cover
+these boundaries; no live Telegram or deployment acceptance is claimed.
 
 The [quality and stability review](../operations/QUALITY_AND_STABILITY_REVIEW.md)
 records the initial findings. Milestone one of the
@@ -169,14 +247,15 @@ available for recovery. Schema 25 introduced immutable origins and the original
 first-return boundary. External workers continue the exact thread through socket
 or stdio; unsupported modes fail closed. Automated evidence uses fictional
 provider and Telegram adapters. Live continuity and a production rollback
-artifact for schema 30 remain deployment-specific; the current target is schema 30.
+artifact for schema 32 remain deployment-specific; the current target is schema 32.
 
 - Numeric project/topic identity, canonical allowlisted roots, idempotent
   routing, persistent provider sessions, bounded visible context, and writer
   leases backed by versioned SQLite migrations.
 - Additive durable provider-job, result, and Telegram-outbox schema with atomic
-  idempotent enqueue, strict per-topic FIFO leases, conservative stale-job
-  recovery, and a feature-gated embedded compatibility consumer. `dispatch_mode`
+  idempotent enqueue, strict per-topic FIFO leases, canonical-root execution
+  exclusion, conservative stale-job recovery, and a feature-gated embedded
+  compatibility consumer. `dispatch_mode`
   defaults to `inline`; `queue_runtime` defaults to `embedded`.
 - Isolated queue workers are available for locally managed Codex, OpenCode, and
   Antigravity behind `dispatch_mode: "queue"` and `queue_runtime: "external"`.
@@ -295,7 +374,8 @@ artifact for schema 30 remain deployment-specific; the current target is schema 
   before offset persistence, during provider invocation, and after Telegram
   acceptance but before delivery persistence. It proves redelivery
   idempotency, conservative recovery on both sides of `executing`, outbox-only
-  retry, concurrent provider isolation, responsive cached Controller status,
+  retry, same-root provider exclusion with explicit uncertainty resolution,
+  responsive cached Controller status,
   and distinct Hub/provider polling offsets without network, credentials, or
   live services.
 - Automatic inter-agent handoff and unseen-dialogue injection are disabled at
@@ -439,7 +519,7 @@ artifact for schema 30 remain deployment-specific; the current target is schema 
   reapers. Runtime-proxy monitoring remains independent and never restarts a
   shared app-server underneath an active Codex or tlive session.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
-- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-30
+- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-32
   immutable-deployment triage guide, source revision, timestamp, and content
   hashes into a neutral local store for the independent Hermes channel. It
   carries no private deployment inventory and creates no service dependency.

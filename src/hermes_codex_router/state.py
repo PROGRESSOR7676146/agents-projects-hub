@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterator, Sequence, TypedDict
+from typing import Iterator, Mapping, Sequence, TypedDict
 
 from .artifacts import ValidatedArtifact
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
@@ -21,6 +21,56 @@ MAX_PROVIDER_RESPONSE_LENGTH = 200_000
 RECOVERED_RESULT_METADATA_JSON = '{"hub_recovered":true}'
 RUNTIME_EVENT_MAX_AGE = timedelta(days=30)
 RUNTIME_EVENT_MAX_COUNT = 10_000
+PROVIDER_WORKER_FAIRNESS_FRESHNESS = timedelta(minutes=2)
+
+_ELIGIBLE_PROVIDER_JOB_SQL = """SELECT candidate.* FROM provider_jobs candidate
+   JOIN topics candidate_topic ON candidate_topic.topic_id = candidate.topic_id
+   WHERE candidate.agent_id = ?
+     AND candidate.attempt_count < candidate.max_attempts
+     AND (
+       (candidate.status = 'queued'
+           AND (candidate.next_attempt_at IS NULL OR candidate.next_attempt_at <= ?))
+       OR (candidate.status = 'retry_wait'
+           AND candidate.next_attempt_at IS NOT NULL AND candidate.next_attempt_at <= ?)
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM provider_jobs earlier
+       WHERE earlier.topic_id = candidate.topic_id
+         AND earlier.topic_sequence < candidate.topic_sequence
+         AND earlier.status NOT IN ('completed', 'failed', 'cancelled', 'indeterminate')
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM provider_jobs active
+       JOIN topics active_topic ON active_topic.topic_id = active.topic_id
+       WHERE active.job_id != candidate.job_id
+         AND COALESCE(active_topic.execution_scope, 'project:' || active_topic.project_id) =
+             COALESCE(candidate_topic.execution_scope, 'project:' || candidate_topic.project_id)
+         AND (
+           active.status = 'executing'
+           OR (active.status = 'leased' AND active.lease_expires_at > ?)
+           OR (active.status = 'indeterminate' AND NOT EXISTS (
+             SELECT 1 FROM provider_job_resolutions resolutions
+             WHERE resolutions.job_id = active.job_id
+           ))
+         )
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM agent_sessions writer
+       JOIN topics writer_topic ON writer_topic.topic_id = writer.topic_id
+       WHERE writer.status IN ('active', 'satellite')
+         AND writer.writer_mode != 'telegram'
+         AND COALESCE(writer_topic.execution_scope, 'project:' || writer_topic.project_id) =
+             COALESCE(candidate_topic.execution_scope, 'project:' || candidate_topic.project_id)
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM turn_dispatches dispatch
+       JOIN topics dispatch_topic ON dispatch_topic.topic_id = dispatch.topic_id
+       WHERE dispatch.status = 'running'
+         AND COALESCE(dispatch_topic.execution_scope, 'project:' || dispatch_topic.project_id) =
+             COALESCE(candidate_topic.execution_scope, 'project:' || candidate_topic.project_id)
+     )
+   ORDER BY candidate.created_at, candidate.topic_id, candidate.topic_sequence
+   LIMIT 1"""
 
 
 class StateError(RuntimeError):
@@ -35,6 +85,7 @@ class TopicRecord:
     thread_id: int
     title: str
     active_agent_id: str | None
+    execution_scope: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +101,13 @@ class SessionRecord:
     terminal_name: str | None
     writer_mode: str
     context_remaining_percent: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class WriterTransferSnapshot:
+    topic: TopicRecord
+    session: SessionRecord
+    lane: tuple[tuple[str, object], ...] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,6 +379,9 @@ class HubState:
 
     @staticmethod
     def _topic(row: sqlite3.Row) -> TopicRecord:
+        execution_scope = row["execution_scope"]
+        if execution_scope is None:
+            execution_scope = f"project:{row['project_id']}"
         return TopicRecord(
             topic_id=row["topic_id"],
             project_id=row["project_id"],
@@ -328,6 +389,7 @@ class HubState:
             thread_id=row["thread_id"],
             title=row["title"],
             active_agent_id=row["active_agent_id"],
+            execution_scope=str(execution_scope),
         )
 
     @staticmethod
@@ -803,13 +865,24 @@ class HubState:
         chat_id: int,
         thread_id: int,
         title: str,
+        execution_root: Path | None = None,
     ) -> TopicRecord:
         # Supergroups use negative IDs; direct bot chats use the positive user
         # ID. Zero is never a valid Telegram chat identity.
         if chat_id == 0 or thread_id <= 0 or not title.strip():
             raise StateError("invalid Telegram topic identity")
+        project = _bounded(project_id, name="project id", maximum=48)
+        fallback_scope = f"project:{project}"
+        requested_scope = fallback_scope
+        if execution_root is not None:
+            if not execution_root.is_absolute():
+                raise StateError("execution root must be absolute")
+            canonical_root = execution_root.resolve()
+            requested_scope = "root:" + _bounded(
+                str(canonical_root), name="execution root", maximum=4096
+            )
         now = _now()
-        with self._connection:
+        with self._immediate_transaction():
             existing = self._connection.execute(
                 "SELECT * FROM topics WHERE chat_id = ? AND thread_id = ?",
                 (chat_id, thread_id),
@@ -819,14 +892,37 @@ class HubState:
             if existing is None:
                 self._connection.execute(
                     """INSERT INTO topics
-                       (project_id, chat_id, thread_id, title, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (project_id, chat_id, thread_id, title.strip(), now, now),
+                       (project_id, chat_id, thread_id, title, execution_scope,
+                        created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (project, chat_id, thread_id, title.strip(), requested_scope, now, now),
                 )
             else:
+                stored_scope = existing["execution_scope"] or fallback_scope
+                if execution_root is not None and stored_scope not in {
+                    fallback_scope,
+                    requested_scope,
+                }:
+                    lane = self._connection.execute(
+                        """SELECT worktree_path FROM worktree_lanes
+                           WHERE topic_id = ? AND project_id = ? AND status = 'active'""",
+                        (existing["topic_id"], project_id),
+                    ).fetchone()
+                    if lane is None or stored_scope != f"root:{lane['worktree_path']}":
+                        raise StateError("Telegram topic execution root changed")
+                next_scope = (
+                    stored_scope
+                    if execution_root is not None
+                    and stored_scope not in {fallback_scope, requested_scope}
+                    else requested_scope
+                    if execution_root is not None
+                    else stored_scope
+                )
                 self._connection.execute(
-                    "UPDATE topics SET title = ?, updated_at = ? WHERE topic_id = ?",
-                    (title.strip(), now, existing["topic_id"]),
+                    """UPDATE topics
+                       SET title = ?, execution_scope = ?, updated_at = ?
+                       WHERE topic_id = ?""",
+                    (title.strip(), next_scope, now, existing["topic_id"]),
                 )
         row = self._connection.execute(
             "SELECT * FROM topics WHERE chat_id = ? AND thread_id = ?",
@@ -835,6 +931,95 @@ class HubState:
         if row is None:
             raise StateError("failed to persist Telegram topic")
         return self._topic(row)
+
+    def reconcile_legacy_execution_scopes(self, project_roots: Mapping[str, Path]) -> int:
+        """Atomically replace trusted legacy project scopes with canonical roots.
+
+        The mapping is supplied only by the locally loaded registry.  Active
+        worktree bindings are evidence of a distinct lane and are never
+        rewritten by this compatibility pass.
+        """
+        canonical = {
+            _bounded(project_id, name="project id", maximum=48): "root:"
+            + _bounded(str(root.resolve()), name="execution root", maximum=4096)
+            for project_id, root in project_roots.items()
+        }
+        changed = 0
+        with self._immediate_transaction():
+            rows = self._connection.execute(
+                """SELECT topics.topic_id, topics.project_id, topics.execution_scope,
+                          lanes.worktree_path
+                   FROM topics LEFT JOIN worktree_lanes lanes
+                     ON lanes.topic_id = topics.topic_id AND lanes.status = 'active'"""
+            ).fetchall()
+            for row in rows:
+                project_id = str(row["project_id"])
+                current = str(row["execution_scope"] or f"project:{project_id}")
+                lane_root = row["worktree_path"]
+                if lane_root is not None:
+                    if current != f"root:{lane_root}":
+                        raise StateError("active lane execution scope mismatch")
+                    continue
+                expected = canonical.get(project_id)
+                if current != f"project:{project_id}":
+                    continue
+                evidence = {
+                    str(item["root"])
+                    for item in self._connection.execute(
+                        """SELECT origins.canonical_root AS root
+                               FROM agent_sessions sessions
+                               JOIN codex_session_origins origins
+                                 ON origins.session_id = sessions.session_id
+                               WHERE sessions.topic_id = ?
+                               UNION
+                               SELECT checkpoints.project_root AS root
+                               FROM provider_jobs jobs
+                               JOIN provider_execution_checkpoints checkpoints
+                                 ON checkpoints.job_id = jobs.job_id
+                               WHERE jobs.topic_id = ?""",
+                        (row["topic_id"], row["topic_id"]),
+                    ).fetchall()
+                }
+                if len(evidence) > 1:
+                    raise StateError("ambiguous legacy execution root evidence")
+                if evidence:
+                    # Persisted identity protects the historical checkout even
+                    # when a known registry ID now points elsewhere. Execution
+                    # validation rejects that mismatch; unrelated roots remain
+                    # usable. Never resolve this path through today's filesystem.
+                    expected = "root:" + _bounded(
+                        evidence.pop(), name="execution root", maximum=4096
+                    )
+                if expected is None:
+                    active = self._connection.execute(
+                        """SELECT 1 FROM agent_sessions
+                               WHERE topic_id = ? AND status IN ('active', 'satellite')
+                                 AND writer_mode != 'telegram'
+                               UNION SELECT 1 FROM provider_jobs
+                               WHERE topic_id = ? AND (
+                                 status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                                 OR (status = 'indeterminate' AND NOT EXISTS (
+                                   SELECT 1 FROM provider_job_resolutions resolutions
+                                   WHERE resolutions.job_id = provider_jobs.job_id
+                                 ))
+                               )
+                               UNION SELECT 1 FROM turn_dispatches
+                               WHERE topic_id = ? AND status = 'running'
+                               LIMIT 1""",
+                        (row["topic_id"], row["topic_id"], row["topic_id"]),
+                    ).fetchone()
+                    if active is not None:
+                        raise StateError(
+                            "ambiguous legacy execution scope requires local resolution"
+                        )
+                    continue
+                cursor = self._connection.execute(
+                    """UPDATE topics SET execution_scope = ?, updated_at = ?
+                       WHERE topic_id = ? AND execution_scope IS ?""",
+                    (expected, _now(), row["topic_id"], row["execution_scope"]),
+                )
+                changed += cursor.rowcount
+        return changed
 
     def get_topic(self, topic_id: int) -> TopicRecord:
         row = self._connection.execute(
@@ -895,10 +1080,103 @@ class HubState:
             raise StateError(f"unknown session_id: {session_id}")
         return self.get_session(session_id)
 
-    def set_writer_mode(self, session_id: str, writer_mode: str) -> SessionRecord:
+    def writer_transfer_snapshot(
+        self, topic: TopicRecord, session: SessionRecord
+    ) -> WriterTransferSnapshot:
+        """Capture persisted identity before filesystem validation, without I/O."""
+        with self._immediate_transaction():
+            snapshot = WriterTransferSnapshot(
+                topic, session, self._writer_lane_snapshot(topic.topic_id)
+            )
+            self._require_writer_transfer_snapshot(snapshot)
+            return snapshot
+
+    def _writer_lane_snapshot(self, topic_id: int) -> tuple[tuple[str, object], ...] | None:
+        lane = self.active_lane_for_topic(topic_id)
+        return None if lane is None else tuple(sorted(lane.items()))
+
+    def _require_writer_transfer_snapshot(self, snapshot: WriterTransferSnapshot) -> None:
+        """Caller holds the ownership transaction; no Git/provider access here."""
+        if (
+            snapshot.session.topic_id != snapshot.topic.topic_id
+            or self.get_topic(snapshot.topic.topic_id) != snapshot.topic
+            or self.get_session(snapshot.session.session_id) != snapshot.session
+            or self._writer_lane_snapshot(snapshot.topic.topic_id) != snapshot.lane
+            or snapshot.session.status != "active"
+            or self.topic_has_running_dispatch(snapshot.topic.topic_id)
+            or self.topic_has_pending_provider_job(snapshot.topic.topic_id)
+        ):
+            raise StateError("writer transfer snapshot changed; retry the command")
+
+    def set_writer_mode(
+        self,
+        session_id: str,
+        writer_mode: str,
+        *,
+        expected_transfer: WriterTransferSnapshot | None = None,
+    ) -> SessionRecord:
         if writer_mode not in {"telegram", "local", "terminal"}:
             raise StateError("invalid writer mode")
-        with self._connection:
+        with self._immediate_transaction():
+            if expected_transfer is not None:
+                if expected_transfer.session.session_id != session_id:
+                    raise StateError("writer transfer session mismatch")
+                self._require_writer_transfer_snapshot(expected_transfer)
+            session = self._connection.execute(
+                """SELECT sessions.session_id, sessions.writer_mode,
+                          COALESCE(topics.execution_scope, 'project:' || topics.project_id)
+                            AS execution_scope
+                   FROM agent_sessions sessions
+                   JOIN topics ON topics.topic_id = sessions.topic_id
+                   WHERE sessions.session_id = ?""",
+                (session_id,),
+            ).fetchone()
+            if session is None:
+                raise StateError(f"unknown session_id: {session_id}")
+            if writer_mode != "telegram" and session["writer_mode"] == "telegram":
+                scope = str(session["execution_scope"])
+                conflicting_writer = self._connection.execute(
+                    """SELECT 1 FROM agent_sessions other
+                       JOIN topics ON topics.topic_id = other.topic_id
+                       WHERE other.session_id != ?
+                         AND other.status IN ('active', 'satellite')
+                         AND other.writer_mode != 'telegram'
+                         AND COALESCE(topics.execution_scope,
+                                      'project:' || topics.project_id) = ?
+                       LIMIT 1""",
+                    (session_id, scope),
+                ).fetchone()
+                conflicting_job = self._connection.execute(
+                    """SELECT 1 FROM provider_jobs jobs
+                       JOIN topics ON topics.topic_id = jobs.topic_id
+                       WHERE COALESCE(topics.execution_scope,
+                                      'project:' || topics.project_id) = ?
+                         AND (
+                           jobs.status IN (
+                             'queued', 'leased', 'executing', 'retry_wait', 'result_ready'
+                           )
+                           OR (jobs.status = 'indeterminate' AND NOT EXISTS (
+                             SELECT 1 FROM provider_job_resolutions resolutions
+                             WHERE resolutions.job_id = jobs.job_id
+                           ))
+                         )
+                       LIMIT 1""",
+                    (scope,),
+                ).fetchone()
+                conflicting_dispatch = self._connection.execute(
+                    """SELECT 1 FROM turn_dispatches dispatches
+                       JOIN topics ON topics.topic_id = dispatches.topic_id
+                       WHERE dispatches.status = 'running'
+                         AND COALESCE(topics.execution_scope,
+                                      'project:' || topics.project_id) = ?
+                       LIMIT 1""",
+                    (scope,),
+                ).fetchone()
+                if any(
+                    conflict is not None
+                    for conflict in (conflicting_writer, conflicting_job, conflicting_dispatch)
+                ):
+                    raise StateError("execution root is owned by another writer")
             cursor = self._connection.execute(
                 "UPDATE agent_sessions SET writer_mode = ?, updated_at = ? WHERE session_id = ?",
                 (writer_mode, _now(), session_id),
@@ -1134,6 +1412,7 @@ class HubState:
         max_attempts: int = 5,
         take_local_writer: bool = False,
         available_at: datetime | None = None,
+        expected_transfer: WriterTransferSnapshot | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
         """Atomically accept one bounded provider request.
 
@@ -1230,6 +1509,12 @@ class HubState:
                     raise StateError("provider job handoff snapshot is not pending")
 
             if take_local_writer:
+                if (
+                    expected_transfer is None
+                    or expected_transfer.session.session_id != target_session
+                ):
+                    raise StateError("local writer transfer requires a validated snapshot")
+                self._require_writer_transfer_snapshot(expected_transfer)
                 pending_job = self._connection.execute(
                     """SELECT 1 FROM provider_jobs
                        WHERE topic_id = ? AND status IN
@@ -1735,43 +2020,120 @@ class HubState:
         worker_id: str,
         *,
         lease_seconds: int = 90,
+        max_parallel_roots: int = 1,
+        scheduler_agents: Sequence[str] = (),
         now: datetime | None = None,
     ) -> ProviderJobRecord | None:
         target_agent = _bounded(agent_id, name="agent id", maximum=64)
         worker = _bounded(worker_id, name="worker id", maximum=128)
         if not 1 <= lease_seconds <= 3600:
             raise StateError("invalid provider lease duration")
+        if not 1 <= max_parallel_roots <= 16:
+            raise StateError("invalid parallel root capacity")
+        scheduled_agents = tuple(
+            _bounded(value, name="scheduler agent id", maximum=64) for value in scheduler_agents
+        )
+        if len(set(scheduled_agents)) != len(scheduled_agents):
+            raise StateError("scheduler agents contain duplicates")
+        if scheduled_agents and target_agent not in scheduled_agents:
+            raise StateError("scheduler agents must include the target agent")
         current = now or datetime.now(timezone.utc)
         timestamp = _timestamp(current)
         expires_at = _timestamp(current + timedelta(seconds=lease_seconds))
         with self._immediate_transaction():
+            effective_capacity = max_parallel_roots
+            freshness = _timestamp(current - PROVIDER_WORKER_FAIRNESS_FRESHNESS)
+            placeholders = ", ".join("?" for _ in scheduled_agents)
+            if scheduled_agents:
+                self._connection.execute(
+                    """INSERT INTO execution_scheduler_workers
+                       (agent_id, declared_capacity, observed_at) VALUES (?, ?, ?)
+                       ON CONFLICT(agent_id) DO UPDATE SET
+                         declared_capacity = excluded.declared_capacity,
+                         observed_at = excluded.observed_at""",
+                    (target_agent, max_parallel_roots, timestamp),
+                )
+                advertised = self._connection.execute(
+                    f"""SELECT MIN(declared_capacity) FROM execution_scheduler_workers
+                         WHERE agent_id IN ({placeholders}) AND observed_at >= ?""",
+                    (*scheduled_agents, freshness),
+                ).fetchone()[0]
+                if advertised is not None:
+                    effective_capacity = min(effective_capacity, int(advertised))
+            occupied = int(
+                self._connection.execute(
+                    """SELECT COUNT(DISTINCT COALESCE(
+                         topics.execution_scope, 'project:' || topics.project_id))
+                       FROM provider_jobs jobs
+                       JOIN topics ON topics.topic_id = jobs.topic_id
+                       WHERE jobs.status IN ('leased', 'executing')
+                         AND jobs.lease_expires_at > ?""",
+                    (timestamp,),
+                ).fetchone()[0]
+            )
+            if occupied >= effective_capacity:
+                return None
+            busy_agents = {
+                str(item["agent_id"])
+                for item in self._connection.execute(
+                    """SELECT DISTINCT agent_id FROM provider_jobs
+                       WHERE status IN ('leased', 'executing')
+                         AND lease_expires_at > ?""",
+                    (timestamp,),
+                ).fetchall()
+            }
+            # Each configured provider worker owns one adapter/client/process
+            # lifecycle.  A durable live lease is therefore evidence that its
+            # worker cannot take another productive slot; do not let a fresh
+            # heartbeat reserve fairness for work it cannot execute.
+            if target_agent in busy_agents:
+                return None
             row = self._connection.execute(
-                """SELECT candidate.* FROM provider_jobs candidate
-                   WHERE candidate.agent_id = ?
-                     AND candidate.attempt_count < candidate.max_attempts
-                     AND (
-                       (candidate.status = 'queued'
-                           AND (candidate.next_attempt_at IS NULL
-                                OR candidate.next_attempt_at <= ?))
-                       OR (candidate.status = 'retry_wait'
-                           AND candidate.next_attempt_at IS NOT NULL
-                           AND candidate.next_attempt_at <= ?)
-                     )
-                     AND NOT EXISTS (
-                       SELECT 1 FROM provider_jobs earlier
-                       WHERE earlier.topic_id = candidate.topic_id
-                         AND earlier.topic_sequence < candidate.topic_sequence
-                         AND earlier.status NOT IN (
-                           'completed', 'failed', 'cancelled', 'indeterminate'
-                         )
-                     )
-                   ORDER BY candidate.created_at, candidate.topic_id,
-                            candidate.topic_sequence
-                   LIMIT 1""",
-                (target_agent, timestamp, timestamp),
+                _ELIGIBLE_PROVIDER_JOB_SQL,
+                (target_agent, timestamp, timestamp, timestamp),
             ).fetchone()
             if row is None:
                 return None
+            if scheduled_agents:
+                health_rows = self._connection.execute(
+                    f"""SELECT DISTINCT agent_id FROM runtime_health
+                         WHERE component = 'provider_worker'
+                           AND agent_id IN ({placeholders})
+                           AND heartbeat_at >= ?""",
+                    (*scheduled_agents, freshness),
+                ).fetchall()
+                live_agents = {target_agent}
+                live_agents.update(str(item["agent_id"]) for item in health_rows)
+                contenders: list[tuple[int, str, int, int, sqlite3.Row]] = []
+                for contender_agent in sorted(live_agents.intersection(scheduled_agents)):
+                    if contender_agent in busy_agents:
+                        continue
+                    candidate = self._connection.execute(
+                        _ELIGIBLE_PROVIDER_JOB_SQL,
+                        (contender_agent, timestamp, timestamp, timestamp),
+                    ).fetchone()
+                    if candidate is None:
+                        continue
+                    grant = self._connection.execute(
+                        """SELECT last_grant_sequence FROM execution_scheduler_grants
+                           WHERE agent_id = ?""",
+                        (contender_agent,),
+                    ).fetchone()
+                    contenders.append(
+                        (
+                            0 if grant is None else int(grant["last_grant_sequence"]),
+                            str(candidate["created_at"]),
+                            int(candidate["topic_id"]),
+                            int(candidate["topic_sequence"]),
+                            candidate,
+                        )
+                    )
+                if not contenders:
+                    return None
+                winner = min(contenders, key=lambda item: item[:4])
+                if str(winner[4]["agent_id"]) != target_agent:
+                    return None
+                row = winner[4]
             token = str(uuid.uuid4())
             cursor = self._connection.execute(
                 """UPDATE provider_jobs
@@ -1784,6 +2146,21 @@ class HubState:
             )
             if cursor.rowcount != 1:
                 raise StateError("provider job lease race")
+            if scheduled_agents:
+                next_grant = int(
+                    self._connection.execute(
+                        """SELECT COALESCE(MAX(last_grant_sequence), 0) + 1
+                           FROM execution_scheduler_grants"""
+                    ).fetchone()[0]
+                )
+                self._connection.execute(
+                    """INSERT INTO execution_scheduler_grants
+                       (agent_id, last_grant_sequence, updated_at) VALUES (?, ?, ?)
+                       ON CONFLICT(agent_id) DO UPDATE SET
+                         last_grant_sequence = excluded.last_grant_sequence,
+                         updated_at = excluded.updated_at""",
+                    (target_agent, next_grant, timestamp),
+                )
             leased = self._connection.execute(
                 "SELECT * FROM provider_jobs WHERE job_id = ?", (row["job_id"],)
             ).fetchone()
@@ -3213,6 +3590,70 @@ class HubState:
             "runtime_events": [dict(row) for row in runtime_events],
         }
 
+    def execution_capacity_snapshot(
+        self, capacity: int, *, now: datetime | None = None
+    ) -> dict[str, object]:
+        """Return passive, bounded slot ownership without project or topic identity."""
+        if not 1 <= capacity <= 16:
+            raise StateError("invalid parallel root capacity")
+        timestamp = _timestamp(now or datetime.now(timezone.utc))
+        rows = self._connection.execute(
+            """SELECT jobs.lease_owner, jobs.agent_id, jobs.status,
+                      COALESCE(topics.execution_scope,
+                               'project:' || topics.project_id) AS execution_scope
+               FROM provider_jobs jobs
+               JOIN topics ON topics.topic_id = jobs.topic_id
+               WHERE jobs.status IN ('leased', 'executing')
+                 AND jobs.lease_expires_at > ?
+               ORDER BY jobs.lease_owner, jobs.agent_id, jobs.status
+               LIMIT 16""",
+            (timestamp,),
+        ).fetchall()
+        owners = [
+            {
+                "worker_instance": str(row["lease_owner"] or "unknown"),
+                "agent_id": str(row["agent_id"]),
+                "phase": str(row["status"]),
+            }
+            for row in rows
+        ]
+        occupied = int(
+            self._connection.execute(
+                """SELECT COUNT(DISTINCT COALESCE(
+                     topics.execution_scope, 'project:' || topics.project_id))
+                   FROM provider_jobs jobs
+                   JOIN topics ON topics.topic_id = jobs.topic_id
+                   WHERE jobs.status IN ('leased', 'executing')
+                     AND jobs.lease_expires_at > ?""",
+                (timestamp,),
+            ).fetchone()[0]
+        )
+        uncertain = int(
+            self._connection.execute(
+                """SELECT COUNT(DISTINCT COALESCE(
+                     topics.execution_scope, 'project:' || topics.project_id))
+                   FROM provider_jobs jobs
+                   JOIN topics ON topics.topic_id = jobs.topic_id
+                   WHERE (
+                     jobs.status = 'executing' AND jobs.lease_expires_at <= ?
+                   ) OR (
+                     jobs.status = 'indeterminate'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_job_resolutions resolutions
+                       WHERE resolutions.job_id = jobs.job_id
+                     )
+                   )""",
+                (timestamp,),
+            ).fetchone()[0]
+        )
+        return {
+            "capacity": capacity,
+            "occupied": occupied,
+            "available": max(0, capacity - occupied),
+            "owners": owners,
+            "blocked_uncertain_scopes": uncertain,
+        }
+
     def reliability_snapshot(self, *, now: datetime | None = None) -> dict[str, int | None]:
         """Return bounded aggregate outcome telemetry without provider or network access."""
         current = now or datetime.now(timezone.utc)
@@ -3531,7 +3972,8 @@ class HubState:
         topic_id: int | None = None,
     ) -> None:
         now = _now()
-        with self._connection:
+        resolved_path = str(worktree_path.resolve(strict=True))
+        with self._immediate_transaction():
             self._connection.execute(
                 """INSERT INTO worktree_lanes
                    (lane_id, project_id, topic_id, worktree_path, branch_name,
@@ -3540,22 +3982,40 @@ class HubState:
                 (
                     lane_id,
                     project_id,
-                    topic_id,
-                    str(worktree_path.resolve(strict=True)),
+                    None,
+                    resolved_path,
                     branch_name,
                     now,
                     now,
                 ),
             )
+            if topic_id is not None:
+                self._bind_lane_locked(lane_id, topic_id, now=now)
 
     def archive_lane(self, lane_id: str) -> None:
-        with self._connection:
+        with self._immediate_transaction():
+            lane = self._connection.execute(
+                "SELECT * FROM worktree_lanes WHERE lane_id = ? AND status = 'active'",
+                (lane_id,),
+            ).fetchone()
+            if lane is None:
+                raise StateError(f"unknown or inactive lane_id: {lane_id}")
+            topic_id = lane["topic_id"]
+            if topic_id is not None:
+                self._require_topic_execution_idle_locked(int(topic_id))
+                self._require_execution_scope_idle_locked(f"root:{lane['worktree_path']}")
             cursor = self._connection.execute(
                 "UPDATE worktree_lanes SET status = 'archived', updated_at = ? WHERE lane_id = ?",
                 (_now(), lane_id),
             )
-        if cursor.rowcount != 1:
-            raise StateError(f"unknown lane_id: {lane_id}")
+            if cursor.rowcount != 1:
+                raise StateError(f"unknown lane_id: {lane_id}")
+            if topic_id is not None:
+                self._connection.execute(
+                    """UPDATE topics SET execution_scope = 'project:' || project_id,
+                              updated_at = ? WHERE topic_id = ?""",
+                    (_now(), topic_id),
+                )
 
     def mark_lane_cleaned(self, lane_id: str) -> None:
         with self._connection:
@@ -3568,11 +4028,23 @@ class HubState:
             raise StateError(f"lane is unknown, active, or already cleaned: {lane_id}")
 
     def bind_lane(self, lane_id: str, topic_id: int) -> dict[str, object]:
+        with self._immediate_transaction():
+            self._bind_lane_locked(lane_id, topic_id, now=_now())
+        bound = self._connection.execute(
+            "SELECT * FROM worktree_lanes WHERE lane_id = ?", (lane_id,)
+        ).fetchone()
+        if bound is None:
+            raise StateError(f"unknown lane_id: {lane_id}")
+        return dict(bound)
+
+    def _bind_lane_locked(self, lane_id: str, topic_id: int, *, now: str) -> None:
         lane = self._connection.execute(
             "SELECT * FROM worktree_lanes WHERE lane_id = ?", (lane_id,)
         ).fetchone()
         if lane is None or lane["status"] != "active":
             raise StateError(f"unknown or inactive lane_id: {lane_id}")
+        if lane["topic_id"] is not None:
+            raise StateError("active lane is already bound")
         topic = self._connection.execute(
             "SELECT * FROM topics WHERE topic_id = ?", (topic_id,)
         ).fetchone()
@@ -3587,17 +4059,96 @@ class HubState:
         ).fetchone()
         if conflict is not None:
             raise StateError("Telegram topic is already bound to another active lane")
-        with self._connection:
-            self._connection.execute(
-                "UPDATE worktree_lanes SET topic_id = ?, updated_at = ? WHERE lane_id = ?",
-                (topic_id, _now(), lane_id),
-            )
-        bound = self._connection.execute(
-            "SELECT * FROM worktree_lanes WHERE lane_id = ?", (lane_id,)
+        self._require_topic_execution_idle_locked(topic_id)
+        self._require_execution_scope_idle_locked(f"root:{lane['worktree_path']}")
+        self._connection.execute(
+            "UPDATE worktree_lanes SET topic_id = ?, updated_at = ? WHERE lane_id = ?",
+            (topic_id, now, lane_id),
+        )
+        self._connection.execute(
+            "UPDATE topics SET execution_scope = ?, updated_at = ? WHERE topic_id = ?",
+            (f"root:{lane['worktree_path']}", now, topic_id),
+        )
+
+    def _require_topic_execution_idle_locked(self, topic_id: int) -> None:
+        job = self._connection.execute(
+            """SELECT 1 FROM provider_jobs jobs
+               WHERE jobs.topic_id = ? AND (
+                 jobs.status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                 OR (jobs.status = 'indeterminate' AND NOT EXISTS (
+                   SELECT 1 FROM provider_job_resolutions resolutions
+                   WHERE resolutions.job_id = jobs.job_id
+                 ))
+               ) LIMIT 1""",
+            (topic_id,),
         ).fetchone()
-        if bound is None:
-            raise StateError(f"unknown lane_id: {lane_id}")
-        return dict(bound)
+        dispatch = self._connection.execute(
+            """SELECT 1 FROM turn_dispatches
+               WHERE topic_id = ? AND status IN ('queued', 'running') LIMIT 1""",
+            (topic_id,),
+        ).fetchone()
+        writer = self._connection.execute(
+            """SELECT 1 FROM agent_sessions
+               WHERE topic_id = ? AND status IN ('active', 'satellite')
+                 AND writer_mode != 'telegram' LIMIT 1""",
+            (topic_id,),
+        ).fetchone()
+        bound_session = self._connection.execute(
+            """SELECT 1 FROM agent_sessions
+               WHERE topic_id = ? AND status IN ('active', 'satellite')
+                 AND provider_session_id IS NOT NULL LIMIT 1""",
+            (topic_id,),
+        ).fetchone()
+        if any(item is not None for item in (job, dispatch, writer, bound_session)):
+            raise StateError("Telegram topic has active or unresolved execution")
+
+    def _require_execution_scope_idle_locked(self, execution_scope: str) -> None:
+        job = self._connection.execute(
+            """SELECT 1 FROM provider_jobs jobs
+               JOIN topics ON topics.topic_id = jobs.topic_id
+               WHERE COALESCE(topics.execution_scope, 'project:' || topics.project_id) = ?
+                 AND (
+                   jobs.status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                   OR (jobs.status = 'indeterminate' AND NOT EXISTS (
+                     SELECT 1 FROM provider_job_resolutions resolutions
+                     WHERE resolutions.job_id = jobs.job_id
+                   ))
+                 ) LIMIT 1""",
+            (execution_scope,),
+        ).fetchone()
+        dispatch = self._connection.execute(
+            """SELECT 1 FROM turn_dispatches dispatches
+               JOIN topics ON topics.topic_id = dispatches.topic_id
+               WHERE COALESCE(topics.execution_scope, 'project:' || topics.project_id) = ?
+                 AND dispatches.status IN ('queued', 'running') LIMIT 1""",
+            (execution_scope,),
+        ).fetchone()
+        writer = self._connection.execute(
+            """SELECT 1 FROM agent_sessions sessions
+               JOIN topics ON topics.topic_id = sessions.topic_id
+               WHERE COALESCE(topics.execution_scope, 'project:' || topics.project_id) = ?
+                 AND sessions.status IN ('active', 'satellite')
+                 AND sessions.writer_mode != 'telegram' LIMIT 1""",
+            (execution_scope,),
+        ).fetchone()
+        bound_session = self._connection.execute(
+            """SELECT 1 FROM agent_sessions sessions
+               JOIN topics ON topics.topic_id = sessions.topic_id
+               WHERE COALESCE(topics.execution_scope, 'project:' || topics.project_id) = ?
+                 AND sessions.status IN ('active', 'satellite')
+                 AND sessions.provider_session_id IS NOT NULL LIMIT 1""",
+            (execution_scope,),
+        ).fetchone()
+        if any(item is not None for item in (job, dispatch, writer, bound_session)):
+            raise StateError("execution scope has active or unresolved execution")
+
+    def active_lane_for_topic(self, topic_id: int) -> dict[str, object] | None:
+        row = self._connection.execute(
+            """SELECT * FROM worktree_lanes
+               WHERE topic_id = ? AND status = 'active'""",
+            (topic_id,),
+        ).fetchone()
+        return None if row is None else dict(row)
 
     def get_lane(self, lane_id: str) -> dict[str, object]:
         row = self._connection.execute(

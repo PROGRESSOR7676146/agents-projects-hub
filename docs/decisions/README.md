@@ -1,7 +1,7 @@
 # Decision map
 
 Status: active  
-Last updated: 2026-09-05
+Last updated: 2026-09-13
 
 This directory is the durable entry point for consequential product and
 architecture decisions. New records should be named `NNNN-short-title.md`.
@@ -48,6 +48,9 @@ with a new record.
 | No silent session rebind on project relocation | Schema-29 project editing preserves immutable group identity, blocks live provider state, and recovers the registry/SQLite commit without rewriting provider-native roots. | [ADR 0027](0027-no-silent-session-rebind-on-project-relocation.md) |
 
 | Explicit Codex provider routing | Schema-30 retains source provenance while a local provider setting pins start/resume and native CLI transfer without replacing the thread. | [ADR 0028](0028-explicit-codex-provider-routing.md) |
+| Execution root validation | Recheck the registered canonical allowlisted Git root before Hub-owned execution; invalid roots fail before invocation with no automatic replay. | [ADR 0029](0029-execution-time-root-validation.md) |
+| Root execution exclusion | Schema-31 transactional ownership permits at most one Hub-owned productive writer per canonical root across topics/providers; unresolved uncertainty retains the scope. | [ADR 0030](0030-canonical-root-execution-exclusion.md) |
+| Bounded root concurrency | Schema-32 global capacity and durable fairness permit parallel Hub workers only on independent canonical roots or explicitly bound and revalidated worktree lanes. | [ADR 0031](0031-bounded-root-concurrency.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

@@ -1,6 +1,6 @@
 # ADR 0008: Resident Codex proxy lifetime belongs to systemd
 
-Status: accepted  
+Status: accepted
 Date: 2026-09-03
 
 ## Context

@@ -17,6 +17,7 @@ from .hub_config import HubConfig
 from .project_resolution import resolve_project_context
 from .registry import ProjectRegistry
 from .state import RECOVERED_RESULT_METADATA_JSON, HubState, StateError
+from .topic_execution import resolve_topic_execution_root
 
 
 def checkpoint_failure_notice(state: HubState, job_id: str, error: BaseException) -> str:
@@ -126,22 +127,24 @@ def recover_codex_job(
     artifacts: tuple[ValidatedArtifact, ...] = ()
     try:
         topic = state.get_topic(job.topic_id)
-        project = resolve_project_context(
+        resolved = resolve_project_context(
             config,
             state,
             chat_id=topic.chat_id,
             expected_project_id=topic.project_id,
-        ).project
+        )
+        registry = resolved.registry
+        project_root = resolve_topic_execution_root(state, registry, topic)
         checkpoint = journal.read(job.job_id)
         if checkpoint is None:
             raise StateError("no durable execution identity")
-        if checkpoint["project_root"] != str(project.root.resolve(strict=True)):
+        if checkpoint["project_root"] != str(project_root):
             raise StateError("recovery project binding changed")
         binding_valid = True
         if not reconcile_codex_completion(
             state,
             config,
-            project_root=project.root,
+            project_root=project_root,
             job_id=job.job_id,
             lease_token=token,
             agent_id=agent_id,

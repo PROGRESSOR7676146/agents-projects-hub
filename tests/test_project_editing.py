@@ -118,6 +118,59 @@ class ProjectEditingTests(unittest.TestCase):
         store.select_root(42, option.option_id)
         return store, workflow_id
 
+    def test_relocation_commits_execution_scope_with_registry_and_binding(self) -> None:
+        from hermes_codex_router.topic_execution import resolve_topic_execution_root
+
+        self._dynamic_binding()
+        topic = self.state.observe_topic(
+            project_id="example",
+            chat_id=-1001234567890,
+            thread_id=7,
+            title="Example",
+            execution_root=self.old_root,
+        )
+        target = self.allowed_b / "example"
+        store, workflow_id = self._relocation_ready(target)
+        store.confirm(42, workflow_id)
+        store.apply(workflow_id)
+        refreshed = self.state.get_topic(topic.topic_id)
+        self.assertEqual(refreshed.execution_scope, f"root:{target}")
+        self.assertEqual(
+            resolve_topic_execution_root(self.state, load_registry(self.registry_path), refreshed),
+            target,
+        )
+        self.state.observe_topic(
+            project_id="example",
+            chat_id=-1001234567890,
+            thread_id=7,
+            title="Example",
+            execution_root=target,
+        )
+
+    def test_relocation_crash_recovers_execution_scope_with_registry(self) -> None:
+        self._dynamic_binding()
+        topic = self.state.observe_topic(
+            project_id="example",
+            chat_id=-1001234567890,
+            thread_id=7,
+            title="Example",
+            execution_root=self.old_root,
+        )
+        target = self.allowed_b / "example"
+        store, workflow_id = self._relocation_ready(target)
+        store.confirm(42, workflow_id)
+        with patch(
+            "hermes_codex_router.project_editing._after_registry_write",
+            side_effect=SimulatedCrash(),
+        ):
+            with self.assertRaises(SimulatedCrash):
+                store.apply(workflow_id)
+        self.assertEqual(
+            self.state.get_topic(topic.topic_id).execution_scope, f"root:{self.old_root}"
+        )
+        store.recover_pending()
+        self.assertEqual(self.state.get_topic(topic.topic_id).execution_scope, f"root:{target}")
+
     def test_display_name_edit_preserves_identity_root_topic_and_group_binding(self) -> None:
         self._dynamic_binding()
         store, workflow_id = self._rename_ready()

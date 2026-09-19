@@ -20,7 +20,7 @@ from .provider_catalog import (
     opencode_models,
 )
 from .provider_catalog_cache import CatalogSnapshot, ProviderCatalogCache
-from .registry import load_registry
+from .registry import ExecutionRootError, load_registry, validate_execution_root
 from .routing import decide_targets, parse_command, parse_context_request
 from .state import HubState
 from .telegram import (
@@ -36,6 +36,7 @@ from .telegram import (
 from .telegram_activity import telegram_activity
 from .telegram_interaction import telegram_contract_version, telegram_turn_prompt
 from .telegram_multipart import send_telegram_html_parts
+from .topic_execution import require_inline_topic
 
 
 class ExternalAgentService:
@@ -66,6 +67,13 @@ class ExternalAgentService:
             )
         self.state_path = state_path
         self.state = HubState.open(state_path)
+        try:
+            self.state.reconcile_legacy_execution_scopes(
+                {project.project_id: project.root for project in self.registry.projects}
+            )
+        except BaseException:
+            self.state.close()
+            raise
         self.response_transport_enabled = response_transport
         self._telegram = (
             TelegramBotApi(self.agent.token_file.read_text(encoding="utf-8").strip())
@@ -195,13 +203,16 @@ class ExternalAgentService:
 
     def _direct_topic(self, chat_id: int, thread_id: int, project_id: str):
         topic = self.state.find_topic(chat_id, thread_id)
-        if topic is not None:
-            return topic
         return self.state.observe_topic(
             project_id=project_id,
             chat_id=chat_id,
             thread_id=thread_id,
-            title="General" if thread_id == 1 else f"Topic {thread_id}",
+            title=(
+                topic.title
+                if topic is not None
+                else ("General" if thread_id == 1 else f"Topic {thread_id}")
+            ),
+            execution_root=self.registry.require_project(project_id).root,
         )
 
     def _show_direct_models(
@@ -358,10 +369,12 @@ class ExternalAgentService:
         project_id: str,
         session_id: str,
     ) -> None:
+        require_inline_topic(self.state, self.state.get_topic(topic_id))
         session = self.state.get_session(session_id)
         if not session.provider_session_id:
             raise RuntimeError("provider session is not started")
         project = self.registry.require_project(project_id)
+        validate_execution_root(self.registry, project)
         result = self.adapter.run_turn(
             cwd=project.root,
             session_id=session.provider_session_id,
@@ -440,14 +453,7 @@ class ExternalAgentService:
                 )
                 return False
         if message.is_forwarded:
-            topic = self.state.find_topic(message.chat_id, message.thread_id)
-            if topic is None:
-                topic = self.state.observe_topic(
-                    project_id=binding.project_id,
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    title="General" if message.thread_id == 1 else f"Topic {message.thread_id}",
-                )
+            topic = self._direct_topic(message.chat_id, message.thread_id, binding.project_id)
             return self.state.record_forwarded_quote(
                 topic_id=topic.topic_id,
                 chat_id=message.chat_id,
@@ -459,14 +465,7 @@ class ExternalAgentService:
         if command is not None:
             if not self.direct_messages_only:
                 return False
-            topic = self.state.find_topic(message.chat_id, message.thread_id)
-            if topic is None:
-                topic = self.state.observe_topic(
-                    project_id=binding.project_id,
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    title="General" if message.thread_id == 1 else f"Topic {message.thread_id}",
-                )
+            topic = self._direct_topic(message.chat_id, message.thread_id, binding.project_id)
             active = self.state.active_session(topic.topic_id)
             if command.name == "status":
                 detail = (
@@ -502,22 +501,8 @@ class ExternalAgentService:
                 ),
             )
             return True
-        topic = self.state.find_topic(message.chat_id, message.thread_id)
-        if topic is None:
-            topic = self.state.observe_topic(
-                project_id=binding.project_id,
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                title="General" if message.thread_id == 1 else f"Topic {message.thread_id}",
-            )
+        topic = self._direct_topic(message.chat_id, message.thread_id, binding.project_id)
         active = self.state.active_session(topic.topic_id)
-        if self.direct_messages_only and active is None:
-            active = self.state.activate_agent(
-                topic.topic_id,
-                self.agent.agent_id,
-                self.agent.default_model,
-                self.agent.default_effort,
-            )
         active_agent = (
             active.agent_id
             if active
@@ -541,6 +526,20 @@ class ExternalAgentService:
             observer_agent_id=self.agent.agent_id,
         ):
             return False
+        try:
+            require_inline_topic(self.state, topic)
+        except ExecutionRootError as exc:
+            send_telegram_html_parts(
+                self.telegram, message.chat_id, message.thread_id, exc.public_message
+            )
+            return True
+        if self.direct_messages_only and active is None:
+            active = self.state.activate_agent(
+                topic.topic_id,
+                self.agent.agent_id,
+                self.agent.default_model,
+                self.agent.default_effort,
+            )
         if active is not None and active.agent_id == self.agent.agent_id:
             session = active
         else:
@@ -602,6 +601,13 @@ class ExternalAgentService:
                 f"{forwarded_context}\n\nCURRENT USER MESSAGE:\n{prompt}"
             )
         project = self.registry.require_project(binding.project_id)
+        try:
+            validate_execution_root(self.registry, project)
+        except ExecutionRootError as exc:
+            send_telegram_html_parts(
+                self.telegram, message.chat_id, message.thread_id, exc.public_message
+            )
+            return True
         artifact_job_id, staging_dir = create_job_staging(
             Path(project.root), prefix=f"{self.agent.agent_id}-inline"
         )
