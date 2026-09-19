@@ -10,6 +10,16 @@ the only writer.
 
 ## Project-topic entry
 
+Optional local `codex_model_provider` selects a named provider already configured
+in Codex (for example `example-proxy`). It is not a URL or a credential. Both
+OpenAI and this exact provider can be discovered; new origins retain the actual
+inspected provider. `/local` pins this route and the session model, `/return`
+still invokes no model, and the next turn must resume the same thread. Close
+the local CLI before return. An active shared-server subscriber can prevent a
+route change; fail closed and close that client, do not replace the thread or
+restart the shared server under another writer. Schema 30 needs a compatible
+rollback artifact before activation.
+
 1. In the intended registered topic, send `/connect`.
 2. Select one bounded saved-session label for that project.
 3. Review the source, destination, history separation, and replacement notice.

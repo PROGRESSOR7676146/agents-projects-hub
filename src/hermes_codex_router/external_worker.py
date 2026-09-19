@@ -116,6 +116,7 @@ class ExternalQueueWorker:
                 config.codex_socket_path,
                 manage_process=config.manage_codex_server,
                 stdio_executable=config.codex_stdio_executable,
+                model_provider=config.codex_model_provider,
                 shared_socket_health=(
                     (lambda: probe_codex_runtime_proxy().ok)
                     if config.codex_multi_auth_dir is not None
@@ -299,11 +300,15 @@ class ExternalQueueWorker:
             elif workflow.stage == "activation_requested":
                 if workflow.source_thread_id is None:
                     raise ExternalQueueWorkerError("connect source is missing")
-                client.read_thread_metadata(
+                metadata = client.read_thread_metadata(
                     thread_id=workflow.source_thread_id,
                     cwd=workflow.canonical_root,
                 )
-                store.prepare_marker(workflow.workflow_id, workflow.lease_token)
+                store.prepare_marker(
+                    workflow.workflow_id,
+                    workflow.lease_token,
+                    model_provider=metadata.model_provider,
+                )
             else:
                 raise ExternalQueueWorkerError("connect workflow stage is not executable")
         except Exception as exc:
@@ -590,11 +595,13 @@ class ExternalQueueWorker:
                 if (
                     metadata.thread_id != origin.provider_thread_id
                     or metadata.cwd != origin.canonical_root
-                    or metadata.model_provider != origin.model_provider
+                    or metadata.model_provider
+                    not in {origin.model_provider, self.config.codex_model_provider}
                 ):
                     raise ExternalQueueWorkerError("adopted Codex source mismatch")
             fallback_transfer = bool(
                 origin is None
+                and self.config.codex_model_provider is None
                 and job.provider_session_id
                 and self.supervisor.transport_mode == "stdio-fallback"
             )
@@ -633,7 +640,8 @@ class ExternalQueueWorker:
             if origin is not None and (
                 thread.thread_id != origin.provider_thread_id
                 or thread.cwd != origin.canonical_root
-                or thread.model_provider != origin.model_provider
+                or thread.model_provider
+                != (self.config.codex_model_provider or origin.model_provider)
             ):
                 raise ExternalQueueWorkerError("adopted Codex resume identity mismatch")
             journal.record_thread(job.job_id, token, thread.thread_id, project.root)

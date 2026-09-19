@@ -35,6 +35,7 @@ class CodexAppServerSupervisor:
         manage_process: bool = True,
         stdio_executable: Path | None = None,
         shared_socket_health: Callable[[], bool] | None = None,
+        model_provider: str | None = None,
     ) -> None:
         self.socket_path = socket_path.expanduser().resolve()
         self.manage_process = manage_process
@@ -42,6 +43,7 @@ class CodexAppServerSupervisor:
             stdio_executable.expanduser().resolve(strict=True) if stdio_executable else None
         )
         self.shared_socket_health = shared_socket_health
+        self.model_provider = model_provider
         self.process: subprocess.Popen[bytes] | None = None
         self.transport_mode: str | None = None
         self._ownership_file: BinaryIO | None = None
@@ -150,6 +152,7 @@ class CodexAppServerSupervisor:
             client = CodexAppServerClient(
                 StdioJsonLineTransport.start(str(self.stdio_executable)),
                 approval_policy="never",
+                model_provider=self.model_provider,
             )
             client.initialize()
             return client
@@ -160,7 +163,9 @@ class CodexAppServerSupervisor:
         if self.transport_mode == "socket" and not self.socket_path.is_socket():
             raise AppServerError("shared Codex app-server socket is unavailable")
         try:
-            client = CodexAppServerClient(UnixWebSocketTransport(self.socket_path))
+            client = CodexAppServerClient(
+                UnixWebSocketTransport(self.socket_path), model_provider=self.model_provider
+            )
             client.initialize()
             return client
         except Exception:
@@ -170,6 +175,7 @@ class CodexAppServerSupervisor:
             fallback = CodexAppServerClient(
                 StdioJsonLineTransport.start(str(self.stdio_executable)),
                 approval_policy="never",
+                model_provider=self.model_provider,
             )
             fallback.initialize()
             return fallback

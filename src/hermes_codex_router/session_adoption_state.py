@@ -19,6 +19,7 @@ class AdoptionRequest:
     model: str
     effort: str
     replaces_session_id: str | None = None
+    model_provider: str = "openai"
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +120,7 @@ class CodexSessionOrigins:
         _bounded(request.project_id, name="project_id", maximum=48)
         _bounded(request.model, name="model", maximum=200)
         _bounded(request.effort, name="effort", maximum=64)
+        _bounded(request.model_provider, name="model_provider", maximum=64)
         if (
             type(request.chat_id) is not int
             or not -(2**63) <= request.chat_id < 0
@@ -257,12 +259,13 @@ class CodexSessionOrigins:
         self.connection.execute(
             """INSERT INTO codex_session_origins (session_id, provider_thread_id, project_id,
                canonical_root, model_provider, created_at, replaces_session_id)
-               VALUES (?, ?, ?, ?, 'openai', ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
                 session.session_id,
                 request.provider_thread_id,
                 request.project_id,
                 str(request.canonical_root),
+                request.model_provider,
                 now,
                 request.replaces_session_id,
             ),

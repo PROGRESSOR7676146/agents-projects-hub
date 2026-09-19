@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,9 @@ def local_resume_command(
     executable: str | None,
     provider_session_id: str,
     project_root: Path,
+    *,
+    model_provider: str | None = None,
+    model: str | None = None,
 ) -> LocalResumeCommand:
     session_id = provider_session_id.strip()
     if not session_id:
@@ -34,6 +38,15 @@ def local_resume_command(
     root = str(project_root.expanduser().resolve(strict=True))
     if runtime == "codex":
         argv = ("codex", "resume", session_id, "-C", root)
+        if model_provider is not None:
+            if not model:
+                raise LocalTransferError("explicit provider resume requires a model")
+            argv += (
+                "-c",
+                "model_provider=" + json.dumps(model_provider),
+                "-c",
+                "model=" + json.dumps(model),
+            )
     elif runtime == "opencode":
         argv = (executable or "opencode", root, "--session", session_id)
     elif runtime == "antigravity":

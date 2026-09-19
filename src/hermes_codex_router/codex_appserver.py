@@ -357,12 +357,15 @@ class CodexAppServerClient:
         *,
         initialized: bool = False,
         approval_policy: str = "on-request",
+        model_provider: str | None = None,
     ) -> None:
         if approval_policy not in {"on-request", "never"}:
             raise ValueError("unsupported Codex approval policy")
         self._transport = transport
         self._initialized = initialized
         self._approval_policy = approval_policy
+        self._model_provider = model_provider
+        self._session_providers = tuple(dict.fromkeys(("openai", model_provider or "openai")))
         self._next_request_id = 1
         self.notifications: deque[dict[str, Any]] = deque()
         self.on_visible_item: Callable[[str, str, str], None] | None = None
@@ -492,7 +495,10 @@ class CodexAppServerClient:
             raise CodexMetadataError("source_root_invalid") from None
         if source_root != expected_root:
             raise CodexMetadataError("source_root_mismatch")
-        if thread.get("ephemeral") is not False or thread.get("modelProvider") != "openai":
+        if (
+            thread.get("ephemeral") is not False
+            or thread.get("modelProvider") not in self._session_providers
+        ):
             raise CodexMetadataError("source_backend_unsupported")
         if thread.get("source") not in ("cli", "vscode", "exec", "appServer"):
             raise CodexMetadataError("source_kind_unsupported")
@@ -505,7 +511,9 @@ class CodexAppServerClient:
             raise CodexMetadataError("source_not_idle")
         if status.get("activeFlags", []) != []:
             raise CodexMetadataError("source_not_idle")
-        return CodexThreadMetadata(thread_id, source_root, "openai", status["type"])
+        return CodexThreadMetadata(
+            thread_id, source_root, str(thread["modelProvider"]), status["type"]
+        )
 
     def list_connectable_threads(
         self,
@@ -530,7 +538,7 @@ class CodexAppServerClient:
                 "limit": limit,
                 "sortKey": "updated_at",
                 "sortDirection": "desc",
-                "modelProviders": ["openai"],
+                "modelProviders": list(self._session_providers),
                 "sourceKinds": ["cli", "vscode"],
                 "archived": False,
                 "useStateDbOnly": True,
@@ -555,7 +563,7 @@ class CodexAppServerClient:
                 or status.get("type") not in ("idle", "notLoaded")
                 or status.get("activeFlags", []) != []
                 or raw.get("ephemeral") is not False
-                or raw.get("modelProvider") != "openai"
+                or raw.get("modelProvider") not in self._session_providers
                 or raw.get("source") not in ("cli", "vscode")
                 or not isinstance(updated_at, int)
                 or isinstance(updated_at, bool)
@@ -611,10 +619,13 @@ class CodexAppServerClient:
                 **self._approval_params(),
                 **instruction_params,
                 "experimentalRawEvents": False,
+                **({"modelProvider": self._model_provider} if self._model_provider else {}),
             },
         )
         if not isinstance(result, dict) or not isinstance(result.get("thread"), dict):
             raise RpcError("thread/start returned an invalid result")
+        if self._model_provider and result.get("modelProvider") != self._model_provider:
+            raise RpcError("thread/start returned a different model provider")
         returned_cwd = Path(str(result.get("cwd"))).resolve(strict=True)
         if returned_cwd != canonical_cwd:
             raise RpcError("thread/start returned a different cwd")
@@ -662,10 +673,15 @@ class CodexAppServerClient:
                 **self._approval_params(),
                 **instruction_params,
                 "excludeTurns": True,
+                **({"modelProvider": self._model_provider} if self._model_provider else {}),
             },
         )
         thread = result.get("thread") if isinstance(result, dict) else None
         returned_id = thread.get("id") if isinstance(thread, dict) else None
+        if self._model_provider and (
+            not isinstance(result, dict) or result.get("modelProvider") != self._model_provider
+        ):
+            raise RpcError("thread/resume returned a different model provider")
         returned_cwd = result.get("cwd") if isinstance(result, dict) else None
         if returned_id != thread_id:
             raise RpcError("thread/resume returned a different thread id")

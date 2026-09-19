@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from typing import Any, cast
 
 import test_codex_session_adoption as adoption_fixtures
@@ -32,8 +33,22 @@ class SessionAdoptionJourneyTests(unittest.TestCase):
                     finally:
                         fixture.doCleanups()
 
-    def journey(self, fixture, replacement, mode):
-        config = fixture.config
+    def test_proxy_route_preserves_old_and_new_origins_across_local_return(self):
+        for source in ("openai", "example-proxy"):
+            for mode in ("stdio-fallback", "socket"):
+                with self.subTest(source=source, transport=mode):
+                    fixture = adoption_fixtures.CodexSessionAdoptionTests()
+                    fixture.setUp()
+                    try:
+                        fixture.inspector.return_value = replace(
+                            fixture.inspector.return_value, model_provider=source
+                        )
+                        self.journey(fixture, False, mode, route="example-proxy", source=source)
+                    finally:
+                        fixture.doCleanups()
+
+    def journey(self, fixture, replacement, mode, route=None, source="openai"):
+        config = replace(fixture.config, codex_model_provider=route)
         registry = load_registry(config.registry_path)
         state = HubState.open(config.state_path)
         try:
@@ -54,18 +69,21 @@ class SessionAdoptionJourneyTests(unittest.TestCase):
             native_history = ["CLI marker before attach"]
             calls = []
             root = fixture.root
+            backend = source
 
             class Client(worker_fixtures.WorkerClient):
                 def read_thread_metadata(self, **kwargs):
                     calls.append(("read", kwargs["thread_id"]))
-                    return CodexThreadMetadata("example-thread", root, "openai", "notLoaded")
+                    return CodexThreadMetadata("example-thread", root, backend, "notLoaded")
 
                 def start_thread(self, **kwargs):
                     raise AssertionError("adopted journey must never start a thread")
 
                 def resume_thread(self, **kwargs):
+                    nonlocal backend
+                    backend = route or source
                     calls.append(("resume", kwargs["thread_id"]))
-                    return CodexThread("example-thread", root, "gpt-5.6-sol", "openai")
+                    return CodexThread("example-thread", root, "gpt-5.6-sol", backend)
 
                 def start_turn(self, **kwargs):
                     calls.append(("turn", kwargs["thread_id"]))
@@ -146,6 +164,7 @@ class SessionAdoptionJourneyTests(unittest.TestCase):
             self.assertEqual(
                 CodexSessionOrigins(state).require(session_id).activation_message_id, 10
             )
+            self.assertEqual(CodexSessionOrigins(state).require(session_id).model_provider, source)
             self.assertTrue(
                 all(
                     job.status == "completed"

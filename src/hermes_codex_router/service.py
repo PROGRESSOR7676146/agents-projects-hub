@@ -176,6 +176,7 @@ class ProjectHubService:
                 self.config.codex_socket_path,
                 manage_process=self.config.manage_codex_server,
                 stdio_executable=self.config.codex_stdio_executable,
+                model_provider=self.config.codex_model_provider,
             )
         self._codex_client: CodexAppServerClient | None = None
         self.terminal = TerminalRuntime(
@@ -2796,7 +2797,12 @@ class ProjectHubService:
             agent = self.config.require_agent(session.agent_id)
             try:
                 resume = local_resume_command(
-                    agent.runtime, agent.executable, session.provider_session_id, project.root
+                    agent.runtime,
+                    agent.executable,
+                    session.provider_session_id,
+                    project.root,
+                    model_provider=self.config.codex_model_provider,
+                    model=session.model,
                 )
             except LocalTransferError as exc:
                 self._send_text(message, str(exc))

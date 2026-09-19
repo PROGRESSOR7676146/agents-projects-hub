@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import time
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Iterator
 
@@ -85,7 +86,9 @@ def inspect_codex_session(config: HubConfig, thread_id: str, root: Path) -> Code
         transport = StdioJsonLineTransport.start(str(config.codex_stdio_executable))
     else:
         raise RpcError("configured Codex metadata transport unavailable")
-    client = CodexAppServerClient(transport, approval_policy="never")
+    client = CodexAppServerClient(
+        transport, approval_policy="never", model_provider=config.codex_model_provider
+    )
     try:
         client.initialize(deadline=deadline)
         return client.read_thread_metadata(thread_id=thread_id, cwd=root, deadline=deadline)
@@ -109,7 +112,9 @@ def list_connectable_codex_sessions(
         transport = StdioJsonLineTransport.start(str(config.codex_stdio_executable))
     else:
         raise RpcError("configured Codex metadata transport unavailable")
-    client = CodexAppServerClient(transport, approval_policy="never")
+    client = CodexAppServerClient(
+        transport, approval_policy="never", model_provider=config.codex_model_provider
+    )
     try:
         client.initialize(deadline=deadline)
         return client.list_connectable_threads(root=root, limit=24)
@@ -227,10 +232,11 @@ def attach_codex_session(
         if (
             metadata.thread_id != codex_thread_id
             or metadata.cwd != root
-            or metadata.model_provider != "openai"
+            or metadata.model_provider not in {"openai", config.codex_model_provider}
             or metadata.status not in ("idle", "notLoaded")
         ):
             raise AdoptionError("source_identity_mismatch")
+        request = replace(request, model_provider=metadata.model_provider)
         if not apply:
             return _result(request, target, "preview")
         if _project_root(config, project_id, chat_id) != root:

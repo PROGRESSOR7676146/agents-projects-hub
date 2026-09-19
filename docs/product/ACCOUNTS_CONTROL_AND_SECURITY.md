@@ -180,10 +180,20 @@ This normative module is part of the
   generation.
 
 Initial reviewed resume shapes are `codex resume SESSION_ID -C ROOT`,
+with explicit provider/model `-c` overrides when local `codex_model_provider`
+is configured,
 `opencode ROOT --session SESSION_ID`, and
 `cd -- ROOT && agy --conversation SESSION_ID --sandbox --mode accept-edits`. They are version-sensitive
 adapter capabilities, not permanent user-input templates. Hermes requires a
 separate native capability check.
+
+An explicit local Codex route MUST preserve the source provider as immutable
+provenance while pinning the configured provider for execution and `/local`.
+Discovery MUST accept only OpenAI and that exact configured provider. A route
+mismatch MUST fail before productive inference; exact-session failure MUST NOT
+be repaired by creating a replacement thread. Existing root, activation and
+single-writer checks remain mandatory. See
+[ADR 0028](../decisions/0028-explicit-codex-provider-routing.md).
 
 ## 12. Approval, sandbox, and secret requirements
 

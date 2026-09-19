@@ -84,6 +84,14 @@ origins, activation boundaries and thread reservations remain unchanged. Runtime
 rollback requires a schema-30-compatible artifact; restoring an old database is
 not a runtime rollback procedure.
 
+An explicit `codex_model_provider` now pins Codex start/resume and `/local`
+commands to one locally configured route without replacing session identity.
+Discovery remains limited to OpenAI plus that exact provider. Original provider
+provenance and `/return`'s model-free lease semantics remain intact. Offline
+old/new-origin round trips cover socket and stdio execution; deployment-local
+Telegram/CLI acceptance remains separate. See
+[ADR 0028](../decisions/0028-explicit-codex-provider-routing.md).
+
 Saved Codex CLI and Codex VS Code/app sessions can be connected through
 `/connect` in a registered project topic, the owner-only Hub private control plane, or a short-lived code
 issued by local `session connect [CONFIG]`. All three entrances use one durable,
@@ -141,7 +149,7 @@ available for recovery. Schema 25 introduced immutable origins and the original
 first-return boundary. External workers continue the exact thread through socket
 or stdio; unsupported modes fail closed. Automated evidence uses fictional
 provider and Telegram adapters. Live continuity and a production rollback
-artifact for schema 29 remain unaccepted; the current target is schema 29.
+artifact for schema 30 remain deployment-specific; the current target is schema 30.
 
 - Numeric project/topic identity, canonical allowlisted roots, idempotent
   routing, persistent provider sessions, bounded visible context, and writer
@@ -411,7 +419,7 @@ artifact for schema 29 remain unaccepted; the current target is schema 29.
   reapers. Runtime-proxy monitoring remains independent and never restarts a
   shared app-server underneath an active Codex or tlive session.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
-- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-29
+- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-30
   immutable-deployment triage guide, source revision, timestamp, and content
   hashes into a neutral local store for the independent Hermes channel. It
   carries no private deployment inventory and creates no service dependency.
