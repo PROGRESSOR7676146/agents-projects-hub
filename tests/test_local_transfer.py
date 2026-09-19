@@ -8,6 +8,25 @@ from hermes_codex_router.local_transfer import LocalTransferError, local_resume_
 
 
 class LocalTransferTests(unittest.TestCase):
+    def test_codex_shared_socket_attaches_without_second_writer(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="Shared Project ") as directory:
+            root = Path(directory)
+            socket = root / "control socket.sock"
+            command = local_resume_command(
+                "codex",
+                None,
+                "thread-123",
+                root,
+                model_provider="example-proxy",
+                model="example-model",
+                codex_socket_path=socket,
+            )
+            self.assertEqual(command.argv[:4], ("codex", "--remote", f"unix://{socket}", "resume"))
+            self.assertEqual(command.argv[4:7], ("thread-123", "-C", str(root)))
+            self.assertIn('model_provider="example-proxy"', command.argv)
+            self.assertNotIn("--sandbox", command.argv)
+            self.assertNotIn("--ask-for-approval", command.argv)
+
     def test_codex_resume_command_is_argument_safe(self) -> None:
         directory = tempfile.TemporaryDirectory(prefix="My Project ")
         self.addCleanup(directory.cleanup)

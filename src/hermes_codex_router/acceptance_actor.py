@@ -282,7 +282,10 @@ async def _click_callback_prefix(message: Any, prefix: bytes) -> None:
 async def _click_callback_exact(message: Any, data: bytes) -> None:
     for row in getattr(message, "buttons", None) or ():
         for button in row:
-            if getattr(button, "data", None) == data:
+            value = getattr(button, "data", None)
+            # Click the original callback unchanged: the Controller still
+            # validates the generation suffix before changing session state.
+            if isinstance(value, bytes) and value.split(b"~", 1)[0] == data:
                 await button.click()
                 return
     raise AcceptanceActorError(

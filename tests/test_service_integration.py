@@ -849,7 +849,8 @@ class ServiceIntegrationTests(unittest.TestCase):
             active = value.state.active_session(topic.topic_id)
             assert active is not None
             self.assertEqual(active.writer_mode, "local")
-            self.assertIn("codex resume thread-1 -C", telegram.sent[-1][2])
+            self.assertIn("codex --remote unix://", telegram.sent[-1][2])
+            self.assertIn("resume thread-1 -C", telegram.sent[-1][2])
 
             prompt_count = len(client.prompts)
             self.assertTrue(value.handle_update(update(12, "must not run")))

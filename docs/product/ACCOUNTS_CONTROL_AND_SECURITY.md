@@ -71,7 +71,11 @@ This normative module is part of the
 - **REQ-CMD-004 (Implemented):** `/new` requires an owner callback confirmation
   and resets only the active provider session; mass reset behavior is removed.
   `/local` transfers writer ownership. Codex `/return` changes only the lease,
-  with no provider call, summary, or session-ID change. Other providers retain
+  with no provider call, summary, or session-ID change. Codex local commands
+  attach the native TUI to the configured owning app-server through `--remote`
+  and a Unix socket; standalone resume MUST NOT create a competing persistence
+  writer. Remote attach retains the session's permissions without overrides.
+  Other providers retain
   bounded summaries pending separate native-resume acceptance.
 - **REQ-CMD-005 (Implemented):** The public Telegram command menu contains only
   `/status`, `/model`, `/accounts`, `/new`, `/local`, `/return`, and `/stop`. Legacy

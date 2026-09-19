@@ -2824,6 +2824,7 @@ class ProjectHubService:
                     project.root,
                     model_provider=self.config.codex_model_provider,
                     model=session.model,
+                    codex_socket_path=self.config.codex_socket_path,
                 )
             except LocalTransferError as exc:
                 self._send_text(message, str(exc))

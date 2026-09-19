@@ -11,6 +11,8 @@ operator deployment inventory or live conversation evidence.
 Native Codex catalog discovery no longer requires the retired multi-auth helper.
 The monitor reads `model/list`; isolated Controller refresh callbacks request
 asynchronous discovery and retain last-good selectable models without provider RPC.
+Codex `/local` now emits a native TUI attach to the configured shared Unix socket,
+preserving the same persisted thread instead of opening a competing standalone writer.
 
 The [quality and stability review](../operations/QUALITY_AND_STABILITY_REVIEW.md)
 records the initial findings. Milestone one of the
