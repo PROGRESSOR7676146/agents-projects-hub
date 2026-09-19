@@ -198,6 +198,14 @@ class ProviderCatalogCache:
             raise RuntimeError("provider catalog cache verification failed")
         return result
 
+    def request_refresh(self, agent_id: str) -> None:
+        """Ask the monitor for discovery while retaining the displayed choices."""
+        value = self._read()
+        raw = value["providers"].get(agent_id)
+        if isinstance(raw, dict):
+            raw["refresh_requested"] = True
+            self._write(value)
+
     def mark_failure(self, agent_id: str, *, observed_at: datetime | None = None) -> None:
         value = self._read()
         providers = value["providers"]
@@ -218,6 +226,9 @@ class ProviderCatalogCache:
         max_age: timedelta = timedelta(hours=12),
         now: datetime | None = None,
     ) -> bool:
+        raw = self._read()["providers"].get(agent_id)
+        if isinstance(raw, dict) and raw.get("refresh_requested") is True:
+            return True
         snapshot = self.load(agent_id)
         if snapshot is None:
             return True

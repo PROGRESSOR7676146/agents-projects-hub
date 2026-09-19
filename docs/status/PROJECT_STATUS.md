@@ -8,6 +8,10 @@ operator deployment inventory or live conversation evidence.
 
 ## Quality checkpoint
 
+Native Codex catalog discovery no longer requires the retired multi-auth helper.
+The monitor reads `model/list`; isolated Controller refresh callbacks request
+asynchronous discovery and retain last-good selectable models without provider RPC.
+
 The [quality and stability review](../operations/QUALITY_AND_STABILITY_REVIEW.md)
 records the initial findings. Milestone one of the
 [reliability plan](../operations/RELIABILITY_PLAN.md) now consumes buffered Codex

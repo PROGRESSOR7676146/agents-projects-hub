@@ -51,8 +51,11 @@ This normative module is part of the
   long catalogs are paginated. Failed discovery uses the cache and becomes an
   Operations warning only after the cached success is older than 24 hours. When
   Codex multi-auth is not configured, monitoring MUST NOT execute a discovered
-  `codex-multi-auth` binary or retain its account-agnostic matrix: the selectable
-  Codex catalog MUST collapse to the configured default model and effort.
+  `codex-multi-auth` binary. Instead, the monitor reads native Codex `model/list`
+  metadata through the configured socket, without starting threads or inference.
+  Discovery failures preserve the last good catalog. The isolated Controller
+  never discovers models itself: Refresh requests monitor refresh while keeping
+  cached choices usable. Only an empty cache uses the configured default.
 - **REQ-CMD-003 (Implemented):** `/accounts` lists configured provider accounts
   and observable limits. OpenCode Go exact exhaustion/reset telemetry is shown
   only after a real provider `429`; plan caps are labelled separately. In the

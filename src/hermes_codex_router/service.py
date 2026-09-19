@@ -1292,6 +1292,22 @@ class ProjectHubService:
                 source_version="externally managed fallback",
             )
         cached = cache.load(agent_id)
+        if self._uses_external_codex_worker():
+            # The isolated Controller must never own provider RPC/CLI discovery.
+            # Refresh invalidates freshness, not the selectable last-good models.
+            if cached is None:
+                cached = cache.store(
+                    agent_id,
+                    (
+                        ProviderModel(
+                            agent.default_model, agent.default_model, (agent.default_effort,)
+                        ),
+                    ),
+                    source_version="configured fallback",
+                )
+            if refresh:
+                cache.request_refresh(agent_id)
+            return cached
         if not refresh and cached is not None and not cache.is_stale(agent_id, max_age=max_age):
             return cached
         if not refresh and cached is None and self._queue_enabled(agent_id):
@@ -1770,7 +1786,12 @@ class ProjectHubService:
             if callback.data.startswith("modelrefresh:"):
                 _, agent_id, raw_page = callback.data.split(":", 2)
                 self.config.require_agent(agent_id)
-                self.telegram.answer_callback(callback.callback_id, "Refreshing catalog…")
+                self.telegram.answer_callback(
+                    callback.callback_id,
+                    "Refresh queued for monitor; reopen /model after its next check."
+                    if self._uses_external_codex_worker()
+                    else "Refreshing catalog…",
+                )
                 self._show_model_menu(
                     message,
                     topic,

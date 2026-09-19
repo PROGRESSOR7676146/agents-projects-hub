@@ -909,6 +909,51 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         self.assertEqual(cold.source_version, "externally managed fallback")
         self.assertEqual(warm.models[0].model_id, "provider-selected")
 
+    def test_isolated_controller_refresh_preserves_models_without_rpc(self) -> None:
+        from hermes_codex_router.provider_catalog import ProviderModel
+
+        controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
+        controller.config = replace(
+            self.config,
+            agents=self.config.agents
+            + (
+                AgentDefinition(
+                    "codex",
+                    "Codex",
+                    "example_codex_bot",
+                    "codex",
+                    None,
+                    True,
+                    False,
+                    "configured",
+                    "high",
+                ),
+            ),
+        )
+        cache = controller._catalog_cache()
+        cache.store(
+            "codex",
+            (
+                ProviderModel("choice-a", "A", ("low", "high")),
+                ProviderModel("choice-b", "B", ("medium",)),
+            ),
+            source_version="codex model/list",
+        )
+        with (
+            patch.object(controller, "_uses_external_codex_worker", return_value=True),
+            patch.object(
+                controller,
+                "_discover_provider_models",
+                side_effect=AssertionError("provider invoked"),
+            ),
+        ):
+            refreshed = controller._provider_catalog("codex", refresh=True)
+            warm = controller._provider_catalog("codex")
+        self.assertEqual([m.model_id for m in refreshed.models], ["choice-a", "choice-b"])
+        self.assertEqual(warm.models, refreshed.models)
+        self.assertEqual(warm.updated_at, refreshed.updated_at)
+        self.assertTrue(cache.is_stale("codex"))
+
     def test_controller_fails_fast_for_legacy_managed_external_jobs(self) -> None:
         token = Path(self.tempdir.name) / "codex-token"
         token.write_text("123456:secret-token-value", encoding="utf-8")
