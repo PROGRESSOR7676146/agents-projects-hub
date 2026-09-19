@@ -1,6 +1,6 @@
 # Agents Projects Hub recovery capsule
 
-Maintained for Hub `0.7.0`, state schema `32`. This capsule is a bounded local
+Maintained for Hub `0.7.0`, state schema `33`. This capsule is a bounded local
 recovery guide, not authority to weaken policy, retry ambiguous work, expose
 private state, or perform a rollout.
 
@@ -38,7 +38,7 @@ ACTIVE_BIN doctor HUB_CONFIG
 ```
 
 Acceptance requires `release-info.ok=true`, `clean_tree=true`, an exact Git
-SHA, schema `32/32`, and `deployment_revision.status=converged`. A live process
+SHA, schema `33/33`, and `deployment_revision.status=converged`. A live process
 or package version alone is not deployment identity.
 
 ## Classify before repair

@@ -1,6 +1,6 @@
 # P0: полнота входящих материалов
 
-Статус: запланировано; исправление не реализовано.
+Статус: repository checkpoint реализован в schema 33; deployment и live E2E не выполнялись.
 База исследования: `6f4f0e2e383711d9c595e5cdda4ebe381c29d300`.
 
 ## Результат
@@ -105,3 +105,20 @@ Live Telegram/provider E2E — отдельный разрешённый эта�
 Исправление context/quota labels идёт следующим. Универсальный document service,
 новые providers, автоматическое исполнение файлов, расширение approvals и
 фоновый LLM-анализ входящих материалов не входят в P0.
+
+## Итог repository checkpoint
+
+Реализация использует одну additive migration 33 и не изменяет миграции 1–32.
+Cloud Bot API остаётся ограничен скачиванием файла до 20 MB; Premium-статус
+пользовательского аккаунта этот bot boundary не меняет. Hub поэтому не пытается
+пересылать большие файлы через acceptance-аккаунт и не заявляет, что способен
+разбить байты, которых Bot API ему не передал. Возможный отдельный rollout
+официального local Bot API server, который допускает download без size limit,
+остаётся будущей deployment-задачей с собственной trust boundary.
+
+Offline acceptance покрывает caption/file-only parsing, фактический input fake
+provider, bounded album, FIFO material во время active turn, passive forward,
+selected quote, duplicate update, явный oversized отказ, native Codex
+`localImage`, schema-32 upgrade и symlink/integrity refusal. Repository checks
+не являются доказательством работающей установки; live Telegram/provider E2E
+по-прежнему требует отдельной разрешённой задачи и exact-revision evidence.

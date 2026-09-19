@@ -11,6 +11,7 @@ from unittest.mock import patch
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.external_service import ExternalAgentService
 from hermes_codex_router.external_worker import ExternalQueueWorker
+from hermes_codex_router.migrations import LATEST_SCHEMA_VERSION
 from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.registry import ExecutionRootError
 from hermes_codex_router.service import ProjectHubService
@@ -299,7 +300,7 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
             adapter = CapturingAdapter("opencode")
             worker = harness.worker("opencode", adapter)
             try:
-                self.assertEqual(state.schema_version, 32)
+                self.assertEqual(state.schema_version, LATEST_SCHEMA_VERSION)
                 self.assertEqual(state.get_topic(old.topic_id).execution_scope, f"root:{root}")
                 for table in preserved_tables:
                     self.assertEqual(

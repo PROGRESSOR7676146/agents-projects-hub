@@ -51,6 +51,7 @@ with a new record.
 | Execution root validation | Recheck the registered canonical allowlisted Git root before Hub-owned execution; invalid roots fail before invocation with no automatic replay. | [ADR 0029](0029-execution-time-root-validation.md) |
 | Root execution exclusion | Schema-31 transactional ownership permits at most one Hub-owned productive writer per canonical root across topics/providers; unresolved uncertainty retains the scope. | [ADR 0030](0030-canonical-root-execution-exclusion.md) |
 | Bounded root concurrency | Schema-32 global capacity and durable fairness permit parallel Hub workers only on independent canonical roots or explicitly bound and revalidated worktree lanes. | [ADR 0031](0031-bounded-root-concurrency.md) |
+| Durable inbound Telegram materials | Schema 33 atomically binds verified text/image snapshots to queue jobs and session/root identity; albums are one turn, late files stay FIFO, forwards remain passive, and unavailable content is explicit. | [ADR 0032](0032-durable-inbound-telegram-materials.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

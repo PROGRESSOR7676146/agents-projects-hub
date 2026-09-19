@@ -124,7 +124,13 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
                 state.close()
             package = Path(__file__).resolve().parents[1] / "src/hermes_codex_router"
             descriptors = []
-            for index, maximum in enumerate((32, 32, 24)):
+            for index, maximum in enumerate(
+                (
+                    migrations.LATEST_SCHEMA_VERSION,
+                    migrations.LATEST_SCHEMA_VERSION,
+                    24,
+                )
+            ):
                 wheel = _wheel(
                     root / f"fixture-{index}.whl",
                     version=f"0.7.{index}",

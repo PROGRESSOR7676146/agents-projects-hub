@@ -21,6 +21,118 @@ from hermes_codex_router.migrations import (
 
 
 class MigrationTests(unittest.TestCase):
+    def test_schema_32_upgrade_adds_incoming_material_state_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            connection = sqlite3.connect(path)
+            try:
+                for version in range(1, 33):
+                    if version == 31:
+                        migrations_module._ensure_execution_scope_column(connection)
+                    migrations_module._execute_migration_script(
+                        connection, getattr(migrations_module, f"MIGRATION_{version}")
+                    )
+                    if version == 1:
+                        migrations_module._ensure_legacy_columns(connection)
+                    connection.execute(f"PRAGMA user_version={version}")
+                connection.executescript(
+                    """INSERT INTO topics
+                       (project_id, chat_id, thread_id, title, execution_scope,
+                        created_at, updated_at)
+                       VALUES ('example-project', -1001234567890, 7, 'Topic',
+                               'root:/home/example/project', 'now', 'now');
+                       INSERT INTO agent_sessions
+                       (session_id, topic_id, agent_id, generation, status, model, effort,
+                        created_at, updated_at)
+                       VALUES ('session', 1, 'codex', 1, 'active', 'model', 'high',
+                               'now', 'now');
+                       INSERT INTO provider_jobs
+                       (job_id, idempotency_key, chat_id, message_id, topic_id,
+                        topic_sequence, agent_id, session_id, session_generation, model,
+                        effort, payload_text, status, created_at, updated_at)
+                       VALUES ('job', 'key', -1001234567890, 1, 1, 1, 'codex',
+                               'session', 1, 'model', 'high', 'hello', 'queued',
+                               'now', 'now');"""
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            result = migrate_database(path, create_backup=False)
+
+            self.assertEqual(
+                (result.previous_version, result.current_version),
+                (32, LATEST_SCHEMA_VERSION),
+            )
+            migrated = sqlite3.connect(path)
+            try:
+                columns = {row[1] for row in migrated.execute("PRAGMA table_info(provider_jobs)")}
+                self.assertIn("input_group_key", columns)
+                tables = {
+                    row[0]
+                    for row in migrated.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+                self.assertIn("incoming_materials", tables)
+                self.assertEqual(
+                    migrated.execute("SELECT payload_text FROM provider_jobs").fetchone()[0],
+                    "hello",
+                )
+                self.assertEqual(migrated.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            finally:
+                migrated.close()
+
+    def test_schema_33_fault_rolls_back_column_table_and_user_version(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            connection = sqlite3.connect(path)
+            try:
+                for version in range(1, 33):
+                    if version == 31:
+                        migrations_module._ensure_execution_scope_column(connection)
+                    migrations_module._execute_migration_script(
+                        connection, getattr(migrations_module, f"MIGRATION_{version}")
+                    )
+                    if version == 1:
+                        migrations_module._ensure_legacy_columns(connection)
+                    connection.execute(f"PRAGMA user_version={version}")
+                connection.commit()
+            finally:
+                connection.close()
+
+            original = migrations_module._execute_migration_script
+
+            def fail_schema_33(connection: sqlite3.Connection, script: str) -> None:
+                if script == migrations_module.MIGRATION_33:
+                    original(connection, script)
+                    raise RuntimeError("fictional schema-33 fault")
+                original(connection, script)
+
+            with mock.patch.object(
+                migrations_module,
+                "_execute_migration_script",
+                side_effect=fail_schema_33,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "schema-33 fault"):
+                    migrate_database(path, create_backup=False)
+
+            rolled_back = sqlite3.connect(path)
+            try:
+                self.assertEqual(rolled_back.execute("PRAGMA user_version").fetchone()[0], 32)
+                columns = {
+                    row[1] for row in rolled_back.execute("PRAGMA table_info(provider_jobs)")
+                }
+                self.assertNotIn("input_group_key", columns)
+                self.assertIsNone(
+                    rolled_back.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' "
+                        "AND name='incoming_materials'"
+                    ).fetchone()
+                )
+            finally:
+                rolled_back.close()
+
     def test_real_schema_30_upgrade_retains_pending_connect_and_edit_work(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
@@ -63,7 +175,10 @@ class MigrationTests(unittest.TestCase):
             finally:
                 connection.close()
             result = migrate_database(path)
-            self.assertEqual((result.previous_version, result.current_version), (30, 32))
+            self.assertEqual(
+                (result.previous_version, result.current_version),
+                (30, LATEST_SCHEMA_VERSION),
+            )
             connection = sqlite3.connect(path)
             try:
                 for table, rows in before.items():

@@ -200,6 +200,7 @@ necessary but not sufficient for items marked live.
 | Numeric project/topic isolation | Implemented | Automated multi-project isolation tests. |
 | Central Telegram group ingress | Implemented | External provider group pollers disabled by design. |
 | Reply/mention/quote/ordinary semantics | Implemented | Automated routing coverage; live acceptance is deployment-local. |
+| Inbound Telegram materials | Implemented for Hub-owned durable queue ingress; live acceptance pending | Schema-33 durable text/image snapshots, caption and file-only parsing, one-turn albums, passive forwards, FIFO late input, Codex `localImage`, provider-input regressions, explicit unsupported/20 MiB notices, and digest/path revalidation. Legacy inline input rejects attachments visibly. |
 | Explicit bounded visible context | Implemented | No automatic handoff; `/context [agent_id] [1..20]` reads only the current topic on explicit user request. |
 | Artifact staging and attachment delivery | Implemented for Hub-owned transports | Exact per-job staging, private immutable spool, path/size/digest validation, bounded rejection notice, durable ordered queue delivery, immediate legacy/DM delivery, and post-acceptance cleanup. Hermes retains its independent native transport. |
 | Codex persistent sessions and metadata | Implemented | App-server integration and restart persistence covered. |
