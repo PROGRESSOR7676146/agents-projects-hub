@@ -136,6 +136,13 @@ those methods to user identities. See the
 [onboarding guide](docs/operations/PROJECT_GROUP_ONBOARDING_PLAN.md) for private
 credential setup, failure recovery and live acceptance.
 
+For an already registered project, `/projects` also offers owner-only local
+editing. A display-name change does not rename the Telegram group. Git-root
+relocation uses only opaque locally generated choices, preserves the numeric
+group binding and both directories, and refuses attached provider sessions or
+unfinished work. Provider history is never rebound to the new root. See
+[ADR 0027](docs/decisions/0027-no-silent-session-rebind-on-project-relocation.md).
+
 For a local assisted selection, run:
 
 ```text
@@ -441,12 +448,20 @@ The publishable integration sources live in:
 
 Install them using the Hermes user-plugin/hook mechanism, and provide:
 
-- `HERMES_PROJECT_HUB_SOURCE` — absolute path to this repository's `src`;
+- `HERMES_PROJECT_HUB_SOURCE` — the Python import root (`site-packages`) of the
+  same clean immutable release used by Hub, never a production source checkout;
 - `HERMES_PROJECT_HUB_STATE` — the same SQLite state path used by the hub;
 - `HERMES_PROJECT_HUB_OWNER_IDS` — comma-separated allowed Telegram user IDs.
 
 Admission fails closed when the database or binding is unavailable. Explicit
 Hermes mentions remain on Hermes's native exclusive-mention path.
+
+Hub doctor reports `hermes:hub_plugin_compatibility` from the running gateway's
+configured import root, clean revision and read-only state schema. Treat a
+mismatch as a deployment gate failure, not a reason to disable private Hermes
+rescue. Every schema rollout/rollback must include plugin/hook consumers, update
+their import root, restart the gateway at an idle boundary and recheck. Native
+Hermes model providers and credentials are not changed by this integration.
 
 For response provenance, merge `config/hermes-display.example.yaml` into the
 Hermes config. It enables Hermes's native runtime footer; the Hub hook does not

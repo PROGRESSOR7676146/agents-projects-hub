@@ -51,8 +51,11 @@ This normative module is part of the
   long catalogs are paginated. Failed discovery uses the cache and becomes an
   Operations warning only after the cached success is older than 24 hours. When
   Codex multi-auth is not configured, monitoring MUST NOT execute a discovered
-  `codex-multi-auth` binary or retain its account-agnostic matrix: the selectable
-  Codex catalog MUST collapse to the configured default model and effort.
+  `codex-multi-auth` binary. Instead, the monitor reads native Codex `model/list`
+  metadata through the configured socket, without starting threads or inference.
+  Discovery failures preserve the last good catalog. The isolated Controller
+  never discovers models itself: Refresh requests monitor refresh while keeping
+  cached choices usable. Only an empty cache uses the configured default.
 - **REQ-CMD-003 (Implemented):** `/accounts` lists configured provider accounts
   and observable limits. OpenCode Go exact exhaustion/reset telemetry is shown
   only after a real provider `429`; plan caps are labelled separately. In the
@@ -68,7 +71,11 @@ This normative module is part of the
 - **REQ-CMD-004 (Implemented):** `/new` requires an owner callback confirmation
   and resets only the active provider session; mass reset behavior is removed.
   `/local` transfers writer ownership. Codex `/return` changes only the lease,
-  with no provider call, summary, or session-ID change. Other providers retain
+  with no provider call, summary, or session-ID change. Codex local commands
+  attach the native TUI to the configured owning app-server through `--remote`
+  and a Unix socket; standalone resume MUST NOT create a competing persistence
+  writer. Remote attach retains the session's permissions without overrides.
+  Other providers retain
   bounded summaries pending separate native-resume acceptance.
 - **REQ-CMD-005 (Implemented):** The public Telegram command menu contains only
   `/status`, `/model`, `/accounts`, `/new`, `/local`, `/return`, and `/stop`. Legacy
@@ -133,6 +140,9 @@ This normative module is part of the
   running and that a completed provider session exists, changes `writer_mode`
   from `telegram` to `local`, and returns a reviewed
   provider-specific resume command for the canonical root and session ID.
+  Antigravity MUST use the configured executable and the same model/effort
+  argument builder as productive turns. An explicit effort replaces a known
+  existing effort suffix; default effort preserves the selected model ID.
 - **REQ-WRITER-007 (Implemented for Codex with explicit owner assertion):**
   after the owner closes the CLI and Hub work is terminal, `/return` changes
   only the lease; it invokes no model and copies no summary or transcript. The
@@ -180,10 +190,20 @@ This normative module is part of the
   generation.
 
 Initial reviewed resume shapes are `codex resume SESSION_ID -C ROOT`,
+with explicit provider/model `-c` overrides when local `codex_model_provider`
+is configured,
 `opencode ROOT --session SESSION_ID`, and
-`cd -- ROOT && agy --conversation SESSION_ID --sandbox --mode accept-edits`. They are version-sensitive
+`cd -- ROOT && agy --conversation SESSION_ID --sandbox --mode accept-edits --model MODEL_EFFORT`. They are version-sensitive
 adapter capabilities, not permanent user-input templates. Hermes requires a
 separate native capability check.
+
+An explicit local Codex route MUST preserve the source provider as immutable
+provenance while pinning the configured provider for execution and `/local`.
+Discovery MUST accept only OpenAI and that exact configured provider. A route
+mismatch MUST fail before productive inference; exact-session failure MUST NOT
+be repaired by creating a replacement thread. Existing root, activation and
+single-writer checks remain mandatory. See
+[ADR 0028](../decisions/0028-explicit-codex-provider-routing.md).
 
 ## 12. Approval, sandbox, and secret requirements
 

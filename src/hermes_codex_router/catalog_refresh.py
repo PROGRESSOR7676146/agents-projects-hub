@@ -6,7 +6,9 @@ from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Callable
 
+from .codex_appserver import CodexAppServerClient, UnixWebSocketTransport
 from .hub_config import HubConfig
+from .model_selection import available_models
 from .provider_catalog import (
     DEFAULT_CATALOG_TTL,
     ProviderCatalogError,
@@ -18,6 +20,22 @@ from .provider_catalog import (
 from .provider_catalog_cache import ProviderCatalogCache
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def native_codex_models(config: HubConfig) -> tuple[ProviderModel, ...]:
+    """Read capabilities only; never start a server, thread, or inference turn."""
+    client = CodexAppServerClient(UnixWebSocketTransport(config.codex_socket_path))
+    try:
+        client.initialize()
+        models = tuple(
+            ProviderModel(model_id, model_id, efforts)
+            for model_id, efforts in available_models(client.list_models()).items()
+        )
+        if not models:
+            raise ProviderCatalogError("Codex returned no usable models")
+        return models
+    finally:
+        client.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,29 +87,24 @@ def refresh_provider_catalogs(
             continue
         if agent.runtime == "codex" and config.codex_multi_auth_executable is None:
             before = cache.load(agent.agent_id)
-            configured = ProviderModel(
-                agent.default_model,
-                agent.default_model,
-                (agent.default_effort,),
-            )
-            matches_config = bool(
+            if (
                 before is not None
-                and before.source_version == "configured fallback"
-                and len(before.models) == 1
-                and before.models[0].model_id == configured.model_id
-                and before.models[0].efforts == configured.efforts
-            )
-            if matches_config and not cache.is_stale(
-                agent.agent_id, max_age=max_age, now=observed_at
+                and before.source_version == "codex model/list"
+                and not cache.is_stale(agent.agent_id, max_age=max_age, now=observed_at)
             ):
                 continue
             previous_ids = {item.model_id for item in before.models} if before else set()
-            snapshot = cache.store(
-                agent.agent_id,
-                (configured,),
-                source_version="configured fallback",
-                observed_at=observed_at,
-            )
+            try:
+                snapshot = cache.store(
+                    agent.agent_id,
+                    native_codex_models(config),
+                    source_version="codex model/list",
+                    observed_at=observed_at,
+                )
+            except (OSError, RuntimeError):
+                cache.mark_failure(agent.agent_id, observed_at=observed_at)
+                failed.append(agent.agent_id)
+                continue
             refreshed.append(agent.agent_id)
             new_ids = tuple(
                 item.model_id for item in snapshot.models if item.model_id not in previous_ids

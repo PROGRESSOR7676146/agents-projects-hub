@@ -45,6 +45,9 @@ with a new record.
 | Project/group provisioning | Schema-27 lets the owner-only Hub queue bounded local-root and forum creation through a separately enabled, pinned Telegram user session; ambiguous external operations stop for exact local reconciliation. | [ADR 0024](0024-user-authorized-project-group-provisioning.md) |
 | Provisioning fencing and owner membership | Schema-28 snapshots every configured owner, fences the private user session and workflow lease, centralizes project resolution, and persists command/result delivery recovery. | [ADR 0025](0025-provisioning-fencing-and-owner-membership.md) |
 | Signed GitHub merge privacy boundary | A pinned-signature merge may exempt an externally declared exact author-email span and only the fingerprint rule on a complete author-name or hosted source-owner span equal to local origin; all surrounding metadata remains scanned. | [ADR 0026](0026-signed-github-merge-privacy-boundary.md) |
+| No silent session rebind on project relocation | Schema-29 project editing preserves immutable group identity, blocks live provider state, and recovers the registry/SQLite commit without rewriting provider-native roots. | [ADR 0027](0027-no-silent-session-rebind-on-project-relocation.md) |
+
+| Explicit Codex provider routing | Schema-30 retains source provenance while a local provider setting pins start/resume and native CLI transfer without replacing the thread. | [ADR 0028](0028-explicit-codex-provider-routing.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

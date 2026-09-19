@@ -5,6 +5,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Add owner-only durable registered-project editing with Hub-local display-name
+  changes, opaque canonical Git-root relocation, strict live-session/work
+  blockers, schema-29 crash recovery, and no provider-history or Telegram-group
+  rebind.
 - Project-group provisioning now requires and configures only the Hub and locally
   managed provider bots; externally managed recovery providers retain their
   independent admission path and cannot block project creation.

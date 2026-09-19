@@ -143,6 +143,7 @@ class HubConfig:
     codex_sessions_dir: Path | None = None
     codex_multi_auth_executable: Path | None = None
     codex_stdio_executable: Path | None = None
+    codex_model_provider: str | None = None
     codex_account_hints: dict[int, str] = field(default_factory=dict)
     provider_account_hints: dict[str, tuple[str, ...]] = field(default_factory=dict)
     provider_telemetry: dict[str, ProviderTelemetrySettings] = field(default_factory=dict)
@@ -332,6 +333,12 @@ def load_hub_config(
         ):
             raise HubConfigError("codex_account_hints values must be three characters")
         codex_account_hints[account_index] = raw_hint
+    codex_model_provider = root.get("codex_model_provider")
+    if codex_model_provider is not None and (
+        not isinstance(codex_model_provider, str)
+        or re.fullmatch(r"[A-Za-z0-9_-]{1,64}", codex_model_provider) is None
+    ):
+        raise HubConfigError("codex_model_provider must be a bounded provider identifier")
     stdio_executable_value = root.get("codex_stdio_executable")
     codex_stdio_executable = None
     if stdio_executable_value is not None:
@@ -820,6 +827,7 @@ def load_hub_config(
         codex_sessions_dir=codex_sessions_dir,
         codex_multi_auth_executable=codex_multi_auth_executable,
         codex_stdio_executable=codex_stdio_executable,
+        codex_model_provider=codex_model_provider,
         codex_account_hints=codex_account_hints,
         provider_account_hints=provider_account_hints,
         provider_telemetry=provider_telemetry,

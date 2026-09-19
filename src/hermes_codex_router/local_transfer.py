@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
+
+from .antigravity_model import model_arguments
 
 
 class LocalTransferError(ValueError):
@@ -27,6 +30,11 @@ def local_resume_command(
     executable: str | None,
     provider_session_id: str,
     project_root: Path,
+    *,
+    model_provider: str | None = None,
+    model: str | None = None,
+    effort: str | None = None,
+    codex_socket_path: Path | None = None,
 ) -> LocalResumeCommand:
     session_id = provider_session_id.strip()
     if not session_id:
@@ -34,6 +42,20 @@ def local_resume_command(
     root = str(project_root.expanduser().resolve(strict=True))
     if runtime == "codex":
         argv = ("codex", "resume", session_id, "-C", root)
+        if codex_socket_path is not None:
+            # Attach to the owning daemon; standalone resume opens a second
+            # persistence writer even when the Hub's logical lease is local.
+            socket = codex_socket_path.expanduser().resolve()
+            argv = ("codex", "--remote", f"unix://{socket}", *argv[1:])
+        if model_provider is not None:
+            if not model:
+                raise LocalTransferError("explicit provider resume requires a model")
+            argv += (
+                "-c",
+                "model_provider=" + json.dumps(model_provider),
+                "-c",
+                "model=" + json.dumps(model),
+            )
     elif runtime == "opencode":
         argv = (executable or "opencode", root, "--session", session_id)
     elif runtime == "antigravity":
@@ -44,6 +66,7 @@ def local_resume_command(
             "--sandbox",
             "--mode",
             "accept-edits",
+            *model_arguments(model, effort),
         )
     else:
         raise LocalTransferError(f"local resume is not supported for runtime: {runtime}")

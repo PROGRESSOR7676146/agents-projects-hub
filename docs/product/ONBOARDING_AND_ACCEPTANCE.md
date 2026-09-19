@@ -67,6 +67,33 @@ This normative module is part of the
   read-only without initialization or migration. An ambiguous completion send
   without a positive Telegram message ID MUST remain unknown.
 
+### Existing-project editing
+
+- **REQ-PROJECT-EDIT-001 (Implemented):** The owner-only Hub project workflow
+  MUST select an existing registered project before offering a local display-name
+  change or Git-root relocation. Display-name editing changes only Hub registry
+  metadata; changing the Telegram group title is a separate, explicitly named
+  and confirmed operation and MUST NOT occur implicitly.
+- **REQ-PROJECT-EDIT-002 (Implemented):** A relocation target MUST be selected
+  through an opaque callback from bounded locally discovered or derived options.
+  Telegram MUST NOT accept path text. The target MUST be a canonical direct child
+  of a configured `allowed_root`, MUST reject symlinks, escapes, duplicate roots
+  and non-empty non-Git directories, and MAY initialize only the safe derived
+  `<allowed_root>/<immutable project_id>` directory.
+- **REQ-PROJECT-EDIT-003 (Implemented):** Root relocation MUST preserve
+  `project_id`, numeric Telegram group binding and topic identity, and MUST NOT
+  move, copy or delete either root, project files, Git history or the Telegram
+  group. It MUST refuse any non-archived attached provider session, non-Telegram
+  writer, queued/running work, pending delivery or unresolved outcome. Archived
+  provider-native identity and history remain bound to their original root and
+  MUST NOT be rewritten or resumed under the new root.
+- **REQ-PROJECT-EDIT-004 (Implemented):** Editing MUST use a durable preview and
+  explicit confirmation workflow. Registry projection and dynamic root binding
+  MUST commit under one locally serialized fail-closed boundary, roll back on a
+  handled fault, and recover a crash after registry replacement before accepting
+  new Telegram work. Repeated callbacks MUST return the same result without
+  creating another root or changing the numeric group binding.
+
 ## 15. Functional acceptance criteria
 
 The following are release-level acceptance criteria. Automated coverage is
@@ -133,6 +160,13 @@ necessary but not sufficient for items marked live.
   send/create outcomes neither substitute a thread nor partially archive the
   existing binding. A committed marker activates one generation; the next
   later message resumes the selected thread without `/return`.
+- **AC-F-014 (Automated offline; REQ-PROJECT-EDIT-001..004):** Owner project
+  selection, impact preview and confirmation preserve immutable project/group
+  identity. Rename performs no Telegram group mutation. Existing and derived new
+  roots pass the canonical safety gate; busy/session/delivery/uncertain states
+  block relocation; crash recovery and callback replay converge once; new
+  Controller/worker resolution uses the new root while archived provider origins
+  retain the old root.
 
 ## 16. Non-functional acceptance criteria
 
@@ -174,6 +208,7 @@ necessary but not sufficient for items marked live.
 | Telegram E2E baseline | Bounded actor implemented; live authorization pending | Results remain private deployment evidence. |
 | `/local` and `/return` | Implemented | Codex return is model-free and same-session; other providers retain prior behavior pending acceptance. |
 | Project/group onboarding | Implemented offline; deployment opt-in and live canary required | Owner-only Hub wizard, schema-28 owner/lease/command receipts, bounded Git-root preparation and a separately authorized owner user-session provisioner; unknown Telegram outcomes stop without blind retry. |
+| Registered-project editing | Implemented offline; live Telegram acceptance pending | Owner-only schema-29 workflow changes local display name or relocates to an opaque safe Git-root option; immutable project/group identity and old provider origins remain unchanged. |
 | Compact command surface | Implemented | Provider defaults remain bounded; project Hub scope exposes `/menu`, `/connect`, `/stop`, and Hub private scope exposes `/start`, `/projects`, `/connect`, `/cancel`. |
 | Saved Codex session connect | Implemented; live Telegram acceptance pending | One durable workflow serves topic selection, Hub-private selection/new-topic creation, and owner-scoped local one-time codes. |
 | Summary-free Codex return | Implemented | Local lease change; no model, transcript, handoff, or session change. |

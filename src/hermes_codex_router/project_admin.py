@@ -1,12 +1,28 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from .registry import PROJECT_ID, RegistryError, load_registry
+
+
+@contextmanager
+def registry_lock(path: Path) -> Iterator[None]:
+    """Serialize local registry read/modify/write operations across processes."""
+    descriptor = os.open(path.with_name(f".{path.name}.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.chmod(path.with_name(f".{path.name}.lock"), 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 def _read(path: Path) -> dict[str, object]:
@@ -28,6 +44,11 @@ def _atomic_write(path: Path, document: dict[str, object]) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     except Exception:
         try:
             os.unlink(temporary)
@@ -37,6 +58,24 @@ def _atomic_write(path: Path, document: dict[str, object]) -> None:
 
 
 def add_project(
+    registry_path: Path,
+    *,
+    project_id: str,
+    display_name: str,
+    topic_name: str,
+    root: Path,
+) -> None:
+    with registry_lock(registry_path):
+        _add_project_unlocked(
+            registry_path,
+            project_id=project_id,
+            display_name=display_name,
+            topic_name=topic_name,
+            root=root,
+        )
+
+
+def _add_project_unlocked(
     registry_path: Path,
     *,
     project_id: str,
@@ -71,8 +110,8 @@ def add_project(
             "enabled": True,
         }
     )
-    _atomic_write(registry_path, document)
     try:
+        _atomic_write(registry_path, document)
         load_registry(registry_path)
     except Exception:
         projects.pop()
@@ -141,44 +180,53 @@ def ensure_project(
     root: Path,
 ) -> None:
     """Idempotently persist the exact project prepared by one workflow."""
-    registry = load_registry(registry_path)
-    canonical = root.expanduser().resolve(strict=True)
-    matches = [
-        item
-        for item in registry.projects
-        if item.project_id == project_id or item.root == canonical
-    ]
-    if matches:
-        item = matches[0]
-        if (
-            len(matches) == 1
-            and item.project_id == project_id
-            and item.root == canonical
-            and item.enabled
-        ):
-            return
-        raise RegistryError("project registry identity conflicts with onboarding workflow")
-    add_project(
-        registry_path,
-        project_id=project_id,
-        display_name=display_name,
-        topic_name=display_name,
-        root=canonical,
-    )
+    with registry_lock(registry_path):
+        registry = load_registry(registry_path)
+        canonical = root.expanduser().resolve(strict=True)
+        matches = [
+            item
+            for item in registry.projects
+            if item.project_id == project_id or item.root == canonical
+        ]
+        if matches:
+            item = matches[0]
+            if (
+                len(matches) == 1
+                and item.project_id == project_id
+                and item.root == canonical
+                and item.enabled
+            ):
+                return
+            raise RegistryError("project registry identity conflicts with onboarding workflow")
+        _add_project_unlocked(
+            registry_path,
+            project_id=project_id,
+            display_name=display_name,
+            topic_name=display_name,
+            root=canonical,
+        )
 
 
 def set_project_enabled(registry_path: Path, project_id: str, enabled: bool) -> None:
-    document = _read(registry_path)
-    projects = document.get("projects")
-    if not isinstance(projects, list):
-        raise RegistryError("projects must be an array")
-    found = False
-    for value in projects:
-        if isinstance(value, dict) and value.get("project_id") == project_id:
-            value["enabled"] = enabled
-            found = True
-            break
-    if not found:
-        raise RegistryError(f"unknown project_id: {project_id}")
-    _atomic_write(registry_path, document)
-    load_registry(registry_path)
+    with registry_lock(registry_path):
+        document = _read(registry_path)
+        projects = document.get("projects")
+        if not isinstance(projects, list):
+            raise RegistryError("projects must be an array")
+        selected: dict[str, object] | None = None
+        previous: object = None
+        for value in projects:
+            if isinstance(value, dict) and value.get("project_id") == project_id:
+                previous = value.get("enabled", True)
+                value["enabled"] = enabled
+                selected = value
+                break
+        if selected is None:
+            raise RegistryError(f"unknown project_id: {project_id}")
+        try:
+            _atomic_write(registry_path, document)
+            load_registry(registry_path)
+        except Exception:
+            selected["enabled"] = previous
+            _atomic_write(registry_path, document)
+            raise

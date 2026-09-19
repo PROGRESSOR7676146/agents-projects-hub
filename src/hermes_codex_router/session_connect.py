@@ -92,6 +92,7 @@ class ConnectWorkflow:
     result_session_id: str | None
     error_code: str | None
     expires_at: str
+    source_model_provider: str = "openai"
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +139,7 @@ class SessionConnectStore:
             row["result_session_id"],
             row["error_code"],
             str(row["expires_at"]),
+            str(row["source_model_provider"]),
         )
 
     @staticmethod
@@ -937,7 +939,9 @@ class SessionConnectStore:
             )
         return self.get(workflow_id)
 
-    def prepare_marker(self, workflow_id: str, lease_token: str | None) -> ConnectWorkflow:
+    def prepare_marker(
+        self, workflow_id: str, lease_token: str | None, *, model_provider: str = "openai"
+    ) -> ConnectWorkflow:
         now = _now()
         with self.state._immediate_transaction():
             workflow = self.get(workflow_id)
@@ -946,8 +950,8 @@ class SessionConnectStore:
             CodexSessionOrigins(self.state).preview(self._adoption_request(workflow))
             self.connection.execute(
                 """UPDATE session_connect_workflows SET stage='marker_ready',lease_owner=NULL,
-                   lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE workflow_id=?""",
-                (now, workflow_id),
+                   lease_token=NULL,lease_expires_at=NULL,updated_at=?,source_model_provider=? WHERE workflow_id=?""",
+                (now, model_provider, workflow_id),
             )
             self._insert_outbox_locked(
                 workflow_id,
@@ -1261,6 +1265,7 @@ class SessionConnectStore:
             workflow.model,
             workflow.effort,
             workflow.replaces_session_id,
+            workflow.source_model_provider,
         )
 
 

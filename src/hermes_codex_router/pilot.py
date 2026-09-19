@@ -47,6 +47,7 @@ def run_codex_pilot(
     supervisor = CodexAppServerSupervisor(
         config.state_path.parent / "codex-stdio-placeholder.sock",
         stdio_executable=config.codex_stdio_executable,
+        model_provider=config.codex_model_provider,
     )
     try:
         topic = state.observe_topic(

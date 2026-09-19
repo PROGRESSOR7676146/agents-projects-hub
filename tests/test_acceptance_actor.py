@@ -11,6 +11,7 @@ from unittest.mock import ANY, AsyncMock, patch
 from hermes_codex_router.acceptance_actor import (
     AcceptanceActorConfig,
     AcceptanceActorError,
+    _click_callback_exact,
     _forward_to_topic,
     _run_check,
     _run_configured_checks,
@@ -95,6 +96,18 @@ class FakeIterClient:
 
 
 class AcceptanceActorConfigTests(unittest.TestCase):
+    def test_exact_callback_accepts_generation_bound_control(self) -> None:
+        button = FakeButton(b"provider:codex~0123456789abcdef")
+        message = FakeMessage(1, button=button)
+        asyncio.run(_click_callback_exact(message, b"provider:codex"))
+        self.assertTrue(button.clicked)
+
+    def test_exact_callback_does_not_select_prefix_collision(self) -> None:
+        button = FakeButton(b"provider:codex-extra~0123456789abcdef")
+        with self.assertRaises(AcceptanceActorError):
+            asyncio.run(_click_callback_exact(FakeMessage(1, button=button), b"provider:codex"))
+        self.assertFalse(button.clicked)
+
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.base = Path(self.tempdir.name)

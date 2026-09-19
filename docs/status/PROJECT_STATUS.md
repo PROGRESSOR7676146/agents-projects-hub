@@ -8,6 +8,18 @@ operator deployment inventory or live conversation evidence.
 
 ## Quality checkpoint
 
+Antigravity native `/local` now pins the session model and effort with the same
+argument builder used by productive turns. Existing effort suffixes are replaced
+without duplication. Local CPA/direct profile isolation remains deployment-owned;
+each deployment must prove migration, atomic settings persistence and a same-session
+Telegram/TUI/Telegram round trip separately from these offline regressions.
+
+Native Codex catalog discovery no longer requires the retired multi-auth helper.
+The monitor reads `model/list`; isolated Controller refresh callbacks request
+asynchronous discovery and retain last-good selectable models without provider RPC.
+Codex `/local` now emits a native TUI attach to the configured shared Unix socket,
+preserving the same persisted thread instead of opening a competing standalone writer.
+
 The [quality and stability review](../operations/QUALITY_AND_STABILITY_REVIEW.md)
 records the initial findings. Milestone one of the
 [reliability plan](../operations/RELIABILITY_PLAN.md) now consumes buffered Codex
@@ -78,6 +90,28 @@ the existing alert output, transaction semantics, and schema.
 
 ## Implemented
 
+Passive recovery diagnostics now compare the running Hermes Hub-plugin import
+source with the exact clean Hub release and live database schema. A mismatch
+is optional-channel degradation in doctor, but blocks deployment acceptance.
+Schema rollouts include the idle gateway as a database consumer without changing
+its native providers. Bootstrap refuses an existing Hub installation and no
+longer installs legacy multi-auth ordering. Both owners' recovery capsules must
+be republished after topology changes; see the recovery operations guide.
+
+Schema 30 prepares immutable Codex origins for bounded provider identifiers and
+persists the inspected provider across the connect marker transaction. Existing
+origins, activation boundaries and thread reservations remain unchanged. Runtime
+rollback requires a schema-30-compatible artifact; restoring an old database is
+not a runtime rollback procedure.
+
+An explicit `codex_model_provider` now pins Codex start/resume and `/local`
+commands to one locally configured route without replacing session identity.
+Discovery remains limited to OpenAI plus that exact provider. Original provider
+provenance and `/return`'s model-free lease semantics remain intact. Offline
+old/new-origin round trips cover socket and stdio execution; deployment-local
+Telegram/CLI acceptance remains separate. See
+[ADR 0028](../decisions/0028-explicit-codex-provider-routing.md).
+
 Saved Codex CLI and Codex VS Code/app sessions can be connected through
 `/connect` in a registered project topic, the owner-only Hub private control plane, or a short-lived code
 issued by local `session connect [CONFIG]`. All three entrances use one durable,
@@ -116,12 +150,26 @@ proven preflight/configuration blocks can be resumed explicitly. See
 No user session, group, project, credential, service or live canary has been
 created by this repository change.
 
+Owner-only editing of an existing registered project is implemented offline in
+the private Hub `/projects` workflow. The owner first selects a project, then
+chooses either a Hub-local display-name change or an opaque safe Git-root option,
+reviews the impact and confirms. Display-name editing does not rename the
+Telegram group. Relocation preserves immutable `project_id`, numeric group/topic
+identity and both directories; it never copies or deletes files or provider
+history. Attached provider sessions, non-Telegram writers, queued/running work,
+pending delivery and unresolved outcomes block relocation. Schema 29 records the
+durable workflow and opaque options. A serialized registry/SQLite commit rolls
+back handled faults and completes a post-registry-write crash before Controller
+admission resumes. Archived provider origins retain the old root. Automated
+evidence is fictional and offline; no live Telegram edit canary or deployment is
+claimed. See [ADR 0027](../decisions/0027-no-silent-session-rebind-on-project-relocation.md).
+
 The administrative `session attach-codex` preview/apply interface remains
 available for recovery. Schema 25 introduced immutable origins and the original
 first-return boundary. External workers continue the exact thread through socket
 or stdio; unsupported modes fail closed. Automated evidence uses fictional
 provider and Telegram adapters. Live continuity and a production rollback
-artifact for schema 28 remain unaccepted; the current target is schema 28.
+artifact for schema 30 remain deployment-specific; the current target is schema 30.
 
 - Numeric project/topic identity, canonical allowlisted roots, idempotent
   routing, persistent provider sessions, bounded visible context, and writer
@@ -391,7 +439,7 @@ artifact for schema 28 remain unaccepted; the current target is schema 28.
   reapers. Runtime-proxy monitoring remains independent and never restarts a
   shared app-server underneath an active Codex or tlive session.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
-- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-28
+- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-30
   immutable-deployment triage guide, source revision, timestamp, and content
   hashes into a neutral local store for the independent Hermes channel. It
   carries no private deployment inventory and creates no service dependency.
@@ -406,7 +454,7 @@ artifact for schema 28 remain unaccepted; the current target is schema 28.
   alone may also be suppressed on a complete author-name or hosted source-owner
   span that exactly repeats the valid local origin owner; all surrounding
   metadata and unrelated rules remain scanned.
-- Documentation validation inventories all 96 normative product requirement IDs,
+- Documentation validation inventories all 102 normative product requirement IDs,
   protects all 20 numbered baseline sections by content hash, and checks local
   Markdown files/anchors repository-wide. The product baseline is split into a
   short normative index and five stable capability modules; the guarded move

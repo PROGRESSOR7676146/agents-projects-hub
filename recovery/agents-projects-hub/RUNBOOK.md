@@ -1,6 +1,6 @@
 # Agents Projects Hub recovery capsule
 
-Maintained for Hub `0.7.0`, state schema `28`. This capsule is a bounded local
+Maintained for Hub `0.7.0`, state schema `30`. This capsule is a bounded local
 recovery guide, not authority to weaken policy, retry ambiguous work, expose
 private state, or perform a rollout.
 
@@ -38,7 +38,7 @@ ACTIVE_BIN doctor HUB_CONFIG
 ```
 
 Acceptance requires `release-info.ok=true`, `clean_tree=true`, an exact Git
-SHA, schema `28/28`, and `deployment_revision.status=converged`. A live process
+SHA, schema `30/30`, and `deployment_revision.status=converged`. A live process
 or package version alone is not deployment identity.
 
 ## Classify before repair
@@ -54,7 +54,7 @@ or package version alone is not deployment identity.
 - Mixed/unknown revision: stop promotion and use immutable manifest/rollback
   gates; do not reinstall from a dirty checkout.
 - Schema/integrity failure: stop database users and preserve evidence before a
-  reviewed restore. Ordinary runtime rollback retains schema-28 state.
+  reviewed restore. Ordinary runtime rollback retains schema-30 state.
 - Retained Codex origins: never delete origin records or change a provider
   thread ID to bypass a resume failure. Inline/embedded execution is unsupported
   while any origin remains, including archived bindings. Schema compatibility
@@ -76,6 +76,36 @@ revision and the required checks pass. Live Telegram/provider acceptance is a
 separate evidence level.
 
 ## Immutable rollback and deeper recovery
+
+Hermes's Hub plugin and turn-export hook also consume this state. Include the
+idle gateway in every schema rollout/rollback. `HERMES_PROJECT_HUB_SOURCE`
+must select the same clean immutable release as Hub, never a mutable checkout.
+After changing it and restarting the affected gateway, require doctor's
+`hermes:hub_plugin_compatibility` check. A mismatch blocks deployment acceptance,
+but Hermes's independent private channel and native providers remain rescue
+routes. Do not overwrite its model/auth/fallback configuration.
+
+Do not rerun the bootstrap installer over a deployment or restore legacy
+multi-auth PATH/ordering from an older guide. The installer refuses an existing
+Hub unit before mutation. Republish both owners' capsules independently after
+topology changes; peers must not rewrite each other's published generations.
+
+When an explicit Codex route uses CLIProxyAPI, preserve the local provider
+definition, exact-session routing and a verified direct Codex rescue launcher.
+CPA failure is not permission to rewrite origins, start replacement sessions or
+route Hermes/other runtimes through CPA. Consult the local proxy runbook for
+its passive doctor, pinned release and distinct management/client credentials.
+Never restart the shared Codex app-server under an active local writer.
+
+For deployments with separate Antigravity CPA and direct profiles, the configured
+executable must identify the CPA profile consistently for worker turns and `/local`.
+Preserve conversation ID, root, model, effort and one writer. Whole-directory
+profile mounts allow atomic settings saves; never restore a single-file settings
+mount or toggle a shared provider beneath running clients. Native direct history
+and CPA history diverge after migration. Do not synchronize stores or promise
+automatic continuation across them. Consult the deployment's AGY profile recovery
+guide for canonical paths, validated snapshots and manual versioned updates.
+Antigravity `/return` still invokes a bounded model summary. It is not model-free.
 
 Use the full repository runbooks when the checkout is available:
 
