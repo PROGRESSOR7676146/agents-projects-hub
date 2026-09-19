@@ -54,7 +54,7 @@ class MigrationTests(unittest.TestCase):
                 connection.close()
 
             result = migrate_database(path, create_backup=False)
-            self.assertEqual((result.previous_version, result.current_version), (28, 29))
+            self.assertEqual((result.previous_version, result.current_version), (28, 30))
             connection = sqlite3.connect(path)
             try:
                 self.assertEqual(
@@ -103,7 +103,7 @@ class MigrationTests(unittest.TestCase):
                 connection.close()
 
             result = migrate_database(path, create_backup=False)
-            self.assertEqual((result.previous_version, result.current_version), (27, 29))
+            self.assertEqual((result.previous_version, result.current_version), (27, 30))
             connection = sqlite3.connect(path)
             try:
                 self.assertEqual(

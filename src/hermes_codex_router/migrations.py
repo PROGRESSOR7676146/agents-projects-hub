@@ -1144,6 +1144,30 @@ CREATE TABLE project_edit_root_options (
 """
 
 
+MIGRATION_30 = (
+    """
+DROP TRIGGER codex_origin_identity_immutable;
+DROP TRIGGER codex_origin_reservation_retained;
+DROP TRIGGER codex_origin_activation_immutable;
+DROP TRIGGER codex_origin_binding_guard;
+"""
+    + MIGRATION_25.split("ALTER TABLE external_turn_excerpts", 1)[0]
+    .replace("CREATE TABLE codex_session_origins", "CREATE TABLE codex_session_origins_v30")
+    .replace("CHECK(model_provider = 'openai')", "CHECK(length(model_provider) BETWEEN 1 AND 64)")
+    + """
+INSERT INTO codex_session_origins_v30 SELECT * FROM codex_session_origins;
+DROP TABLE codex_session_origins;
+ALTER TABLE codex_session_origins_v30 RENAME TO codex_session_origins;
+"""
+    + "CREATE TRIGGER codex_origin_identity_immutable"
+    + MIGRATION_25.split("CREATE TRIGGER codex_origin_identity_immutable", 1)[1]
+    + """
+ALTER TABLE session_connect_workflows ADD COLUMN source_model_provider TEXT
+    NOT NULL DEFAULT 'openai' CHECK(length(source_model_provider) BETWEEN 1 AND 64);
+"""
+)
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -1267,6 +1291,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_27,
         MIGRATION_28,
         MIGRATION_29,
+        MIGRATION_30,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:
