@@ -15,6 +15,7 @@ from hermes_codex_router.acceptance_actor import (
     _forward_to_topic,
     _run_check,
     _run_configured_checks,
+    _run_p0_p1_live_checks,
     _targets_for_check,
     _wait_for_response,
     load_acceptance_actor_config,
@@ -40,6 +41,7 @@ class FakeMessage:
         self.id = message_id
         self.raw_text = text
         self.buttons = [[button]] if button is not None else None
+        self.grouped_id: int | None = None
 
 
 class FakeDocumentMessage(FakeMessage):
@@ -61,6 +63,30 @@ class FakeClient:
     async def send_message(self, *_args: object, **_kwargs: object) -> FakeMessage:
         self.sent.append((_args, _kwargs))
         return FakeMessage(len(self.sent))
+
+
+class FakeP0P1Client(FakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.uploaded_payloads: list[bytes] = []
+        self._next_id = 100
+
+    async def send_message(self, *_args: object, **_kwargs: object) -> FakeMessage:
+        self.sent.append((_args, _kwargs))
+        self._next_id += 1
+        return FakeMessage(self._next_id)
+
+    async def send_file(self, _chat_id: int, file: object, **_kwargs: object) -> object:
+        paths = file if isinstance(file, list) else [file]
+        messages = []
+        grouped_id = 9876 if isinstance(file, list) else None
+        for value in paths:
+            self.uploaded_payloads.append(Path(str(value)).read_bytes())
+            self._next_id += 1
+            message = FakeMessage(self._next_id)
+            message.grouped_id = grouped_id
+            messages.append(message)
+        return messages if isinstance(file, list) else messages[0]
 
 
 class FakeRawClient:
@@ -252,6 +278,68 @@ class AcceptanceActorConfigTests(unittest.TestCase):
             _targets_for_check(config, "codex_interaction_v2"),
             ("example_codex_bot",),
         )
+
+    def test_p0_p1_live_requires_private_state_restart_opt_in_and_codex(self) -> None:
+        state_path = self.base / "state.db"
+        state_path.touch(mode=0o600)
+        with self.assertRaisesRegex(AcceptanceActorError, "state_path"):
+            load_acceptance_actor_config(
+                self.write_config(
+                    checks=["p0_p1_live"],
+                    provider_agent_ids=["codex"],
+                    allow_service_restart=True,
+                    timeout_seconds=180,
+                )
+            )
+        with self.assertRaisesRegex(AcceptanceActorError, "service restart"):
+            load_acceptance_actor_config(
+                self.write_config(
+                    checks=["p0_p1_live"],
+                    provider_agent_ids=["codex"],
+                    state_path=str(state_path),
+                    timeout_seconds=180,
+                )
+            )
+        with self.assertRaisesRegex(AcceptanceActorError, "aligned codex provider"):
+            load_acceptance_actor_config(
+                self.write_config(
+                    checks=["p0_p1_live"],
+                    provider_agent_ids=["opencode"],
+                    state_path=str(state_path),
+                    allow_service_restart=True,
+                    timeout_seconds=180,
+                )
+            )
+
+        config = load_acceptance_actor_config(
+            self.write_config(
+                checks=["p0_p1_live"],
+                provider_agent_ids=["codex"],
+                state_path=str(state_path),
+                allow_service_restart=True,
+                timeout_seconds=180,
+            )
+        )
+
+        self.assertEqual(config.state_path, state_path)
+        self.assertTrue(config.allow_service_restart)
+        self.assertEqual(_targets_for_check(config, "p0_p1_live"), ("example_provider_bot",))
+
+    def test_p0_p1_live_accepts_the_recommended_360_second_timeout(self) -> None:
+        state_path = self.base / "state.db"
+        state_path.touch(mode=0o600)
+
+        config = load_acceptance_actor_config(
+            self.write_config(
+                checks=["p0_p1_live"],
+                provider_agent_ids=["codex"],
+                state_path=str(state_path),
+                allow_service_restart=True,
+                timeout_seconds=360,
+            )
+        )
+
+        self.assertEqual(config.timeout_seconds, 360)
 
     def test_stop_route_targets_only_the_provider_selected_by_model_menu(self) -> None:
         config = load_acceptance_actor_config(
@@ -727,6 +815,127 @@ class AcceptanceActorConfigTests(unittest.TestCase):
                 )
             )
         )
+
+    def test_p0_p1_live_check_records_all_seven_scenarios(self) -> None:
+        state_path = self.base / "state.db"
+        state_path.touch(mode=0o600)
+        config = AcceptanceActorConfig(
+            api_id=1,
+            api_hash_file=self.secret,
+            session_path=self.base / "acceptance.session",
+            expected_user_id=1,
+            telegram_chat_id=-1001234567890,
+            telegram_thread_id=77,
+            hub_username="example_hub_bot",
+            provider_usernames=("example_codex_bot",),
+            checks=("p0_p1_live",),
+            timeout_seconds=180,
+            artifacts_dir=self.artifacts,
+            provider_agent_ids=("codex",),
+            state_path=state_path,
+            allow_service_restart=True,
+        )
+        client = FakeP0P1Client()
+        responses = (
+            FakeMessage(201, "caption"),
+            FakeMessage(202, "album"),
+            FakeMessage(203, "active"),
+            FakeMessage(204, "late"),
+            FakeMessage(205, "recovery"),
+            FakeMessage(206, "oversize"),
+            FakeMessage(207, "Context remaining: 88.5%\nWeekly remaining: 42%"),
+            FakeMessage(208, "Context remaining: 88.5%"),
+            FakeMessage(209, "Codex\nexample account"),
+        )
+        job_rows = (
+            [("caption", "completed")],
+            [("album", "completed")],
+            [("album", "completed")],
+            [("active", "executing")],
+            [("late", "queued")],
+            [("late", "completed")],
+            [("recovery", "queued")],
+            [("recovery", "completed")],
+        )
+        with (
+            patch("hermes_codex_router.acceptance_actor._select_provider", new=AsyncMock()),
+            patch(
+                "hermes_codex_router.acceptance_actor._wait_for_markers",
+                new=AsyncMock(side_effect=responses),
+            ) as wait,
+            patch(
+                "hermes_codex_router.acceptance_actor._wait_for_job",
+                new=AsyncMock(side_effect=job_rows),
+            ),
+            patch(
+                "hermes_codex_router.acceptance_actor._job_rows",
+                return_value=[("recovery", "queued")],
+            ),
+            patch(
+                "hermes_codex_router.acceptance_actor._material_count",
+                side_effect=(2, 1),
+            ),
+            patch("hermes_codex_router.acceptance_actor._service"),
+            patch(
+                "hermes_codex_router.acceptance_actor._service_active",
+                side_effect=(True, True, False, True, True, True, True),
+            ),
+        ):
+            results = asyncio.run(_run_p0_p1_live_checks(client, config, "example_codex_bot"))
+
+        self.assertEqual(
+            [result.check for result in results],
+            [
+                "caption_only_document_provider_content",
+                "album_provider_content",
+                "attachment_during_active_turn_fifo",
+                "restart_idempotency_and_recovery",
+                "oversize_explicit_unavailable_notice",
+                "p1_live_turn_context_and_quota_labels",
+                "p1_status_context_and_accounts_read_only",
+            ],
+        )
+        self.assertTrue(all(result.ok for result in results))
+        self.assertEqual(wait.await_args_list[-2].kwargs["username"], config.hub_username)
+        self.assertEqual(wait.await_args_list[-1].kwargs["username"], config.hub_username)
+        self.assertTrue(
+            any(len(payload) == 20 * 1024 * 1024 + 1 for payload in client.uploaded_payloads)
+        )
+
+    def test_p0_p1_live_does_not_start_a_preexisting_inactive_service(self) -> None:
+        state_path = self.base / "state.db"
+        state_path.touch(mode=0o600)
+        config = AcceptanceActorConfig(
+            api_id=1,
+            api_hash_file=self.secret,
+            session_path=self.base / "acceptance.session",
+            expected_user_id=1,
+            telegram_chat_id=-1001234567890,
+            telegram_thread_id=77,
+            hub_username="example_hub_bot",
+            provider_usernames=("example_codex_bot",),
+            checks=("p0_p1_live",),
+            timeout_seconds=180,
+            artifacts_dir=self.artifacts,
+            provider_agent_ids=("codex",),
+            state_path=state_path,
+            allow_service_restart=True,
+        )
+        with (
+            patch(
+                "hermes_codex_router.acceptance_actor._service_active",
+                side_effect=(True, False, True, False),
+            ),
+            patch("hermes_codex_router.acceptance_actor._service") as service,
+        ):
+            results = asyncio.run(
+                _run_p0_p1_live_checks(FakeP0P1Client(), config, "example_codex_bot")
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertFalse(results[0].ok)
+        self.assertIn("requires the Controller and Codex worker", results[0].detail)
+        service.assert_not_called()
 
     def test_raw_forward_targets_the_canary_forum_topic(self) -> None:
         config = load_acceptance_actor_config(self.write_config())

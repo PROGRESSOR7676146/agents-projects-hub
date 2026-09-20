@@ -158,6 +158,16 @@ quiet; an interrupted or contaminated artifact is not acceptance evidence.
 The runner stops after its first failed check; diagnose and drain that bounded
 scenario before starting another run.
 
+The optional `p0_p1_live` check is the disruptive seven-result P0/P1 suite.
+Add `state_path` (an absolute mode-`0600` live SQLite file) and
+`allow_service_restart: true` only for an owner-declared maintenance window,
+align exactly one `provider_agent_ids` entry to `codex`, and set
+`timeout_seconds` to 120–600. The actor requires the standard Controller and
+Codex worker to be active, uses only fixed service names and prompts, restores
+the initially active units on failure, and writes no live evidence to Git.
+Successful repository tests prove this control flow only; `e2e-run` against a
+specific deployed revision is the live evidence.
+
 The `model_menu` check follows the complete callback ladder in the dedicated
 topic: it selects the first provider, first model, and first effort exposed by
 the Hub, then requires the deterministic final confirmation. This changes only

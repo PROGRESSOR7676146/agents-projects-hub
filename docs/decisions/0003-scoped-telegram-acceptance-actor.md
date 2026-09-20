@@ -37,6 +37,18 @@ Git. The checked-in runner exposes only a fixed set of bounded checks:
 - a bounded emergency-stop and immediate recovery check against only the first
   provider selected by the preceding `model_menu` check.
 
+An additional opt-in `p0_p1_live` scenario expands to seven separately reported
+checks for the aligned Codex identity: caption-only document content, one
+two-document album, an attachment admitted while another turn is executing,
+restart idempotency and recovery, the explicit notice for a Bot API file above
+20 MB, live response context/quota labels, and read-only `/status` plus
+`/accounts`. It reads the private live SQLite state to prove job/material
+cardinality and controls only the fixed Controller and Codex-worker systemd
+units. Configuration must name a private mode-`0600` state file, explicitly set
+`allow_service_restart`, and allow at least 120 seconds per response. The actor
+refuses to begin when either unit is inactive and restores every unit that was
+active before the run. Unit names and prompts are not configurable.
+
 The runner cannot accept arbitrary commands or prompt text from its config.
 While waiting for each expected response it fails the affected check immediately
 if the dedicated topic receives a message from any sender other than the pinned
@@ -54,8 +66,9 @@ status may record only aggregate pass/fail state.
   canary message.
 - Obtaining an application API ID/hash and performing one interactive account
   authorization remain deployment-local prerequisites.
-- The bounded actor supplements synthetic and operator tests; destructive
-  commands, account rotation, restart faults, quote semantics, and writer
+- The bounded actor supplements synthetic and operator tests. Its restart
+  scenario is separately opted in and must run only in an owner-declared
+  maintenance window; destructive commands, account rotation, and writer
   transfer still require separately controlled acceptance procedures.
 - Compromise of the test account is constrained to its configured canary topic,
   but the account must still be removed or its session revoked when unused.
