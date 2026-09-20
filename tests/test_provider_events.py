@@ -19,7 +19,19 @@ from hermes_codex_router.state import HubState
 
 def account(index: int, *, active: bool, remaining: int, hint: str):
     return CodexAccountStatus(
-        index, active, "available", "low", remaining, 50, None, None, None, False, hint
+        index,
+        active,
+        "available",
+        "low",
+        remaining,
+        50,
+        None,
+        None,
+        None,
+        False,
+        hint,
+        primary_duration_minutes=300,
+        secondary_duration_minutes=10080,
     )
 
 
@@ -61,7 +73,7 @@ class ProviderEventTests(unittest.TestCase):
                 CodexRotationObservation(1, 2, 1, 1),
             ),
             "Codex quota exhausted for alt…; switched to acc…. "
-            "Replacement status: available; 5h 90%, week 50%.",
+            "Replacement status: available; 5h 90%, Week 50%.",
         )
 
     def test_detects_account_switch_even_before_provider_429(self) -> None:

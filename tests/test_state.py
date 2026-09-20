@@ -170,6 +170,9 @@ class HubStateTests(unittest.TestCase):
         updated = self.state.set_context_remaining(session.session_id, 73.25)
         self.assertEqual(updated.context_remaining_percent, 73.25)
 
+        unknown = self.state.set_context_remaining(session.session_id, None)
+        self.assertIsNone(unknown.context_remaining_percent)
+
     def test_contract_provenance_lists_only_current_provider_sessions(self) -> None:
         previous = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
         self.state.bind_provider_session(previous.session_id, "thread-previous", None)

@@ -4,7 +4,8 @@ import html
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .codex_appserver import LimitWindow, RateLimits, TurnResult
+from .codex_appserver import LimitWindow, RateLimits, TurnResult, context_remaining_percent
+from .quota_windows import quota_window_label
 
 _ABSENT_DETAIL_VALUES = {"", "unavailable", "unknown", "none", "n/a"}
 _MONTH_LABELS = (
@@ -53,10 +54,13 @@ def _compact_details(details: dict[str, str]) -> str:
     if _available_detail(context):
         telemetry.append(f"Context remaining: {context}")
 
-    for remaining_key, reset_key, label in (
-        ("5-hour remaining", "5-hour reset", "5-hour remaining"),
-        ("Weekly remaining", "Weekly reset", "Weekly remaining"),
-    ):
+    window_keys: set[str] = set()
+    for remaining_key in tuple(details):
+        if remaining_key == "Context remaining" or not remaining_key.endswith(" remaining"):
+            continue
+        label = remaining_key
+        reset_key = f"{remaining_key.removesuffix(' remaining')} reset"
+        window_keys.update((remaining_key, reset_key))
         remaining = details.get(remaining_key)
         reset = details.get(reset_key)
         if not _available_detail(remaining) and not _available_detail(reset):
@@ -73,10 +77,7 @@ def _compact_details(details: dict[str, str]) -> str:
         "Model",
         "Effort",
         "Context remaining",
-        "5-hour remaining",
-        "5-hour reset",
-        "Weekly remaining",
-        "Weekly reset",
+        *window_keys,
     }
     for key, value in details.items():
         if key in consumed or not _available_detail(value):
@@ -109,10 +110,10 @@ def _remaining_text(window: LimitWindow | None) -> str:
 
 
 def _context_remaining(result: TurnResult) -> str:
-    if not result.context_window or result.context_tokens_used is None:
+    remaining = context_remaining_percent(result)
+    if remaining is None:
         return "unavailable"
-    remaining = max(0, result.context_window - result.context_tokens_used)
-    return f"{remaining * 100 / result.context_window:.1f}%"
+    return f"{remaining:.1f}%"
 
 
 def format_telegram_response(
@@ -126,20 +127,22 @@ def format_telegram_response(
     timezone_name: str,
 ) -> str:
     timezone = ZoneInfo(timezone_name)
-    details = "\n".join(
-        [
-            f"Session: {session_label}",
-            f"Agent: {agent}",
-            f"Model: {model}",
-            f"Effort: {effort}",
-            f"Context remaining: {_context_remaining(result)}",
-            f"5-hour remaining: {_remaining_text(limits.primary)}",
-            f"5-hour reset: {_reset_text(limits.primary, timezone)}",
-            f"Weekly remaining: {_remaining_text(limits.secondary)}",
-            f"Weekly reset: {_reset_text(limits.secondary, timezone)}",
-        ]
-    )
+    details = {
+        "Session": session_label,
+        "Agent": agent,
+        "Model": model,
+        "Effort": effort,
+        "Context remaining": _context_remaining(result),
+    }
+    for slot, window in (("primary", limits.primary), ("secondary", limits.secondary)):
+        label = quota_window_label(
+            window.duration_minutes if window is not None else None,
+            slot=slot,
+            compact=False,
+        )
+        details[f"{label} remaining"] = _remaining_text(window)
+        details[f"{label} reset"] = _reset_text(window, timezone)
     return format_agent_response(
         result.text or "Codex completed the turn without a text response.",
-        dict(line.split(": ", 1) for line in details.splitlines()),
+        details,
     )

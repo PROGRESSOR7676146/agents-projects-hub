@@ -37,6 +37,8 @@ class CodexAccountStatusTests(unittest.TestCase):
                     False,
                     "abc…",
                     auth_invalidated=True,
+                    primary_duration_minutes=300,
+                    secondary_duration_minutes=10080,
                 ),
             ),
             1,
@@ -48,6 +50,10 @@ class CodexAccountStatusTests(unittest.TestCase):
 
         self.assertEqual(restored, original)
         self.assertLessEqual(len(encoded), 1000)
+        self.assertNotIn('"5h"', encoded)
+        self.assertNotIn('"week"', encoded)
+        self.assertIn("primary_remaining_percent", original.accounts[0].as_dict())
+        self.assertNotIn("five_hour_remaining_percent", original.accounts[0].as_dict())
 
     def test_redacts_identity_and_reports_limits(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -61,8 +67,16 @@ class CodexAccountStatusTests(unittest.TestCase):
                         "byAccountId": {
                             "org-secret-ABC123": {
                                 "updatedAt": 1_700_000_000_000,
-                                "primary": {"usedPercent": 25, "resetAtMs": 1_700_001_000_000},
-                                "secondary": {"usedPercent": 40, "resetAtMs": 1_700_002_000_000},
+                                "primary": {
+                                    "usedPercent": 25,
+                                    "resetAtMs": 1_700_001_000_000,
+                                    "durationMinutes": 10080,
+                                },
+                                "secondary": {
+                                    "usedPercent": 40,
+                                    "resetAtMs": 1_700_002_000_000,
+                                    "durationMinutes": 15,
+                                },
                             }
                         }
                     }
@@ -97,6 +111,8 @@ class CodexAccountStatusTests(unittest.TestCase):
         self.assertEqual(status.account_rotations, 4)
         self.assertEqual(status.accounts[0].five_hour_remaining, 75)
         self.assertEqual(status.accounts[0].weekly_remaining, 60)
+        self.assertEqual(status.accounts[0].primary_duration_minutes, 10080)
+        self.assertEqual(status.accounts[0].secondary_duration_minutes, 15)
         self.assertEqual(status.accounts[0].identity_hint, "acc…")
         self.assertTrue(status.accounts[0].auth_invalidated)
         self.assertNotIn("secret@example.com", rendered)

@@ -245,8 +245,16 @@ class CodexAppServerTests(unittest.TestCase):
                     "id": 1,
                     "result": {
                         "rateLimits": {
-                            "primary": {"usedPercent": 35, "resetsAt": 1770000000},
-                            "secondary": {"usedPercent": 52, "resetsAt": 1770500000},
+                            "primary": {
+                                "usedPercent": 35,
+                                "resetsAt": 1770000000,
+                                "windowDurationMins": 300,
+                            },
+                            "secondary": {
+                                "usedPercent": 52,
+                                "resetsAt": 1770500000,
+                                "windowDurationMins": 10080,
+                            },
                         }
                     },
                 }
@@ -261,6 +269,8 @@ class CodexAppServerTests(unittest.TestCase):
         self.assertEqual(limits.primary.remaining_percent, 65)
         self.assertEqual(limits.secondary.remaining_percent, 48)
         self.assertEqual(limits.primary.resets_at, 1770000000)
+        self.assertEqual(limits.primary.duration_minutes, 300)
+        self.assertEqual(limits.secondary.duration_minutes, 10080)
 
     def test_wait_for_turn_returns_only_completed_agent_message_and_usage(self) -> None:
         transport = FakeTransport(
@@ -307,9 +317,48 @@ class CodexAppServerTests(unittest.TestCase):
         result = client.wait_for_turn("turn-9")
         self.assertEqual(result.text, "Done")
         self.assertEqual(result.context_window, 100000)
-        self.assertEqual(result.context_tokens_used, 25000)
+        self.assertEqual(result.context_tokens_used, 1000)
         self.assertNotIn("reasoning", result.text)
         self.assertEqual(transport.receive_timeouts, [3600.0] * 4)
+
+    def test_wait_for_turn_uses_latest_post_compaction_context_usage(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "method": "thread/tokenUsage/updated",
+                    "params": {
+                        "threadId": "thread-123",
+                        "turnId": "turn-9",
+                        "tokenUsage": {
+                            "modelContextWindow": 100000,
+                            "last": {"totalTokens": 80000},
+                            "total": {"totalTokens": 180000},
+                        },
+                    },
+                },
+                {
+                    "method": "thread/tokenUsage/updated",
+                    "params": {
+                        "threadId": "thread-123",
+                        "turnId": "turn-9",
+                        "tokenUsage": {
+                            "modelContextWindow": 100000,
+                            "last": {"totalTokens": 20000},
+                            "total": {"totalTokens": 200000},
+                        },
+                    },
+                },
+                {
+                    "method": "turn/completed",
+                    "params": {"threadId": "thread-123", "turn": {"id": "turn-9"}},
+                },
+            ]
+        )
+
+        result = CodexAppServerClient(transport, initialized=True).wait_for_turn("turn-9")
+
+        self.assertEqual(result.context_window, 100000)
+        self.assertEqual(result.context_tokens_used, 20000)
 
     def test_server_approval_request_is_left_for_tlive_and_never_auto_allowed(self) -> None:
         transport = FakeTransport(

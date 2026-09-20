@@ -1,6 +1,6 @@
-# Следующая сессия: context usage и quota windows
+# Следующая сессия: deployment и live acceptance P0/P1
 
-Статус: P0 реализован как repository checkpoint; P1 остаётся открытым.
+Статус: P0 и P1 реализованы как repository checkpoints; deployment и live E2E остаются отдельными gates.
 Дата: 2026-09-20
 
 ## Откуда продолжать
@@ -21,15 +21,18 @@ Telegram-материалов. Схема — 33; миграции 1–30 сох
 с проектом, crash recovery и повтор admission для динамической группы после
 ошибки SQLite без пропуска сообщения.
 
-## Следующая работа
+## Завершённая repository-работа
 
-1. **P1:** исправить происхождение context usage и подписи quota windows.
-   `metadata.py::format_telegram_response` пока жёстко сопоставляет primary с
-   пятичасовым окном, secondary — с недельным. Причину неверного заполнения
-   контекста ещё требуется доказать. Не выводить правила тарифа из одной
-   наблюдаемой сессии; учитывать длительность окна, аккаунт и свежесть данных.
+1. **P1:** Codex app-server `last.totalTokens` используется как текущая
+   заполненность контекста; накопительный `total.totalTokens` больше не создаёт
+   ложный ноль. Последний snapshot учитывает compaction, отсутствие snapshot
+   очищает старое значение до unknown. Quota labels строятся из reported
+   duration, а passive account snapshot сохраняет duration и freshness.
+   Неизвестные окна называются Primary/Secondary window.
 
-P0 закрыт только на repository evidence; deployment и live E2E не выполнялись.
+P0/P1 закрыты только на repository evidence; deployment и live E2E требуют
+точной чистой опубликованной ревизии, manifest/backup/rollback gate и проверки
+каждого обязательного long-running component.
 Не возобновлять старые пользовательские поручения и не выдавать отправленные
 ранее файлы за уже полученные агентом. Продолжение таких задач требует
 отдельного согласования.

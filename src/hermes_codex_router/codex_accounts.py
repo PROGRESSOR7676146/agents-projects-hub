@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
+from .quota_windows import quota_window_label
+
 _ID_SUFFIX = re.compile(r"\[id:([^\]]+)\]")
 _EMAIL = re.compile(r"([A-Za-z0-9][A-Za-z0-9.*_-]*)@([A-Za-z0-9.*_-]+(?:\.[A-Za-z0-9_-]+)+)")
 _LIVE_QUOTA = re.compile(
@@ -40,6 +42,8 @@ class CodexAccountStatus:
     quota_stale: bool
     identity_hint: str | None = None
     auth_invalidated: bool = False
+    primary_duration_minutes: int | None = None
+    secondary_duration_minutes: int | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -47,14 +51,16 @@ class CodexAccountStatus:
             "active": self.active,
             "availability": self.availability,
             "risk": self.risk,
-            "five_hour_remaining_percent": self.five_hour_remaining,
-            "weekly_remaining_percent": self.weekly_remaining,
-            "five_hour_resets_at": self.five_hour_resets_at,
-            "weekly_resets_at": self.weekly_resets_at,
+            "primary_remaining_percent": self.five_hour_remaining,
+            "secondary_remaining_percent": self.weekly_remaining,
+            "primary_resets_at": self.five_hour_resets_at,
+            "secondary_resets_at": self.weekly_resets_at,
             "quota_updated_at": self.quota_updated_at,
             "quota_stale": self.quota_stale,
             "identity_hint": self.identity_hint,
             "auth_invalidated": self.auth_invalidated,
+            "primary_duration_minutes": self.primary_duration_minutes,
+            "secondary_duration_minutes": self.secondary_duration_minutes,
         }
 
 
@@ -93,14 +99,16 @@ def encode_codex_pool_snapshot(status: CodexPoolStatus) -> str:
                 "active": item.active,
                 "availability": item.availability,
                 "risk": item.risk,
-                "5h": item.five_hour_remaining,
-                "week": item.weekly_remaining,
-                "5h_reset": item.five_hour_resets_at,
-                "week_reset": item.weekly_resets_at,
+                "p": item.five_hour_remaining,
+                "s": item.weekly_remaining,
+                "p_reset": item.five_hour_resets_at,
+                "s_reset": item.weekly_resets_at,
                 "updated": item.quota_updated_at,
                 "stale": item.quota_stale,
                 "hint": item.identity_hint,
                 "auth": item.auth_invalidated,
+                "p_minutes": item.primary_duration_minutes,
+                "s_minutes": item.secondary_duration_minutes,
             }
             for item in status.accounts
         ],
@@ -125,14 +133,16 @@ def decode_codex_pool_snapshot(value: str) -> CodexPoolStatus:
                 active=item.get("active") is True,
                 availability=str(item["availability"])[:64],
                 risk=str(item["risk"])[:64],
-                five_hour_remaining=_integer(item.get("5h")),
-                weekly_remaining=_integer(item.get("week")),
-                five_hour_resets_at=_integer(item.get("5h_reset")),
-                weekly_resets_at=_integer(item.get("week_reset")),
+                five_hour_remaining=_integer(item.get("p", item.get("5h"))),
+                weekly_remaining=_integer(item.get("s", item.get("week"))),
+                five_hour_resets_at=_integer(item.get("p_reset", item.get("5h_reset"))),
+                weekly_resets_at=_integer(item.get("s_reset", item.get("week_reset"))),
                 quota_updated_at=_integer(item.get("updated")),
                 quota_stale=item.get("stale") is True,
                 identity_hint=(str(item["hint"])[:32] if item.get("hint") else None),
                 auth_invalidated=item.get("auth") is True,
+                primary_duration_minutes=_integer(item.get("p_minutes")),
+                secondary_duration_minutes=_integer(item.get("s_minutes")),
             )
             for item in raw_accounts
             if isinstance(item, dict)
@@ -162,6 +172,14 @@ def _remaining(window: dict[str, Any]) -> int | None:
     if not isinstance(used, (int, float)) or isinstance(used, bool):
         return None
     return max(0, min(100, round(100 - used)))
+
+
+def _duration_minutes(window: dict[str, Any]) -> int | None:
+    for key in ("durationMinutes", "windowMinutes"):
+        value = _integer(window.get(key))
+        if value is not None and value > 0:
+            return value
+    return None
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -315,9 +333,12 @@ def read_codex_pool_status(
             )
             if live_values is not None:
                 five_hour_remaining, weekly_remaining, five_hour_reset, weekly_reset = live_values
+                primary_duration_minutes, secondary_duration_minutes = 300, 10_080
                 updated_at = int(observed_at.timestamp())
             else:
                 five_hour_remaining, weekly_remaining = _remaining(primary), _remaining(secondary)
+                primary_duration_minutes = _duration_minutes(primary)
+                secondary_duration_minutes = _duration_minutes(secondary)
                 five_hour_reset = (
                     value // 1000
                     if (value := _integer(primary.get("resetAtMs"))) is not None
@@ -353,6 +374,8 @@ def read_codex_pool_status(
                         else _masked_identity_hint(label)
                     ),
                     auth_invalidated=auth_invalidated,
+                    primary_duration_minutes=primary_duration_minutes,
+                    secondary_duration_minutes=secondary_duration_minutes,
                 )
             )
 
@@ -383,9 +406,15 @@ def format_codex_pool_status(status: CodexPoolStatus, *, timezone_name: str) -> 
         identity = f" ({account.identity_hint})" if account.identity_hint else ""
         limits = []
         if account.five_hour_remaining is not None:
-            limits.append(f"5h {account.five_hour_remaining}%")
+            limits.append(
+                f"{quota_window_label(account.primary_duration_minutes, slot='primary', compact=True)} "
+                f"{account.five_hour_remaining}%"
+            )
         if account.weekly_remaining is not None:
-            limits.append(f"week {account.weekly_remaining}%")
+            limits.append(
+                f"{quota_window_label(account.secondary_duration_minutes, slot='secondary', compact=True)} "
+                f"{account.weekly_remaining}%"
+            )
         updated = ""
         if account.quota_updated_at is not None:
             timestamp = datetime.fromtimestamp(account.quota_updated_at, timezone)

@@ -52,9 +52,38 @@ class StatusViewTests(unittest.TestCase):
             limits_stale=True,
         )
 
-        self.assertIn("🟡 5h 90%", text)
-        self.assertIn("🟡 Week 80%", text)
+        self.assertIn("🟡 Primary window 90%", text)
+        self.assertIn("🟡 Secondary window 80%", text)
         self.assertEqual(text.count("· cached"), 2)
+
+    def test_status_labels_primary_weekly_window_from_duration(self) -> None:
+        text = format_session_status(
+            agent="Codex",
+            model="gpt-5.6-sol",
+            effort="high",
+            writer="telegram",
+            context_remaining=None,
+            account_hint=None,
+            limits=RateLimits(LimitWindow(48, None, 10080), None),
+            timezone_name="UTC",
+        )
+
+        self.assertIn("🟢 Week 48%", text)
+        self.assertNotIn("5h", text)
+
+    def test_status_formats_short_reported_window_duration(self) -> None:
+        text = format_session_status(
+            agent="Codex",
+            model="gpt-5.6-sol",
+            effort="high",
+            writer="telegram",
+            context_remaining=None,
+            account_hint=None,
+            limits=RateLimits(LimitWindow(91, None, 15), None),
+            timezone_name="UTC",
+        )
+
+        self.assertIn("🟢 15m 91%", text)
 
     def test_compact_status_omits_technical_provider_noise(self) -> None:
         text = format_session_status(
@@ -91,7 +120,7 @@ class StatusViewTests(unittest.TestCase):
         )
 
         self.assertIn("🔴 Current network location unsupported", text)
-        self.assertIn("🟢 5h 100%", text)
+        self.assertIn("🟢 Primary window 100%", text)
 
     def test_accounts_lists_codex_and_opencode_go_capabilities(self) -> None:
         pool = CodexPoolStatus(
@@ -107,6 +136,36 @@ class StatusViewTests(unittest.TestCase):
         self.assertIn("OpenCode Go", text)
         self.assertIn("🟢 plan", text)
         self.assertIn("plan: 5h $12", text)
+
+    def test_accounts_uses_duration_and_marks_stale_quota_as_cached(self) -> None:
+        pool = CodexPoolStatus(
+            True,
+            True,
+            (
+                CodexAccountStatus(
+                    1,
+                    True,
+                    "ready",
+                    "low",
+                    48,
+                    None,
+                    None,
+                    None,
+                    1_800_000_000,
+                    True,
+                    "acc…",
+                    primary_duration_minutes=10080,
+                ),
+            ),
+            1,
+            0,
+        )
+
+        text = format_accounts(pool, include_opencode_go=False)
+
+        self.assertIn("Week 48%", text)
+        self.assertIn("cached", text)
+        self.assertNotIn("5h", text)
 
     def test_accounts_shows_latest_provider_supplied_opencode_reset(self) -> None:
         pool = CodexPoolStatus(False, False, (), None, 0, "not configured")

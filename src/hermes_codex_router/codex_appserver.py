@@ -348,6 +348,18 @@ class TurnResult:
     context_tokens_used: int | None
 
 
+def context_remaining_percent(result: TurnResult) -> float | None:
+    if (
+        result.context_window is None
+        or result.context_window <= 0
+        or result.context_tokens_used is None
+        or result.context_tokens_used < 0
+    ):
+        return None
+    remaining = max(0, result.context_window - result.context_tokens_used)
+    return remaining * 100 / result.context_window
+
+
 class CodexAppServerClient:
     """Small typed client for the stable v2 methods Project Hub needs."""
 
@@ -804,11 +816,11 @@ class CodexAppServerClient:
                 usage = params.get("tokenUsage")
                 if isinstance(usage, dict):
                     window = usage.get("modelContextWindow")
-                    total = usage.get("total")
+                    last = usage.get("last")
                     if isinstance(window, int):
                         context_window = window
-                    if isinstance(total, dict) and isinstance(total.get("totalTokens"), int):
-                        context_tokens_used = total["totalTokens"]
+                    if isinstance(last, dict) and isinstance(last.get("totalTokens"), int):
+                        context_tokens_used = last["totalTokens"]
                 continue
             if method == "item/completed" and params.get("turnId") == turn_id:
                 item = params.get("item")

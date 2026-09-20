@@ -18,9 +18,21 @@ Native Codex route/model continuity and Antigravity model/effort pinning remain
 part of this baseline. Deployment and schema-compatible runtime rollback are
 separate gates; existing schema-30/32 executables cannot open schema-33 state.
 
-Inbound attachment/caption/album completeness is repository-complete. The next
-open priority is accurate Codex context/quota-window labels; see the
-[roadmap](../ROADMAP.ru.md).
+Inbound attachment/caption/album completeness and accurate Codex
+context/quota-window telemetry are repository-complete. Deployment and live
+acceptance remain separate; see the [roadmap](../ROADMAP.ru.md).
+
+Codex context remainder now uses the latest app-server `last.totalTokens`
+snapshot, while cumulative `total.totalTokens` remains lifetime usage and is
+never treated as current context occupancy. The latest notification wins across
+compaction; a successful turn without current-context telemetry clears the
+older percentage to unknown. Provider-supplied quota durations survive passive
+account snapshots and drive response, `/status`, `/accounts`, rotation and
+alert labels. A 15-minute, five-hour or weekly window is therefore named by its
+actual duration even when it occupies an unexpected primary/secondary slot;
+missing duration is shown only as Primary/Secondary window. Stale cached quota
+is explicitly marked and still cannot alert. This checkpoint adds no migration;
+the target schema remains 33. See [ADR 0033](../decisions/0033-truthful-context-and-quota-telemetry.md).
 
 Hub-owned durable queue ingress now normalizes caption-only and file-only
 documents, photos, albums, selected quotes, and passive forwarded materials.

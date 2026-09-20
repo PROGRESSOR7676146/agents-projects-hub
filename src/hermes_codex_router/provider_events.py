@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .codex_accounts import CodexAccountStatus, CodexPoolStatus
+from .quota_windows import quota_window_label
 from .state import HubState
 
 
@@ -130,9 +131,19 @@ def format_codex_rotation_event(
     limits: list[str] = []
     if active is not None and not active.quota_stale:
         if active.five_hour_remaining is not None:
-            limits.append(f"5h {active.five_hour_remaining}%")
+            label = quota_window_label(
+                active.primary_duration_minutes,
+                slot="primary",
+                compact=True,
+            )
+            limits.append(f"{label} {active.five_hour_remaining}%")
         if active.weekly_remaining is not None:
-            limits.append(f"week {active.weekly_remaining}%")
+            label = quota_window_label(
+                active.secondary_duration_minutes,
+                slot="secondary",
+                compact=True,
+            )
+            limits.append(f"{label} {active.weekly_remaining}%")
     status = active.availability if active is not None else "unknown"
     status_text = f"{status}; {', '.join(limits)}" if limits else status
     if observation.provider_limit_count > 0:

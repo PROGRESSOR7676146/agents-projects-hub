@@ -267,6 +267,37 @@ class OperationalAlertTests(unittest.TestCase):
         self.assertEqual(six, ())
         self.assertEqual([item.code for item in five], ["codex_5h_low"])
 
+    def test_low_quota_alert_uses_reported_window_duration(self) -> None:
+        alerts = evaluate_operational_alerts(
+            pool=CodexPoolStatus(
+                True,
+                True,
+                (
+                    CodexAccountStatus(
+                        1,
+                        True,
+                        "ready",
+                        "low",
+                        5,
+                        None,
+                        None,
+                        None,
+                        1,
+                        False,
+                        primary_duration_minutes=10080,
+                    ),
+                ),
+                1,
+                0,
+            ),
+            state_snapshot={"pending_dispatches": []},
+            doctor_ok=True,
+        )
+
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("weekly quota", alerts[0].message)
+        self.assertNotIn("5-hour", alerts[0].message)
+
     def test_quota_warning_is_once_per_low_band_and_rearms_after_recovery(self) -> None:
         alert = evaluate_operational_alerts(
             pool=CodexPoolStatus(

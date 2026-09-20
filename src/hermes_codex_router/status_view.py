@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from .codex_accounts import CodexAccountStatus, CodexPoolStatus
 from .codex_appserver import LimitWindow, RateLimits
 from .provider_limits import ProviderLimit
+from .quota_windows import quota_window_label
 
 
 def _name(value: str) -> str:
@@ -60,12 +61,20 @@ def cached_codex_rate_limits(account: CodexAccountStatus | None) -> RateLimits:
     if account is None:
         return RateLimits(None, None)
     primary = (
-        LimitWindow(account.five_hour_remaining, account.five_hour_resets_at, None)
+        LimitWindow(
+            account.five_hour_remaining,
+            account.five_hour_resets_at,
+            account.primary_duration_minutes,
+        )
         if account.five_hour_remaining is not None
         else None
     )
     secondary = (
-        LimitWindow(account.weekly_remaining, account.weekly_resets_at, None)
+        LimitWindow(
+            account.weekly_remaining,
+            account.weekly_resets_at,
+            account.secondary_duration_minutes,
+        )
         if account.weekly_remaining is not None
         else None
     )
@@ -103,8 +112,26 @@ def format_session_status(
     windows = [
         value
         for value in (
-            _window("5h", limits.primary, timezone, stale=limits_stale),
-            _window("Week", limits.secondary, timezone, stale=limits_stale),
+            _window(
+                quota_window_label(
+                    limits.primary.duration_minutes if limits.primary else None,
+                    slot="primary",
+                    compact=True,
+                ),
+                limits.primary,
+                timezone,
+                stale=limits_stale,
+            ),
+            _window(
+                quota_window_label(
+                    limits.secondary.duration_minutes if limits.secondary else None,
+                    slot="secondary",
+                    compact=True,
+                ),
+                limits.secondary,
+                timezone,
+                stale=limits_stale,
+            ),
         )
         if value is not None
     ]
@@ -149,7 +176,12 @@ def format_accounts(
             identity = account.identity_hint or f"account {account.index}"
             limits: list[str] = []
             if account.five_hour_remaining is not None:
-                value = f"5h {account.five_hour_remaining}%"
+                label = quota_window_label(
+                    account.primary_duration_minutes,
+                    slot="primary",
+                    compact=True,
+                )
+                value = f"{label} {account.five_hour_remaining}%"
                 if account.five_hour_resets_at is not None:
                     reset = datetime.fromtimestamp(
                         account.five_hour_resets_at, ZoneInfo(timezone_name)
@@ -157,13 +189,20 @@ def format_accounts(
                     value += f" ↻ {reset:%d.%m %H:%M}"
                 limits.append(value)
             if account.weekly_remaining is not None:
-                value = f"week {account.weekly_remaining}%"
+                label = quota_window_label(
+                    account.secondary_duration_minutes,
+                    slot="secondary",
+                    compact=True,
+                )
+                value = f"{label} {account.weekly_remaining}%"
                 if account.weekly_resets_at is not None:
                     reset = datetime.fromtimestamp(
                         account.weekly_resets_at, ZoneInfo(timezone_name)
                     )
                     value += f" ↻ {reset:%d.%m %H:%M}"
                 limits.append(value)
+            if limits and account.quota_stale:
+                limits.append("cached")
             suffix = f" · {' · '.join(limits)}" if limits else ""
             lines.append(f"{marker}{active} {identity}{suffix}")
     if include_opencode_go:
