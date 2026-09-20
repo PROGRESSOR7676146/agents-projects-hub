@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import html
 import os
-import re
 import sqlite3
 import subprocess
 import threading
@@ -60,6 +59,16 @@ from .incoming_materials import (
     prepare_incoming_materials,
     receive_incoming_materials,
 )
+from .ingress_decisions import (
+    CONTROL_COMMANDS,
+    ControlCommandDecision,
+    EmergencyStopDecision,
+    IgnoreDecision,
+    IngressDecisionContext,
+    PassiveForwardDecision,
+    ProductiveRouteDecision,
+    decide_ingress,
+)
 from .local_transfer import LocalTransferError, local_resume_command
 from .metadata import format_agent_response, format_telegram_response
 from .model_selection import ModelSelectionError, available_models
@@ -87,9 +96,7 @@ from .registry import (
     validate_execution_root,
 )
 from .routing import (
-    decide_targets,
     is_emergency_stop,
-    mentioned_targets,
     parse_command,
     parse_context_request,
 )
@@ -2653,7 +2660,28 @@ class ProjectHubService:
             keep_session=self.state.active_session(topic.topic_id),
         )
         self._discard_terminal_materials(topic)
-        if message.is_forwarded:
+        active = self.state.active_session(topic.topic_id)
+        ingress_context = IngressDecisionContext(
+            active_agent_id=active.agent_id if active is not None else self.agent.agent_id,
+            pending_batch_agent_id=None,
+            usernames=self.usernames,
+            hub_username=(
+                self.config.hub_bot.telegram_username if self.config.hub_bot is not None else None
+            ),
+            managed_external_agent_ids=frozenset(
+                candidate.agent_id
+                for candidate in self.config.agents
+                if candidate.managed_externally
+            ),
+            queue_enabled_agent_ids=frozenset(
+                candidate.agent_id
+                for candidate in self.config.agents
+                if self._queue_enabled(candidate.agent_id)
+            ),
+            primary_agent_id=self.agent.agent_id,
+        )
+        decision = decide_ingress(message, ingress_context)
+        if isinstance(decision, PassiveForwardDecision):
             if self.state.message_already_observed(message.chat_id, message.message_id):
                 return False
             forwarded_materials: tuple[IncomingMaterialDraft, ...] = ()
@@ -2685,7 +2713,7 @@ class ProjectHubService:
                 materials=forwarded_materials,
                 session=forwarded_session,
             )
-        if is_emergency_stop(message.text):
+        if isinstance(decision, EmergencyStopDecision):
             active = self.state.active_session(topic.topic_id)
             target_agent_id = active.agent_id if active is not None else self.agent.agent_id
             request_id, cancelled, pending = self.state.request_emergency_stop(
@@ -2712,8 +2740,13 @@ class ProjectHubService:
             if not durable:
                 self._send_text(message, detail)
             return True
-        command = parse_command(message.text)
-        if command is not None and (message.attachments or message.unavailable_materials):
+        if isinstance(decision, ControlCommandDecision):
+            command = decision.command
+        elif isinstance(decision, ProductiveRouteDecision):
+            command = decision.parsed_command
+        else:
+            command = None
+        if isinstance(decision, ControlCommandDecision) and decision.admission == "reject_material":
             if not self.state.claim_message(
                 message.chat_id,
                 message.message_id,
@@ -2726,22 +2759,21 @@ class ProjectHubService:
                 "Send the command and the productive material as separate messages.",
             )
             return True
-        if command is not None:
+        if (
+            isinstance(decision, (ControlCommandDecision, ProductiveRouteDecision))
+            and command is not None
+        ):
             self.state.flush_message_batch(topic.topic_id)
-        control_commands = {
-            "menu",
-            "pilot",
-            "status",
-            "accounts",
-            "new",
-            "terminal",
-            "release",
-            "local",
-            "return",
-            "model",
-            "agent",
-            "connect",
-        }
+        if isinstance(decision, ProductiveRouteDecision) and command is not None:
+            active = self.state.active_session(topic.topic_id)
+            ingress_context = replace(
+                ingress_context,
+                active_agent_id=active.agent_id if active is not None else self.agent.agent_id,
+            )
+            decision = decide_ingress(message, ingress_context)
+            if not isinstance(decision, ProductiveRouteDecision):
+                raise ServiceError("unexpected reclassified ingress decision")
+            command = decision.parsed_command
         return_session = (
             self.state.active_session(topic.topic_id)
             if command and command.name == "return"
@@ -2761,7 +2793,7 @@ class ProjectHubService:
         )
         if (
             command
-            and command.name in control_commands
+            and command.name in CONTROL_COMMANDS
             and not queued_non_codex_return
             and not atomic_codex_return
         ):
@@ -3118,21 +3150,9 @@ class ProjectHubService:
             )
             return True
 
-        active = self.state.active_session(topic.topic_id)
-        active_agent = active.agent_id if active else self.agent.agent_id
-        routing_text = message.text
-        if self.config.hub_bot is not None:
-            # Addressing the transport/controller bot does not create a model
-            # identity. It keeps the ordinary active-provider route while an
-            # explicit provider mention still wins deterministically.
-            routing_text = re.sub(
-                rf"(?i)(?<![A-Za-z0-9_])@{re.escape(self.config.hub_bot.telegram_username)}\b",
-                "",
-                routing_text,
-            ).strip()
-        if message.reply_to_username is None and not mentioned_targets(
-            routing_text, usernames=self.usernames
-        ):
+        if not isinstance(decision, (IgnoreDecision, ProductiveRouteDecision)):
+            raise ServiceError("unexpected ingress decision")
+        if decision.pending_batch_eligible:
             pending_batch_agent = None
             if message.media_group_id is not None and not self.state.message_already_observed(
                 message.chat_id, message.message_id
@@ -3151,24 +3171,21 @@ class ProjectHubService:
             if pending_batch_agent is None:
                 pending_batch_agent = self.state.pending_message_batch_agent(topic.topic_id)
             if pending_batch_agent is not None and self._queue_enabled(pending_batch_agent):
-                active_agent = pending_batch_agent
-        targets = decide_targets(
-            routing_text,
-            active_agent=active_agent,
-            usernames=self.usernames,
-            reply_to_username=message.reply_to_username,
-        )
-        local_targets = tuple(
-            target for target in targets if not self.config.require_agent(target).managed_externally
-        )
+                decision = decide_ingress(
+                    message,
+                    replace(ingress_context, pending_batch_agent_id=pending_batch_agent),
+                )
+                if not isinstance(decision, (IgnoreDecision, ProductiveRouteDecision)):
+                    raise ServiceError("unexpected inherited ingress decision")
+        if isinstance(decision, IgnoreDecision):
+            return False
+        if not isinstance(decision, ProductiveRouteDecision):
+            raise ServiceError("unexpected productive ingress decision")
+        local_targets = decision.local_targets
         # Native gateways see the Telegram update independently. The Hub may
         # retain shared topic metadata, but it must neither claim nor answer a
         # message whose productive targets are all externally managed.
-        if not local_targets:
-            return False
-        if (message.attachments or message.unavailable_materials) and any(
-            not self._queue_enabled(target) for target in local_targets
-        ):
+        if decision.admission == "reject_material_inline":
             if not self.state.claim_message(
                 message.chat_id,
                 message.message_id,
@@ -3181,7 +3198,7 @@ class ProjectHubService:
                 "this inline route did not receive or read the attachment.",
             )
             return True
-        if any(not self._queue_enabled(target) for target in local_targets):
+        if decision.requires_inline_root:
             try:
                 require_inline_topic(self.state, topic)
             except ExecutionRootError as exc:
@@ -3191,7 +3208,7 @@ class ProjectHubService:
                     return False
                 self._send_text(message, exc.public_message)
                 return True
-        if self._queue_enabled(self.agent.agent_id) and len(local_targets) > 1:
+        if decision.admission == "reject_multiple_queue_targets":
             if not self.state.claim_message(
                 message.chat_id,
                 message.message_id,
@@ -3223,18 +3240,12 @@ class ProjectHubService:
                         message, "This provider session is not available for Telegram turns."
                     )
                     return True
-                clean_text = re.sub(
-                    rf"(?i)(?<![A-Za-z0-9_])@{re.escape(target_agent.telegram_username)}\b",
-                    "",
-                    routing_text,
-                ).strip()
-                if not clean_text and not (message.attachments or message.unavailable_materials):
+                clean_text = decision.prompt_text
+                if decision.admission == "reject_empty_request":
                     self._send_text(
                         message, f"Add a request after the {target_agent.display_name} mention."
                     )
                     return True
-                if not clean_text:
-                    clean_text = "Review the attached Telegram material."
                 try:
                     prompt = self._explicit_context_prompt(topic, target_agent_id, clean_text)
                 except ServiceError as exc:
@@ -3301,20 +3312,14 @@ class ProjectHubService:
             )
             return True
         project = self.registry.require_project(binding.project_id)
-        clean_text = re.sub(
-            rf"(?i)(?<![A-Za-z0-9_])@{re.escape(self.agent.telegram_username)}\b",
-            "",
-            routing_text,
-        ).strip()
-        if not clean_text and not (message.attachments or message.unavailable_materials):
+        clean_text = decision.prompt_text
+        if decision.admission == "reject_empty_request":
             if queue_mode:
                 self.state.claim_message(
                     message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
                 )
             self._send_text(message, "Add a request after the Codex mention.")
             return True
-        if not clean_text:
-            clean_text = "Review the attached Telegram material."
         try:
             prompt = self._explicit_context_prompt(topic, self.agent.agent_id, clean_text)
         except ServiceError as exc:
