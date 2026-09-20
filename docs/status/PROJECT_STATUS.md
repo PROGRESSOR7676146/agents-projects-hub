@@ -47,8 +47,10 @@ the Bot API download limit. Albums use one bounded collection turn; material
 received after execution starts stays FIFO and is excluded from same-turn
 steering. A later album part atomically holds its exact unleased queue tail
 while Telegram downloads it, preventing a slow synchronous download from
-splitting one media group into multiple provider turns. Duplicate updates do
-not redownload, extend the hold, or reinvoke. Workers revalidate
+splitting one media group into multiple provider turns. The bounded album quiet
+window also spans the next Bot API long poll, so a part delivered in the next
+update batch cannot lose the group before its download begins. Duplicate
+updates do not redownload, extend the hold, or reinvoke. Workers revalidate
 path, symlink, size and digest after execution-root/lane validation, preserve
 raw evidence for uncertain execution, and remove consumed snapshots after the
 atomic result commit. Passive forwards do not invoke a model and attach only to

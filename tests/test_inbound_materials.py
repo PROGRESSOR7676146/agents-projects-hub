@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import tempfile
-import time
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
@@ -156,10 +156,11 @@ class InboundMaterialTests(unittest.TestCase):
             finally:
                 worker.close()
 
-    def test_album_job_stays_unleased_while_the_next_part_downloads(self) -> None:
+    def test_album_job_stays_unleased_through_next_poll_and_download(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             harness = FaultMatrixHarness(Path(directory))
             controller = harness.controller()
+            first_created: datetime | None = None
 
             class SlowSecondDownloadBot(InboundRecordingBot):
                 leased_during_download = False
@@ -172,10 +173,12 @@ class InboundMaterialTests(unittest.TestCase):
                     max_bytes: int,
                 ) -> DownloadedTelegramFile:
                     if file_id == "album-two":
-                        time.sleep(0.03)
+                        assert first_created is not None
                         self.leased_during_download = (
                             controller.state.lease_provider_job(
-                                "opencode", "fictional-racing-worker"
+                                "opencode",
+                                "fictional-racing-worker",
+                                now=first_created + timedelta(seconds=30),
                             )
                             is not None
                         )
@@ -212,11 +215,20 @@ class InboundMaterialTests(unittest.TestCase):
                 declared_size=25,
             )
             try:
-                with patch("hermes_codex_router.service.ALBUM_QUIET_MILLISECONDS", 10):
-                    self.assertTrue(controller.handle_update(first))
-                    self.assertTrue(controller.handle_update(second))
+                self.assertTrue(controller.handle_update(first))
                 topic = controller.state.find_topic(harness.chat_id, 912)
                 assert topic is not None
+                first_jobs = controller.state.provider_jobs_for_topic(topic.topic_id)
+                self.assertEqual(len(first_jobs), 1)
+                first_created = datetime.fromisoformat(first_jobs[0].created_at)
+                self.assertIsNone(
+                    controller.state.lease_provider_job(
+                        "opencode",
+                        "fictional-arrival-worker",
+                        now=first_created + timedelta(seconds=6),
+                    )
+                )
+                self.assertTrue(controller.handle_update(second))
                 self.assertFalse(telegram.leased_during_download)
                 self.assertEqual(len(controller.state.provider_jobs_for_topic(topic.topic_id)), 1)
                 self.assertEqual(
