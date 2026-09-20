@@ -4,13 +4,16 @@ import asyncio
 import json
 import tempfile
 import unittest
+from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, patch
 
 from hermes_codex_router.acceptance_actor import (
+    P0_P1_CHECKS,
     AcceptanceActorConfig,
     AcceptanceActorError,
+    AcceptanceCheckResult,
     _click_callback_exact,
     _forward_to_topic,
     _run_check,
@@ -20,7 +23,25 @@ from hermes_codex_router.acceptance_actor import (
     _wait_for_response,
     load_acceptance_actor_config,
 )
-from hermes_codex_router.acceptance_runtime import AcceptanceRuntimeError, ServiceSnapshot
+from hermes_codex_router.acceptance_contracts import (
+    AcceptanceActorConfig as ContractConfig,
+)
+from hermes_codex_router.acceptance_contracts import (
+    AcceptanceActorError as ContractError,
+)
+from hermes_codex_router.acceptance_contracts import (
+    AcceptanceCheckResult as ContractResult,
+)
+from hermes_codex_router.acceptance_runtime import (
+    AcceptanceRuntimeError,
+    FixedServiceSupervisor,
+    ReadOnlyAcceptanceState,
+    ServiceSnapshot,
+)
+from hermes_codex_router.p0_p1_acceptance import (
+    P0P1ScenarioContext,
+    run_p0_p1_live_scenario,
+)
 
 
 class FakeButton:
@@ -90,7 +111,7 @@ class FakeP0P1Client(FakeClient):
         return messages if isinstance(file, list) else messages[0]
 
 
-class StatefulAcceptanceProbe:
+class StatefulAcceptanceProbe(ReadOnlyAcceptanceState):
     def __init__(self, *, fail_message_id: int | None = None) -> None:
         self.fail_message_id = fail_message_id
         self.calls: list[tuple[str, object]] = []
@@ -107,7 +128,7 @@ class StatefulAcceptanceProbe:
             ],
         }
 
-    def jobs_for_input(self, _chat_id: int, message_id: int) -> list[tuple[str, str]]:
+    def jobs_for_input(self, chat_id: int, message_id: int) -> list[tuple[str, str]]:
         self.calls.append(("jobs", message_id))
         if message_id == self.fail_message_id:
             raise AcceptanceRuntimeError("named state probe failure")
@@ -119,7 +140,7 @@ class StatefulAcceptanceProbe:
         return {"album": 2, "recovery": 1}[job_id]
 
 
-class StatefulServiceSupervisor:
+class StatefulServiceSupervisor(FixedServiceSupervisor):
     def __init__(
         self,
         *,
@@ -934,22 +955,15 @@ class AcceptanceActorConfigTests(unittest.TestCase):
             FakeMessage(208, "Context remaining: 88.5%"),
             FakeMessage(209, "Codex\nexample account"),
         )
+        context = P0P1ScenarioContext(client, config, probe, supervisor)
         with (
-            patch("hermes_codex_router.acceptance_actor._select_provider", new=AsyncMock()),
+            patch("hermes_codex_router.p0_p1_acceptance._select_provider", new=AsyncMock()),
             patch(
-                "hermes_codex_router.acceptance_actor._wait_for_markers",
+                "hermes_codex_router.p0_p1_acceptance._wait_for_markers",
                 new=AsyncMock(side_effect=responses),
             ) as wait,
-            patch(
-                "hermes_codex_router.acceptance_actor.ReadOnlyAcceptanceState",
-                return_value=probe,
-            ),
-            patch(
-                "hermes_codex_router.acceptance_actor.FixedServiceSupervisor",
-                return_value=supervisor,
-            ),
         ):
-            results = asyncio.run(_run_p0_p1_live_checks(client, config, "example_codex_bot"))
+            results = asyncio.run(run_p0_p1_live_scenario(context, "example_codex_bot"))
 
         self.assertEqual(
             [result.check for result in results],
@@ -999,21 +1013,13 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         state_path.touch(mode=0o600)
         config = self.p0_config(state_path)
         supervisor = StatefulServiceSupervisor(worker_active=False)
-        with (
-            patch(
-                "hermes_codex_router.acceptance_actor.ReadOnlyAcceptanceState",
-                return_value=StatefulAcceptanceProbe(),
-            ),
-            patch(
-                "hermes_codex_router.acceptance_actor.FixedServiceSupervisor",
-                return_value=supervisor,
-            ),
-        ):
-            results = asyncio.run(
-                _run_p0_p1_live_checks(FakeP0P1Client(), config, "example_codex_bot")
-            )
+        context = P0P1ScenarioContext(
+            FakeP0P1Client(), config, StatefulAcceptanceProbe(), supervisor
+        )
+        results = asyncio.run(run_p0_p1_live_scenario(context, "example_codex_bot"))
 
         self.assertEqual(len(results), 1)
+        self.assertEqual([result.check for result in results], [P0_P1_CHECKS[0]])
         self.assertFalse(results[0].ok)
         self.assertIn("requires the Controller and Codex worker", results[0].detail)
         self.assertEqual(supervisor.actions, ["capture", "restore"])
@@ -1030,26 +1036,18 @@ class AcceptanceActorConfigTests(unittest.TestCase):
             FakeMessage(203, "active"),
             FakeMessage(204, "late"),
         )
+        context = P0P1ScenarioContext(FakeP0P1Client(), config, probe, supervisor)
         with (
-            patch("hermes_codex_router.acceptance_actor._select_provider", new=AsyncMock()),
+            patch("hermes_codex_router.p0_p1_acceptance._select_provider", new=AsyncMock()),
             patch(
-                "hermes_codex_router.acceptance_actor._wait_for_markers",
+                "hermes_codex_router.p0_p1_acceptance._wait_for_markers",
                 new=AsyncMock(side_effect=responses),
             ),
-            patch(
-                "hermes_codex_router.acceptance_actor.ReadOnlyAcceptanceState",
-                return_value=probe,
-            ),
-            patch(
-                "hermes_codex_router.acceptance_actor.FixedServiceSupervisor",
-                return_value=supervisor,
-            ),
         ):
-            results = asyncio.run(
-                _run_p0_p1_live_checks(FakeP0P1Client(), config, "example_codex_bot")
-            )
+            results = asyncio.run(run_p0_p1_live_scenario(context, "example_codex_bot"))
 
         self.assertFalse(results[-1].ok)
+        self.assertEqual([result.check for result in results], list(P0_P1_CHECKS[:4]))
         self.assertIn("named state probe failure", results[-1].detail)
         self.assertTrue(supervisor.worker_active)
         self.assertEqual(supervisor.actions[-1], "restore")
@@ -1065,26 +1063,20 @@ class AcceptanceActorConfigTests(unittest.TestCase):
             FakeMessage(203, "active"),
             FakeMessage(204, "late"),
         )
+        context = P0P1ScenarioContext(
+            FakeP0P1Client(), config, StatefulAcceptanceProbe(), supervisor
+        )
         with (
-            patch("hermes_codex_router.acceptance_actor._select_provider", new=AsyncMock()),
+            patch("hermes_codex_router.p0_p1_acceptance._select_provider", new=AsyncMock()),
             patch(
-                "hermes_codex_router.acceptance_actor._wait_for_markers",
+                "hermes_codex_router.p0_p1_acceptance._wait_for_markers",
                 new=AsyncMock(side_effect=responses),
             ),
-            patch(
-                "hermes_codex_router.acceptance_actor.ReadOnlyAcceptanceState",
-                return_value=StatefulAcceptanceProbe(),
-            ),
-            patch(
-                "hermes_codex_router.acceptance_actor.FixedServiceSupervisor",
-                return_value=supervisor,
-            ),
         ):
-            results = asyncio.run(
-                _run_p0_p1_live_checks(FakeP0P1Client(), config, "example_codex_bot")
-            )
+            results = asyncio.run(run_p0_p1_live_scenario(context, "example_codex_bot"))
 
         self.assertFalse(results[-1].ok)
+        self.assertEqual([result.check for result in results], list(P0_P1_CHECKS[:4]))
         self.assertIn("named Controller restart failure", results[-1].detail)
         self.assertTrue(supervisor.controller_active)
         self.assertTrue(supervisor.worker_active)
@@ -1101,28 +1093,72 @@ class AcceptanceActorConfigTests(unittest.TestCase):
             FakeMessage(203, "active"),
             FakeMessage(204, "late"),
         )
+        context = P0P1ScenarioContext(
+            FakeP0P1Client(),
+            config,
+            StatefulAcceptanceProbe(fail_message_id=106),
+            supervisor,
+        )
         with (
-            patch("hermes_codex_router.acceptance_actor._select_provider", new=AsyncMock()),
+            patch("hermes_codex_router.p0_p1_acceptance._select_provider", new=AsyncMock()),
             patch(
-                "hermes_codex_router.acceptance_actor._wait_for_markers",
+                "hermes_codex_router.p0_p1_acceptance._wait_for_markers",
                 new=AsyncMock(side_effect=responses),
             ),
+        ):
+            results = asyncio.run(run_p0_p1_live_scenario(context, "example_codex_bot"))
+
+        self.assertFalse(results[-1].ok)
+        self.assertEqual([result.check for result in results], list(P0_P1_CHECKS[:4]))
+        self.assertIn("named state probe failure", results[-1].detail)
+        self.assertIn("service restoration failed: named restoration failure", results[-1].detail)
+
+    def test_p0_p1_context_contains_only_the_four_reviewed_dependencies(self) -> None:
+        self.assertEqual(
+            [field.name for field in fields(P0P1ScenarioContext)],
+            ["client", "config", "state_probe", "service_supervisor"],
+        )
+
+    def test_acceptance_actor_reexports_the_existing_contract_names(self) -> None:
+        self.assertIs(AcceptanceActorConfig, ContractConfig)
+        self.assertIs(AcceptanceActorError, ContractError)
+        self.assertIs(AcceptanceCheckResult, ContractResult)
+
+    def test_acceptance_actor_builds_the_explicit_p0_p1_context(self) -> None:
+        state_path = self.base / "state.db"
+        state_path.touch(mode=0o600)
+        config = self.p0_config(state_path)
+        client = FakeP0P1Client()
+        probe = StatefulAcceptanceProbe()
+        supervisor = StatefulServiceSupervisor()
+        run_scenario = AsyncMock(return_value=[])
+
+        with (
             patch(
                 "hermes_codex_router.acceptance_actor.ReadOnlyAcceptanceState",
-                return_value=StatefulAcceptanceProbe(fail_message_id=106),
+                return_value=probe,
             ),
             patch(
                 "hermes_codex_router.acceptance_actor.FixedServiceSupervisor",
                 return_value=supervisor,
             ),
+            patch(
+                "hermes_codex_router.acceptance_actor._run_p0_p1_live_scenario",
+                new=run_scenario,
+            ),
         ):
-            results = asyncio.run(
-                _run_p0_p1_live_checks(FakeP0P1Client(), config, "example_codex_bot")
-            )
+            results = asyncio.run(_run_p0_p1_live_checks(client, config, "example_codex_bot"))
 
-        self.assertFalse(results[-1].ok)
-        self.assertIn("named state probe failure", results[-1].detail)
-        self.assertIn("service restoration failed: named restoration failure", results[-1].detail)
+        self.assertEqual(results, [])
+        await_args = run_scenario.await_args
+        if await_args is None:
+            self.fail("scenario was not called")
+        context, target = await_args.args
+        self.assertIs(context.client, client)
+        self.assertIs(context.config, config)
+        self.assertIs(context.state_probe, probe)
+        self.assertIs(context.service_supervisor, supervisor)
+        self.assertEqual(target, "example_codex_bot")
 
     def test_raw_forward_targets_the_canary_forum_topic(self) -> None:
         config = load_acceptance_actor_config(self.write_config())
