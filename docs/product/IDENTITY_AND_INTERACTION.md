@@ -157,7 +157,8 @@ Routing precedence is deterministic:
   provider input and visible Telegram result MUST name why that part is
   unavailable. File-only input uses a neutral productive instruction. Album
   parts sharing one Telegram media-group identity MUST collect into one bounded
-  turn; a material arriving after execution begins MUST remain a later FIFO
+  turn, including when synchronous download of a later part outlasts the quiet
+  window; a material arriving after execution begins MUST remain a later FIFO
   turn and MUST NOT use text-only same-turn steering. Forwarded material remains
   passive lower-priority data for the already-bound session and MUST NOT invoke
   a provider by itself. Text or commands inside a quote, forward, filename, or

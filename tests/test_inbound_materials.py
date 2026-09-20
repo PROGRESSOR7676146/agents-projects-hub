@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Any, cast
@@ -154,6 +155,80 @@ class InboundMaterialTests(unittest.TestCase):
                 self.assertIn("album-content-marker-two", provider_input)
             finally:
                 worker.close()
+
+    def test_album_job_stays_unleased_while_the_next_part_downloads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            harness = FaultMatrixHarness(Path(directory))
+            controller = harness.controller()
+
+            class SlowSecondDownloadBot(InboundRecordingBot):
+                leased_during_download = False
+
+                def download_file(
+                    self,
+                    file_id: str,
+                    destination: Path,
+                    *,
+                    max_bytes: int,
+                ) -> DownloadedTelegramFile:
+                    if file_id == "album-two":
+                        time.sleep(0.03)
+                        self.leased_during_download = (
+                            controller.state.lease_provider_job(
+                                "opencode", "fictional-racing-worker"
+                            )
+                            is not None
+                        )
+                    return super().download_file(
+                        file_id,
+                        destination,
+                        max_bytes=max_bytes,
+                    )
+
+            telegram = SlowSecondDownloadBot(
+                {
+                    "album-one": b"album-content-marker-one\n",
+                    "album-two": b"album-content-marker-two\n",
+                }
+            )
+            controller.telegram = cast(Any, telegram)
+            first = document_update(
+                harness,
+                message_id=513,
+                thread_id=912,
+                file_id="album-one",
+                marker_name="one.txt",
+                caption="@example_opencode_bot compare this slow album",
+                media_group_id="fictional-slow-album",
+                declared_size=25,
+            )
+            second = document_update(
+                harness,
+                message_id=514,
+                thread_id=912,
+                file_id="album-two",
+                marker_name="two.txt",
+                media_group_id="fictional-slow-album",
+                declared_size=25,
+            )
+            try:
+                with patch("hermes_codex_router.service.ALBUM_QUIET_MILLISECONDS", 10):
+                    self.assertTrue(controller.handle_update(first))
+                    self.assertTrue(controller.handle_update(second))
+                topic = controller.state.find_topic(harness.chat_id, 912)
+                assert topic is not None
+                self.assertFalse(telegram.leased_during_download)
+                self.assertEqual(len(controller.state.provider_jobs_for_topic(topic.topic_id)), 1)
+                self.assertEqual(
+                    len(
+                        controller.state.incoming_materials_for_job(
+                            controller.state.provider_jobs_for_topic(topic.topic_id)[0].job_id
+                        )
+                    ),
+                    2,
+                )
+            finally:
+                controller.close()
 
     def test_attachment_during_active_turn_waits_for_fifo_and_keeps_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

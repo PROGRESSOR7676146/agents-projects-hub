@@ -9,12 +9,22 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol, Sequence
 
-from .telegram import DownloadedTelegramFile, IncomingAttachment, TelegramError, TopicMessage
+from .telegram import (
+    TELEGRAM_FILE_DOWNLOAD_TIMEOUT_SECONDS,
+    DownloadedTelegramFile,
+    IncomingAttachment,
+    TelegramError,
+    TopicMessage,
+)
 
 MAX_INCOMING_FILE_BYTES = 20 * 1024 * 1024
 MAX_INCOMING_MATERIALS_PER_JOB = 10
 MAX_INCOMING_JOB_BYTES = 80 * 1024 * 1024
 ALBUM_QUIET_MILLISECONDS = 2_000
+ALBUM_DOWNLOAD_HOLD_MILLISECONDS = int(TELEGRAM_FILE_DOWNLOAD_TIMEOUT_SECONDS * 1_000) + 2_000
+ALBUM_MAX_MILLISECONDS = (
+    MAX_INCOMING_MATERIALS_PER_JOB * ALBUM_DOWNLOAD_HOLD_MILLISECONDS + ALBUM_QUIET_MILLISECONDS
+)
 MAX_INLINE_TEXT_CHARACTERS = 120_000
 
 _TEXT_EXTENSIONS = frozenset(

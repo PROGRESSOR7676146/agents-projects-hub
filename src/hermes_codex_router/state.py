@@ -2029,6 +2029,84 @@ class HubState:
             available_at=quiet_until,
         )
 
+    def hold_queued_input_group(
+        self,
+        *,
+        topic_id: int,
+        input_group_key: str,
+        hold_ms: int,
+        max_ms: int,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+        session_generation: int | None = None,
+    ) -> ProviderJobRecord | None:
+        """Keep an exact queued tail group unavailable during part download."""
+        target_agent = (
+            _bounded(agent_id, name="agent id", maximum=64) if agent_id is not None else None
+        )
+        target_session = (
+            _bounded(session_id, name="session id", maximum=128) if session_id is not None else None
+        )
+        group_key = _bounded(input_group_key, name="input group key", maximum=256)
+        exact_scope = (target_agent, target_session, session_generation)
+        if any(value is None for value in exact_scope) and any(
+            value is not None for value in exact_scope
+        ):
+            raise StateError("incomplete input group hold scope")
+        if (
+            topic_id <= 0
+            or (session_generation is not None and session_generation <= 0)
+            or hold_ms <= 0
+            or max_ms < hold_ms
+        ):
+            raise StateError("invalid input group hold")
+        current = datetime.now(timezone.utc)
+        timestamp = _timestamp(current)
+        with self._immediate_transaction():
+            candidate = self._connection.execute(
+                """SELECT * FROM provider_jobs
+                   WHERE topic_id = ? AND input_group_key = ?
+                     AND status = 'queued'
+                     AND topic_sequence = (
+                         SELECT MAX(tail.topic_sequence) FROM provider_jobs tail
+                         WHERE tail.topic_id = provider_jobs.topic_id
+                     )
+                   ORDER BY topic_sequence DESC LIMIT 1""",
+                (
+                    topic_id,
+                    group_key,
+                ),
+            ).fetchone()
+            if candidate is None:
+                return None
+            if target_agent is not None and (
+                str(candidate["agent_id"]) != target_agent
+                or str(candidate["session_id"]) != target_session
+                or int(candidate["session_generation"]) != session_generation
+            ):
+                return None
+            hard_deadline = datetime.fromisoformat(str(candidate["created_at"])) + timedelta(
+                milliseconds=max_ms
+            )
+            held_until = min(current + timedelta(milliseconds=hold_ms), hard_deadline)
+            if held_until <= current:
+                return None
+            existing = candidate["next_attempt_at"]
+            if existing is not None and datetime.fromisoformat(str(existing)) >= held_until:
+                return self._provider_job(candidate)
+            cursor = self._connection.execute(
+                """UPDATE provider_jobs
+                   SET next_attempt_at = ?, updated_at = ?
+                   WHERE job_id = ? AND status = 'queued'""",
+                (_timestamp(held_until), timestamp, candidate["job_id"]),
+            )
+            if cursor.rowcount != 1:
+                return None
+            held = self._connection.execute(
+                "SELECT * FROM provider_jobs WHERE job_id = ?", (candidate["job_id"],)
+            ).fetchone()
+            return self._provider_job(held) if held is not None else None
+
     def pending_message_batch_agent(
         self, topic_id: int, *, now: datetime | None = None
     ) -> str | None:

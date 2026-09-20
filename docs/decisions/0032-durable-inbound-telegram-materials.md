@@ -35,7 +35,12 @@ Admission accepts UTF-8 text and signature-verified JPEG, PNG, GIF or WebP;
 archives and unsupported document/media types are not opened. Limits are 20
 MiB per file, ten parts and 80 MiB per job. A media group waits for a bounded
 two-second quiet window and creates one provider job. A file-only message gets
-a neutral productive instruction.
+a neutral productive instruction. Before downloading a later album part, the
+Controller atomically holds only the matching unleased tail job. The hold is
+bounded by the Bot API download timeout and by the ten-part absolute collection
+window; committing each part restores the ordinary two-second quiet window.
+Already leased or executing work is never reclaimed, so a genuinely late part
+remains FIFO instead of mutating an active provider turn.
 
 Workers receive no Telegram token. After the existing root/lane check they
 revalidate the private canonical path, reject symlinks, verify size/digest and

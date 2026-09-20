@@ -45,6 +45,8 @@ from .external_runtime import ProviderLimitError, ProviderUnavailableError
 from .external_service import ExternalAgentService
 from .hub_config import HubConfig, ProjectBinding, read_telegram_token
 from .incoming_materials import (
+    ALBUM_DOWNLOAD_HOLD_MILLISECONDS,
+    ALBUM_MAX_MILLISECONDS,
     ALBUM_QUIET_MILLISECONDS,
     IncomingMaterialDraft,
     IncomingMaterialError,
@@ -533,8 +535,24 @@ class ProjectHubService:
         if len(payload) > 20000:
             marker = "[Earlier visible context was truncated for durable admission.]\n\n"
             payload = marker + payload[-(20000 - len(marker)) :]
+        group_key = None
+        if message.media_group_id is not None:
+            raw_group = f"{message.chat_id}:{message.thread_id}:{message.media_group_id}".encode(
+                "utf-8"
+            )
+            group_key = "telegram-album:" + hashlib.sha256(raw_group).hexdigest()
         materials: tuple[IncomingMaterialDraft, ...] = ()
         if message.attachments or message.unavailable_materials:
+            if group_key is not None and not take_local_writer:
+                self.state.hold_queued_input_group(
+                    topic_id=topic.topic_id,
+                    agent_id=session.agent_id,
+                    session_id=session.session_id,
+                    session_generation=session.generation,
+                    input_group_key=group_key,
+                    hold_ms=ALBUM_DOWNLOAD_HOLD_MILLISECONDS,
+                    max_ms=ALBUM_MAX_MILLISECONDS,
+                )
             try:
                 materials = receive_incoming_materials(
                     message,
@@ -550,12 +568,6 @@ class ProjectHubService:
             if take_local_writer:
                 expected_transfer = self.state.writer_transfer_snapshot(topic, session)
                 resolve_topic_execution_root(self.state, self.registry, topic)
-            group_key = None
-            if message.media_group_id is not None:
-                raw_group = (
-                    f"{message.chat_id}:{message.thread_id}:{message.media_group_id}"
-                ).encode("utf-8")
-                group_key = "telegram-album:" + hashlib.sha256(raw_group).hexdigest()
             if (batchable_user_text is not None or materials) and not take_local_writer:
                 appended_text = batchable_user_text or "Review the attached Telegram material."
                 _, created = self.state.enqueue_or_append_provider_job(
@@ -580,9 +592,10 @@ class ProjectHubService:
                         if group_key is not None
                         else self.config.message_batch_quiet_ms
                     ),
-                    max_ms=max(
-                        self.config.message_batch_max_ms,
-                        ALBUM_QUIET_MILLISECONDS if group_key is not None else 0,
+                    max_ms=(
+                        ALBUM_MAX_MILLISECONDS
+                        if group_key is not None
+                        else self.config.message_batch_max_ms
                     ),
                 )
             else:
@@ -3295,7 +3308,23 @@ class ProjectHubService:
         if message.reply_to_username is None and not mentioned_targets(
             routing_text, usernames=self.usernames
         ):
-            pending_batch_agent = self.state.pending_message_batch_agent(topic.topic_id)
+            pending_batch_agent = None
+            if message.media_group_id is not None and not self.state.message_already_observed(
+                message.chat_id, message.message_id
+            ):
+                raw_group = (
+                    f"{message.chat_id}:{message.thread_id}:{message.media_group_id}"
+                ).encode("utf-8")
+                held_group = self.state.hold_queued_input_group(
+                    topic_id=topic.topic_id,
+                    input_group_key=("telegram-album:" + hashlib.sha256(raw_group).hexdigest()),
+                    hold_ms=ALBUM_DOWNLOAD_HOLD_MILLISECONDS,
+                    max_ms=ALBUM_MAX_MILLISECONDS,
+                )
+                if held_group is not None:
+                    pending_batch_agent = held_group.agent_id
+            if pending_batch_agent is None:
+                pending_batch_agent = self.state.pending_message_batch_agent(topic.topic_id)
             if pending_batch_agent is not None and self._queue_enabled(pending_batch_agent):
                 active_agent = pending_batch_agent
         targets = decide_targets(

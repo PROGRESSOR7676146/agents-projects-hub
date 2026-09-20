@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TELEGRAM_HEALTH_FAILURE_THRESHOLD = 3
+TELEGRAM_FILE_DOWNLOAD_TIMEOUT_SECONDS = 60.0
 
 
 class TelegramError(RuntimeError):
@@ -613,7 +614,10 @@ class TelegramBotApi:
         digest = hashlib.sha256()
         size = 0
         try:
-            with self._opener(request, timeout=60.0) as response, partial.open("xb") as output:
+            with (
+                self._opener(request, timeout=TELEGRAM_FILE_DOWNLOAD_TIMEOUT_SECONDS) as response,
+                partial.open("xb") as output,
+            ):
                 os.chmod(partial, 0o600)
                 while True:
                     chunk = response.read(64 * 1024)
