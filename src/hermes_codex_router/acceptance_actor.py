@@ -4,14 +4,19 @@ import asyncio
 import json
 import os
 import re
-import sqlite3
-import subprocess
 import tempfile
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from .acceptance_runtime import (
+    AcceptanceRuntimeError,
+    FixedServiceSupervisor,
+    ReadOnlyAcceptanceState,
+    ServiceSnapshot,
+)
 
 USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
 SUPPORTED_CHECKS = (
@@ -38,8 +43,6 @@ P0_P1_CHECKS = (
     "p1_live_turn_context_and_quota_labels",
     "p1_status_context_and_accounts_read_only",
 )
-_CONTROLLER_UNIT = "agents-projects-hub.service"
-_CODEX_WORKER_UNIT = "agents-projects-hub-worker@codex.service"
 _MAX_CLOUD_BOT_FILE_BYTES = 20 * 1024 * 1024
 
 
@@ -307,35 +310,8 @@ async def _wait_for_response(
     raise AcceptanceActorError(f"timed out waiting for @{username}")
 
 
-def _job_rows(state_path: Path, chat_id: int, message_id: int) -> list[tuple[str, str]]:
-    connection = sqlite3.connect(f"file:{state_path.resolve()}?mode=ro", uri=True)
-    try:
-        return [
-            (str(row[0]), str(row[1]))
-            for row in connection.execute(
-                "SELECT jobs.job_id,jobs.status FROM provider_job_inputs inputs "
-                "JOIN provider_jobs jobs ON jobs.job_id=inputs.job_id "
-                "WHERE inputs.chat_id=? AND inputs.message_id=? ORDER BY jobs.created_at",
-                (chat_id, message_id),
-            )
-        ]
-    finally:
-        connection.close()
-
-
-def _material_count(state_path: Path, job_id: str) -> int:
-    connection = sqlite3.connect(f"file:{state_path.resolve()}?mode=ro", uri=True)
-    try:
-        row = connection.execute(
-            "SELECT COUNT(*) FROM incoming_materials WHERE job_id=?", (job_id,)
-        ).fetchone()
-        return int(row[0])
-    finally:
-        connection.close()
-
-
 async def _wait_for_job(
-    state_path: Path,
+    state: ReadOnlyAcceptanceState,
     chat_id: int,
     message_id: int,
     statuses: set[str],
@@ -345,7 +321,7 @@ async def _wait_for_job(
     deadline = asyncio.get_running_loop().time() + timeout_seconds
     latest: list[tuple[str, str]] = []
     while asyncio.get_running_loop().time() < deadline:
-        latest = _job_rows(state_path, chat_id, message_id)
+        latest = state.jobs_for_input(chat_id, message_id)
         if len(latest) == 1 and latest[0][1] in statuses:
             return latest
         await asyncio.sleep(0.25)
@@ -404,37 +380,6 @@ async def _send_input_document(
         reply_to=config.telegram_thread_id,
         force_document=True,
     )
-
-
-def _service(action: str, unit: str) -> None:
-    try:
-        subprocess.run(
-            ("systemctl", "--user", action, unit),
-            check=True,
-            timeout=40,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        raise AcceptanceActorError(
-            f"service {action} failed for the fixed acceptance unit"
-        ) from exc
-
-
-def _service_active(unit: str) -> bool:
-    try:
-        result = subprocess.run(
-            ("systemctl", "--user", "is-active", "--quiet", unit),
-            check=False,
-            timeout=10,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise AcceptanceActorError(
-            "service state check failed for the fixed acceptance unit"
-        ) from exc
-    return result.returncode == 0
 
 
 async def _click_callback_prefix(message: Any, prefix: bytes) -> None:
@@ -535,21 +480,20 @@ async def _run_p0_p1_live_checks(
 ) -> list[AcceptanceCheckResult]:
     if config.state_path is None or not config.allow_service_restart:
         raise AcceptanceActorError("p0_p1_live is missing its local state or restart authority")
-    state_path = config.state_path
+    state = ReadOnlyAcceptanceState(config.state_path)
+    services = FixedServiceSupervisor()
     results: list[AcceptanceCheckResult] = []
     current_check = P0_P1_CHECKS[0]
     failure: tuple[str, str] | None = None
     nonce = uuid.uuid4().hex[:12].upper()
-    initially_active: dict[str, bool] = {}
+    initial_services: ServiceSnapshot | None = None
 
     def passed(check: str, response_id: int | None, detail: str) -> None:
         results.append(AcceptanceCheckResult(check, target, True, response_id, detail))
 
     try:
-        initially_active = {
-            unit: _service_active(unit) for unit in (_CONTROLLER_UNIT, _CODEX_WORKER_UNIT)
-        }
-        if not all(initially_active.values()):
+        initial_services = services.capture_active_state()
+        if not initial_services.all_active:
             raise AcceptanceActorError(
                 "p0_p1_live requires the Controller and Codex worker to be active"
             )
@@ -594,7 +538,7 @@ async def _run_p0_p1_live_checks(
                 markers=("CAPTION_FILE_OK", caption_token),
             )
             caption_jobs = await _wait_for_job(
-                state_path,
+                state,
                 config.telegram_chat_id,
                 int(caption_message.id),
                 {"completed"},
@@ -634,7 +578,7 @@ async def _run_p0_p1_live_checks(
             for message in album_messages:
                 album_job_rows.extend(
                     await _wait_for_job(
-                        state_path,
+                        state,
                         config.telegram_chat_id,
                         int(message.id),
                         {"completed"},
@@ -643,7 +587,7 @@ async def _run_p0_p1_live_checks(
             album_job_ids = {row[0] for row in album_job_rows}
             if len(album_job_rows) != 2 or len(album_job_ids) != 1:
                 raise AcceptanceActorError("album parts did not bind to one durable job")
-            if _material_count(state_path, next(iter(album_job_ids))) != 2:
+            if state.material_count(next(iter(album_job_ids))) != 2:
                 raise AcceptanceActorError("album job did not retain both material snapshots")
             passed(current_check, int(album_response.id), "one job and two materials verified")
 
@@ -656,7 +600,7 @@ async def _run_p0_p1_live_checks(
                 reply_to=config.telegram_thread_id,
             )
             await _wait_for_job(
-                state_path,
+                state,
                 config.telegram_chat_id,
                 int(active.id),
                 {"executing"},
@@ -671,7 +615,7 @@ async def _run_p0_p1_live_checks(
                 "Use no tools.",
             )
             await _wait_for_job(
-                state_path,
+                state,
                 config.telegram_chat_id,
                 int(late.id),
                 {"queued", "leased", "executing", "result_ready", "completed"},
@@ -691,7 +635,7 @@ async def _run_p0_p1_live_checks(
                 markers=("LATE_FILE_OK", late_token),
             )
             late_jobs = await _wait_for_job(
-                state_path,
+                state,
                 config.telegram_chat_id,
                 int(late.id),
                 {"completed"},
@@ -705,8 +649,8 @@ async def _run_p0_p1_live_checks(
             )
 
             current_check = P0_P1_CHECKS[3]
-            _service("stop", _CODEX_WORKER_UNIT)
-            if _service_active(_CODEX_WORKER_UNIT):
+            services.stop_codex_worker()
+            if services.is_codex_worker_active():
                 raise AcceptanceActorError("Codex worker did not stop for recovery check")
             recovery = await _send_input_document(
                 client,
@@ -717,19 +661,19 @@ async def _run_p0_p1_live_checks(
                 "Use no tools.",
             )
             queued = await _wait_for_job(
-                state_path,
+                state,
                 config.telegram_chat_id,
                 int(recovery.id),
                 {"queued"},
             )
             recovery_job_id = queued[0][0]
-            _service("restart", _CONTROLLER_UNIT)
-            if not _service_active(_CONTROLLER_UNIT):
+            services.restart_controller()
+            if not services.is_controller_active():
                 raise AcceptanceActorError("Controller did not restart")
-            if len(_job_rows(state_path, config.telegram_chat_id, int(recovery.id))) != 1:
+            if len(state.jobs_for_input(config.telegram_chat_id, int(recovery.id))) != 1:
                 raise AcceptanceActorError("Controller restart duplicated durable admission")
-            _service("start", _CODEX_WORKER_UNIT)
-            if not _service_active(_CODEX_WORKER_UNIT):
+            services.start_codex_worker()
+            if not services.is_codex_worker_active():
                 raise AcceptanceActorError("Codex worker did not recover")
             recovery_response = await _wait_for_markers(
                 client,
@@ -739,12 +683,12 @@ async def _run_p0_p1_live_checks(
                 markers=("RECOVERY_FILE_OK", recovery_token),
             )
             recovery_jobs = await _wait_for_job(
-                state_path,
+                state,
                 config.telegram_chat_id,
                 int(recovery.id),
                 {"completed"},
             )
-            if len(recovery_jobs) != 1 or _material_count(state_path, recovery_job_id) != 1:
+            if len(recovery_jobs) != 1 or state.material_count(recovery_job_id) != 1:
                 raise AcceptanceActorError("recovery produced duplicate job or material rows")
             passed(current_check, int(recovery_response.id), "restart recovery stayed exactly once")
 
@@ -817,24 +761,23 @@ async def _run_p0_p1_live_checks(
                 markers=("Codex",),
             )
             passed(current_check, int(status_response.id), "read-only status and accounts verified")
-    except AcceptanceActorError as exc:
+    except (AcceptanceActorError, AcceptanceRuntimeError) as exc:
         failure = (current_check, str(exc))
-    except (OSError, sqlite3.Error) as exc:
+    except OSError as exc:
         failure = (
             current_check,
             f"bounded local acceptance operation failed: {type(exc).__name__}",
         )
     finally:
-        try:
-            for unit, was_active in initially_active.items():
-                if was_active and not _service_active(unit):
-                    _service("start", unit)
-        except AcceptanceActorError as exc:
-            if failure is None:
-                failure = (P0_P1_CHECKS[3], str(exc))
-            else:
-                failed_check, detail = failure
-                failure = (failed_check, f"{detail}; service restoration failed: {exc}")
+        if initial_services is not None:
+            try:
+                services.restore(initial_services)
+            except AcceptanceRuntimeError as exc:
+                if failure is None:
+                    failure = (P0_P1_CHECKS[3], str(exc))
+                else:
+                    failed_check, detail = failure
+                    failure = (failed_check, f"{detail}; service restoration failed: {exc}")
 
     if failure is not None:
         failed_check, detail = failure
