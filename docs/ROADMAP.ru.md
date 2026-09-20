@@ -22,14 +22,15 @@ Repository acceptance не означает обновления работаю�
    Schema 33 сохраняет и проверяет caption, документы, фото, альбомы, цитаты,
    пересылки и late FIFO input; неподдержанные части получают явный отказ.
    Deployment и live provider/Telegram E2E остаются отдельной задачей.
-2. **P1 — достоверные context/quota labels.** Проверить источник заполнения
-   контекста, идентичность сессии и аккаунта, длительности upstream окон,
-   compaction и свежесть кэша. Не считать primary автоматически пятичасовым,
-   secondary — недельным, а неизвестный контекст — нулевым. Фоновые проверки
-   не вызывают модели.
+2. **P1 — достоверные context/quota labels: repository checkpoint реализован.**
+   Текущий context берётся из последнего app-server snapshot, корректно меняется
+   после compaction и становится unknown при отсутствии данных. Подписи окон
+   строятся из upstream duration; неизвестные primary/secondary не выдаются за
+   5h/week, а stale cache явно помечен. Schema остаётся 33. Deployment и live
+   Telegram/provider acceptance — отдельный этап.
 
-P1 остаётся нерешённым. Исходные пользовательские поручения не должны
-перезапускаться автоматически после repository-исправления доставки.
+Исходные пользовательские поручения не должны перезапускаться автоматически
+после repository-исправлений P0/P1.
 
 ### Telegram Interaction Contract v2
 

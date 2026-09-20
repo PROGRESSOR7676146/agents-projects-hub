@@ -39,7 +39,13 @@ This normative module is part of the
 
 - **REQ-CMD-001 (Implemented):** `/status` shows the active provider, model,
   effort, context remainder when observable, masked active account, and compact
-  provider-supplied limit/reset windows.
+  provider-supplied limit/reset windows. Codex context remainder MUST use the
+  latest current-context usage snapshot, not cumulative lifetime token usage;
+  a missing current snapshot is unknown and MUST clear an older displayed
+  value. A quota-window label MUST derive from the provider-reported duration.
+  `primary` and `secondary` identify positions only: an unknown duration remains
+  `Primary window` or `Secondary window` rather than being guessed as five-hour
+  or weekly.
 - **REQ-CMD-002 (Implemented):** `/model` is the single cascaded selector for
   provider, model, and effort. It marks current values and validates callbacks
   against the exact cached catalog snapshot displayed to the user. The final
@@ -67,7 +73,9 @@ This normative module is part of the
   A configured private Antigravity status cache MAY supply structured current
   account, per-model quota, reset time, current model/effort, and matching-session
   context without ANSI parsing or a provider/model invocation. Stale, mismatched,
-  oversized, or non-private cache files MUST degrade to unknown.
+  oversized, or non-private cache files MUST degrade to unknown. Passive Codex
+  account snapshots MUST retain each window's reported duration and freshness;
+  stale values remain explicitly cached and MUST NOT be presented as current.
 - **REQ-CMD-004 (Implemented):** `/new` requires an owner callback confirmation
   and resets only the active provider session; mass reset behavior is removed.
   `/local` transfers writer ownership. Codex `/return` changes only the lease,

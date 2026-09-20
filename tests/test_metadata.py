@@ -64,6 +64,42 @@ class MetadataTests(unittest.TestCase):
         self.assertNotIn("unavailable", rendered)
         self.assertEqual(rendered.count("\n", rendered.index("<blockquote")), 0)
 
+    def test_quota_labels_follow_reported_duration_not_window_position(self) -> None:
+        rendered = format_telegram_response(
+            result=TurnResult(text="Done", context_window=None, context_tokens_used=None),
+            agent="Codex",
+            model="gpt-5.6-sol",
+            effort="high",
+            session_label="Example Project Alpha · Backend · Codex",
+            limits=RateLimits(
+                primary=LimitWindow(remaining_percent=48, resets_at=None, duration_minutes=10080),
+                secondary=LimitWindow(remaining_percent=91, resets_at=None, duration_minutes=15),
+            ),
+            timezone_name="UTC",
+        )
+
+        self.assertIn("Weekly remaining: 48%", rendered)
+        self.assertIn("15-minute remaining: 91%", rendered)
+        self.assertNotIn("5-hour", rendered)
+
+    def test_unknown_quota_duration_is_labelled_by_window_identity(self) -> None:
+        rendered = format_telegram_response(
+            result=TurnResult(text="Done", context_window=None, context_tokens_used=None),
+            agent="Codex",
+            model="gpt-5.6-sol",
+            effort="high",
+            session_label="Example Project Alpha · Backend · Codex",
+            limits=RateLimits(
+                primary=LimitWindow(remaining_percent=48, resets_at=None, duration_minutes=None),
+                secondary=None,
+            ),
+            timezone_name="UTC",
+        )
+
+        self.assertIn("Primary window remaining: 48%", rendered)
+        self.assertNotIn("5-hour", rendered)
+        self.assertNotIn("Context remaining", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

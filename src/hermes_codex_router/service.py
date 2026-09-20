@@ -26,7 +26,13 @@ from .codex_accounts import (
     decode_codex_pool_snapshot,
     read_codex_pool_status,
 )
-from .codex_appserver import CodexAppServerClient, LimitWindow, RateLimits, RpcError
+from .codex_appserver import (
+    CodexAppServerClient,
+    LimitWindow,
+    RateLimits,
+    RpcError,
+    context_remaining_percent,
+)
 from .codex_failure import CodexPreparationError, codex_preparation, uncertain_provider_notice
 from .codex_recovery import (
     checkpoint_failure_notice,
@@ -916,16 +922,14 @@ class ProjectHubService:
                 finally:
                     client.on_visible_item = None
                     client.on_completed = None
-                if result.context_window and result.context_tokens_used is not None:
-                    remaining = max(0, result.context_window - result.context_tokens_used)
-                    try:
-                        queue_state.set_context_remaining(
-                            executing.session_id, remaining * 100 / result.context_window
-                        )
-                    except Exception:
-                        # Context percentage is display telemetry, not part of
-                        # the productive result's durable commit.
-                        pass
+                try:
+                    queue_state.set_context_remaining(
+                        executing.session_id, context_remaining_percent(result)
+                    )
+                except Exception:
+                    # Context percentage is display telemetry, not part of
+                    # the productive result's durable commit.
+                    pass
                 visible_response = result.text + prepared.visible_notice
                 provider_session_id = thread.thread_id
                 actual_model = thread.model
@@ -1364,11 +1368,9 @@ class ProjectHubService:
         self.state.acknowledge_telegram_contract(
             session.session_id, CODEX_TELEGRAM_CONTRACT_VERSION
         )
-        if result.context_window and result.context_tokens_used is not None:
-            remaining = max(0, result.context_window - result.context_tokens_used)
-            session = self.state.set_context_remaining(
-                session.session_id, remaining * 100 / result.context_window
-            )
+        session = self.state.set_context_remaining(
+            session.session_id, context_remaining_percent(result)
+        )
         limits = client.read_rate_limits()
         response = format_telegram_response(
             result=result,

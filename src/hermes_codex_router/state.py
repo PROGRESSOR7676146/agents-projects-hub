@@ -1462,8 +1462,8 @@ class HubState:
             )
         return self.get_session(session_id), True
 
-    def set_context_remaining(self, session_id: str, percent: float) -> SessionRecord:
-        bounded = max(0.0, min(100.0, percent))
+    def set_context_remaining(self, session_id: str, percent: float | None) -> SessionRecord:
+        bounded = None if percent is None else max(0.0, min(100.0, percent))
         with self._connection:
             cursor = self._connection.execute(
                 "UPDATE agent_sessions SET context_remaining_percent = ?, updated_at = ? "

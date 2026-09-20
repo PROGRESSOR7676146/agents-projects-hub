@@ -15,7 +15,12 @@ from .artifacts import (
     remove_spooled_artifact,
     spool_staged_artifacts,
 )
-from .codex_appserver import CodexAppServerClient, RateLimits, RpcRejectedError
+from .codex_appserver import (
+    CodexAppServerClient,
+    RateLimits,
+    RpcRejectedError,
+    context_remaining_percent,
+)
 from .codex_failure import CodexPreparationError, codex_preparation, uncertain_provider_notice
 from .codex_proxy_health import probe_codex_runtime_proxy
 from .codex_recovery import (
@@ -823,16 +828,10 @@ class ExternalQueueWorker:
         visible_response = (
             result.text.strip() or "Codex completed the turn without visible text."
         ) + prepared.visible_notice
-        if result.context_window and result.context_tokens_used is not None:
-            try:
-                self.state.set_context_remaining(
-                    job.session_id,
-                    max(0, result.context_window - result.context_tokens_used)
-                    * 100
-                    / result.context_window,
-                )
-            except Exception:
-                pass
+        try:
+            self.state.set_context_remaining(job.session_id, context_remaining_percent(result))
+        except Exception:
+            pass
         try:
             limits = client.read_rate_limits()
         except Exception:

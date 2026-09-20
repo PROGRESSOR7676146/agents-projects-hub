@@ -9,6 +9,7 @@ from typing import Mapping
 
 from .codex_accounts import CodexPoolStatus
 from .operational_alert import OperationalAlert
+from .quota_windows import quota_window_label
 from .reliability_alerts import evaluate_reliability_alerts
 
 DEFAULT_LOW_QUOTA_PERCENT = 5
@@ -438,12 +439,17 @@ def evaluate_operational_alerts(
                 and account.five_hour_remaining is not None
                 and account.five_hour_remaining <= low_quota_percent
             ):
+                label = quota_window_label(
+                    account.primary_duration_minutes,
+                    slot="primary",
+                    compact=False,
+                ).casefold()
                 alerts.append(
                     OperationalAlert(
                         f"codex:account:{account.index}:5h-low",
                         "codex_5h_low",
                         "warning",
-                        f"Codex account {account.index}{identity} has {account.five_hour_remaining}% of its 5-hour quota left.",
+                        f"Codex account {account.index}{identity} has {account.five_hour_remaining}% of its {label} quota left.",
                     )
                 )
             if (
@@ -452,12 +458,17 @@ def evaluate_operational_alerts(
                 and account.weekly_remaining is not None
                 and account.weekly_remaining <= low_quota_percent
             ):
+                label = quota_window_label(
+                    account.secondary_duration_minutes,
+                    slot="secondary",
+                    compact=False,
+                ).casefold()
                 alerts.append(
                     OperationalAlert(
                         f"codex:account:{account.index}:week-low",
                         "codex_weekly_low",
                         "warning",
-                        f"Codex account {account.index}{identity} has {account.weekly_remaining}% of its weekly quota left.",
+                        f"Codex account {account.index}{identity} has {account.weekly_remaining}% of its {label} quota left.",
                     )
                 )
     pending = state_snapshot.get("pending_dispatches")
