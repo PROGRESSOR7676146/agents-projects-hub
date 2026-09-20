@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Keep one Telegram media group in one durable provider turn when downloading
+  a later part outlasts the album quiet window, without reclaiming leased work
+  or changing schema 33.
 - Add owner-only durable registered-project editing with Hub-local display-name
   changes, opaque canonical Git-root relocation, strict live-session/work
   blockers, schema-29 crash recovery, and no provider-history or Telegram-group

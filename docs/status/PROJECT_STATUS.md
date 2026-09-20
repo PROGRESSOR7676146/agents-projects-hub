@@ -45,7 +45,10 @@ image bytes, excess parts/bytes, and cloud Bot API files above 20 MB produce an
 explicit provider-input and Telegram notice. Telegram Premium does not change
 the Bot API download limit. Albums use one bounded collection turn; material
 received after execution starts stays FIFO and is excluded from same-turn
-steering. Duplicate updates do not redownload or reinvoke. Workers revalidate
+steering. A later album part atomically holds its exact unleased queue tail
+while Telegram downloads it, preventing a slow synchronous download from
+splitting one media group into multiple provider turns. Duplicate updates do
+not redownload, extend the hold, or reinvoke. Workers revalidate
 path, symlink, size and digest after execution-root/lane validation, preserve
 raw evidence for uncertain execution, and remove consumed snapshots after the
 atomic result commit. Passive forwards do not invoke a model and attach only to
