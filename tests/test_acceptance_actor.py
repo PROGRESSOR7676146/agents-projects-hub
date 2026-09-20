@@ -20,6 +20,7 @@ from hermes_codex_router.acceptance_actor import (
     _wait_for_response,
     load_acceptance_actor_config,
 )
+from hermes_codex_router.acceptance_runtime import AcceptanceRuntimeError, ServiceSnapshot
 
 
 class FakeButton:
@@ -87,6 +88,87 @@ class FakeP0P1Client(FakeClient):
             message.grouped_id = grouped_id
             messages.append(message)
         return messages if isinstance(file, list) else messages[0]
+
+
+class StatefulAcceptanceProbe:
+    def __init__(self, *, fail_message_id: int | None = None) -> None:
+        self.fail_message_id = fail_message_id
+        self.calls: list[tuple[str, object]] = []
+        self.jobs = {
+            101: [[("caption", "completed")]],
+            102: [[("album", "completed")]],
+            103: [[("album", "completed")]],
+            104: [[("active", "executing")]],
+            105: [[("late", "queued")], [("late", "completed")]],
+            106: [
+                [("recovery", "queued")],
+                [("recovery", "queued")],
+                [("recovery", "completed")],
+            ],
+        }
+
+    def jobs_for_input(self, _chat_id: int, message_id: int) -> list[tuple[str, str]]:
+        self.calls.append(("jobs", message_id))
+        if message_id == self.fail_message_id:
+            raise AcceptanceRuntimeError("named state probe failure")
+        states = self.jobs[message_id]
+        return states.pop(0) if len(states) > 1 else states[0]
+
+    def material_count(self, job_id: str) -> int:
+        self.calls.append(("materials", job_id))
+        return {"album": 2, "recovery": 1}[job_id]
+
+
+class StatefulServiceSupervisor:
+    def __init__(
+        self,
+        *,
+        controller_active: bool = True,
+        worker_active: bool = True,
+        fail_action: str | None = None,
+        fail_restore: bool = False,
+    ) -> None:
+        self.controller_active = controller_active
+        self.worker_active = worker_active
+        self.fail_action = fail_action
+        self.fail_restore = fail_restore
+        self.actions: list[str] = []
+
+    def capture_active_state(self) -> ServiceSnapshot:
+        self.actions.append("capture")
+        return ServiceSnapshot(self.controller_active, self.worker_active)
+
+    def stop_codex_worker(self) -> None:
+        self.actions.append("stop_worker")
+        self.worker_active = False
+
+    def restart_controller(self) -> None:
+        self.actions.append("restart_controller")
+        if self.fail_action == "restart_controller":
+            self.controller_active = False
+            raise AcceptanceRuntimeError("named Controller restart failure")
+        self.controller_active = True
+
+    def start_codex_worker(self) -> None:
+        self.actions.append("start_worker")
+        self.worker_active = True
+
+    def is_controller_active(self) -> bool:
+        self.actions.append("check_controller")
+        return self.controller_active
+
+    def is_codex_worker_active(self) -> bool:
+        self.actions.append("check_worker")
+        return self.worker_active
+
+    def restore(self, initial: ServiceSnapshot) -> None:
+        self.actions.append("restore")
+        if initial.controller_active:
+            self.controller_active = True
+        if initial.codex_worker_active:
+            self.worker_active = True
+        if self.fail_restore:
+            raise AcceptanceRuntimeError("named restoration failure")
 
 
 class FakeRawClient:
@@ -177,6 +259,24 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         path.write_text(json.dumps(document), encoding="utf-8")
         path.chmod(0o600)
         return path
+
+    def p0_config(self, state_path: Path) -> AcceptanceActorConfig:
+        return AcceptanceActorConfig(
+            api_id=1,
+            api_hash_file=self.secret,
+            session_path=self.base / "acceptance.session",
+            expected_user_id=1,
+            telegram_chat_id=-1001234567890,
+            telegram_thread_id=77,
+            hub_username="example_hub_bot",
+            provider_usernames=("example_codex_bot",),
+            checks=("p0_p1_live",),
+            timeout_seconds=180,
+            artifacts_dir=self.artifacts,
+            provider_agent_ids=("codex",),
+            state_path=state_path,
+            allow_service_restart=True,
+        )
 
     def test_loads_private_scoped_config(self) -> None:
         config = load_acceptance_actor_config(self.write_config())
@@ -819,23 +919,10 @@ class AcceptanceActorConfigTests(unittest.TestCase):
     def test_p0_p1_live_check_records_all_seven_scenarios(self) -> None:
         state_path = self.base / "state.db"
         state_path.touch(mode=0o600)
-        config = AcceptanceActorConfig(
-            api_id=1,
-            api_hash_file=self.secret,
-            session_path=self.base / "acceptance.session",
-            expected_user_id=1,
-            telegram_chat_id=-1001234567890,
-            telegram_thread_id=77,
-            hub_username="example_hub_bot",
-            provider_usernames=("example_codex_bot",),
-            checks=("p0_p1_live",),
-            timeout_seconds=180,
-            artifacts_dir=self.artifacts,
-            provider_agent_ids=("codex",),
-            state_path=state_path,
-            allow_service_restart=True,
-        )
+        config = self.p0_config(state_path)
         client = FakeP0P1Client()
+        probe = StatefulAcceptanceProbe()
+        supervisor = StatefulServiceSupervisor()
         responses = (
             FakeMessage(201, "caption"),
             FakeMessage(202, "album"),
@@ -847,16 +934,6 @@ class AcceptanceActorConfigTests(unittest.TestCase):
             FakeMessage(208, "Context remaining: 88.5%"),
             FakeMessage(209, "Codex\nexample account"),
         )
-        job_rows = (
-            [("caption", "completed")],
-            [("album", "completed")],
-            [("album", "completed")],
-            [("active", "executing")],
-            [("late", "queued")],
-            [("late", "completed")],
-            [("recovery", "queued")],
-            [("recovery", "completed")],
-        )
         with (
             patch("hermes_codex_router.acceptance_actor._select_provider", new=AsyncMock()),
             patch(
@@ -864,21 +941,12 @@ class AcceptanceActorConfigTests(unittest.TestCase):
                 new=AsyncMock(side_effect=responses),
             ) as wait,
             patch(
-                "hermes_codex_router.acceptance_actor._wait_for_job",
-                new=AsyncMock(side_effect=job_rows),
+                "hermes_codex_router.acceptance_actor.ReadOnlyAcceptanceState",
+                return_value=probe,
             ),
             patch(
-                "hermes_codex_router.acceptance_actor._job_rows",
-                return_value=[("recovery", "queued")],
-            ),
-            patch(
-                "hermes_codex_router.acceptance_actor._material_count",
-                side_effect=(2, 1),
-            ),
-            patch("hermes_codex_router.acceptance_actor._service"),
-            patch(
-                "hermes_codex_router.acceptance_actor._service_active",
-                side_effect=(True, True, False, True, True, True, True),
+                "hermes_codex_router.acceptance_actor.FixedServiceSupervisor",
+                return_value=supervisor,
             ),
         ):
             results = asyncio.run(_run_p0_p1_live_checks(client, config, "example_codex_bot"))
@@ -901,32 +969,34 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         self.assertTrue(
             any(len(payload) == 20 * 1024 * 1024 + 1 for payload in client.uploaded_payloads)
         )
+        self.assertEqual(
+            supervisor.actions,
+            [
+                "capture",
+                "stop_worker",
+                "check_worker",
+                "restart_controller",
+                "check_controller",
+                "start_worker",
+                "check_worker",
+                "restore",
+            ],
+        )
 
     def test_p0_p1_live_does_not_start_a_preexisting_inactive_service(self) -> None:
         state_path = self.base / "state.db"
         state_path.touch(mode=0o600)
-        config = AcceptanceActorConfig(
-            api_id=1,
-            api_hash_file=self.secret,
-            session_path=self.base / "acceptance.session",
-            expected_user_id=1,
-            telegram_chat_id=-1001234567890,
-            telegram_thread_id=77,
-            hub_username="example_hub_bot",
-            provider_usernames=("example_codex_bot",),
-            checks=("p0_p1_live",),
-            timeout_seconds=180,
-            artifacts_dir=self.artifacts,
-            provider_agent_ids=("codex",),
-            state_path=state_path,
-            allow_service_restart=True,
-        )
+        config = self.p0_config(state_path)
+        supervisor = StatefulServiceSupervisor(worker_active=False)
         with (
             patch(
-                "hermes_codex_router.acceptance_actor._service_active",
-                side_effect=(True, False, True, False),
+                "hermes_codex_router.acceptance_actor.ReadOnlyAcceptanceState",
+                return_value=StatefulAcceptanceProbe(),
             ),
-            patch("hermes_codex_router.acceptance_actor._service") as service,
+            patch(
+                "hermes_codex_router.acceptance_actor.FixedServiceSupervisor",
+                return_value=supervisor,
+            ),
         ):
             results = asyncio.run(
                 _run_p0_p1_live_checks(FakeP0P1Client(), config, "example_codex_bot")
@@ -935,7 +1005,113 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertFalse(results[0].ok)
         self.assertIn("requires the Controller and Codex worker", results[0].detail)
-        service.assert_not_called()
+        self.assertEqual(supervisor.actions, ["capture", "restore"])
+
+    def test_p0_p1_live_restores_worker_after_failure_following_stop(self) -> None:
+        state_path = self.base / "state.db"
+        state_path.touch(mode=0o600)
+        config = self.p0_config(state_path)
+        probe = StatefulAcceptanceProbe(fail_message_id=106)
+        supervisor = StatefulServiceSupervisor()
+        responses = (
+            FakeMessage(201, "caption"),
+            FakeMessage(202, "album"),
+            FakeMessage(203, "active"),
+            FakeMessage(204, "late"),
+        )
+        with (
+            patch("hermes_codex_router.acceptance_actor._select_provider", new=AsyncMock()),
+            patch(
+                "hermes_codex_router.acceptance_actor._wait_for_markers",
+                new=AsyncMock(side_effect=responses),
+            ),
+            patch(
+                "hermes_codex_router.acceptance_actor.ReadOnlyAcceptanceState",
+                return_value=probe,
+            ),
+            patch(
+                "hermes_codex_router.acceptance_actor.FixedServiceSupervisor",
+                return_value=supervisor,
+            ),
+        ):
+            results = asyncio.run(
+                _run_p0_p1_live_checks(FakeP0P1Client(), config, "example_codex_bot")
+            )
+
+        self.assertFalse(results[-1].ok)
+        self.assertIn("named state probe failure", results[-1].detail)
+        self.assertTrue(supervisor.worker_active)
+        self.assertEqual(supervisor.actions[-1], "restore")
+
+    def test_p0_p1_live_restores_services_when_controller_restart_fails(self) -> None:
+        state_path = self.base / "state.db"
+        state_path.touch(mode=0o600)
+        config = self.p0_config(state_path)
+        supervisor = StatefulServiceSupervisor(fail_action="restart_controller")
+        responses = (
+            FakeMessage(201, "caption"),
+            FakeMessage(202, "album"),
+            FakeMessage(203, "active"),
+            FakeMessage(204, "late"),
+        )
+        with (
+            patch("hermes_codex_router.acceptance_actor._select_provider", new=AsyncMock()),
+            patch(
+                "hermes_codex_router.acceptance_actor._wait_for_markers",
+                new=AsyncMock(side_effect=responses),
+            ),
+            patch(
+                "hermes_codex_router.acceptance_actor.ReadOnlyAcceptanceState",
+                return_value=StatefulAcceptanceProbe(),
+            ),
+            patch(
+                "hermes_codex_router.acceptance_actor.FixedServiceSupervisor",
+                return_value=supervisor,
+            ),
+        ):
+            results = asyncio.run(
+                _run_p0_p1_live_checks(FakeP0P1Client(), config, "example_codex_bot")
+            )
+
+        self.assertFalse(results[-1].ok)
+        self.assertIn("named Controller restart failure", results[-1].detail)
+        self.assertTrue(supervisor.controller_active)
+        self.assertTrue(supervisor.worker_active)
+        self.assertEqual(supervisor.actions[-1], "restore")
+
+    def test_p0_p1_live_preserves_original_failure_when_restoration_fails(self) -> None:
+        state_path = self.base / "state.db"
+        state_path.touch(mode=0o600)
+        config = self.p0_config(state_path)
+        supervisor = StatefulServiceSupervisor(fail_restore=True)
+        responses = (
+            FakeMessage(201, "caption"),
+            FakeMessage(202, "album"),
+            FakeMessage(203, "active"),
+            FakeMessage(204, "late"),
+        )
+        with (
+            patch("hermes_codex_router.acceptance_actor._select_provider", new=AsyncMock()),
+            patch(
+                "hermes_codex_router.acceptance_actor._wait_for_markers",
+                new=AsyncMock(side_effect=responses),
+            ),
+            patch(
+                "hermes_codex_router.acceptance_actor.ReadOnlyAcceptanceState",
+                return_value=StatefulAcceptanceProbe(fail_message_id=106),
+            ),
+            patch(
+                "hermes_codex_router.acceptance_actor.FixedServiceSupervisor",
+                return_value=supervisor,
+            ),
+        ):
+            results = asyncio.run(
+                _run_p0_p1_live_checks(FakeP0P1Client(), config, "example_codex_bot")
+            )
+
+        self.assertFalse(results[-1].ok)
+        self.assertIn("named state probe failure", results[-1].detail)
+        self.assertIn("service restoration failed: named restoration failure", results[-1].detail)
 
     def test_raw_forward_targets_the_canary_forum_topic(self) -> None:
         config = load_acceptance_actor_config(self.write_config())
