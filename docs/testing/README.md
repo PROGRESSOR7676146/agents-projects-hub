@@ -1,18 +1,43 @@
 # Testing and acceptance strategy
 
-## Automated gate
+## Development loop and canonical acceptance
 
-Run:
+During development, run cheap repository contracts and explicitly selected tests:
+
+```bash
+python scripts/validate.py --profile focused tests.test_documentation_contract
+```
+
+With no test selectors, `--profile focused` runs only static preflight checks.
+It omits Git history scanning, whole-project Pyright and full test discovery: its output explicitly
+says **not canonical acceptance**. Select the tests affected by the change;
+the profile does not guess test coverage from a diff.
+
+The full canonical command remains:
 
 ```bash
 python scripts/validate.py
 ```
 
-The gate performs the repository privacy scan, formatting, Ruff, Pyright,
-unit/integration tests, release-lock verification, documentation/release
-metadata contracts, and publishable configuration validation. Automated tests
+Both profiles run documentation/release metadata contracts, publishable
+configuration, release-lock verification, formatting, Ruff, and tree privacy.
+Canonical additionally scans all reachable Git history before running
+whole-project Pyright and all unit/integration tests. The full privacy/history
+scan remains mandatory before every commit, even after focused checks pass.
+Each stage reports elapsed time and stops on failure; exit 0 means the selected
+profile passed, 1 means a failed/unavailable stage, and 2 means invalid arguments.
+Test selectors are accepted only in the focused profile. Automated tests
 use fake transports and temporary Git/SQLite fixtures. They must not contact
 real Telegram groups or consume provider tokens.
+
+Publication sequence with the installed hook: focused checks → mandatory
+privacy/history scan → commit → push (one full canonical run on the clean commit)
+→ independent exact-revision CI/CodeQL. Do not run the same full validator
+manually immediately before this push. Without the hook, run the canonical
+command on the final clean commit before publication. A failed gate blocks
+publication; fix it, rerun the affected checks, and commit before retrying.
+There is no validation receipt/cache: another push runs the full hook again.
+The trade-off is recorded in [ADR 0034](../decisions/0034-fail-fast-maintenance-validation.md).
 
 GitHub CI and tag-release validation both call the same reusable
 `.github/workflows/validate.yml` matrix for Python 3.11, 3.12, and 3.13. Each
@@ -114,7 +139,9 @@ scanner rules, and compares it exactly with the one named GitHub repository
 variable without printing either value. It then prepends the current checkout's
 `src` directory to `PYTHONPATH` and runs `python scripts/validate.py`. This
 prevents an editable environment from another worktree from silently supplying
-the validator implementation.
+the validator implementation. The hook prints the validator's stage timings
+and rechecks tree, HEAD, published refs and author policy before permitting the
+push. It never reuses a result from a different Python environment or policy.
 
 The hook fails before publication when GitHub or the repository variable is
 unavailable. It reduces avoidable hosted-CI retries; it cannot promise that a

@@ -192,7 +192,7 @@ def _assert_validation_contract(workflows: Path) -> None:
     if 'gh release create "$RELEASE_TAG" --verify-tag --generate-notes' not in release_commands:
         raise AssertionError("release publication command changed")
 
-    validator = (ROOT / "scripts" / "validate.py").read_text(encoding="utf-8")
+    validator = " ".join((ROOT / "scripts" / "validate.py").read_text(encoding="utf-8").split())
     for required_stage in (
         '"hermes_codex_router.privacy_scan", str(ROOT), "--history"',
         "check_release_lock()",

@@ -346,9 +346,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             env=environment,
             timeout=900,
         )
+        sys.stdout.write(validator.stdout)
+        sys.stderr.write(validator.stderr)
         if validator.returncode != 0:
-            sys.stdout.write(validator.stdout)
-            sys.stderr.write(validator.stderr)
             raise PreflightError("canonical repository validation failed")
         final_status = _run(
             ["git", "status", "--porcelain", "--untracked-files=all"],

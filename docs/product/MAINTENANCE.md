@@ -26,12 +26,20 @@ This normative module is part of the
 
 ## 19. Maintenance and change policy
 
-1. Update this document before or with a change to observable product behavior,
-   trust boundaries, status classification, or acceptance criteria.
-2. Update `docs/status/PROJECT_STATUS.md` when evidence changes a capability's
-   current state.
-3. Record consequential durable choices under `docs/decisions/`; do not rewrite
-   accepted rationale invisibly.
+1. Define observable behavior, trust boundaries, and acceptance criteria once,
+   in the owning product requirement module. Update only the affected contract
+   and its reviewed section digest; the manifest is a generated integrity guard,
+   never a second normative source. A fix restoring an existing contract does
+   not require rewriting requirements.
+2. Update `docs/status/PROJECT_STATUS.md` only when evidence changes a capability's
+   lifecycle or acceptance state. Use a short status and a contract link rather
+   than repeating its behavior. Runbooks own executable procedures; the testing
+   guide owns check commands and evidence boundaries. Update them only when
+   those procedures change, linking to the product contract for behavior.
+3. Record new consequential durable choices under `docs/decisions/`; do not
+   rewrite accepted rationale invisibly or add an ADR for a mechanical fix.
+   Changelog entries are short release-facing summaries and links, not another
+   specification. There is no requirement to touch all these documents per change.
 4. Preserve backward compatibility for persisted state through explicit schema
    migrations and backups.
 5. Prefer official provider interfaces and capability probes. Pin or test fast-
@@ -47,6 +55,12 @@ This normative module is part of the
    quota status, and health metrics must always be read passively from local
    cached files (`quota-cache.json`, logs) or response headers. Live probes are
    strictly prohibited except upon explicit, interactive operator request.
+9. Focused development checks are partial offline feedback, never acceptance.
+   Publication and CI MUST run the full canonical validator. Cheap static and
+   documentation contracts MUST fail before whole-project typing and the full
+   test suite. With the installed pre-push hook, its clean-commit canonical run
+   is the final local gate; do not also run it manually on the unchanged tree.
+   CI MUST independently execute the full gate for its exact checked-out revision.
 
 ## 20. Provenance
 

@@ -6,11 +6,13 @@ are intentionally excluded.
 
 ## Start here
 
-1. [Product requirements](product/PRODUCT_REQUIREMENTS.md)
-2. [Requirements split plan](product/REQUIREMENTS_SPLIT_PLAN.md)
-3. [Project status](status/PROJECT_STATUS.md)
-4. [Security model](SECURITY.ru.md) and [security policy](../SECURITY.md)
-5. [Decision map](decisions/README.md)
+Follow the scoped read order in [AGENTS.md](../AGENTS.md).
+The [product index](product/PRODUCT_REQUIREMENTS.md) routes capability reading;
+[maintenance](product/MAINTENANCE.md#19-maintenance-and-change-policy) defines
+document ownership. [Project status](status/PROJECT_STATUS.md) records evidence,
+and the [decision map](decisions/README.md) routes durable rationale.
+The completed [requirements split](product/REQUIREMENTS_SPLIT_PLAN.md) is
+migration rationale, not a routine prerequisite or another specification.
 
 ## Delivery and operation
 

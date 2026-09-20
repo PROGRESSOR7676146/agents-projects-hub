@@ -83,8 +83,11 @@ them.
 
 ## Definition of done for engineering changes
 
-A change is complete only when its observable contract is documented, the
-narrow tests and full canonical validation pass for a named clean commit, the
-privacy gate passes, deployment uses that exact revision, rollback remains
-available, and any required live/restart acceptance is explicitly distinguished
-from repository-only evidence.
+A repository change is complete when its observable contract is documented,
+focused checks and full canonical validation pass for a named clean commit,
+and privacy/history and required hosted checks pass. Use the
+[publication sequence](../testing/README.md#development-loop-and-canonical-acceptance)
+to avoid repeating the final local gate. Deployment acceptance additionally
+requires every required component to report that exact clean revision,
+schema-compatible rollback, and any required live/restart evidence. It is a
+separate explicitly authorized task, never implied by repository completion.

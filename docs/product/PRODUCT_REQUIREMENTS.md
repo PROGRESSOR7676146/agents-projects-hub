@@ -15,8 +15,10 @@ Normative words MUST, SHOULD, and MAY are used in their BCP 14 sense.
 
 ## Normative modules
 
-The index and every module below form one accepted baseline. Read all modules
-before changing observable product behavior or trust boundaries.
+The index and every module below form one accepted baseline. Follow the scoped
+read order in [AGENTS.md](../../AGENTS.md); requirements, architecture, security,
+and release/deployment contract changes require reading all modules. Scoped
+reading never exempts an implementation from any requirement.
 
 - [Identity and interaction](IDENTITY_AND_INTERACTION.md)
 - [Accounts, control, and security](ACCOUNTS_CONTROL_AND_SECURITY.md)

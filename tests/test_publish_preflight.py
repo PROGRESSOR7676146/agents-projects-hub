@@ -291,6 +291,10 @@ class PublishPreflightTests(unittest.TestCase):
                     return subprocess.CompletedProcess(
                         argv, 0, stdout=b'{"value":"owner@example.com"}', stderr=b""
                     )
+                if Path(argv[-1]).name == "validate.py":
+                    return subprocess.CompletedProcess(
+                        argv, 0, stdout="PASS documentation (0.10s)\n", stderr=""
+                    )
                 return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
             stdout = io.StringIO()
@@ -321,6 +325,7 @@ class PublishPreflightTests(unittest.TestCase):
             self.assertEqual(environment["PYTHONPATH"].split(os.pathsep)[0], str(root / "src"))
             self.assertEqual(environment["HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE"], str(policy))
             self.assertIn("passed", stdout.getvalue())
+            self.assertIn("PASS documentation (0.10s)", stdout.getvalue())
             status_calls = [
                 call for call in calls if call[0][:3] == ["git", "status", "--porcelain"]
             ]
