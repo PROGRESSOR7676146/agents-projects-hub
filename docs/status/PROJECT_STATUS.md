@@ -94,6 +94,9 @@ distinct. Retained lanes fail closed in unsupported productive inline and manage
 terminal paths, even after a configuration change. `/local` and non-Codex summary
 return validate roots outside SQLite and recheck persisted identity inside the
 writer transaction; invalid lanes or stale snapshots cannot transfer ownership.
+External workers compare the already-canonical target against Git's registered
+worktree paths without resolving unrelated entries, so a valid lane remains
+usable when systemd `PrivateTmp` hides a different temporary worktree.
 Managed inline terminal takeover also claims ownership with a checked snapshot
 before provider preparation and process launch. Unconfirmed launch retains the
 claim until explicit `/release`; process liveness cannot automatically return it.
