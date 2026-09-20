@@ -22,6 +22,8 @@ Operational truth is split by purpose:
 - Planned post-baseline sequence: [`ROADMAP.ru.md`](../ROADMAP.ru.md).
 - Engineering debt and exact evidence rules:
   [`ENGINEERING_BASELINE.md`](ENGINEERING_BASELINE.md).
+- Incremental maintenance refactoring sequence and package boundaries:
+  [`REFACTORING_PLAN.md`](REFACTORING_PLAN.md).
 - Complete validation gate: `python scripts/validate.py`.
 - Saved Codex session connection and deployment-local acceptance:
   [`SESSION_CONNECT.md`](SESSION_CONNECT.md).
