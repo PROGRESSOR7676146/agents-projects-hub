@@ -17,7 +17,6 @@ from .artifacts import (
     artifact_spool_root,
     create_job_staging,
     remove_spooled_artifact,
-    spool_staged_artifacts,
     verify_spooled_artifact,
 )
 from .codex_accounts import (
@@ -50,6 +49,10 @@ from .controller_commands import (
     HtmlCommandDecision,
     TextCommandDecision,
 )
+from .controller_result_publication import (
+    PreparedResultPublication,
+    PreparedResultPublisher,
+)
 from .delivery_retry import delivery_retry_delay
 from .execution_journal import ExecutionJournal
 from .external_runtime import ProviderLimitError, ProviderUnavailableError
@@ -60,7 +63,6 @@ from .incoming_materials import (
     ALBUM_MAX_MILLISECONDS,
     IncomingMaterialDraft,
     IncomingMaterialError,
-    cleanup_consumed_raw_inputs,
     cleanup_materialized_inputs,
     cleanup_pending_raw_inputs,
     prepare_incoming_materials,
@@ -956,26 +958,21 @@ class ProjectHubService:
                         "Usage windows": "unavailable",
                     },
                 )
-            artifacts = spool_staged_artifacts(
-                project.root,
-                executing.job_id,
-                artifact_spool_root(self.config.state_path),
+            PreparedResultPublisher(
+                state=queue_state,
+                state_path=self.config.state_path,
+            ).publish(
+                PreparedResultPublication(
+                    job=executing,
+                    project_root=project.root,
+                    prepared_materials=prepared,
+                    visible_response=visible_response,
+                    telegram_html=telegram_html,
+                    provider_session_id=provider_session_id,
+                    actual_model=actual_model,
+                    telegram_contract_version=contract_version,
+                )
             )
-            queue_state.commit_provider_result(
-                executing.job_id,
-                token,
-                visible_response=visible_response,
-                sender_agent_id=agent.agent_id,
-                telegram_html=telegram_html,
-                provider_session_id=provider_session_id,
-                actual_model=actual_model,
-                user_excerpt=executing.payload_text,
-                acknowledge_context=executing.context_watermark is not None,
-                acknowledge_handoff=executing.handoff_id is not None,
-                telegram_contract_version=contract_version,
-                artifacts=artifacts,
-            )
-            cleanup_consumed_raw_inputs(prepared)
         except Exception as exc:
             # The provider call may have started.  Do not retry it without
             # provider-specific proof, even if an adapter reports an error.
