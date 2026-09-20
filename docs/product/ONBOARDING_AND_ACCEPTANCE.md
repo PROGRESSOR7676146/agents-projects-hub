@@ -145,6 +145,15 @@ necessary but not sufficient for items marked live.
   provider identities MUST invalidate the affected canary check rather than be
   mistaken for test output. The runner MUST stop after the first failed check so
   it cannot enqueue unrelated later scenarios behind unhealthy provider work.
+  A separately enabled Codex-only P0/P1 scenario MAY inspect one private live
+  state database and restart only the fixed Controller and Codex-worker units.
+  It MUST require explicit restart opt-in, both units initially active, an
+  aligned Codex response identity, and a private state file. It MUST emit seven
+  distinct results covering caption-only content, album unity, FIFO admission
+  during active work, exactly-once restart recovery, the explicit over-20-MB
+  material notice, response context/quota labels, and read-only status/account
+  commands. It MUST restore units that were active before the scenario and MUST
+  NOT accept service names or productive prompts from configuration.
   Bot identities MUST NOT be used to impersonate the operator because
   Telegram does not deliver bot-authored messages to other bots.
 - **AC-F-012 (Automated offline; REQ-OPS-010..011):** Distinct clean candidate

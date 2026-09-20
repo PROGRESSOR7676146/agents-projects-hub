@@ -442,6 +442,13 @@ artifact for schema 33 remain deployment-specific; the current target is schema 
   visible history. It accepts no arbitrary prompt from configuration
   and fails fast on the first failed scenario or when unrelated senders
   contaminate the dedicated canary topic.
+- Its opt-in `p0_p1_live` scenario now replaces the deployment-local runner for
+  seven P0/P1 checks. It proves provider-visible document/album bytes, FIFO
+  admission during an active turn, durable cardinality across a controlled
+  Controller/worker restart, the explicit over-20-MB notice, truthful response
+  context/quota labels, and read-only status/account output. Private state and
+  restart authority remain explicit deployment inputs; repository tests prove
+  the actor logic, not a live Telegram or provider result.
 - Hub-owned stop acknowledgements for affected work are persisted through the
   shared Telegram outbox and delivered by the Hub identity. Idle stop replies
   remain immediate. Release environments use the checked-in hash-locked

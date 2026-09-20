@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Move the seven deployment-local inbound-material and context/quota live checks
+  into the scoped acceptance actor as one explicit, fail-fast, restart-authorized
+  Codex scenario with seven separate private artifact results.
 - Keep one Telegram media group in one durable provider turn when the next part
   arrives through a later long poll or its download outlasts the album quiet
   window, without reclaiming leased work or changing schema 33.

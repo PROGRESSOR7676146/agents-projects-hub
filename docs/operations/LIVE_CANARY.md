@@ -1,7 +1,7 @@
 # Live canary and rollback
 
 Status: owner-coordinated acceptance procedure
-Last updated: 2026-08-31
+Last updated: 2026-09-20
 
 This procedure is the final gate between the automated subprocess fault matrix
 and routine use of the external queue topology. It changes live Telegram and
@@ -154,8 +154,18 @@ other providers and its repository tests prove the runner, not a live provider
 result. The fixed artifact check remains available separately. With two aligned
 provider usernames and agent IDs, the context contract check verifies a
 context-free switch followed by explicit bounded `/context` retrieval. The
-remaining manually selected quote, failure, restart, and recovery tests below
-are still explicit operator-controlled operations.
+opt-in `p0_p1_live` scenario runs seven separately reported Codex checks for
+caption-only document bytes, a two-part album, FIFO attachment admission during
+active work, restart idempotency/recovery, an explicit over-20-MB unavailable
+notice, live context/quota labels, and read-only `/status` and `/accounts`.
+Before enabling it, add the private mode-`0600` `state_path`, set
+`allow_service_restart` to `true`, choose a timeout of at least 120 seconds
+(360 is recommended for a remote provider), and ensure the aligned `codex`
+provider identity is configured. It stops unless the standard Controller and
+Codex-worker units are both active, and it restores units that were active when
+the scenario began. This is maintenance-window authorization, not part of the
+non-disruptive baseline. The remaining manually selected failure and recovery
+tests below are still explicit operator-controlled operations.
 
 1. Run `/status` and `/accounts`. They must remain compact and responsive
    without a productive model turn.
