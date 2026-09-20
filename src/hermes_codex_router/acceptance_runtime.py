@@ -8,9 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .schema_compatibility import TARGET_SCHEMA_VERSION
+
 _CONTROLLER_UNIT = "agents-projects-hub.service"
 _CODEX_WORKER_UNIT = "agents-projects-hub-worker@codex.service"
-_INCOMING_MATERIAL_SCHEMA = 33
+_ACCEPTANCE_STATE_SCHEMA = TARGET_SCHEMA_VERSION
 
 
 class AcceptanceRuntimeError(RuntimeError):
@@ -28,7 +30,7 @@ class ServiceSnapshot:
 
 
 class ReadOnlyAcceptanceState:
-    """Bounded live-acceptance reads against the schema-33 state database."""
+    """Bounded live-acceptance reads against the current state database."""
 
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -41,10 +43,8 @@ class ReadOnlyAcceptanceState:
             connection.execute("PRAGMA query_only=ON")
             schema_row = connection.execute("PRAGMA user_version").fetchone()
             schema = int(schema_row[0]) if schema_row is not None else 0
-            if schema < _INCOMING_MATERIAL_SCHEMA:
-                raise AcceptanceRuntimeError(
-                    "acceptance state schema does not support incoming materials"
-                )
+            if schema != _ACCEPTANCE_STATE_SCHEMA:
+                raise AcceptanceRuntimeError("acceptance state schema is unsupported")
             yield connection
         except AcceptanceRuntimeError:
             raise
@@ -72,7 +72,8 @@ class ReadOnlyAcceptanceState:
     def material_count(self, job_id: str) -> int:
         with self._connection() as connection:
             row = connection.execute(
-                "SELECT COUNT(*) FROM incoming_materials WHERE job_id=?", (job_id,)
+                "SELECT COUNT(*) FROM (SELECT 1 FROM incoming_materials WHERE job_id=? LIMIT 3)",
+                (job_id,),
             ).fetchone()
             return int(row[0]) if row is not None else 0
 

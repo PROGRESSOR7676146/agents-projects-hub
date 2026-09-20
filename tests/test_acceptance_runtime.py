@@ -27,6 +27,7 @@ class StatefulSystemctl:
         }
         self.fail_action = fail_action
         self.actions: list[str] = []
+        self.probes: list[str] = []
 
     def __call__(
         self, argv: tuple[str, ...], **_kwargs: object
@@ -34,6 +35,7 @@ class StatefulSystemctl:
         action = argv[2]
         unit = argv[-1]
         if action == "is-active":
+            self.probes.append(unit)
             return subprocess.CompletedProcess(argv, 0 if self.active[unit] else 3)
         name = f"{action}:{unit}"
         self.actions.append(name)
@@ -105,6 +107,46 @@ class AcceptanceStateProbeTests(unittest.TestCase):
         self.assertNotIn(str(self.state_path), str(raised.exception))
         self.assertIn("schema", str(raised.exception))
 
+    def test_rejects_future_state_schema_without_exposing_path(self) -> None:
+        connection = sqlite3.connect(self.state_path)
+        connection.execute("PRAGMA user_version=34")
+        connection.commit()
+        connection.close()
+
+        with self.assertRaises(AcceptanceRuntimeError) as raised:
+            ReadOnlyAcceptanceState(self.state_path).jobs_for_input(-1000000000001, 41)
+
+        self.assertNotIn(str(self.state_path), str(raised.exception))
+        self.assertIn("schema", str(raised.exception))
+
+    def test_limits_job_membership_to_two_rows(self) -> None:
+        connection = sqlite3.connect(self.state_path)
+        connection.executescript(
+            """
+            INSERT INTO provider_jobs VALUES ('job-2', 'queued', '2026-01-02');
+            INSERT INTO provider_jobs VALUES ('job-3', 'queued', '2026-01-03');
+            INSERT INTO provider_job_inputs VALUES ('job-2', -1000000000001, 41);
+            INSERT INTO provider_job_inputs VALUES ('job-3', -1000000000001, 41);
+            """
+        )
+        connection.commit()
+        connection.close()
+
+        rows = ReadOnlyAcceptanceState(self.state_path).jobs_for_input(-1000000000001, 41)
+
+        self.assertEqual(rows, [("job-1", "completed"), ("job-2", "queued")])
+
+    def test_limits_material_cardinality_to_three_rows(self) -> None:
+        connection = sqlite3.connect(self.state_path)
+        connection.executemany(
+            "INSERT INTO incoming_materials VALUES (?)",
+            [("job-1",), ("job-1",)],
+        )
+        connection.commit()
+        connection.close()
+
+        self.assertEqual(ReadOnlyAcceptanceState(self.state_path).material_count("job-1"), 3)
+
 
 class FixedServiceSupervisorTests(unittest.TestCase):
     def test_captures_and_restores_only_the_fixed_initially_active_units(self) -> None:
@@ -118,6 +160,14 @@ class FixedServiceSupervisorTests(unittest.TestCase):
         self.assertEqual(
             systemctl.actions,
             ["restart:agents-projects-hub.service"],
+        )
+        self.assertEqual(
+            systemctl.probes,
+            [
+                "agents-projects-hub.service",
+                "agents-projects-hub-worker@codex.service",
+                "agents-projects-hub.service",
+            ],
         )
         self.assertFalse(systemctl.active["agents-projects-hub-worker@codex.service"])
 

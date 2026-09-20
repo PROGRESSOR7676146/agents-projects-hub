@@ -982,6 +982,17 @@ class AcceptanceActorConfigTests(unittest.TestCase):
                 "restore",
             ],
         )
+        self.assertEqual(
+            {101, 102, 103, 104, 105, 106},
+            {message_id for kind, message_id in probe.calls if kind == "jobs"},
+        )
+        job_calls = [message_id for kind, message_id in probe.calls if kind == "jobs"]
+        self.assertGreaterEqual(job_calls.count(105), 2)
+        self.assertGreaterEqual(job_calls.count(106), 3)
+        self.assertEqual(
+            [call for call in probe.calls if call[0] == "materials"],
+            [("materials", "album"), ("materials", "recovery")],
+        )
 
     def test_p0_p1_live_does_not_start_a_preexisting_inactive_service(self) -> None:
         state_path = self.base / "state.db"
