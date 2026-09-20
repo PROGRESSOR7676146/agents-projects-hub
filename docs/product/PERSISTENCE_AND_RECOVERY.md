@@ -260,6 +260,21 @@ recreate unsaved provider context or a partially executed turn.
   one provider turn or a later Codex input is absorbed through same-turn
   steering. A crash after an ambiguous provider acceptance MUST NOT replay that
   input automatically.
+- **REQ-QUEUE-010 (Implemented in schema 33):** Inbound Telegram material
+  identity, binding, content class, private spool path, byte count, SHA-256,
+  availability reason, and consumption state MUST be committed in the same
+  SQLite transaction as its provider-job input. Duplicate
+  `(chat_id, message_id, attachment_index)` receipts MUST neither download nor
+  invoke twice. Raw input uses a private Hub-owned spool; provider preparation
+  revalidates canonical path, regular-file status, digest, size, UTF-8 or image
+  signature, then copies only to `.hub/incoming/<job_id>` below the revalidated
+  execution root. Successful result commit atomically marks stored material
+  consumed before best-effort raw cleanup. A stale pre-execution lease MAY retry
+  the same snapshot; ambiguous execution MUST retain it without replay. Session,
+  provider, root/lane, writer, stop, and activation boundaries MUST prevent a
+  pending material from migrating to a different productive binding. Migration
+  33 is additive; rollout and runtime rollback both require artifacts that
+  declare schema-33 compatibility.
 
 The detailed state machine, retry proof rule, reconciliation, and required
 fault acceptance are normative in [ADR 0001](../decisions/0001-durable-provider-job-queue.md).

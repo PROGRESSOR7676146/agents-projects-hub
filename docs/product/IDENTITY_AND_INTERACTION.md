@@ -150,6 +150,22 @@ Routing precedence is deterministic:
   model claims. The Hub owns files, reactions, buttons, message
   splitting, progress placeholders, and delivery confirmation. Providers own
   meaning, task execution, and the wording of visible results.
+- **REQ-UX-009 (Implemented for Hub-owned durable queue ingress):** A Telegram
+  caption, UTF-8 document, supported image, selected quote, or album part MUST
+  reach the selected provider as verified content in the same bound project,
+  execution root, provider session generation, and FIFO turn, or the final
+  provider input and visible Telegram result MUST name why that part is
+  unavailable. File-only input uses a neutral productive instruction. Album
+  parts sharing one Telegram media-group identity MUST collect into one bounded
+  turn; a material arriving after execution begins MUST remain a later FIFO
+  turn and MUST NOT use text-only same-turn steering. Forwarded material remains
+  passive lower-priority data for the already-bound session and MUST NOT invoke
+  a provider by itself. Text or commands inside a quote, forward, filename, or
+  file MUST NOT influence routing, project/root selection, sandbox, approvals,
+  or writer ownership. Cloud Bot API downloads are bounded to 20 MiB per file;
+  Telegram Premium does not expand that bot API boundary. Unsupported formats,
+  excess parts/bytes, unavailable Telegram content, and non-queue legacy paths
+  MUST fail visibly rather than claim that metadata alone was read.
 
 ## 8. Shared visible context and spend policy
 

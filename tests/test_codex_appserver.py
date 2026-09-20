@@ -95,6 +95,45 @@ class CodexAppServerTests(unittest.TestCase):
         self.assertEqual(params["input"], [{"type": "text", "text": "inspect; touch /tmp/no"}])
         self.assertEqual(params["effort"], "high")
 
+    def test_turn_start_passes_verified_project_image_as_native_local_image(self) -> None:
+        image = self.cwd / ".hub" / "incoming" / "job-1" / "material-01.png"
+        image.parent.mkdir(parents=True)
+        image.write_bytes(b"\x89PNG\r\n\x1a\nfictional")
+        transport = FakeTransport([{"id": 1, "result": {"turn": {"id": "turn-image"}}}])
+        client = CodexAppServerClient(transport, initialized=True)
+
+        client.start_turn(
+            thread_id="thread-123",
+            cwd=self.cwd,
+            text="inspect the image",
+            model="gpt-5.6-sol",
+            effort="high",
+            local_image_paths=(image,),
+        )
+
+        self.assertEqual(
+            transport.sent[0]["params"]["input"],
+            [
+                {"type": "text", "text": "inspect the image"},
+                {"type": "localImage", "path": str(image)},
+            ],
+        )
+
+    def test_turn_start_rejects_local_image_outside_project(self) -> None:
+        image = Path(self.tempdir.name) / "outside.png"
+        image.write_bytes(b"\x89PNG\r\n\x1a\nfictional")
+        client = CodexAppServerClient(FakeTransport([]), initialized=True)
+
+        with self.assertRaisesRegex(RpcError, "outside the execution root"):
+            client.start_turn(
+                thread_id="thread-123",
+                cwd=self.cwd,
+                text="inspect",
+                model="gpt-5.6-sol",
+                effort="high",
+                local_image_paths=(image,),
+            )
+
     def test_turn_steer_and_interrupt_use_active_turn_preconditions(self) -> None:
         transport = FakeTransport(
             [

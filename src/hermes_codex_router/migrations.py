@@ -1205,6 +1205,61 @@ WHERE status = 'active' AND topic_id IS NOT NULL;
 """
 
 
+MIGRATION_33 = """
+CREATE TABLE IF NOT EXISTS incoming_materials (
+    material_id TEXT PRIMARY KEY CHECK(length(material_id) BETWEEN 1 AND 128),
+    job_id TEXT REFERENCES provider_jobs(job_id),
+    topic_id INTEGER NOT NULL REFERENCES topics(topic_id),
+    project_id TEXT NOT NULL CHECK(length(project_id) BETWEEN 1 AND 128),
+    execution_scope TEXT NOT NULL CHECK(length(execution_scope) BETWEEN 1 AND 4096),
+    agent_id TEXT CHECK(agent_id IS NULL OR length(agent_id) BETWEEN 1 AND 64),
+    session_id TEXT REFERENCES agent_sessions(session_id),
+    session_generation INTEGER CHECK(
+        session_generation IS NULL OR session_generation > 0
+    ),
+    chat_id INTEGER NOT NULL CHECK(chat_id != 0),
+    message_id INTEGER NOT NULL CHECK(message_id > 0),
+    attachment_index INTEGER NOT NULL CHECK(attachment_index > 0),
+    media_group_id TEXT CHECK(length(media_group_id) <= 256),
+    origin TEXT NOT NULL CHECK(origin IN ('topic', 'direct', 'forward')),
+    kind TEXT NOT NULL CHECK(length(kind) BETWEEN 1 AND 32),
+    content_kind TEXT CHECK(content_kind IN ('text', 'image')),
+    file_unique_id TEXT CHECK(length(file_unique_id) <= 512),
+    display_name TEXT NOT NULL CHECK(length(display_name) BETWEEN 1 AND 128),
+    mime_type TEXT CHECK(length(mime_type) <= 256),
+    declared_size INTEGER CHECK(declared_size IS NULL OR declared_size >= 0),
+    storage_path TEXT CHECK(length(storage_path) <= 4096),
+    byte_size INTEGER CHECK(byte_size IS NULL OR byte_size >= 0),
+    sha256 TEXT CHECK(sha256 IS NULL OR length(sha256) = 64),
+    status TEXT NOT NULL CHECK(status IN ('stored', 'unavailable', 'consumed')),
+    unavailable_code TEXT CHECK(length(unavailable_code) <= 64),
+    unavailable_detail TEXT CHECK(length(unavailable_detail) <= 500),
+    created_at TEXT NOT NULL,
+    consumed_at TEXT,
+    UNIQUE(chat_id, message_id, attachment_index),
+    CHECK(
+        (agent_id IS NULL AND session_id IS NULL AND session_generation IS NULL)
+        OR
+        (agent_id IS NOT NULL AND session_id IS NOT NULL AND session_generation IS NOT NULL)
+    ),
+    CHECK(
+        (status IN ('stored', 'consumed') AND content_kind IS NOT NULL
+            AND storage_path IS NOT NULL AND byte_size IS NOT NULL AND sha256 IS NOT NULL
+            AND unavailable_code IS NULL AND unavailable_detail IS NULL)
+        OR
+        (status = 'unavailable' AND content_kind IS NULL AND storage_path IS NULL
+            AND byte_size IS NULL AND sha256 IS NULL AND unavailable_code IS NOT NULL
+            AND unavailable_detail IS NOT NULL)
+    ),
+    CHECK((status = 'consumed') = (consumed_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS incoming_materials_job
+ON incoming_materials(job_id, attachment_index, message_id);
+CREATE INDEX IF NOT EXISTS incoming_materials_session
+ON incoming_materials(session_id, session_generation, status);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -1273,6 +1328,16 @@ def _ensure_execution_scope_column(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE topics ADD COLUMN execution_scope TEXT")
 
 
+def _ensure_input_group_key_column(connection: sqlite3.Connection) -> None:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(provider_jobs)")}
+    if columns and "input_group_key" not in columns:
+        connection.execute(
+            """ALTER TABLE provider_jobs ADD COLUMN input_group_key TEXT CHECK(
+                   input_group_key IS NULL OR length(input_group_key) BETWEEN 1 AND 256
+               )"""
+        )
+
+
 def _execute_migration_script(connection: sqlite3.Connection, script: str) -> None:
     """Execute one trusted migration script without sqlite3's implicit COMMIT.
 
@@ -1337,6 +1402,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_30,
         MIGRATION_31,
         MIGRATION_32,
+        MIGRATION_33,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:
@@ -1346,6 +1412,8 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
                     continue
                 if version == 31:
                     _ensure_execution_scope_column(connection)
+                if version == 33:
+                    _ensure_input_group_key_column(connection)
                 _execute_migration_script(connection, script)
                 if version == 1:
                     _ensure_legacy_columns(connection)

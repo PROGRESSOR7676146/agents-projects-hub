@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import mimetypes
+import os
 import re
 import socket
 import ssl
@@ -24,6 +26,8 @@ class TelegramError(RuntimeError):
             "poll",
             "send_message",
             "send_document",
+            "get_file",
+            "download_file",
             "chat_action",
             "message_draft",
             "answer_callback",
@@ -109,6 +113,8 @@ def _operation(method: str) -> str:
         "getUpdates": "poll",
         "sendMessage": "send_message",
         "sendDocument": "send_document",
+        "getFile": "get_file",
+        "downloadFile": "download_file",
         "sendChatAction": "chat_action",
         "sendMessageDraft": "message_draft",
         "answerCallbackQuery": "answer_callback",
@@ -169,6 +175,23 @@ def _transport_error(method: str, exc: Exception) -> TelegramError:
 
 
 @dataclass(frozen=True, slots=True)
+class IncomingAttachment:
+    kind: str
+    file_id: str
+    file_unique_id: str
+    file_name: str | None
+    mime_type: str | None
+    file_size: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadedTelegramFile:
+    path: Path
+    size: int
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
 class TopicMessage:
     update_id: int
     message_id: int
@@ -179,6 +202,11 @@ class TopicMessage:
     text: str
     reply_to_username: str | None = None
     is_forwarded: bool = False
+    text_source: str = "text"
+    attachments: tuple[IncomingAttachment, ...] = ()
+    media_group_id: str | None = None
+    quote_text: str | None = None
+    unavailable_materials: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,13 +219,130 @@ class TopicCallback:
     data: str
 
 
+def _telegram_nonnegative_int(value: object) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return 0
+
+
+def _incoming_materials(
+    message: dict[str, Any],
+) -> tuple[tuple[IncomingAttachment, ...], tuple[str, ...]]:
+    attachments: list[IncomingAttachment] = []
+    unavailable: list[str] = []
+    document = message.get("document")
+    if isinstance(document, dict):
+        file_id = document.get("file_id")
+        unique_id = document.get("file_unique_id")
+        size = document.get("file_size")
+        if (
+            isinstance(file_id, str)
+            and 1 <= len(file_id) <= 512
+            and isinstance(unique_id, str)
+            and 1 <= len(unique_id) <= 512
+        ):
+            attachments.append(
+                IncomingAttachment(
+                    kind="document",
+                    file_id=file_id,
+                    file_unique_id=unique_id,
+                    file_name=(
+                        str(document["file_name"])
+                        if isinstance(document.get("file_name"), str)
+                        else None
+                    ),
+                    mime_type=(
+                        str(document["mime_type"])[:256]
+                        if isinstance(document.get("mime_type"), str)
+                        else None
+                    ),
+                    file_size=(
+                        size
+                        if isinstance(size, int) and not isinstance(size, bool) and size >= 0
+                        else None
+                    ),
+                )
+            )
+        else:
+            unavailable.append("document metadata is incomplete")
+    photos = message.get("photo")
+    if isinstance(photos, list) and photos:
+        candidates = [
+            item
+            for item in photos
+            if isinstance(item, dict)
+            and isinstance(item.get("file_id"), str)
+            and 1 <= len(str(item.get("file_id"))) <= 512
+            and isinstance(item.get("file_unique_id"), str)
+            and 1 <= len(str(item.get("file_unique_id"))) <= 512
+        ]
+        if candidates:
+            photo = max(
+                candidates,
+                key=lambda item: (
+                    _telegram_nonnegative_int(item.get("file_size")),
+                    _telegram_nonnegative_int(item.get("width"))
+                    * _telegram_nonnegative_int(item.get("height")),
+                ),
+            )
+            size = photo.get("file_size")
+            attachments.append(
+                IncomingAttachment(
+                    kind="photo",
+                    file_id=str(photo["file_id"]),
+                    file_unique_id=str(photo["file_unique_id"]),
+                    file_name=None,
+                    mime_type="image/jpeg",
+                    file_size=(
+                        size
+                        if isinstance(size, int) and not isinstance(size, bool) and size >= 0
+                        else None
+                    ),
+                )
+            )
+        else:
+            unavailable.append("photo metadata is incomplete")
+    for field, label in (
+        ("animation", "animation"),
+        ("audio", "audio"),
+        ("video", "video"),
+        ("video_note", "video note"),
+        ("voice", "voice message"),
+        ("sticker", "sticker"),
+    ):
+        if field in message:
+            unavailable.append(f"{label} input is not supported")
+    return tuple(attachments), tuple(unavailable)
+
+
+def _message_text(message: dict[str, Any], *, has_material: bool) -> tuple[str, str] | None:
+    text = message.get("text")
+    if isinstance(text, str):
+        return text, "text"
+    caption = message.get("caption")
+    if isinstance(caption, str):
+        return caption, "caption"
+    if has_material:
+        return "", "none"
+    return None
+
+
+def _selected_quote(message: dict[str, Any]) -> str | None:
+    quote = message.get("quote")
+    text = quote.get("text") if isinstance(quote, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return text.strip()[:4000]
+
+
 def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
     message = update.get("message")
     if not isinstance(message, dict) or message.get("from", {}).get("is_bot"):
         return None
     chat = message.get("chat")
     sender = message.get("from")
-    text = message.get("text")
+    attachments, unavailable_materials = _incoming_materials(message)
+    parsed_text = _message_text(message, has_material=bool(attachments or unavailable_materials))
     raw_thread_id = message.get("message_thread_id")
     reply_to_username = None
     is_forwarded = isinstance(message.get("forward_origin"), dict) or any(
@@ -233,7 +378,7 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
         or (not message.get("is_topic_message") and not chat.get("is_forum"))
         or not isinstance(sender, dict)
         or not isinstance(sender.get("id"), int)
-        or not isinstance(text, str)
+        or parsed_text is None
     ):
         return None
     return TopicMessage(
@@ -243,9 +388,18 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
         thread_id=thread_id,
         chat_title=str(chat.get("title") or chat["id"]),
         sender_id=int(sender["id"]),
-        text=text,
+        text=parsed_text[0],
         reply_to_username=reply_to_username,
         is_forwarded=is_forwarded,
+        text_source=parsed_text[1],
+        attachments=attachments,
+        media_group_id=(
+            str(message["media_group_id"])[:256]
+            if isinstance(message.get("media_group_id"), str)
+            else None
+        ),
+        quote_text=_selected_quote(message),
+        unavailable_materials=unavailable_materials,
     )
 
 
@@ -256,7 +410,8 @@ def parse_direct_message(update: dict[str, Any]) -> TopicMessage | None:
         return None
     chat = message.get("chat")
     sender = message.get("from")
-    text = message.get("text")
+    attachments, unavailable_materials = _incoming_materials(message)
+    parsed_text = _message_text(message, has_material=bool(attachments or unavailable_materials))
     if (
         not isinstance(chat, dict)
         or chat.get("type") != "private"
@@ -264,7 +419,7 @@ def parse_direct_message(update: dict[str, Any]) -> TopicMessage | None:
         or not isinstance(sender, dict)
         or not isinstance(sender.get("id"), int)
         or chat["id"] != sender["id"]
-        or not isinstance(text, str)
+        or parsed_text is None
     ):
         return None
     raw_thread_id = message.get("message_thread_id")
@@ -275,7 +430,7 @@ def parse_direct_message(update: dict[str, Any]) -> TopicMessage | None:
         thread_id=raw_thread_id if isinstance(raw_thread_id, int) else 1,
         chat_title="Direct",
         sender_id=int(sender["id"]),
-        text=text,
+        text=parsed_text[0],
         is_forwarded=isinstance(message.get("forward_origin"), dict)
         or any(
             key in message
@@ -286,6 +441,15 @@ def parse_direct_message(update: dict[str, Any]) -> TopicMessage | None:
                 "forward_date",
             )
         ),
+        text_source=parsed_text[1],
+        attachments=attachments,
+        media_group_id=(
+            str(message["media_group_id"])[:256]
+            if isinstance(message.get("media_group_id"), str)
+            else None
+        ),
+        quote_text=_selected_quote(message),
+        unavailable_materials=unavailable_materials,
     )
 
 
@@ -361,8 +525,126 @@ class TelegramBotApi:
     ) -> None:
         if not token.strip() or ":" not in token or "\n" in token:
             raise TelegramError("invalid bot token")
-        self._base = f"https://api.telegram.org/bot{token.strip()}/"
+        normalized_token = token.strip()
+        self._base = f"https://api.telegram.org/bot{normalized_token}/"
+        self._file_base = f"https://api.telegram.org/file/bot{normalized_token}/"
         self._opener = opener
+
+    def download_file(
+        self,
+        file_id: str,
+        destination: Path,
+        *,
+        max_bytes: int,
+    ) -> DownloadedTelegramFile:
+        if not file_id or len(file_id) > 512 or not 1 <= max_bytes <= 2**31:
+            raise TelegramError(
+                "invalid file download request",
+                operation="download_file",
+                failure_class="local_validation",
+            )
+        if destination.is_symlink():
+            raise TelegramError(
+                "unsafe file download destination",
+                operation="download_file",
+                failure_class="local_io",
+            )
+        result = self.call("getFile", file_id=file_id)
+        if not isinstance(result, dict):
+            raise TelegramError(
+                "getFile returned an invalid result",
+                operation="get_file",
+                failure_class="invalid_response",
+            )
+        reported_size = result.get("file_size")
+        if reported_size is not None and (
+            not isinstance(reported_size, int)
+            or isinstance(reported_size, bool)
+            or reported_size < 0
+        ):
+            raise TelegramError(
+                "getFile returned an invalid size",
+                operation="get_file",
+                failure_class="invalid_response",
+            )
+        if (
+            isinstance(reported_size, int)
+            and not isinstance(reported_size, bool)
+            and reported_size > max_bytes
+        ):
+            raise TelegramError(
+                "Telegram file exceeds the configured download limit",
+                operation="download_file",
+                failure_class="local_validation",
+            )
+        file_path = result.get("file_path")
+        if not isinstance(file_path, str) or not file_path or len(file_path) > 1024:
+            raise TelegramError(
+                "getFile did not return a safe path",
+                operation="get_file",
+                failure_class="invalid_response",
+            )
+        decoded_path = urllib.parse.unquote(file_path)
+        parsed_path = urllib.parse.urlsplit(decoded_path)
+        segments = decoded_path.split("/")
+        if (
+            parsed_path.scheme
+            or parsed_path.netloc
+            or parsed_path.query
+            or parsed_path.fragment
+            or decoded_path.startswith("/")
+            or any(not segment or segment in {".", ".."} for segment in segments)
+            or "\\" in decoded_path
+            or any(ord(character) < 32 or ord(character) == 127 for character in decoded_path)
+        ):
+            raise TelegramError(
+                "getFile returned an unsafe path",
+                operation="get_file",
+                failure_class="invalid_response",
+            )
+        resolved = destination.expanduser().resolve(strict=False)
+        resolved.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(resolved.parent, 0o700)
+        partial = resolved.with_name(f".{resolved.name}.{uuid.uuid4().hex}.part")
+        request = urllib.request.Request(
+            self._file_base + urllib.parse.quote(decoded_path, safe="/._-"),
+            method="GET",
+        )
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            with self._opener(request, timeout=60.0) as response, partial.open("xb") as output:
+                os.chmod(partial, 0o600)
+                while True:
+                    chunk = response.read(64 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise TelegramError(
+                            "Telegram file exceeds the configured download limit",
+                            operation="download_file",
+                            failure_class="local_validation",
+                        )
+                    output.write(chunk)
+                    digest.update(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            if reported_size is not None and reported_size != size:
+                raise TelegramError(
+                    "downloaded Telegram file size does not match metadata",
+                    operation="download_file",
+                    failure_class="invalid_response",
+                )
+            os.replace(partial, resolved)
+            os.chmod(resolved, 0o600)
+        except TelegramError:
+            partial.unlink(missing_ok=True)
+            raise
+        except Exception as exc:
+            partial.unlink(missing_ok=True)
+            raise _transport_error("downloadFile", exc) from None
+        return DownloadedTelegramFile(path=resolved, size=size, sha256=digest.hexdigest())
 
     def call(self, method: str, **params: Any) -> Any:
         return self._call_with_timeout(method, request_timeout=8, **params)

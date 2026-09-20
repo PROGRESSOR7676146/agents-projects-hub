@@ -12,7 +12,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, Sequence
 
 import aiohttp
 
@@ -710,14 +710,23 @@ class CodexAppServerClient:
         text: str,
         model: str,
         effort: str,
+        local_image_paths: Sequence[Path] = (),
     ) -> str:
         canonical_cwd = cwd.expanduser().resolve(strict=True)
+        turn_input: list[dict[str, str]] = [{"type": "text", "text": text}]
+        for image_path in local_image_paths:
+            if image_path.is_symlink():
+                raise RpcError("turn/start local image must not be a symlink")
+            canonical_image = image_path.expanduser().resolve(strict=True)
+            if not canonical_image.is_file() or not canonical_image.is_relative_to(canonical_cwd):
+                raise RpcError("turn/start local image is outside the execution root")
+            turn_input.append({"type": "localImage", "path": str(canonical_image)})
         result = self._request(
             "turn/start",
             {
                 "threadId": thread_id,
                 "cwd": str(canonical_cwd),
-                "input": [{"type": "text", "text": text}],
+                "input": turn_input,
                 "model": model,
                 "effort": effort,
                 **self._approval_params(),

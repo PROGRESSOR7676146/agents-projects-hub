@@ -12,6 +12,13 @@ from pathlib import Path
 from typing import Iterator, Mapping, Sequence, TypedDict
 
 from .artifacts import ValidatedArtifact
+from .incoming_materials import (
+    IncomingMaterialDraft,
+    IncomingMaterialError,
+    IncomingMaterialRecord,
+    bound_material_drafts,
+    cleanup_rejected_draft_inputs,
+)
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
 from .release_identity import CURRENT_RELEASE, ReleaseIdentity
 from .telegram import TELEGRAM_HEALTH_FAILURE_THRESHOLD
@@ -136,6 +143,7 @@ class ProviderJobRecord:
     payload_text: str
     context_watermark: int | None
     handoff_id: str | None
+    input_group_key: str | None
     status: str
     attempt_count: int
     max_attempts: int
@@ -301,9 +309,10 @@ def _parse_timestamp(value: str, *, name: str) -> datetime:
 
 
 class HubState:
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: sqlite3.Connection, state_path: Path | None = None) -> None:
         self._connection = connection
         self._connection.row_factory = sqlite3.Row
+        self._state_path = state_path
 
     @classmethod
     def open(cls, path: Path) -> "HubState":
@@ -325,7 +334,7 @@ class HubState:
         try:
             os.chmod(path, 0o600)
             migrate_connection(connection)
-            return cls(connection)
+            return cls(connection, path)
         except BaseException:
             try:
                 connection.close()
@@ -351,7 +360,7 @@ class HubState:
                 connection.close()
                 raise StateError("state_schema_unsupported")
             connection.execute("PRAGMA foreign_keys=ON")
-            return cls(connection)
+            return cls(connection, resolved)
         except StateError:
             raise
         except (OSError, sqlite3.Error):
@@ -426,6 +435,7 @@ class HubState:
             payload_text=str(row["payload_text"]),
             context_watermark=row["context_watermark"],
             handoff_id=row["handoff_id"],
+            input_group_key=row["input_group_key"],
             status=str(row["status"]),
             attempt_count=int(row["attempt_count"]),
             max_attempts=int(row["max_attempts"]),
@@ -439,6 +449,202 @@ class HubState:
             error_detail=row["error_detail"],
             created_at=str(row["created_at"]),
             updated_at=str(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _incoming_material(row: sqlite3.Row) -> IncomingMaterialRecord:
+        return IncomingMaterialRecord(
+            material_id=str(row["material_id"]),
+            job_id=None if row["job_id"] is None else str(row["job_id"]),
+            topic_id=int(row["topic_id"]),
+            project_id=str(row["project_id"]),
+            execution_scope=str(row["execution_scope"]),
+            agent_id=None if row["agent_id"] is None else str(row["agent_id"]),
+            session_id=None if row["session_id"] is None else str(row["session_id"]),
+            session_generation=(
+                None if row["session_generation"] is None else int(row["session_generation"])
+            ),
+            chat_id=int(row["chat_id"]),
+            message_id=int(row["message_id"]),
+            attachment_index=int(row["attachment_index"]),
+            media_group_id=row["media_group_id"],
+            origin=str(row["origin"]),
+            kind=str(row["kind"]),
+            content_kind=row["content_kind"],
+            file_unique_id=row["file_unique_id"],
+            display_name=str(row["display_name"]),
+            mime_type=row["mime_type"],
+            declared_size=row["declared_size"],
+            storage_path=row["storage_path"],
+            byte_size=row["byte_size"],
+            sha256=row["sha256"],
+            status=str(row["status"]),
+            unavailable_code=row["unavailable_code"],
+            unavailable_detail=row["unavailable_detail"],
+        )
+
+    def _insert_incoming_materials(
+        self,
+        *,
+        job_id: str | None,
+        topic_id: int,
+        chat_id: int,
+        message_id: int,
+        agent_id: str | None,
+        session_id: str | None,
+        session_generation: int | None,
+        materials: Sequence[IncomingMaterialDraft],
+        timestamp: str,
+        origin: str | None = None,
+    ) -> None:
+        if not materials:
+            return
+        topic = self._connection.execute(
+            "SELECT project_id, execution_scope FROM topics WHERE topic_id = ?",
+            (topic_id,),
+        ).fetchone()
+        if topic is None:
+            raise StateError(f"unknown topic_id: {topic_id}")
+        if job_id is not None:
+            aggregate = self._connection.execute(
+                """SELECT COUNT(*), COALESCE(SUM(byte_size), 0)
+                   FROM incoming_materials WHERE job_id = ?""",
+                (job_id,),
+            ).fetchone()
+        else:
+            aggregate = self._connection.execute(
+                """SELECT COUNT(*), COALESCE(SUM(byte_size), 0)
+                   FROM incoming_materials
+                   WHERE job_id IS NULL AND topic_id = ? AND session_id IS ?
+                     AND session_generation IS ?""",
+                (topic_id, session_id, session_generation),
+            ).fetchone()
+        assert aggregate is not None
+        bounded_materials = bound_material_drafts(
+            materials,
+            existing_count=int(aggregate[0]),
+            existing_bytes=int(aggregate[1]),
+        )
+        if any(
+            before.storage_path is not None and after.storage_path is None
+            for before, after in zip(materials, bounded_materials, strict=True)
+        ):
+            if self._state_path is None:
+                raise StateError("incoming material cleanup requires a state path")
+            cleanup_rejected_draft_inputs(
+                materials,
+                bounded_materials,
+                state_path=self._state_path,
+            )
+        execution_scope = topic["execution_scope"] or f"project:{topic['project_id']}"
+        material_origin = origin or ("direct" if chat_id > 0 else "topic")
+        for material in bounded_materials:
+            name = _bounded(material.display_name, name="material display name", maximum=128)
+            kind = _bounded(material.kind, name="material kind", maximum=32)
+            media_group_id = _optional_bounded(
+                material.media_group_id, name="media group id", maximum=256
+            )
+            unique_id = _optional_bounded(
+                material.file_unique_id, name="Telegram file unique id", maximum=512
+            )
+            mime_type = _optional_bounded(
+                material.mime_type, name="material MIME type", maximum=256
+            )
+            code = _optional_bounded(
+                material.unavailable_code, name="material error code", maximum=64
+            )
+            detail = _optional_bounded(
+                material.unavailable_detail, name="material error detail", maximum=500
+            )
+            storage_path = (
+                _bounded(str(material.storage_path), name="material storage path", maximum=4096)
+                if material.storage_path is not None
+                else None
+            )
+            if material.status == "stored":
+                if (
+                    material.content_kind not in {"text", "image"}
+                    or storage_path is None
+                    or material.byte_size is None
+                    or material.sha256 is None
+                    or re.fullmatch(r"[0-9a-f]{64}", material.sha256) is None
+                ):
+                    raise StateError("stored material metadata is incomplete")
+            elif material.status == "unavailable":
+                if code is None or detail is None:
+                    raise StateError("unavailable material has no bounded reason")
+            else:
+                raise StateError("invalid incoming material status")
+            self._connection.execute(
+                """INSERT INTO incoming_materials (
+                       material_id, job_id, topic_id, project_id, execution_scope,
+                       agent_id, session_id, session_generation, chat_id, message_id,
+                       attachment_index, media_group_id, origin, kind, content_kind,
+                       file_unique_id, display_name, mime_type, declared_size,
+                       storage_path, byte_size, sha256, status, unavailable_code,
+                       unavailable_detail, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                             ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(uuid.uuid4()),
+                    job_id,
+                    topic_id,
+                    str(topic["project_id"]),
+                    str(execution_scope),
+                    agent_id,
+                    session_id,
+                    session_generation,
+                    chat_id,
+                    message_id,
+                    material.attachment_index,
+                    media_group_id,
+                    material_origin,
+                    kind,
+                    material.content_kind,
+                    unique_id,
+                    name,
+                    mime_type,
+                    material.declared_size,
+                    storage_path,
+                    material.byte_size,
+                    material.sha256,
+                    material.status,
+                    code,
+                    detail,
+                    timestamp,
+                ),
+            )
+
+    def _attach_forwarded_materials(
+        self,
+        *,
+        job_id: str,
+        topic_id: int,
+        agent_id: str,
+        session_id: str,
+        session_generation: int,
+    ) -> None:
+        topic = self._connection.execute(
+            "SELECT project_id, execution_scope FROM topics WHERE topic_id = ?",
+            (topic_id,),
+        ).fetchone()
+        if topic is None:
+            raise StateError(f"unknown topic_id: {topic_id}")
+        execution_scope = topic["execution_scope"] or f"project:{topic['project_id']}"
+        self._connection.execute(
+            """UPDATE incoming_materials SET job_id = ?
+               WHERE job_id IS NULL AND topic_id = ? AND project_id = ?
+                 AND execution_scope = ? AND agent_id = ? AND session_id = ?
+                 AND session_generation = ?""",
+            (
+                job_id,
+                topic_id,
+                topic["project_id"],
+                execution_scope,
+                agent_id,
+                session_id,
+                session_generation,
+            ),
         )
 
     @staticmethod
@@ -1409,6 +1615,8 @@ class HubState:
         provider_session_id: str | None = None,
         context_watermark: int | None = None,
         handoff_id: str | None = None,
+        materials: Sequence[IncomingMaterialDraft] = (),
+        input_group_key: str | None = None,
         max_attempts: int = 5,
         take_local_writer: bool = False,
         available_at: datetime | None = None,
@@ -1437,6 +1645,7 @@ class HubState:
         handoff = (
             _bounded(handoff_id, name="handoff id", maximum=128) if handoff_id is not None else None
         )
+        group_key = _optional_bounded(input_group_key, name="input group key", maximum=256)
         if chat_id == 0 or message_id <= 0 or session_generation <= 0:
             raise StateError("invalid provider job identity")
         if context_watermark is not None and context_watermark < 0:
@@ -1566,9 +1775,9 @@ class HubState:
                          job_id, idempotency_key, chat_id, message_id, topic_id,
                          topic_sequence, agent_id, session_id, session_generation,
                          provider_session_id, model, effort, payload_text,
-                         context_watermark, handoff_id, status, attempt_count,
+                         context_watermark, handoff_id, input_group_key, status, attempt_count,
                          max_attempts, next_attempt_at, created_at, updated_at
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                                  'queued', 0, ?, ?, ?, ?)""",
                     (
                         job_id,
@@ -1586,17 +1795,12 @@ class HubState:
                         payload,
                         context_watermark,
                         handoff,
+                        group_key,
                         max_attempts,
                         ready_at,
                         now,
                         now,
                     ),
-                )
-                self._connection.execute(
-                    """INSERT INTO provider_job_inputs (
-                           job_id, chat_id, message_id, part_index, input_text, received_at
-                       ) VALUES (?, ?, ?, 1, ?, ?)""",
-                    (job_id, chat_id, message_id, payload, now),
                 )
             except sqlite3.IntegrityError as exc:
                 duplicate = self._connection.execute(
@@ -1609,6 +1813,30 @@ class HubState:
                 if str(duplicate["idempotency_key"]) != key:
                     raise StateError("Telegram message already has another provider job") from exc
                 return self._provider_job(duplicate), False
+            self._connection.execute(
+                """INSERT INTO provider_job_inputs (
+                       job_id, chat_id, message_id, part_index, input_text, received_at
+                   ) VALUES (?, ?, ?, 1, ?, ?)""",
+                (job_id, chat_id, message_id, payload, now),
+            )
+            self._attach_forwarded_materials(
+                job_id=job_id,
+                topic_id=topic_id,
+                agent_id=target_agent,
+                session_id=target_session,
+                session_generation=session_generation,
+            )
+            self._insert_incoming_materials(
+                job_id=job_id,
+                topic_id=topic_id,
+                chat_id=chat_id,
+                message_id=message_id,
+                agent_id=target_agent,
+                session_id=target_session,
+                session_generation=session_generation,
+                materials=materials,
+                timestamp=now,
+            )
             created = True
             row = self._connection.execute(
                 "SELECT * FROM provider_jobs WHERE job_id = ?", (job_id,)
@@ -1635,6 +1863,8 @@ class HubState:
         provider_session_id: str | None = None,
         context_watermark: int | None = None,
         handoff_id: str | None = None,
+        materials: Sequence[IncomingMaterialDraft] = (),
+        input_group_key: str | None = None,
         quiet_ms: int,
         max_ms: int,
     ) -> tuple[ProviderJobRecord, bool]:
@@ -1662,8 +1892,11 @@ class HubState:
                 payload_text=payload_text,
                 context_watermark=context_watermark,
                 handoff_id=handoff_id,
+                materials=materials,
+                input_group_key=input_group_key,
             )
         user_text = _bounded(appended_user_text, name="batch input", maximum=20000)
+        group_key = _optional_bounded(input_group_key, name="input group key", maximum=256)
         current = datetime.now(timezone.utc)
         timestamp = _timestamp(current)
         quiet_until = current + timedelta(milliseconds=quiet_ms)
@@ -1699,6 +1932,7 @@ class HubState:
                 """SELECT * FROM provider_jobs
                    WHERE topic_id = ? AND agent_id = ? AND session_id = ?
                      AND session_generation = ? AND model = ? AND effort = ?
+                     AND input_group_key IS ?
                      AND status = 'queued' AND next_attempt_at > ?
                      AND created_at >= ?
                      AND topic_sequence = (
@@ -1713,6 +1947,7 @@ class HubState:
                     session_generation,
                     model,
                     effort,
+                    group_key,
                     timestamp,
                     absolute_floor,
                 ),
@@ -1745,6 +1980,24 @@ class HubState:
                            VALUES (?, ?, ?, ?, ?, ?)""",
                         (candidate["job_id"], chat_id, message_id, part, user_text, timestamp),
                     )
+                    self._attach_forwarded_materials(
+                        job_id=str(candidate["job_id"]),
+                        topic_id=topic_id,
+                        agent_id=agent_id,
+                        session_id=session_id,
+                        session_generation=session_generation,
+                    )
+                    self._insert_incoming_materials(
+                        job_id=str(candidate["job_id"]),
+                        topic_id=topic_id,
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        agent_id=agent_id,
+                        session_id=session_id,
+                        session_generation=session_generation,
+                        materials=materials,
+                        timestamp=timestamp,
+                    )
                     self._connection.execute(
                         """UPDATE provider_jobs
                            SET payload_text = ?, next_attempt_at = ?, updated_at = ?
@@ -1771,6 +2024,8 @@ class HubState:
             payload_text=payload_text,
             context_watermark=context_watermark,
             handoff_id=handoff_id,
+            materials=materials,
+            input_group_key=group_key,
             available_at=quiet_until,
         )
 
@@ -1798,6 +2053,126 @@ class HubState:
         if row is None:
             raise StateError(f"unknown provider job: {job_id}")
         return self._provider_job(row)
+
+    def message_already_observed(self, chat_id: int, message_id: int) -> bool:
+        row = self._connection.execute(
+            """SELECT 1 FROM observed_messages
+               WHERE chat_id = ? AND message_id = ? LIMIT 1""",
+            (chat_id, message_id),
+        ).fetchone()
+        return row is not None
+
+    def incoming_materials_for_job(self, job_id: str) -> tuple[IncomingMaterialRecord, ...]:
+        binding = self._connection.execute(
+            """SELECT jobs.topic_id, jobs.chat_id, jobs.agent_id, jobs.session_id,
+                      jobs.session_generation, topics.project_id, topics.execution_scope
+               FROM provider_jobs jobs JOIN topics ON topics.topic_id = jobs.topic_id
+               WHERE jobs.job_id = ?""",
+            (job_id,),
+        ).fetchone()
+        if binding is None:
+            raise StateError(f"unknown provider job: {job_id}")
+        rows = self._connection.execute(
+            """SELECT materials.* FROM incoming_materials materials
+               LEFT JOIN provider_job_inputs inputs
+                 ON inputs.job_id = materials.job_id
+                AND inputs.chat_id = materials.chat_id
+                AND inputs.message_id = materials.message_id
+               WHERE materials.job_id = ?
+               ORDER BY COALESCE(inputs.part_index, 1), materials.attachment_index""",
+            (job_id,),
+        ).fetchall()
+        records = tuple(self._incoming_material(row) for row in rows)
+        execution_scope = binding["execution_scope"] or f"project:{binding['project_id']}"
+        if any(
+            (
+                record.topic_id,
+                record.project_id,
+                record.execution_scope,
+                record.agent_id,
+                record.session_id,
+                record.session_generation,
+                record.chat_id,
+            )
+            != (
+                int(binding["topic_id"]),
+                str(binding["project_id"]),
+                str(execution_scope),
+                str(binding["agent_id"]),
+                str(binding["session_id"]),
+                int(binding["session_generation"]),
+                int(binding["chat_id"]),
+            )
+            for record in records
+        ):
+            raise IncomingMaterialError("incoming material binding changed")
+        return records
+
+    def pending_incoming_materials(self, topic_id: int) -> tuple[IncomingMaterialRecord, ...]:
+        rows = self._connection.execute(
+            """SELECT * FROM incoming_materials
+               WHERE topic_id = ? AND job_id IS NULL
+               ORDER BY created_at, message_id, attachment_index""",
+            (topic_id,),
+        ).fetchall()
+        return tuple(self._incoming_material(row) for row in rows)
+
+    def delete_pending_incoming_materials(self, topic_id: int, material_ids: Sequence[str]) -> int:
+        identifiers = tuple(
+            _bounded(value, name="incoming material id", maximum=128) for value in material_ids
+        )
+        if not identifiers:
+            return 0
+        placeholders = ", ".join("?" for _ in identifiers)
+        with self._immediate_transaction():
+            cursor = self._connection.execute(
+                f"""DELETE FROM incoming_materials
+                    WHERE topic_id = ? AND job_id IS NULL
+                      AND material_id IN ({placeholders})""",
+                (topic_id, *identifiers),
+            )
+        return cursor.rowcount
+
+    def stored_incoming_materials_for_terminal_jobs(
+        self, topic_id: int
+    ) -> tuple[IncomingMaterialRecord, ...]:
+        rows = self._connection.execute(
+            """SELECT materials.* FROM incoming_materials materials
+               JOIN provider_jobs jobs ON jobs.job_id = materials.job_id
+               WHERE materials.topic_id = ?
+                 AND materials.status IN ('stored', 'consumed')
+                 AND jobs.status IN ('result_ready', 'completed', 'failed', 'cancelled')
+               ORDER BY materials.created_at, materials.message_id,
+                        materials.attachment_index""",
+            (topic_id,),
+        ).fetchall()
+        return tuple(self._incoming_material(row) for row in rows)
+
+    def mark_incoming_materials_discarded(
+        self,
+        material_ids: Sequence[str],
+        *,
+        code: str,
+        detail: str,
+    ) -> int:
+        identifiers = tuple(
+            _bounded(value, name="incoming material id", maximum=128) for value in material_ids
+        )
+        if not identifiers:
+            return 0
+        error_code = _bounded(code, name="material error code", maximum=64)
+        error_detail = _bounded(detail, name="material error detail", maximum=500)
+        placeholders = ", ".join("?" for _ in identifiers)
+        with self._immediate_transaction():
+            cursor = self._connection.execute(
+                f"""UPDATE incoming_materials
+                    SET status = 'unavailable', content_kind = NULL,
+                        storage_path = NULL, byte_size = NULL, sha256 = NULL,
+                        unavailable_code = ?, unavailable_detail = ?, consumed_at = NULL
+                    WHERE status = 'stored' AND material_id IN ({placeholders})""",
+                (error_code, error_detail, *identifiers),
+            )
+        return cursor.rowcount
 
     def resolve_indeterminate_job(self, job_id: str, resolution: str) -> bool:
         """Append one immutable operator classification without changing the job."""
@@ -2203,6 +2578,12 @@ class HubState:
             ):
                 return None
             if str(candidate["status"]) != "queued":
+                return None
+            material = self._connection.execute(
+                "SELECT 1 FROM incoming_materials WHERE job_id = ? LIMIT 1",
+                (candidate["job_id"],),
+            ).fetchone()
+            if material is not None:
                 return None
             available = candidate["next_attempt_at"]
             if available is not None and str(available) > timestamp:
@@ -2717,6 +3098,12 @@ class HubState:
                     response,
                     timestamp,
                 ),
+            )
+            self._connection.execute(
+                """UPDATE incoming_materials
+                   SET status = 'consumed', consumed_at = ?
+                   WHERE job_id = ? AND status = 'stored'""",
+                (timestamp, job_id),
             )
             self._connection.execute(
                 """DELETE FROM external_turn_excerpts
@@ -3479,7 +3866,9 @@ class HubState:
                     (chat_id, message_id, observer_agent_id, _now()),
                 )
         except sqlite3.IntegrityError:
-            return False
+            if self.message_already_observed(chat_id, message_id):
+                return False
+            raise
         return True
 
     def record_forwarded_quote(
@@ -3490,13 +3879,23 @@ class HubState:
         message_id: int,
         observer_agent_id: str,
         text: str,
+        materials: Sequence[IncomingMaterialDraft] = (),
+        session: SessionRecord | None = None,
     ) -> bool:
         """Persist a Telegram forward as passive visible context, never as work."""
-        quote = _bounded(text, name="forwarded quote", maximum=4000)
+        quote = _bounded(
+            text or "Forwarded Telegram material.",
+            name="forwarded quote",
+            maximum=4000,
+        )
         observer = _bounded(observer_agent_id, name="observer agent id", maximum=64)
         topic = self.get_topic(topic_id)
         if topic.chat_id != chat_id or message_id <= 0:
             raise StateError("forwarded quote does not match topic")
+        if session is not None and (
+            session.topic_id != topic_id or session.status not in {"active", "satellite"}
+        ):
+            raise StateError("forwarded material session does not match topic")
         timestamp = _now()
         try:
             with self._immediate_transaction():
@@ -3512,6 +3911,18 @@ class HubState:
                                'Forwarded message', ?, ?, ?)""",
                     (topic_id, quote, timestamp, message_id),
                 )
+                self._insert_incoming_materials(
+                    job_id=None,
+                    topic_id=topic_id,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    agent_id=None if session is None else session.agent_id,
+                    session_id=None if session is None else session.session_id,
+                    session_generation=None if session is None else session.generation,
+                    materials=materials,
+                    timestamp=timestamp,
+                    origin="forward",
+                )
                 self._connection.execute(
                     """DELETE FROM external_turn_excerpts
                        WHERE topic_id = ? AND turn_id NOT IN (
@@ -3521,7 +3932,9 @@ class HubState:
                     (topic_id, topic_id),
                 )
         except sqlite3.IntegrityError:
-            return False
+            if self.message_already_observed(chat_id, message_id):
+                return False
+            raise
         return True
 
     def get_bot_offset(self, agent_id: str) -> int | None:

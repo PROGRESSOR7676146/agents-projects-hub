@@ -3,9 +3,11 @@ from __future__ import annotations
 import io
 import socket
 import ssl
+import tempfile
 import unittest
 import urllib.error
 from email.message import Message
+from pathlib import Path
 from unittest.mock import call as mock_call
 from unittest.mock import patch
 
@@ -20,6 +22,64 @@ from hermes_codex_router.telegram import (
 
 
 class TelegramUpdateTests(unittest.TestCase):
+    def test_download_file_streams_verified_content_to_private_destination(self) -> None:
+        content = b"fictional telegram content"
+
+        class Response:
+            def __init__(self) -> None:
+                self.offset = 0
+
+            def __enter__(self) -> "Response":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                pass
+
+            def read(self, size: int) -> bytes:
+                chunk = content[self.offset : self.offset + size]
+                self.offset += len(chunk)
+                return chunk
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "private" / "snapshot"
+            telegram = TelegramBotApi(
+                "123456:example",
+                opener=lambda *_args, **_kwargs: Response(),
+            )
+            with patch.object(
+                telegram,
+                "call",
+                return_value={"file_path": "documents/example.txt", "file_size": len(content)},
+            ):
+                downloaded = telegram.download_file(
+                    "fictional-file-id", destination, max_bytes=1024
+                )
+
+            self.assertEqual(destination.read_bytes(), content)
+            self.assertEqual(downloaded.path, destination)
+            self.assertEqual(downloaded.size, len(content))
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+
+    def test_download_file_rejects_unsafe_telegram_path_before_network_read(self) -> None:
+        telegram = TelegramBotApi(
+            "123456:example",
+            opener=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("download must not start")
+            ),
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(
+                telegram,
+                "call",
+                return_value={"file_path": "../outside.txt", "file_size": 1},
+            ),
+        ):
+            with self.assertRaisesRegex(TelegramError, "unsafe path"):
+                telegram.download_file(
+                    "fictional-file-id", Path(directory) / "snapshot", max_bytes=1024
+                )
+
     def test_transport_failures_are_classified_without_exposing_request_secrets(self) -> None:
         cases = (
             (urllib.error.URLError(socket.gaierror("secret DNS detail")), "network_dns"),

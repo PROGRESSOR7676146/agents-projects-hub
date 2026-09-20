@@ -8,17 +8,40 @@ operator deployment inventory or live conversation evidence.
 
 ## Quality checkpoint
 
-The integrated development baseline retains released schemas 26–30 unchanged
-and adds root exclusion and bounded concurrency as schemas 31–32. Project
+The integrated development baseline retains released schemas 26–30 unchanged,
+adds root exclusion and bounded concurrency as schemas 31–32, and adds durable
+inbound Telegram materials as schema 33. Project
 relocation commits topic execution scopes with the registry/binding transition,
 including crash recovery. Transient admission faults in dynamically onboarded
 groups retain their Telegram offset and retry through idempotent queue admission.
 Native Codex route/model continuity and Antigravity model/effort pinning remain
 part of this baseline. Deployment and schema-compatible runtime rollback are
-separate gates; existing schema-30 executables cannot open schema-32 state.
+separate gates; existing schema-30/32 executables cannot open schema-33 state.
 
-Open priorities are inbound attachment/caption/album completeness and accurate
-Codex context/quota-window labels; see the [roadmap](../ROADMAP.ru.md).
+Inbound attachment/caption/album completeness is repository-complete. The next
+open priority is accurate Codex context/quota-window labels; see the
+[roadmap](../ROADMAP.ru.md).
+
+Hub-owned durable queue ingress now normalizes caption-only and file-only
+documents, photos, albums, selected quotes, and passive forwarded materials.
+Schema 33 atomically binds each material receipt and verified private spool
+snapshot to numeric topic, immutable project/execution scope, provider session
+generation, and provider job. UTF-8 documents reach every local queue adapter
+as content or a verified project-relative copy; Codex images use native
+app-server `localImage`. OpenCode/Antigravity images, archives, invalid text or
+image bytes, excess parts/bytes, and cloud Bot API files above 20 MB produce an
+explicit provider-input and Telegram notice. Telegram Premium does not change
+the Bot API download limit. Albums use one bounded collection turn; material
+received after execution starts stays FIFO and is excluded from same-turn
+steering. Duplicate updates do not redownload or reinvoke. Workers revalidate
+path, symlink, size and digest after execution-root/lane validation, preserve
+raw evidence for uncertain execution, and remove consumed snapshots after the
+atomic result commit. Passive forwards do not invoke a model and attach only to
+their already-bound session generation. Legacy inline routes reject inbound
+attachments explicitly. Offline parser, actual-provider-input, migration,
+deduplication, forwarding, native image RPC and tamper tests cover this
+checkpoint; deployment and live Telegram/provider acceptance remain separate.
+See [ADR 0032](../decisions/0032-durable-inbound-telegram-materials.md).
 
 
 Antigravity native `/local` now pins the session model and effort with the same
@@ -247,7 +270,7 @@ available for recovery. Schema 25 introduced immutable origins and the original
 first-return boundary. External workers continue the exact thread through socket
 or stdio; unsupported modes fail closed. Automated evidence uses fictional
 provider and Telegram adapters. Live continuity and a production rollback
-artifact for schema 32 remain deployment-specific; the current target is schema 32.
+artifact for schema 33 remain deployment-specific; the current target is schema 33.
 
 - Numeric project/topic identity, canonical allowlisted roots, idempotent
   routing, persistent provider sessions, bounded visible context, and writer
@@ -519,7 +542,7 @@ artifact for schema 32 remain deployment-specific; the current target is schema 
   reapers. Runtime-proxy monitoring remains independent and never restarts a
   shared app-server underneath an active Codex or tlive session.
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
-- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-32
+- A clean-tree Hub-owned recovery capsule publishes a self-contained schema-33
   immutable-deployment triage guide, source revision, timestamp, and content
   hashes into a neutral local store for the independent Hermes channel. It
   carries no private deployment inventory and creates no service dependency.
