@@ -83,8 +83,11 @@ def validate_worktree_execution_root(
             text=True,
             timeout=5,
         )
+        # An unrelated worktree may be outside this process's mount namespace
+        # (for example a host /tmp path hidden by systemd PrivateTmp).  Only the
+        # exact, already-canonical target needs to be visible here.
         registered = {
-            Path(line.removeprefix("worktree ")).resolve(strict=True)
+            Path(line.removeprefix("worktree ")).expanduser().absolute()
             for line in listed.stdout.splitlines()
             if line.startswith("worktree ")
         }

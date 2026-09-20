@@ -103,6 +103,72 @@ class WorktreeTests(unittest.TestCase):
             with self.assertRaises(ExecutionRootError):
                 validate_worktree_execution_root(registry, project, "backend", lane)
 
+    def test_execution_validation_ignores_unavailable_unrelated_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            allowed = Path(directory)
+            root = allowed / "Project"
+            lane = allowed / "Project-backend"
+            init_git_root(root)
+            subprocess.run(
+                (
+                    "git",
+                    "-C",
+                    str(root),
+                    "-c",
+                    "user.name=Example",
+                    "-c",
+                    "user.email=example@example.com",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "commit",
+                    "--allow-empty",
+                    "-qm",
+                    "Fictional fixture",
+                ),
+                check=True,
+                capture_output=True,
+                timeout=5,
+            )
+            subprocess.run(
+                ("git", "-C", str(root), "worktree", "add", "--detach", str(lane)),
+                check=True,
+                capture_output=True,
+                timeout=5,
+            )
+            project = Project("project", "Project", "Project", root)
+            registry = ProjectRegistry(1, (allowed,), (project,))
+            hidden_unrelated = allowed / "hidden-by-private-mount"
+
+            def run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+                result = subprocess.run(
+                    argv,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if argv[-2:] == ("list", "--porcelain"):
+                    return subprocess.CompletedProcess(
+                        argv,
+                        result.returncode,
+                        f"worktree {hidden_unrelated}\nHEAD {'0' * 40}\ndetached\n\n{result.stdout}",
+                        result.stderr,
+                    )
+                return result
+
+            self.assertEqual(
+                validate_worktree_execution_root(
+                    registry,
+                    project,
+                    "backend",
+                    lane,
+                    run=run,
+                ),
+                lane,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

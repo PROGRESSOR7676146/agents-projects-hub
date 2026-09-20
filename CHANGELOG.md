@@ -60,6 +60,8 @@ and releases use semantic versioning while the public API is still evolving.
 - Make explicit worktree lanes executable: idle-only bind/archive transitions
   atomically change topic scope, and workers revalidate the exact derived,
   allowlisted, registered Git worktree before using it as cwd.
+- Keep exact worktree-lane validation independent of unrelated Git worktrees
+  hidden by a service mount namespace such as systemd `PrivateTmp`.
 - Add schema-31 canonical-root execution scopes so Hub queue workers, local
   writer transfer, and saved-session adoption cannot concurrently write one
   checkout across different topics or providers; separately registered roots
