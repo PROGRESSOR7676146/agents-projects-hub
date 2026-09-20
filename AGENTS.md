@@ -5,12 +5,18 @@ contain information about any operator's real projects or deployment.
 
 ## Read order
 
-1. `docs/product/PRODUCT_REQUIREMENTS.md` and every normative module it lists
-2. `docs/status/PROJECT_STATUS.md`
-3. `docs/INDEX.md`
-4. `docs/SECURITY.ru.md`
-5. only the architecture, decisions, operations, and tests relevant to the
-   assigned change
+Always read this file, `docs/SECURITY.ru.md`, and
+`docs/product/ACCOUNTS_CONTROL_AND_SECURITY.md` before work. Then read
+`docs/product/PRODUCT_REQUIREMENTS.md`, `docs/product/MAINTENANCE.md`,
+`docs/status/PROJECT_STATUS.md`, and `docs/INDEX.md`.
+
+For a local implementation/test fix or non-normative documentation edit, read
+only the capability modules selected by the requirements index and the relevant
+architecture, decisions, operations, and tests. If scope is uncertain, read the
+full baseline. Changes to requirements, architecture, security/trust boundaries,
+or release/deployment contracts require every normative module before design or
+editing. A newly discovered boundary change upgrades a scoped read to a full
+read before proceeding. The index routes reading; it does not waive requirements.
 
 Before substantial work, read the optional private operator profile at
 `${XDG_CONFIG_HOME:-$HOME/.config}/agents-projects-hub/USER.md` when it exists.
@@ -64,11 +70,11 @@ bytes exactly equal the valid owner in the local GitHub `origin` URL. Never
 record a real value or its digest in this repository, and never extend these
 rules to another identity, field, finding type, or deployment datum.
 
-For behavior changes, update the product requirements or project status when
-observable behavior, scope, acceptance, or lifecycle classification changes.
-Record durable consequential rationale under `docs/decisions/`. Run the
-narrowest relevant checks followed by `python scripts/validate.py` when
-practical; distinguish automated coverage from owner-driven live E2E.
+Follow the document ownership/change rules in `docs/product/MAINTENANCE.md`;
+do not repeat an observable contract in every guide. Use the focused development
+profile described in `docs/testing/README.md` during iteration. Full canonical
+validation remains mandatory for publication and CI; distinguish automated
+coverage from owner-driven live E2E.
 
 Never call a deployment current or accepted without naming the exact clean Git
 revision and confirming that every required long-running component reports that

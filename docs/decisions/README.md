@@ -53,6 +53,7 @@ with a new record.
 | Bounded root concurrency | Schema-32 global capacity and durable fairness permit parallel Hub workers only on independent canonical roots or explicitly bound and revalidated worktree lanes. | [ADR 0031](0031-bounded-root-concurrency.md) |
 | Durable inbound Telegram materials | Schema 33 atomically binds verified text/image snapshots to queue jobs and session/root identity; albums are one turn, late files stay FIFO, forwards remain passive, and unavailable content is explicit. | [ADR 0032](0032-durable-inbound-telegram-materials.md) |
 | Truthful context and quota telemetry | Current Codex context comes from the latest `last` snapshot; quota labels come from reported duration, while missing/stale data stays explicitly unknown/cached. | [ADR 0033](0033-truthful-context-and-quota-telemetry.md) |
+| Maintenance validation | Cheap contracts fail before expensive checks; focused iteration and one canonical pre-push run preserve independent CI without a receipt cache. | [ADR 0034](0034-fail-fast-maintenance-validation.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

@@ -22,43 +22,18 @@ Inbound attachment/caption/album completeness and accurate Codex
 context/quota-window telemetry are repository-complete. Deployment and live
 acceptance remain separate; see the [roadmap](../ROADMAP.ru.md).
 
-Codex context remainder now uses the latest app-server `last.totalTokens`
-snapshot, while cumulative `total.totalTokens` remains lifetime usage and is
-never treated as current context occupancy. The latest notification wins across
-compaction; a successful turn without current-context telemetry clears the
-older percentage to unknown. Provider-supplied quota durations survive passive
-account snapshots and drive response, `/status`, `/accounts`, rotation and
-alert labels. A 15-minute, five-hour or weekly window is therefore named by its
-actual duration even when it occupies an unexpected primary/secondary slot;
-missing duration is shown only as Primary/Secondary window. Stale cached quota
-is explicitly marked and still cannot alert. This checkpoint adds no migration;
-the target schema remains 33. See [ADR 0033](../decisions/0033-truthful-context-and-quota-telemetry.md).
+Context/quota telemetry is repository-complete with offline notification,
+snapshot and display regressions; no new migration beyond schema 33. Behavior
+is defined by [REQ-CMD-001..003](../product/ACCOUNTS_CONTROL_AND_SECURITY.md#compact-control-surface);
+see [ADR 0033](../decisions/0033-truthful-context-and-quota-telemetry.md) for rationale.
 
-Hub-owned durable queue ingress now normalizes caption-only and file-only
-documents, photos, albums, selected quotes, and passive forwarded materials.
-Schema 33 atomically binds each material receipt and verified private spool
-snapshot to numeric topic, immutable project/execution scope, provider session
-generation, and provider job. UTF-8 documents reach every local queue adapter
-as content or a verified project-relative copy; Codex images use native
-app-server `localImage`. OpenCode/Antigravity images, archives, invalid text or
-image bytes, excess parts/bytes, and cloud Bot API files above 20 MB produce an
-explicit provider-input and Telegram notice. Telegram Premium does not change
-the Bot API download limit. Albums use one bounded collection turn; material
-received after execution starts stays FIFO and is excluded from same-turn
-steering. A later album part atomically holds its exact unleased queue tail
-while Telegram downloads it, preventing a slow synchronous download from
-splitting one media group into multiple provider turns. The bounded album quiet
-window also spans the next Bot API long poll, so a part delivered in the next
-update batch cannot lose the group before its download begins. Duplicate
-updates do not redownload, extend the hold, or reinvoke. Workers revalidate
-path, symlink, size and digest after execution-root/lane validation, preserve
-raw evidence for uncertain execution, and remove consumed snapshots after the
-atomic result commit. Passive forwards do not invoke a model and attach only to
-their already-bound session generation. Legacy inline routes reject inbound
-attachments explicitly. Offline parser, actual-provider-input, migration,
-deduplication, forwarding, native image RPC and tamper tests cover this
-checkpoint; deployment and live Telegram/provider acceptance remain separate.
-See [ADR 0032](../decisions/0032-durable-inbound-telegram-materials.md).
+Inbound materials are repository-complete at schema 33. Offline parser,
+actual-provider-input, migration, album arrival, deduplication, forwarding,
+native-image RPC and tamper regressions cover
+[REQ-UX-009](../product/IDENTITY_AND_INTERACTION.md#telegram-interaction-contract)
+and [REQ-QUEUE-010](../product/PERSISTENCE_AND_RECOVERY.md#implemented-queue-compatibility-and-local-provider-worker-isolation).
+Deployment and live Telegram/provider acceptance remain separate; see
+[ADR 0032](../decisions/0032-durable-inbound-telegram-materials.md).
 
 
 Antigravity native `/local` now pins the session model and effort with the same
