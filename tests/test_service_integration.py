@@ -20,6 +20,7 @@ from hermes_codex_router.hub_config import (
     TerminalSettings,
 )
 from hermes_codex_router.models import Project, ProjectRegistry
+from hermes_codex_router.provider_catalog_cache import CatalogSnapshot
 from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.state import HubState
 from tests.git_fixtures import init_git_root
@@ -350,7 +351,14 @@ class ServiceIntegrationTests(unittest.TestCase):
                 item for item in callback_values(telegram.markups[-1]) if item.endswith(":medium")
             )
             self.assertRegex(apply, r"^use:codex:[a-f0-9]{12}:medium$")
+
+            def forbidden_catalog(*args: object, **kwargs: object) -> CatalogSnapshot:
+                raise AssertionError("final model selection attempted catalog discovery")
+
+            original_provider_catalog = value._provider_catalog
+            value._provider_catalog = forbidden_catalog  # type: ignore[method-assign]
             self.assertTrue(value.handle_update(callback(4, "cb-effort", apply)))
+            value._provider_catalog = original_provider_catalog  # type: ignore[method-assign]
             topic = value.state.find_topic(-1001234567890, 77)
             assert topic is not None
             active = value.state.active_session(topic.topic_id)

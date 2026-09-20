@@ -28,7 +28,6 @@ from .codex_accounts import (
 )
 from .codex_appserver import (
     CodexAppServerClient,
-    LimitWindow,
     RateLimits,
     RpcError,
     context_remaining_percent,
@@ -38,6 +37,11 @@ from .codex_recovery import (
     checkpoint_failure_notice,
     reconcile_codex_completion,
     recover_codex_job,
+)
+from .controller_commands import (
+    ControllerCommandOrchestrator,
+    HtmlCommandDecision,
+    TextCommandDecision,
 )
 from .delivery_retry import delivery_retry_delay
 from .execution_journal import ExecutionJournal
@@ -75,8 +79,6 @@ from .provider_catalog import (
     opencode_models,
 )
 from .provider_catalog_cache import CatalogSnapshot, ProviderCatalogCache
-from .provider_limits import ProviderLimit, decode_provider_limit
-from .provider_telemetry import load_antigravity_telemetry
 from .registry import (
     ExecutionRootError,
     Project,
@@ -95,7 +97,6 @@ from .runtime_health import CONTROLLER_INSTANCE_ID
 from .session_connect import SessionConnectStore
 from .session_controls import bind_controls, validate_control
 from .state import HubState, SessionRecord, StateError, TopicRecord
-from .status_view import cached_codex_rate_limits, format_accounts, format_session_status
 from .supervisor import CodexAppServerSupervisor
 from .telegram import (
     TELEGRAM_HEALTH_FAILURE_THRESHOLD,
@@ -1536,6 +1537,13 @@ class ProjectHubService:
                 f"{agent.display_name} model catalog is unavailable and has no local cache"
             )
 
+    def _cached_provider_catalog(self, agent_id: str) -> CatalogSnapshot:
+        self.config.require_agent(agent_id)
+        cached = self._catalog_cache().load(agent_id)
+        if cached is None:
+            raise ProviderCatalogError("model selection expired; run /model again")
+        return cached
+
     def _switch_agent(
         self,
         *,
@@ -1622,17 +1630,60 @@ class ProjectHubService:
             )
         return {"inline_keyboard": rows}
 
-    def _show_provider_menu(self, message: TopicMessage, topic: TopicRecord) -> None:
+    def _command_orchestrator(self) -> ControllerCommandOrchestrator:
+        orchestrator = getattr(self, "_controller_command_orchestrator", None)
+        if orchestrator is None:
+            orchestrator = ControllerCommandOrchestrator(self.config, self.state)
+            self._controller_command_orchestrator = orchestrator
+        return orchestrator
+
+    def _render_command_decision(
+        self,
+        message: TopicMessage,
+        decision: TextCommandDecision | HtmlCommandDecision,
+    ) -> None:
+        if isinstance(decision, HtmlCommandDecision):
+            self.telegram.send_html(
+                message.chat_id,
+                message.thread_id,
+                decision.html,
+                reply_markup=decision.reply_markup,
+            )
+            return
+        if decision.response_agent_id is not None:
+            self._send_text_as_agent(
+                message,
+                agent_id=decision.response_agent_id,
+                text=decision.text,
+            )
+            return
+        self._send_text(message, decision.text)
+
+    def _show_status(self, message: TopicMessage, topic: TopicRecord) -> None:
         active = self.state.active_session(topic.topic_id)
-        values = []
-        for candidate in self.config.agents:
-            marker = "✓ " if active and active.agent_id == candidate.agent_id else ""
-            values.append((f"{marker}{candidate.display_name}", f"provider:{candidate.agent_id}"))
-        self.telegram.send_html(
-            message.chat_id,
-            message.thread_id,
-            "Provider → model → effort",
-            reply_markup=self._inline_grid(bind_controls(self.state, topic.topic_id, values)),
+        pool = None
+        live_limits = None
+        if active is not None:
+            agent = self.config.require_agent(active.agent_id)
+            if agent.runtime == "codex":
+                pool = self._codex_pool()
+                if active.provider_session_id and not self._queue_enabled(agent.agent_id):
+                    live_limits = self._client().read_rate_limits()
+        self._render_command_decision(
+            message,
+            self._command_orchestrator().status(topic, pool, live_limits),
+        )
+
+    def _show_accounts(self, message: TopicMessage) -> None:
+        self._render_command_decision(
+            message,
+            self._command_orchestrator().accounts(self._codex_pool()),
+        )
+
+    def _show_provider_menu(self, message: TopicMessage, topic: TopicRecord) -> None:
+        self._render_command_decision(
+            message,
+            self._command_orchestrator().provider_menu(topic),
         )
 
     def _show_control_menu(self, message: TopicMessage) -> None:
@@ -1667,54 +1718,15 @@ class ProjectHubService:
         page: int = 0,
         refresh: bool = False,
     ) -> None:
-        active = self.state.active_session(topic.topic_id)
         catalog = self._provider_catalog(agent_id, refresh=refresh)
-        page_count = max(
-            1,
-            (len(catalog.models) + self.MODEL_PAGE_SIZE - 1) // self.MODEL_PAGE_SIZE,
-        )
-        if page < 0 or page >= page_count:
-            raise ModelSelectionError("model catalog page is unavailable")
-        start = page * self.MODEL_PAGE_SIZE
-        models = catalog.models[start : start + self.MODEL_PAGE_SIZE]
-        values = []
-        for model in models:
-            marker = (
-                "✓ "
-                if active and active.agent_id == agent_id and active.model == model.model_id
-                else ""
-            )
-            is_highlighted = (
-                model.is_new
-                and "🆕" not in model.label
-                and not model.label.lower().endswith("(new)")
-            )
-            new_prefix = "🆕 " if is_highlighted else ""
-            values.append(
-                (f"{marker}{new_prefix}{model.label}", f"choose:{agent_id}:{model.callback_key}")
-            )
-        navigation: list[tuple[str, str]] = []
-        if page > 0:
-            navigation.append(("←", f"models:{agent_id}:{page - 1}"))
-        navigation.append(("🔄 Обновить", f"modelrefresh:{agent_id}:{page}"))
-        if page + 1 < page_count:
-            navigation.append(("→", f"models:{agent_id}:{page + 1}"))
-        agent = self.config.require_agent(agent_id)
-        cached = " · cached" if catalog.last_failure_at is not None else ""
-        keyboard = self._inline_grid(bind_controls(self.state, topic.topic_id, values))[
-            "inline_keyboard"
-        ]
-        if navigation:
-            keyboard.extend(
-                self._inline_grid(bind_controls(self.state, topic.topic_id, navigation))[
-                    "inline_keyboard"
-                ]
-            )
-        self.telegram.send_html(
-            message.chat_id,
-            message.thread_id,
-            html.escape(f"{agent.display_name}: choose model · {page + 1}/{page_count}{cached}"),
-            reply_markup={"inline_keyboard": keyboard},
+        self._render_command_decision(
+            message,
+            self._command_orchestrator().model_menu(
+                topic,
+                agent_id,
+                catalog,
+                page=page,
+            ),
         )
 
     def _show_effort_menu(
@@ -1725,34 +1737,14 @@ class ProjectHubService:
         callback_key: str,
     ) -> None:
         catalog = self._provider_catalog(agent_id, refresh=False)
-        model = next(
-            (item for item in catalog.models if item.callback_key == callback_key),
-            None,
-        )
-        if model is None:
-            raise ModelSelectionError("model selection is unavailable")
-        active = self.state.active_session(topic.topic_id)
-        values = []
-        for effort in model.efforts:
-            marker = (
-                "✓ "
-                if active
-                and active.agent_id == agent_id
-                and active.model == model.model_id
-                and active.effort == effort
-                else ""
-            )
-            values.append(
-                (
-                    f"{marker}{effort.title()}",
-                    f"use:{agent_id}:{model.callback_key}:{effort}",
-                )
-            )
-        self.telegram.send_html(
-            message.chat_id,
-            message.thread_id,
-            html.escape(f"{model.label}: choose effort"),
-            reply_markup=self._inline_grid(bind_controls(self.state, topic.topic_id, values)),
+        self._render_command_decision(
+            message,
+            self._command_orchestrator().effort_menu(
+                topic,
+                agent_id,
+                callback_key,
+                catalog,
+            ),
         )
 
     def _apply_model_selection(
@@ -1766,58 +1758,18 @@ class ProjectHubService:
         message: TopicMessage,
         expected_session_id: str | None = None,
     ) -> None:
-        # The callback key belongs to the snapshot the user just saw. A final
-        # click must update local state, not depend on another provider RPC.
-        catalog = self._provider_catalog(agent_id, refresh=False)
-        selected = next(
-            (item for item in catalog.models if item.callback_key == callback_key),
-            None,
-        )
-        if selected is None or effort not in selected.efforts:
-            raise ModelSelectionError("provider selection is no longer available")
-        model = selected.model_id
-        active = self.state.active_session(topic.topic_id)
-        if (
-            expected_session_id is not None
-            and (active.session_id if active else "") != expected_session_id
-        ):
-            raise StateError("active session changed; open controls again")
-        if active is None:
-            replacement = self.state.activate_agent(
-                topic.topic_id, agent_id, model, effort, expected_session_id=""
-            )
-            self._send_text(
-                message,
-                f"{self.config.require_agent(agent_id).display_name} · {model} · "
-                f"{effort.title()} will start on the next message "
-                f"(generation {replacement.generation}).",
-            )
-            return
-        if active.writer_mode != "telegram":
-            command = "/release" if active.writer_mode == "terminal" else "/return"
-            raise ServiceError(f"Use {command} before changing provider settings")
-        if active.agent_id != agent_id:
-            self._switch_agent(
-                project=project,
-                topic=topic,
-                target_agent_id=agent_id,
-                message=message,
-                target_model=model,
-                target_effort=effort,
-                expected_session_id=active.session_id,
-            )
-            return
-        if (active.model, active.effort) == (model, effort):
-            self._send_text(message, "This provider, model, and effort are already active.")
-            return
-        agent = self.config.require_agent(agent_id)
-        replacement = self.state.replace_active_session(
-            topic.topic_id, model=model, effort=effort, expected_session_id=active.session_id
-        )
-        self._send_text(
+        # Final application is cache-only; never rediscover providers here.
+        catalog = self._cached_provider_catalog(agent_id)
+        self._render_command_decision(
             message,
-            f"{agent.display_name} · {model} · {effort.title()} will start on the next "
-            f"message (generation {replacement.generation}).",
+            self._command_orchestrator().apply_model_selection(
+                topic,
+                agent_id,
+                callback_key,
+                effort,
+                catalog,
+                expected_session_id=expected_session_id,
+            ),
         )
 
     def _handle_callback(self, callback: TopicCallback) -> bool:
@@ -2884,137 +2836,10 @@ class ProjectHubService:
             self._show_control_menu(message)
             return True
         if command and command.name == "status":
-            active = self.state.active_session(topic.topic_id)
-            if active is None:
-                detail = "No active agent session has been created yet."
-            else:
-                agent = self.config.require_agent(active.agent_id)
-                pool = self._codex_pool() if agent.runtime == "codex" else None
-                current_account = (
-                    next((item for item in pool.accounts if item.active), None)
-                    if pool and pool.available
-                    else None
-                )
-                limits = (
-                    self._client().read_rate_limits()
-                    if agent.runtime == "codex"
-                    and active.provider_session_id
-                    and not self._queue_enabled(agent.agent_id)
-                    else cached_codex_rate_limits(current_account)
-                )
-                status_model = active.model
-                status_effort = active.effort
-                status_context = active.context_remaining_percent
-                status_account = current_account.identity_hint if current_account else None
-                worker_health = next(
-                    (
-                        item
-                        for item in self.state.list_runtime_health()
-                        if item.component == "provider_worker" and item.agent_id == agent.agent_id
-                    ),
-                    None,
-                )
-                telemetry_settings = self.config.provider_telemetry.get(active.agent_id)
-                if telemetry_settings is not None and agent.runtime == "antigravity":
-                    telemetry = load_antigravity_telemetry(
-                        telemetry_settings,
-                        selected_model=active.model,
-                        selected_effort=active.effort,
-                    )
-                    if active.model == "provider-selected" and telemetry.model:
-                        status_model = telemetry.model
-                    if active.effort == "default" and telemetry.effort:
-                        status_effort = telemetry.effort
-                    if status_context is None:
-                        status_context = telemetry.context_remaining
-                    status_account = telemetry.account_hint
-                    if telemetry.quota_remaining is not None:
-                        limits = RateLimits(
-                            LimitWindow(
-                                telemetry.quota_remaining,
-                                telemetry.quota_resets_at,
-                                None,
-                            ),
-                            None,
-                        )
-                detail = format_session_status(
-                    agent=agent.display_name,
-                    model=status_model,
-                    effort=status_effort,
-                    writer=active.writer_mode,
-                    context_remaining=status_context,
-                    account_hint=status_account,
-                    limits=limits,
-                    timezone_name="Europe/Moscow",
-                    limits_stale=current_account.quota_stale if current_account else False,
-                    provider_state=(
-                        worker_health.provider_state if worker_health is not None else None
-                    ),
-                    provider_error_code=(
-                        worker_health.error_code if worker_health is not None else None
-                    ),
-                )
-            if active is None:
-                self._send_text(message, detail)
-            else:
-                self._send_text_as_agent(message, agent_id=active.agent_id, text=detail)
+            self._show_status(message, topic)
             return True
         if command and command.name == "accounts":
-            pool = self._codex_pool()
-            if pool is None:
-                pool = CodexPoolStatus(False, False, (), None, 0, "not_configured")
-            include_opencode = any(item.runtime == "opencode" for item in self.config.agents)
-            event = self.state.latest_runtime_event("opencode", "provider_limit")
-            opencode_limit = decode_provider_limit(str(event["detail"])) if event else None
-            if opencode_limit is not None and opencode_limit.resets_at <= time.time():
-                opencode_limit = None
-            provider_limits = {}
-            provider_current_accounts = {}
-            worker_health = {
-                item.agent_id: item
-                for item in self.state.list_runtime_health()
-                if item.component == "provider_worker" and item.agent_id is not None
-            }
-            for agent_id in self.config.provider_account_hints:
-                limit_event = self.state.latest_runtime_event(agent_id, "provider_limit")
-                if limit_event is None:
-                    continue
-                limit = decode_provider_limit(str(limit_event["detail"]))
-                if limit is not None and limit.resets_at > time.time():
-                    provider_limits[agent_id] = limit
-            for agent_id, telemetry_settings in self.config.provider_telemetry.items():
-                agent = self.config.require_agent(agent_id)
-                telemetry = load_antigravity_telemetry(
-                    telemetry_settings,
-                    selected_model=agent.default_model,
-                    selected_effort=agent.default_effort,
-                )
-                if telemetry.account_hint:
-                    provider_current_accounts[agent_id] = telemetry.account_hint
-                if telemetry.quota_remaining is not None and telemetry.quota_resets_at is not None:
-                    provider_limits[agent_id] = ProviderLimit(
-                        provider=agent_id,
-                        window="model",
-                        remaining_percent=telemetry.quota_remaining,
-                        resets_at=telemetry.quota_resets_at,
-                    )
-            detail = format_accounts(
-                pool,
-                include_opencode_go=include_opencode,
-                opencode_limit=opencode_limit,
-                provider_account_hints=self.config.provider_account_hints,
-                provider_limits=provider_limits,
-                provider_current_accounts=provider_current_accounts,
-                provider_states={
-                    agent_id: item.provider_state for agent_id, item in worker_health.items()
-                },
-                provider_error_codes={
-                    agent_id: item.error_code
-                    for agent_id, item in worker_health.items()
-                    if item.error_code is not None
-                },
-            )
-            self._send_text(message, detail or "No provider accounts are configured.")
+            self._show_accounts(message)
             return True
         if command and command.name == "new":
             if command.arguments:
