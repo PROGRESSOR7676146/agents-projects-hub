@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import Mock, patch
 
-from hermes_codex_router.codex_appserver import CodexThread, TurnResult
+from hermes_codex_router.codex_appserver import CodexThread, RateLimits, TurnResult
 from hermes_codex_router.external_runtime import ExternalTurnResult
 from hermes_codex_router.incoming_materials import PreparedIncomingMaterials
 from hermes_codex_router.models import Project, ProjectRegistry
@@ -20,6 +20,9 @@ from hermes_codex_router.worker_execution import (
     external_provider_prompt,
     invoke_external_provider_turn,
     open_codex_provider_thread,
+    prepare_codex_worker_result,
+    prepare_external_worker_result,
+    prepare_worker_artifacts,
     prepare_worker_materials,
     prepare_worker_staging_directory,
     require_provider_job_lease,
@@ -344,6 +347,121 @@ class WorkerExecutionPhaseTests(unittest.TestCase):
             effort="high",
             interrupt_prepared=True,
             staging_dir=staging,
+        )
+
+    def test_artifact_preparation_snapshots_with_bounded_rejection_notice(self) -> None:
+        artifacts = (object(),)
+        with patch(
+            "hermes_codex_router.worker_execution.spool_staged_artifacts",
+            return_value=artifacts,
+        ) as spooler:
+            prepared = prepare_worker_artifacts(
+                self.project.root,
+                "fictional-job",
+                Path("/home/example/private/hub.db"),
+                report_rejections=True,
+            )
+
+        self.assertIs(prepared.artifacts, artifacts)
+        self.assertEqual(prepared.visible_notice, "")
+        spooler.assert_called_once()
+        args = spooler.call_args
+        self.assertEqual(args.args[0], self.project.root)
+        self.assertEqual(args.args[1], "fictional-job")
+        self.assertEqual(
+            args.args[2],
+            Path("/home/example/private/artifact-spool"),
+        )
+        self.assertEqual(args.kwargs["rejection_sink"], [])
+
+        def reject(*_args: object, rejection_sink: list[str], **_kwargs: object) -> tuple[()]:
+            rejection_sink.extend(["unsafe one", "unsafe two", "unsafe three", "unsafe four"])
+            return ()
+
+        with patch(
+            "hermes_codex_router.worker_execution.spool_staged_artifacts",
+            side_effect=reject,
+        ):
+            rejected = prepare_worker_artifacts(
+                self.project.root,
+                "fictional-job",
+                Path("/home/example/private/hub.db"),
+                report_rejections=True,
+            )
+        self.assertEqual(
+            rejected.visible_notice,
+            "\n\n⚠️ Not attached: unsafe one; unsafe two; unsafe three; and 1 more",
+        )
+
+    def test_result_preparation_preserves_runtime_specific_visible_text(self) -> None:
+        incoming = PreparedIncomingMaterials("", (), ("material notice",), None, ())
+        codex_result = TurnResult("  Fictional Codex result  ", 1000, 200)
+        with patch(
+            "hermes_codex_router.worker_execution.format_telegram_response",
+            return_value="<b>codex</b>",
+        ) as codex_formatter:
+            codex = prepare_codex_worker_result(
+                codex_result,
+                incoming,
+                agent_name="Codex",
+                model="fictional-model",
+                effort="high",
+                session_label="Example Project · Fictional topic · Codex",
+                limits=RateLimits(None, None),
+                artifact_notice="\n\nARTIFACT NOTICE",
+                trim_visible_text=True,
+                empty_visible_text="Codex completed the turn without visible text.",
+            )
+        self.assertEqual(
+            codex.visible_response,
+            "Fictional Codex result\n\n⚠️ Incoming material unavailable: material notice"
+            "\n\nARTIFACT NOTICE",
+        )
+        self.assertEqual(codex.telegram_html, "<b>codex</b>")
+        formatted_result = codex_formatter.call_args.kwargs["result"]
+        self.assertEqual(
+            formatted_result.text,
+            "  Fictional Codex result  \n\n⚠️ Incoming material unavailable: "
+            "material notice\n\nARTIFACT NOTICE",
+        )
+
+        external_result = ExternalTurnResult(
+            "opencode",
+            "  Fictional external result  ",
+            "fictional-next-session",
+            "fictional-actual-model",
+        )
+        with patch(
+            "hermes_codex_router.worker_execution.format_agent_response",
+            return_value="<b>external</b>",
+        ) as external_formatter:
+            external = prepare_external_worker_result(
+                external_result,
+                incoming,
+                agent_name="OpenCode",
+                runtime="opencode",
+                model="fictional-actual-model",
+                effort="high",
+                session_label="Example Project · Fictional topic · OpenCode",
+                artifact_notice="\n\nARTIFACT NOTICE",
+                trim_visible_text=True,
+            )
+        self.assertEqual(
+            external.visible_response,
+            "Fictional external result\n\n⚠️ Incoming material unavailable: "
+            "material notice\n\nARTIFACT NOTICE",
+        )
+        external_formatter.assert_called_once_with(
+            external.visible_response,
+            {
+                "Session": "Example Project · Fictional topic · OpenCode",
+                "Agent": "OpenCode",
+                "Runtime": "opencode",
+                "Model": "fictional-actual-model",
+                "Effort": "high",
+                "Context remaining": "unavailable",
+                "Usage windows": "unavailable",
+            },
         )
 
 
