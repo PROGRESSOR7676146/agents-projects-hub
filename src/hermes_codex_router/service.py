@@ -137,6 +137,11 @@ from .telegram_multipart import send_telegram_html_parts
 from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
 from .topic_execution import require_inline_topic, resolve_topic_execution_root
+from .worker_execution import (
+    require_provider_job_lease,
+    resolve_embedded_worker_target,
+    revalidate_worker_execution_root,
+)
 
 
 class ServiceError(RuntimeError):
@@ -803,13 +808,14 @@ class ProjectHubService:
         from .state import ProviderJobRecord
 
         assert isinstance(job, ProviderJobRecord)
-        assert job.lease_token is not None
-        executing = queue_state.mark_provider_job_executing(job.job_id, job.lease_token)
+        lease_token = require_provider_job_lease(job, error_factory=AssertionError)
+        executing = queue_state.mark_provider_job_executing(job.job_id, lease_token)
         token = executing.lease_token
         assert token is not None
         agent = self.config.require_agent(executing.agent_id)
-        topic = queue_state.get_topic(executing.topic_id)
-        project = self.registry.require_project(topic.project_id)
+        target = resolve_embedded_worker_target(queue_state, self.registry, executing)
+        topic = target.topic
+        project = target.project
         heartbeat_stop = threading.Event()
 
         def maintain_lease() -> None:
@@ -834,8 +840,8 @@ class ProjectHubService:
         heartbeat.start()
         prepared = None
         try:
-            execution_root = resolve_topic_execution_root(queue_state, self.registry, topic)
-            project = replace(project, root=execution_root)
+            target = revalidate_worker_execution_root(queue_state, target)
+            project = target.project
             prepared = prepare_incoming_materials(
                 queue_state.incoming_materials_for_job(executing.job_id),
                 state_path=self.config.state_path,

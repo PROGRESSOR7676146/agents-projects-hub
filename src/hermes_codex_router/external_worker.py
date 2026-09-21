@@ -61,7 +61,11 @@ from .telegram_interaction import (
     telegram_turn_prompt,
     telegram_user_turn_prompt,
 )
-from .topic_execution import resolve_topic_execution_root
+from .worker_execution import (
+    require_provider_job_lease,
+    resolve_external_worker_target,
+    revalidate_worker_execution_root,
+)
 
 
 class ExternalQueueWorkerError(RuntimeError):
@@ -344,20 +348,13 @@ class ExternalQueueWorker:
         return True
 
     def _execute(self, job: ProviderJobRecord) -> None:
-        if job.lease_token is None:
-            raise ExternalQueueWorkerError("leased provider job has no lease token")
-        topic = self.state.get_topic(job.topic_id)
+        lease_token = require_provider_job_lease(job, error_factory=ExternalQueueWorkerError)
         try:
-            resolved = resolve_project_context(
-                self.config,
-                self.state,
-                chat_id=topic.chat_id,
-                expected_project_id=topic.project_id,
-            )
+            target = resolve_external_worker_target(self.config, self.state, job)
         except ProjectResolutionError as exc:
             self.state.terminate_provider_job_with_notice(
                 job.job_id,
-                job.lease_token,
+                lease_token,
                 status="failed",
                 expected_status="leased",
                 error_class="pre_execution",
@@ -370,9 +367,10 @@ class ExternalQueueWorker:
             self._last_error_code = str(exc)[:128]
             self._provider_state = "unavailable"
             return
-        self.registry = resolved.registry
-        project = resolved.project
-        executing = self.state.mark_provider_job_executing(job.job_id, job.lease_token)
+        self.registry = target.registry
+        project = target.project
+        topic = target.topic
+        executing = self.state.mark_provider_job_executing(job.job_id, lease_token)
         self._publish_health(activity_state="executing", active_job=executing)
         token = executing.lease_token
         assert token is not None
@@ -406,8 +404,8 @@ class ExternalQueueWorker:
         )
         heartbeat.start()
         try:
-            execution_root = resolve_topic_execution_root(self.state, self.registry, topic)
-            project = replace(project, root=execution_root)
+            target = revalidate_worker_execution_root(self.state, target)
+            project = target.project
             if self.agent.runtime == "codex":
                 self._execute_codex(executing, token, project, topic)
             else:
