@@ -19,6 +19,12 @@ from .incoming_materials import (
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
 from .release_identity import CURRENT_RELEASE, ReleaseIdentity
 from .state_incoming_materials import IncomingMaterialsStateFacade
+from .state_provider_jobs import (
+    ProviderChatActivity,
+    ProviderJobRecord,
+    ProviderJobRecovery,
+    ProviderJobsStateFacade,
+)
 from .telegram import TELEGRAM_HEALTH_FAILURE_THRESHOLD
 from .telegram_multipart import split_telegram_html
 
@@ -26,56 +32,6 @@ MAX_PROVIDER_RESPONSE_LENGTH = 200_000
 RECOVERED_RESULT_METADATA_JSON = '{"hub_recovered":true}'
 RUNTIME_EVENT_MAX_AGE = timedelta(days=30)
 RUNTIME_EVENT_MAX_COUNT = 10_000
-PROVIDER_WORKER_FAIRNESS_FRESHNESS = timedelta(minutes=2)
-
-_ELIGIBLE_PROVIDER_JOB_SQL = """SELECT candidate.* FROM provider_jobs candidate
-   JOIN topics candidate_topic ON candidate_topic.topic_id = candidate.topic_id
-   WHERE candidate.agent_id = ?
-     AND candidate.attempt_count < candidate.max_attempts
-     AND (
-       (candidate.status = 'queued'
-           AND (candidate.next_attempt_at IS NULL OR candidate.next_attempt_at <= ?))
-       OR (candidate.status = 'retry_wait'
-           AND candidate.next_attempt_at IS NOT NULL AND candidate.next_attempt_at <= ?)
-     )
-     AND NOT EXISTS (
-       SELECT 1 FROM provider_jobs earlier
-       WHERE earlier.topic_id = candidate.topic_id
-         AND earlier.topic_sequence < candidate.topic_sequence
-         AND earlier.status NOT IN ('completed', 'failed', 'cancelled', 'indeterminate')
-     )
-     AND NOT EXISTS (
-       SELECT 1 FROM provider_jobs active
-       JOIN topics active_topic ON active_topic.topic_id = active.topic_id
-       WHERE active.job_id != candidate.job_id
-         AND COALESCE(active_topic.execution_scope, 'project:' || active_topic.project_id) =
-             COALESCE(candidate_topic.execution_scope, 'project:' || candidate_topic.project_id)
-         AND (
-           active.status = 'executing'
-           OR (active.status = 'leased' AND active.lease_expires_at > ?)
-           OR (active.status = 'indeterminate' AND NOT EXISTS (
-             SELECT 1 FROM provider_job_resolutions resolutions
-             WHERE resolutions.job_id = active.job_id
-           ))
-         )
-     )
-     AND NOT EXISTS (
-       SELECT 1 FROM agent_sessions writer
-       JOIN topics writer_topic ON writer_topic.topic_id = writer.topic_id
-       WHERE writer.status IN ('active', 'satellite')
-         AND writer.writer_mode != 'telegram'
-         AND COALESCE(writer_topic.execution_scope, 'project:' || writer_topic.project_id) =
-             COALESCE(candidate_topic.execution_scope, 'project:' || candidate_topic.project_id)
-     )
-     AND NOT EXISTS (
-       SELECT 1 FROM turn_dispatches dispatch
-       JOIN topics dispatch_topic ON dispatch_topic.topic_id = dispatch.topic_id
-       WHERE dispatch.status = 'running'
-         AND COALESCE(dispatch_topic.execution_scope, 'project:' || dispatch_topic.project_id) =
-             COALESCE(candidate_topic.execution_scope, 'project:' || candidate_topic.project_id)
-     )
-   ORDER BY candidate.created_at, candidate.topic_id, candidate.topic_sequence
-   LIMIT 1"""
 
 
 class StateError(RuntimeError):
@@ -125,39 +81,6 @@ class HandoffRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class ProviderJobRecord:
-    job_id: str
-    idempotency_key: str
-    chat_id: int
-    message_id: int
-    topic_id: int
-    topic_sequence: int
-    agent_id: str
-    session_id: str
-    session_generation: int
-    provider_session_id: str | None
-    model: str
-    effort: str
-    payload_text: str
-    context_watermark: int | None
-    handoff_id: str | None
-    input_group_key: str | None
-    status: str
-    attempt_count: int
-    max_attempts: int
-    next_attempt_at: str | None
-    lease_owner: str | None
-    lease_token: str | None
-    lease_expires_at: str | None
-    provider_started_at: str | None
-    error_class: str | None
-    error_code: str | None
-    error_detail: str | None
-    created_at: str
-    updated_at: str
-
-
-@dataclass(frozen=True, slots=True)
 class ProviderJobResultRecord:
     result_id: str
     job_id: str
@@ -203,20 +126,6 @@ class TelegramOutboxPartRecord:
     file_sha256: str | None = None
     telegram_message_id: int | None = None
     delivered_at: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ProviderJobRecovery:
-    requeued_job_ids: tuple[str, ...]
-    indeterminate_job_ids: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class ProviderChatActivity:
-    agent_id: str
-    chat_id: int
-    thread_id: int
-    message_id: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,6 +226,13 @@ class HubState:
             transaction=self._immediate_transaction,
             state_error=StateError,
         )
+        self._provider_job_state = ProviderJobsStateFacade(
+            connection,
+            transaction=self._immediate_transaction,
+            write_transaction=self._connection_transaction,
+            state_error=StateError,
+            job_has_materials=self._incoming_material_state.job_has_materials,
+        )
 
     @classmethod
     def open(cls, path: Path) -> "HubState":
@@ -390,6 +306,11 @@ class HubState:
         else:
             self._connection.commit()
 
+    @contextmanager
+    def _connection_transaction(self) -> Iterator[None]:
+        with self._connection:
+            yield
+
     @staticmethod
     def _topic(row: sqlite3.Row) -> TopicRecord:
         execution_scope = row["execution_scope"]
@@ -423,37 +344,7 @@ class HubState:
 
     @staticmethod
     def _provider_job(row: sqlite3.Row) -> ProviderJobRecord:
-        return ProviderJobRecord(
-            job_id=str(row["job_id"]),
-            idempotency_key=str(row["idempotency_key"]),
-            chat_id=int(row["chat_id"]),
-            message_id=int(row["message_id"]),
-            topic_id=int(row["topic_id"]),
-            topic_sequence=int(row["topic_sequence"]),
-            agent_id=str(row["agent_id"]),
-            session_id=str(row["session_id"]),
-            session_generation=int(row["session_generation"]),
-            provider_session_id=row["provider_session_id"],
-            model=str(row["model"]),
-            effort=str(row["effort"]),
-            payload_text=str(row["payload_text"]),
-            context_watermark=row["context_watermark"],
-            handoff_id=row["handoff_id"],
-            input_group_key=row["input_group_key"],
-            status=str(row["status"]),
-            attempt_count=int(row["attempt_count"]),
-            max_attempts=int(row["max_attempts"]),
-            next_attempt_at=row["next_attempt_at"],
-            lease_owner=row["lease_owner"],
-            lease_token=row["lease_token"],
-            lease_expires_at=row["lease_expires_at"],
-            provider_started_at=row["provider_started_at"],
-            error_class=row["error_class"],
-            error_code=row["error_code"],
-            error_detail=row["error_detail"],
-            created_at=str(row["created_at"]),
-            updated_at=str(row["updated_at"]),
-        )
+        return ProviderJobsStateFacade.record(row)
 
     def _insert_incoming_materials(
         self,
@@ -1388,68 +1279,17 @@ class HubState:
 
     def topic_has_pending_provider_job(self, topic_id: int) -> bool:
         """Whether durable work still owns this topic's provider writer."""
-        row = self._connection.execute(
-            """SELECT 1 FROM provider_jobs
-               WHERE topic_id = ?
-                 AND status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
-               LIMIT 1""",
-            (topic_id,),
-        ).fetchone()
-        return row is not None
+        return self._provider_job_state.topic_has_pending(topic_id)
 
     def nonterminal_provider_job_counts(self, agent_ids: Sequence[str]) -> dict[str, int]:
         """Count accepted work that must be drained before runtime ownership changes."""
-        bounded_ids = tuple(
-            _bounded(agent_id, name="agent id", maximum=64) for agent_id in agent_ids
-        )
-        if not bounded_ids:
-            return {}
-        placeholders = ", ".join("?" for _ in bounded_ids)
-        rows = self._connection.execute(
-            f"""SELECT agent_id, COUNT(*) AS job_count FROM provider_jobs
-                WHERE agent_id IN ({placeholders})
-                  AND status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
-                GROUP BY agent_id""",
-            bounded_ids,
-        ).fetchall()
-        return {str(row["agent_id"]): int(row["job_count"]) for row in rows}
+        return self._provider_job_state.nonterminal_counts(agent_ids)
 
     def provider_chat_activities(
         self, agent_ids: Sequence[str]
     ) -> tuple[ProviderChatActivity, ...]:
         """Return each topic whose head job should display provider activity."""
-        bounded_ids = tuple(
-            _bounded(agent_id, name="agent id", maximum=64) for agent_id in agent_ids
-        )
-        if not bounded_ids:
-            return ()
-        placeholders = ", ".join("?" for _ in bounded_ids)
-        rows = self._connection.execute(
-            f"""SELECT current.agent_id, current.chat_id, current.message_id, topics.thread_id
-                FROM provider_jobs current
-                JOIN topics ON topics.topic_id = current.topic_id
-                WHERE current.agent_id IN ({placeholders})
-                  AND current.status IN ('queued', 'leased', 'executing', 'result_ready')
-                  AND NOT EXISTS (
-                    SELECT 1 FROM provider_jobs earlier
-                    WHERE earlier.topic_id = current.topic_id
-                      AND earlier.topic_sequence < current.topic_sequence
-                      AND earlier.status NOT IN (
-                        'completed', 'failed', 'cancelled', 'indeterminate'
-                      )
-                  )
-                ORDER BY current.created_at, current.topic_id""",
-            bounded_ids,
-        ).fetchall()
-        return tuple(
-            ProviderChatActivity(
-                agent_id=str(row["agent_id"]),
-                chat_id=int(row["chat_id"]),
-                thread_id=int(row["thread_id"]),
-                message_id=int(row["message_id"]),
-            )
-            for row in rows
-        )
+        return self._provider_job_state.chat_activities(agent_ids)
 
     def enqueue_provider_job(
         self,
@@ -1963,26 +1803,10 @@ class HubState:
         self, topic_id: int, *, now: datetime | None = None
     ) -> str | None:
         """Return the target of the still-open tail burst, if one exists."""
-        timestamp = _timestamp(now)
-        row = self._connection.execute(
-            """SELECT agent_id FROM provider_jobs
-               WHERE topic_id = ? AND status = 'queued' AND next_attempt_at > ?
-                 AND topic_sequence = (
-                   SELECT MAX(tail.topic_sequence) FROM provider_jobs tail
-                   WHERE tail.topic_id = provider_jobs.topic_id
-                 )
-               LIMIT 1""",
-            (topic_id, timestamp),
-        ).fetchone()
-        return str(row["agent_id"]) if row is not None else None
+        return self._provider_job_state.pending_batch_agent(topic_id, now=now)
 
     def get_provider_job(self, job_id: str) -> ProviderJobRecord:
-        row = self._connection.execute(
-            "SELECT * FROM provider_jobs WHERE job_id = ?", (job_id,)
-        ).fetchone()
-        if row is None:
-            raise StateError(f"unknown provider job: {job_id}")
-        return self._provider_job(row)
+        return self._provider_job_state.get(job_id)
 
     def message_already_observed(self, chat_id: int, message_id: int) -> bool:
         row = self._connection.execute(
@@ -2021,51 +1845,14 @@ class HubState:
 
     def resolve_indeterminate_job(self, job_id: str, resolution: str) -> bool:
         """Append one immutable operator classification without changing the job."""
-        identifier = _bounded(job_id, name="provider job id", maximum=128)
-        classification = _bounded(resolution, name="resolution", maximum=32)
-        if classification not in {"acknowledged", "superseded", "externally_completed"}:
-            raise StateError("invalid indeterminate job resolution")
-        with self._immediate_transaction():
-            job = self._connection.execute(
-                "SELECT status FROM provider_jobs WHERE job_id = ?", (identifier,)
-            ).fetchone()
-            if job is None:
-                raise StateError(f"unknown provider job: {identifier}")
-            if str(job["status"]) != "indeterminate":
-                raise StateError("only an indeterminate provider job can be resolved")
-            existing = self._connection.execute(
-                "SELECT resolution FROM provider_job_resolutions WHERE job_id = ?",
-                (identifier,),
-            ).fetchone()
-            if existing is not None:
-                if str(existing["resolution"]) == classification:
-                    return False
-                raise StateError("indeterminate provider job already has a different resolution")
-            self._connection.execute(
-                """INSERT INTO provider_job_resolutions (job_id, resolution, resolved_at)
-                   VALUES (?, ?, ?)""",
-                (identifier, classification, _now()),
-            )
-        return True
+        return self._provider_job_state.resolve_indeterminate(job_id, resolution)
 
     def provider_jobs_for_topic(self, topic_id: int) -> tuple[ProviderJobRecord, ...]:
-        rows = self._connection.execute(
-            "SELECT * FROM provider_jobs WHERE topic_id = ? ORDER BY topic_sequence",
-            (topic_id,),
-        ).fetchall()
-        return tuple(self._provider_job(row) for row in rows)
+        return self._provider_job_state.for_topic(topic_id)
 
     def flush_message_batch(self, topic_id: int) -> int:
         """Make collecting queued inputs eligible before a control boundary."""
-        timestamp = _now()
-        with self._connection:
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs SET next_attempt_at = ?, updated_at = ?
-                   WHERE topic_id = ? AND status = 'queued'
-                     AND next_attempt_at IS NOT NULL AND next_attempt_at > ?""",
-                (timestamp, timestamp, topic_id, timestamp),
-            )
-        return cursor.rowcount
+        return self._provider_job_state.flush_batch(topic_id)
 
     def request_emergency_stop(
         self,
@@ -2220,19 +2007,7 @@ class HubState:
     def cancel_active_provider_job(
         self, job_id: str, lease_token: str, *, error_code: str = "emergency_stop"
     ) -> None:
-        timestamp = _now()
-        with self._connection:
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs
-                   SET status = 'cancelled', lease_owner = NULL, lease_token = NULL,
-                       lease_expires_at = NULL, next_attempt_at = NULL,
-                       error_class = 'user_stop', error_code = ?, updated_at = ?
-                   WHERE job_id = ? AND lease_token = ?
-                     AND status IN ('leased', 'executing')""",
-                (error_code, timestamp, job_id, lease_token),
-            )
-        if cursor.rowcount != 1:
-            raise StateError("active provider job cannot be cancelled")
+        self._provider_job_state.cancel_active(job_id, lease_token, error_code=error_code)
 
     def lease_provider_job(
         self,
@@ -2244,149 +2019,14 @@ class HubState:
         scheduler_agents: Sequence[str] = (),
         now: datetime | None = None,
     ) -> ProviderJobRecord | None:
-        target_agent = _bounded(agent_id, name="agent id", maximum=64)
-        worker = _bounded(worker_id, name="worker id", maximum=128)
-        if not 1 <= lease_seconds <= 3600:
-            raise StateError("invalid provider lease duration")
-        if not 1 <= max_parallel_roots <= 16:
-            raise StateError("invalid parallel root capacity")
-        scheduled_agents = tuple(
-            _bounded(value, name="scheduler agent id", maximum=64) for value in scheduler_agents
+        return self._provider_job_state.lease(
+            agent_id,
+            worker_id,
+            lease_seconds=lease_seconds,
+            max_parallel_roots=max_parallel_roots,
+            scheduler_agents=scheduler_agents,
+            now=now,
         )
-        if len(set(scheduled_agents)) != len(scheduled_agents):
-            raise StateError("scheduler agents contain duplicates")
-        if scheduled_agents and target_agent not in scheduled_agents:
-            raise StateError("scheduler agents must include the target agent")
-        current = now or datetime.now(timezone.utc)
-        timestamp = _timestamp(current)
-        expires_at = _timestamp(current + timedelta(seconds=lease_seconds))
-        with self._immediate_transaction():
-            effective_capacity = max_parallel_roots
-            freshness = _timestamp(current - PROVIDER_WORKER_FAIRNESS_FRESHNESS)
-            placeholders = ", ".join("?" for _ in scheduled_agents)
-            if scheduled_agents:
-                self._connection.execute(
-                    """INSERT INTO execution_scheduler_workers
-                       (agent_id, declared_capacity, observed_at) VALUES (?, ?, ?)
-                       ON CONFLICT(agent_id) DO UPDATE SET
-                         declared_capacity = excluded.declared_capacity,
-                         observed_at = excluded.observed_at""",
-                    (target_agent, max_parallel_roots, timestamp),
-                )
-                advertised = self._connection.execute(
-                    f"""SELECT MIN(declared_capacity) FROM execution_scheduler_workers
-                         WHERE agent_id IN ({placeholders}) AND observed_at >= ?""",
-                    (*scheduled_agents, freshness),
-                ).fetchone()[0]
-                if advertised is not None:
-                    effective_capacity = min(effective_capacity, int(advertised))
-            occupied = int(
-                self._connection.execute(
-                    """SELECT COUNT(DISTINCT COALESCE(
-                         topics.execution_scope, 'project:' || topics.project_id))
-                       FROM provider_jobs jobs
-                       JOIN topics ON topics.topic_id = jobs.topic_id
-                       WHERE jobs.status IN ('leased', 'executing')
-                         AND jobs.lease_expires_at > ?""",
-                    (timestamp,),
-                ).fetchone()[0]
-            )
-            if occupied >= effective_capacity:
-                return None
-            busy_agents = {
-                str(item["agent_id"])
-                for item in self._connection.execute(
-                    """SELECT DISTINCT agent_id FROM provider_jobs
-                       WHERE status IN ('leased', 'executing')
-                         AND lease_expires_at > ?""",
-                    (timestamp,),
-                ).fetchall()
-            }
-            # Each configured provider worker owns one adapter/client/process
-            # lifecycle.  A durable live lease is therefore evidence that its
-            # worker cannot take another productive slot; do not let a fresh
-            # heartbeat reserve fairness for work it cannot execute.
-            if target_agent in busy_agents:
-                return None
-            row = self._connection.execute(
-                _ELIGIBLE_PROVIDER_JOB_SQL,
-                (target_agent, timestamp, timestamp, timestamp),
-            ).fetchone()
-            if row is None:
-                return None
-            if scheduled_agents:
-                health_rows = self._connection.execute(
-                    f"""SELECT DISTINCT agent_id FROM runtime_health
-                         WHERE component = 'provider_worker'
-                           AND agent_id IN ({placeholders})
-                           AND heartbeat_at >= ?""",
-                    (*scheduled_agents, freshness),
-                ).fetchall()
-                live_agents = {target_agent}
-                live_agents.update(str(item["agent_id"]) for item in health_rows)
-                contenders: list[tuple[int, str, int, int, sqlite3.Row]] = []
-                for contender_agent in sorted(live_agents.intersection(scheduled_agents)):
-                    if contender_agent in busy_agents:
-                        continue
-                    candidate = self._connection.execute(
-                        _ELIGIBLE_PROVIDER_JOB_SQL,
-                        (contender_agent, timestamp, timestamp, timestamp),
-                    ).fetchone()
-                    if candidate is None:
-                        continue
-                    grant = self._connection.execute(
-                        """SELECT last_grant_sequence FROM execution_scheduler_grants
-                           WHERE agent_id = ?""",
-                        (contender_agent,),
-                    ).fetchone()
-                    contenders.append(
-                        (
-                            0 if grant is None else int(grant["last_grant_sequence"]),
-                            str(candidate["created_at"]),
-                            int(candidate["topic_id"]),
-                            int(candidate["topic_sequence"]),
-                            candidate,
-                        )
-                    )
-                if not contenders:
-                    return None
-                winner = min(contenders, key=lambda item: item[:4])
-                if str(winner[4]["agent_id"]) != target_agent:
-                    return None
-                row = winner[4]
-            token = str(uuid.uuid4())
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs
-                   SET status = 'leased', lease_owner = ?, lease_token = ?,
-                       lease_expires_at = ?, next_attempt_at = NULL,
-                       error_class = NULL, error_code = NULL, error_detail = NULL,
-                       updated_at = ?
-                   WHERE job_id = ? AND status IN ('queued', 'retry_wait')""",
-                (worker, token, expires_at, timestamp, row["job_id"]),
-            )
-            if cursor.rowcount != 1:
-                raise StateError("provider job lease race")
-            if scheduled_agents:
-                next_grant = int(
-                    self._connection.execute(
-                        """SELECT COALESCE(MAX(last_grant_sequence), 0) + 1
-                           FROM execution_scheduler_grants"""
-                    ).fetchone()[0]
-                )
-                self._connection.execute(
-                    """INSERT INTO execution_scheduler_grants
-                       (agent_id, last_grant_sequence, updated_at) VALUES (?, ?, ?)
-                       ON CONFLICT(agent_id) DO UPDATE SET
-                         last_grant_sequence = excluded.last_grant_sequence,
-                         updated_at = excluded.updated_at""",
-                    (target_agent, next_grant, timestamp),
-                )
-            leased = self._connection.execute(
-                "SELECT * FROM provider_jobs WHERE job_id = ?", (row["job_id"],)
-            ).fetchone()
-            if leased is None:
-                raise StateError("leased provider job disappeared")
-            return self._provider_job(leased)
 
     def lease_steer_followup(
         self,
@@ -2397,64 +2037,16 @@ class HubState:
         now: datetime | None = None,
     ) -> ProviderJobRecord | None:
         """Lease the immediate compatible FIFO successor for same-turn steering."""
-        worker = _bounded(worker_id, name="worker id", maximum=128)
-        current = now or datetime.now(timezone.utc)
-        timestamp = _timestamp(current)
-        expires_at = _timestamp(current + timedelta(seconds=lease_seconds))
-        with self._immediate_transaction():
-            parent = self._connection.execute(
-                "SELECT * FROM provider_jobs WHERE job_id = ? AND status = 'executing'",
-                (parent_job_id,),
-            ).fetchone()
-            if parent is None:
-                return None
-            candidate = self._connection.execute(
-                """SELECT * FROM provider_jobs
-                   WHERE topic_id = ? AND topic_sequence = (
-                       SELECT MIN(topic_sequence) FROM provider_jobs
-                       WHERE topic_id = ? AND topic_sequence > ?
-                         AND status NOT IN ('completed', 'failed', 'cancelled', 'indeterminate')
-                   )""",
-                (parent["topic_id"], parent["topic_id"], parent["topic_sequence"]),
-            ).fetchone()
-            if candidate is None or any(
-                candidate[field] != parent[field]
-                for field in ("agent_id", "session_id", "session_generation", "model", "effort")
-            ):
-                return None
-            if str(candidate["status"]) != "queued":
-                return None
-            if self._incoming_material_state.job_has_materials(str(candidate["job_id"])):
-                return None
-            available = candidate["next_attempt_at"]
-            if available is not None and str(available) > timestamp:
-                return None
-            token = str(uuid.uuid4())
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs
-                   SET status = 'leased', lease_owner = ?, lease_token = ?,
-                       lease_expires_at = ?, next_attempt_at = NULL, updated_at = ?
-                   WHERE job_id = ? AND status = 'queued'""",
-                (worker, token, expires_at, timestamp, candidate["job_id"]),
-            )
-            if cursor.rowcount != 1:
-                return None
-            return self.get_provider_job(str(candidate["job_id"]))
+        return self._provider_job_state.lease_steer_followup(
+            parent_job_id,
+            worker_id,
+            lease_seconds=lease_seconds,
+            now=now,
+        )
 
     def reject_unaccepted_steer(self, job_id: str, lease_token: str) -> None:
         """Requeue a steer only after app-server proved it was not accepted."""
-        timestamp = _now()
-        with self._connection:
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs
-                   SET status = 'queued', attempt_count = MAX(0, attempt_count - 1),
-                       provider_started_at = NULL, lease_owner = NULL, lease_token = NULL,
-                       lease_expires_at = NULL, updated_at = ?
-                   WHERE job_id = ? AND status = 'executing' AND lease_token = ?""",
-                (timestamp, job_id, lease_token),
-            )
-        if cursor.rowcount != 1:
-            raise StateError("rejected steer job lease is missing or invalid")
+        self._provider_job_state.reject_unaccepted_steer(job_id, lease_token)
 
     def complete_steered_job(
         self,
@@ -2465,62 +2057,12 @@ class HubState:
         provider_turn_id: str,
     ) -> None:
         """Record that one queued input was accepted into an active provider turn."""
-        turn_id = _bounded(provider_turn_id, name="provider turn id", maximum=256)
-        timestamp = _now()
-        with self._immediate_transaction():
-            child = self._connection.execute(
-                """SELECT * FROM provider_jobs WHERE job_id = ? AND status = 'executing'
-                   AND lease_token = ?""",
-                (child_job_id, lease_token),
-            ).fetchone()
-            parent = self._connection.execute(
-                "SELECT * FROM provider_jobs WHERE job_id = ? AND status = 'executing'",
-                (parent_job_id,),
-            ).fetchone()
-            if (
-                child is None
-                or parent is None
-                or any(
-                    child[field] != parent[field]
-                    for field in ("topic_id", "agent_id", "session_id", "session_generation")
-                )
-            ):
-                raise StateError("steered job does not match its active parent")
-            self._connection.execute(
-                """INSERT INTO provider_job_absorptions
-                   (child_job_id, parent_job_id, provider_turn_id, created_at)
-                   VALUES (?, ?, ?, ?)""",
-                (child_job_id, parent_job_id, turn_id, timestamp),
-            )
-            if child["context_watermark"] is not None:
-                self._connection.execute(
-                    """INSERT INTO visible_context_cursors
-                       (topic_id, observer_agent_id, last_turn_id, updated_at)
-                       VALUES (?, ?, ?, ?)
-                       ON CONFLICT(topic_id, observer_agent_id) DO UPDATE SET
-                         last_turn_id = MAX(last_turn_id, excluded.last_turn_id),
-                         updated_at = excluded.updated_at""",
-                    (
-                        child["topic_id"],
-                        child["agent_id"],
-                        child["context_watermark"],
-                        timestamp,
-                    ),
-                )
-            if child["handoff_id"] is not None:
-                self._connection.execute(
-                    "DELETE FROM pending_handoffs WHERE handoff_id = ?",
-                    (child["handoff_id"],),
-                )
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs
-                   SET status = 'completed', lease_owner = NULL, lease_token = NULL,
-                       lease_expires_at = NULL, updated_at = ?
-                   WHERE job_id = ? AND status = 'executing' AND lease_token = ?""",
-                (timestamp, child_job_id, lease_token),
-            )
-            if cursor.rowcount != 1:
-                raise StateError("steered job lease changed during completion")
+        self._provider_job_state.complete_steered(
+            child_job_id,
+            lease_token,
+            parent_job_id=parent_job_id,
+            provider_turn_id=provider_turn_id,
+        )
 
     def mark_provider_job_executing(
         self,
@@ -2529,33 +2071,11 @@ class HubState:
         *,
         now: datetime | None = None,
     ) -> ProviderJobRecord:
-        timestamp = _timestamp(now)
-        with self._connection:
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs
-                   SET status = 'executing', attempt_count = attempt_count + 1,
-                       provider_started_at = ?, updated_at = ?
-                   WHERE job_id = ? AND status = 'leased' AND lease_token = ?
-                     AND lease_expires_at > ? AND attempt_count < max_attempts""",
-                (timestamp, timestamp, job_id, lease_token, timestamp),
-            )
-        if cursor.rowcount != 1:
-            raise StateError("provider job lease is missing, expired, or invalid")
-        return self.get_provider_job(job_id)
+        return self._provider_job_state.mark_executing(job_id, lease_token, now=now)
 
     def release_provider_job_lease(self, job_id: str, lease_token: str) -> None:
         """Return work that was leased but not invoked to the durable queue."""
-        timestamp = _now()
-        with self._connection:
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs
-                   SET status = 'queued', lease_owner = NULL, lease_token = NULL,
-                       lease_expires_at = NULL, updated_at = ?
-                   WHERE job_id = ? AND status = 'leased' AND lease_token = ?""",
-                (timestamp, job_id, lease_token),
-            )
-        if cursor.rowcount != 1:
-            raise StateError("provider job lease is missing or invalid")
+        self._provider_job_state.release_lease(job_id, lease_token)
 
     def heartbeat_provider_job(
         self,
@@ -2565,21 +2085,9 @@ class HubState:
         lease_seconds: int = 90,
         now: datetime | None = None,
     ) -> ProviderJobRecord:
-        if not 1 <= lease_seconds <= 3600:
-            raise StateError("invalid provider lease duration")
-        current = now or datetime.now(timezone.utc)
-        timestamp = _timestamp(current)
-        expires_at = _timestamp(current + timedelta(seconds=lease_seconds))
-        with self._connection:
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs SET lease_expires_at = ?, updated_at = ?
-                   WHERE job_id = ? AND status IN ('leased', 'executing')
-                     AND lease_token = ? AND lease_expires_at > ?""",
-                (expires_at, timestamp, job_id, lease_token, timestamp),
-            )
-        if cursor.rowcount != 1:
-            raise StateError("provider job lease is missing, expired, or invalid")
-        return self.get_provider_job(job_id)
+        return self._provider_job_state.heartbeat(
+            job_id, lease_token, lease_seconds=lease_seconds, now=now
+        )
 
     def schedule_provider_job_retry(
         self,
@@ -2592,35 +2100,14 @@ class HubState:
         now: datetime | None = None,
     ) -> ProviderJobRecord:
         """Schedule only work which is still provably pre-execution."""
-        code = _bounded(error_code, name="error code", maximum=128)
-        if not 0 <= delay_seconds <= 86400:
-            raise StateError("invalid retry delay")
-        detail = error_detail.strip()[:1000] if error_detail else None
-        current = now or datetime.now(timezone.utc)
-        timestamp = _timestamp(current)
-        available_at = _timestamp(current + timedelta(seconds=delay_seconds))
-        with self._connection:
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs
-                   SET status = CASE
-                         WHEN attempt_count + 1 >= max_attempts THEN 'failed'
-                         ELSE 'retry_wait'
-                       END,
-                       attempt_count = attempt_count + 1,
-                       next_attempt_at = CASE
-                         WHEN attempt_count + 1 >= max_attempts THEN NULL
-                         ELSE ?
-                       END,
-                       lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
-                       error_class = 'transient_pre_execution', error_code = ?,
-                       error_detail = ?, updated_at = ?
-                   WHERE job_id = ? AND status = 'leased' AND lease_token = ?
-                     AND lease_expires_at > ?""",
-                (available_at, code, detail, timestamp, job_id, lease_token, timestamp),
-            )
-        if cursor.rowcount != 1:
-            raise StateError("retry requires a current pre-execution provider job lease")
-        return self.get_provider_job(job_id)
+        return self._provider_job_state.schedule_retry(
+            job_id,
+            lease_token,
+            error_code=error_code,
+            delay_seconds=delay_seconds,
+            error_detail=error_detail,
+            now=now,
+        )
 
     def fail_provider_job(
         self,
@@ -2632,23 +2119,14 @@ class HubState:
         error_detail: str | None = None,
         now: datetime | None = None,
     ) -> ProviderJobRecord:
-        failure_class = _bounded(error_class, name="error class", maximum=64)
-        code = _bounded(error_code, name="error code", maximum=128)
-        detail = error_detail.strip()[:1000] if error_detail else None
-        timestamp = _timestamp(now)
-        with self._connection:
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs
-                   SET status = 'failed', lease_owner = NULL, lease_token = NULL,
-                       lease_expires_at = NULL, error_class = ?, error_code = ?,
-                       error_detail = ?, updated_at = ?
-                   WHERE job_id = ? AND status IN ('leased', 'executing')
-                     AND lease_token = ? AND lease_expires_at > ?""",
-                (failure_class, code, detail, timestamp, job_id, lease_token, timestamp),
-            )
-        if cursor.rowcount != 1:
-            raise StateError("provider job lease is missing or invalid")
-        return self.get_provider_job(job_id)
+        return self._provider_job_state.fail(
+            job_id,
+            lease_token,
+            error_class=error_class,
+            error_code=error_code,
+            error_detail=error_detail,
+            now=now,
+        )
 
     def mark_provider_job_indeterminate(
         self,
@@ -2660,22 +2138,13 @@ class HubState:
         now: datetime | None = None,
     ) -> ProviderJobRecord:
         """Record that a provider invocation might have happened; never retry it."""
-        code = _bounded(error_code, name="error code", maximum=128)
-        detail = error_detail.strip()[:1000] if error_detail else None
-        timestamp = _timestamp(now)
-        with self._connection:
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs
-                   SET status = 'indeterminate', lease_owner = NULL, lease_token = NULL,
-                       lease_expires_at = NULL, error_class = 'ambiguous_execution',
-                       error_code = ?, error_detail = ?, updated_at = ?
-                   WHERE job_id = ? AND status = 'executing' AND lease_token = ?
-                     AND lease_expires_at > ?""",
-                (code, detail, timestamp, job_id, lease_token, timestamp),
-            )
-        if cursor.rowcount != 1:
-            raise StateError("provider job lease is missing or invalid")
-        return self.get_provider_job(job_id)
+        return self._provider_job_state.mark_indeterminate(
+            job_id,
+            lease_token,
+            error_code=error_code,
+            error_detail=error_detail,
+            now=now,
+        )
 
     def terminate_provider_job_with_notice(
         self,
@@ -2761,62 +2230,12 @@ class HubState:
         return self.get_provider_job(job_id)
 
     def cancel_provider_job(self, job_id: str) -> ProviderJobRecord:
-        with self._connection:
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs
-                   SET status = 'cancelled', next_attempt_at = NULL, updated_at = ?
-                   WHERE job_id = ? AND status IN ('queued', 'retry_wait')""",
-                (_now(), job_id),
-            )
-        if cursor.rowcount != 1:
-            raise StateError("only queued provider work can be cancelled")
-        return self.get_provider_job(job_id)
+        return self._provider_job_state.cancel(job_id)
 
     def recover_stale_provider_jobs(
         self, *, agent_id: str | None = None, now: datetime | None = None
     ) -> ProviderJobRecovery:
-        target_agent = _bounded(agent_id, name="agent id", maximum=64) if agent_id else None
-        timestamp = _timestamp(now)
-        scope = "AND agent_id = ?" if target_agent is not None else ""
-        params: tuple[object, ...] = (timestamp,)
-        if target_agent is not None:
-            params += (target_agent,)
-        with self._immediate_transaction():
-            leased = self._connection.execute(
-                "SELECT job_id FROM provider_jobs "
-                "WHERE status = 'leased' AND lease_expires_at <= ? " + scope + " ORDER BY job_id",
-                params,
-            ).fetchall()
-            executing = self._connection.execute(
-                "SELECT job_id FROM provider_jobs "
-                "WHERE status = 'executing' AND lease_expires_at <= ? "
-                + scope
-                + " ORDER BY job_id",
-                params,
-            ).fetchall()
-            self._connection.execute(
-                """UPDATE provider_jobs
-                   SET status = 'queued', lease_owner = NULL, lease_token = NULL,
-                       lease_expires_at = NULL, next_attempt_at = NULL,
-                       error_class = 'recovered_pre_execution',
-                       error_code = 'stale_lease', updated_at = ?
-                   WHERE status = 'leased' AND lease_expires_at <= ? """
-                + scope,
-                (timestamp, timestamp) + ((target_agent,) if target_agent is not None else ()),
-            )
-            self._connection.execute(
-                """UPDATE provider_jobs
-                   SET status = 'indeterminate', lease_owner = NULL, lease_token = NULL,
-                       lease_expires_at = NULL, error_class = 'ambiguous_execution',
-                       error_code = 'stale_executing_lease', updated_at = ?
-                   WHERE status = 'executing' AND lease_expires_at <= ? """
-                + scope,
-                (timestamp, timestamp) + ((target_agent,) if target_agent is not None else ()),
-            )
-        return ProviderJobRecovery(
-            requeued_job_ids=tuple(str(row["job_id"]) for row in leased),
-            indeterminate_job_ids=tuple(str(row["job_id"]) for row in executing),
-        )
+        return self._provider_job_state.recover_stale(agent_id=agent_id, now=now)
 
     def commit_provider_result(
         self,
