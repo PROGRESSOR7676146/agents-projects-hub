@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
+from .codex_appserver import CodexAppServerClient, CodexThread, TurnResult
+from .external_runtime import ExternalCliAdapter, ExternalTurnResult
 from .hub_config import HubConfig
 from .incoming_materials import PreparedIncomingMaterials, prepare_incoming_materials
 from .models import Project, ProjectRegistry
@@ -149,16 +151,93 @@ def external_provider_prompt(
     )
 
 
+def open_codex_provider_thread(
+    client: CodexAppServerClient,
+    job: ProviderJobRecord,
+    project: Project,
+    *,
+    developer_instructions: str,
+    force_new_thread: bool = False,
+) -> CodexThread:
+    """Start or resume the exact Codex thread selected by the job snapshot."""
+    if job.provider_session_id and not force_new_thread:
+        return client.resume_thread(
+            thread_id=job.provider_session_id,
+            cwd=project.root,
+            model=job.model,
+            developer_instructions=developer_instructions,
+        )
+    return client.start_thread(
+        cwd=project.root,
+        model=job.model,
+        project_id=project.project_id,
+        developer_instructions=developer_instructions,
+    )
+
+
+def start_codex_provider_turn(
+    client: CodexAppServerClient,
+    job: ProviderJobRecord,
+    thread: CodexThread,
+    project: Project,
+    *,
+    prompt: str,
+    local_image_paths: Sequence[Path] = (),
+) -> str:
+    """Cross the Codex invocation-accepted boundary."""
+    return client.start_turn(
+        thread_id=thread.thread_id,
+        cwd=project.root,
+        text=prompt,
+        model=job.model,
+        effort=job.effort,
+        local_image_paths=local_image_paths,
+    )
+
+
+def wait_for_codex_provider_turn(
+    client: CodexAppServerClient,
+    turn_id: str,
+) -> TurnResult:
+    """Wait for the already accepted Codex invocation to complete."""
+    return client.wait_for_turn(turn_id)
+
+
+def invoke_external_provider_turn(
+    adapter: ExternalCliAdapter,
+    job: ProviderJobRecord,
+    project: Project,
+    *,
+    prompt: str,
+    interrupt_prepared: bool = False,
+    staging_dir: Path,
+) -> ExternalTurnResult:
+    """Invoke one external CLI turn from an immutable job snapshot."""
+    return adapter.run_turn(
+        cwd=project.root,
+        prompt=prompt,
+        session_id=job.provider_session_id,
+        model=job.model if job.model != "provider-selected" else None,
+        effort=job.effort,
+        interrupt_prepared=interrupt_prepared,
+        staging_dir=staging_dir,
+    )
+
+
 __all__ = [
     "WorkerExecutionTarget",
     "codex_provider_prompt",
     "codex_turn_text",
     "external_provider_prompt",
+    "invoke_external_provider_turn",
+    "open_codex_provider_thread",
     "prepare_worker_materials",
     "prepare_worker_staging_directory",
     "require_provider_job_lease",
     "resolve_embedded_worker_target",
     "resolve_external_worker_target",
     "revalidate_worker_execution_root",
+    "start_codex_provider_turn",
+    "wait_for_codex_provider_turn",
     "worker_needs_full_telegram_contract",
 ]

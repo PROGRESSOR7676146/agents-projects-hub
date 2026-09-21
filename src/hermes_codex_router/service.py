@@ -138,11 +138,15 @@ from .topic_execution import require_inline_topic, resolve_topic_execution_root
 from .worker_execution import (
     codex_provider_prompt,
     external_provider_prompt,
+    invoke_external_provider_turn,
+    open_codex_provider_thread,
     prepare_worker_materials,
     prepare_worker_staging_directory,
     require_provider_job_lease,
     resolve_embedded_worker_target,
     revalidate_worker_execution_root,
+    start_codex_provider_turn,
+    wait_for_codex_provider_turn,
 )
 
 
@@ -864,34 +868,24 @@ class ProjectHubService:
                 with codex_preparation():
                     self._require_legacy_codex_execution(queue_state)
                     client = self._client()
-                    if executing.provider_session_id:
-                        thread = client.resume_thread(
-                            thread_id=executing.provider_session_id,
-                            cwd=project.root,
-                            model=executing.model,
-                            developer_instructions=telegram_developer_instructions(
-                                runtime="codex", new_session=full_contract
-                            ),
-                        )
-                    else:
-                        thread = client.start_thread(
-                            cwd=project.root,
-                            model=executing.model,
-                            project_id=project.project_id,
-                            developer_instructions=telegram_developer_instructions(
-                                runtime="codex", new_session=full_contract
-                            ),
-                        )
+                    thread = open_codex_provider_thread(
+                        client,
+                        executing,
+                        project,
+                        developer_instructions=telegram_developer_instructions(
+                            runtime="codex", new_session=full_contract
+                        ),
+                    )
                     journal.record_thread(executing.job_id, token, thread.thread_id, project.root)
-                turn_id = client.start_turn(
-                    thread_id=thread.thread_id,
-                    cwd=project.root,
-                    text=codex_provider_prompt(
+                turn_id = start_codex_provider_turn(
+                    client,
+                    executing,
+                    thread,
+                    project,
+                    prompt=codex_provider_prompt(
                         executing.payload_text + prepared.prompt_suffix,
                         staging_dir=staging_dir,
                     ),
-                    model=executing.model,
-                    effort=executing.effort,
                     local_image_paths=prepared.local_image_paths,
                 )
                 journal.record_turn(executing.job_id, token, turn_id)
@@ -902,7 +896,7 @@ class ProjectHubService:
                     executing.job_id, token, result.text
                 )
                 try:
-                    result = client.wait_for_turn(turn_id)
+                    result = wait_for_codex_provider_turn(client, turn_id)
                     journal.record_completion(executing.job_id, token, result.text)
                 finally:
                     client.on_visible_item = None
@@ -937,8 +931,10 @@ class ProjectHubService:
                 external = getattr(self, "external_services", {}).get(agent.agent_id)
                 if external is None:
                     raise ServiceError("no embedded adapter is configured for this provider")
-                result = external.adapter.run_turn(
-                    cwd=project.root,
+                result = invoke_external_provider_turn(
+                    external.adapter,
+                    executing,
+                    project,
                     prompt=external_provider_prompt(
                         executing,
                         prepared,
@@ -946,9 +942,6 @@ class ProjectHubService:
                         staging_dir=staging_dir,
                         full_contract=full_contract,
                     ),
-                    session_id=executing.provider_session_id,
-                    model=executing.model if executing.model != "provider-selected" else None,
-                    effort=executing.effort,
                     staging_dir=staging_dir,
                 )
                 visible_response = result.text + prepared.visible_notice

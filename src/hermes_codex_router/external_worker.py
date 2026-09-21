@@ -62,11 +62,15 @@ from .worker_execution import (
     codex_provider_prompt,
     codex_turn_text,
     external_provider_prompt,
+    invoke_external_provider_turn,
+    open_codex_provider_thread,
     prepare_worker_materials,
     prepare_worker_staging_directory,
     require_provider_job_lease,
     resolve_external_worker_target,
     revalidate_worker_execution_root,
+    start_codex_provider_turn,
+    wait_for_codex_provider_turn,
     worker_needs_full_telegram_contract,
 )
 
@@ -687,20 +691,13 @@ class ExternalQueueWorker:
             developer_instructions = telegram_developer_instructions(
                 runtime="codex", new_session=full_contract
             )
-            if job.provider_session_id and not fallback_transfer:
-                thread = client.resume_thread(
-                    thread_id=job.provider_session_id,
-                    cwd=project.root,
-                    model=job.model,
-                    developer_instructions=developer_instructions,
-                )
-            else:
-                thread = client.start_thread(
-                    cwd=project.root,
-                    model=job.model,
-                    project_id=project.project_id,
-                    developer_instructions=developer_instructions,
-                )
+            thread = open_codex_provider_thread(
+                client,
+                job,
+                project,
+                developer_instructions=developer_instructions,
+                force_new_thread=fallback_transfer,
+            )
             if origin is not None and (
                 thread.thread_id != origin.provider_thread_id
                 or thread.cwd != origin.canonical_root
@@ -709,12 +706,12 @@ class ExternalQueueWorker:
             ):
                 raise ExternalQueueWorkerError("adopted Codex resume identity mismatch")
             journal.record_thread(job.job_id, token, thread.thread_id, project.root)
-        turn_id = client.start_turn(
-            thread_id=thread.thread_id,
-            cwd=project.root,
-            text=codex_provider_prompt(turn_text, staging_dir=staging_dir),
-            model=job.model,
-            effort=job.effort,
+        turn_id = start_codex_provider_turn(
+            client,
+            job,
+            thread,
+            project,
+            prompt=codex_provider_prompt(turn_text, staging_dir=staging_dir),
             local_image_paths=prepared.local_image_paths,
         )
         journal.record_turn(job.job_id, token, turn_id)
@@ -802,7 +799,7 @@ class ExternalQueueWorker:
         )
         monitor.start()
         try:
-            result = client.wait_for_turn(turn_id)
+            result = wait_for_codex_provider_turn(client, turn_id)
             journal.record_completion(job.job_id, token, result.text)
         except Exception:
             pending_request = self.state.pending_emergency_stop(job.topic_id, self.agent.agent_id)
@@ -912,8 +909,10 @@ class ExternalQueueWorker:
         )
         monitor.start()
         try:
-            result = adapter.run_turn(
-                cwd=project.root,
+            result = invoke_external_provider_turn(
+                adapter,
+                job,
+                project,
                 prompt=external_provider_prompt(
                     job,
                     prepared,
@@ -921,9 +920,6 @@ class ExternalQueueWorker:
                     full_contract=self._needs_full_telegram_contract(job),
                     staging_dir=staging_dir,
                 ),
-                session_id=job.provider_session_id,
-                model=job.model if job.model != "provider-selected" else None,
-                effort=job.effort,
                 interrupt_prepared=interrupt_prepared,
                 staging_dir=staging_dir,
             )
