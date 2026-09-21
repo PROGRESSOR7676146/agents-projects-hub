@@ -7,12 +7,6 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .artifacts import (
-    ValidatedArtifact,
-    artifact_spool_root,
-    cleanup_job_staging,
-    remove_spooled_artifact,
-)
 from .codex_appserver import (
     CodexAppServerClient,
     RateLimits,
@@ -26,6 +20,10 @@ from .codex_recovery import (
     reconcile_codex_completion,
     recover_codex_job,
 )
+from .controller_result_publication import (
+    PreparedResultPublication,
+    PreparedResultPublisher,
+)
 from .execution_journal import ExecutionJournal
 from .external_runtime import (
     ExternalCliAdapter,
@@ -35,11 +33,7 @@ from .external_runtime import (
     ProviderUnavailableError,
 )
 from .hub_config import HubConfig
-from .incoming_materials import (
-    IncomingMaterialError,
-    cleanup_consumed_raw_inputs,
-    cleanup_materialized_inputs,
-)
+from .incoming_materials import IncomingMaterialError
 from .project_resolution import (
     ProjectResolutionError,
     resolve_project_context,
@@ -542,47 +536,6 @@ class ExternalQueueWorker:
             heartbeat.join(timeout=2)
             self._cleanup_incoming_material_staging(Path(project.root), executing.job_id)
 
-    def _commit(
-        self,
-        job: ProviderJobRecord,
-        token: str,
-        *,
-        visible_response: str,
-        provider_session_id: str | None,
-        actual_model: str | None,
-        telegram_html: str,
-        artifacts: tuple[ValidatedArtifact, ...] = (),
-    ) -> None:
-        try:
-            self.state.commit_provider_result(
-                job.job_id,
-                token,
-                visible_response=visible_response,
-                sender_agent_id=self.agent.agent_id,
-                telegram_html=telegram_html,
-                provider_session_id=provider_session_id,
-                actual_model=actual_model,
-                user_excerpt=job.payload_text,
-                acknowledge_context=job.context_watermark is not None,
-                acknowledge_handoff=job.handoff_id is not None,
-                telegram_contract_version=telegram_contract_version(self.agent.runtime),
-                artifacts=artifacts,
-            )
-        except BaseException:
-            spool_root = artifact_spool_root(self.config.state_path)
-            for artifact in artifacts:
-                try:
-                    remove_spooled_artifact(artifact.path, spool_root)
-                except Exception:
-                    pass
-            raise
-
-    def _cleanup_artifact_staging(self, project_root: Path, job_id: str) -> None:
-        try:
-            cleanup_job_staging(project_root, job_id)
-        except Exception as exc:
-            self._record_event("warning", "artifact_staging_cleanup_error", type(exc).__name__)
-
     def _cleanup_incoming_material_staging(self, project_root: Path, job_id: str) -> None:
         directory = project_root / ".hub" / "incoming" / job_id
         try:
@@ -836,18 +789,23 @@ class ExternalQueueWorker:
             trim_visible_text=True,
             empty_visible_text="Codex completed the turn without visible text.",
         )
-        self._commit(
-            job,
-            token,
-            visible_response=prepared_result.visible_response,
-            provider_session_id=thread.thread_id,
-            actual_model=thread.model,
-            telegram_html=prepared_result.telegram_html,
-            artifacts=artifacts.artifacts,
+        PreparedResultPublisher(
+            state=self.state,
+            state_path=self.config.state_path,
+            cleanup_error=lambda code, detail: self._record_event("warning", code, detail),
+        ).publish(
+            PreparedResultPublication(
+                job=job,
+                project_root=Path(project.root),
+                prepared_materials=prepared,
+                visible_response=prepared_result.visible_response,
+                telegram_html=prepared_result.telegram_html,
+                provider_session_id=thread.thread_id,
+                actual_model=thread.model,
+                telegram_contract_version=telegram_contract_version(self.agent.runtime),
+                artifacts=artifacts.artifacts,
+            )
         )
-        cleanup_consumed_raw_inputs(prepared)
-        cleanup_materialized_inputs(prepared)
-        self._cleanup_artifact_staging(Path(project.root), job.job_id)
 
     def _execute_external(
         self, job: ProviderJobRecord, token: str, project: object, topic: object
@@ -944,15 +902,20 @@ class ExternalQueueWorker:
             artifact_notice=artifacts.visible_notice,
             trim_visible_text=True,
         )
-        self._commit(
-            job,
-            token,
-            visible_response=prepared_result.visible_response,
-            provider_session_id=result.provider_session_id,
-            actual_model=actual_model,
-            telegram_html=prepared_result.telegram_html,
-            artifacts=artifacts.artifacts,
+        PreparedResultPublisher(
+            state=self.state,
+            state_path=self.config.state_path,
+            cleanup_error=lambda code, detail: self._record_event("warning", code, detail),
+        ).publish(
+            PreparedResultPublication(
+                job=job,
+                project_root=Path(project.root),
+                prepared_materials=prepared,
+                visible_response=prepared_result.visible_response,
+                telegram_html=prepared_result.telegram_html,
+                provider_session_id=result.provider_session_id,
+                actual_model=actual_model,
+                telegram_contract_version=telegram_contract_version(self.agent.runtime),
+                artifacts=artifacts.artifacts,
+            )
         )
-        cleanup_consumed_raw_inputs(prepared)
-        cleanup_materialized_inputs(prepared)
-        self._cleanup_artifact_staging(Path(project.root), job.job_id)
