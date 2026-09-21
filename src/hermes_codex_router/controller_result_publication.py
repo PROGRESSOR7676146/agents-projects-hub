@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .artifacts import ValidatedArtifact, artifact_spool_root, spool_staged_artifacts
+from .artifacts import ValidatedArtifact
 from .incoming_materials import PreparedIncomingMaterials, cleanup_consumed_raw_inputs
 from .state import HubState, ProviderJobRecord, ProviderJobResultRecord, StateError
 
@@ -18,6 +18,7 @@ class PreparedResultPublication:
     provider_session_id: str | None
     actual_model: str | None
     telegram_contract_version: int
+    artifacts: tuple[ValidatedArtifact, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,11 +39,6 @@ class PreparedResultPublisher:
         if token is None:
             raise StateError("prepared result publication requires an active lease")
 
-        artifacts = spool_staged_artifacts(
-            publication.project_root,
-            publication.job.job_id,
-            artifact_spool_root(self.state_path),
-        )
         result = self.state.commit_provider_result(
             publication.job.job_id,
             token,
@@ -55,7 +51,7 @@ class PreparedResultPublisher:
             acknowledge_context=publication.job.context_watermark is not None,
             acknowledge_handoff=publication.job.handoff_id is not None,
             telegram_contract_version=publication.telegram_contract_version,
-            artifacts=artifacts,
+            artifacts=publication.artifacts,
         )
         cleanup_consumed_raw_inputs(publication.prepared_materials)
-        return PublishedProviderResult(result=result, artifacts=artifacts)
+        return PublishedProviderResult(result=result, artifacts=publication.artifacts)

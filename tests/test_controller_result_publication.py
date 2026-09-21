@@ -16,6 +16,7 @@ from hermes_codex_router.incoming_materials import (
     PreparedIncomingMaterials,
 )
 from hermes_codex_router.state import HubState, ProviderJobRecord, StateError
+from hermes_codex_router.worker_execution import prepare_worker_artifacts
 
 
 class PreparedResultPublisherTests(unittest.TestCase):
@@ -87,6 +88,12 @@ class PreparedResultPublisherTests(unittest.TestCase):
         job: ProviderJobRecord,
         raw: Path,
     ) -> PreparedResultPublication:
+        artifacts = prepare_worker_artifacts(
+            self.project_root,
+            job.job_id,
+            self.state_path,
+            report_rejections=False,
+        )
         return PreparedResultPublication(
             job=job,
             project_root=self.project_root,
@@ -96,6 +103,7 @@ class PreparedResultPublisherTests(unittest.TestCase):
             provider_session_id="provider-session",
             actual_model="gpt-actual",
             telegram_contract_version=1,
+            artifacts=artifacts.artifacts,
         )
 
     def stage_artifact(self, job: ProviderJobRecord) -> Path:

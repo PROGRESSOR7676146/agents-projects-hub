@@ -78,7 +78,7 @@ from .ingress_decisions import (
     decide_ingress,
 )
 from .local_transfer import LocalTransferError, local_resume_command
-from .metadata import format_agent_response, format_telegram_response
+from .metadata import format_telegram_response
 from .model_selection import ModelSelectionError, available_models
 from .project_editing import ProjectEditStore
 from .project_onboarding import ProjectOnboardingStore
@@ -140,6 +140,9 @@ from .worker_execution import (
     external_provider_prompt,
     invoke_external_provider_turn,
     open_codex_provider_thread,
+    prepare_codex_worker_result,
+    prepare_external_worker_result,
+    prepare_worker_artifacts,
     prepare_worker_materials,
     prepare_worker_staging_directory,
     require_provider_job_lease,
@@ -909,7 +912,6 @@ class ProjectHubService:
                     # Context percentage is display telemetry, not part of
                     # the productive result's durable commit.
                     pass
-                visible_response = result.text + prepared.visible_notice
                 provider_session_id = thread.thread_id
                 actual_model = thread.model
                 try:
@@ -918,14 +920,23 @@ class ProjectHubService:
                     # Rate-limit telemetry is optional; the durable result must
                     # not be discarded after the productive turn completed.
                     limits = RateLimits(None, None)
-                telegram_html = format_telegram_response(
-                    result=replace(result, text=result.text + prepared.visible_notice),
-                    agent=agent.display_name,
+                artifacts = prepare_worker_artifacts(
+                    project.root,
+                    executing.job_id,
+                    self.config.state_path,
+                    report_rejections=False,
+                )
+                prepared_result = prepare_codex_worker_result(
+                    result,
+                    prepared,
+                    agent_name=agent.display_name,
                     model=thread.model,
                     effort=executing.effort,
-                    session_label=f"{project.display_name} · {topic.title} · {agent.display_name}",
+                    session_label=(
+                        f"{project.display_name} · {topic.title} · {agent.display_name}"
+                    ),
                     limits=limits,
-                    timezone_name="Europe/Moscow",
+                    artifact_notice=artifacts.visible_notice,
                 )
             else:
                 external = getattr(self, "external_services", {}).get(agent.agent_id)
@@ -944,20 +955,25 @@ class ProjectHubService:
                     ),
                     staging_dir=staging_dir,
                 )
-                visible_response = result.text + prepared.visible_notice
                 provider_session_id = result.provider_session_id
                 actual_model = result.model or executing.model
-                telegram_html = format_agent_response(
-                    visible_response,
-                    {
-                        "Session": f"{project.display_name} · {topic.title} · {agent.display_name}",
-                        "Agent": agent.display_name,
-                        "Runtime": agent.runtime,
-                        "Model": actual_model,
-                        "Effort": executing.effort,
-                        "Context remaining": "unavailable",
-                        "Usage windows": "unavailable",
-                    },
+                artifacts = prepare_worker_artifacts(
+                    project.root,
+                    executing.job_id,
+                    self.config.state_path,
+                    report_rejections=False,
+                )
+                prepared_result = prepare_external_worker_result(
+                    result,
+                    prepared,
+                    agent_name=agent.display_name,
+                    runtime=agent.runtime,
+                    model=actual_model,
+                    effort=executing.effort,
+                    session_label=(
+                        f"{project.display_name} · {topic.title} · {agent.display_name}"
+                    ),
+                    artifact_notice=artifacts.visible_notice,
                 )
             PreparedResultPublisher(
                 state=queue_state,
@@ -967,11 +983,12 @@ class ProjectHubService:
                     job=executing,
                     project_root=project.root,
                     prepared_materials=prepared,
-                    visible_response=visible_response,
-                    telegram_html=telegram_html,
+                    visible_response=prepared_result.visible_response,
+                    telegram_html=prepared_result.telegram_html,
                     provider_session_id=provider_session_id,
                     actual_model=actual_model,
                     telegram_contract_version=contract_version,
+                    artifacts=artifacts.artifacts,
                 )
             )
         except Exception as exc:

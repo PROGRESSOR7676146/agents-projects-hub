@@ -4,7 +4,6 @@ import os
 import subprocess
 import threading
 import uuid
-from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,7 +12,6 @@ from .artifacts import (
     artifact_spool_root,
     cleanup_job_staging,
     remove_spooled_artifact,
-    spool_staged_artifacts,
 )
 from .codex_appserver import (
     CodexAppServerClient,
@@ -42,7 +40,6 @@ from .incoming_materials import (
     cleanup_consumed_raw_inputs,
     cleanup_materialized_inputs,
 )
-from .metadata import format_agent_response, format_telegram_response
 from .project_resolution import (
     ProjectResolutionError,
     resolve_project_context,
@@ -64,6 +61,9 @@ from .worker_execution import (
     external_provider_prompt,
     invoke_external_provider_turn,
     open_codex_provider_thread,
+    prepare_codex_worker_result,
+    prepare_external_worker_result,
+    prepare_worker_artifacts,
     prepare_worker_materials,
     prepare_worker_staging_directory,
     require_provider_job_lease,
@@ -577,14 +577,6 @@ class ExternalQueueWorker:
                     pass
             raise
 
-    @staticmethod
-    def _artifact_notice(rejections: list[str]) -> str:
-        if not rejections:
-            return ""
-        shown = rejections[:3]
-        suffix = "" if len(rejections) <= 3 else f"; and {len(rejections) - 3} more"
-        return "\n\n⚠️ Not attached: " + "; ".join(shown) + suffix
-
     def _cleanup_artifact_staging(self, project_root: Path, job_id: str) -> None:
         try:
             cleanup_job_staging(project_root, job_id)
@@ -818,9 +810,6 @@ class ExternalQueueWorker:
             raise ProviderTurnStopped(interrupted_request[0])
         if late_request is not None:
             raise ProviderTurnStopped(late_request)
-        visible_response = (
-            result.text.strip() or "Codex completed the turn without visible text."
-        ) + prepared.visible_notice
         try:
             self.state.set_context_remaining(job.session_id, context_remaining_percent(result))
         except Exception:
@@ -829,34 +818,32 @@ class ExternalQueueWorker:
             limits = client.read_rate_limits()
         except Exception:
             limits = RateLimits(None, None)
-        rejections: list[str] = []
-        artifacts = spool_staged_artifacts(
+        artifacts = prepare_worker_artifacts(
             Path(project.root),
             job.job_id,
-            artifact_spool_root(self.config.state_path),
-            rejection_sink=rejections,
+            self.config.state_path,
+            report_rejections=True,
         )
-        artifact_notice = self._artifact_notice(rejections)
-        visible_response += artifact_notice
+        prepared_result = prepare_codex_worker_result(
+            result,
+            prepared,
+            agent_name=self.agent.display_name,
+            model=thread.model,
+            effort=job.effort,
+            session_label=(f"{project.display_name} · {topic.title} · {self.agent.display_name}"),
+            limits=limits,
+            artifact_notice=artifacts.visible_notice,
+            trim_visible_text=True,
+            empty_visible_text="Codex completed the turn without visible text.",
+        )
         self._commit(
             job,
             token,
-            visible_response=visible_response,
+            visible_response=prepared_result.visible_response,
             provider_session_id=thread.thread_id,
             actual_model=thread.model,
-            telegram_html=format_telegram_response(
-                result=replace(
-                    result,
-                    text=(result.text + prepared.visible_notice + artifact_notice),
-                ),
-                agent=self.agent.display_name,
-                model=thread.model,
-                effort=job.effort,
-                session_label=f"{project.display_name} · {topic.title} · {self.agent.display_name}",
-                limits=limits,
-                timezone_name="Europe/Moscow",
-            ),
-            artifacts=artifacts,
+            telegram_html=prepared_result.telegram_html,
+            artifacts=artifacts.artifacts,
         )
         cleanup_consumed_raw_inputs(prepared)
         cleanup_materialized_inputs(prepared)
@@ -939,35 +926,32 @@ class ExternalQueueWorker:
             raise ExternalRuntimeError(
                 f"{self.agent.runtime} did not return a provider session id for a new turn"
             )
-        visible_response = result.text.strip() + prepared.visible_notice
-        rejections = []
-        artifacts = spool_staged_artifacts(
+        artifacts = prepare_worker_artifacts(
             Path(project.root),
             job.job_id,
-            artifact_spool_root(self.config.state_path),
-            rejection_sink=rejections,
+            self.config.state_path,
+            report_rejections=True,
         )
-        artifact_notice = self._artifact_notice(rejections)
-        visible_response += artifact_notice
+        actual_model = result.model or job.model
+        prepared_result = prepare_external_worker_result(
+            result,
+            prepared,
+            agent_name=self.agent.display_name,
+            runtime=self.agent.runtime,
+            model=actual_model,
+            effort=job.effort,
+            session_label=(f"{project.display_name} · {topic.title} · {self.agent.display_name}"),
+            artifact_notice=artifacts.visible_notice,
+            trim_visible_text=True,
+        )
         self._commit(
             job,
             token,
-            visible_response=visible_response,
+            visible_response=prepared_result.visible_response,
             provider_session_id=result.provider_session_id,
-            actual_model=result.model or job.model,
-            telegram_html=format_agent_response(
-                visible_response,
-                {
-                    "Session": f"{project.display_name} · {topic.title} · {self.agent.display_name}",
-                    "Agent": self.agent.display_name,
-                    "Runtime": self.agent.runtime,
-                    "Model": result.model or job.model,
-                    "Effort": job.effort,
-                    "Context remaining": "unavailable",
-                    "Usage windows": "unavailable",
-                },
-            ),
-            artifacts=artifacts,
+            actual_model=actual_model,
+            telegram_html=prepared_result.telegram_html,
+            artifacts=artifacts.artifacts,
         )
         cleanup_consumed_raw_inputs(prepared)
         cleanup_materialized_inputs(prepared)

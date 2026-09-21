@@ -6,10 +6,16 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Sequence
 
-from .codex_appserver import CodexAppServerClient, CodexThread, TurnResult
+from .artifacts import (
+    ValidatedArtifact,
+    artifact_spool_root,
+    spool_staged_artifacts,
+)
+from .codex_appserver import CodexAppServerClient, CodexThread, RateLimits, TurnResult
 from .external_runtime import ExternalCliAdapter, ExternalTurnResult
 from .hub_config import HubConfig
 from .incoming_materials import PreparedIncomingMaterials, prepare_incoming_materials
+from .metadata import format_agent_response, format_telegram_response
 from .models import Project, ProjectRegistry
 from .project_resolution import resolve_project_context
 from .state import HubState, ProviderJobRecord, TopicRecord
@@ -28,6 +34,22 @@ class WorkerExecutionTarget:
     registry: ProjectRegistry
     project: Project
     topic: TopicRecord
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedWorkerArtifacts:
+    """Immutable spool snapshots plus their bounded user-visible rejection notice."""
+
+    artifacts: tuple[ValidatedArtifact, ...]
+    visible_notice: str
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedWorkerResult:
+    """Provider output rendered for durable storage and Telegram delivery."""
+
+    visible_response: str
+    telegram_html: str
 
 
 def require_provider_job_lease(
@@ -224,13 +246,116 @@ def invoke_external_provider_turn(
     )
 
 
+def _artifact_rejection_notice(rejections: Sequence[str]) -> str:
+    if not rejections:
+        return ""
+    shown = rejections[:3]
+    suffix = "" if len(rejections) <= 3 else f"; and {len(rejections) - 3} more"
+    return "\n\n⚠️ Not attached: " + "; ".join(shown) + suffix
+
+
+def prepare_worker_artifacts(
+    execution_root: Path,
+    job_id: str,
+    state_path: Path,
+    *,
+    report_rejections: bool,
+) -> PreparedWorkerArtifacts:
+    """Validate and snapshot staged artifacts before the durable result commit."""
+    if not report_rejections:
+        artifacts = spool_staged_artifacts(
+            execution_root,
+            job_id,
+            artifact_spool_root(state_path),
+        )
+        return PreparedWorkerArtifacts(artifacts, "")
+
+    rejections: list[str] = []
+    artifacts = spool_staged_artifacts(
+        execution_root,
+        job_id,
+        artifact_spool_root(state_path),
+        rejection_sink=rejections,
+    )
+    return PreparedWorkerArtifacts(artifacts, _artifact_rejection_notice(rejections))
+
+
+def prepare_codex_worker_result(
+    result: TurnResult,
+    prepared_materials: PreparedIncomingMaterials,
+    *,
+    agent_name: str,
+    model: str,
+    effort: str,
+    session_label: str,
+    limits: RateLimits,
+    artifact_notice: str = "",
+    trim_visible_text: bool = False,
+    empty_visible_text: str | None = None,
+) -> PreparedWorkerResult:
+    """Render an accepted Codex result without committing or cleaning worker state."""
+    visible_text = result.text.strip() if trim_visible_text else result.text
+    if not visible_text and empty_visible_text is not None:
+        visible_text = empty_visible_text
+    notices = prepared_materials.visible_notice + artifact_notice
+    return PreparedWorkerResult(
+        visible_response=visible_text + notices,
+        telegram_html=format_telegram_response(
+            result=replace(result, text=result.text + notices),
+            agent=agent_name,
+            model=model,
+            effort=effort,
+            session_label=session_label,
+            limits=limits,
+            timezone_name="Europe/Moscow",
+        ),
+    )
+
+
+def prepare_external_worker_result(
+    result: ExternalTurnResult,
+    prepared_materials: PreparedIncomingMaterials,
+    *,
+    agent_name: str,
+    runtime: str,
+    model: str,
+    effort: str,
+    session_label: str,
+    artifact_notice: str = "",
+    trim_visible_text: bool = False,
+) -> PreparedWorkerResult:
+    """Render an accepted external-provider result without durable side effects."""
+    visible_text = result.text.strip() if trim_visible_text else result.text
+    visible_response = visible_text + prepared_materials.visible_notice + artifact_notice
+    return PreparedWorkerResult(
+        visible_response=visible_response,
+        telegram_html=format_agent_response(
+            visible_response,
+            {
+                "Session": session_label,
+                "Agent": agent_name,
+                "Runtime": runtime,
+                "Model": model,
+                "Effort": effort,
+                "Context remaining": "unavailable",
+                "Usage windows": "unavailable",
+            },
+        ),
+    )
+
+
 __all__ = [
+    "PreparedWorkerArtifacts",
+    "PreparedWorkerResult",
     "WorkerExecutionTarget",
     "codex_provider_prompt",
     "codex_turn_text",
     "external_provider_prompt",
     "invoke_external_provider_turn",
     "open_codex_provider_thread",
+    "prepare_codex_worker_result",
+    "prepare_external_worker_result",
+    "prepare_worker_artifacts",
     "prepare_worker_materials",
     "prepare_worker_staging_directory",
     "require_provider_job_lease",
