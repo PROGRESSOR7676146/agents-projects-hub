@@ -1,7 +1,7 @@
 # Refactoring plan
 
-Status: accepted incremental backlog  
-Date: 2026-09-20
+Status: Packages 0–5 complete; Package 6 deferred
+Date: 2026-09-21
 
 ## Objective
 
@@ -17,16 +17,19 @@ an observable behavior, trust-boundary, schema, or deployment-contract change
 stops being a mechanical refactor and must follow the corresponding normative
 change process.
 
-## Starting checkpoint
+## Closure checkpoint
 
-The current `maintenance/fail-fast-validation` branch contains the first
-package as commit `d10aadf`: cheap contracts precede expensive validation,
-focused development checks are distinct from canonical acceptance, validation
-prints stage durations, documentation ownership is explicit, and the pre-push
-hook remains uncached and fail-closed. This commit is not integrated merely
-because it exists locally. The next agent must review it, run its focused tests
-and mandatory privacy/history gate, publish a PR, wait for the complete CI and
-CodeQL result, and merge only when the exact revision is green.
+Packages 0–5 are published in `origin/main` at
+`a00ab09994d552e83fba470f745539cb88052e63`. Package 0 was merged through PR
+#56, Package 1 through PR #57, Package 2 through PR #58, Package 3 through PRs
+#59–#62, Package 4 through PRs #63–#67, and Package 5 through PRs #68–#73.
+Git ancestry checks proved every exact head of the 15-PR structural sequence
+#59–#73 is an ancestor of this checkpoint.
+
+The last canonical publication evidence for that checkpoint reported 994
+tests, Pyright with 0 errors, successful hosted validation on Python 3.11,
+3.12, and 3.13, and successful CodeQL. This is repository publication
+evidence, not deployment or live Telegram/provider acceptance.
 
 ## Invariants for every package
 
@@ -46,7 +49,7 @@ CodeQL result, and merge only when the exact revision is green.
 
 ## Package 0 — validation and documentation ownership
 
-State: implemented on the current branch; review and integration pending.
+State: complete (PR #56).
 
 Acceptance:
 
@@ -67,6 +70,8 @@ are a measured bottleneck. The remaining saving does not currently justify the
 tool, policy, lockfile, worktree, and external-policy invalidation surface.
 
 ## Package 1 — acceptance runtime seam and stateful fakes
+
+State: complete (PR #57).
 
 Extract the local operational mechanics used by live acceptance before moving
 the seven-step scenario itself:
@@ -93,6 +98,8 @@ Acceptance:
 
 ## Package 2 — isolate the P0/P1 live scenario
 
+State: complete (PR #58).
+
 After package 1 establishes stable seams, move the fixed seven-result scenario
 to a dedicated module. If shared dataclasses must move, place only the config,
 error, and result contracts in a dependency-neutral module and re-export their
@@ -115,6 +122,8 @@ Acceptance:
   runtime-only import cycle is introduced.
 
 ## Package 3 — Controller vertical seams
+
+State: complete (PRs #59–#62).
 
 Do not split `service.py` by arbitrary line ranges. First map the dependencies
 and characterize one vertical behavior, then extract only that seam. Preferred
@@ -142,6 +151,8 @@ One seam is one PR. Do not combine all four extractions.
 
 ## Package 4 — state domain facades on one connection
 
+State: complete (PRs #63–#67).
+
 Gradually group `state.py` operations behind internal domain facades while
 retaining the existing `HubState` public surface and single SQLite connection:
 
@@ -167,6 +178,8 @@ Acceptance:
 
 ## Package 5 — explicit worker execution phases
 
+State: complete (PRs #68–#73).
+
 Make the existing worker lifecycle visible without inventing another durable
 state machine. Isolate pure or narrowly effectful phases for:
 
@@ -190,7 +203,9 @@ Acceptance:
 
 ## Package 6 — bounded maintenance utilities
 
-Only after the structural packages demonstrate repeated friction, consider:
+State: deferred.
+
+Only after measured, repeated maintenance friction, consider:
 
 - an explicit documentation-contract command that updates one existing numbered
   section digest, prints the change, and remains read-only by default;
@@ -222,17 +237,29 @@ mutation authority.
   same formatter that produced the output;
 - no claim that repository refactoring accepts a deployed installation.
 
-## Handoff sequence
+## Closure evidence
 
-1. Finish package 0 on its existing branch and merge it independently.
-2. Create a fresh branch from the resulting `origin/main` for package 1.
-3. Before each package, assign helpers a read-only dependency/test map and have
-   the primary agent approve the exact boundary.
-4. Land characterization tests before movement, then perform the smallest
-   mechanical extraction that makes them pass.
-5. Run the focused profile during iteration, the mandatory privacy/history gate
-   before commit, the installed publication preflight on push, and hosted CI and
-   CodeQL for the exact revision.
-6. Record only changed evidence or procedure. Do not copy this plan into status,
-   requirements, ADRs, or changelog.
+- Published checkpoint:
+  `a00ab09994d552e83fba470f745539cb88052e63` on `origin/main`.
+- Package-to-PR mapping: Package 0 #56; Package 1 #57; Package 2 #58;
+  Package 3 #59–#62; Package 4 #63–#67; Package 5 #68–#73.
+- The exact heads of PRs #59–#73 are all ancestors of the published checkpoint.
+- Last known canonical result: 994 tests and Pyright with 0 errors.
+- Hosted publication result: Python 3.11–3.13 and CodeQL successful.
 
+## Remaining triggers
+
+- Package 6 remains deferred until repeated digest-maintenance, focused-test
+  discovery, or validation-timing friction is measured and documented.
+- Deployment, live acceptance, release-tag debt, and worktree or branch
+  housekeeping remain separate operational work. They are not closure evidence
+  for this refactoring plan.
+
+## Reopening conditions
+
+Reopen this plan only when measured maintenance evidence shows that one of its
+deferred utilities is warranted, or when a regression demonstrates that an
+extracted boundary no longer preserves the invariants above. New feature work,
+an isolated large file, or a line-count change alone is not sufficient. Any
+reopened package must name its current state, last verified revision, next
+trigger, owner, bounded scope, and new closure evidence.

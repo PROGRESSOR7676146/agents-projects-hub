@@ -61,6 +61,39 @@ This normative module is part of the
    test suite. With the installed pre-push hook, its clean-commit canonical run
    is the final local gate; do not also run it manually on the unchanged tree.
    CI MUST independently execute the full gate for its exact checked-out revision.
+10. An architecture review and an explicit extraction plan are required when at
+    least one review trigger fires: a file of roughly more than 1,500 lines
+    receives a new responsibility; a function of roughly more than 200 lines
+    receives a materially new branch or lifecycle behavior; or one lifecycle or
+    invariant is duplicated across multiple runtime paths. These values are
+    review triggers, not blocking line-count limits or automatic refactoring
+    orders.
+11. When extraction is not currently justified, the bounded exception MUST name
+    the concrete rationale, owner, scope, next review date, and event that
+    reopens the decision.
+12. A feature PR that touches an already triggered hotspot MUST either reduce
+    the component's responsibility or include the bounded exception defined
+    above. Mechanical splitting solely to pass a size or complexity metric is
+    prohibited.
+13. A PR that materially changes Controller, state, or worker lifecycle behavior
+    MUST identify the component owner, transaction owner, provider-invocation
+    boundary, replay safety, failure certainty, cleanup owner, focused tests,
+    and exact publication evidence.
+14. Architecture fitness review MUST check import direction, preserve one owner
+    of each SQLite transaction, and prevent runtime code from bypassing the
+    applicable state or domain facade. Orchestration and facades MAY depend on
+    dependency-neutral contracts and domain helpers; lower layers MUST NOT
+    import Controller, provider-worker, or Telegram runtime orchestration.
+    Size and complexity measurements are for trend reporting and review
+    selection, not a standalone blocking quality gate.
+15. Before a major feature wave, review active hotspots, accepted bounded
+    exceptions, unclosed accepted plans, and debt in worktrees, branches, and
+    release tags. Resolve or explicitly carry each item before opening the wave.
+16. Every accepted plan MUST record its current state, last verified revision,
+    next trigger, and a closure section when the work is complete.
+17. Every long-lived worktree MUST record its owner, purpose, base branch or
+    revision, and a post-merge review point. Never remove a worktree
+    automatically before checking its tracked, staged, and untracked state.
 
 ## 20. Provenance
 
