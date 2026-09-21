@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html
 import os
 import re
 import sqlite3
@@ -18,6 +17,11 @@ from .incoming_materials import (
 )
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
 from .release_identity import CURRENT_RELEASE, ReleaseIdentity
+from .state_delivery import (
+    DeliveryStateFacade,
+    TelegramOutboxPartRecord,
+    TelegramOutboxRecord,
+)
 from .state_incoming_materials import IncomingMaterialsStateFacade
 from .state_provider_jobs import (
     ProviderChatActivity,
@@ -26,7 +30,6 @@ from .state_provider_jobs import (
     ProviderJobsStateFacade,
 )
 from .telegram import TELEGRAM_HEALTH_FAILURE_THRESHOLD
-from .telegram_multipart import split_telegram_html
 
 MAX_PROVIDER_RESPONSE_LENGTH = 200_000
 RECOVERED_RESULT_METADATA_JSON = '{"hub_recovered":true}'
@@ -91,41 +94,6 @@ class ProviderJobResultRecord:
     context_watermark: int | None
     handoff_id: str | None
     created_at: str
-
-
-@dataclass(frozen=True, slots=True)
-class TelegramOutboxRecord:
-    outbox_id: str
-    job_id: str
-    sender_agent_id: str
-    chat_id: int
-    thread_id: int
-    telegram_html: str
-    status: str
-    attempt_count: int
-    available_at: str
-    lease_owner: str | None
-    lease_token: str | None
-    lease_expires_at: str | None
-    telegram_message_id: int | None
-    error_code: str | None
-    created_at: str
-    updated_at: str
-    delivered_at: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class TelegramOutboxPartRecord:
-    outbox_id: str
-    part_index: int
-    telegram_html: str
-    part_type: str = "text"
-    file_path: str | None = None
-    file_name: str | None = None
-    file_size: int | None = None
-    file_sha256: str | None = None
-    telegram_message_id: int | None = None
-    delivered_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,6 +192,12 @@ class HubState:
             connection,
             state_path,
             transaction=self._immediate_transaction,
+            state_error=StateError,
+        )
+        self._delivery_state = DeliveryStateFacade(
+            connection,
+            transaction=self._immediate_transaction,
+            write_transaction=self._connection_transaction,
             state_error=StateError,
         )
         self._provider_job_state = ProviderJobsStateFacade(
@@ -720,57 +694,11 @@ class HubState:
 
     @staticmethod
     def _telegram_outbox(row: sqlite3.Row) -> TelegramOutboxRecord:
-        return TelegramOutboxRecord(
-            outbox_id=str(row["outbox_id"]),
-            job_id=str(row["job_id"]),
-            sender_agent_id=str(row["sender_agent_id"]),
-            chat_id=int(row["chat_id"]),
-            thread_id=int(row["thread_id"]),
-            telegram_html=str(row["telegram_html"]),
-            status=str(row["status"]),
-            attempt_count=int(row["attempt_count"]),
-            available_at=str(row["available_at"]),
-            lease_owner=row["lease_owner"],
-            lease_token=row["lease_token"],
-            lease_expires_at=row["lease_expires_at"],
-            telegram_message_id=row["telegram_message_id"],
-            error_code=row["error_code"],
-            created_at=str(row["created_at"]),
-            updated_at=str(row["updated_at"]),
-            delivered_at=row["delivered_at"],
-        )
+        return DeliveryStateFacade.outbox_record(row)
 
     @staticmethod
     def _telegram_outbox_part(row: sqlite3.Row) -> TelegramOutboxPartRecord:
-        keys = row.keys() if hasattr(row, "keys") else ()
-        return TelegramOutboxPartRecord(
-            outbox_id=str(row["outbox_id"]),
-            part_index=int(row["part_index"]),
-            telegram_html=str(row["telegram_html"]),
-            part_type=str(row["part_type"]) if "part_type" in keys else "text",
-            file_path=(
-                str(row["file_path"])
-                if "file_path" in keys and row["file_path"] is not None
-                else None
-            ),
-            file_name=(
-                str(row["file_name"])
-                if "file_name" in keys and row["file_name"] is not None
-                else None
-            ),
-            file_size=(
-                int(row["file_size"])
-                if "file_size" in keys and row["file_size"] is not None
-                else None
-            ),
-            file_sha256=(
-                str(row["file_sha256"])
-                if "file_sha256" in keys and row["file_sha256"] is not None
-                else None
-            ),
-            telegram_message_id=row["telegram_message_id"],
-            delivered_at=row["delivered_at"],
-        )
+        return DeliveryStateFacade.outbox_part_record(row)
 
     def _insert_telegram_outbox_parts(
         self,
@@ -778,34 +706,7 @@ class HubState:
         telegram_html: str,
         artifacts: tuple[ValidatedArtifact, ...] = (),
     ) -> None:
-        parts = split_telegram_html(telegram_html)
-        for part_index, part in enumerate(parts, start=1):
-            self._connection.execute(
-                """INSERT INTO telegram_outbox_parts
-                   (outbox_id, part_index, telegram_html, part_type, file_path, file_name,
-                    file_size, file_sha256)
-                   VALUES (?, ?, ?, 'text', NULL, NULL, NULL, NULL)""",
-                (outbox_id, part_index, part),
-            )
-        start_index = len(parts) + 1
-        for offset, artifact in enumerate(artifacts):
-            idx = start_index + offset
-            caption = f"📄 <b>{html.escape(artifact.name)}</b>"
-            self._connection.execute(
-                """INSERT INTO telegram_outbox_parts
-                   (outbox_id, part_index, telegram_html, part_type, file_path, file_name,
-                    file_size, file_sha256)
-                   VALUES (?, ?, ?, 'document', ?, ?, ?, ?)""",
-                (
-                    outbox_id,
-                    idx,
-                    caption,
-                    str(artifact.path),
-                    artifact.name,
-                    artifact.size,
-                    artifact.sha256,
-                ),
-            )
+        self._delivery_state.insert_outbox_parts(outbox_id, telegram_html, artifacts)
 
     def observe_topic(
         self,
@@ -2446,28 +2347,13 @@ class HubState:
         return self._provider_result(row)
 
     def get_telegram_outbox(self, outbox_id: str) -> TelegramOutboxRecord:
-        row = self._connection.execute(
-            "SELECT * FROM telegram_outbox WHERE outbox_id = ?", (outbox_id,)
-        ).fetchone()
-        if row is None:
-            raise StateError(f"unknown Telegram outbox row: {outbox_id}")
-        return self._telegram_outbox(row)
+        return self._delivery_state.get_outbox(outbox_id)
 
     def get_telegram_outbox_for_job(self, job_id: str) -> TelegramOutboxRecord:
-        row = self._connection.execute(
-            "SELECT * FROM telegram_outbox WHERE job_id = ?", (job_id,)
-        ).fetchone()
-        if row is None:
-            raise StateError(f"provider job has no Telegram outbox row: {job_id}")
-        return self._telegram_outbox(row)
+        return self._delivery_state.get_outbox_for_job(job_id)
 
     def get_telegram_outbox_parts(self, outbox_id: str) -> tuple[TelegramOutboxPartRecord, ...]:
-        rows = self._connection.execute(
-            """SELECT * FROM telegram_outbox_parts
-               WHERE outbox_id = ? ORDER BY part_index""",
-            (outbox_id,),
-        ).fetchall()
-        return tuple(self._telegram_outbox_part(row) for row in rows)
+        return self._delivery_state.get_outbox_parts(outbox_id)
 
     def next_telegram_outbox_part(
         self,
@@ -2476,19 +2362,7 @@ class HubState:
         *,
         now: datetime | None = None,
     ) -> TelegramOutboxPartRecord:
-        timestamp = _timestamp(now)
-        row = self._connection.execute(
-            """SELECT parts.* FROM telegram_outbox_parts parts
-               JOIN telegram_outbox outbox ON outbox.outbox_id = parts.outbox_id
-               WHERE parts.outbox_id = ? AND parts.telegram_message_id IS NULL
-                 AND outbox.status = 'sending' AND outbox.lease_token = ?
-                 AND outbox.lease_expires_at > ?
-               ORDER BY parts.part_index LIMIT 1""",
-            (outbox_id, lease_token, timestamp),
-        ).fetchone()
-        if row is None:
-            raise StateError("Telegram outbox has no sendable part for this lease")
-        return self._telegram_outbox_part(row)
+        return self._delivery_state.next_outbox_part(outbox_id, lease_token, now=now)
 
     def lease_telegram_outbox(
         self,
@@ -2498,49 +2372,12 @@ class HubState:
         lease_seconds: int = 90,
         now: datetime | None = None,
     ) -> TelegramOutboxRecord | None:
-        sender = _bounded(sender_agent_id, name="sender agent id", maximum=64)
-        worker = _bounded(worker_id, name="worker id", maximum=128)
-        if not 1 <= lease_seconds <= 3600:
-            raise StateError("invalid Telegram outbox lease duration")
-        current = now or datetime.now(timezone.utc)
-        timestamp = _timestamp(current)
-        expires_at = _timestamp(current + timedelta(seconds=lease_seconds))
-        with self._immediate_transaction():
-            row = self._connection.execute(
-                """SELECT outbox.* FROM telegram_outbox outbox
-                   JOIN provider_jobs job ON job.job_id = outbox.job_id
-                   WHERE outbox.sender_agent_id = ? AND outbox.status = 'pending'
-                     AND outbox.available_at <= ? AND outbox.attempt_count < 20
-                     AND NOT EXISTS (
-                       SELECT 1 FROM telegram_outbox earlier_outbox
-                       JOIN provider_jobs earlier_job
-                         ON earlier_job.job_id = earlier_outbox.job_id
-                       WHERE earlier_job.topic_id = job.topic_id
-                         AND earlier_job.topic_sequence < job.topic_sequence
-                         AND earlier_outbox.status NOT IN ('delivered', 'failed')
-                     )
-                   ORDER BY outbox.created_at, outbox.outbox_id LIMIT 1""",
-                (sender, timestamp),
-            ).fetchone()
-            if row is None:
-                return None
-            token = str(uuid.uuid4())
-            cursor = self._connection.execute(
-                """UPDATE telegram_outbox
-                   SET status = 'sending', attempt_count = attempt_count + 1,
-                       lease_owner = ?, lease_token = ?, lease_expires_at = ?,
-                       error_code = NULL, updated_at = ?
-                   WHERE outbox_id = ? AND status = 'pending'""",
-                (worker, token, expires_at, timestamp, row["outbox_id"]),
-            )
-            if cursor.rowcount != 1:
-                raise StateError("Telegram outbox lease race")
-            leased = self._connection.execute(
-                "SELECT * FROM telegram_outbox WHERE outbox_id = ?", (row["outbox_id"],)
-            ).fetchone()
-            if leased is None:
-                raise StateError("leased Telegram outbox row disappeared")
-            return self._telegram_outbox(leased)
+        return self._delivery_state.lease_outbox(
+            sender_agent_id,
+            worker_id,
+            lease_seconds=lease_seconds,
+            now=now,
+        )
 
     def heartbeat_telegram_outbox(
         self,
@@ -2550,36 +2387,13 @@ class HubState:
         lease_seconds: int = 90,
         now: datetime | None = None,
     ) -> TelegramOutboxRecord:
-        if not 1 <= lease_seconds <= 3600:
-            raise StateError("invalid Telegram outbox lease duration")
-        current = now or datetime.now(timezone.utc)
-        timestamp = _timestamp(current)
-        expires_at = _timestamp(current + timedelta(seconds=lease_seconds))
-        with self._connection:
-            cursor = self._connection.execute(
-                """UPDATE telegram_outbox SET lease_expires_at = ?, updated_at = ?
-                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
-                     AND lease_expires_at > ?""",
-                (expires_at, timestamp, outbox_id, lease_token, timestamp),
-            )
-        if cursor.rowcount != 1:
-            raise StateError("Telegram outbox lease is missing, expired, or invalid")
-        return self.get_telegram_outbox(outbox_id)
+        return self._delivery_state.heartbeat_outbox(
+            outbox_id, lease_token, lease_seconds=lease_seconds, now=now
+        )
 
     def release_telegram_outbox_lease(self, outbox_id: str, lease_token: str) -> None:
         """Return an unsent delivery lease without consuming a retry attempt."""
-        timestamp = _now()
-        with self._connection:
-            cursor = self._connection.execute(
-                """UPDATE telegram_outbox
-                   SET status = 'pending', attempt_count = MAX(attempt_count - 1, 0),
-                       lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
-                       error_code = NULL, available_at = ?, updated_at = ?
-                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?""",
-                (timestamp, timestamp, outbox_id, lease_token),
-            )
-        if cursor.rowcount != 1:
-            raise StateError("Telegram outbox lease is missing or invalid")
+        self._delivery_state.release_outbox_lease(outbox_id, lease_token)
 
     def retry_telegram_outbox(
         self,
@@ -2590,41 +2404,13 @@ class HubState:
         delay_seconds: int,
         now: datetime | None = None,
     ) -> TelegramOutboxRecord:
-        code = _bounded(error_code, name="error code", maximum=128)
-        if not 0 <= delay_seconds <= 86400:
-            raise StateError("invalid Telegram outbox retry delay")
-        current = now or datetime.now(timezone.utc)
-        timestamp = _timestamp(current)
-        available_at = _timestamp(current + timedelta(seconds=delay_seconds))
-        with self._immediate_transaction():
-            row = self._connection.execute(
-                """SELECT job_id, attempt_count FROM telegram_outbox
-                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
-                     AND lease_expires_at > ?""",
-                (outbox_id, lease_token, timestamp),
-            ).fetchone()
-            if row is None:
-                raise StateError("Telegram outbox lease is missing, expired, or invalid")
-            cursor = self._connection.execute(
-                """UPDATE telegram_outbox
-                   SET status = CASE WHEN attempt_count >= 20 THEN 'failed' ELSE 'pending' END,
-                       available_at = ?, lease_owner = NULL, lease_token = NULL,
-                       lease_expires_at = NULL, error_code = ?, updated_at = ?
-                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
-                     AND lease_expires_at > ?""",
-                (available_at, code, timestamp, outbox_id, lease_token, timestamp),
-            )
-            if cursor.rowcount != 1:
-                raise StateError("Telegram outbox lease is missing, expired, or invalid")
-            if int(row["attempt_count"]) >= 20:
-                self._connection.execute(
-                    """UPDATE provider_jobs
-                       SET status = 'failed', error_class = 'telegram_delivery',
-                           error_code = ?, error_detail = NULL, updated_at = ?
-                       WHERE job_id = ? AND status = 'result_ready'""",
-                    (code, timestamp, row["job_id"]),
-                )
-        return self.get_telegram_outbox(outbox_id)
+        return self._delivery_state.retry_outbox(
+            outbox_id,
+            lease_token,
+            error_code=error_code,
+            delay_seconds=delay_seconds,
+            now=now,
+        )
 
     def mark_telegram_outbox_delivered(
         self,
@@ -2634,85 +2420,12 @@ class HubState:
         telegram_message_id: int,
         now: datetime | None = None,
     ) -> TelegramOutboxRecord:
-        if telegram_message_id <= 0:
-            raise StateError("invalid Telegram message id")
-        timestamp = _timestamp(now)
-        with self._immediate_transaction():
-            row = self._connection.execute(
-                """SELECT job_id, sender_agent_id FROM telegram_outbox
-                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
-                     AND lease_expires_at > ?""",
-                (outbox_id, lease_token, timestamp),
-            ).fetchone()
-            if row is None:
-                raise StateError("Telegram outbox lease is missing or invalid")
-            part = self._connection.execute(
-                """SELECT part_index FROM telegram_outbox_parts
-                   WHERE outbox_id = ? AND telegram_message_id IS NULL
-                   ORDER BY part_index LIMIT 1""",
-                (outbox_id,),
-            ).fetchone()
-            if part is None:
-                raise StateError("Telegram outbox has no undelivered part")
-            self._connection.execute(
-                """UPDATE telegram_outbox_parts
-                   SET telegram_message_id = ?, delivered_at = ?
-                   WHERE outbox_id = ? AND part_index = ? AND telegram_message_id IS NULL""",
-                (telegram_message_id, timestamp, outbox_id, part["part_index"]),
-            )
-            remaining = self._connection.execute(
-                """SELECT 1 FROM telegram_outbox_parts
-                   WHERE outbox_id = ? AND telegram_message_id IS NULL LIMIT 1""",
-                (outbox_id,),
-            ).fetchone()
-            if remaining is not None:
-                self._connection.execute(
-                    """UPDATE telegram_outbox
-                       SET status = 'pending', attempt_count = MAX(attempt_count - 1, 0),
-                           available_at = ?, lease_owner = NULL,
-                           lease_token = NULL, lease_expires_at = NULL, error_code = NULL,
-                           updated_at = ? WHERE outbox_id = ? AND status = 'sending'
-                             AND lease_token = ? AND lease_expires_at > ?""",
-                    (timestamp, timestamp, outbox_id, lease_token, timestamp),
-                )
-            else:
-                self._connection.execute(
-                    """UPDATE telegram_outbox
-                       SET status = 'delivered', telegram_message_id = ?, delivered_at = ?,
-                           lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
-                           updated_at = ? WHERE outbox_id = ? AND status = 'sending'
-                             AND lease_token = ? AND lease_expires_at > ?""",
-                    (
-                        telegram_message_id,
-                        timestamp,
-                        timestamp,
-                        outbox_id,
-                        lease_token,
-                        timestamp,
-                    ),
-                )
-                cursor = self._connection.execute(
-                    """UPDATE provider_jobs SET status = 'completed', updated_at = ?
-                       WHERE job_id = ? AND status = 'result_ready'""",
-                    (timestamp, row["job_id"]),
-                )
-                if cursor.rowcount != 1:
-                    terminal = self._connection.execute(
-                        "SELECT status FROM provider_jobs WHERE job_id = ?",
-                        (row["job_id"],),
-                    ).fetchone()
-                    allowed_terminal = {"failed", "indeterminate"}
-                    if str(row["sender_agent_id"]) == "hub":
-                        allowed_terminal.add("cancelled")
-                    if terminal is None or str(terminal["status"]) not in allowed_terminal:
-                        raise StateError("provider job is not ready for Telegram completion")
-            delivered = self._connection.execute(
-                "SELECT * FROM telegram_outbox WHERE outbox_id = ?", (outbox_id,)
-            ).fetchone()
-            if delivered is None:
-                raise StateError("delivered Telegram outbox row disappeared")
-            result = self._telegram_outbox(delivered)
-        return result
+        return self._delivery_state.mark_outbox_delivered(
+            outbox_id,
+            lease_token,
+            telegram_message_id=telegram_message_id,
+            now=now,
+        )
 
     def recover_stale_telegram_outbox(
         self,
@@ -2720,44 +2433,7 @@ class HubState:
         sender_agent_ids: tuple[str, ...] | None = None,
         now: datetime | None = None,
     ) -> tuple[str, ...]:
-        timestamp = _timestamp(now)
-        agent_filter = ""
-        parameters: tuple[object, ...] = (timestamp,)
-        if sender_agent_ids is not None:
-            if not sender_agent_ids:
-                return ()
-            placeholders = ", ".join("?" for _ in sender_agent_ids)
-            agent_filter = f" AND sender_agent_id IN ({placeholders})"
-            parameters = (timestamp, *sender_agent_ids)
-        with self._immediate_transaction():
-            rows = self._connection.execute(
-                f"""SELECT outbox_id, job_id, attempt_count FROM telegram_outbox
-                   WHERE status = 'sending' AND lease_expires_at <= ?{agent_filter}
-                   ORDER BY outbox_id""",
-                parameters,
-            ).fetchall()
-            self._connection.execute(
-                f"""UPDATE telegram_outbox
-                   SET status = CASE WHEN attempt_count >= 20 THEN 'failed' ELSE 'pending' END,
-                       lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
-                       error_code = 'stale_sender_lease', available_at = ?, updated_at = ?
-                   WHERE status = 'sending' AND lease_expires_at <= ?{agent_filter}""",
-                (timestamp, timestamp, timestamp, *parameters[1:]),
-            )
-            terminal_job_ids = [
-                str(row["job_id"]) for row in rows if int(row["attempt_count"]) >= 20
-            ]
-            if terminal_job_ids:
-                placeholders = ", ".join("?" for _ in terminal_job_ids)
-                self._connection.execute(
-                    f"""UPDATE provider_jobs
-                        SET status = 'failed', error_class = 'telegram_delivery',
-                            error_code = 'stale_sender_lease', error_detail = NULL,
-                            updated_at = ?
-                        WHERE status = 'result_ready' AND job_id IN ({placeholders})""",
-                    (timestamp, *terminal_job_ids),
-                )
-        return tuple(str(row["outbox_id"]) for row in rows)
+        return self._delivery_state.recover_stale_outbox(sender_agent_ids=sender_agent_ids, now=now)
 
     def stage_handoff(
         self,
