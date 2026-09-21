@@ -8,13 +8,25 @@ from typing import Any, cast
 from unittest.mock import Mock, patch
 
 from hermes_codex_router.codex_appserver import CodexThread, RateLimits, TurnResult
-from hermes_codex_router.external_runtime import ExternalTurnResult
-from hermes_codex_router.incoming_materials import PreparedIncomingMaterials
+from hermes_codex_router.codex_failure import CodexPreparationError
+from hermes_codex_router.external_runtime import (
+    ExternalTurnResult,
+    ProviderLimitError,
+    ProviderUnavailableError,
+)
+from hermes_codex_router.incoming_materials import (
+    IncomingMaterialError,
+    PreparedIncomingMaterials,
+)
 from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.project_resolution import ResolvedProject
+from hermes_codex_router.provider_limits import ProviderLimit
+from hermes_codex_router.registry import ExecutionRootError
 from hermes_codex_router.state import ProviderJobRecord, TopicRecord
 from hermes_codex_router.worker_execution import (
+    ProviderTurnStopped,
     WorkerExecutionTarget,
+    classify_worker_failure,
     codex_provider_prompt,
     codex_turn_text,
     external_provider_prompt,
@@ -463,6 +475,70 @@ class WorkerExecutionPhaseTests(unittest.TestCase):
                 "Usage windows": "unavailable",
             },
         )
+
+    def test_failure_classification_is_conservative_after_possible_invocation(self) -> None:
+        limit = ProviderLimit("opencode-go", "weekly", 0, 2_000_000_000)
+        cases = (
+            (
+                ExecutionRootError(),
+                "codex",
+                ("failed", "pre_execution", "execution_root_invalid", False, "execution_root"),
+            ),
+            (
+                ProviderTurnStopped("fictional-stop"),
+                "codex",
+                ("cancelled", "cancelled", "emergency_stop", False, "emergency_stop"),
+            ),
+            (
+                ProviderLimitError(limit),
+                "opencode",
+                ("failed", "quota", "ProviderLimitError", False, "provider_limit"),
+            ),
+            (
+                ProviderUnavailableError("fictional_unavailable", "Fictional unavailable"),
+                "opencode",
+                (
+                    "failed",
+                    "provider_unavailable",
+                    "fictional_unavailable",
+                    False,
+                    "provider_unavailable",
+                ),
+            ),
+            (
+                IncomingMaterialError("fictional material"),
+                "codex",
+                ("failed", "pre_execution", "IncomingMaterialError", False, "incoming_material"),
+            ),
+            (
+                CodexPreparationError("fictional setup"),
+                "codex",
+                ("failed", "pre_execution", "CodexPreparationError", False, "checkpoint"),
+            ),
+            (
+                RuntimeError("completion unknown"),
+                "codex",
+                ("indeterminate", "ambiguous_execution", "RuntimeError", True, "checkpoint"),
+            ),
+            (
+                RuntimeError("completion unknown"),
+                "opencode",
+                ("indeterminate", "ambiguous_execution", "RuntimeError", False, "uncertain"),
+            ),
+        )
+        for error, runtime, expected in cases:
+            with self.subTest(error=type(error).__name__, runtime=runtime):
+                classified = classify_worker_failure(error, runtime=runtime)
+                self.assertEqual(
+                    (
+                        classified.status,
+                        classified.error_class,
+                        classified.error_code,
+                        classified.reconcile_codex,
+                        classified.notice,
+                    ),
+                    expected,
+                )
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Literal, Sequence
 
 from .artifacts import (
     ValidatedArtifact,
@@ -12,12 +12,23 @@ from .artifacts import (
     spool_staged_artifacts,
 )
 from .codex_appserver import CodexAppServerClient, CodexThread, RateLimits, TurnResult
-from .external_runtime import ExternalCliAdapter, ExternalTurnResult
+from .codex_failure import CodexPreparationError
+from .external_runtime import (
+    ExternalCliAdapter,
+    ExternalTurnResult,
+    ProviderLimitError,
+    ProviderUnavailableError,
+)
 from .hub_config import HubConfig
-from .incoming_materials import PreparedIncomingMaterials, prepare_incoming_materials
+from .incoming_materials import (
+    IncomingMaterialError,
+    PreparedIncomingMaterials,
+    prepare_incoming_materials,
+)
 from .metadata import format_agent_response, format_telegram_response
 from .models import Project, ProjectRegistry
 from .project_resolution import resolve_project_context
+from .registry import ExecutionRootError
 from .state import HubState, ProviderJobRecord, TopicRecord
 from .telegram_interaction import (
     telegram_contract_version,
@@ -52,6 +63,33 @@ class PreparedWorkerResult:
     telegram_html: str
 
 
+class ProviderTurnStopped(RuntimeError):
+    """An accepted provider turn was explicitly stopped by its owning user."""
+
+    def __init__(self, request_id: str) -> None:
+        super().__init__("provider turn stopped by user")
+        self.request_id = request_id
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerFailureClassification:
+    """Conservative durable outcome for one failed worker execution phase."""
+
+    status: Literal["failed", "indeterminate", "cancelled"]
+    error_class: str
+    error_code: str
+    reconcile_codex: bool
+    notice: Literal[
+        "execution_root",
+        "emergency_stop",
+        "provider_limit",
+        "provider_unavailable",
+        "incoming_material",
+        "checkpoint",
+        "uncertain",
+    ]
+
+
 def require_provider_job_lease(
     job: ProviderJobRecord,
     *,
@@ -61,6 +99,53 @@ def require_provider_job_lease(
     if job.lease_token is None:
         raise error_factory("leased provider job has no lease token")
     return job.lease_token
+
+
+def classify_worker_failure(
+    error: Exception,
+    *,
+    runtime: str,
+) -> WorkerFailureClassification:
+    """Classify without inferring that an ambiguous provider call was safe to replay."""
+    if isinstance(error, ExecutionRootError):
+        return WorkerFailureClassification(
+            "failed", "pre_execution", error.code, False, "execution_root"
+        )
+    if isinstance(error, ProviderTurnStopped):
+        return WorkerFailureClassification(
+            "cancelled", "cancelled", "emergency_stop", False, "emergency_stop"
+        )
+    if isinstance(error, ProviderLimitError):
+        return WorkerFailureClassification(
+            "failed", "quota", type(error).__name__, False, "provider_limit"
+        )
+    if isinstance(error, ProviderUnavailableError):
+        return WorkerFailureClassification(
+            "failed",
+            "provider_unavailable",
+            error.code,
+            False,
+            "provider_unavailable",
+        )
+    if isinstance(error, IncomingMaterialError):
+        return WorkerFailureClassification(
+            "failed", "pre_execution", type(error).__name__, False, "incoming_material"
+        )
+    if isinstance(error, CodexPreparationError):
+        return WorkerFailureClassification(
+            "failed",
+            "pre_execution",
+            type(error).__name__,
+            False,
+            "checkpoint" if runtime == "codex" else "uncertain",
+        )
+    return WorkerFailureClassification(
+        "indeterminate",
+        "ambiguous_execution",
+        type(error).__name__,
+        runtime == "codex",
+        "checkpoint" if runtime == "codex" else "uncertain",
+    )
 
 
 def resolve_external_worker_target(
@@ -347,7 +432,10 @@ def prepare_external_worker_result(
 __all__ = [
     "PreparedWorkerArtifacts",
     "PreparedWorkerResult",
+    "ProviderTurnStopped",
+    "WorkerFailureClassification",
     "WorkerExecutionTarget",
+    "classify_worker_failure",
     "codex_provider_prompt",
     "codex_turn_text",
     "external_provider_prompt",

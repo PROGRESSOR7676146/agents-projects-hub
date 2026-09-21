@@ -30,7 +30,7 @@ from .codex_appserver import (
     RpcError,
     context_remaining_percent,
 )
-from .codex_failure import CodexPreparationError, codex_preparation, uncertain_provider_notice
+from .codex_failure import codex_preparation, uncertain_provider_notice
 from .codex_recovery import (
     checkpoint_failure_notice,
     reconcile_codex_completion,
@@ -55,14 +55,13 @@ from .controller_result_publication import (
 )
 from .delivery_retry import delivery_retry_delay
 from .execution_journal import ExecutionJournal
-from .external_runtime import ProviderLimitError, ProviderUnavailableError
+from .external_runtime import ProviderUnavailableError
 from .external_service import ExternalAgentService
 from .hub_config import HubConfig, ProjectBinding, read_telegram_token
 from .incoming_materials import (
     ALBUM_DOWNLOAD_HOLD_MILLISECONDS,
     ALBUM_MAX_MILLISECONDS,
     IncomingMaterialDraft,
-    IncomingMaterialError,
     cleanup_materialized_inputs,
     cleanup_pending_raw_inputs,
     receive_incoming_materials,
@@ -136,6 +135,7 @@ from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
 from .topic_execution import require_inline_topic, resolve_topic_execution_root
 from .worker_execution import (
+    classify_worker_failure,
     codex_provider_prompt,
     external_provider_prompt,
     invoke_external_provider_turn,
@@ -994,11 +994,9 @@ class ProjectHubService:
         except Exception as exc:
             # The provider call may have started.  Do not retry it without
             # provider-specific proof, even if an adapter reports an error.
-            error_class = "quota" if isinstance(exc, ProviderLimitError) else "ambiguous_execution"
+            failure = classify_worker_failure(exc, runtime=agent.runtime)
             recovered = False
-            if agent.runtime == "codex" and not isinstance(
-                exc, (CodexPreparationError, IncomingMaterialError, ExecutionRootError)
-            ):
+            if failure.reconcile_codex:
                 assert self.supervisor is not None
                 try:
                     recovered = reconcile_codex_completion(
@@ -1013,14 +1011,14 @@ class ProjectHubService:
                 except Exception:
                     recovered = False
             try:
-                if isinstance(exc, ExecutionRootError):
-                    error_class = "pre_execution"
+                if failure.notice == "execution_root":
+                    assert isinstance(exc, ExecutionRootError)
                     queue_state.terminate_provider_job_with_notice(
                         executing.job_id,
                         token,
-                        status="failed",
-                        error_class=error_class,
-                        error_code=exc.code,
+                        status=failure.status,
+                        error_class=failure.error_class,
+                        error_code=failure.error_code,
                         sender_agent_id=agent.agent_id,
                         telegram_html=exc.public_message,
                     )
@@ -1031,50 +1029,44 @@ class ProjectHubService:
                         "provider_result_recovered",
                         agent.agent_id,
                     )
-                elif isinstance(exc, ProviderLimitError):
+                elif failure.notice == "provider_limit":
                     queue_state.terminate_provider_job_with_notice(
                         executing.job_id,
                         token,
-                        status="failed",
-                        error_class=error_class,
-                        error_code=type(exc).__name__,
+                        status=failure.status,
+                        error_class=failure.error_class,
+                        error_code=failure.error_code,
                         sender_agent_id=agent.agent_id,
                         telegram_html=(
                             f"{agent.display_name} limit reached. Reset telemetry was "
                             "recorded; use /accounts for the current status."
                         ),
                     )
-                elif isinstance(exc, ProviderUnavailableError):
-                    error_class = "provider_unavailable"
+                elif failure.notice == "provider_unavailable":
+                    assert isinstance(exc, ProviderUnavailableError)
                     queue_state.terminate_provider_job_with_notice(
                         executing.job_id,
                         token,
-                        status="failed",
-                        error_class=error_class,
-                        error_code=exc.code,
+                        status=failure.status,
+                        error_class=failure.error_class,
+                        error_code=failure.error_code,
                         sender_agent_id=agent.agent_id,
                         telegram_html=exc.public_message,
                     )
                 else:
-                    if isinstance(exc, (CodexPreparationError, IncomingMaterialError)):
-                        error_class = "pre_execution"
                     queue_state.terminate_provider_job_with_notice(
                         executing.job_id,
                         token,
-                        status=(
-                            "failed"
-                            if isinstance(exc, (CodexPreparationError, IncomingMaterialError))
-                            else "indeterminate"
-                        ),
-                        error_class=error_class,
-                        error_code=type(exc).__name__,
+                        status=failure.status,
+                        error_class=failure.error_class,
+                        error_code=failure.error_code,
                         sender_agent_id=agent.agent_id,
                         telegram_html=(
                             "Incoming material integrity validation failed; "
                             "the provider was not started. Send the material again."
-                            if isinstance(exc, IncomingMaterialError)
+                            if failure.notice == "incoming_material"
                             else checkpoint_failure_notice(queue_state, executing.job_id, exc)
-                            if agent.runtime == "codex"
+                            if failure.notice == "checkpoint"
                             else uncertain_provider_notice(agent.display_name)
                         ),
                     )
@@ -1085,7 +1077,7 @@ class ProjectHubService:
                     agent.agent_id,
                     "warning",
                     "queued_provider_error",
-                    f"{error_class}:{type(exc).__name__}",
+                    f"{failure.error_class}:{failure.error_code}",
                 )
             if agent.runtime == "codex":
                 self._discard_codex_client()
