@@ -1,20 +1,28 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import Mock, patch
 
+from hermes_codex_router.incoming_materials import PreparedIncomingMaterials
 from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.project_resolution import ResolvedProject
 from hermes_codex_router.state import ProviderJobRecord, TopicRecord
 from hermes_codex_router.worker_execution import (
     WorkerExecutionTarget,
+    codex_provider_prompt,
+    codex_turn_text,
+    external_provider_prompt,
+    prepare_worker_materials,
+    prepare_worker_staging_directory,
     require_provider_job_lease,
     resolve_embedded_worker_target,
     resolve_external_worker_target,
     revalidate_worker_execution_root,
+    worker_needs_full_telegram_contract,
 )
 
 
@@ -41,13 +49,21 @@ class WorkerExecutionPhaseTests(unittest.TestCase):
             f"root:{self.project.root}",
         )
 
-    def job(self, lease_token: str | None = "fictional-lease") -> ProviderJobRecord:
+    def job(
+        self,
+        lease_token: str | None = "fictional-lease",
+        *,
+        provider_session_id: str | None = "fictional-provider-session",
+    ) -> ProviderJobRecord:
         return cast(
             ProviderJobRecord,
             SimpleNamespace(
                 job_id="fictional-job",
                 topic_id=self.topic.topic_id,
                 lease_token=lease_token,
+                provider_session_id=provider_session_id,
+                session_id="fictional-session",
+                payload_text="Fictional request",
             ),
         )
 
@@ -106,6 +122,105 @@ class WorkerExecutionPhaseTests(unittest.TestCase):
         self.assertEqual(refreshed.topic, target.topic)
         self.assertEqual(refreshed.project.root, lane_root)
         self.assertEqual(target.project.root, Path("/home/example/project"))
+
+    def test_material_preparation_uses_persisted_job_materials_and_exact_boundary(self) -> None:
+        state = Mock()
+        records = (object(),)
+        state.incoming_materials_for_job.return_value = records
+        prepared = PreparedIncomingMaterials(" suffix", (), (), None, ())
+        with patch(
+            "hermes_codex_router.worker_execution.prepare_incoming_materials",
+            return_value=prepared,
+        ) as materializer:
+            result = prepare_worker_materials(
+                state,
+                state_path=Path("/home/example/private/hub.db"),
+                execution_root=self.project.root,
+                job=self.job(),
+                runtime="codex",
+            )
+
+        self.assertIs(result, prepared)
+        state.incoming_materials_for_job.assert_called_once_with("fictional-job")
+        materializer.assert_called_once_with(
+            records,
+            state_path=Path("/home/example/private/hub.db"),
+            execution_root=self.project.root,
+            job_id="fictional-job",
+            runtime="codex",
+        )
+
+    def test_staging_and_contract_decision_are_bounded_pre_invocation_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            staging = prepare_worker_staging_directory(root, "fictional-job")
+            self.assertEqual(staging, root / ".hub" / "staging" / "fictional-job")
+            self.assertTrue(staging.is_dir())
+
+        state = Mock()
+        state.telegram_contract_version.return_value = 4
+        with patch(
+            "hermes_codex_router.worker_execution.telegram_contract_version",
+            return_value=5,
+        ):
+            self.assertTrue(worker_needs_full_telegram_contract(state, self.job(), "codex"))
+        state.telegram_contract_version.return_value = 5
+        with patch(
+            "hermes_codex_router.worker_execution.telegram_contract_version",
+            return_value=5,
+        ):
+            self.assertFalse(worker_needs_full_telegram_contract(state, self.job(), "codex"))
+        self.assertTrue(
+            worker_needs_full_telegram_contract(
+                state,
+                self.job(provider_session_id=None),
+                "codex",
+            )
+        )
+
+    def test_provider_prompt_construction_preserves_material_and_fallback_context(self) -> None:
+        prepared = PreparedIncomingMaterials("\nMATERIAL", (), (), None, ())
+        current = codex_turn_text(self.job(), prepared)
+        self.assertEqual(current, "Fictional request\nMATERIAL")
+        bridged = codex_turn_text(
+            self.job(),
+            prepared,
+            fallback_visible_context="Fictional previous context",
+        )
+        self.assertIn("PREVIOUS VISIBLE CONTEXT:\nFictional previous context", bridged)
+        self.assertIn("CURRENT USER MESSAGE:\nFictional request\nMATERIAL", bridged)
+
+        staging = Path("/home/example/project/.hub/staging/fictional-job")
+        with patch(
+            "hermes_codex_router.worker_execution.telegram_user_turn_prompt",
+            return_value="codex-prompt",
+        ) as codex_builder:
+            self.assertEqual(
+                codex_provider_prompt(current, staging_dir=staging),
+                "codex-prompt",
+            )
+        codex_builder.assert_called_once_with(current, staging_dir=staging)
+
+        with patch(
+            "hermes_codex_router.worker_execution.telegram_turn_prompt",
+            return_value="external-prompt",
+        ) as external_builder:
+            self.assertEqual(
+                external_provider_prompt(
+                    self.job(),
+                    prepared,
+                    runtime="opencode",
+                    full_contract=True,
+                    staging_dir=staging,
+                ),
+                "external-prompt",
+            )
+        external_builder.assert_called_once_with(
+            "Fictional request\nMATERIAL",
+            runtime="opencode",
+            new_session=True,
+            staging_dir=staging,
+        )
 
 
 if __name__ == "__main__":

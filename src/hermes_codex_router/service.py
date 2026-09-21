@@ -65,7 +65,6 @@ from .incoming_materials import (
     IncomingMaterialError,
     cleanup_materialized_inputs,
     cleanup_pending_raw_inputs,
-    prepare_incoming_materials,
     receive_incoming_materials,
 )
 from .ingress_decisions import (
@@ -130,7 +129,6 @@ from .telegram_interaction import (
     CODEX_TELEGRAM_CONTRACT_VERSION,
     telegram_contract_version,
     telegram_developer_instructions,
-    telegram_turn_prompt,
     telegram_user_turn_prompt,
 )
 from .telegram_multipart import send_telegram_html_parts
@@ -138,6 +136,10 @@ from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
 from .topic_execution import require_inline_topic, resolve_topic_execution_root
 from .worker_execution import (
+    codex_provider_prompt,
+    external_provider_prompt,
+    prepare_worker_materials,
+    prepare_worker_staging_directory,
     require_provider_job_lease,
     resolve_embedded_worker_target,
     revalidate_worker_execution_root,
@@ -842,15 +844,14 @@ class ProjectHubService:
         try:
             target = revalidate_worker_execution_root(queue_state, target)
             project = target.project
-            prepared = prepare_incoming_materials(
-                queue_state.incoming_materials_for_job(executing.job_id),
+            prepared = prepare_worker_materials(
+                queue_state,
                 state_path=self.config.state_path,
                 execution_root=project.root,
-                job_id=executing.job_id,
+                job=executing,
                 runtime=agent.runtime,
             )
-            staging_dir = project.root / ".hub" / "staging" / executing.job_id
-            staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            staging_dir = prepare_worker_staging_directory(project.root, executing.job_id)
             contract_version = telegram_contract_version(agent.runtime)
             full_contract = (
                 executing.provider_session_id is None
@@ -885,7 +886,7 @@ class ProjectHubService:
                 turn_id = client.start_turn(
                     thread_id=thread.thread_id,
                     cwd=project.root,
-                    text=telegram_user_turn_prompt(
+                    text=codex_provider_prompt(
                         executing.payload_text + prepared.prompt_suffix,
                         staging_dir=staging_dir,
                     ),
@@ -938,11 +939,12 @@ class ProjectHubService:
                     raise ServiceError("no embedded adapter is configured for this provider")
                 result = external.adapter.run_turn(
                     cwd=project.root,
-                    prompt=telegram_turn_prompt(
-                        executing.payload_text + prepared.prompt_suffix,
+                    prompt=external_provider_prompt(
+                        executing,
+                        prepared,
                         runtime=agent.runtime,
                         staging_dir=staging_dir,
-                        new_session=full_contract,
+                        full_contract=full_contract,
                     ),
                     session_id=executing.provider_session_id,
                     model=executing.model if executing.model != "provider-selected" else None,
