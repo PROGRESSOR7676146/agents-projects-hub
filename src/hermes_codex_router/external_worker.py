@@ -13,7 +13,7 @@ from .codex_appserver import (
     RpcRejectedError,
     context_remaining_percent,
 )
-from .codex_failure import CodexPreparationError, codex_preparation, uncertain_provider_notice
+from .codex_failure import codex_preparation, uncertain_provider_notice
 from .codex_proxy_health import probe_codex_runtime_proxy
 from .codex_recovery import (
     checkpoint_failure_notice,
@@ -33,7 +33,6 @@ from .external_runtime import (
     ProviderUnavailableError,
 )
 from .hub_config import HubConfig
-from .incoming_materials import IncomingMaterialError
 from .project_resolution import (
     ProjectResolutionError,
     resolve_project_context,
@@ -50,6 +49,8 @@ from .telegram_interaction import (
     telegram_developer_instructions,
 )
 from .worker_execution import (
+    ProviderTurnStopped,
+    classify_worker_failure,
     codex_provider_prompt,
     codex_turn_text,
     external_provider_prompt,
@@ -71,12 +72,6 @@ from .worker_execution import (
 
 class ExternalQueueWorkerError(RuntimeError):
     pass
-
-
-class ProviderTurnStopped(RuntimeError):
-    def __init__(self, request_id: str) -> None:
-        super().__init__("provider turn stopped by user")
-        self.request_id = request_id
 
 
 class ExternalQueueWorker:
@@ -412,28 +407,32 @@ class ExternalQueueWorker:
             else:
                 self._execute_external(executing, token, project, topic)
         except Exception as exc:
+            failure = classify_worker_failure(exc, runtime=self.agent.runtime)
             try:
-                if isinstance(exc, ExecutionRootError):
-                    self._last_error_code = exc.code
+                if failure.notice == "execution_root":
+                    assert isinstance(exc, ExecutionRootError)
+                    self._last_error_code = failure.error_code
                     self._provider_state = "unavailable"
                     self.state.terminate_provider_job_with_notice(
                         executing.job_id,
                         token,
-                        status="failed",
-                        error_class="pre_execution",
-                        error_code=exc.code,
+                        status=failure.status,
+                        error_class=failure.error_class,
+                        error_code=failure.error_code,
                         sender_agent_id=self.agent.agent_id,
                         telegram_html=exc.public_message,
                     )
-                elif isinstance(exc, ProviderTurnStopped):
+                elif failure.notice == "emergency_stop":
+                    assert isinstance(exc, ProviderTurnStopped)
                     self.state.cancel_active_provider_job(
-                        executing.job_id, token, error_code="emergency_stop"
+                        executing.job_id, token, error_code=failure.error_code
                     )
                     self.state.complete_emergency_stop(exc.request_id)
                     self._last_error_code = None
                     self._provider_state = "ready"
                     self._record_event("info", "provider_turn_stopped", self.agent.agent_id)
-                elif isinstance(exc, ProviderLimitError):
+                elif failure.notice == "provider_limit":
+                    assert isinstance(exc, ProviderLimitError)
                     self._last_error_code = "provider_limit"
                     self._provider_state = "limited"
                     self._quota_remaining_percent = float(exc.limit.remaining_percent)
@@ -441,9 +440,9 @@ class ExternalQueueWorker:
                     self.state.terminate_provider_job_with_notice(
                         executing.job_id,
                         token,
-                        status="failed",
-                        error_class="quota",
-                        error_code=type(exc).__name__,
+                        status=failure.status,
+                        error_class=failure.error_class,
+                        error_code=failure.error_code,
                         sender_agent_id=self.agent.agent_id,
                         telegram_html=(
                             f"{self.agent.display_name} limit reached. Reset telemetry was "
@@ -451,29 +450,23 @@ class ExternalQueueWorker:
                         ),
                     )
                     self._record_event("warning", "provider_limit", exc.limit.to_json())
-                elif isinstance(exc, ProviderUnavailableError):
-                    self._last_error_code = exc.code
+                elif failure.notice == "provider_unavailable":
+                    assert isinstance(exc, ProviderUnavailableError)
+                    self._last_error_code = failure.error_code
                     self._provider_state = "unavailable"
                     self.state.terminate_provider_job_with_notice(
                         executing.job_id,
                         token,
-                        status="failed",
-                        error_class="provider_unavailable",
-                        error_code=exc.code,
+                        status=failure.status,
+                        error_class=failure.error_class,
+                        error_code=failure.error_code,
                         sender_agent_id=self.agent.agent_id,
                         telegram_html=exc.public_message,
                     )
-                    self._record_event("warning", "provider_unavailable", exc.code)
+                    self._record_event("warning", "provider_unavailable", failure.error_code)
                 else:
-                    failure_class = (
-                        "pre_execution"
-                        if isinstance(exc, (CodexPreparationError, IncomingMaterialError))
-                        else "ambiguous_execution"
-                    )
                     recovered = False
-                    if self.agent.runtime == "codex" and not isinstance(
-                        exc, (CodexPreparationError, IncomingMaterialError)
-                    ):
+                    if failure.reconcile_codex:
                         assert self.supervisor is not None
                         try:
                             recovered = reconcile_codex_completion(
@@ -504,28 +497,24 @@ class ExternalQueueWorker:
                         self.state.terminate_provider_job_with_notice(
                             executing.job_id,
                             token,
-                            status=(
-                                "failed"
-                                if isinstance(exc, (CodexPreparationError, IncomingMaterialError))
-                                else "indeterminate"
-                            ),
-                            error_class=failure_class,
-                            error_code=type(exc).__name__,
+                            status=failure.status,
+                            error_class=failure.error_class,
+                            error_code=failure.error_code,
                             error_detail=error_detail,
                             sender_agent_id=self.agent.agent_id,
                             telegram_html=(
                                 "Incoming material integrity validation failed; "
                                 "the provider was not started. Send the material again."
-                                if isinstance(exc, IncomingMaterialError)
+                                if failure.notice == "incoming_material"
                                 else checkpoint_failure_notice(self.state, executing.job_id, exc)
-                                if self.agent.runtime == "codex"
+                                if failure.notice == "checkpoint"
                                 else uncertain_provider_notice(self.agent.display_name)
                             ),
                         )
                         self._record_event(
                             "warning",
                             "queued_provider_error",
-                            f"{failure_class}:{type(exc).__name__}",
+                            f"{failure.error_class}:{failure.error_code}",
                         )
             except Exception:
                 pass
