@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from hermes_codex_router.controller_result_publication import (
     PreparedResultPublication,
@@ -88,6 +89,9 @@ class PreparedResultPublisherTests(unittest.TestCase):
         job: ProviderJobRecord,
         raw: Path,
     ) -> PreparedResultPublication:
+        materialized = self.project_root / ".hub" / "incoming" / job.job_id
+        materialized.mkdir(parents=True, exist_ok=True)
+        (materialized / "input.txt").write_text("fictional input", encoding="utf-8")
         artifacts = prepare_worker_artifacts(
             self.project_root,
             job.job_id,
@@ -97,7 +101,7 @@ class PreparedResultPublisherTests(unittest.TestCase):
         return PreparedResultPublication(
             job=job,
             project_root=self.project_root,
-            prepared_materials=PreparedIncomingMaterials("", (), (), None, (raw,)),
+            prepared_materials=PreparedIncomingMaterials("", (), (), materialized, (raw,)),
             visible_response="visible result",
             telegram_html="<b>visible result</b>",
             provider_session_id="provider-session",
@@ -115,9 +119,10 @@ class PreparedResultPublisherTests(unittest.TestCase):
 
     def test_publish_commits_result_outbox_and_artifact_before_raw_cleanup(self) -> None:
         job, raw = self.executing_job(101)
-        self.stage_artifact(job)
+        staged_artifact = self.stage_artifact(job)
+        publication = self.publication(job, raw)
 
-        published = self.publisher.publish(self.publication(job, raw))
+        published = self.publisher.publish(publication)
 
         self.assertIsInstance(published, PublishedProviderResult)
         self.assertEqual(published.result.job_id, job.job_id)
@@ -133,14 +138,19 @@ class PreparedResultPublisherTests(unittest.TestCase):
         )
         self.assertEqual(self.state.incoming_materials_for_job(job.job_id)[0].status, "consumed")
         self.assertFalse(raw.exists())
+        assert publication.prepared_materials.materialized_directory is not None
+        self.assertFalse(publication.prepared_materials.materialized_directory.exists())
+        self.assertFalse(staged_artifact.parent.exists())
 
     def test_commit_failure_keeps_job_and_raw_material_for_recovery(self) -> None:
         job, raw = self.executing_job(102)
-        self.stage_artifact(job)
+        staged_artifact = self.stage_artifact(job)
         invalid = replace(job, lease_token="wrong-token")
+        publication = self.publication(invalid, raw)
+        artifact_path = publication.artifacts[0].path
 
         with self.assertRaisesRegex(StateError, "lease is missing or invalid"):
-            self.publisher.publish(self.publication(invalid, raw))
+            self.publisher.publish(publication)
 
         self.assertEqual(self.state.get_provider_job(job.job_id).status, "executing")
         with self.assertRaisesRegex(StateError, "has no result"):
@@ -149,6 +159,34 @@ class PreparedResultPublisherTests(unittest.TestCase):
             self.state.get_telegram_outbox_for_job(job.job_id)
         self.assertEqual(self.state.incoming_materials_for_job(job.job_id)[0].status, "stored")
         self.assertTrue(raw.exists())
+        self.assertFalse(artifact_path.exists())
+        assert publication.prepared_materials.materialized_directory is not None
+        self.assertTrue(publication.prepared_materials.materialized_directory.exists())
+        self.assertTrue(staged_artifact.exists())
+
+    def test_cleanup_failure_does_not_reverse_commit_and_is_reported(self) -> None:
+        job, raw = self.executing_job(104)
+        self.stage_artifact(job)
+        cleanup_error = Mock()
+        publisher = PreparedResultPublisher(
+            state=self.state,
+            state_path=self.state_path,
+            cleanup_error=cleanup_error,
+        )
+
+        with patch(
+            "hermes_codex_router.controller_result_publication.cleanup_job_staging",
+            side_effect=OSError("fictional cleanup failure"),
+        ):
+            published = publisher.publish(self.publication(job, raw))
+
+        self.assertEqual(published.result.job_id, job.job_id)
+        self.assertEqual(self.state.get_provider_job(job.job_id).status, "result_ready")
+        self.assertFalse(raw.exists())
+        cleanup_error.assert_called_once_with(
+            "artifact_staging_cleanup_error",
+            "OSError",
+        )
 
     def test_artifact_spool_failure_does_not_commit_or_clean_raw_material(self) -> None:
         job, raw = self.executing_job(103)
