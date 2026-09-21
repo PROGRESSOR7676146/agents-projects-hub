@@ -7,6 +7,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import Mock, patch
 
+from hermes_codex_router.codex_appserver import CodexThread, TurnResult
+from hermes_codex_router.external_runtime import ExternalTurnResult
 from hermes_codex_router.incoming_materials import PreparedIncomingMaterials
 from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.project_resolution import ResolvedProject
@@ -16,12 +18,16 @@ from hermes_codex_router.worker_execution import (
     codex_provider_prompt,
     codex_turn_text,
     external_provider_prompt,
+    invoke_external_provider_turn,
+    open_codex_provider_thread,
     prepare_worker_materials,
     prepare_worker_staging_directory,
     require_provider_job_lease,
     resolve_embedded_worker_target,
     resolve_external_worker_target,
     revalidate_worker_execution_root,
+    start_codex_provider_turn,
+    wait_for_codex_provider_turn,
     worker_needs_full_telegram_contract,
 )
 
@@ -64,6 +70,8 @@ class WorkerExecutionPhaseTests(unittest.TestCase):
                 provider_session_id=provider_session_id,
                 session_id="fictional-session",
                 payload_text="Fictional request",
+                model="fictional-model",
+                effort="high",
             ),
         )
 
@@ -219,6 +227,122 @@ class WorkerExecutionPhaseTests(unittest.TestCase):
             "Fictional request\nMATERIAL",
             runtime="opencode",
             new_session=True,
+            staging_dir=staging,
+        )
+
+    def test_codex_thread_open_preserves_resume_and_forced_new_boundaries(self) -> None:
+        client = Mock()
+        resumed = CodexThread(
+            "fictional-provider-session",
+            self.project.root,
+            "fictional-model",
+            "openai",
+        )
+        started = CodexThread(
+            "fictional-new-session",
+            self.project.root,
+            "fictional-model",
+            "openai",
+        )
+        client.resume_thread.return_value = resumed
+        client.start_thread.return_value = started
+
+        self.assertIs(
+            open_codex_provider_thread(
+                client,
+                self.job(),
+                self.project,
+                developer_instructions="Fictional contract",
+            ),
+            resumed,
+        )
+        client.resume_thread.assert_called_once_with(
+            thread_id="fictional-provider-session",
+            cwd=self.project.root,
+            model="fictional-model",
+            developer_instructions="Fictional contract",
+        )
+        client.start_thread.assert_not_called()
+
+        self.assertIs(
+            open_codex_provider_thread(
+                client,
+                self.job(),
+                self.project,
+                developer_instructions="Fictional contract",
+                force_new_thread=True,
+            ),
+            started,
+        )
+        client.start_thread.assert_called_once_with(
+            cwd=self.project.root,
+            model="fictional-model",
+            project_id=self.project.project_id,
+            developer_instructions="Fictional contract",
+        )
+
+    def test_codex_turn_start_and_completion_are_separate_invocation_boundaries(self) -> None:
+        client = Mock()
+        thread = CodexThread(
+            "fictional-thread",
+            self.project.root,
+            "fictional-model",
+            "openai",
+        )
+        client.start_turn.return_value = "fictional-turn"
+        result = TurnResult("Fictional result", 1000, 200)
+        client.wait_for_turn.return_value = result
+        images = (self.project.root / ".hub" / "incoming" / "image.png",)
+
+        turn_id = start_codex_provider_turn(
+            client,
+            self.job(),
+            thread,
+            self.project,
+            prompt="Fictional prompt",
+            local_image_paths=images,
+        )
+        self.assertEqual(turn_id, "fictional-turn")
+        client.start_turn.assert_called_once_with(
+            thread_id="fictional-thread",
+            cwd=self.project.root,
+            text="Fictional prompt",
+            model="fictional-model",
+            effort="high",
+            local_image_paths=images,
+        )
+        self.assertIs(wait_for_codex_provider_turn(client, turn_id), result)
+        client.wait_for_turn.assert_called_once_with("fictional-turn")
+
+    def test_external_invocation_uses_immutable_job_snapshot(self) -> None:
+        adapter = Mock()
+        result = ExternalTurnResult(
+            "opencode",
+            "Fictional result",
+            "fictional-next-session",
+            "fictional-actual-model",
+        )
+        adapter.run_turn.return_value = result
+        staging = self.project.root / ".hub" / "staging" / "fictional-job"
+
+        self.assertIs(
+            invoke_external_provider_turn(
+                adapter,
+                self.job(),
+                self.project,
+                prompt="Fictional prompt",
+                interrupt_prepared=True,
+                staging_dir=staging,
+            ),
+            result,
+        )
+        adapter.run_turn.assert_called_once_with(
+            cwd=self.project.root,
+            prompt="Fictional prompt",
+            session_id="fictional-provider-session",
+            model="fictional-model",
+            effort="high",
+            interrupt_prepared=True,
             staging_dir=staging,
         )
 
