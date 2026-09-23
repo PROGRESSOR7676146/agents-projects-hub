@@ -915,6 +915,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
         controller.config = replace(
             self.config,
+            codex_model_provider="example-route",
             agents=self.config.agents
             + (
                 AgentDefinition(
@@ -934,8 +935,9 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         cache.store(
             "codex",
             (
-                ProviderModel("choice-a", "A", ("low", "high")),
-                ProviderModel("choice-b", "B", ("medium",)),
+                ProviderModel("gpt-5.6-sol", "A", ("low", "high")),
+                ProviderModel("claude-sonnet-4-6", "B", ("medium",)),
+                ProviderModel("gemini-3-flash", "C", ("high",)),
             ),
             source_version="codex model/list",
         )
@@ -949,7 +951,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         ):
             refreshed = controller._provider_catalog("codex", refresh=True)
             warm = controller._provider_catalog("codex")
-        self.assertEqual([m.model_id for m in refreshed.models], ["choice-a", "choice-b"])
+        self.assertEqual([m.model_id for m in refreshed.models], ["gpt-5.6-sol"])
         self.assertEqual(warm.models, refreshed.models)
         self.assertEqual(warm.updated_at, refreshed.updated_at)
         self.assertTrue(cache.is_stale("codex"))

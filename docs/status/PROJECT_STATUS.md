@@ -45,6 +45,10 @@ Telegram/TUI/Telegram round trip separately from these offline regressions.
 Native Codex catalog discovery no longer requires the retired multi-auth helper.
 The monitor reads `model/list`; isolated Controller refresh callbacks request
 asynchronous discovery and retain last-good selectable models without provider RPC.
+When a proxy returns a union catalog, the Codex selector admits only OpenAI
+GPT/o-series identifiers, including through an explicitly configured route.
+It sanitizes older cached snapshots on display and refreshes snapshots created
+before this boundary; discovery failure cannot re-expose foreign models.
 Codex `/local` now emits a native TUI attach to the configured shared Unix socket,
 preserving the same persisted thread instead of opening a competing standalone writer.
 Package F is repository-complete at schema 32. `max_parallel_roots` defaults to

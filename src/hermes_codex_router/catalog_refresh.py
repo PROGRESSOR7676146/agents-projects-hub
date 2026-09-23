@@ -8,7 +8,7 @@ from typing import Callable
 
 from .codex_appserver import CodexAppServerClient, UnixWebSocketTransport
 from .hub_config import HubConfig
-from .model_selection import available_models
+from .model_selection import available_openai_models
 from .provider_catalog import (
     DEFAULT_CATALOG_TTL,
     ProviderCatalogError,
@@ -27,9 +27,10 @@ def native_codex_models(config: HubConfig) -> tuple[ProviderModel, ...]:
     client = CodexAppServerClient(UnixWebSocketTransport(config.codex_socket_path))
     try:
         client.initialize()
+        listed = client.list_models()
+        discovered = available_openai_models(listed, model_provider=config.codex_model_provider)
         models = tuple(
-            ProviderModel(model_id, model_id, efforts)
-            for model_id, efforts in available_models(client.list_models()).items()
+            ProviderModel(model_id, model_id, efforts) for model_id, efforts in discovered.items()
         )
         if not models:
             raise ProviderCatalogError("Codex returned no usable models")
@@ -87,9 +88,14 @@ def refresh_provider_catalogs(
             continue
         if agent.runtime == "codex" and config.codex_multi_auth_executable is None:
             before = cache.load(agent.agent_id)
+            native_source = (
+                "codex model/list openai-only"
+                if config.codex_model_provider is None
+                else f"codex model/list {config.codex_model_provider}"
+            )
             if (
                 before is not None
-                and before.source_version == "codex model/list"
+                and before.source_version == native_source
                 and not cache.is_stale(agent.agent_id, max_age=max_age, now=observed_at)
             ):
                 continue
@@ -98,7 +104,7 @@ def refresh_provider_catalogs(
                 snapshot = cache.store(
                     agent.agent_id,
                     native_codex_models(config),
-                    source_version="codex model/list",
+                    source_version=native_source,
                     observed_at=observed_at,
                 )
             except (OSError, RuntimeError):
