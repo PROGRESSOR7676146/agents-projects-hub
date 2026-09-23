@@ -78,7 +78,11 @@ from .ingress_decisions import (
 )
 from .local_transfer import LocalTransferError, local_resume_command
 from .metadata import format_telegram_response
-from .model_selection import ModelSelectionError, available_models
+from .model_selection import (
+    ModelSelectionError,
+    available_openai_models,
+    is_openai_model,
+)
 from .project_editing import ProjectEditStore
 from .project_onboarding import ProjectOnboardingStore
 from .project_resolution import (
@@ -1381,7 +1385,9 @@ class ProjectHubService:
         return result.text
 
     def _model_catalog(self) -> dict[str, tuple[str, ...]]:
-        return available_models(self._client().list_models())
+        return available_openai_models(
+            self._client().list_models(), model_provider=self.config.codex_model_provider
+        )
 
     def _catalog_cache(self) -> ProviderCatalogCache:
         return ProviderCatalogCache(
@@ -1444,6 +1450,24 @@ class ProjectHubService:
                 source_version="externally managed fallback",
             )
         cached = cache.load(agent_id)
+        if agent.runtime == "codex" and cached:
+            # Cached snapshots do not preserve provider identity. Unmarked foreign
+            # models cannot be authorized by a configured proxy route.
+            safe = tuple(model for model in cached.models if is_openai_model(model.model_id))
+            if len(safe) != len(cached.models):
+                if safe:
+                    cached = replace(cached, models=safe)
+                else:
+                    cached = cache.store(
+                        agent_id,
+                        (
+                            ProviderModel(
+                                agent.default_model, agent.default_model, (agent.default_effort,)
+                            ),
+                        ),
+                        source_version="configured fallback",
+                    )
+                cache.request_refresh(agent_id)
         if self._uses_external_codex_worker():
             # The isolated Controller must never own provider RPC/CLI discovery.
             # Refresh invalidates freshness, not the selectable last-good models.

@@ -25,15 +25,27 @@ class CatalogRefreshTests(unittest.TestCase):
             ):
                 client = factory.return_value
                 client.list_models.return_value = (
-                    {"id": "native", "supportedReasoningEfforts": [{"reasoningEffort": "high"}]},
+                    {
+                        "id": "gpt-6-astra",
+                        "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
+                    },
+                    {
+                        "id": "claude-sonnet-4-6",
+                        "modelProvider": "cliproxyapi",
+                        "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
+                    },
+                    {
+                        "id": "gemini-3-flash",
+                        "supportedReasoningEfforts": [{"reasoningEffort": "medium"}],
+                    },
                 )
-                models = native_codex_models(config)
+                models = native_codex_models(replace(config, codex_model_provider="cliproxyapi"))
                 transport.assert_called_once_with(config.codex_socket_path)
                 self.assertEqual(
                     [call[0] for call in client.method_calls],
                     ["initialize", "list_models", "close"],
                 )
-                self.assertEqual(models, (ProviderModel("native", "native", ("high",)),))
+                self.assertEqual(models, (ProviderModel("gpt-6-astra", "gpt-6-astra", ("high",)),))
 
     def _config(self, root: Path) -> HubConfig:
         return HubConfig(
@@ -144,7 +156,7 @@ class CatalogRefreshTests(unittest.TestCase):
                 [(model.model_id, model.efforts) for model in loaded.models],
                 [("native-a", ("low", "high")), ("native-b", ("medium",))],
             )
-            self.assertEqual(loaded.source_version, "codex model/list")
+            self.assertEqual(loaded.source_version, "codex model/list openai-only")
 
     def test_native_failure_preserves_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -165,6 +177,31 @@ class CatalogRefreshTests(unittest.TestCase):
             loaded = cache.load("codex")
             assert loaded is not None
             self.assertEqual(loaded.models[0].model_id, "old")
+
+    def test_native_refresh_replaces_fresh_unfiltered_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = replace(self._config(root), codex_multi_auth_executable=None)
+            cache = ProviderCatalogCache(root / "provider-model-catalogs.json")
+            now = datetime(2026, 9, 4, tzinfo=timezone.utc)
+            cache.store(
+                "codex",
+                (
+                    ProviderModel("gpt-6-astra", "GPT", ("high",)),
+                    ProviderModel("gemini-3-flash", "Gemini", ("high",)),
+                ),
+                source_version="codex model/list",
+                observed_at=now,
+            )
+            with patch(
+                "hermes_codex_router.catalog_refresh.native_codex_models",
+                return_value=(ProviderModel("gpt-6-astra", "GPT", ("high",)),),
+            ):
+                result = refresh_provider_catalogs(config, now=now)
+            self.assertEqual(result.refreshed, ("codex",))
+            loaded = cache.load("codex")
+            assert loaded is not None
+            self.assertEqual([model.model_id for model in loaded.models], ["gpt-6-astra"])
 
 
 if __name__ == "__main__":
