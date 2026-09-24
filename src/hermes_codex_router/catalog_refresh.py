@@ -22,6 +22,12 @@ from .provider_catalog_cache import ProviderCatalogCache
 Run = Callable[..., subprocess.CompletedProcess[str]]
 
 
+def native_codex_catalog_source(model_provider: str | None) -> str:
+    if model_provider is None:
+        return "codex model/list openai-only"
+    return f"codex model/list route-filtered {model_provider}"
+
+
 def native_codex_models(config: HubConfig) -> tuple[ProviderModel, ...]:
     """Read capabilities only; never start a server, thread, or inference turn."""
     client = CodexAppServerClient(UnixWebSocketTransport(config.codex_socket_path))
@@ -86,13 +92,11 @@ def refresh_provider_catalogs(
     for agent in config.agents:
         if agent.managed_externally or agent.runtime not in {"codex", "opencode", "antigravity"}:
             continue
-        if agent.runtime == "codex" and config.codex_multi_auth_executable is None:
+        if agent.runtime == "codex" and (
+            config.codex_multi_auth_executable is None or config.codex_model_provider is not None
+        ):
             before = cache.load(agent.agent_id)
-            native_source = (
-                "codex model/list openai-only"
-                if config.codex_model_provider is None
-                else f"codex model/list {config.codex_model_provider}"
-            )
+            native_source = native_codex_catalog_source(config.codex_model_provider)
             if (
                 before is not None
                 and before.source_version == native_source

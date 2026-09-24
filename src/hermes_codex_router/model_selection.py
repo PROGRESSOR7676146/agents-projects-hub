@@ -19,14 +19,22 @@ def is_openai_model(model_id: str) -> bool:
 def available_openai_models(
     models: Iterable[dict[str, Any]], *, model_provider: str | None = None
 ) -> dict[str, tuple[str, ...]]:
-    """Accept OpenAI IDs only, even when a proxy route exposes a union catalog."""
+    """Accept OpenAI IDs and models tagged with the exact configured route."""
     return available_models(
         item
         for item in models
         if isinstance(item.get("id"), str)
-        and is_openai_model(item["id"])
-        and item.get("modelProvider", item.get("providerID", "openai"))
-        in ("openai", model_provider)
+        and (
+            (
+                is_openai_model(item["id"])
+                and item.get("modelProvider", item.get("providerID", "openai"))
+                in ("openai", model_provider)
+            )
+            or (
+                model_provider is not None
+                and item.get("modelProvider", item.get("providerID")) == model_provider
+            )
+        )
     )
 
 

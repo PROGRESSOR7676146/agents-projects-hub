@@ -19,6 +19,7 @@ from .artifacts import (
     remove_spooled_artifact,
     verify_spooled_artifact,
 )
+from .catalog_refresh import native_codex_catalog_source
 from .codex_accounts import (
     CodexPoolStatus,
     decode_codex_pool_snapshot,
@@ -1451,22 +1452,17 @@ class ProjectHubService:
             )
         cached = cache.load(agent_id)
         if agent.runtime == "codex" and cached:
-            # Cached snapshots do not preserve provider identity. Unmarked foreign
-            # models cannot be authorized by a configured proxy route.
-            safe = tuple(model for model in cached.models if is_openai_model(model.model_id))
-            if len(safe) != len(cached.models):
-                if safe:
-                    cached = replace(cached, models=safe)
-                else:
-                    cached = cache.store(
-                        agent_id,
-                        (
-                            ProviderModel(
-                                agent.default_model, agent.default_model, (agent.default_effort,)
-                            ),
+            cached = self._safe_cached_codex_catalog(cache, agent_id, cached)
+            if not cached.models:
+                cached = cache.store(
+                    agent_id,
+                    (
+                        ProviderModel(
+                            agent.default_model, agent.default_model, (agent.default_effort,)
                         ),
-                        source_version="configured fallback",
-                    )
+                    ),
+                    source_version="configured fallback",
+                )
                 cache.request_refresh(agent_id)
         if self._uses_external_codex_worker():
             # The isolated Controller must never own provider RPC/CLI discovery.
@@ -1507,7 +1503,9 @@ class ProjectHubService:
                 agent_id,
                 models,
                 source_version=(
-                    self._source_version(executable)
+                    native_codex_catalog_source(self.config.codex_model_provider)
+                    if agent.runtime == "codex"
+                    else self._source_version(executable)
                     if executable is not None
                     else "provider-managed"
                 ),
@@ -1531,11 +1529,36 @@ class ProjectHubService:
             )
 
     def _cached_provider_catalog(self, agent_id: str) -> CatalogSnapshot:
-        self.config.require_agent(agent_id)
-        cached = self._catalog_cache().load(agent_id)
+        agent = self.config.require_agent(agent_id)
+        cache = self._catalog_cache()
+        cached = cache.load(agent_id)
         if cached is None:
             raise ProviderCatalogError("model selection expired; run /model again")
+        if agent.runtime == "codex":
+            cached = self._safe_cached_codex_catalog(cache, agent_id, cached)
         return cached
+
+    def _safe_cached_codex_catalog(
+        self, cache: ProviderCatalogCache, agent_id: str, cached: CatalogSnapshot
+    ) -> CatalogSnapshot:
+        agent = self.config.require_agent(agent_id)
+        exact_route = (
+            self.config.codex_model_provider is not None
+            and cached.source_version
+            == native_codex_catalog_source(self.config.codex_model_provider)
+        )
+        configured_default = (
+            cached.source_version == "configured fallback"
+            and len(cached.models) == 1
+            and cached.models[0].model_id == agent.default_model
+        )
+        if exact_route or configured_default:
+            return cached
+        safe = tuple(model for model in cached.models if is_openai_model(model.model_id))
+        if len(safe) == len(cached.models):
+            return cached
+        cache.request_refresh(agent_id)
+        return replace(cached, models=safe)
 
     def _switch_agent(
         self,

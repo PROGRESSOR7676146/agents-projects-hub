@@ -956,6 +956,51 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         self.assertEqual(warm.updated_at, refreshed.updated_at)
         self.assertTrue(cache.is_stale("codex"))
 
+    def test_exact_route_cache_keeps_tagged_models_and_rejects_old_union_cache(self) -> None:
+        from hermes_codex_router.provider_catalog import ProviderModel
+
+        controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
+        controller.config = replace(
+            self.config,
+            codex_model_provider="example-route",
+            agents=self.config.agents
+            + (
+                AgentDefinition(
+                    "codex",
+                    "Codex",
+                    "example_codex_bot",
+                    "codex",
+                    None,
+                    True,
+                    False,
+                    "gpt-6-astra",
+                    "high",
+                ),
+            ),
+        )
+        cache = controller._catalog_cache()
+        models = (
+            ProviderModel("gpt-6-astra", "GPT", ("high",)),
+            ProviderModel("special-model", "Route", ("low",)),
+        )
+        with patch.object(controller, "_uses_external_codex_worker", return_value=True):
+            cache.store(
+                "codex", models, source_version="codex model/list route-filtered example-route"
+            )
+            self.assertEqual(
+                [item.model_id for item in controller._provider_catalog("codex").models],
+                ["gpt-6-astra", "special-model"],
+            )
+            self.assertEqual(
+                [item.model_id for item in controller._cached_provider_catalog("codex").models],
+                ["gpt-6-astra", "special-model"],
+            )
+            cache.store("codex", models, source_version="codex model/list example-route")
+            self.assertEqual(
+                [item.model_id for item in controller._cached_provider_catalog("codex").models],
+                ["gpt-6-astra"],
+            )
+
     def test_controller_fails_fast_for_legacy_managed_external_jobs(self) -> None:
         token = Path(self.tempdir.name) / "codex-token"
         token.write_text("123456:secret-token-value", encoding="utf-8")

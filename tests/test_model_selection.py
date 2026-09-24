@@ -37,7 +37,7 @@ class ModelSelectionTests(unittest.TestCase):
             {"gpt-6-astra": ("high",), "o3": ("medium",)},
         )
 
-    def test_custom_route_does_not_admit_foreign_models(self) -> None:
+    def test_custom_route_accepts_only_explicitly_tagged_models(self) -> None:
         entries = [
             {"id": "gpt-6-astra", "supportedReasoningEfforts": [{"reasoningEffort": "high"}]},
             {
@@ -59,7 +59,12 @@ class ModelSelectionTests(unittest.TestCase):
         ]
         self.assertEqual(
             available_openai_models(entries, model_provider="example-route"),
-            {"gpt-6-astra": ("high",), "gpt-5.6-sol": ("medium",)},
+            {
+                "gpt-6-astra": ("high",),
+                "special-model": ("low",),
+                "gemini-3-flash": ("low",),
+                "gpt-5.6-sol": ("medium",),
+            },
         )
 
     def test_extracts_only_models_with_efforts(self) -> None:
