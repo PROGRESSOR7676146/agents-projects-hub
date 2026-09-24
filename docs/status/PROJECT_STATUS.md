@@ -8,6 +8,13 @@ operator deployment inventory or live conversation evidence.
 
 ## Quality checkpoint
 
+Schema 34 Codex recovery and exact already-open local reconciliation are in
+repository implementation, pending immutable deployment and live Telegram /
+provider acceptance. Offline tests exercise exact terminal evidence,
+inspection-first continuation, paused queue work and ownership checks; see
+[REQ-QUEUE-004](../product/PERSISTENCE_AND_RECOVERY.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
+and [ADR 0035](../decisions/0035-exact-terminal-turn-reconciliation.md).
+
 The integrated development baseline retains released schemas 26–30 unchanged,
 adds root exclusion and bounded concurrency as schemas 31–32, and adds durable
 inbound Telegram materials as schema 33. Project

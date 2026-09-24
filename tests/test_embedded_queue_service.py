@@ -543,7 +543,7 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         rejected = service.state.active_session(topic.topic_id)
         assert rejected is not None
         self.assertEqual(rejected.writer_mode, "local")
-        self.assertIn("still running", telegram.sent[-1])
+        self.assertIn("pending or being delivered", telegram.sent[-1])
         self.assertEqual(len(client.turn_threads), 1)
         service.close()
 

@@ -158,6 +158,7 @@ class HubState:
             active_lane_for_topic=self.active_lane_for_topic,
             topic_has_running_dispatch=self.topic_has_running_dispatch,
             topic_has_pending_provider_job=self.topic_has_pending_provider_job,
+            topic_has_unheld_provider_job=self.topic_has_unheld_provider_job,
             origin_exists=self._session_origin_exists,
             activate_origin=self._activate_session_origin,
         )
@@ -566,6 +567,9 @@ class HubState:
                                  OR (status = 'indeterminate' AND NOT EXISTS (
                                    SELECT 1 FROM provider_job_resolutions resolutions
                                    WHERE resolutions.job_id = provider_jobs.job_id
+                                 ) AND NOT EXISTS (
+                                   SELECT 1 FROM provider_turn_terminal_evidence evidence
+                                   WHERE evidence.job_id = provider_jobs.job_id
                                  ))
                                )
                                UNION SELECT 1 FROM turn_dispatches
@@ -629,10 +633,10 @@ class HubState:
         )
 
     def writer_transfer_snapshot(
-        self, topic: TopicRecord, session: SessionRecord
+        self, topic: TopicRecord, session: SessionRecord, *, allow_held: bool = False
     ) -> WriterTransferSnapshot:
         """Capture persisted identity before filesystem validation, without I/O."""
-        return self._sessions_state.writer_transfer_snapshot(topic, session)
+        return self._sessions_state.writer_transfer_snapshot(topic, session, allow_held=allow_held)
 
     def _writer_lane_snapshot(self, topic_id: int) -> tuple[tuple[str, object], ...] | None:
         return self._sessions_state._writer_lane_snapshot(topic_id)
@@ -707,6 +711,9 @@ class HubState:
     def topic_has_pending_provider_job(self, topic_id: int) -> bool:
         """Whether durable work still owns this topic's provider writer."""
         return self._provider_job_state.topic_has_pending(topic_id)
+
+    def topic_has_unheld_provider_job(self, topic_id: int) -> bool:
+        return self._provider_job_state.topic_has_unheld(topic_id)
 
     def nonterminal_provider_job_counts(self, agent_ids: Sequence[str]) -> dict[str, int]:
         """Count accepted work that must be drained before runtime ownership changes."""
@@ -1585,6 +1592,7 @@ class HubState:
         telegram_html: str,
         expected_status: str = "executing",
         error_detail: str | None = None,
+        terminal_turn_status: str | None = None,
         now: datetime | None = None,
     ) -> ProviderJobRecord:
         """Atomically terminalize invoked work and queue one visible failure notice."""
@@ -1594,6 +1602,12 @@ class HubState:
             raise StateError("provider failure notice has an invalid expected status")
         if expected_status == "leased" and status != "failed":
             raise StateError("pre-execution provider work cannot become indeterminate")
+        if terminal_turn_status is not None and (
+            status != "indeterminate"
+            or expected_status != "executing"
+            or terminal_turn_status not in {"failed", "interrupted"}
+        ):
+            raise StateError("invalid confirmed terminal turn status")
         failure_class = _bounded(error_class, name="error class", maximum=64)
         code = _bounded(error_code, name="error code", maximum=128)
         sender = _bounded(sender_agent_id, name="sender agent id", maximum=64)
@@ -1616,6 +1630,64 @@ class HubState:
                 raise StateError("provider job lease is missing or invalid")
             if sender != str(row["agent_id"]):
                 raise StateError("Telegram outbox sender does not match provider job agent")
+            if terminal_turn_status is not None:
+                checkpoint = self._connection.execute(
+                    "SELECT provider_thread_id, provider_turn_id, project_root "
+                    "FROM provider_execution_checkpoints WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+                session = self._connection.execute(
+                    "SELECT provider_session_id, generation, writer_mode "
+                    "FROM agent_sessions WHERE session_id = ?",
+                    (row["session_id"],),
+                ).fetchone()
+                if (
+                    checkpoint is None
+                    or session is None
+                    or not checkpoint["provider_turn_id"]
+                    or checkpoint["provider_thread_id"] != session["provider_session_id"]
+                    or int(session["generation"]) != int(row["session_generation"])
+                    or session["writer_mode"] != "telegram"
+                ):
+                    raise StateError("confirmed turn evidence binding changed")
+                self._connection.execute(
+                    "INSERT INTO provider_turn_terminal_evidence "
+                    "(job_id, terminal_status, provider_thread_id, provider_turn_id, "
+                    "project_root, observed_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        job_id,
+                        terminal_turn_status,
+                        checkpoint["provider_thread_id"],
+                        checkpoint["provider_turn_id"],
+                        checkpoint["project_root"],
+                        timestamp,
+                    ),
+                )
+                self._connection.execute(
+                    """INSERT OR IGNORE INTO provider_job_holds (job_id, cause_job_id, held_at)
+                       SELECT tail.job_id, ?, ? FROM provider_jobs tail
+                       JOIN topics tail_topic ON tail_topic.topic_id = tail.topic_id
+                       JOIN topics source_topic ON source_topic.topic_id = ?
+                       WHERE COALESCE(tail_topic.execution_scope,
+                                      'project:' || tail_topic.project_id) =
+                             COALESCE(source_topic.execution_scope,
+                                      'project:' || source_topic.project_id)
+                         AND tail.status IN ('queued', 'retry_wait')""",
+                    (job_id, timestamp, row["topic_id"]),
+                )
+                held_count = int(
+                    self._connection.execute(
+                        "SELECT COUNT(*) FROM provider_job_holds WHERE cause_job_id = ?",
+                        (job_id,),
+                    ).fetchone()[0]
+                )
+                if held_count:
+                    html = _bounded(
+                        html + f"\n\nQueue: {held_count} earlier request(s) remain paused "
+                        "until the owner reviews them.",
+                        name="Telegram outbox text",
+                        maximum=MAX_PROVIDER_RESPONSE_LENGTH,
+                    )
             outbox_id = str(uuid.uuid4())
             self._connection.execute(
                 """INSERT INTO telegram_outbox (
@@ -1654,6 +1726,18 @@ class HubState:
             )
             if cursor.rowcount != 1:
                 raise StateError("provider job lease changed during failure commit")
+            if status == "indeterminate" and terminal_turn_status is None and sender == "codex":
+                accepted_turn = self._connection.execute(
+                    "SELECT provider_turn_id FROM provider_execution_checkpoints WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+                if accepted_turn is not None and accepted_turn["provider_turn_id"]:
+                    self._connection.execute(
+                        """INSERT OR IGNORE INTO provider_turn_observations
+                           (job_id, attempt_count, next_check_at, updated_at)
+                           VALUES (?, 0, ?, ?)""",
+                        (job_id, timestamp, timestamp),
+                    )
         return self.get_provider_job(job_id)
 
     def cancel_provider_job(self, job_id: str) -> ProviderJobRecord:
@@ -2417,6 +2501,10 @@ class HubState:
                        SELECT 1 FROM provider_job_resolutions resolutions
                        WHERE resolutions.job_id = jobs.job_id
                      )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_turn_terminal_evidence terminal
+                       WHERE terminal.job_id = jobs.job_id
+                     )
                    )""",
                 (timestamp,),
             ).fetchone()[0]
@@ -2481,6 +2569,10 @@ class HubState:
                      AND NOT EXISTS (
                        SELECT 1 FROM provider_job_resolutions resolutions
                        WHERE resolutions.job_id = jobs.job_id
+                     )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_turn_terminal_evidence terminal
+                       WHERE terminal.job_id = jobs.job_id
                      )"""
             ).fetchone()[0]
         )
@@ -2853,6 +2945,9 @@ class HubState:
                  OR (jobs.status = 'indeterminate' AND NOT EXISTS (
                    SELECT 1 FROM provider_job_resolutions resolutions
                    WHERE resolutions.job_id = jobs.job_id
+                 ) AND NOT EXISTS (
+                   SELECT 1 FROM provider_turn_terminal_evidence evidence
+                   WHERE evidence.job_id = jobs.job_id
                  ))
                ) LIMIT 1""",
             (topic_id,),
@@ -2887,6 +2982,9 @@ class HubState:
                    OR (jobs.status = 'indeterminate' AND NOT EXISTS (
                      SELECT 1 FROM provider_job_resolutions resolutions
                      WHERE resolutions.job_id = jobs.job_id
+                   ) AND NOT EXISTS (
+                     SELECT 1 FROM provider_turn_terminal_evidence evidence
+                     WHERE evidence.job_id = jobs.job_id
                    ))
                  ) LIMIT 1""",
             (execution_scope,),

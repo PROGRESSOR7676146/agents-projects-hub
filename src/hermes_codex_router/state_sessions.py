@@ -31,6 +31,7 @@ class WriterTransferSnapshot:
     topic: TopicRecord
     session: SessionRecord
     lane: tuple[tuple[str, object], ...] | None
+    allow_held: bool = False
 
 
 class TelegramContractProvenance(TypedDict):
@@ -64,6 +65,7 @@ class SessionsStateFacade:
         active_lane_for_topic: ActiveLaneLookup,
         topic_has_running_dispatch: TopicBusyCheck,
         topic_has_pending_provider_job: TopicBusyCheck,
+        topic_has_unheld_provider_job: TopicBusyCheck,
         origin_exists: OriginExists,
         activate_origin: OriginActivate,
     ) -> None:
@@ -75,6 +77,7 @@ class SessionsStateFacade:
         self._active_lane_for_topic = active_lane_for_topic
         self._topic_has_running_dispatch = topic_has_running_dispatch
         self._topic_has_pending_provider_job = topic_has_pending_provider_job
+        self._topic_has_unheld_provider_job = topic_has_unheld_provider_job
         self._origin_exists = origin_exists
         self._activate_origin = activate_origin
 
@@ -134,11 +137,11 @@ class SessionsStateFacade:
         return self.get_session(session_id)
 
     def writer_transfer_snapshot(
-        self, topic: TopicRecord, session: SessionRecord
+        self, topic: TopicRecord, session: SessionRecord, *, allow_held: bool = False
     ) -> WriterTransferSnapshot:
         with self._transaction():
             snapshot = WriterTransferSnapshot(
-                topic, session, self._writer_lane_snapshot(topic.topic_id)
+                topic, session, self._writer_lane_snapshot(topic.topic_id), allow_held
             )
             self._require_writer_transfer_snapshot(snapshot)
             return snapshot
@@ -155,7 +158,11 @@ class SessionsStateFacade:
             or self._writer_lane_snapshot(snapshot.topic.topic_id) != snapshot.lane
             or snapshot.session.status != "active"
             or self._topic_has_running_dispatch(snapshot.topic.topic_id)
-            or self._topic_has_pending_provider_job(snapshot.topic.topic_id)
+            or (
+                self._topic_has_unheld_provider_job(snapshot.topic.topic_id)
+                if snapshot.allow_held
+                else self._topic_has_pending_provider_job(snapshot.topic.topic_id)
+            )
         ):
             raise self._state_error("writer transfer snapshot changed; retry the command")
 
@@ -205,10 +212,16 @@ class SessionsStateFacade:
                          AND (
                            jobs.status IN (
                              'queued', 'leased', 'executing', 'retry_wait', 'result_ready'
+                           ) AND NOT EXISTS (
+                             SELECT 1 FROM provider_job_holds holds
+                             WHERE holds.job_id = jobs.job_id
                            )
                            OR (jobs.status = 'indeterminate' AND NOT EXISTS (
                              SELECT 1 FROM provider_job_resolutions resolutions
                              WHERE resolutions.job_id = jobs.job_id
+                           ) AND NOT EXISTS (
+                             SELECT 1 FROM provider_turn_terminal_evidence evidence
+                             WHERE evidence.job_id = jobs.job_id
                            ))
                          )
                        LIMIT 1""",
@@ -282,6 +295,10 @@ class SessionsStateFacade:
                 """SELECT 1 FROM provider_jobs
                    WHERE topic_id = ? AND status IN
                      ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_job_holds holds
+                       WHERE holds.job_id = provider_jobs.job_id
+                     )
                    LIMIT 1""",
                 (topic_id,),
             ).fetchone()

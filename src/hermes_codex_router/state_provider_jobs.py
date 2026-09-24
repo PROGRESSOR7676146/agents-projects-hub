@@ -20,10 +20,16 @@ _ELIGIBLE_PROVIDER_JOB_SQL = """SELECT candidate.* FROM provider_jobs candidate
            AND candidate.next_attempt_at IS NOT NULL AND candidate.next_attempt_at <= ?)
      )
      AND NOT EXISTS (
+       SELECT 1 FROM provider_job_holds held WHERE held.job_id = candidate.job_id
+     )
+     AND NOT EXISTS (
        SELECT 1 FROM provider_jobs earlier
        WHERE earlier.topic_id = candidate.topic_id
          AND earlier.topic_sequence < candidate.topic_sequence
          AND earlier.status NOT IN ('completed', 'failed', 'cancelled', 'indeterminate')
+         AND NOT EXISTS (
+           SELECT 1 FROM provider_job_holds held WHERE held.job_id = earlier.job_id
+         )
      )
      AND NOT EXISTS (
        SELECT 1 FROM provider_jobs active
@@ -37,6 +43,9 @@ _ELIGIBLE_PROVIDER_JOB_SQL = """SELECT candidate.* FROM provider_jobs candidate
            OR (active.status = 'indeterminate' AND NOT EXISTS (
              SELECT 1 FROM provider_job_resolutions resolutions
              WHERE resolutions.job_id = active.job_id
+           ) AND NOT EXISTS (
+             SELECT 1 FROM provider_turn_terminal_evidence evidence
+             WHERE evidence.job_id = active.job_id
            ))
          )
      )
@@ -184,6 +193,18 @@ class ProviderJobsStateFacade:
                WHERE topic_id = ?
                  AND status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
                LIMIT 1""",
+            (topic_id,),
+        ).fetchone()
+        return row is not None
+
+    def topic_has_unheld(self, topic_id: int) -> bool:
+        row = self._connection.execute(
+            """SELECT 1 FROM provider_jobs jobs
+               WHERE jobs.topic_id = ?
+                 AND jobs.status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                 AND NOT EXISTS (
+                   SELECT 1 FROM provider_job_holds holds WHERE holds.job_id = jobs.job_id
+                 ) LIMIT 1""",
             (topic_id,),
         ).fetchone()
         return row is not None

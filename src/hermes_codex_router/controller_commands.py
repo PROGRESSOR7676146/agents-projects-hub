@@ -119,6 +119,19 @@ class ControllerCommandOrchestrator:
             provider_state=(worker_health.provider_state if worker_health is not None else None),
             provider_error_code=(worker_health.error_code if worker_health is not None else None),
         )
+        if active.agent_id == "codex":
+            from .turn_continuation_state import TurnContinuationState
+
+            failed_turns, held_jobs = TurnContinuationState(self.state).session_status(
+                active.session_id
+            )
+            if failed_turns:
+                detail += (
+                    f"\nInterrupted Codex turn(s): {failed_turns}; old work was not replayed."
+                    " Reply exactly retry to its failure notice to continue with inspection."
+                )
+            if held_jobs:
+                detail += f"\nQueued request(s) paused for owner review: {held_jobs}."
         return TextCommandDecision(detail, response_agent_id=active.agent_id)
 
     def accounts(

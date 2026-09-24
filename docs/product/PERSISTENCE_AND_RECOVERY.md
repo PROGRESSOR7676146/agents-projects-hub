@@ -172,7 +172,7 @@ recreate unsaved provider context or a partially executed turn.
   not yet invoked from `executing`, result delivery, terminal failure, and
   `indeterminate` execution. An unproven in-flight turn MUST NOT be retried
   automatically. A terminal provider failure or indeterminate outcome MUST
-  enqueue one bounded user-visible notice through the provider bot identity;
+  enqueue a bounded user-visible notice through the provider bot identity;
   delivering that notice MUST NOT convert the terminal job into a successful
   provider result.
   Codex queue paths MUST consume already-buffered turn events and deduplicate
@@ -199,13 +199,24 @@ recreate unsaved provider context or a partially executed turn.
   idempotent; replacing it or resolving another job state MUST fail. Resolution
   MUST leave the job status, error evidence, delivery state, and replay policy
   unchanged, and the audit MUST report resolved and unresolved counts. An
-  unresolved `indeterminate` job MUST retain its execution scope; its immutable
+  unresolved `indeterminate` job MUST retain its execution scope unless the
+  exact accepted turn is independently proven terminal. Its immutable operator
   resolution MAY release the scope only for new work and MUST NOT replay or
   mutate the uncertain job. Failure
   notices MUST state what happened, what Hub saved, and the next safe action.
-  For an uncertain outcome that action MUST be an explicit new user request to
-  inspect current project state before continuing; the notice itself MUST NOT
-  enqueue or imply an automatic retry.
+  For an unconfirmed outcome the action MUST keep the root paused. An exact
+  read-only Codex check MAY prove completed, failed, interrupted, active, or
+  unknown without starting a new turn. Completed output is delivered from
+  saved provider data without replay. A later proof MAY replace the initial
+  unconfirmed notice with one durable corrected notice, preserving the original
+  text and delivery evidence. Confirmed failed/interrupted turns keep
+  their `indeterminate` job history and partial effects; separate durable
+  terminal evidence releases only the execution uncertainty. Active/unknown
+  remains excluded, and later reads are bounded. A confirmed failure notice
+  MUST offer a reply-bound explicit inspection-first continuation as a new job
+  in the same provider session; duplicate updates or choices MUST create at
+  most one job. Existing queued work on that root MUST remain visible and
+  paused until an owner decision. No accepted turn may be retried automatically.
 - **REQ-QUEUE-005 (Implemented for embedded compatibility and the external sender):** Provider result persistence and Telegram delivery
   MUST use a durable outbox. Telegram delivery retry MUST NOT create another
   provider turn, and visible-context acknowledgement MUST occur only after a

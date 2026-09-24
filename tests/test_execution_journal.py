@@ -130,6 +130,7 @@ class ExecutionJournalTests(unittest.TestCase):
                             )
                         self.assertEqual(client.turns, 0)
                         self.assertEqual(client.reads, 1 if phase in {"accepted", "partial"} else 0)
+                        self.assertEqual(worker.run_cycle(), phase in {"accepted", "partial"})
                         self.assertFalse(worker.run_cycle())
                     finally:
                         worker.close()
@@ -164,6 +165,41 @@ class ExecutionJournalTests(unittest.TestCase):
                 result.text if result else None, "Recovered final" if expected else None
             )
             self.assertEqual([x["method"] for x in transport.sent], ["thread/read"])
+
+    def test_exact_turn_read_distinguishes_terminal_active_and_unknown_without_model(self) -> None:
+        root = self.fixture.registry.projects[0].root
+        for stored, expected in (
+            ("failed", "failed"),
+            ("interrupted", "interrupted"),
+            ("inProgress", "active"),
+            ("completed", "completed"),
+            ("futureStatus", "error"),
+        ):
+            with self.subTest(status=stored):
+                transport = FakeTransport(
+                    [
+                        {
+                            "id": 1,
+                            "result": {
+                                "thread": {
+                                    "id": "thread-1",
+                                    "cwd": str(root),
+                                    "turns": [{"id": "turn-1", "status": stored, "items": []}],
+                                }
+                            },
+                        }
+                    ]
+                )
+                client = CodexAppServerClient(transport, initialized=True)
+                if expected == "error":
+                    with self.assertRaisesRegex(Exception, "status is unrecognized"):
+                        client.read_turn_outcome(thread_id="thread-1", turn_id="turn-1", cwd=root)
+                else:
+                    outcome = client.read_turn_outcome(
+                        thread_id="thread-1", turn_id="turn-1", cwd=root
+                    )
+                    self.assertEqual(outcome.status, expected)
+                self.assertEqual([call["method"] for call in transport.sent], ["thread/read"])
 
     def test_embedded_restart_recovers_checkpoint_before_dispatching_new_work(self) -> None:
         class Client(embedded_fixtures.QueueClient):

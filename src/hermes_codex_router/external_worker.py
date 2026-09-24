@@ -48,6 +48,7 @@ from .telegram_interaction import (
     telegram_contract_version,
     telegram_developer_instructions,
 )
+from .turn_observation import TurnObservation
 from .worker_execution import (
     ProviderTurnStopped,
     classify_worker_failure,
@@ -253,6 +254,8 @@ class ExternalQueueWorker:
                 self.worker_id,
                 self.supervisor.client,
             ):
+                return True
+            if TurnObservation(self.state, self.config).run_once(self.supervisor.client):
                 return True
         self.state.recover_stale_provider_jobs(agent_id=self.agent.agent_id)
         if self._stop.is_set():
@@ -466,10 +469,11 @@ class ExternalQueueWorker:
                     self._record_event("warning", "provider_unavailable", failure.error_code)
                 else:
                     recovered = False
+                    turn_status = "unknown"
                     if failure.reconcile_codex:
                         assert self.supervisor is not None
                         try:
-                            recovered = reconcile_codex_completion(
+                            turn_status = reconcile_codex_completion(
                                 self.state,
                                 self.config,
                                 project_root=Path(project.root),
@@ -478,8 +482,10 @@ class ExternalQueueWorker:
                                 agent_id=self.agent.agent_id,
                                 client_factory=self.supervisor.client,
                             )
+                            recovered = turn_status == "completed"
                         except Exception:
                             recovered = False
+                            turn_status = "unknown"
                     if recovered:
                         self._last_success_at = datetime.now(timezone.utc)
                         self._last_error_code = None
@@ -501,12 +507,17 @@ class ExternalQueueWorker:
                             error_class=failure.error_class,
                             error_code=failure.error_code,
                             error_detail=error_detail,
+                            terminal_turn_status=(
+                                turn_status if turn_status in {"failed", "interrupted"} else None
+                            ),
                             sender_agent_id=self.agent.agent_id,
                             telegram_html=(
                                 "Incoming material integrity validation failed; "
                                 "the provider was not started. Send the material again."
                                 if failure.notice == "incoming_material"
-                                else checkpoint_failure_notice(self.state, executing.job_id, exc)
+                                else checkpoint_failure_notice(
+                                    self.state, executing.job_id, exc, turn_status=turn_status
+                                )
                                 if failure.notice == "checkpoint"
                                 else uncertain_provider_notice(self.agent.display_name)
                             ),
@@ -610,6 +621,10 @@ class ExternalQueueWorker:
                 and job.provider_session_id
                 and self.supervisor.transport_mode == "stdio-fallback"
             )
+            if fallback_transfer and job.idempotency_key.startswith("continuation:"):
+                raise ExternalQueueWorkerError(
+                    "continuation requires the owning Codex socket; fallback cannot preserve its thread"
+                )
             turn_text = codex_turn_text(job, prepared)
             if fallback_transfer:
                 visible_context = self.state.recent_external_context(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import html
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 from .artifacts import (
     ValidatedArtifact,
@@ -20,14 +20,16 @@ from .state import RECOVERED_RESULT_METADATA_JSON, HubState, StateError
 from .topic_execution import resolve_topic_execution_root
 
 
-def checkpoint_failure_notice(state: HubState, job_id: str, error: BaseException) -> str:
+def checkpoint_failure_notice(
+    state: HubState, job_id: str, error: BaseException, *, turn_status: str = "unknown"
+) -> str:
     if isinstance(error, CodexPreparationError):
         return codex_failure_notice(error)
     partial = getattr(error, "partial_text", "") or ExecutionJournal(state).partial_text(job_id)
     retained = CodexTurnError(error, partial)
     if isinstance(error, CodexTurnError):
         retained.failure_reason = error.failure_reason
-    return codex_failure_notice(retained)
+    return codex_failure_notice(retained, turn_status=turn_status)
 
 
 def reconcile_codex_completion(
@@ -39,12 +41,12 @@ def reconcile_codex_completion(
     lease_token: str,
     agent_id: str,
     client_factory: Callable[[], CodexAppServerClient],
-) -> bool:
-    """Commit one exact, read-only confirmed result under the current lease."""
+) -> Literal["completed", "failed", "interrupted", "active", "unknown"]:
+    """Reconcile one accepted turn by exact identity without productive work."""
     journal = ExecutionJournal(state)
     checkpoint = journal.read(job_id)
     if checkpoint is None:
-        return False
+        return "unknown"
     canonical_root = project_root.resolve(strict=True)
     if checkpoint["project_root"] != str(canonical_root):
         raise StateError("recovery project binding changed")
@@ -53,14 +55,21 @@ def reconcile_codex_completion(
     if not isinstance(thread_id, str) or not thread_id:
         raise StateError("recovery thread identity is missing")
     text = checkpoint["completed_text"]
+    outcome_status: Literal["completed", "failed", "interrupted", "active", "unknown"] = "unknown"
     if text is None and isinstance(turn_id, str) and turn_id:
         client = client_factory()
         try:
-            result = client.read_completed_turn(
-                thread_id=thread_id,
-                turn_id=turn_id,
-                cwd=canonical_root,
-            )
+            if hasattr(client, "read_turn_outcome"):
+                outcome = client.read_turn_outcome(
+                    thread_id=thread_id, turn_id=turn_id, cwd=canonical_root
+                )
+                outcome_status = outcome.status
+                result = outcome.result
+            else:
+                result = client.read_completed_turn(
+                    thread_id=thread_id, turn_id=turn_id, cwd=canonical_root
+                )
+                outcome_status = "completed" if result is not None else "unknown"
         finally:
             try:
                 client.close()
@@ -70,7 +79,7 @@ def reconcile_codex_completion(
             text = result.text
             journal.record_completion(job_id, lease_token, text)
     if text is None:
-        return False
+        return outcome_status
 
     rejections: list[str] = []
     artifacts: tuple[ValidatedArtifact, ...] = ()
@@ -105,7 +114,7 @@ def reconcile_codex_completion(
             except Exception:
                 pass
         raise
-    return True
+    return "completed"
 
 
 def recover_codex_job(
@@ -124,6 +133,7 @@ def recover_codex_job(
     assert job.lease_token is not None
     token = job.lease_token
     binding_valid = False
+    observed_status: Literal["completed", "failed", "interrupted", "active", "unknown"] = "unknown"
     artifacts: tuple[ValidatedArtifact, ...] = ()
     try:
         topic = state.get_topic(job.topic_id)
@@ -141,7 +151,7 @@ def recover_codex_job(
         if checkpoint["project_root"] != str(project_root):
             raise StateError("recovery project binding changed")
         binding_valid = True
-        if not reconcile_codex_completion(
+        observed_status = reconcile_codex_completion(
             state,
             config,
             project_root=project_root,
@@ -149,7 +159,8 @@ def recover_codex_job(
             lease_token=token,
             agent_id=agent_id,
             client_factory=client_factory,
-        ):
+        )
+        if observed_status != "completed":
             raise RpcError("worker stopped without a confirmed completed turn")
     except Exception as exc:
         if state.get_provider_job(job.job_id).status != "executing":
@@ -162,7 +173,8 @@ def recover_codex_job(
         # Missing protocol capability, unknown acceptance, active turns and root
         # mismatches cannot authorize productive replay or a successful result.
         partial = journal.partial_text(job.job_id) if binding_valid else ""
-        notice = codex_failure_notice(CodexTurnError(exc, partial))
+        terminal_status = observed_status if observed_status in {"failed", "interrupted"} else None
+        notice = codex_failure_notice(CodexTurnError(exc, partial), turn_status=observed_status)
         state.terminate_provider_job_with_notice(
             job.job_id,
             token,
@@ -171,5 +183,6 @@ def recover_codex_job(
             error_code="recovery_unconfirmed",
             sender_agent_id=agent_id,
             telegram_html=notice,
+            terminal_turn_status=terminal_status,
         )
     return True

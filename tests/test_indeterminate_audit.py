@@ -28,7 +28,14 @@ class IndeterminateAuditTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.fixture.tearDown()
 
-    def _indeterminate(self, message_id: int, phase: str, *, notice: bool) -> str:
+    def _indeterminate(
+        self,
+        message_id: int,
+        phase: str,
+        *,
+        notice: bool,
+        terminal: str | None = None,
+    ) -> str:
         state = HubState.open(self.fixture.config.state_path)
         try:
             topic = state.observe_topic(
@@ -79,6 +86,7 @@ class IndeterminateAuditTests(unittest.TestCase):
                     error_code="test_failure",
                     sender_agent_id="codex",
                     telegram_html="Outcome unknown",
+                    terminal_turn_status=terminal,
                 )
             else:
                 state.mark_provider_job_indeterminate(
@@ -125,6 +133,15 @@ class IndeterminateAuditTests(unittest.TestCase):
             self.assertEqual(json.loads(destination.read_text())["total"], 1)
             with self.assertRaises(FileExistsError):
                 write_private_indeterminate_report(destination, report)
+
+    def test_confirmed_terminal_turn_keeps_partial_evidence_without_resolution_advice(self) -> None:
+        job_id = self._indeterminate(8, "partial", notice=True, terminal="failed")
+        report = classify_indeterminate_jobs(self.fixture.config.state_path)
+        record = next(item for item in report["records"] if item["job_id"] == job_id)
+        self.assertEqual(record["evidence"], "partial_checkpoint")
+        self.assertEqual(record["terminal_turn_status"], "failed")
+        self.assertEqual(record["recommended_action"], "continue_from_failure_notice")
+        self.assertEqual(report["turn_terminality"], {"failed": 1})
 
     def test_cli_prints_only_aggregate_and_writes_private_details(self) -> None:
         job_id = self._indeterminate(1, "none", notice=False)
