@@ -45,7 +45,13 @@ class CatalogRefreshTests(unittest.TestCase):
                     [call[0] for call in client.method_calls],
                     ["initialize", "list_models", "close"],
                 )
-                self.assertEqual(models, (ProviderModel("gpt-6-astra", "gpt-6-astra", ("high",)),))
+                self.assertEqual(
+                    models,
+                    (
+                        ProviderModel("gpt-6-astra", "gpt-6-astra", ("high",)),
+                        ProviderModel("claude-sonnet-4-6", "claude-sonnet-4-6", ("high",)),
+                    ),
+                )
 
     def _config(self, root: Path) -> HubConfig:
         return HubConfig(
@@ -177,6 +183,40 @@ class CatalogRefreshTests(unittest.TestCase):
             loaded = cache.load("codex")
             assert loaded is not None
             self.assertEqual(loaded.models[0].model_id, "old")
+
+    def test_explicit_route_refreshes_from_tagged_native_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = replace(self._config(root), codex_model_provider="example-route")
+            cache = ProviderCatalogCache(root / "provider-model-catalogs.json")
+            with (
+                patch("hermes_codex_router.catalog_refresh.UnixWebSocketTransport"),
+                patch("hermes_codex_router.catalog_refresh.CodexAppServerClient") as factory,
+            ):
+                factory.return_value.list_models.return_value = (
+                    {
+                        "id": "gpt-6-astra",
+                        "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
+                    },
+                    {
+                        "id": "special-model",
+                        "modelProvider": "example-route",
+                        "supportedReasoningEfforts": [{"reasoningEffort": "low"}],
+                    },
+                    {
+                        "id": "foreign-model",
+                        "modelProvider": "other-route",
+                        "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
+                    },
+                )
+                result = refresh_provider_catalogs(config)
+            self.assertEqual(result.refreshed, ("codex",))
+            cached = cache.load("codex")
+            assert cached is not None
+            self.assertEqual(
+                [model.model_id for model in cached.models], ["gpt-6-astra", "special-model"]
+            )
+            self.assertEqual(cached.source_version, "codex model/list route-filtered example-route")
 
     def test_native_refresh_replaces_fresh_unfiltered_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
