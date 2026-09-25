@@ -94,3 +94,14 @@ sender, matching the adoption execution policy. Schema-25 binaries reject schema
 Repository tests prove state, adapter and synthetic transport boundaries with
 fictional data. They do not prove bot permissions, the installed Telegram
 client UI, or provider-history continuity in a live deployment.
+
+## 2026-09-25 amendment: discovery during a productive turn
+
+The original worker loop processed connection metadata only after productive
+work. A long turn could outlast the workflow and leave the initial `/connect`
+acknowledgement without a selection menu. The Codex worker now runs a separate
+metadata-only loop with its own SQLite connection and app-server client. It
+leases the same durable workflow state as the idle worker loop, so duplicate
+polls cannot duplicate selection output. It never starts or resumes a turn.
+Expired worker requests receive one durable outbox notice; late metadata
+responses cannot change the expired state.

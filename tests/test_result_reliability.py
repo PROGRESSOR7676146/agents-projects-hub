@@ -129,27 +129,29 @@ class ResultReliabilityTests(unittest.TestCase):
                 fixture = worker_fixtures.CodexQueueWorkerTests()
                 fixture.setUp()
                 old_id = fixture.enqueue(1, "Fictional task")
+                tail_id = None
+                if final_status == "failed":
+                    tail_state = HubState.open(fixture.config.state_path)
+                    old_job = tail_state.get_provider_job(old_id)
+                    tail, _ = tail_state.enqueue_provider_job(
+                        idempotency_key="telegram:fictional-held-tail",
+                        chat_id=old_job.chat_id,
+                        message_id=9,
+                        topic_id=old_job.topic_id,
+                        agent_id="codex",
+                        session_id=old_job.session_id,
+                        session_generation=old_job.session_generation,
+                        model=old_job.model,
+                        effort=old_job.effort,
+                        payload_text="Earlier fictional queued request",
+                    )
+                    tail_id = tail.job_id
+                    tail_state.close()
                 client = Client()
                 worker = fixture.worker(client)
                 try:
                     self.assertTrue(worker.run_cycle())
                     self.assertEqual(worker.state.get_provider_job(old_id).status, "indeterminate")
-                    tail_id = None
-                    if final_status == "failed":
-                        old_job = worker.state.get_provider_job(old_id)
-                        tail, _ = worker.state.enqueue_provider_job(
-                            idempotency_key="telegram:fictional-held-tail",
-                            chat_id=old_job.chat_id,
-                            message_id=9,
-                            topic_id=old_job.topic_id,
-                            agent_id="codex",
-                            session_id=old_job.session_id,
-                            session_generation=old_job.session_generation,
-                            model=old_job.model,
-                            effort=old_job.effort,
-                            payload_text="Earlier fictional queued request",
-                        )
-                        tail_id = tail.job_id
                     if final_status == "completed":
                         staging = fixture.registry.projects[0].root / ".hub" / "staging" / old_id
                         staging.mkdir(parents=True, exist_ok=True)
@@ -710,7 +712,15 @@ class ResultReliabilityTests(unittest.TestCase):
 
     def test_telegram_cooldown_survives_sender_restart_then_delivers(self) -> None:
         class LimitedBot(Bot):
-            def send_html(self, chat_id, thread_id, html):
+            def send_html(
+                self,
+                chat_id,
+                thread_id,
+                html,
+                *,
+                reply_markup=None,
+                reply_to_message_id=None,
+            ):
                 self.sent.append((chat_id, thread_id, html))
                 raise TelegramError(
                     "Fictional rate limit",

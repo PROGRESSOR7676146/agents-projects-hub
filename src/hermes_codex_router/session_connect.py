@@ -179,13 +179,40 @@ class SessionConnectStore:
         workflow = self._workflow(row)
         if _parse_time(workflow.expires_at) <= datetime.now(timezone.utc):
             with self.state._immediate_transaction():
+                self._expire_worker_requests_locked(_now())
                 self.connection.execute(
                     """UPDATE session_connect_workflows SET stage='expired', updated_at=?
-                       WHERE workflow_id=? AND stage NOT IN ('completed','cancelled','failed')""",
+                       WHERE workflow_id=? AND stage NOT IN
+                       ('completed','cancelled','expired','failed')""",
                     (_now(), workflow.workflow_id),
                 )
             return None
         return workflow
+
+    def _expire_worker_requests_locked(self, now: str) -> None:
+        """Record a visible disposition for worker requests that never ran in time."""
+        rows = self.connection.execute(
+            """SELECT workflow_id,destination_chat_id,destination_thread_id,owner_user_id
+               FROM session_connect_workflows
+               WHERE expires_at<=? AND stage IN ('discovering','activation_requested')""",
+            (now,),
+        ).fetchall()
+        for row in rows:
+            cursor = self.connection.execute(
+                """UPDATE session_connect_workflows SET stage='expired',updated_at=?,
+                   lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL
+                   WHERE workflow_id=? AND stage IN ('discovering','activation_requested')""",
+                (now, row["workflow_id"]),
+            )
+            if cursor.rowcount != 1:
+                continue
+            self._insert_outbox_locked(
+                str(row["workflow_id"]),
+                "notice",
+                int(row["destination_chat_id"] or row["owner_user_id"]),
+                int(row["destination_thread_id"] or 1),
+                "Время поиска сохранённой сессии истекло. Hub не подключил её; отправьте /connect снова.",
+            )
 
     def start_direct(
         self,
@@ -597,6 +624,7 @@ class SessionConnectStore:
         now = datetime.now(timezone.utc)
         token = _token()
         with self.state._immediate_transaction():
+            self._expire_worker_requests_locked(now.isoformat())
             self.connection.execute(
                 """UPDATE session_connect_workflows SET stage='expired',updated_at=?
                    WHERE expires_at<=? AND stage NOT IN
@@ -965,7 +993,10 @@ class SessionConnectStore:
     def fail_worker(self, workflow_id: str, lease_token: str | None, error_code: str) -> None:
         with self.state._immediate_transaction():
             workflow = self.get(workflow_id)
-            if workflow.lease_token != lease_token:
+            if workflow.lease_token != lease_token or workflow.stage not in (
+                "discovering",
+                "activation_requested",
+            ):
                 raise StateError("connect_worker_lease_changed")
             self.connection.execute(
                 """UPDATE session_connect_workflows SET stage='failed',error_code=?,

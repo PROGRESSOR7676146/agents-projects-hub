@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterator, Mapping, Sequence
+from typing import Iterator, Literal, Mapping, Sequence
 
 from .artifacts import ValidatedArtifact
 from .incoming_materials import (
@@ -16,6 +16,7 @@ from .incoming_materials import (
 )
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
 from .release_identity import CURRENT_RELEASE, ReleaseIdentity
+from .root_blockers import RootBlockerNotice, RootBlockerState, persistent_root_blocker
 from .state_delivery import (
     DeliveryStateFacade,
     TelegramOutboxPartRecord,
@@ -130,6 +131,9 @@ class HubState:
         self._connection = connection
         self._connection.row_factory = sqlite3.Row
         self._state_path = state_path
+        self._root_blocker_state = RootBlockerState(
+            connection, self._immediate_transaction, StateError
+        )
         self._incoming_material_state = IncomingMaterialsStateFacade(
             connection,
             state_path,
@@ -161,6 +165,8 @@ class HubState:
             topic_has_unheld_provider_job=self.topic_has_unheld_provider_job,
             origin_exists=self._session_origin_exists,
             activate_origin=self._activate_session_origin,
+            hold_scope_before_return=self._root_blocker_state.hold_scope_before_return,
+            notice_released_scope=self._root_blocker_state.notice_released_scope,
         )
         self._runtime_health_state = RuntimeHealthStateFacade(
             connection,
@@ -725,6 +731,65 @@ class HubState:
         """Return each topic whose head job should display provider activity."""
         return self._provider_job_state.chat_activities(agent_ids)
 
+    def reject_blocked_provider_input(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        topic_id: int,
+        session_id: str,
+        session_generation: int,
+    ) -> RootBlockerNotice | None:
+        return self._root_blocker_state.reject_blocked_input(
+            chat_id=chat_id,
+            message_id=message_id,
+            topic_id=topic_id,
+            session_id=session_id,
+            session_generation=session_generation,
+        )
+
+    def materialize_held_provider_jobs(self) -> int:
+        return self._root_blocker_state.materialize_held_jobs()
+
+    def materialize_released_uncertainty_notices(self) -> int:
+        return self._root_blocker_state.materialize_released_uncertainty()
+
+    def held_provider_job_count(self, topic_id: int) -> int:
+        return self._root_blocker_state.held_count_for_topic(topic_id)
+
+    def root_blocker_for_topic(self, topic_id: int):
+        return persistent_root_blocker(self._connection, topic_id=topic_id)
+
+    def lease_root_blocker_notice(
+        self, sender_id: str, *, now: datetime | None = None
+    ) -> RootBlockerNotice | None:
+        return self._root_blocker_state.lease_notice(sender_id, now=now)
+
+    def complete_root_blocker_notice(self, notice: RootBlockerNotice, message_id: int) -> None:
+        self._root_blocker_state.complete_notice(notice, message_id)
+
+    def retry_root_blocker_notice(
+        self, notice: RootBlockerNotice, error_code: str, delay_seconds: int
+    ) -> None:
+        self._root_blocker_state.retry_notice(notice, error_code, delay_seconds)
+
+    def decide_held_provider_job(
+        self,
+        *,
+        job_id: str,
+        action: Literal["confirm", "cancel"],
+        chat_id: int,
+        thread_id: int,
+        notice_message_id: int,
+    ) -> str:
+        return self._root_blocker_state.decide_held_job(
+            job_id=job_id,
+            action=action,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            notice_message_id=notice_message_id,
+        )
+
     def enqueue_provider_job(
         self,
         *,
@@ -816,6 +881,11 @@ class HubState:
             expected_writer = "local" if take_local_writer else "telegram"
             if str(session["writer_mode"]) != expected_writer:
                 raise StateError(f"provider job session writer is not {expected_writer}")
+            if (
+                not take_local_writer
+                and persistent_root_blocker(self._connection, topic_id=topic_id) is not None
+            ):
+                raise StateError("execution root has a persistent local writer or uncertainty")
             if str(session["model"]) != selected_model or str(session["effort"]) != selected_effort:
                 raise StateError("provider job model or effort does not match persisted session")
             persisted_provider_session = session["provider_session_id"]
@@ -1054,6 +1124,8 @@ class HubState:
                 or self.get_topic(topic_id).chat_id != chat_id
             ):
                 raise StateError("provider batch session snapshot changed")
+            if persistent_root_blocker(self._connection, topic_id=topic_id) is not None:
+                raise StateError("execution root has a persistent local writer or uncertainty")
             candidate = self._connection.execute(
                 """SELECT * FROM provider_jobs
                    WHERE topic_id = ? AND agent_id = ? AND session_id = ?

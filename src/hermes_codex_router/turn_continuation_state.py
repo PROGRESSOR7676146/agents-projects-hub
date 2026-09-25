@@ -42,7 +42,8 @@ class TurnContinuationState:
                 """SELECT COUNT(*) FROM provider_job_holds holds
                    JOIN provider_jobs jobs ON jobs.job_id = holds.job_id
                    JOIN agent_sessions session ON session.topic_id = jobs.topic_id
-                   WHERE session.session_id = ? AND jobs.status IN ('queued', 'retry_wait')""",
+                   WHERE session.session_id = ? AND jobs.status IN ('queued', 'retry_wait')
+                     AND holds.decision = 'pending'""",
                 (session_id,),
             ).fetchone()[0]
         )
@@ -139,6 +140,7 @@ class TurnContinuationState:
                      jobs.status IN ('leased', 'executing', 'result_ready')
                      OR (jobs.status IN ('queued', 'retry_wait') AND NOT EXISTS (
                        SELECT 1 FROM provider_job_holds holds WHERE holds.job_id = jobs.job_id
+                         AND holds.decision = 'pending'
                      ))
                      OR (jobs.status = 'indeterminate' AND NOT EXISTS (
                        SELECT 1 FROM provider_job_resolutions resolution
@@ -171,7 +173,8 @@ class TurnContinuationState:
                     """SELECT COUNT(*) FROM provider_job_holds holds
                        JOIN provider_jobs jobs ON jobs.job_id = holds.job_id
                        JOIN topics ON topics.topic_id = jobs.topic_id
-                       WHERE topics.execution_scope = ? AND jobs.status IN ('queued', 'retry_wait')""",
+                       WHERE topics.execution_scope = ? AND jobs.status IN ('queued', 'retry_wait')
+                         AND holds.decision = 'pending'""",
                     ("root:" + str(root),),
                 ).fetchone()[0]
             )

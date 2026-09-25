@@ -165,6 +165,16 @@ recreate unsaved provider context or a partially executed turn.
   owners, and an aggregate uncertain-scope count, but not project paths, topic
   IDs, prompts, sessions, or provider output. The target
   provider/session/model/effort snapshot MUST be immutable after enqueue.
+  Persistent local/terminal ownership or unconfirmed execution on the scope
+  MUST be checked in productive admission's SQLite transaction. New blocked
+  input MUST have one durable disposition bound to its Telegram message and
+  MUST NOT silently enter a queue that cannot progress. Already accepted
+  queued work MUST keep its history and FIFO position, enter the existing
+  durable hold mechanism before a writer returns, and require an exact
+  owner decision to confirm or cancel; returning the lease alone MUST NOT
+  start it. A confirmed job remains subject to the root writer exclusion and
+  ordinary FIFO. Explicit failed-turn continuation retains its documented
+  exception to an earlier held tail.
   A committed `result_ready` job MAY release its cross-topic filesystem scope
   because only durable Telegram delivery remains, while the existing same-topic
   FIFO boundary MUST continue through final-result delivery.
@@ -175,6 +185,12 @@ recreate unsaved provider context or a partially executed turn.
   enqueue a bounded user-visible notice through the provider bot identity;
   delivering that notice MUST NOT convert the terminal job into a successful
   provider result.
+  Blocker and hold notices MUST be persisted separately from provider result
+  delivery, sent by the authorized Hub sender, and retried as delivery only.
+  Repeated Telegram updates or callbacks MUST not create another job, decision,
+  or provider invocation. Owner-facing text MUST distinguish a request never
+  sent to the provider, an accepted job held before execution, and executing
+  work; a typing action is not evidence of execution.
   Codex queue paths MUST consume already-buffered turn events and deduplicate
   completed visible items by ID. A handled turn failure MUST retain a bounded,
   explicitly incomplete visible excerpt in its durable notice and show a safe

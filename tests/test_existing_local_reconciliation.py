@@ -129,18 +129,23 @@ class ExistingLocalReconciliationTests(unittest.TestCase):
         state = HubState.open(self.fixture.config.state_path)
         try:
             old = state.get_provider_job(self.job_id)
-            tail, _ = state.enqueue_provider_job(
-                idempotency_key="telegram:fictional-tail",
-                chat_id=old.chat_id,
-                message_id=18,
-                topic_id=old.topic_id,
-                agent_id="codex",
-                session_id=old.session_id,
-                session_generation=old.session_generation,
-                model=old.model,
-                effort=old.effort,
-                payload_text="Fictional queued tail",
-            )
+            # Recreate an already accepted pre-upgrade tail. New admission
+            # correctly rejects input while this old turn is unresolved.
+            with state._connection:
+                state._connection.execute(
+                    """INSERT INTO provider_jobs
+                       (job_id,idempotency_key,chat_id,message_id,topic_id,topic_sequence,
+                        agent_id,session_id,session_generation,provider_session_id,
+                        model,effort,payload_text,status,attempt_count,max_attempts,
+                        created_at,updated_at)
+                       SELECT 'fictional-tail','telegram:fictional-tail',chat_id,18,topic_id,
+                              topic_sequence+1,agent_id,session_id,session_generation,
+                              provider_session_id,model,effort,'Fictional queued tail',
+                              'queued',0,5,created_at,updated_at
+                       FROM provider_jobs WHERE job_id=?""",
+                    (old.job_id,),
+                )
+            tail = state.get_provider_job("fictional-tail")
         finally:
             state.close()
         result = self.reconcile(apply=True, confirm_cli_closed=True)

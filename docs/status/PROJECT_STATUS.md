@@ -8,6 +8,13 @@ operator deployment inventory or live conversation evidence.
 
 ## Quality checkpoint
 
+Schema 35 durable root-blocker admission, held-job owner decisions and Hub
+notices are in repository implementation; live Telegram/provider acceptance
+and immutable deployment remain separate. Offline evidence covers refusal,
+retained queue work, explicit decision, sender retry and same-root exclusion;
+see [REQ-WRITER-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md) and
+[ADR 0036](../decisions/0036-durable-local-root-blockers.md).
+
 Schema 34 Codex recovery and exact already-open local reconciliation are in
 repository implementation, pending immutable deployment and live Telegram /
 provider acceptance. Offline tests exercise exact terminal evidence,

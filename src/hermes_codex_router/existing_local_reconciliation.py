@@ -281,6 +281,7 @@ def _claim_exact_local(
                WHERE topics.execution_scope = ? AND jobs.job_id != ? AND (
                  (jobs.status IN ('queued', 'retry_wait') AND NOT EXISTS (
                    SELECT 1 FROM provider_job_holds holds WHERE holds.job_id = jobs.job_id
+                     AND holds.decision = 'pending'
                  ))
                  OR jobs.status IN ('leased', 'executing', 'result_ready')
                  OR (jobs.status = 'indeterminate' AND NOT EXISTS (

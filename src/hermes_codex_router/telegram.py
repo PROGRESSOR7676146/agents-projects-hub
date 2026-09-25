@@ -704,6 +704,7 @@ class TelegramBotApi:
         html: str,
         *,
         reply_markup: dict[str, Any] | None = None,
+        reply_to_message_id: int | None = None,
     ) -> int:
         params: dict[str, Any] = {
             "chat_id": chat_id,
@@ -715,6 +716,10 @@ class TelegramBotApi:
             params["message_thread_id"] = thread_id
         if reply_markup is not None:
             params["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+        if reply_to_message_id is not None:
+            params["reply_parameters"] = json.dumps(
+                {"message_id": reply_to_message_id, "allow_sending_without_reply": True}
+            )
         result = self.call("sendMessage", **params)
         if not isinstance(result, dict) or not isinstance(result.get("message_id"), int):
             raise TelegramError(

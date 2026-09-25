@@ -68,6 +68,8 @@ class SessionsStateFacade:
         topic_has_unheld_provider_job: TopicBusyCheck,
         origin_exists: OriginExists,
         activate_origin: OriginActivate,
+        hold_scope_before_return: Callable[[int], None],
+        notice_released_scope: Callable[..., None],
     ) -> None:
         self._connection = connection
         self._transaction = transaction
@@ -80,6 +82,8 @@ class SessionsStateFacade:
         self._topic_has_unheld_provider_job = topic_has_unheld_provider_job
         self._origin_exists = origin_exists
         self._activate_origin = activate_origin
+        self._hold_scope_before_return = hold_scope_before_return
+        self._notice_released_scope = notice_released_scope
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
@@ -182,6 +186,7 @@ class SessionsStateFacade:
                 self._require_writer_transfer_snapshot(expected_transfer)
             session = self._connection.execute(
                 """SELECT sessions.session_id, sessions.writer_mode,
+                          sessions.topic_id, sessions.generation,
                           COALESCE(topics.execution_scope, 'project:' || topics.project_id)
                             AS execution_scope
                    FROM agent_sessions sessions
@@ -214,7 +219,7 @@ class SessionsStateFacade:
                              'queued', 'leased', 'executing', 'retry_wait', 'result_ready'
                            ) AND NOT EXISTS (
                              SELECT 1 FROM provider_job_holds holds
-                             WHERE holds.job_id = jobs.job_id
+                             WHERE holds.job_id = jobs.job_id AND holds.decision = 'pending'
                            )
                            OR (jobs.status = 'indeterminate' AND NOT EXISTS (
                              SELECT 1 FROM provider_job_resolutions resolutions
@@ -241,10 +246,16 @@ class SessionsStateFacade:
                     for conflict in (conflicting_writer, conflicting_job, conflicting_dispatch)
                 ):
                     raise self._state_error("execution root is owned by another writer")
+            if writer_mode == "telegram" and session["writer_mode"] in {"local", "terminal"}:
+                self._hold_scope_before_return(int(session["topic_id"]))
             cursor = self._connection.execute(
                 "UPDATE agent_sessions SET writer_mode = ?, updated_at = ? WHERE session_id = ?",
                 (writer_mode, self._now(), session_id),
             )
+            if writer_mode == "telegram" and session["writer_mode"] in {"local", "terminal"}:
+                self._notice_released_scope(
+                    session_id=session_id, generation=int(session["generation"])
+                )
         if cursor.rowcount != 1:
             raise self._state_error(f"unknown session_id: {session_id}")
         return self.get_session(session_id)
@@ -274,7 +285,7 @@ class SessionsStateFacade:
             if topic is None or int(topic["chat_id"]) != chat_id:
                 raise self._state_error("Codex return does not match topic")
             session = self._connection.execute(
-                """SELECT topic_id, agent_id, status, writer_mode
+                """SELECT topic_id, agent_id, status, writer_mode, generation
                    FROM agent_sessions WHERE session_id = ?""",
                 (session_id,),
             ).fetchone()
@@ -291,6 +302,7 @@ class SessionsStateFacade:
                    WHERE topic_id = ? AND status = 'running' LIMIT 1""",
                 (topic_id,),
             ).fetchone()
+            self._hold_scope_before_return(topic_id)
             pending_job = self._connection.execute(
                 """SELECT 1 FROM provider_jobs
                    WHERE topic_id = ? AND status IN
@@ -298,6 +310,7 @@ class SessionsStateFacade:
                      AND NOT EXISTS (
                        SELECT 1 FROM provider_job_holds holds
                        WHERE holds.job_id = provider_jobs.job_id
+                         AND holds.decision = 'pending'
                      )
                    LIMIT 1""",
                 (topic_id,),
@@ -313,6 +326,9 @@ class SessionsStateFacade:
             if cursor.rowcount != 1:
                 raise self._state_error("Codex local writer ownership changed during return")
             self._activate_origin(session_id, message_id, topic_id)
+            self._notice_released_scope(
+                session_id=session_id, generation=int(session["generation"])
+            )
             self._connection.execute(
                 """INSERT INTO observed_messages
                    (chat_id, message_id, observer_agent_id, observed_at)

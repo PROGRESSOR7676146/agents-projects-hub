@@ -21,16 +21,32 @@ _ELIGIBLE_PROVIDER_JOB_SQL = """SELECT candidate.* FROM provider_jobs candidate
      )
      AND NOT EXISTS (
        SELECT 1 FROM provider_job_holds held WHERE held.job_id = candidate.job_id
+         AND held.decision = 'pending'
      )
-     AND NOT EXISTS (
+     AND (EXISTS (SELECT 1 FROM provider_job_continuations special
+                  WHERE special.continuation_job_id = candidate.job_id)
+          OR NOT EXISTS (
        SELECT 1 FROM provider_jobs earlier
        WHERE earlier.topic_id = candidate.topic_id
          AND earlier.topic_sequence < candidate.topic_sequence
          AND earlier.status NOT IN ('completed', 'failed', 'cancelled', 'indeterminate')
-         AND NOT EXISTS (
-           SELECT 1 FROM provider_job_holds held WHERE held.job_id = earlier.job_id
-         )
-     )
+     ))
+     AND (EXISTS (SELECT 1 FROM provider_job_continuations special
+                  WHERE special.continuation_job_id = candidate.job_id)
+          OR NOT EXISTS (
+       SELECT 1 FROM provider_jobs earlier
+       JOIN topics earlier_topic ON earlier_topic.topic_id=earlier.topic_id
+       WHERE COALESCE(earlier_topic.execution_scope,
+                      'project:' || earlier_topic.project_id)=
+             COALESCE(candidate_topic.execution_scope,
+                      'project:' || candidate_topic.project_id)
+         AND (earlier.created_at < candidate.created_at
+              OR (earlier.created_at=candidate.created_at
+                  AND earlier.job_id<candidate.job_id))
+         AND earlier.status IN ('queued','retry_wait')
+         AND EXISTS (SELECT 1 FROM provider_job_holds held
+                     WHERE held.job_id=earlier.job_id AND held.decision='pending')
+     ))
      AND NOT EXISTS (
        SELECT 1 FROM provider_jobs active
        JOIN topics active_topic ON active_topic.topic_id = active.topic_id
@@ -204,6 +220,7 @@ class ProviderJobsStateFacade:
                  AND jobs.status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
                  AND NOT EXISTS (
                    SELECT 1 FROM provider_job_holds holds WHERE holds.job_id = jobs.job_id
+                     AND holds.decision = 'pending'
                  ) LIMIT 1""",
             (topic_id,),
         ).fetchone()
@@ -238,6 +255,10 @@ class ProviderJobsStateFacade:
                 JOIN topics ON topics.topic_id = current.topic_id
                 WHERE current.agent_id IN ({placeholders})
                   AND current.status IN ('queued', 'leased', 'executing', 'result_ready')
+                  AND NOT EXISTS (
+                    SELECT 1 FROM provider_job_holds holds
+                    WHERE holds.job_id=current.job_id AND holds.decision='pending'
+                  )
                   AND NOT EXISTS (
                     SELECT 1 FROM provider_jobs earlier
                     WHERE earlier.topic_id = current.topic_id

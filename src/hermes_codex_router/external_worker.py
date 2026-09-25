@@ -228,6 +228,14 @@ class ExternalQueueWorker:
             raise ExternalQueueWorkerError("poll_seconds must be positive")
         if self.supervisor is not None:
             self.supervisor.start()
+        connect_thread: threading.Thread | None = None
+        if self.agent.runtime == "codex":
+            connect_thread = threading.Thread(
+                target=self._run_connect_forever,
+                name=f"{self.worker_id}-connect",
+                daemon=True,
+            )
+            connect_thread.start()
         try:
             while not self._stop.is_set():
                 try:
@@ -238,6 +246,25 @@ class ExternalQueueWorker:
                 self._stop.wait(0.01 if worked else poll_seconds)
         except KeyboardInterrupt:
             return
+        finally:
+            self._stop.set()
+            if connect_thread is not None:
+                connect_thread.join(timeout=40)
+
+    def _run_connect_forever(self) -> None:
+        """Serve metadata requests while the productive worker waits on a turn."""
+        while not self._stop.is_set():
+            try:
+                state = HubState.open(self.config.state_path)
+                try:
+                    while not self._stop.is_set():
+                        worked = self._run_connect_cycle(state=state)
+                        self._stop.wait(0.01 if worked else 0.2)
+                finally:
+                    state.close()
+            except Exception as exc:
+                self._record_event("error", "connect_worker_cycle_error", type(exc).__name__)
+                self._stop.wait(1)
 
     def run_cycle(self) -> bool:
         """Lease and execute at most one job for this worker's sole agent."""
@@ -284,35 +311,36 @@ class ExternalQueueWorker:
         self._publish_health()
         return True
 
-    def _run_connect_cycle(self) -> bool:
-        """Handle one bounded metadata-only request after productive work."""
-        store = SessionConnectStore(self.state)
+    def _run_connect_cycle(self, *, state: HubState | None = None) -> bool:
+        """Handle one leased metadata request with an independent Codex client."""
+        current_state = state or self.state
+        store = SessionConnectStore(current_state)
         workflow = store.lease_worker(self.worker_id)
         if workflow is None:
             return False
+        client: CodexAppServerClient | None = None
         try:
             if workflow.canonical_root is None:
                 raise ExternalQueueWorkerError("connect project is missing")
             if workflow.project_id is None:
                 raise ExternalQueueWorkerError("connect project is missing")
-            resolved = (
+            if workflow.destination_chat_id is not None:
                 resolve_project_context(
                     self.config,
-                    self.state,
+                    current_state,
                     chat_id=workflow.destination_chat_id,
                     expected_project_id=workflow.project_id,
                     expected_root=workflow.canonical_root,
                 )
-                if workflow.destination_chat_id is not None
-                else resolve_project_group(
+            else:
+                resolve_project_group(
                     self.config,
-                    self.state,
+                    current_state,
                     project_id=workflow.project_id,
                     expected_root=workflow.canonical_root,
                 )
-            )
-            self.registry = resolved.registry
-            client = self._client()
+            assert self.supervisor is not None
+            client = self.supervisor.client()
             client.initialize()
             if workflow.stage == "discovering":
                 discovered = client.list_connectable_threads(root=workflow.canonical_root)
@@ -343,7 +371,9 @@ class ExternalQueueWorker:
                 str(exc) if type(exc).__name__ == "CodexMetadataError" else "metadata_unavailable"
             )
             store.fail_worker(workflow.workflow_id, workflow.lease_token, safe_code)
-            self._discard_client()
+        finally:
+            if client is not None:
+                client.close()
         return True
 
     def _execute(self, job: ProviderJobRecord) -> None:

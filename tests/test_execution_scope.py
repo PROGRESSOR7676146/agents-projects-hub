@@ -6,9 +6,17 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any, cast
 
+from hermes_codex_router.controller_admission import (
+    DuplicateAdmission,
+    DurableAdmissionRequest,
+    DurableProviderAdmission,
+    RejectedAdmission,
+)
 from hermes_codex_router.external_runtime import ExternalTurnResult
 from hermes_codex_router.state import HubState, StateError
+from hermes_codex_router.telegram import TopicMessage
 from tests.fault_matrix_support import FaultMatrixHarness, RecordingAdapter
 
 
@@ -106,15 +114,331 @@ class ExecutionScopeTests(unittest.TestCase):
             agent_id="opencode",
         )
         self.state.set_writer_mode(local_session.session_id, "local")
-        waiting = self.enqueue(work_topic, work_session, 703)
+        with self.assertRaisesRegex(StateError, "persistent local writer"):
+            self.enqueue(work_topic, work_session, 703)
 
         self.assertIsNone(self.state.lease_provider_job("opencode", "opencode-worker"))
         self.state.set_writer_mode(local_session.session_id, "telegram")
-        leased = self.state.lease_provider_job("opencode", "opencode-worker")
-        self.assertIsNotNone(leased)
+        self.assertIsNone(self.state.lease_provider_job("opencode", "opencode-worker"))
+        self.assertEqual(local_topic.execution_scope, work_topic.execution_scope)
+
+    def test_new_request_is_not_queued_behind_another_topics_local_writer(self) -> None:
+        _, owner = self.topic_session(project_id="example-project", thread_id=75, agent_id="codex")
+        destination, selected = self.topic_session(
+            project_id="example-project", thread_id=76, agent_id="codex"
+        )
+        self.state.set_writer_mode(owner.session_id, "local")
+
+        with self.assertRaisesRegex(StateError, "local writer"):
+            self.enqueue(destination, selected, 704)
+
+        self.assertEqual(self.state.provider_jobs_for_topic(destination.topic_id), ())
+
+    def test_blocked_input_has_one_durable_hub_notice_per_telegram_message(self) -> None:
+        owner_topic, owner = self.topic_session(
+            project_id="example-project", thread_id=77, agent_id="codex"
+        )
+        destination, selected = self.topic_session(
+            project_id="example-project", thread_id=78, agent_id="codex"
+        )
+        self.state.set_writer_mode(owner.session_id, "local")
+
+        first = self.state.reject_blocked_provider_input(
+            chat_id=destination.chat_id,
+            message_id=705,
+            topic_id=destination.topic_id,
+            session_id=selected.session_id,
+            session_generation=selected.generation,
+        )
+        repeated = self.state.reject_blocked_provider_input(
+            chat_id=destination.chat_id,
+            message_id=705,
+            topic_id=destination.topic_id,
+            session_id=selected.session_id,
+            session_generation=selected.generation,
+        )
+
+        self.assertIsNotNone(first)
+        self.assertEqual(first, repeated)
+        assert first is not None
+        self.assertEqual(first.blocker_topic_id, owner_topic.topic_id)
+        self.assertEqual(first.kind, "rejected")
+        self.assertIn("не получил", first.telegram_html)
+        self.assertEqual(self.state.provider_jobs_for_topic(destination.topic_id), ())
+
+    def test_controller_admission_rejects_blocked_update_without_provider_job(self) -> None:
+        _, owner = self.topic_session(project_id="example-project", thread_id=179, agent_id="codex")
+        destination, selected = self.topic_session(
+            project_id="example-project", thread_id=180, agent_id="opencode"
+        )
+        self.state.set_writer_mode(owner.session_id, "local")
+        message = TopicMessage(
+            update_id=1900,
+            message_id=1900,
+            chat_id=destination.chat_id,
+            thread_id=destination.thread_id,
+            chat_title="Fictional group",
+            sender_id=42,
+            text="Fictional productive request",
+        )
+        admission = DurableProviderAdmission(
+            state=self.state,
+            telegram=cast(Any, object()),
+            state_path=self.base / "state.db",
+            observer_agent_id="hub",
+            message_batch_quiet_ms=100,
+            message_batch_max_ms=1000,
+        )
+        request = DurableAdmissionRequest(
+            message=message,
+            topic=destination,
+            session=selected,
+            prompt=message.text,
+        )
+        result = admission.admit(request)
+        self.assertEqual(result, RejectedAdmission("persistent_root_blocker"))
+        self.assertIsInstance(admission.admit(request), DuplicateAdmission)
+        self.assertEqual(self.state.provider_jobs_for_topic(destination.topic_id), ())
+
+    def test_concurrent_local_transfer_and_admission_have_one_winner(self) -> None:
+        _, owner = self.topic_session(project_id="example-project", thread_id=181, agent_id="codex")
+        destination, selected = self.topic_session(
+            project_id="example-project", thread_id=182, agent_id="opencode"
+        )
+        barrier = threading.Barrier(2)
+        outcomes: list[str] = []
+        failures: list[Exception] = []
+
+        def transfer() -> None:
+            peer = HubState.open(self.base / "state.db")
+            try:
+                barrier.wait(timeout=3)
+                try:
+                    peer.set_writer_mode(owner.session_id, "local")
+                    outcomes.append("local")
+                except StateError:
+                    pass
+            except Exception as exc:
+                failures.append(exc)
+            finally:
+                peer.close()
+
+        def admit() -> None:
+            peer = HubState.open(self.base / "state.db")
+            try:
+                barrier.wait(timeout=3)
+                try:
+                    peer.enqueue_provider_job(
+                        idempotency_key="fictional-race:181",
+                        chat_id=destination.chat_id,
+                        message_id=1811,
+                        topic_id=destination.topic_id,
+                        agent_id=selected.agent_id,
+                        session_id=selected.session_id,
+                        session_generation=selected.generation,
+                        model=selected.model,
+                        effort=selected.effort,
+                        payload_text="Fictional concurrent request",
+                    )
+                    outcomes.append("queued")
+                except StateError:
+                    pass
+            except Exception as exc:
+                failures.append(exc)
+            finally:
+                peer.close()
+
+        threads = [threading.Thread(target=transfer), threading.Thread(target=admit)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=4)
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(failures, [])
+        self.assertEqual(len(outcomes), 1)
+        self.assertEqual(
+            (self.state.get_session(owner.session_id).writer_mode == "local"),
+            (outcomes == ["local"]),
+        )
+
+    def test_legacy_queued_job_needs_exact_notice_decision_after_return(self) -> None:
+        owner_topic, owner = self.topic_session(
+            project_id="example-project", thread_id=171, agent_id="codex"
+        )
+        destination, selected = self.topic_session(
+            project_id="example-project", thread_id=172, agent_id="opencode"
+        )
+        waiting = self.enqueue(destination, selected, 1701)
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE agent_sessions SET writer_mode='local' WHERE session_id=?",
+                (owner.session_id,),
+            )
+        self.assertEqual(self.state.materialize_held_provider_jobs(), 1)
+        self.assertEqual(self.state.materialize_held_provider_jobs(), 0)
+        notice = self.state.lease_root_blocker_notice("fictional-sender")
+        assert notice is not None
+        self.assertEqual(notice.kind, "held")
+        self.assertIn("сохранён, но не начат", notice.telegram_html)
+        self.state.complete_root_blocker_notice(notice, 1801)
+        with self.assertRaisesRegex(StateError, "still held"):
+            self.state.decide_held_provider_job(
+                job_id=waiting.job_id,
+                action="confirm",
+                chat_id=destination.chat_id,
+                thread_id=destination.thread_id,
+                notice_message_id=1801,
+            )
+        self.state.set_writer_mode(owner.session_id, "telegram")
+        later = self.enqueue(destination, selected, 1703)
+        self.assertIsNone(self.state.lease_provider_job("opencode", "fictional-worker"))
+        self.assertEqual(
+            self.state.decide_held_provider_job(
+                job_id=waiting.job_id,
+                action="confirm",
+                chat_id=destination.chat_id,
+                thread_id=destination.thread_id,
+                notice_message_id=1801,
+            ),
+            "confirmed",
+        )
+        self.assertEqual(
+            self.state.decide_held_provider_job(
+                job_id=waiting.job_id,
+                action="confirm",
+                chat_id=destination.chat_id,
+                thread_id=destination.thread_id,
+                notice_message_id=1801,
+            ),
+            "confirmed",
+        )
+        leased = self.state.lease_provider_job("opencode", "fictional-worker")
         assert leased is not None
         self.assertEqual(leased.job_id, waiting.job_id)
-        self.assertEqual(local_topic.execution_scope, work_topic.execution_scope)
+        self.assertEqual(self.state.get_provider_job(later.job_id).status, "queued")
+        self.assertEqual(owner_topic.execution_scope, destination.execution_scope)
+
+    def test_held_job_can_be_cancelled_without_releasing_local_writer(self) -> None:
+        _, owner = self.topic_session(project_id="example-project", thread_id=173, agent_id="codex")
+        destination, selected = self.topic_session(
+            project_id="example-project", thread_id=174, agent_id="opencode"
+        )
+        waiting = self.enqueue(destination, selected, 1702)
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE agent_sessions SET writer_mode='local' WHERE session_id=?",
+                (owner.session_id,),
+            )
+        self.state.materialize_held_provider_jobs()
+        notice = self.state.lease_root_blocker_notice("fictional-sender")
+        assert notice is not None
+        self.state.complete_root_blocker_notice(notice, 1802)
+        with self.assertRaisesRegex(StateError, "notice or topic"):
+            self.state.decide_held_provider_job(
+                job_id=waiting.job_id,
+                action="cancel",
+                chat_id=destination.chat_id,
+                thread_id=999,
+                notice_message_id=1802,
+            )
+        self.assertEqual(
+            self.state.decide_held_provider_job(
+                job_id=waiting.job_id,
+                action="cancel",
+                chat_id=destination.chat_id,
+                thread_id=destination.thread_id,
+                notice_message_id=1802,
+            ),
+            "cancelled",
+        )
+        self.state.set_writer_mode(owner.session_id, "telegram")
+        self.assertEqual(self.state.get_provider_job(waiting.job_id).status, "cancelled")
+        self.assertIsNone(self.state.lease_provider_job("opencode", "fictional-worker"))
+        released = self.state.lease_root_blocker_notice("fictional-sender")
+        assert released is not None
+        self.assertEqual(released.kind, "released")
+        self.assertIn("отменён", released.telegram_html)
+
+    def test_codex_return_holds_legacy_queue_in_its_own_topic(self) -> None:
+        topic, session = self.topic_session(
+            project_id="example-project", thread_id=175, agent_id="codex"
+        )
+        waiting = self.enqueue(topic, session, 1704)
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE agent_sessions SET writer_mode='local' WHERE session_id=?",
+                (session.session_id,),
+            )
+        returned, created = self.state.return_codex_local_writer(
+            chat_id=topic.chat_id,
+            message_id=1705,
+            topic_id=topic.topic_id,
+            session_id=session.session_id,
+            observer_agent_id="hub",
+        )
+        self.assertTrue(created)
+        self.assertEqual(returned.writer_mode, "telegram")
+        self.assertIsNone(self.state.lease_provider_job("codex", "fictional-worker"))
+        hold = self.state._connection.execute(
+            "SELECT hold_reason,decision FROM provider_job_holds WHERE job_id=?",
+            (waiting.job_id,),
+        ).fetchone()
+        self.assertEqual(tuple(hold), ("local", "pending"))
+
+    def test_schema_34_uncertainty_hold_gets_exact_owner_decision_notice(self) -> None:
+        topic, session = self.topic_session(
+            project_id="example-project", thread_id=176, agent_id="codex"
+        )
+        source = self.enqueue(topic, session, 1706)
+        waiting = self.enqueue(topic, session, 1707)
+        with self.state._connection:
+            self.state._connection.execute(
+                """INSERT INTO provider_job_holds(job_id,cause_job_id,held_at)
+                   VALUES (?,?,?)""",
+                (waiting.job_id, source.job_id, "2026-01-01T00:00:00+00:00"),
+            )
+        self.assertEqual(self.state.materialize_held_provider_jobs(), 1)
+        notice = self.state.lease_root_blocker_notice("fictional-sender")
+        assert notice is not None
+        self.assertEqual(notice.job_id, waiting.job_id)
+        self.assertIn("прежний ход", notice.telegram_html)
+        self.assertEqual(self.state.materialize_held_provider_jobs(), 0)
+
+    def test_uncertainty_resolution_notifies_rejected_and_held_topics_once(self) -> None:
+        source_topic, source_session = self.topic_session(
+            project_id="example-project", thread_id=177, agent_id="codex"
+        )
+        destination, selected = self.topic_session(
+            project_id="example-project", thread_id=178, agent_id="opencode"
+        )
+        source = self.enqueue(source_topic, source_session, 1710)
+        self.enqueue(source_topic, source_session, 1711)
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE provider_jobs SET status='indeterminate' WHERE job_id=?",
+                (source.job_id,),
+            )
+        self.state.reject_blocked_provider_input(
+            chat_id=destination.chat_id,
+            message_id=1712,
+            topic_id=destination.topic_id,
+            session_id=selected.session_id,
+            session_generation=selected.generation,
+        )
+        self.assertEqual(self.state.materialize_held_provider_jobs(), 1)
+        self.assertEqual(self.state.held_provider_job_count(source_topic.topic_id), 1)
+        self.assertEqual(self.state.materialize_released_uncertainty_notices(), 0)
+        self.state.resolve_indeterminate_job(source.job_id, "acknowledged")
+        self.assertEqual(self.state.held_provider_job_count(source_topic.topic_id), 1)
+        self.assertEqual(self.state.materialize_released_uncertainty_notices(), 2)
+        self.assertEqual(self.state.materialize_released_uncertainty_notices(), 0)
+        released = self.state._connection.execute(
+            """SELECT telegram_html FROM hub_blocker_outbox
+               WHERE kind='released' ORDER BY chat_id,thread_id"""
+        ).fetchall()
+        self.assertEqual(len(released), 2)
+        self.assertTrue(any("паузе" in row[0] for row in released))
+        self.assertTrue(any("не был передан" in row[0] for row in released))
 
     def test_reconcile_legacy_scope_keeps_local_writer_on_canonical_root(self) -> None:
         local_topic, local_session = self.topic_session(
@@ -130,7 +454,8 @@ class ExecutionScopeTests(unittest.TestCase):
             project_id="example-project", thread_id=742, agent_id="opencode", root=self.base
         )
         self.state.reconcile_legacy_execution_scopes({"example-project": self.base})
-        self.enqueue(work_topic, work_session, 742)
+        with self.assertRaisesRegex(StateError, "persistent local writer"):
+            self.enqueue(work_topic, work_session, 742)
 
         self.assertIsNone(self.state.lease_provider_job("opencode", "opencode-worker"))
         self.assertEqual(
@@ -474,16 +799,27 @@ class ExecutionScopeTests(unittest.TestCase):
             agent_id="opencode",
             root=root,
         )
-        self.state.set_writer_mode(local_session.session_id, "local")
-        self.enqueue(work_topic, work_session, 717)
+        waiting = self.enqueue(work_topic, work_session, 717)
+        # Legacy state could contain accepted work before the local lease was
+        # recorded; the new release must pause it before returning ownership.
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE agent_sessions SET writer_mode='local' WHERE session_id=?",
+                (local_session.session_id,),
+            )
         adapter = RecordingAdapter("opencode")
         worker = harness.worker("opencode", adapter)
         try:
             self.assertFalse(worker.run_cycle())
             self.assertEqual(adapter.calls, [])
             self.state.set_writer_mode(local_session.session_id, "telegram")
-            self.assertTrue(worker.run_cycle())
-            self.assertEqual(len(adapter.calls), 1)
+            self.assertFalse(worker.run_cycle())
+            self.assertEqual(adapter.calls, [])
+            hold = self.state._connection.execute(
+                "SELECT hold_reason,decision FROM provider_job_holds WHERE job_id=?",
+                (waiting.job_id,),
+            ).fetchone()
+            self.assertEqual(tuple(hold), ("local", "pending"))
             self.assertEqual(local_topic.execution_scope, work_topic.execution_scope)
         finally:
             worker.close()

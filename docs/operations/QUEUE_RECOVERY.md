@@ -131,6 +131,20 @@ The audit reports these annotations separately and recommends no further action
 for resolved records. Schema 32 uses the immutable annotation to release the
 canonical-root scope for unrelated future work.
 
+## Persistent local root blockers
+
+When a local or terminal writer retains a canonical root, new productive
+messages in another topic receive a durable Hub refusal and do not enter the
+provider queue. Open the linked owner topic, close the CLI at an idle boundary,
+then use `/return` there (or `/release` for a managed terminal). The command
+only changes the writer lease and retains the provider thread. Already accepted
+queued work is held before the lease returns; the owner must use the exact
+notice to confirm or cancel that job. A late `/return` alone does not run it.
+The sender may retry an undelivered blocker notice without starting a provider
+turn. Inspect `/status` in the topic for its owner-facing blocker reason; do
+not use PID absence or lease age as proof that the CLI closed. Schema 35 is
+additive and requires schema-compatible Hub, workers and sender for rollback.
+
 ## Capacity and lane changes
 
 `max_parallel_roots` defaults to 1. Raising it requires external queue mode and

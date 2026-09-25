@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -88,6 +90,80 @@ class Client(worker_fixtures.WorkerClient):
 
 
 class SessionConnectJourneyTests(unittest.TestCase):
+    def test_discovery_progresses_while_productive_turn_waits(self) -> None:
+        fixture = worker_fixtures.CodexQueueWorkerTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        job_id = fixture.enqueue()
+        entered = threading.Event()
+        release = threading.Event()
+
+        class SlowWorker(ExternalQueueWorker):
+            def _execute(self, job):
+                assert job.lease_token is not None
+                self.state.mark_provider_job_executing(job.job_id, job.lease_token)
+                entered.set()
+                if not release.wait(5):
+                    raise TimeoutError("fictional turn timed out")
+
+        client = Client(fixture.registry.projects[0].root)
+        workers: list[SlowWorker] = []
+
+        def run_worker() -> None:
+            worker = SlowWorker(
+                fixture.config,
+                "codex",
+                registry=fixture.registry,
+                supervisor=cast(Any, worker_fixtures.WorkerSupervisor(client)),
+                worker_id="connect-worker",
+            )
+            workers.append(worker)
+            try:
+                worker.run_forever()
+            finally:
+                worker.close()
+
+        runner = threading.Thread(target=run_worker, daemon=True)
+        runner.start()
+        self.assertTrue(entered.wait(2), "productive turn did not start")
+        try:
+            state = HubState.open(fixture.config.state_path)
+            try:
+                workflow = SessionConnectStore(state).start_topic(
+                    owner_user_id=42,
+                    project_id="example-project",
+                    canonical_root=fixture.registry.projects[0].root,
+                    chat_id=-1001234567890,
+                    thread_id=77,
+                    model="gpt-5.6-sol",
+                    effort="high",
+                )
+                deadline = time.monotonic() + 1
+                current = SessionConnectStore(state).get(workflow.workflow_id)
+                while time.monotonic() < deadline:
+                    current = SessionConnectStore(state).get(workflow.workflow_id)
+                    if current.stage == "choosing_source":
+                        break
+                    time.sleep(0.02)
+                self.assertEqual(current.stage, "choosing_source")
+                self.assertEqual(state.get_provider_job(job_id).status, "executing")
+                self.assertEqual(client.turns, 0)
+                self.assertEqual(
+                    state._connection.execute(
+                        "SELECT COUNT(*) FROM session_connect_outbox WHERE workflow_id=?",
+                        (workflow.workflow_id,),
+                    ).fetchone()[0],
+                    1,
+                )
+            finally:
+                state.close()
+        finally:
+            release.set()
+            if workers:
+                workers[0].stop()
+            runner.join(2)
+            self.assertFalse(runner.is_alive())
+
     def test_topic_connect_uses_worker_marker_and_never_starts_a_turn(self) -> None:
         fixture = worker_fixtures.CodexQueueWorkerTests()
         fixture.setUp()

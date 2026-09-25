@@ -15,6 +15,7 @@ from .artifacts import (
     remove_spooled_artifact,
     verify_spooled_artifact,
 )
+from .blocker_notice_sender import deliver_root_blocker_notice
 from .command_menu import GROUP_COMMANDS
 from .delivery_retry import delivery_retry_delay
 from .hub_config import HubConfig
@@ -38,7 +39,15 @@ class TelegramSender(Protocol):
     def call(self, method: str, **params: object) -> object: ...
 
     def send_chat_action(self, chat_id: int, thread_id: int, action: str = "typing") -> None: ...
-    def send_html(self, chat_id: int, thread_id: int, html: str) -> int: ...
+    def send_html(
+        self,
+        chat_id: int,
+        thread_id: int,
+        html: str,
+        *,
+        reply_markup: dict[str, Any] | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> int: ...
     def send_document(
         self,
         chat_id: int,
@@ -316,6 +325,10 @@ class TelegramOutboxSender:
         self.state.recover_stale_telegram_outbox(sender_agent_ids=self.agent_ids, now=now)
         self.progress.recover_stale(self.provider_agent_ids, now=now)
         self.progress.supersede_terminal(self.provider_agent_ids, now=now)
+        self.state.materialize_held_provider_jobs()
+        self.state.materialize_released_uncertainty_notices()
+        if self.config.hub_bot is not None and self._deliver_root_blocker_one(now=now):
+            return True
         if (
             self._final_deliveries_since_command_scope >= 10
             and self._sync_onboarded_project_commands()
@@ -347,6 +360,18 @@ class TelegramOutboxSender:
         # Final results and durable progress have priority over advisory chat actions.
         self._refresh_chat_actions()
         return False
+
+    def _deliver_root_blocker_one(self, *, now: datetime | None = None) -> bool:
+        result = deliver_root_blocker_notice(
+            self.state, cast(Any, self.telegram_bots["hub"]), self.sender_id, now=now
+        )
+        if not result.worked:
+            return False
+        if result.error is None:
+            self._record_transport_success()
+        elif isinstance(result.error, TelegramError):
+            self._record_transport_failure(result.error)
+        return True
 
     def _deliver_connect_one(self) -> bool:
         store = SessionConnectStore(self.state)
