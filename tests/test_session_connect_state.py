@@ -89,6 +89,67 @@ class SessionConnectStateTests(unittest.TestCase):
                 payload_text="Delayed input",
             )
 
+    def test_expired_discovery_sends_one_durable_restart_notice(self) -> None:
+        workflow = self.store.start_topic(
+            owner_user_id=42,
+            project_id="example-project",
+            canonical_root=self.root,
+            chat_id=-1001234567890,
+            thread_id=77,
+            model="gpt-5.6-sol",
+            effort="high",
+        )
+        with self.state._immediate_transaction():
+            self.state._connection.execute(
+                "UPDATE session_connect_workflows SET expires_at=? WHERE workflow_id=?",
+                ("2000-01-01T00:00:00+00:00", workflow.workflow_id),
+            )
+        self.assertIsNone(self.store.lease_worker("worker-before-restart"))
+        restarted_state = HubState.open(self.root / "state.db")
+        try:
+            restarted = SessionConnectStore(restarted_state)
+            self.assertIsNone(restarted.lease_worker("worker-after-restart"))
+            self.assertEqual(restarted.get(workflow.workflow_id).stage, "expired")
+            notices = restarted_state._connection.execute(
+                "SELECT kind,telegram_html FROM session_connect_outbox WHERE workflow_id=?",
+                (workflow.workflow_id,),
+            ).fetchall()
+            self.assertEqual(len(notices), 1)
+            self.assertEqual(notices[0][0], "notice")
+            self.assertIn("/connect", notices[0][1])
+        finally:
+            restarted_state.close()
+
+    def test_expiry_during_metadata_read_cannot_be_reclassified_as_failure(self) -> None:
+        workflow = self.store.start_topic(
+            owner_user_id=42,
+            project_id="example-project",
+            canonical_root=self.root,
+            chat_id=-1001234567890,
+            thread_id=77,
+            model="gpt-5.6-sol",
+            effort="high",
+        )
+        leased = required(self.store.lease_worker("worker-1"))
+        with self.state._immediate_transaction():
+            self.state._connection.execute(
+                "UPDATE session_connect_workflows SET expires_at=? WHERE workflow_id=?",
+                ("2000-01-01T00:00:00+00:00", workflow.workflow_id),
+            )
+        self.assertIsNone(self.store.lease_worker("worker-2"))
+        with self.assertRaisesRegex(StateError, "connect_worker_lease_changed"):
+            self.store.finish_discovery(workflow.workflow_id, leased.lease_token, ())
+        with self.assertRaisesRegex(StateError, "connect_worker_lease_changed"):
+            self.store.fail_worker(workflow.workflow_id, leased.lease_token, "metadata_unavailable")
+        self.assertEqual(self.store.get(workflow.workflow_id).stage, "expired")
+        self.assertEqual(
+            self.state._connection.execute(
+                "SELECT COUNT(*) FROM session_connect_outbox WHERE workflow_id=?",
+                (workflow.workflow_id,),
+            ).fetchone()[0],
+            1,
+        )
+
     def test_marker_unknown_outcome_preserves_current_binding(self) -> None:
         previous = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-5.6-sol", "high")
         self.state.bind_provider_session(previous.session_id, "old-thread", None)

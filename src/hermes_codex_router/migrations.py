@@ -1260,6 +1260,81 @@ ON incoming_materials(session_id, session_generation, status);
 """
 
 
+MIGRATION_34 = """
+CREATE TABLE IF NOT EXISTS provider_turn_terminal_evidence (
+    job_id TEXT PRIMARY KEY REFERENCES provider_jobs(job_id),
+    terminal_status TEXT NOT NULL CHECK(terminal_status IN ('failed', 'interrupted')),
+    provider_thread_id TEXT NOT NULL,
+    provider_turn_id TEXT NOT NULL,
+    project_root TEXT NOT NULL,
+    observed_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS provider_job_holds (
+    job_id TEXT PRIMARY KEY REFERENCES provider_jobs(job_id),
+    cause_job_id TEXT NOT NULL REFERENCES provider_jobs(job_id),
+    held_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS provider_job_continuations (
+    source_job_id TEXT PRIMARY KEY REFERENCES provider_jobs(job_id),
+    continuation_job_id TEXT NOT NULL UNIQUE REFERENCES provider_jobs(job_id),
+    chat_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS provider_turn_observations (
+    job_id TEXT PRIMARY KEY REFERENCES provider_jobs(job_id),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 3),
+    next_check_at TEXT NOT NULL,
+    last_status TEXT CHECK(last_status IN ('active', 'unknown')),
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS provider_recovery_notices (
+    job_id TEXT PRIMARY KEY REFERENCES provider_jobs(job_id),
+    outbox_id TEXT NOT NULL,
+    telegram_html TEXT NOT NULL,
+    delivery_status TEXT NOT NULL,
+    telegram_message_id INTEGER,
+    saved_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS provider_turn_observations_due
+ON provider_turn_observations(next_check_at, attempt_count);
+"""
+
+
+MIGRATION_35 = """
+CREATE TABLE IF NOT EXISTS hub_blocker_outbox (
+    outbox_id TEXT PRIMARY KEY,
+    event_key TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL CHECK(kind IN ('rejected', 'held', 'released')),
+    chat_id INTEGER NOT NULL,
+    thread_id INTEGER NOT NULL,
+    reply_to_message_id INTEGER,
+    telegram_html TEXT NOT NULL,
+    reply_markup_json TEXT,
+    blocker_topic_id INTEGER REFERENCES topics(topic_id),
+    blocker_session_id TEXT,
+    blocker_generation INTEGER,
+    blocker_kind TEXT CHECK(blocker_kind IN ('local', 'terminal', 'uncertain')),
+    blocker_job_id TEXT REFERENCES provider_jobs(job_id),
+    job_id TEXT REFERENCES provider_jobs(job_id),
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'sending', 'delivered', 'failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    available_at TEXT NOT NULL,
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    telegram_message_id INTEGER,
+    error_code TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    delivered_at TEXT
+);
+CREATE INDEX IF NOT EXISTS hub_blocker_outbox_due
+ON hub_blocker_outbox(status, available_at, created_at);
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
     previous_version: int
@@ -1338,6 +1413,22 @@ def _ensure_input_group_key_column(connection: sqlite3.Connection) -> None:
         )
 
 
+def _ensure_hold_decision_columns(connection: sqlite3.Connection) -> None:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(provider_job_holds)")}
+    if "hold_reason" not in columns:
+        connection.execute(
+            """ALTER TABLE provider_job_holds ADD COLUMN hold_reason TEXT NOT NULL
+               DEFAULT 'uncertainty' CHECK(hold_reason IN ('uncertainty','local','terminal'))"""
+        )
+    if "decision" not in columns:
+        connection.execute(
+            """ALTER TABLE provider_job_holds ADD COLUMN decision TEXT NOT NULL
+               DEFAULT 'pending' CHECK(decision IN ('pending','confirmed','cancelled'))"""
+        )
+    if "decided_at" not in columns:
+        connection.execute("ALTER TABLE provider_job_holds ADD COLUMN decided_at TEXT")
+
+
 def _execute_migration_script(connection: sqlite3.Connection, script: str) -> None:
     """Execute one trusted migration script without sqlite3's implicit COMMIT.
 
@@ -1403,17 +1494,21 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_31,
         MIGRATION_32,
         MIGRATION_33,
+        MIGRATION_34,
+        MIGRATION_35,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:
             connection.execute("BEGIN IMMEDIATE")
-            for version, script in enumerate(migrations, start=1):
+            for version, script in enumerate(migrations[:LATEST_SCHEMA_VERSION], start=1):
                 if previous >= version:
                     continue
                 if version == 31:
                     _ensure_execution_scope_column(connection)
                 if version == 33:
                     _ensure_input_group_key_column(connection)
+                if version == 35:
+                    _ensure_hold_decision_columns(connection)
                 _execute_migration_script(connection, script)
                 if version == 1:
                     _ensure_legacy_columns(connection)

@@ -24,7 +24,10 @@ from .state import (
 from .telegram import TelegramError, TopicMessage
 
 AdmissionRejection = Literal[
-    "input_too_long", "input_before_session_activation", "local_transfer_changed"
+    "input_too_long",
+    "input_before_session_activation",
+    "local_transfer_changed",
+    "persistent_root_blocker",
 ]
 AdmissionFailureReason = Literal["material_download", "enqueue_uncommitted"]
 
@@ -105,6 +108,17 @@ class DurableProviderAdmission:
             ):
                 return DuplicateAdmission()
             return RejectedAdmission("input_too_long")
+
+        if not request.take_local_writer:
+            blocked = self.state.reject_blocked_provider_input(
+                chat_id=message.chat_id,
+                message_id=message.message_id,
+                topic_id=request.topic.topic_id,
+                session_id=request.session.session_id,
+                session_generation=request.session.generation,
+            )
+            if blocked is not None:
+                return RejectedAdmission("persistent_root_blocker")
 
         payload = request.prompt
         if message.quote_text:
@@ -201,6 +215,19 @@ class DurableProviderAdmission:
                     expected_transfer=expected_transfer,
                 )
         except StateError as exc:
+            if str(exc) == "execution root has a persistent local writer or uncertainty":
+                blocked = self.state.reject_blocked_provider_input(
+                    chat_id=message.chat_id,
+                    message_id=message.message_id,
+                    topic_id=request.topic.topic_id,
+                    session_id=request.session.session_id,
+                    session_generation=request.session.generation,
+                )
+                if blocked is not None:
+                    return RejectedAdmission("persistent_root_blocker")
+                # The blocker disappeared between two SQLite transactions.
+                # Leave the update unclaimed so ingress retries normal admission.
+                return DurableAdmissionFailure("enqueue_uncommitted", exc)
             if str(exc) == "input_before_session_activation":
                 self.state.claim_message(
                     message.chat_id,

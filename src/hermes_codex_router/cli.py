@@ -75,6 +75,19 @@ def _parser() -> argparse.ArgumentParser:
     attach.add_argument("--apply", action="store_true")
     attach.add_argument("--confirm-cli-closed", action="store_true")
     attach.add_argument("--json", action="store_true")
+    reconcile_local = session_commands.add_parser(
+        "reconcile-existing-local",
+        help="preview or claim an exact already opened Codex session without launching CLI",
+    )
+    reconcile_local.add_argument("config", type=Path)
+    reconcile_local.add_argument("--session-id", required=True)
+    reconcile_local.add_argument("--provider-thread-id", required=True)
+    reconcile_local.add_argument("--old-job-id", required=True)
+    reconcile_local.add_argument("--generation", required=True, type=int)
+    reconcile_local.add_argument("--root", required=True, type=Path)
+    reconcile_local.add_argument("--apply", action="store_true")
+    reconcile_local.add_argument("--confirm-cli-closed", action="store_true")
+    reconcile_local.add_argument("--confirm-remote-idle", action="store_true")
     connect = session_commands.add_parser(
         "connect", help="choose a saved Codex session and issue a Telegram code"
     )
@@ -391,6 +404,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "session":
+            if args.session_command == "reconcile-existing-local":
+                from .existing_local_reconciliation import reconcile_existing_local
+
+                try:
+                    result = reconcile_existing_local(
+                        load_external_worker_config(args.config),
+                        session_id=args.session_id,
+                        provider_thread_id=args.provider_thread_id,
+                        old_job_id=args.old_job_id,
+                        expected_generation=args.generation,
+                        expected_root=args.root,
+                        apply=args.apply,
+                        confirm_cli_closed=args.confirm_cli_closed,
+                        confirm_remote_idle=args.confirm_remote_idle,
+                    )
+                except Exception as exc:
+                    _print(
+                        {
+                            "format_version": 1,
+                            "ok": False,
+                            "reason_code": (
+                                str(exc)[:180]
+                                if isinstance(exc, StateError)
+                                else type(exc).__name__
+                            ),
+                        }
+                    )
+                    return 2
+                _print({"format_version": 1, "ok": True, **asdict(result)})
+                return 0
             if args.session_command == "connect":
                 from .session_connect_cli import ConnectCliError, prepare_connect_code
 

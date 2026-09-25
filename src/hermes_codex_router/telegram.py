@@ -202,6 +202,7 @@ class TopicMessage:
     sender_id: int
     text: str
     reply_to_username: str | None = None
+    reply_to_message_id: int | None = None
     is_forwarded: bool = False
     text_source: str = "text"
     attachments: tuple[IncomingAttachment, ...] = ()
@@ -346,6 +347,7 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
     parsed_text = _message_text(message, has_material=bool(attachments or unavailable_materials))
     raw_thread_id = message.get("message_thread_id")
     reply_to_username = None
+    reply_to_message_id = None
     is_forwarded = isinstance(message.get("forward_origin"), dict) or any(
         key in message
         for key in (
@@ -363,6 +365,8 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
         and not isinstance(message.get("quote"), dict)
         and reply.get("message_id") != raw_thread_id
     ):
+        if isinstance(reply.get("message_id"), int):
+            reply_to_message_id = int(reply["message_id"])
         reply_author = reply.get("from")
         if (
             isinstance(reply_author, dict)
@@ -391,6 +395,7 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
         sender_id=int(sender["id"]),
         text=parsed_text[0],
         reply_to_username=reply_to_username,
+        reply_to_message_id=reply_to_message_id,
         is_forwarded=is_forwarded,
         text_source=parsed_text[1],
         attachments=attachments,
@@ -699,6 +704,7 @@ class TelegramBotApi:
         html: str,
         *,
         reply_markup: dict[str, Any] | None = None,
+        reply_to_message_id: int | None = None,
     ) -> int:
         params: dict[str, Any] = {
             "chat_id": chat_id,
@@ -710,6 +716,10 @@ class TelegramBotApi:
             params["message_thread_id"] = thread_id
         if reply_markup is not None:
             params["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+        if reply_to_message_id is not None:
+            params["reply_parameters"] = json.dumps(
+                {"message_id": reply_to_message_id, "allow_sending_without_reply": True}
+            )
         result = self.call("sendMessage", **params)
         if not isinstance(result, dict) or not isinstance(result.get("message_id"), int):
             raise TelegramError(

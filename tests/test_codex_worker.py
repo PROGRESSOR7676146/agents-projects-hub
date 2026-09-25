@@ -214,6 +214,44 @@ class CodexQueueWorkerTests(unittest.TestCase):
         finally:
             worker.close()
 
+    def test_notice_continuation_refuses_stdio_fallback_before_new_thread(self) -> None:
+        job_id = self.enqueue(
+            1, "Inspect current fictional project", provider_session_id="thread-1"
+        )
+        state = HubState.open(self.config.state_path)
+        try:
+            with state._immediate_transaction():
+                state._connection.execute(
+                    "UPDATE provider_jobs SET idempotency_key = ? WHERE job_id = ?",
+                    ("continuation:fictional-source", job_id),
+                )
+        finally:
+            state.close()
+
+        class Client(WorkerClient):
+            def start_thread(self, **_kwargs: object) -> CodexThread:
+                raise AssertionError("continuation must not create a new thread")
+
+            def resume_thread(self, **_kwargs: object) -> CodexThread:
+                raise AssertionError("continuation must not use fallback")
+
+        class Supervisor(WorkerSupervisor):
+            transport_mode = "stdio-fallback"
+
+        client = Client()
+        worker = CodexQueueWorker(
+            self.config,
+            registry=self.registry,
+            supervisor=cast(Any, Supervisor(client)),
+            worker_id="fictional-continuation-worker",
+        )
+        try:
+            self.assertTrue(worker.run_cycle())
+            self.assertEqual(worker.state.get_provider_job(job_id).status, "failed")
+            self.assertEqual(client.turns, 0)
+        finally:
+            worker.close()
+
     def test_codex_v2_contract_uses_native_thread_instructions(self) -> None:
         job_id = self.enqueue(1, "Current question", provider_session_id="thread-1")
         state = HubState.open(self.config.state_path)

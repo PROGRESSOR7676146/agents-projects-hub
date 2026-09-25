@@ -11,6 +11,7 @@ from hermes_codex_router.acceptance_runtime import (
     FixedServiceSupervisor,
     ReadOnlyAcceptanceState,
 )
+from hermes_codex_router.schema_compatibility import TARGET_SCHEMA_VERSION
 
 
 class StatefulSystemctl:
@@ -54,8 +55,8 @@ class AcceptanceStateProbeTests(unittest.TestCase):
         self.state_path = Path(self.tempdir.name) / "state.db"
         connection = sqlite3.connect(self.state_path)
         connection.executescript(
-            """
-            PRAGMA user_version=33;
+            f"""
+            PRAGMA user_version={TARGET_SCHEMA_VERSION};
             CREATE TABLE provider_jobs (
                 job_id TEXT PRIMARY KEY,
                 status TEXT NOT NULL,
@@ -109,7 +110,7 @@ class AcceptanceStateProbeTests(unittest.TestCase):
 
     def test_rejects_future_state_schema_without_exposing_path(self) -> None:
         connection = sqlite3.connect(self.state_path)
-        connection.execute("PRAGMA user_version=34")
+        connection.execute(f"PRAGMA user_version={TARGET_SCHEMA_VERSION + 1}")
         connection.commit()
         connection.close()
 

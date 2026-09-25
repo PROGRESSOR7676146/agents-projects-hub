@@ -116,7 +116,11 @@ This normative module is part of the
   it never supplies a filesystem path. Discovery is limited to exact canonical
   registered roots and supported persisted interactive sources (`cli` and
   `vscode`), exposes no transcript or prompt text, and invokes no model, thread
-  creation, or resume. Hub private free text MUST NOT become productive
+  creation, or resume. Metadata discovery MUST progress while the Codex worker
+  waits on an unrelated productive turn, using a separate SQLite connection and
+  app-server client. If a pending discovery or activation recheck expires, Hub
+  MUST durably notify the owner once; expiry MUST NOT silently leave a workflow
+  with no result. Hub private free text MUST NOT become productive
   provider input. Local configuration MUST be explicit rather than discovered
   from hidden user files.
 
@@ -146,8 +150,11 @@ This normative module is part of the
 ### Implemented minimal native transfer
 
 - **REQ-WRITER-006 (Implemented):** `/local` validates that no Hub dispatch,
-  queued/in-flight work, unresolved uncertain outcome, or other local writer
-  owns the same canonical root and that a completed provider session exists,
+  unpaused queued/in-flight work, active or unconfirmed provider turn, or other
+  local writer owns the same canonical root and that a provider session exists.
+  For an accepted uncertain Codex turn, it MAY first read the exact saved turn
+  without invocation; only confirmed terminality can permit write-capable
+  transfer. Earlier queued work MUST remain paused for owner review. `/local`
   changes `writer_mode`
   from `telegram` to `local`, and returns a reviewed
   provider-specific resume command for the canonical root and session ID.
@@ -158,9 +165,26 @@ This normative module is part of the
   after the owner closes the CLI and Hub work is terminal, `/return` changes
   only the lease; it invokes no model and copies no summary or transcript. The
   next Telegram turn resumes the same session. V1 does not infer OS process
-  state. Other providers retain prior behavior pending separate acceptance.
+  state. An explicit local reconciliation MAY adopt an already opened exact
+  Codex session without launching a CLI or a model, only after matching active
+  Hub session, provider thread, generation, origin and canonical root, proving
+  the old turn terminal through read-only protocol, excluding other Hub writers
+  and leases, and receiving an owner assertion that the standalone CLI has
+  closed at an idle boundary or a remote CLI is idle. It MUST leave the old
+  uncertain job and its checkpoint, error and notice intact. Process absence
+  alone cannot establish this boundary. Other providers retain prior behavior
+  pending separate acceptance.
 - **REQ-WRITER-008 (Implemented):** Messages arriving while `local` owns the
-  writer do not call a provider and explain how to return safely.
+  writer do not call a provider and explain how to return safely. A productive
+  request from another numeric topic on the same canonical root MUST receive a
+  durable input-bound refusal instead of entering the queue; the owner-topic
+  link MUST use numeric identity and a neutral label unless a trustworthy title
+  is available. It MUST say that the provider did not receive the request and
+  that it will not run later. `/status` in owner context MUST explain the
+  blocker and route to `/return` or `/release`; anonymous monitor aggregates
+  MUST NOT expose topic or session identity. A local writer lease MUST NOT
+  expire merely because it is old or has no visible PID. `/return` remains a
+  model-free same-session lease change after the owner closes the CLI.
 - **REQ-WRITER-009 (Implemented; live acceptance pending):** An explicit local
   `session attach-codex` preview/apply MAY connect a saved Codex thread to a
   registered topic. It MUST verify exact persisted metadata and the canonical

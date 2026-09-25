@@ -55,7 +55,15 @@ class Bot:
     def send_chat_action(self, chat_id: int, thread_id: int, action: str = "typing") -> None:
         self.actions.append((chat_id, thread_id, action))
 
-    def send_html(self, chat_id: int, thread_id: int, html: str) -> int:
+    def send_html(
+        self,
+        chat_id: int,
+        thread_id: int,
+        html: str,
+        *,
+        reply_markup: dict[str, Any] | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> int:
         self.sent.append((chat_id, thread_id, html))
         if self.fail:
             raise RuntimeError("transport unavailable")
@@ -84,7 +92,15 @@ class Bot:
 
 
 class TransportFailBot(Bot):
-    def send_html(self, chat_id: int, thread_id: int, html: str) -> int:
+    def send_html(
+        self,
+        chat_id: int,
+        thread_id: int,
+        html: str,
+        *,
+        reply_markup: dict[str, Any] | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> int:
         self.sent.append((chat_id, thread_id, html))
         if self.fail:
             raise TelegramError(
@@ -142,6 +158,73 @@ class TelegramOutboxSenderTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
+
+    def test_sender_retries_only_blocker_notice_after_transport_failure(self) -> None:
+        token = self.base / "hub.token"
+        token.write_text("fictional-token", encoding="utf-8")
+        token.chmod(0o600)
+        config = replace(self.config, hub_bot=HubTelegramBot("example_hub_bot", token))
+        state = HubState.open(config.state_path)
+        try:
+            owner = state.observe_topic(
+                project_id="example-project",
+                chat_id=-1001234567890,
+                thread_id=191,
+                title="Fictional owner",
+            )
+            destination = state.observe_topic(
+                project_id="example-project",
+                chat_id=-1001234567890,
+                thread_id=192,
+                title="Fictional destination",
+            )
+            local = state.activate_agent(owner.topic_id, "opencode", "model-1", "high")
+            selected = state.activate_agent(destination.topic_id, "opencode", "model-1", "high")
+            state.set_writer_mode(local.session_id, "local")
+            notice = state.reject_blocked_provider_input(
+                chat_id=destination.chat_id,
+                message_id=1901,
+                topic_id=destination.topic_id,
+                session_id=selected.session_id,
+                session_generation=selected.generation,
+            )
+            assert notice is not None
+        finally:
+            state.close()
+        hub = Bot(fail=True)
+        sender = TelegramOutboxSender(
+            config,
+            telegram_bots=cast(
+                dict[str, Any],
+                {
+                    "hub": hub,
+                    "opencode": Bot(),
+                    "antigravity": Bot(),
+                },
+            ),
+        )
+        try:
+            for _ in range(6):
+                self.assertTrue(
+                    sender.run_cycle(now=datetime.now(timezone.utc) + timedelta(hours=1))
+                )
+            self.assertEqual(len(hub.sent), 6)
+            self.assertEqual(sender.state.provider_jobs_for_topic(destination.topic_id), ())
+            pending = sender.state._connection.execute(
+                "SELECT status,attempt_count FROM hub_blocker_outbox WHERE outbox_id=?",
+                (notice.outbox_id,),
+            ).fetchone()
+            self.assertEqual(tuple(pending), ("pending", 6))
+            hub.fail = False
+            self.assertTrue(sender.run_cycle(now=datetime.now(timezone.utc) + timedelta(hours=1)))
+            self.assertEqual(len(hub.sent), 7)
+            delivered = sender.state._connection.execute(
+                "SELECT status,attempt_count FROM hub_blocker_outbox WHERE outbox_id=?",
+                (notice.outbox_id,),
+            ).fetchone()
+            self.assertEqual(tuple(delivered), ("delivered", 7))
+        finally:
+            sender.close()
 
     def ready_outbox(
         self, agent_id: str, message_id: int, *, telegram_html: str | None = None

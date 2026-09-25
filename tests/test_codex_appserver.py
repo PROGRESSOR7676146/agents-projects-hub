@@ -36,6 +36,137 @@ class CodexAppServerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
+    def test_paginated_saved_failed_turn_uses_bounded_read_only_turn_page(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "id": 1,
+                    "result": {
+                        "thread": {
+                            "id": "fictional-thread",
+                            "cwd": str(self.cwd),
+                            "historyMode": "paginated",
+                        }
+                    },
+                },
+                {
+                    "id": 2,
+                    "result": {
+                        "data": [{"id": "fictional-turn", "status": "failed"}],
+                        "nextCursor": None,
+                    },
+                },
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True)
+
+        outcome = client.read_turn_outcome(
+            thread_id="fictional-thread", turn_id="fictional-turn", cwd=self.cwd
+        )
+
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(
+            [message["method"] for message in transport.sent],
+            ["thread/read", "thread/turns/list"],
+        )
+        self.assertEqual(transport.sent[0]["params"]["includeTurns"], False)
+        self.assertEqual(transport.sent[1]["params"]["itemsView"], "notLoaded")
+
+    def test_paginated_completed_turn_reads_only_exact_visible_items(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "id": 1,
+                    "result": {
+                        "thread": {
+                            "id": "fictional-thread",
+                            "cwd": str(self.cwd),
+                            "historyMode": "paginated",
+                        }
+                    },
+                },
+                {
+                    "id": 2,
+                    "result": {
+                        "data": [{"id": "fictional-turn", "status": "completed"}],
+                        "nextCursor": None,
+                    },
+                },
+                {
+                    "id": 3,
+                    "result": {
+                        "data": [
+                            {
+                                "turnId": "fictional-turn",
+                                "item": {"id": "hidden", "type": "reasoning", "text": "secret"},
+                            },
+                            {
+                                "turnId": "fictional-turn",
+                                "item": {"id": "visible", "type": "agentMessage", "text": "First"},
+                            },
+                        ],
+                        "nextCursor": "next",
+                    },
+                },
+                {
+                    "id": 4,
+                    "result": {
+                        "data": [
+                            {
+                                "turnId": "fictional-turn",
+                                "item": {"id": "visible", "type": "agentMessage", "text": "First"},
+                            },
+                            {
+                                "turnId": "fictional-turn",
+                                "item": {"id": "final", "type": "agentMessage", "text": "Done"},
+                            },
+                        ],
+                        "nextCursor": None,
+                    },
+                },
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True)
+
+        outcome = client.read_turn_outcome(
+            thread_id="fictional-thread", turn_id="fictional-turn", cwd=self.cwd
+        )
+
+        self.assertEqual(outcome.status, "completed")
+        self.assertEqual(outcome.result.text if outcome.result else None, "First\n\nDone")
+        self.assertEqual(
+            [message["method"] for message in transport.sent],
+            ["thread/read", "thread/turns/list", "thread/items/list", "thread/items/list"],
+        )
+        self.assertEqual(transport.sent[-1]["params"]["cursor"], "next")
+
+    def test_paginated_turn_search_returns_unknown_without_replay(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "id": 1,
+                    "result": {
+                        "thread": {
+                            "id": "fictional-thread",
+                            "cwd": str(self.cwd),
+                            "historyMode": "paginated",
+                        }
+                    },
+                },
+                {"id": 2, "result": {"data": [], "nextCursor": None}},
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True)
+
+        outcome = client.read_turn_outcome(
+            thread_id="fictional-thread", turn_id="missing-turn", cwd=self.cwd
+        )
+
+        self.assertEqual(outcome.status, "unknown")
+        self.assertEqual(
+            [message["method"] for message in transport.sent], ["thread/read", "thread/turns/list"]
+        )
+
     def test_initialize_and_thread_start_pin_safe_project_policy(self) -> None:
         transport = FakeTransport(
             [

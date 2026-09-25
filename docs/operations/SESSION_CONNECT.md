@@ -76,6 +76,9 @@ when marker activation commits.
 
 - Discovery/metadata failure: the current binding is unchanged; restart
   `/connect` after the supported Codex metadata transport is healthy.
+- Discovery also runs while the Codex worker is waiting on another turn. If a
+  pending search or activation recheck expires, Hub sends a durable notice;
+  start `/connect` again. A Telegram send failure retries only that notice.
 - Stale selection or changed destination: start `/connect` again and review the
   new state.
 - Unknown marker send: do not repeat automatically. Inspect the target topic and

@@ -122,6 +122,55 @@ class ControllerCommandTests(unittest.TestCase):
         self.assertEqual(decision.text, "No active agent session has been created yet.")
         self.assertIsNone(decision.response_agent_id)
 
+    def test_status_names_local_blocker_action_in_owner_context(self) -> None:
+        owner = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-example", "high")
+        other_topic = self.state.observe_topic(
+            project_id="example-project",
+            chat_id=self.topic.chat_id,
+            thread_id=8,
+            title="Fictional other topic",
+        )
+        self.state.activate_agent(other_topic.topic_id, "opencode", "opencode-example", "default")
+        self.state.set_writer_mode(owner.session_id, "local")
+        owner_status = self.orchestrator.status(self.topic, None, None)
+        other_status = self.orchestrator.status(other_topic, None, None)
+        self.assertIn("/return here", owner_status.text)
+        self.assertIn("owner topic", other_status.text)
+        self.assertNotIn(str(self.base), other_status.text)
+
+    def test_status_shows_held_job_for_non_codex_topic(self) -> None:
+        owner = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-example", "high")
+        other_topic = self.state.observe_topic(
+            project_id="example-project",
+            chat_id=self.topic.chat_id,
+            thread_id=9,
+            title="Fictional other topic",
+        )
+        selected = self.state.activate_agent(
+            other_topic.topic_id, "opencode", "opencode-example", "default"
+        )
+        self.state.enqueue_provider_job(
+            idempotency_key="fictional-held-status",
+            chat_id=other_topic.chat_id,
+            message_id=901,
+            topic_id=other_topic.topic_id,
+            agent_id=selected.agent_id,
+            session_id=selected.session_id,
+            session_generation=selected.generation,
+            model=selected.model,
+            effort=selected.effort,
+            payload_text="Fictional queued work",
+        )
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE agent_sessions SET writer_mode='local' WHERE session_id=?",
+                (owner.session_id,),
+            )
+        self.state.set_writer_mode(owner.session_id, "telegram")
+        status = self.orchestrator.status(other_topic, None, None)
+        self.assertIn("held before provider execution: 1", status.text)
+        self.assertIn("confirm or cancel", status.text)
+
     def test_status_uses_supplied_cached_identity_without_provider_access(self) -> None:
         session = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-example", "high")
         self.state.set_context_remaining(session.session_id, 73.25)

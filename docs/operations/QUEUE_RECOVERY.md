@@ -90,8 +90,36 @@ record, pass `--output PRIVATE_PATH`; the command creates a new mode-`0600` JSON
 file and refuses to overwrite an earlier report. The report never authorizes
 productive replay. Its evidence classes distinguish a persisted result, saved
 completion, partial text, accepted turn without visible output, thread creation
-without accepted turn, and absence of an execution checkpoint. Notification
+without accepted turn, and absence of an execution checkpoint. Schema-34 reports
+confirmed failed/interrupted turn status separately from partial evidence and
+recommends the specific failure notice for owner continuation. Notification
 status is reported separately so an undelivered uncertainty notice is visible.
+
+For an accepted Codex turn with a transport loss, the worker makes bounded
+read-only exact `thread/read` observations. Confirmed completion publishes the
+stored result without a new turn. Confirmed failed/interrupted status retains
+the old job and sends a corrected notice; the owner can Reply `retry` to that
+specific notice for a new inspection-first turn in the same session. Earlier
+queued requests on the root remain paused and visible. Active or unproven
+status keeps root exclusion. Do not use `indeterminate-resolve` merely to make
+a failed-turn continuation move, and do not reset the old job to `queued`.
+
+When the owner already opened a native Codex CLI outside Hub ownership, first
+check whether it uses the owning app-server through `--remote`. A standalone
+`codex resume` is a separate persistence writer. Wait for its current turn to
+finish and for the owner to close it at an idle boundary; do not infer this
+from missing process IDs or restart the shared app-server. After release,
+schema and plugin compatibility checks, preview the exact session with
+`agents-projects-hub session reconcile-existing-local` using the private
+session, provider thread, old job, generation and canonical root. Apply with
+`--confirm-cli-closed` only after the owner assertion, or with
+`--confirm-remote-idle` for an already remote idle CLI. Read back the exact
+session and old job. A successful apply prints a same-session `--remote`
+resume command for reopening a closed standalone CLI. This changes writer
+ownership only; the old uncertainty
+and any paused queue remain. `/return` later requires the owner to close the
+CLI and does not replay the old job. The Telegram owner UI uses the specific
+failure notice, with no job ID command required.
 
 After reviewing one exact job, `indeterminate-resolve` can append one fixed
 operator classification: `acknowledged` means the uncertainty was reviewed,
@@ -102,6 +130,20 @@ change the original job or error, send a message, or authorize provider replay.
 The audit reports these annotations separately and recommends no further action
 for resolved records. Schema 32 uses the immutable annotation to release the
 canonical-root scope for unrelated future work.
+
+## Persistent local root blockers
+
+When a local or terminal writer retains a canonical root, new productive
+messages in another topic receive a durable Hub refusal and do not enter the
+provider queue. Open the linked owner topic, close the CLI at an idle boundary,
+then use `/return` there (or `/release` for a managed terminal). The command
+only changes the writer lease and retains the provider thread. Already accepted
+queued work is held before the lease returns; the owner must use the exact
+notice to confirm or cancel that job. A late `/return` alone does not run it.
+The sender may retry an undelivered blocker notice without starting a provider
+turn. Inspect `/status` in the topic for its owner-facing blocker reason; do
+not use PID absence or lease age as proof that the CLI closed. Schema 35 is
+additive and requires schema-compatible Hub, workers and sender for rollback.
 
 ## Capacity and lane changes
 

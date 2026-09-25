@@ -61,8 +61,12 @@ class ControllerCommandOrchestrator:
         codex_rate_limits: RateLimits | None,
     ) -> TextCommandDecision:
         active = self.state.active_session(topic.topic_id)
+        blocker = self.state.root_blocker_for_topic(topic.topic_id)
         if active is None:
-            return TextCommandDecision("No active agent session has been created yet.")
+            detail = "No active agent session has been created yet."
+            if blocker is not None:
+                detail += "\nThis project is held by another topic. See its blocker notice for the owner-topic link."
+            return TextCommandDecision(detail)
 
         agent = self.config.require_agent(active.agent_id)
         current_account = (
@@ -119,6 +123,36 @@ class ControllerCommandOrchestrator:
             provider_state=(worker_health.provider_state if worker_health is not None else None),
             provider_error_code=(worker_health.error_code if worker_health is not None else None),
         )
+        if active.agent_id == "codex":
+            from .turn_continuation_state import TurnContinuationState
+
+            failed_turns, _ = TurnContinuationState(self.state).session_status(active.session_id)
+            if failed_turns:
+                detail += (
+                    f"\nInterrupted Codex turn(s): {failed_turns}; old work was not replayed."
+                    " Reply exactly retry to its failure notice to continue with inspection."
+                )
+        held_jobs = self.state.held_provider_job_count(topic.topic_id)
+        if held_jobs:
+            detail += (
+                f"\nSaved request(s) held before provider execution: {held_jobs}. "
+                "Use the exact Hub notice to confirm or cancel after the root is free."
+            )
+        if blocker is not None:
+            if blocker.kind in {"local", "terminal"}:
+                command = "/return" if blocker.kind == "local" else "/release"
+                detail += (
+                    f"\nProject held by local writer. Close its client, then use {command}"
+                    + (
+                        " here."
+                        if blocker.topic_id == topic.topic_id
+                        else " in the owner topic; see the blocker notice for its link."
+                    )
+                )
+            else:
+                detail += (
+                    "\nProject held by an unconfirmed earlier turn; review it in the owner topic."
+                )
         return TextCommandDecision(detail, response_agent_id=active.agent_id)
 
     def accounts(

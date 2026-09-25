@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from hermes_codex_router.execution_journal import ExecutionJournal
@@ -321,7 +322,7 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
                         execution_root=peer_root,
                     )
                     peer = state.activate_agent(topic.topic_id, "opencode", "fictional", "high")
-                    state.enqueue_provider_job(
+                    request: dict[str, Any] = dict(
                         idempotency_key=f"fictional:{number}",
                         chat_id=topic.chat_id,
                         message_id=number,
@@ -333,6 +334,11 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
                         effort=peer.effort,
                         payload_text="Fictional peer task",
                     )
+                    if number == 72 and ownership in ("local", "terminal", "indeterminate"):
+                        with self.assertRaisesRegex(StateError, "persistent local writer"):
+                            state.enqueue_provider_job(**request)
+                    else:
+                        state.enqueue_provider_job(**request)
                 self.assertTrue(worker.run_cycle())
                 self.assertEqual(adapter.cwds, [replacement])
                 if ownership not in ("local", "terminal"):

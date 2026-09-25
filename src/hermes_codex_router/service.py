@@ -139,6 +139,7 @@ from .telegram_multipart import send_telegram_html_parts
 from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
 from .topic_execution import require_inline_topic, resolve_topic_execution_root
+from .turn_observation import TurnObservation, owning_read_client
 from .worker_execution import (
     classify_worker_failure,
     codex_provider_prompt,
@@ -598,6 +599,10 @@ class ProjectHubService:
         if isinstance(result, DuplicateAdmission):
             return False
         if isinstance(result, RejectedAdmission):
+            if result.reason == "persistent_root_blocker":
+                if not self._uses_external_outbox_sender():
+                    self._deliver_embedded_blocker_notice(self.state)
+                return True
             if result.reason == "input_too_long":
                 self._send_text(
                     message,
@@ -649,6 +654,30 @@ class ProjectHubService:
                 error.safe_detail(consecutive_failures=1, last_success=None),
             )
         return True
+
+    def _reject_persistent_root_input(
+        self, message: TopicMessage, topic: TopicRecord, session: SessionRecord
+    ) -> bool:
+        notice = self.state.reject_blocked_provider_input(
+            chat_id=message.chat_id,
+            message_id=message.message_id,
+            topic_id=topic.topic_id,
+            session_id=session.session_id,
+            session_generation=session.generation,
+        )
+        if notice is not None:
+            if not self._uses_external_outbox_sender():
+                self._deliver_embedded_blocker_notice(self.state)
+            return True
+        if self.state.message_already_observed(message.chat_id, message.message_id):
+            return False
+        raise QueueAcceptanceError("persistent root input has no durable disposition")
+
+    def _deliver_embedded_blocker_notice(self, queue_state: HubState) -> bool:
+        """Compatibility sender for deployments without the standalone outbox."""
+        from .blocker_notice_sender import deliver_root_blocker_notice
+
+        return deliver_root_blocker_notice(queue_state, self.telegram, "embedded-outbox").worked
 
     def _start_embedded_queue_consumer(self) -> None:
         if not any(
@@ -770,6 +799,10 @@ class ProjectHubService:
         queue_state = HubState.open(self.config.state_path)
         try:
             if not self._uses_external_outbox_sender():
+                queue_state.materialize_held_provider_jobs()
+                queue_state.materialize_released_uncertainty_notices()
+                if self._deliver_embedded_blocker_notice(queue_state):
+                    return True
                 queue_state.recover_stale_telegram_outbox(sender_agent_ids=embedded_agent_ids)
             for agent in self.config.agents:
                 if not self._embedded_consumer_owns_agent(agent.agent_id):
@@ -784,6 +817,8 @@ class ProjectHubService:
                         "embedded-recovery",
                         self.supervisor.client,
                     ):
+                        return True
+                    if TurnObservation(queue_state, self.config).run_once(self.supervisor.client):
                         return True
                 queue_state.recover_stale_provider_jobs(agent_id=agent.agent_id)
                 if queue_stop is not None and queue_stop.is_set():
@@ -1001,10 +1036,11 @@ class ProjectHubService:
             # provider-specific proof, even if an adapter reports an error.
             failure = classify_worker_failure(exc, runtime=agent.runtime)
             recovered = False
+            turn_status = "unknown"
             if failure.reconcile_codex:
                 assert self.supervisor is not None
                 try:
-                    recovered = reconcile_codex_completion(
+                    turn_status = reconcile_codex_completion(
                         queue_state,
                         self.config,
                         project_root=project.root,
@@ -1013,8 +1049,10 @@ class ProjectHubService:
                         agent_id=agent.agent_id,
                         client_factory=self.supervisor.client,
                     )
+                    recovered = turn_status == "completed"
                 except Exception:
                     recovered = False
+                    turn_status = "unknown"
             try:
                 if failure.notice == "execution_root":
                     assert isinstance(exc, ExecutionRootError)
@@ -1065,12 +1103,17 @@ class ProjectHubService:
                         status=failure.status,
                         error_class=failure.error_class,
                         error_code=failure.error_code,
+                        terminal_turn_status=(
+                            turn_status if turn_status in {"failed", "interrupted"} else None
+                        ),
                         sender_agent_id=agent.agent_id,
                         telegram_html=(
                             "Incoming material integrity validation failed; "
                             "the provider was not started. Send the material again."
                             if failure.notice == "incoming_material"
-                            else checkpoint_failure_notice(queue_state, executing.job_id, exc)
+                            else checkpoint_failure_notice(
+                                queue_state, executing.job_id, exc, turn_status=turn_status
+                            )
                             if failure.notice == "checkpoint"
                             else uncertain_provider_notice(agent.display_name)
                         ),
@@ -1792,6 +1835,33 @@ class ProjectHubService:
         if not self.config.is_authorized(callback.sender_id, callback.chat_id, callback.thread_id):
             self.telegram.answer_callback(callback.callback_id, "Not authorized")
             return False
+        if callback.data.startswith("bh:"):
+            if callback.sender_id not in self.config.owner_user_ids:
+                self.telegram.answer_callback(
+                    callback.callback_id, "Только владелец может решить судьбу запроса"
+                )
+                return True
+            try:
+                _, action, job_id = callback.data.split(":", 2)
+                if action not in {"c", "x"}:
+                    raise StateError("unknown held-job decision")
+                decision = self.state.decide_held_provider_job(
+                    job_id=job_id,
+                    action="confirm" if action == "c" else "cancel",
+                    chat_id=callback.chat_id,
+                    thread_id=callback.thread_id,
+                    notice_message_id=callback.message_id,
+                )
+            except (ValueError, StateError) as exc:
+                self.telegram.answer_callback(callback.callback_id, str(exc)[:180])
+                return True
+            self.telegram.answer_callback(
+                callback.callback_id,
+                "Запуск подтверждён; запрос ожидает своей очереди"
+                if decision == "confirmed"
+                else "Запрос отменён",
+            )
+            return True
         if not self.state.claim_callback(
             callback.callback_id,
             observer_agent_id=getattr(self, "ingress_identity", self.agent.agent_id),
@@ -2670,6 +2740,53 @@ class ProjectHubService:
         )
         self._discard_terminal_materials(topic)
         active = self.state.active_session(topic.topic_id)
+        if (
+            message.text.strip().casefold() == "retry"
+            and message.reply_to_message_id is not None
+            and not message.is_forwarded
+            and not message.attachments
+            and message.quote_text is None
+        ):
+            from .turn_continuation_state import TurnContinuationState
+
+            continuation = TurnContinuationState(self.state)
+            source = continuation.source_for_notice(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                notice_message_id=message.reply_to_message_id,
+            )
+            if source is not None:
+                try:
+                    root = resolve_topic_execution_root(self.state, self.registry, topic)
+                    _, created, held_count = continuation.continue_from_notice(
+                        source_job_id=source,
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                        notice_message_id=message.reply_to_message_id,
+                        reply_message_id=message.message_id,
+                        canonical_root=root,
+                    )
+                except (ExecutionRootError, StateError) as exc:
+                    if isinstance(exc, StateError) and "already" in str(exc):
+                        return False
+                    self._send_text(
+                        message,
+                        "Continuation is paused: the session, root, or writer changed. "
+                        "Inspect /status before trying again.",
+                    )
+                    return True
+                if created:
+                    self._send_text(
+                        message,
+                        "Continuation accepted in the same Codex session. Codex will first "
+                        "inspect current project state and prior changes."
+                        + (
+                            f" {held_count} earlier queued request(s) remain paused for review."
+                            if held_count
+                            else ""
+                        ),
+                    )
+                return created
         ingress_context = IngressDecisionContext(
             active_agent_id=active.agent_id if active is not None else self.agent.agent_id,
             pending_batch_agent_id=None,
@@ -2985,11 +3102,32 @@ class ProjectHubService:
             if session.writer_mode == "terminal":
                 self._send_text(message, "Use /release before taking the session local.")
                 return True
-            if self.state.topic_has_running_dispatch(
-                topic.topic_id
-            ) or self.state.topic_has_pending_provider_job(topic.topic_id):
+            if session.agent_id == "codex" and session.writer_mode == "telegram":
+                try:
+                    observation = TurnObservation(self.state, self.config)
+                    observation.observe_topic(
+                        topic.topic_id, lambda: owning_read_client(self.config)
+                    )
+                except StateError:
+                    self._send_text(
+                        message,
+                        "Codex turn activity is still unconfirmed. Local write access remains "
+                        "paused; check /status after the current turn stops.",
+                    )
+                    return True
+                if observation.topic_unconfirmed(topic.topic_id):
+                    self._send_text(
+                        message,
+                        "Codex turn activity is still active or unconfirmed. Local write "
+                        "access remains paused; /status shows the saved outcome.",
+                    )
+                    return True
+            if self.state.topic_has_running_dispatch(topic.topic_id) or (
+                session.agent_id != "codex"
+                and self.state.topic_has_unheld_provider_job(topic.topic_id)
+            ):
                 self._send_text(
-                    message, "A provider turn is still running; try /local again later."
+                    message, "Provider work is pending or being delivered; try /local again later."
                 )
                 return True
             if not session.provider_session_id:
@@ -3001,7 +3139,9 @@ class ProjectHubService:
             project = self.registry.require_project(binding.project_id)
             agent = self.config.require_agent(session.agent_id)
             try:
-                expected_transfer = self.state.writer_transfer_snapshot(topic, session)
+                expected_transfer = self.state.writer_transfer_snapshot(
+                    topic, session, allow_held=session.agent_id == "codex"
+                )
                 execution_root = resolve_topic_execution_root(self.state, self.registry, topic)
                 resume = local_resume_command(
                     agent.runtime,
@@ -3044,28 +3184,51 @@ class ProjectHubService:
                 return True
             if self.state.topic_has_running_dispatch(
                 topic.topic_id
-            ) or self.state.topic_has_pending_provider_job(topic.topic_id):
+            ) or self.state.topic_has_unheld_provider_job(topic.topic_id):
                 self._send_text(
-                    message, "A provider turn is still running; try /return again later."
+                    message, "Provider work is pending or being delivered; try /return again later."
                 )
                 return True
             if session.agent_id == "codex":
-                _, created = self.state.return_codex_local_writer(
-                    chat_id=message.chat_id,
-                    message_id=message.message_id,
-                    topic_id=topic.topic_id,
-                    session_id=session.session_id,
-                    observer_agent_id=self.agent.agent_id,
-                )
+                try:
+                    _, created = self.state.return_codex_local_writer(
+                        chat_id=message.chat_id,
+                        message_id=message.message_id,
+                        topic_id=topic.topic_id,
+                        session_id=session.session_id,
+                        observer_agent_id=self.agent.agent_id,
+                    )
+                except StateError:
+                    self._send_text(
+                        message,
+                        "Ownership was not returned: session or provider activity changed. Retry /return after the CLI is closed.",
+                    )
+                    return True
                 if not created:
                     return False
                 from .session_adoption_state import CodexSessionOrigins
+                from .turn_continuation_state import TurnContinuationState
 
                 origin = CodexSessionOrigins(self.state).get(session.session_id)
+                interrupted, held = TurnContinuationState(self.state).session_status(
+                    session.session_id
+                )
                 self._send_text(
                     message,
                     "Ownership returned to Telegram. The next Telegram turn will continue "
                     "the same provider session."
+                    + (
+                        " An earlier Codex turn stopped with an error and remains in history. "
+                        "Reply exactly retry to its failure notice for a new inspection-first "
+                        "turn; the old task will not be replayed."
+                        if interrupted
+                        else ""
+                    )
+                    + (
+                        f" {held} earlier queued request(s) remain paused for review."
+                        if held
+                        else ""
+                    )
                     + (
                         " The previous Hub session is archived; its history was not merged into the connected CLI session."
                         if origin is not None and origin.replaces_session_id is not None
@@ -3245,6 +3408,8 @@ class ProjectHubService:
                     )
                 )
                 if session.writer_mode != "telegram":
+                    if self._queue_enabled(target_agent_id):
+                        return self._reject_persistent_root_input(message, topic, session)
                     self._send_text(
                         message, "This provider session is not available for Telegram turns."
                     )
@@ -3301,9 +3466,7 @@ class ProjectHubService:
             )
         if session.writer_mode == "local":
             if queue_mode:
-                self.state.claim_message(
-                    message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
-                )
+                return self._reject_persistent_root_input(message, topic, session)
             self._send_text(
                 message,
                 "This provider session is open in a local CLI. Close it and use /return "
@@ -3312,9 +3475,7 @@ class ProjectHubService:
             return True
         if session.writer_mode == "terminal":
             if queue_mode:
-                self.state.claim_message(
-                    message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
-                )
+                return self._reject_persistent_root_input(message, topic, session)
             self._send_text(
                 message,
                 "This Codex session is owned by Terminal. Use /release before sending Telegram turns.",

@@ -12,7 +12,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Callable, Literal, Protocol, Sequence, cast
 
 import aiohttp
 
@@ -346,6 +346,14 @@ class TurnResult:
     text: str
     context_window: int | None
     context_tokens_used: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class StoredTurnOutcome:
+    """Read-only status of one exact persisted turn."""
+
+    status: Literal["completed", "failed", "interrupted", "active", "unknown"]
+    result: TurnResult | None = None
 
 
 def context_remaining_percent(result: TurnResult) -> float | None:
@@ -869,8 +877,26 @@ class CodexAppServerClient:
                     "\n\n".join(answers),
                 )
 
-    def read_completed_turn(self, *, thread_id: str, turn_id: str, cwd: Path) -> TurnResult | None:
-        """Read persisted outcome only; never resume, subscribe, or invoke a model."""
+    def read_turn_outcome(self, *, thread_id: str, turn_id: str, cwd: Path) -> StoredTurnOutcome:
+        """Read one exact persisted turn without resume, subscribe, or inference."""
+        summary = self._request(
+            "thread/read",
+            {"threadId": thread_id, "includeTurns": False},
+            deadline=time.monotonic() + 10,
+        )
+        thread = summary.get("thread") if isinstance(summary, dict) else None
+        if not isinstance(thread, dict) or thread.get("id") != thread_id:
+            raise RpcError("stored thread identity mismatch")
+        stored_cwd = thread.get("cwd")
+        if not isinstance(stored_cwd, str) or Path(stored_cwd).resolve() != cwd.resolve(
+            strict=True
+        ):
+            raise RpcError("stored thread project root mismatch")
+        history_mode = thread.get("historyMode", "legacy")
+        if history_mode == "paginated":
+            return self._read_paginated_turn_outcome(thread_id=thread_id, turn_id=turn_id)
+        if history_mode != "legacy":
+            raise RpcError("stored thread history mode is unsupported")
         result = self._request("thread/read", {"threadId": thread_id, "includeTurns": True})
         thread = result.get("thread") if isinstance(result, dict) else None
         if not isinstance(thread, dict) or thread.get("id") != thread_id:
@@ -884,11 +910,20 @@ class CodexAppServerClient:
         if not isinstance(turns, list):
             raise RpcError("stored thread has no turn history")
         matches = [turn for turn in turns if isinstance(turn, dict) and turn.get("id") == turn_id]
-        if len(matches) != 1 or matches[0].get("status") != "completed":
-            return None
+        if not matches:
+            return StoredTurnOutcome("unknown")
+        if len(matches) != 1:
+            raise RpcError("stored turn identity is ambiguous")
+        status = matches[0].get("status")
+        if status in {"failed", "interrupted"}:
+            return StoredTurnOutcome(cast(Literal["failed", "interrupted"], status))
+        if status in {"inProgress", "in_progress"}:
+            return StoredTurnOutcome("active")
+        if status != "completed":
+            raise RpcError("stored turn status is unrecognized")
         items = matches[0].get("items")
         if not isinstance(items, list):
-            return None
+            raise RpcError("completed turn has no visible item history")
         answers: list[str] = []
         seen: set[str] = set()
         for item in items:
@@ -902,7 +937,105 @@ class CodexAppServerClient:
         text = "\n\n".join(answers).strip()
         if len(text) > 200_000:
             raise RpcError("stored visible response exceeds recovery bound")
-        return TurnResult(text, None, None)
+        return StoredTurnOutcome("completed", TurnResult(text, None, None))
+
+    def _read_paginated_turn_outcome(self, *, thread_id: str, turn_id: str) -> StoredTurnOutcome:
+        cursor: str | None = None
+        used_cursors: set[str] = set()
+        deadline = time.monotonic() + 15
+        for _ in range(20):
+            params: dict[str, Any] = {
+                "threadId": thread_id,
+                "limit": 20,
+                "sortDirection": "desc",
+                "itemsView": "notLoaded",
+            }
+            if cursor is not None:
+                params["cursor"] = cursor
+            response = self._request("thread/turns/list", params, deadline=deadline)
+            data = response.get("data") if isinstance(response, dict) else None
+            if not isinstance(data, list) or len(data) > 20:
+                raise RpcError("stored turn page has an invalid shape")
+            matches = [
+                item for item in data if isinstance(item, dict) and item.get("id") == turn_id
+            ]
+            if len(matches) > 1:
+                raise RpcError("stored turn identity is ambiguous")
+            if matches:
+                status = matches[0].get("status")
+                if status in {"failed", "interrupted"}:
+                    return StoredTurnOutcome(cast(Literal["failed", "interrupted"], status))
+                if status in {"inProgress", "in_progress"}:
+                    return StoredTurnOutcome("active")
+                if status != "completed":
+                    raise RpcError("stored turn status is unrecognized")
+                return StoredTurnOutcome(
+                    "completed",
+                    TurnResult(self._read_paginated_visible_items(thread_id, turn_id), None, None),
+                )
+            next_cursor = response.get("nextCursor")
+            if next_cursor is None:
+                return StoredTurnOutcome("unknown")
+            if (
+                not isinstance(next_cursor, str)
+                or not 1 <= len(next_cursor) <= 2048
+                or next_cursor in used_cursors
+                or not data
+            ):
+                raise RpcError("stored turn pagination is invalid")
+            used_cursors.add(next_cursor)
+            cursor = next_cursor
+        raise RpcError("stored turn search exceeds recovery bound")
+
+    def _read_paginated_visible_items(self, thread_id: str, turn_id: str) -> str:
+        cursor: str | None = None
+        used_cursors: set[str] = set()
+        seen_items: set[str] = set()
+        answers: list[str] = []
+        text_size = 0
+        deadline = time.monotonic() + 30
+        for _ in range(100):
+            params: dict[str, Any] = {"threadId": thread_id, "turnId": turn_id, "limit": 10}
+            if cursor is not None:
+                params["cursor"] = cursor
+            response = self._request("thread/items/list", params, deadline=deadline)
+            data = response.get("data") if isinstance(response, dict) else None
+            if not isinstance(data, list) or len(data) > 10:
+                raise RpcError("stored item page has an invalid shape")
+            for row in data:
+                if not isinstance(row, dict) or row.get("turnId") != turn_id:
+                    raise RpcError("stored item turn identity mismatch")
+                item = row.get("item")
+                if not isinstance(item, dict) or item.get("type") != "agentMessage":
+                    continue
+                item_id, visible = item.get("id"), item.get("text")
+                if not isinstance(item_id, str) or not isinstance(visible, str):
+                    raise RpcError("stored visible item has an invalid shape")
+                if item_id in seen_items:
+                    continue
+                seen_items.add(item_id)
+                text_size += len(visible) + 2
+                if text_size > 200_000:
+                    raise RpcError("stored visible response exceeds recovery bound")
+                answers.append(visible)
+            next_cursor = response.get("nextCursor")
+            if next_cursor is None:
+                return "\n\n".join(answers).strip()
+            if (
+                not isinstance(next_cursor, str)
+                or not 1 <= len(next_cursor) <= 2048
+                or next_cursor in used_cursors
+                or not data
+            ):
+                raise RpcError("stored item pagination is invalid")
+            used_cursors.add(next_cursor)
+            cursor = next_cursor
+        raise RpcError("stored item history exceeds recovery bound")
+
+    def read_completed_turn(self, *, thread_id: str, turn_id: str, cwd: Path) -> TurnResult | None:
+        """Compatibility wrapper for callers that need only completed output."""
+        outcome = self.read_turn_outcome(thread_id=thread_id, turn_id=turn_id, cwd=cwd)
+        return outcome.result if outcome.status == "completed" else None
 
     def list_models(self) -> tuple[dict[str, Any], ...]:
         result = self._request("model/list", {"includeHidden": False})

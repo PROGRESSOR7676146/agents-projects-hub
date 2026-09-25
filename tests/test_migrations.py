@@ -18,9 +18,66 @@ from hermes_codex_router.migrations import (
     backup_database,
     migrate_database,
 )
+from hermes_codex_router.state import HubState
 
 
 class MigrationTests(unittest.TestCase):
+    def test_schema_34_hold_evidence_survives_schema_35_upgrade(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            with mock.patch.object(migrations_module, "LATEST_SCHEMA_VERSION", 34):
+                state = HubState.open(path)
+                try:
+                    topic = state.observe_topic(
+                        project_id="example-project",
+                        chat_id=-1001234567890,
+                        thread_id=7,
+                        title="Fictional topic",
+                    )
+                    session = state.activate_agent(topic.topic_id, "codex", "model", "high")
+                    source, _ = state.enqueue_provider_job(
+                        idempotency_key="fictional:source",
+                        chat_id=topic.chat_id,
+                        message_id=1,
+                        topic_id=topic.topic_id,
+                        agent_id="codex",
+                        session_id=session.session_id,
+                        session_generation=session.generation,
+                        model=session.model,
+                        effort=session.effort,
+                        payload_text="Fictional source",
+                    )
+                    tail, _ = state.enqueue_provider_job(
+                        idempotency_key="fictional:tail",
+                        chat_id=topic.chat_id,
+                        message_id=2,
+                        topic_id=topic.topic_id,
+                        agent_id="codex",
+                        session_id=session.session_id,
+                        session_generation=session.generation,
+                        model=session.model,
+                        effort=session.effort,
+                        payload_text="Fictional tail",
+                    )
+                    with state._connection:
+                        state._connection.execute(
+                            "INSERT INTO provider_job_holds(job_id,cause_job_id,held_at) VALUES (?,?,?)",
+                            (tail.job_id, source.job_id, "2026-01-01T00:00:00+00:00"),
+                        )
+                finally:
+                    state.close()
+            result = migrate_database(path, create_backup=False)
+            self.assertEqual((result.previous_version, result.current_version), (34, 35))
+            with sqlite3.connect(path) as connection:
+                hold = connection.execute(
+                    """SELECT cause_job_id,held_at,hold_reason,decision,decided_at
+                       FROM provider_job_holds WHERE job_id=?""",
+                    (tail.job_id,),
+                ).fetchone()
+            self.assertEqual(
+                hold, (source.job_id, "2026-01-01T00:00:00+00:00", "uncertainty", "pending", None)
+            )
+
     def test_schema_32_upgrade_adds_incoming_material_state_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
