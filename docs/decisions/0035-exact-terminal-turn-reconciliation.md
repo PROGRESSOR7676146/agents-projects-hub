@@ -23,6 +23,15 @@ notice remain historical evidence; they are never marked successfully completed
 or reset for replay. Unknown and active turns retain root exclusion. A bounded
 observation queue repeats only read-only checks.
 
+Codex may persist a thread with paginated history. Its supported `thread/read`
+summary identifies that history mode, while a full-history read can fail. For
+those threads Hub uses bounded read-only `thread/turns/list` to establish the
+exact turn status and, only for a completed turn, `thread/items/list` restricted
+to that turn to collect visible agent messages. Invalid pagination, missing
+identity, or an unavailable method leaves the outcome unknown and the root
+excluded. No fallback resumes a thread or invokes a model. The protocol is
+described in the [official Codex app-server documentation](https://developers.openai.com/codex/app-server/).
+
 Queued requests already present on that root are held and visible until a
 separate owner decision. A continuation reply cannot consume them. The
 Controller accepts `retry` only as a Reply to the delivered failure notice;

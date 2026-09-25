@@ -156,7 +156,12 @@ class ExecutionJournalTests(unittest.TestCase):
             ("thread-1", "turn-1", True),
             ("thread-1", "other-turn", False),
         ):
-            transport = FakeTransport([{"id": 1, "result": {"thread": thread}}])
+            transport = FakeTransport(
+                [
+                    {"id": 1, "result": {"thread": {"id": thread["id"], "cwd": thread["cwd"]}}},
+                    {"id": 2, "result": {"thread": thread}},
+                ]
+            )
             client = CodexAppServerClient(transport, initialized=True)
             result = client.read_completed_turn(
                 thread_id=sid, turn_id=turn, cwd=self.fixture.registry.projects[0].root
@@ -164,7 +169,7 @@ class ExecutionJournalTests(unittest.TestCase):
             self.assertEqual(
                 result.text if result else None, "Recovered final" if expected else None
             )
-            self.assertEqual([x["method"] for x in transport.sent], ["thread/read"])
+            self.assertEqual([x["method"] for x in transport.sent], ["thread/read"] * 2)
 
     def test_exact_turn_read_distinguishes_terminal_active_and_unknown_without_model(self) -> None:
         root = self.fixture.registry.projects[0].root
@@ -180,6 +185,10 @@ class ExecutionJournalTests(unittest.TestCase):
                     [
                         {
                             "id": 1,
+                            "result": {"thread": {"id": "thread-1", "cwd": str(root)}},
+                        },
+                        {
+                            "id": 2,
                             "result": {
                                 "thread": {
                                     "id": "thread-1",
@@ -187,7 +196,7 @@ class ExecutionJournalTests(unittest.TestCase):
                                     "turns": [{"id": "turn-1", "status": stored, "items": []}],
                                 }
                             },
-                        }
+                        },
                     ]
                 )
                 client = CodexAppServerClient(transport, initialized=True)
@@ -199,7 +208,7 @@ class ExecutionJournalTests(unittest.TestCase):
                         thread_id="thread-1", turn_id="turn-1", cwd=root
                     )
                     self.assertEqual(outcome.status, expected)
-                self.assertEqual([call["method"] for call in transport.sent], ["thread/read"])
+                self.assertEqual([call["method"] for call in transport.sent], ["thread/read"] * 2)
 
     def test_embedded_restart_recovers_checkpoint_before_dispatching_new_work(self) -> None:
         class Client(embedded_fixtures.QueueClient):
@@ -398,6 +407,10 @@ class ExecutionJournalTests(unittest.TestCase):
                 [
                     {
                         "id": 1,
+                        "result": {"thread": {"id": thread_id, "cwd": cwd}},
+                    },
+                    {
+                        "id": 2,
                         "result": {
                             "thread": {
                                 "id": thread_id,
@@ -405,7 +418,7 @@ class ExecutionJournalTests(unittest.TestCase):
                                 "turns": [{"id": "turn-1", "status": status, "items": []}],
                             }
                         },
-                    }
+                    },
                 ]
             )
             client = CodexAppServerClient(transport, initialized=True)
