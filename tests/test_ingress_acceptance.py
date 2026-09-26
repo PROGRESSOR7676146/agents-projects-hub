@@ -54,7 +54,48 @@ class FailingActionTelegram(ScriptedTelegram):
         )
 
 
+class RecordingActionTelegram(ScriptedTelegram):
+    def __init__(self, service: ProjectHubService, batches: list[list[dict[str, object]]]) -> None:
+        super().__init__(service, batches)
+        self.actions: list[tuple[int, int]] = []
+
+    def send_chat_action(self, chat_id: int, thread_id: int, _action: str = "typing") -> None:
+        self.actions.append((chat_id, thread_id))
+
+
+class ProviderActionBot(RecordingBot):
+    def __init__(self) -> None:
+        super().__init__()
+        self.actions: list[tuple[int, int]] = []
+
+    def send_chat_action(self, chat_id: int, thread_id: int, _action: str = "typing") -> None:
+        self.actions.append((chat_id, thread_id))
+
+
 class IngressAcceptanceTests(unittest.TestCase):
+    def test_group_admission_does_not_show_ingress_bot_typing_for_antigravity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            harness = FaultMatrixHarness(Path(directory))
+            message = harness.update(180, 880, "@example_antigravity_bot fictional task")
+            service = harness.controller(ingress_identity="codex")
+            try:
+                telegram, _ = self.run_batches(
+                    service, [[message]], telegram_type=RecordingActionTelegram
+                )
+                self.assertEqual(cast(RecordingActionTelegram, telegram).actions, [])
+                self.assertEqual(harness.one_job(880).agent_id, "antigravity")
+                codex_bot = ProviderActionBot()
+                antigravity_bot = ProviderActionBot()
+                sender = harness.sender(codex=codex_bot, antigravity=antigravity_bot)
+                try:
+                    sender._refresh_chat_actions(now_monotonic=10.0)
+                    self.assertEqual(codex_bot.actions, [])
+                    self.assertEqual(antigravity_bot.actions, [(harness.chat_id, 880)])
+                finally:
+                    sender.close()
+            finally:
+                service.close()
+
     def run_batches(
         self,
         service: ProjectHubService,
@@ -290,15 +331,15 @@ class IngressAcceptanceTests(unittest.TestCase):
     def test_post_acceptance_typing_failure_does_not_lose_or_duplicate_job(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             harness = FaultMatrixHarness(Path(directory))
-            message = harness.update(181, 881, "@example_opencode_bot fictional typing boundary")
-            service = harness.controller()
+            message = harness.update(181, 881, "@example_codex_bot fictional typing boundary")
+            service = harness.controller(ingress_identity="codex")
             try:
                 self.run_batches(
                     service, [[message], [message]], telegram_type=FailingActionTelegram
                 )
                 topic = service.state.find_topic(harness.chat_id, 881)
                 assert topic is not None
-                self.assertEqual(service.state.get_bot_offset("hub"), 182)
+                self.assertEqual(service.state.get_bot_offset("codex"), 182)
                 self.assertEqual(len(service.state.provider_jobs_for_topic(topic.topic_id)), 1)
                 self.assertEqual(len(self.input_rows(service)), 1)
             finally:

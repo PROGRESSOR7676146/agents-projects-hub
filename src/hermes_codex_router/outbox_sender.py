@@ -47,6 +47,7 @@ class TelegramSender(Protocol):
         *,
         reply_markup: dict[str, Any] | None = None,
         reply_to_message_id: int | None = None,
+        disable_notification: bool = False,
     ) -> int: ...
     def send_document(
         self,
@@ -562,7 +563,10 @@ class TelegramOutboxSender:
         )
         try:
             message_id = self.telegram_bots[agent_id].send_html(
-                progress.chat_id, progress.thread_id, progress.telegram_html
+                progress.chat_id,
+                progress.thread_id,
+                progress.telegram_html,
+                disable_notification=True,
             )
             self.progress.mark_delivered(
                 progress.progress_id,

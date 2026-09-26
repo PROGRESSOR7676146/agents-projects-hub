@@ -26,12 +26,15 @@ class TelegramInteractionPromptTests(unittest.TestCase):
         self.assertIn("commentary", prompt)
         self.assertIn("Do not switch into a provider-specific plan-only mode", prompt)
         self.assertIn("without an artificial delay", prompt)
+        self.assertIn("For substantial work with findings", prompt)
+        self.assertIn("a short final answer is enough", prompt)
 
     def test_existing_session_receives_compact_transport_reminder(self) -> None:
         prompt = telegram_developer_instructions(runtime="opencode", new_session=False)
 
         self.assertIn("TELEGRAM TRANSPORT REMINDER v1", prompt)
         self.assertNotIn("TELEGRAM INTERACTION CONTRACT v1", prompt)
+        self.assertIn("simple work needs a short answer", prompt)
 
     def test_codex_reminder_requires_one_useful_question_before_guessing_a_deliverable(
         self,

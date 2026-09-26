@@ -36,6 +36,45 @@ class CodexAppServerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
+    def test_completed_turn_keeps_progress_separate_from_final_answer(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "turnId": "fictional-turn",
+                        "item": {
+                            "id": "progress",
+                            "type": "agentMessage",
+                            "phase": "commentary",
+                            "text": "Checking",
+                        },
+                    },
+                },
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "turnId": "fictional-turn",
+                        "item": {
+                            "id": "final",
+                            "type": "agentMessage",
+                            "phase": "final_answer",
+                            "text": "Done",
+                        },
+                    },
+                },
+                {"method": "turn/completed", "params": {"turn": {"id": "fictional-turn"}}},
+            ]
+        )
+        visible: list[tuple[str, str, str]] = []
+        client = CodexAppServerClient(transport, initialized=True)
+        client.on_visible_item = lambda item_id, text, phase: visible.append((item_id, text, phase))
+
+        self.assertEqual(client.wait_for_turn("fictional-turn").text, "Done")
+        self.assertEqual(
+            visible, [("progress", "Checking", "commentary"), ("final", "Done", "final_answer")]
+        )
+
     def test_paginated_saved_failed_turn_uses_bounded_read_only_turn_page(self) -> None:
         transport = FakeTransport(
             [
@@ -72,6 +111,51 @@ class CodexAppServerTests(unittest.TestCase):
         self.assertEqual(transport.sent[0]["params"]["includeTurns"], False)
         self.assertEqual(transport.sent[1]["params"]["itemsView"], "notLoaded")
 
+    def test_legacy_recovery_excludes_commentary_but_keeps_unknown_old_items(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "id": 1,
+                    "result": {"thread": {"id": "fictional-thread", "cwd": str(self.cwd)}},
+                },
+                {
+                    "id": 2,
+                    "result": {
+                        "thread": {
+                            "id": "fictional-thread",
+                            "cwd": str(self.cwd),
+                            "turns": [
+                                {
+                                    "id": "fictional-turn",
+                                    "status": "completed",
+                                    "items": [
+                                        {
+                                            "id": "progress",
+                                            "type": "agentMessage",
+                                            "phase": "commentary",
+                                            "text": "Checking",
+                                        },
+                                        {
+                                            "id": "answer",
+                                            "type": "agentMessage",
+                                            "text": "Done from old server",
+                                        },
+                                    ],
+                                }
+                            ],
+                        }
+                    },
+                },
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True)
+
+        outcome = client.read_turn_outcome(
+            thread_id="fictional-thread", turn_id="fictional-turn", cwd=self.cwd
+        )
+
+        self.assertEqual(outcome.result.text if outcome.result else None, "Done from old server")
+
     def test_paginated_completed_turn_reads_only_exact_visible_items(self) -> None:
         transport = FakeTransport(
             [
@@ -102,7 +186,12 @@ class CodexAppServerTests(unittest.TestCase):
                             },
                             {
                                 "turnId": "fictional-turn",
-                                "item": {"id": "visible", "type": "agentMessage", "text": "First"},
+                                "item": {
+                                    "id": "visible",
+                                    "type": "agentMessage",
+                                    "phase": "commentary",
+                                    "text": "First",
+                                },
                             },
                         ],
                         "nextCursor": "next",
@@ -114,11 +203,21 @@ class CodexAppServerTests(unittest.TestCase):
                         "data": [
                             {
                                 "turnId": "fictional-turn",
-                                "item": {"id": "visible", "type": "agentMessage", "text": "First"},
+                                "item": {
+                                    "id": "visible",
+                                    "type": "agentMessage",
+                                    "phase": "commentary",
+                                    "text": "First",
+                                },
                             },
                             {
                                 "turnId": "fictional-turn",
-                                "item": {"id": "final", "type": "agentMessage", "text": "Done"},
+                                "item": {
+                                    "id": "final",
+                                    "type": "agentMessage",
+                                    "phase": "final_answer",
+                                    "text": "Done",
+                                },
                             },
                         ],
                         "nextCursor": None,
@@ -133,7 +232,7 @@ class CodexAppServerTests(unittest.TestCase):
         )
 
         self.assertEqual(outcome.status, "completed")
-        self.assertEqual(outcome.result.text if outcome.result else None, "First\n\nDone")
+        self.assertEqual(outcome.result.text if outcome.result else None, "Done")
         self.assertEqual(
             [message["method"] for message in transport.sent],
             ["thread/read", "thread/turns/list", "thread/items/list", "thread/items/list"],

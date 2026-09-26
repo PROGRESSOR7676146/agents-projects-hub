@@ -28,6 +28,7 @@ class MetadataTests(unittest.TestCase):
             limits=limits,
             timezone_name="Europe/Moscow",
         )
+        self.assertTrue(rendered.startswith("<b>Final</b>\n\n"))
         self.assertIn("Fixed &lt;main&gt; &amp; tests", rendered)
         self.assertIn("<blockquote expandable>", rendered)
         self.assertIn(

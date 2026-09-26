@@ -20,6 +20,7 @@ You are communicating with the user through Telegram, often from a phone.
 - Several short, self-contained messages are preferable to one wall of text when the transport supports incremental messages. Keep related code or copyable text in its own fenced block.
 - Use emoji sparingly and naturally. Do not add decorative emoji to every message.
 - When the result is a document, Markdown file, table, diagram, image, or other artifact, create the real artifact in the exact per-turn directory supplied as $HUB_STAGING_DIR or in the ARTIFACT DELIVERY DIRECTORY section. Do not use a shared staging directory. The Hub validates and delivers eligible files as Telegram attachments.
+- For substantial work with findings or changes worth reviewing, you may attach a concise Markdown final report from that directory. Use tables or diagrams only when they clarify the result. Do not repeat progress notes or the chat answer. For a simple task, a short final answer is enough; do not generate a report by default.
 - For a small closed choice, state concise option labels suitable for Telegram inline buttons.
 - Never claim that a file, button, or reaction was sent unless the transport confirms it. The Hub, not you, owns Telegram UI delivery.
 - Do not expose hidden reasoning, secrets, raw terminal screens, or unfiltered tool output. Visible progress should describe actions and outcomes, not private chain-of-thought.
@@ -27,7 +28,7 @@ You are communicating with the user through Telegram, often from a phone.
 """
 
 _REMINDER = """TELEGRAM TRANSPORT REMINDER v2
-Reply for a Telegram conversation: concise, conversational, and outcome-first. Start simple work immediately; for complex work publish a brief understanding and approach when possible, then continue without an artificial delay. Ask only materially useful clarification questions. When a requested deliverable lacks audience, facts, format, or language and those choices materially affect it, ask one focused question before drafting; do not silently invent them. Put copyable text in a separate fenced block and stage deliverable files only in the exact per-turn directory supplied by the Hub. Never claim Telegram UI actions that the Hub has not confirmed. Do not expose hidden reasoning.
+Reply for a Telegram conversation: concise, conversational, and outcome-first. Start simple work immediately; for complex work publish a brief understanding and approach when possible, then continue without an artificial delay. Ask only materially useful clarification questions. When a requested deliverable lacks audience, facts, format, or language and those choices materially affect it, ask one focused question before drafting; do not silently invent them. Put copyable text in a separate fenced block and stage deliverable files only in the exact per-turn directory supplied by the Hub. Attach a concise Markdown report only when substantial work merits it; simple work needs a short answer. Never claim Telegram UI actions that the Hub has not confirmed. Do not expose hidden reasoning.
 """
 
 _FULL_CONTRACT_V1 = (
@@ -47,7 +48,7 @@ _FULL_CONTRACT_V1 = (
 )
 
 _REMINDER_V1 = """TELEGRAM TRANSPORT REMINDER v1
-Reply for a Telegram conversation: concise, conversational, and outcome-first. Ask only materially useful clarification questions. When a requested deliverable lacks audience, facts, format, or language and those choices materially affect it, ask one focused question before drafting; do not silently invent them. Put copyable text in a separate fenced block and stage deliverable files only in the exact per-turn directory supplied by the Hub. Never claim Telegram UI actions that the Hub has not confirmed. Do not expose hidden reasoning.
+Reply for a Telegram conversation: concise, conversational, and outcome-first. Ask only materially useful clarification questions. When a requested deliverable lacks audience, facts, format, or language and those choices materially affect it, ask one focused question before drafting; do not silently invent them. Put copyable text in a separate fenced block and stage deliverable files only in the exact per-turn directory supplied by the Hub. Attach a concise Markdown report only when substantial work merits it; simple work needs a short answer. Never claim Telegram UI actions that the Hub has not confirmed. Do not expose hidden reasoning.
 """
 
 _RUNTIME_NOTES = {

@@ -20,9 +20,11 @@ This normative module is part of the
   plus pending queue/final-delivery/progress-delivery counts and ages. These
   aggregates MUST contain no prompt, response, provider-session, project, topic
   or account identity. The
-  passive alert evaluator MUST report nonterminal provider work older than 15
-  minutes, committed Telegram final or progress delivery older than 5 minutes,
-  and every newly
+  passive alert evaluator MUST report provider work with an expired execution
+  lease, or due and unblocked queued work waiting over 15 minutes without an
+  active worker lease. A healthy long-running execution MUST NOT alert solely
+  because its original queue timestamp is old. The evaluator MUST also report
+  committed Telegram final or progress delivery older than 5 minutes, and every newly
   unresolved indeterminate outcome. Historical indeterminate work with an
   operator resolution MUST remain visible in totals without keeping the alert
   active.
@@ -258,7 +260,11 @@ recreate unsaved provider context or a partially executed turn.
   deadlines across sender restart, and supersede pending progress when the job
   becomes terminal. Progress delivery MUST NOT complete a job, acknowledge
   visible context, or authorize provider replay. Final-result delivery MUST have
-  priority over progress delivery.
+  priority over progress delivery. Progress messages MUST request Telegram's
+  silent delivery with `disable_notification`; final results and owner decisions
+  MUST retain normal notification behavior. Telegram clients may still display
+  a silent notification, so the flag alone does not prove the absence of screen
+  or tray alerts.
 - **REQ-QUEUE-006 (Implemented for the additive schema and global compatibility gate; per-provider rollout Planned):** Queue migration and per-provider rollout MUST be
   additive, feature-gated, recoverable through the existing backup discipline,
   and retain safe rollback without destroying accepted jobs. Changing an agent
@@ -278,9 +284,9 @@ recreate unsaved provider context or a partially executed turn.
 - **REQ-QUEUE-008 (Implemented):** While the head job of a Telegram topic is
   queued, leased, executing, or awaiting outbox delivery, the standalone sender
   SHOULD refresh Telegram's `typing` chat action through the target provider bot
-  identity. Immediately after durable admission, ingress MUST also make a
-  best-effort initial `typing` call so the user does not wait for the sender's
-  first refresh cycle. These acknowledgements MUST NOT invoke a model or idle
+  identity. Group ingress MAY publish an immediate best-effort `typing` action
+  only when its bot is the selected provider identity; the provider sender owns
+  the action otherwise. These acknowledgements MUST NOT invoke a model or idle
   provider, and a chat-action failure cannot block execution or result delivery.
 - **REQ-QUEUE-009 (Implemented):** Durable input membership MUST retain every
   Telegram `(chat_id, message_id)` exactly once even when several inputs form

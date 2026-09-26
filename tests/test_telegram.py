@@ -22,6 +22,14 @@ from hermes_codex_router.telegram import (
 
 
 class TelegramUpdateTests(unittest.TestCase):
+    def test_silent_html_only_sets_notification_flag_when_requested(self) -> None:
+        telegram = TelegramBotApi("123456:example")
+        with patch.object(telegram, "call", return_value={"message_id": 7}) as api_call:
+            telegram.send_html(-1001234567890, 77, "<i>Progress</i>", disable_notification=True)
+            telegram.send_html(-1001234567890, 77, "<b>Done</b>")
+        self.assertEqual(api_call.call_args_list[0].kwargs["disable_notification"], "true")
+        self.assertNotIn("disable_notification", api_call.call_args_list[1].kwargs)
+
     def test_download_file_streams_verified_content_to_private_destination(self) -> None:
         content = b"fictional telegram content"
 
