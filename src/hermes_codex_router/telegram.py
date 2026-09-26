@@ -705,6 +705,7 @@ class TelegramBotApi:
         *,
         reply_markup: dict[str, Any] | None = None,
         reply_to_message_id: int | None = None,
+        disable_notification: bool = False,
     ) -> int:
         params: dict[str, Any] = {
             "chat_id": chat_id,
@@ -720,6 +721,8 @@ class TelegramBotApi:
             params["reply_parameters"] = json.dumps(
                 {"message_id": reply_to_message_id, "allow_sending_without_reply": True}
             )
+        if disable_notification:
+            params["disable_notification"] = "true"
         result = self.call("sendMessage", **params)
         if not isinstance(result, dict) or not isinstance(result.get("message_id"), int):
             raise TelegramError(

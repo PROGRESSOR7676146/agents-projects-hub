@@ -55,6 +55,7 @@ class MonitorHealthTests(unittest.TestCase):
                     "unresolved_uncertain_execution": 0,
                     "recovered_results": 0,
                     "queued_work": 0,
+                    "stalled_provider_work": 0,
                     "pending_delivery": 0,
                     "pending_progress_delivery": 0,
                     "oldest_queue_age_seconds": None,

@@ -13,6 +13,7 @@ from hermes_codex_router.hub_config import (
     ProjectBinding,
     TerminalSettings,
 )
+from hermes_codex_router.metadata import format_agent_response
 from hermes_codex_router.outbox_sender import TelegramOutboxSender
 from hermes_codex_router.progress_delivery import ProgressDeliveryQueue
 from hermes_codex_router.state import HubState
@@ -23,9 +24,13 @@ class RecordingBot:
     def __init__(self, *, retry_after: int | None = None) -> None:
         self.retry_after = retry_after
         self.sent: list[tuple[int, int, str]] = []
+        self.notification_flags: list[bool] = []
 
-    def send_html(self, chat_id: int, thread_id: int, html: str) -> int:
+    def send_html(
+        self, chat_id: int, thread_id: int, html: str, *, disable_notification: bool = False
+    ) -> int:
         self.sent.append((chat_id, thread_id, html))
+        self.notification_flags.append(disable_notification)
         if self.retry_after is not None:
             retry_after = self.retry_after
             self.retry_after = None
@@ -159,9 +164,35 @@ class DurableProgressDeliveryTests(unittest.TestCase):
         progress = ProgressDeliveryQueue(self.state).for_job(job_id)[0]
         self.assertEqual(progress.status, "delivered")
         self.assertEqual(bot.sent, [(-1001234567890, 77, progress.telegram_html)])
+        self.assertEqual(bot.notification_flags, [True])
         job = self.state.get_provider_job(job_id)
         self.assertEqual(job.status, "executing")
         self.assertEqual(job.attempt_count, 1)
+
+    def test_delivered_progress_and_final_are_distinct_with_different_notification_flags(
+        self,
+    ) -> None:
+        job_id, token, journal = self.executing_job()
+        journal.record_item(job_id, token, "progress", "Checking", "commentary")
+        bot = RecordingBot()
+        sender = self.sender(bot)
+        try:
+            self.assertTrue(sender.run_cycle())
+            self.state.commit_provider_result(
+                job_id,
+                token,
+                visible_response="Done",
+                sender_agent_id="codex",
+                telegram_html=format_agent_response("Done", {}),
+            )
+            self.assertTrue(sender.run_cycle())
+        finally:
+            sender.close()
+
+        self.assertEqual(len(bot.sent), 2)
+        self.assertIn("<i>Progress</i>", bot.sent[0][2])
+        self.assertTrue(bot.sent[1][2].startswith("<b>Final</b>\n\nDone"))
+        self.assertEqual(bot.notification_flags, [True, False])
 
     def test_terminal_job_supersedes_pending_progress(self) -> None:
         job_id, token, journal = self.executing_job()
@@ -199,6 +230,7 @@ class DurableProgressDeliveryTests(unittest.TestCase):
         finally:
             sender.close()
         self.assertEqual(bot.sent, [(-1001234567890, 77, "<b>Done</b>")])
+        self.assertEqual(bot.notification_flags, [False])
         self.assertEqual(ProgressDeliveryQueue(self.state).for_job(job_id)[0].status, "superseded")
         self.assertEqual(self.state.get_provider_job(job_id).status, "completed")
 
@@ -232,6 +264,7 @@ class DurableProgressDeliveryTests(unittest.TestCase):
             restarted.close()
         self.assertEqual(ProgressDeliveryQueue(self.state).for_job(job_id)[0].status, "delivered")
         self.assertEqual(len(bot.sent), 2)
+        self.assertEqual(bot.notification_flags, [True, True])
 
 
 if __name__ == "__main__":

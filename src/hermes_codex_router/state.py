@@ -2661,6 +2661,7 @@ class HubState:
         )
         queued_statuses = ("queued", "leased", "executing", "retry_wait")
         queued_work = sum(counts.get(status, 0) for status in queued_statuses)
+        stalled_provider_work = self._provider_job_state.stalled_work_count(now=current)
         oldest_queue = self._connection.execute(
             """SELECT MIN(created_at) FROM provider_jobs
                WHERE status IN ('queued', 'leased', 'executing', 'retry_wait')"""
@@ -2705,6 +2706,7 @@ class HubState:
             "unresolved_uncertain_execution": unresolved_uncertain_execution,
             "recovered_results": recovered_results,
             "queued_work": queued_work,
+            "stalled_provider_work": stalled_provider_work,
             "pending_delivery": pending_delivery,
             "pending_progress_delivery": pending_progress_delivery,
             "oldest_queue_age_seconds": age_seconds(oldest_queue),

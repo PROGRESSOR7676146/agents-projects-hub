@@ -10,6 +10,7 @@ class ReliabilityAlertTests(unittest.TestCase):
         alerts = evaluate_reliability_alerts(
             {
                 "queued_work": 1,
+                "stalled_provider_work": 1,
                 "pending_delivery": 1,
                 "pending_progress_delivery": 1,
                 "oldest_queue_age_seconds": 901,
@@ -22,7 +23,7 @@ class ReliabilityAlertTests(unittest.TestCase):
         self.assertEqual(
             {alert.code for alert in alerts},
             {
-                "provider_queue_age_exceeded",
+                "provider_work_stalled",
                 "telegram_delivery_age_exceeded",
                 "progress_delivery_age_exceeded",
                 "unresolved_provider_outcome",
@@ -33,6 +34,7 @@ class ReliabilityAlertTests(unittest.TestCase):
         alerts = evaluate_reliability_alerts(
             {
                 "queued_work": 1,
+                "stalled_provider_work": 0,
                 "pending_delivery": 1,
                 "pending_progress_delivery": 1,
                 "oldest_queue_age_seconds": 900,
@@ -51,12 +53,25 @@ class ReliabilityAlertTests(unittest.TestCase):
             evaluate_reliability_alerts(
                 {
                     "queued_work": 0,
+                    "stalled_provider_work": 0,
                     "pending_delivery": 0,
                     "pending_progress_delivery": 0,
                     "oldest_queue_age_seconds": 9999,
                     "oldest_delivery_age_seconds": 9999,
                     "oldest_progress_delivery_age_seconds": 9999,
                     "unresolved_uncertain_execution": "unknown",
+                }
+            ),
+            (),
+        )
+
+    def test_long_running_work_with_fresh_lease_does_not_alert(self) -> None:
+        self.assertEqual(
+            evaluate_reliability_alerts(
+                {
+                    "queued_work": 1,
+                    "oldest_queue_age_seconds": 4 * 3600,
+                    "stalled_provider_work": 0,
                 }
             ),
             (),

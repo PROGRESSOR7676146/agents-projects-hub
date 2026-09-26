@@ -203,6 +203,105 @@ class ProviderJobsStateFacade:
             updated_at=str(row["updated_at"]),
         )
 
+    def stalled_work_count(self, *, now: datetime) -> int:
+        """Count failed leases and old, runnable queue entries without provider access."""
+        timestamp = self._timestamp(now)
+        stale_before = self._timestamp(now - timedelta(minutes=15))
+        expired_leases = int(
+            self._connection.execute(
+                """SELECT COUNT(*) FROM provider_jobs
+                   WHERE status IN ('leased', 'executing')
+                     AND (lease_expires_at IS NULL OR lease_expires_at <= ?)""",
+                (timestamp,),
+            ).fetchone()[0]
+        )
+        # Queue age alone says nothing about a job already being executed.
+        # Count only old, due and unblocked work when no live lease occupies
+        # the default worker capacity; active work must not cause an error.
+        stale_ready_queue = int(
+            self._connection.execute(
+                """SELECT COUNT(*) FROM provider_jobs candidate
+                   JOIN topics candidate_topic ON candidate_topic.topic_id = candidate.topic_id
+                   WHERE candidate.status IN ('queued', 'retry_wait')
+                     AND candidate.attempt_count < candidate.max_attempts
+                     AND ((candidate.status = 'queued'
+                           AND candidate.created_at <= ?
+                           AND (candidate.next_attempt_at IS NULL
+                                OR candidate.next_attempt_at <= ?))
+                          OR (candidate.status = 'retry_wait'
+                              AND candidate.next_attempt_at <= ?))
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_job_holds held
+                       WHERE held.job_id = candidate.job_id AND held.decision = 'pending'
+                     )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_jobs earlier
+                       WHERE earlier.topic_id = candidate.topic_id
+                         AND earlier.topic_sequence < candidate.topic_sequence
+                         AND earlier.status NOT IN
+                           ('completed', 'failed', 'cancelled', 'indeterminate')
+                     )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_jobs earlier
+                       JOIN topics earlier_topic ON earlier_topic.topic_id = earlier.topic_id
+                       JOIN provider_job_holds held ON held.job_id = earlier.job_id
+                       WHERE held.decision = 'pending'
+                         AND earlier.status IN ('queued', 'retry_wait')
+                         AND COALESCE(earlier_topic.execution_scope,
+                                      'project:' || earlier_topic.project_id) =
+                             COALESCE(candidate_topic.execution_scope,
+                                      'project:' || candidate_topic.project_id)
+                         AND (earlier.created_at < candidate.created_at
+                              OR (earlier.created_at = candidate.created_at
+                                  AND earlier.job_id < candidate.job_id))
+                     )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_jobs active
+                       WHERE active.status IN ('leased', 'executing')
+                         AND active.lease_expires_at > ?
+                     )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM provider_jobs uncertain
+                       JOIN topics uncertain_topic
+                         ON uncertain_topic.topic_id = uncertain.topic_id
+                       WHERE uncertain.status = 'indeterminate'
+                         AND COALESCE(uncertain_topic.execution_scope,
+                                      'project:' || uncertain_topic.project_id) =
+                             COALESCE(candidate_topic.execution_scope,
+                                      'project:' || candidate_topic.project_id)
+                         AND NOT EXISTS (
+                           SELECT 1 FROM provider_job_resolutions resolutions
+                           WHERE resolutions.job_id = uncertain.job_id
+                         )
+                         AND NOT EXISTS (
+                           SELECT 1 FROM provider_turn_terminal_evidence terminal
+                           WHERE terminal.job_id = uncertain.job_id
+                         )
+                     )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM agent_sessions writer
+                       JOIN topics writer_topic ON writer_topic.topic_id = writer.topic_id
+                       WHERE writer.status IN ('active', 'satellite')
+                         AND writer.writer_mode != 'telegram'
+                         AND COALESCE(writer_topic.execution_scope,
+                                      'project:' || writer_topic.project_id) =
+                             COALESCE(candidate_topic.execution_scope,
+                                      'project:' || candidate_topic.project_id)
+                     )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM turn_dispatches dispatch
+                       JOIN topics dispatch_topic ON dispatch_topic.topic_id = dispatch.topic_id
+                       WHERE dispatch.status = 'running'
+                         AND COALESCE(dispatch_topic.execution_scope,
+                                      'project:' || dispatch_topic.project_id) =
+                             COALESCE(candidate_topic.execution_scope,
+                                      'project:' || candidate_topic.project_id)
+                     )""",
+                (stale_before, stale_before, stale_before, timestamp),
+            ).fetchone()[0]
+        )
+        return expired_leases + stale_ready_queue
+
     def topic_has_pending(self, topic_id: int) -> bool:
         row = self._connection.execute(
             """SELECT 1 FROM provider_jobs

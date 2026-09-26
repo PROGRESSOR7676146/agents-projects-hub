@@ -4,7 +4,6 @@ from collections.abc import Mapping
 
 from .operational_alert import OperationalAlert
 
-MAX_QUEUE_AGE_SECONDS = 15 * 60
 MAX_DELIVERY_AGE_SECONDS = 5 * 60
 
 
@@ -15,18 +14,17 @@ def _positive_int(value: object) -> int | None:
 def evaluate_reliability_alerts(
     telemetry: Mapping[str, object],
 ) -> tuple[OperationalAlert, ...]:
-    """Evaluate passive queue/outbox thresholds without provider or network access."""
+    """Evaluate passive stalled-work/outbox signals without provider access."""
     alerts: list[OperationalAlert] = []
-    queued = _positive_int(telemetry.get("queued_work"))
-    queue_age = _positive_int(telemetry.get("oldest_queue_age_seconds"))
-    if queued is not None and queue_age is not None and queue_age > MAX_QUEUE_AGE_SECONDS:
+    stalled = _positive_int(telemetry.get("stalled_provider_work"))
+    if stalled is not None:
         alerts.append(
             OperationalAlert(
-                "reliability:provider-queue-age",
-                "provider_queue_age_exceeded",
+                "reliability:provider-work-stalled",
+                "provider_work_stalled",
                 "error",
-                "Provider work has remained nonterminal for over 15 minutes; inspect the "
-                "owning worker and its lease without replaying the task.",
+                f"Hub has {stalled} stalled provider job(s): an expired lease or ready work "
+                "waiting over 15 minutes. Inspect worker health and leases without replaying tasks.",
             )
         )
     pending = _positive_int(telemetry.get("pending_delivery"))

@@ -624,6 +624,103 @@ class ResultReliabilityTests(unittest.TestCase):
             worker.close()
             fixture.tearDown()
 
+    def test_reliability_snapshot_uses_lease_not_total_execution_age(self) -> None:
+        fixture = worker_fixtures.CodexQueueWorkerTests()
+        fixture.setUp()
+        job_id = fixture.enqueue()
+        state = HubState.open(fixture.config.state_path)
+        try:
+            leased = state.lease_provider_job("codex", "fictional-worker")
+            assert leased is not None and leased.lease_token is not None
+            state.mark_provider_job_executing(job_id, leased.lease_token)
+            past = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat()
+            state._connection.execute(
+                "UPDATE provider_jobs SET created_at = ? WHERE job_id = ?", (past, job_id)
+            )
+            state._connection.commit()
+            fresh = state.reliability_snapshot()
+            self.assertGreater(cast(int, fresh["oldest_queue_age_seconds"]), 15 * 60)
+            self.assertEqual(fresh["stalled_provider_work"], 0)
+
+            state._connection.execute(
+                "UPDATE provider_jobs SET lease_expires_at = ? WHERE job_id = ?",
+                (past, job_id),
+            )
+            state._connection.commit()
+            self.assertEqual(state.reliability_snapshot()["stalled_provider_work"], 1)
+        finally:
+            state.close()
+            fixture.tearDown()
+
+    def test_reliability_snapshot_flags_ready_queue_without_active_worker(self) -> None:
+        fixture = worker_fixtures.CodexQueueWorkerTests()
+        fixture.setUp()
+        job_id = fixture.enqueue()
+        state = HubState.open(fixture.config.state_path)
+        try:
+            past = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat()
+            state._connection.execute(
+                "UPDATE provider_jobs SET created_at = ?, next_attempt_at = ? WHERE job_id = ?",
+                (past, past, job_id),
+            )
+            state._connection.commit()
+            self.assertEqual(state.reliability_snapshot()["stalled_provider_work"], 1)
+        finally:
+            state.close()
+            fixture.tearDown()
+
+    def test_reliability_snapshot_does_not_flag_queue_behind_live_job(self) -> None:
+        fixture = worker_fixtures.CodexQueueWorkerTests()
+        fixture.setUp()
+        active_id = fixture.enqueue(1)
+        waiting_id = fixture.enqueue(2)
+        state = HubState.open(fixture.config.state_path)
+        try:
+            leased = state.lease_provider_job("codex", "fictional-worker")
+            assert leased is not None and leased.lease_token is not None
+            state.mark_provider_job_executing(active_id, leased.lease_token)
+            past = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat()
+            state._connection.execute(
+                "UPDATE provider_jobs SET created_at = ?, next_attempt_at = ? WHERE job_id = ?",
+                (past, past, waiting_id),
+            )
+            state._connection.commit()
+            self.assertEqual(state.reliability_snapshot()["stalled_provider_work"], 0)
+        finally:
+            state.close()
+            fixture.tearDown()
+
+    def test_reliability_snapshot_respects_retry_deadline(self) -> None:
+        fixture = worker_fixtures.CodexQueueWorkerTests()
+        fixture.setUp()
+        job_id = fixture.enqueue()
+        state = HubState.open(fixture.config.state_path)
+        try:
+            past = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat()
+            future = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+            state._connection.execute(
+                "UPDATE provider_jobs SET status = 'retry_wait', created_at = ?, "
+                "next_attempt_at = ? WHERE job_id = ?",
+                (past, future, job_id),
+            )
+            state._connection.commit()
+            self.assertEqual(state.reliability_snapshot()["stalled_provider_work"], 0)
+            state._connection.execute(
+                "UPDATE provider_jobs SET next_attempt_at = ? WHERE job_id = ?",
+                (datetime.now(timezone.utc).isoformat(), job_id),
+            )
+            state._connection.commit()
+            self.assertEqual(state.reliability_snapshot()["stalled_provider_work"], 0)
+            state._connection.execute(
+                "UPDATE provider_jobs SET next_attempt_at = ? WHERE job_id = ?",
+                (past, job_id),
+            )
+            state._connection.commit()
+            self.assertEqual(state.reliability_snapshot()["stalled_provider_work"], 1)
+        finally:
+            state.close()
+            fixture.tearDown()
+
     def test_embedded_worker_delivers_partial_failure_without_success(self) -> None:
         class Client(embedded_fixtures.QueueClient):
             def wait_for_turn(self, _turn_id):
@@ -720,7 +817,9 @@ class ResultReliabilityTests(unittest.TestCase):
                 *,
                 reply_markup=None,
                 reply_to_message_id=None,
+                disable_notification=False,
             ):
+                del disable_notification
                 self.sent.append((chat_id, thread_id, html))
                 raise TelegramError(
                     "Fictional rate limit",

@@ -63,7 +63,9 @@ class Bot:
         *,
         reply_markup: dict[str, Any] | None = None,
         reply_to_message_id: int | None = None,
+        disable_notification: bool = False,
     ) -> int:
+        del disable_notification
         self.sent.append((chat_id, thread_id, html))
         if self.fail:
             raise RuntimeError("transport unavailable")
@@ -100,7 +102,9 @@ class TransportFailBot(Bot):
         *,
         reply_markup: dict[str, Any] | None = None,
         reply_to_message_id: int | None = None,
+        disable_notification: bool = False,
     ) -> int:
+        del disable_notification
         self.sent.append((chat_id, thread_id, html))
         if self.fail:
             raise TelegramError(

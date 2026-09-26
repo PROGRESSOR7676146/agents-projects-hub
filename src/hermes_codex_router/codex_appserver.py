@@ -49,6 +49,13 @@ class CodexTurnError(RpcError):
         self.failure_reason = codex_failure_reason(cause)
 
 
+def _final_visible_text(items: Sequence[tuple[str, str]]) -> str:
+    """Keep commentary out of a completed answer, including recovered turns."""
+    explicit = [text for phase, text in items if phase == "final_answer" and text]
+    legacy = [text for phase, text in items if phase == "unknown" and text]
+    return "\n\n".join(explicit if explicit else legacy).strip()
+
+
 class MessageTransport(Protocol):
     def send(self, message: dict[str, Any]) -> None: ...
 
@@ -796,6 +803,7 @@ class CodexAppServerClient:
     def wait_for_turn(self, turn_id: str) -> TurnResult:
         """Wait for one turn while excluding hidden reasoning from the result."""
         answers: list[str] = []
+        final_items: list[tuple[str, str]] = []
         seen_items: set[str] = set()
         context_window: int | None = None
         context_tokens_used: int | None = None
@@ -840,6 +848,7 @@ class CodexAppServerClient:
                     item_id = item.get("id")
                     if not isinstance(item_id, str) or item_id not in seen_items:
                         answers.append(item["text"])
+                        final_items.append((str(item.get("phase") or "unknown"), item["text"]))
                         if isinstance(item_id, str):
                             seen_items.add(item_id)
                             if self.on_visible_item is not None and item["text"].strip():
@@ -857,7 +866,7 @@ class CodexAppServerClient:
                             "\n\n".join(answers),
                         )
                     result = TurnResult(
-                        text="\n\n".join(answer for answer in answers if answer).strip(),
+                        text=_final_visible_text(final_items),
                         context_window=context_window,
                         context_tokens_used=context_tokens_used,
                     )
@@ -924,7 +933,7 @@ class CodexAppServerClient:
         items = matches[0].get("items")
         if not isinstance(items, list):
             raise RpcError("completed turn has no visible item history")
-        answers: list[str] = []
+        answers: list[tuple[str, str]] = []
         seen: set[str] = set()
         for item in items:
             if not isinstance(item, dict) or item.get("type") != "agentMessage":
@@ -933,8 +942,8 @@ class CodexAppServerClient:
             if not isinstance(text, str) or not isinstance(item_id, str) or item_id in seen:
                 continue
             seen.add(item_id)
-            answers.append(text)
-        text = "\n\n".join(answers).strip()
+            answers.append((str(item.get("phase") or "unknown"), text))
+        text = _final_visible_text(answers)
         if len(text) > 200_000:
             raise RpcError("stored visible response exceeds recovery bound")
         return StoredTurnOutcome("completed", TurnResult(text, None, None))
@@ -991,7 +1000,7 @@ class CodexAppServerClient:
         cursor: str | None = None
         used_cursors: set[str] = set()
         seen_items: set[str] = set()
-        answers: list[str] = []
+        answers: list[tuple[str, str]] = []
         text_size = 0
         deadline = time.monotonic() + 30
         for _ in range(100):
@@ -1017,10 +1026,10 @@ class CodexAppServerClient:
                 text_size += len(visible) + 2
                 if text_size > 200_000:
                     raise RpcError("stored visible response exceeds recovery bound")
-                answers.append(visible)
+                answers.append((str(item.get("phase") or "unknown"), visible))
             next_cursor = response.get("nextCursor")
             if next_cursor is None:
-                return "\n\n".join(answers).strip()
+                return _final_visible_text(answers)
             if (
                 not isinstance(next_cursor, str)
                 or not 1 <= len(next_cursor) <= 2048

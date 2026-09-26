@@ -173,9 +173,9 @@ branch cannot supply stale scanner code. Hosted exact-SHA checks remain required
 because a local hook is bypassable and cannot guarantee external runner or
 network availability.
 
-Passive reliability thresholds now alert on provider work older than 15
-minutes, committed Telegram final or progress delivery older than 5 minutes,
-and unresolved indeterminate outcomes. The evaluator is isolated from the broader alert module
+Passive reliability alerts now use lease and runnable-queue state for provider
+work, following [REQ-OPS-004](../product/PERSISTENCE_AND_RECOVERY.md), alongside
+delivery and uncertain-outcome signals. The evaluator is isolated from the broader alert module
 and reads only aggregate SQLite telemetry. Uncertain-result notices give a
 copyable explicit continuation request while preserving the no-replay boundary.
 Schema 24 now backs a separate progress-delivery queue. In external-outbox mode,

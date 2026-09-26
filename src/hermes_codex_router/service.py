@@ -627,32 +627,33 @@ class ProjectHubService:
                 ) from result.error
             raise QueueAcceptanceError("durable provider enqueue did not commit") from result.error
         assert isinstance(result, CommittedAdmission)
-        try:
-            if message.chat_id > 0:
-                self.telegram.send_message_draft(
-                    message.chat_id,
-                    message.thread_id,
-                    draft_id=message.message_id,
+        ingress_agent_id = getattr(self, "ingress_identity", self.agent.agent_id)
+        if message.chat_id > 0 or result.job.agent_id == ingress_agent_id:
+            try:
+                if message.chat_id > 0:
+                    self.telegram.send_message_draft(
+                        message.chat_id,
+                        message.thread_id,
+                        draft_id=message.message_id,
+                    )
+                else:
+                    self.telegram.send_chat_action(message.chat_id, message.thread_id)
+            except Exception as exc:
+                error = (
+                    exc
+                    if isinstance(exc, TelegramError)
+                    else TelegramError(
+                        "Telegram advisory request failed",
+                        operation="message_draft" if message.chat_id > 0 else "chat_action",
+                        failure_class="unexpected_client",
+                    )
                 )
-            else:
-                # Group drafts are not supported by the Bot API yet.
-                self.telegram.send_chat_action(message.chat_id, message.thread_id)
-        except Exception as exc:
-            error = (
-                exc
-                if isinstance(exc, TelegramError)
-                else TelegramError(
-                    "Telegram advisory request failed",
-                    operation="chat_action",
-                    failure_class="unexpected_client",
+                self.state.record_runtime_event(
+                    "telegram",
+                    "warning",
+                    "initial_chat_action_error",
+                    error.safe_detail(consecutive_failures=1, last_success=None),
                 )
-            )
-            self.state.record_runtime_event(
-                "telegram",
-                "warning",
-                "initial_chat_action_error",
-                error.safe_detail(consecutive_failures=1, last_success=None),
-            )
         return True
 
     def _reject_persistent_root_input(
