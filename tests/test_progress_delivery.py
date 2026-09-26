@@ -140,7 +140,7 @@ class DurableProgressDeliveryTests(unittest.TestCase):
         queued = ProgressDeliveryQueue(self.state).for_job(job_id)
         self.assertEqual(len(queued), 1)
         self.assertEqual(queued[0].item_sequence, 1)
-        self.assertIn("Working &lt;safely&gt;", queued[0].telegram_html)
+        self.assertEqual(queued[0].telegram_html, "Working &lt;safely&gt;")
 
         old = (datetime.now(timezone.utc) - timedelta(seconds=121)).isoformat()
         self.state._connection.execute(
@@ -190,8 +190,8 @@ class DurableProgressDeliveryTests(unittest.TestCase):
             sender.close()
 
         self.assertEqual(len(bot.sent), 2)
-        self.assertIn("<i>Progress</i>", bot.sent[0][2])
-        self.assertTrue(bot.sent[1][2].startswith("<b>Final</b>\n\nDone"))
+        self.assertEqual(bot.sent[0][2], "Checking")
+        self.assertEqual(bot.sent[1][2], "Done")
         self.assertEqual(bot.notification_flags, [True, False])
 
     def test_terminal_job_supersedes_pending_progress(self) -> None:

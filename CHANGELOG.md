@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Let Telegram progress and final messages begin with their actual content,
+  keeping their separate delivery and notification policies; guide optional
+  final reports to use task-appropriate visuals without a fixed template.
 - Move the seven deployment-local inbound-material and context/quota live checks
   into the scoped acceptance actor as one explicit, fail-fast, restart-authorized
   Codex scenario with seven separate private artifact results.

@@ -91,10 +91,9 @@ def _compact_details(details: dict[str, str]) -> str:
 def format_agent_response(answer: str, details: dict[str, str]) -> str:
     visible = html.escape(answer or "The agent completed without a visible text response.")
     block = _compact_details(details)
-    final = f"<b>Final</b>\n\n{visible}"
     if not block:
-        return final
-    return f"{final}\n\n<blockquote expandable>{html.escape(block)}</blockquote>"
+        return visible
+    return f"{visible}\n\n<blockquote expandable>{html.escape(block)}</blockquote>"
 
 
 def _reset_text(window: LimitWindow | None, timezone: ZoneInfo) -> str:

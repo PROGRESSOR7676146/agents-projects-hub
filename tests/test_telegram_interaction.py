@@ -27,14 +27,14 @@ class TelegramInteractionPromptTests(unittest.TestCase):
         self.assertIn("Do not switch into a provider-specific plan-only mode", prompt)
         self.assertIn("without an artificial delay", prompt)
         self.assertIn("For substantial work with findings", prompt)
-        self.assertIn("a short final answer is enough", prompt)
+        self.assertIn("simple work needs only a short answer", prompt)
 
     def test_existing_session_receives_compact_transport_reminder(self) -> None:
         prompt = telegram_developer_instructions(runtime="opencode", new_session=False)
 
         self.assertIn("TELEGRAM TRANSPORT REMINDER v1", prompt)
         self.assertNotIn("TELEGRAM INTERACTION CONTRACT v1", prompt)
-        self.assertIn("simple work needs a short answer", prompt)
+        self.assertIn("simple work needs only a short answer", prompt)
 
     def test_codex_reminder_requires_one_useful_question_before_guessing_a_deliverable(
         self,
@@ -43,6 +43,18 @@ class TelegramInteractionPromptTests(unittest.TestCase):
 
         self.assertIn("ask one focused question before drafting", prompt)
         self.assertIn("audience, facts, format, or language", prompt)
+
+    def test_report_guidance_is_present_for_new_and_existing_sessions(self) -> None:
+        for runtime in ("codex", "opencode", "antigravity", "hermes"):
+            for new_session in (False, True):
+                with self.subTest(runtime=runtime, new_session=new_session):
+                    prompt = telegram_developer_instructions(
+                        runtime=runtime, new_session=new_session
+                    )
+                    self.assertIn("choose the report structure for the actual result", prompt)
+                    self.assertIn("tables, diagrams, or images when they clarify", prompt)
+                    self.assertIn("real screenshots", prompt)
+                    self.assertIn("simple work needs only a short answer", prompt)
 
     def test_contract_does_not_claim_unavailable_ui_actions(self) -> None:
         prompt = telegram_turn_prompt("Create a report.", runtime="antigravity", new_session=True)
