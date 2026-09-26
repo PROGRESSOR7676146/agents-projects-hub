@@ -8,6 +8,15 @@ operator deployment inventory or live conversation evidence.
 
 ## Quality checkpoint
 
+Participant evaluation and resource-aware task allocation are an accepted
+product foundation; implementation and acceptance remain pending. See
+[the owning requirements](../product/EVALUATION_AND_ALLOCATION.md) and
+[ADR 0037](../decisions/0037-evidence-based-task-allocation.md).
+The initial [Claude/Codex milestone](../operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
+is scoped to one lead, a read-only advisor and a minimal outcome journal;
+automated scoring and parallel writers are deferred. Provider integration,
+role enforcement and live acceptance remain pending.
+
 Schema 35 durable root-blocker admission, held-job owner decisions and Hub
 notices are in repository implementation; live Telegram/provider acceptance
 and immutable deployment remain separate. Offline evidence covers refusal,
@@ -577,11 +586,10 @@ artifact for schema 33 remain deployment-specific; the current target is schema 
   alone may also be suppressed on a complete author-name or hosted source-owner
   span that exactly repeats the valid local origin owner; all surrounding
   metadata and unrelated rules remain scanned.
-- Documentation validation inventories all 102 normative product requirement IDs,
-  protects all 20 numbered baseline sections by content hash, and checks local
-  Markdown files/anchors repository-wide. The product baseline is split into a
-  short normative index and five stable capability modules; the guarded move
-  changed no numbered normative section content.
+- Documentation validation inventories normative requirement IDs, protects
+  numbered baseline sections by content hash, and checks local Markdown
+  files/anchors repository-wide. The product index routes capability modules;
+  the manifest records their current integrity inventory.
 
 ## Acceptance still required per deployment
 

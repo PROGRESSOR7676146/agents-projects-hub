@@ -25,6 +25,8 @@ reading never exempts an implementation from any requirement.
 - [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md)
 - [Onboarding and acceptance](ONBOARDING_AND_ACCEPTANCE.md)
 - [Maintenance](MAINTENANCE.md)
+- [Evaluation and resource-aware task allocation](EVALUATION_AND_ALLOCATION.md)
+  — accepted foundation; implementation and acceptance pending.
 
 ## 1. Mission
 
