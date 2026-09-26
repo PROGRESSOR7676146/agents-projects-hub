@@ -120,7 +120,7 @@ class DeliveryStateFacade:
         bounded = text.strip()[:_MAX_PROGRESS_SOURCE_LENGTH]
         if not bounded:
             raise self._state_error("progress delivery requires visible text")
-        rendered = f"<i>Progress</i>\n{escape(bounded)}"
+        rendered = escape(bounded)
         if len(rendered) > 4096:
             raise self._state_error("progress delivery exceeds Telegram limit")
         return rendered

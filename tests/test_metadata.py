@@ -28,8 +28,8 @@ class MetadataTests(unittest.TestCase):
             limits=limits,
             timezone_name="Europe/Moscow",
         )
-        self.assertTrue(rendered.startswith("<b>Final</b>\n\n"))
-        self.assertIn("Fixed &lt;main&gt; &amp; tests", rendered)
+        self.assertTrue(rendered.startswith("Fixed &lt;main&gt; &amp; tests\n\n"))
+        self.assertNotIn("<b>Final</b>", rendered)
         self.assertIn("<blockquote expandable>", rendered)
         self.assertIn(
             "Session: Example Project Alpha · Backend / Agent: Codex · gpt-5.6-sol-high",
@@ -64,6 +64,9 @@ class MetadataTests(unittest.TestCase):
         self.assertNotIn("Runtime", rendered)
         self.assertNotIn("unavailable", rendered)
         self.assertEqual(rendered.count("\n", rendered.index("<blockquote")), 0)
+
+    def test_short_final_without_footer_has_no_generated_heading(self) -> None:
+        self.assertEqual(format_agent_response("Done", {}), "Done")
 
     def test_quota_labels_follow_reported_duration_not_window_position(self) -> None:
         rendered = format_telegram_response(
