@@ -129,7 +129,26 @@ def _claude_result(
     visible = terminal.get("result")
     if not isinstance(visible, str) or not visible.strip():
         raise ExternalRuntimeError("claude completed without visible text")
-    return ExternalTurnResult("claude", visible.strip(), actual_session, model)
+    return ExternalTurnResult(
+        "claude", visible.strip(), actual_session, _claude_model(values, model)
+    )
+
+
+def _claude_model(values: list[dict[str, object]], requested: str | None) -> str | None:
+    """Prefer the model that answered, then the session model, over the request."""
+    initialized: str | None = None
+    answered: str | None = None
+    for value in values:
+        if value.get("type") == "system" and value.get("subtype") == "init":
+            reported = value.get("model")
+            if isinstance(reported, str) and reported.strip():
+                initialized = reported.strip()[:200]
+        message = value.get("message")
+        if value.get("type") == "assistant" and isinstance(message, dict):
+            reported = message.get("model")
+            if isinstance(reported, str) and reported.strip():
+                answered = reported.strip()[:200]
+    return answered or initialized or requested
 
 
 def _claude_json_events(output: str) -> list[dict[str, object]]:
@@ -282,7 +301,8 @@ class ExternalCliAdapter:
                         "claude_effort_unsupported", "Claude effort is unsupported."
                     )
                 argv.extend(("--effort", effort))
-            argv.append(prompt)
+            # `--tools` is variadic, so the prompt must not directly follow it.
+            argv.extend(("--", prompt))
             return tuple(argv)
         argv = [
             self.executable,

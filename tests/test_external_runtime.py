@@ -82,6 +82,77 @@ class ExternalRuntimeTests(unittest.TestCase):
         self.assertIn("--safe-mode", calls[0])
         self.assertEqual(calls[0][calls[0].index("--tools") + 1], "")
         self.assertEqual(calls[1][calls[1].index("--resume") + 1], session)
+        for call, prompt in zip(calls, ("hello", "again")):
+            self.assertEqual(call[-2:], ("--", prompt))
+
+    def test_claude_prompt_cannot_be_read_as_an_option_value(self) -> None:
+        session = str(uuid.uuid4())
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            output = (
+                '{"type":"result","subtype":"success","is_error":false,'
+                f'"session_id":"{session}","result":"Visible answer"}}\n'
+            )
+            return subprocess.CompletedProcess(argv, 0, output, "")
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(
+                "os.environ",
+                {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+                clear=True,
+            ),
+        ):
+            ExternalCliAdapter("claude", run=fake_run).run_turn(
+                cwd=Path(directory), prompt="- first item"
+            )
+        # `--tools <tools...>` is variadic; without a separator a prompt that
+        # directly follows it would be parsed as another tool name.
+        self.assertEqual(calls[0][-4:], ("--tools", "", "--", "- first item"))
+
+    def test_claude_reports_the_model_the_cli_actually_used(self) -> None:
+        session = str(uuid.uuid4())
+        outputs = (
+            (
+                '{"type":"system","subtype":"init","model":"claude-example-routed",'
+                f'"session_id":"{session}"}}\n'
+                '{"type":"assistant","message":{"model":"claude-example-answered",'
+                '"content":[{"type":"text","text":"Visible answer"}]}}\n',
+                "claude-example-answered",
+            ),
+            (
+                '{"type":"system","subtype":"init","model":"claude-example-routed",'
+                f'"session_id":"{session}"}}\n',
+                "claude-example-routed",
+            ),
+            ("", "sonnet"),
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(
+                "os.environ",
+                {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+                clear=True,
+            ),
+        ):
+            for events, expected in outputs:
+
+                def fake_run(
+                    argv: tuple[str, ...], **_: object
+                ) -> subprocess.CompletedProcess[str]:
+                    output = events + (
+                        '{"type":"result","subtype":"success","is_error":false,'
+                        f'"session_id":"{session}","result":"Visible answer"}}\n'
+                    )
+                    return subprocess.CompletedProcess(argv, 0, output, "")
+
+                with self.subTest(expected=expected):
+                    result = ExternalCliAdapter("claude", run=fake_run).run_turn(
+                        cwd=Path(directory), prompt="hello", model="sonnet"
+                    )
+                    self.assertEqual(result.model, expected)
 
     def test_claude_rejects_missing_completion_and_session_switch(self) -> None:
         original = str(uuid.uuid4())
