@@ -5,6 +5,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Run canonical tests as isolated per-module discovery processes in parallel
+  and let focused selectors import sibling fixtures as discovery does; fix a
+  fake Git signature verifier that failed intermittently under load
+  ([ADR 0041](docs/decisions/0041-parallel-isolated-test-modules.md)).
 - Let Telegram progress and final messages begin with their actual content,
   keeping their separate delivery and notification policies; guide optional
   final reports to use task-appropriate visuals without a fixed template.

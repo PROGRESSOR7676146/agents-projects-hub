@@ -185,8 +185,11 @@ class PrivacyScanTests(TestCase):
             root = Path(temporary)
             subprocess.run(["/usr/bin/git", "init", "-q", str(root)], check=True)
             fake = root / "fake-verifier"
+            # Git writes the signed payload to the verifier's stdin; exiting
+            # before reading it makes Git fail intermittently with EPIPE.
             fake.write_text(
                 "#!/bin/sh\n"
+                "cat >/dev/null\n"
                 "echo '[GNUPG:] NEWSIG'\n"
                 "echo '[GNUPG:] GOODSIG B5690EEEBB952194 GitHub'\n"
                 "echo '[GNUPG:] VALIDSIG 968479A1AFF927E37D1A566BB5690EEEBB952194 "
