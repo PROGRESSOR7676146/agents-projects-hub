@@ -477,9 +477,11 @@ class ExternalQueueWorker:
                 elif failure.notice == "emergency_stop":
                     assert isinstance(exc, ProviderTurnStopped)
                     self.state.cancel_active_provider_job(
-                        executing.job_id, token, error_code=failure.error_code
+                        executing.job_id,
+                        token,
+                        error_code=failure.error_code,
+                        stop_request_id=exc.request_id,
                     )
-                    self.state.complete_emergency_stop(exc.request_id)
                     self._last_error_code = None
                     self._provider_state = "ready"
                     self._record_event("info", "provider_turn_stopped", self.agent.agent_id)
@@ -726,9 +728,7 @@ class ExternalQueueWorker:
             monitor_state = HubState.open(self.config.state_path)
             try:
                 while not monitor_stop.wait(0.2):
-                    request_id = monitor_state.pending_emergency_stop(
-                        job.topic_id, self.agent.agent_id
-                    )
+                    request_id = monitor_state.pending_emergency_stop_for_job(job.job_id)
                     if request_id is not None:
                         try:
                             assert self.supervisor is not None
@@ -800,7 +800,7 @@ class ExternalQueueWorker:
             result = wait_for_codex_provider_turn(client, turn_id)
             journal.record_completion(job.job_id, token, result.text)
         except Exception:
-            pending_request = self.state.pending_emergency_stop(job.topic_id, self.agent.agent_id)
+            pending_request = self.state.pending_emergency_stop_for_job(job.job_id)
             if interrupted_request or pending_request is not None:
                 request_id = interrupted_request[0] if interrupted_request else pending_request
                 assert request_id is not None
@@ -811,7 +811,7 @@ class ExternalQueueWorker:
             client.on_completed = None
             monitor_stop.set()
             monitor.join(timeout=2)
-        late_request = self.state.pending_emergency_stop(job.topic_id, self.agent.agent_id)
+        late_request = self.state.pending_emergency_stop_for_job(job.job_id)
         if interrupted_request:
             raise ProviderTurnStopped(interrupted_request[0])
         if late_request is not None:
@@ -889,9 +889,7 @@ class ExternalQueueWorker:
             monitor_state = HubState.open(self.config.state_path)
             try:
                 while not monitor_stop.wait(0.2):
-                    request_id = monitor_state.pending_emergency_stop(
-                        job.topic_id, self.agent.agent_id
-                    )
+                    request_id = monitor_state.pending_emergency_stop_for_job(job.job_id)
                     if request_id is None:
                         continue
                     interrupted_request.append(request_id)
@@ -928,7 +926,7 @@ class ExternalQueueWorker:
         finally:
             monitor_stop.set()
             monitor.join(timeout=2)
-        late_request = self.state.pending_emergency_stop(job.topic_id, self.agent.agent_id)
+        late_request = self.state.pending_emergency_stop_for_job(job.job_id)
         if interrupted_request:
             raise ProviderTurnStopped(interrupted_request[0])
         if late_request is not None:

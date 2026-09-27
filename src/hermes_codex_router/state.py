@@ -1437,34 +1437,12 @@ class HubState:
         timestamp = _now()
         with self._immediate_transaction():
             request = self._connection.execute(
-                """SELECT topic_id, chat_id, target_agent_id, created_at
-                   FROM provider_stop_requests WHERE request_id = ?""",
+                "SELECT chat_id FROM provider_stop_requests WHERE request_id = ?",
                 (identifier,),
             ).fetchone()
             if request is None:
                 raise StateError("emergency stop request does not exist")
-            candidate = self._connection.execute(
-                """SELECT jobs.job_id, topics.thread_id
-                   FROM provider_jobs jobs
-                   JOIN topics ON topics.topic_id = jobs.topic_id
-                   WHERE jobs.topic_id = ? AND jobs.created_at <= ? AND (
-                       (jobs.agent_id = ? AND jobs.status IN ('leased', 'executing')) OR (
-                           jobs.status = 'cancelled'
-                           AND jobs.error_class = 'user_stop'
-                           AND jobs.error_code = 'emergency_stop'
-                           AND jobs.updated_at >= ?
-                       )
-                   )
-                   ORDER BY CASE WHEN jobs.status IN ('leased', 'executing') THEN 0 ELSE 1 END,
-                            jobs.updated_at DESC, jobs.created_at DESC
-                   LIMIT 1""",
-                (
-                    request["topic_id"],
-                    request["created_at"],
-                    request["target_agent_id"],
-                    request["created_at"],
-                ),
-            ).fetchone()
+            candidate = self._provider_job_state.stop_notice_job(identifier)
             if candidate is None:
                 return False
             existing = self._connection.execute(
@@ -1504,6 +1482,10 @@ class HubState:
         ).fetchone()
         return None if row is None else str(row["request_id"])
 
+    def pending_emergency_stop_for_job(self, job_id: str) -> str | None:
+        """The pending stop that covers this job; later work is never covered."""
+        return self._provider_job_state.pending_stop_for_job(job_id)
+
     def complete_emergency_stop(self, request_id: str) -> None:
         with self._connection:
             self._connection.execute(
@@ -1513,9 +1495,16 @@ class HubState:
             )
 
     def cancel_active_provider_job(
-        self, job_id: str, lease_token: str, *, error_code: str = "emergency_stop"
+        self,
+        job_id: str,
+        lease_token: str,
+        *,
+        error_code: str = "emergency_stop",
+        stop_request_id: str | None = None,
     ) -> None:
-        self._provider_job_state.cancel_active(job_id, lease_token, error_code=error_code)
+        self._provider_job_state.cancel_active(
+            job_id, lease_token, error_code=error_code, stop_request_id=stop_request_id
+        )
 
     def lease_provider_job(
         self,

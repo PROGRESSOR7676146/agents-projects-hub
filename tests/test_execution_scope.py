@@ -318,6 +318,75 @@ class ExecutionScopeTests(unittest.TestCase):
         self.assertEqual(self.state.get_provider_job(later.job_id).status, "queued")
         self.assertEqual(owner_topic.execution_scope, destination.execution_scope)
 
+    def test_repeated_stop_leaves_a_held_job_confirmed_after_it_alone(self) -> None:
+        _, owner = self.topic_session(project_id="example-project", thread_id=175, agent_id="codex")
+        destination, selected = self.topic_session(
+            project_id="example-project", thread_id=176, agent_id="opencode"
+        )
+        waiting = self.enqueue(destination, selected, 1704)
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE agent_sessions SET writer_mode='local' WHERE session_id=?",
+                (owner.session_id,),
+            )
+        self.assertEqual(self.state.materialize_held_provider_jobs(), 1)
+        held_notice = self.state.lease_root_blocker_notice("fictional-sender")
+        assert held_notice is not None
+        self.state.complete_root_blocker_notice(held_notice, 1803)
+        self.state.set_writer_mode(owner.session_id, "telegram")
+        free = self.enqueue(destination, selected, 1705)
+
+        def stop() -> str:
+            request_id, cancelled, pending = self.state.request_emergency_stop(
+                topic_id=destination.topic_id,
+                chat_id=destination.chat_id,
+                message_id=1706,
+                target_agent_id="opencode",
+            )
+            self.assertEqual((cancelled, pending), (1, False))
+            self.assertTrue(self.state.enqueue_emergency_stop_notice(request_id, "Stopped."))
+            return request_id
+
+        request_id = stop()
+        stop_notice = self.state.lease_telegram_outbox("hub", "fictional-sender")
+        assert stop_notice is not None and stop_notice.lease_token is not None
+        self.assertEqual(stop_notice.job_id, free.job_id)
+        self.state.mark_telegram_outbox_delivered(
+            stop_notice.outbox_id, stop_notice.lease_token, telegram_message_id=1807
+        )
+        self.assertEqual(
+            self.state.decide_held_provider_job(
+                job_id=waiting.job_id,
+                action="confirm",
+                chat_id=destination.chat_id,
+                thread_id=destination.thread_id,
+                notice_message_id=1803,
+            ),
+            "confirmed",
+        )
+        leased = self.state.lease_provider_job("opencode", "fictional-worker")
+        assert leased is not None and leased.lease_token is not None
+        started = self.state.mark_provider_job_executing(
+            leased.job_id, leased.lease_token, honor_stop=True
+        )
+        self.assertEqual((started.job_id, started.status), (waiting.job_id, "executing"))
+
+        self.assertEqual(stop(), request_id)
+
+        self.assertIsNone(self.state.pending_emergency_stop_for_job(waiting.job_id))
+        with self.assertRaises(StateError):
+            self.state.get_telegram_outbox_for_job(waiting.job_id)
+        self.state.commit_provider_result(
+            waiting.job_id,
+            leased.lease_token,
+            visible_response="Fictional answer",
+            sender_agent_id="opencode",
+            telegram_html="Fictional answer",
+        )
+        self.assertEqual(
+            self.state.get_telegram_outbox_for_job(waiting.job_id).sender_agent_id, "opencode"
+        )
+
     def test_held_job_can_be_cancelled_without_releasing_local_writer(self) -> None:
         _, owner = self.topic_session(project_id="example-project", thread_id=173, agent_id="codex")
         destination, selected = self.topic_session(

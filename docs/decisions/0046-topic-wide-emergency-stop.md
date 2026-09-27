@@ -21,14 +21,23 @@ running turn. Topic FIFO allows at most one running turn, so one request row
 per Telegram message still suffices and no schema change is needed; when
 nothing runs, the request is addressed to the active agent and completes at
 once, as before. Held jobs awaiting an owner decision are left for that
-decision. The stop acknowledgement can now be attached to a cancelled job of
-any provider, but only to work that existed when the stop was recorded, so a
-duplicate stop message never attaches a notice to a later job.
+decision.
 
-A leased job counts as running. When its worker moves it to `executing`, the
-same transaction honors a pending stop recorded after the job was created: the
-job is cancelled without invoking the provider and the stop completes. An older
-unfinished stop, for example after a worker crash, never cancels later work.
+A stop covers exactly the work that existed when it was recorded, except work
+then held for an owner decision. Every stop check uses this one rule: the start
+of a turn, the worker's stop monitor, its checks after the provider returns or
+fails, and the choice of the job that carries the Hub acknowledgement. An older
+unfinished stop therefore never interrupts or cancels later work, and a
+repeated stop message never attaches a notice to a job that started after the
+stop, including a held job the owner confirmed after it. The acknowledgement
+can be attached to a covered job of any provider.
+
+A leased job counts as running. Moving it to `executing` checks for a covering
+pending stop inside the same immediate write transaction: a stop committed
+first cancels the job without invoking the provider and completes, and a stop
+committed later finds the job executing and interrupts it. Cancelling stopped
+work and completing its stop are likewise one transaction, so a worker that
+dies in between cannot leave the stop pending.
 
 ## Consequences
 

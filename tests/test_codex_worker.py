@@ -517,6 +517,33 @@ class CodexQueueWorkerTests(unittest.TestCase):
             sender.join(1)
             worker.close()
 
+    def test_an_unfinished_older_stop_never_stops_later_codex_work(self) -> None:
+        old_id = self.enqueue(message_id=102)
+        state = HubState.open(self.config.state_path)
+        try:
+            leased = state.lease_provider_job("codex", "crashed-worker")
+            assert leased is not None and leased.lease_token is not None
+            self.assertEqual(leased.job_id, old_id)
+            state.mark_provider_job_executing(leased.job_id, leased.lease_token)
+            _, _, pending = state.request_emergency_stop(
+                topic_id=leased.topic_id,
+                chat_id=-1001234567890,
+                message_id=103,
+                target_agent_id="codex",
+            )
+            self.assertTrue(pending)
+            # The worker died after cancelling, before completing the stop.
+            state.cancel_active_provider_job(leased.job_id, leased.lease_token)
+        finally:
+            state.close()
+        later_id = self.enqueue(message_id=104, payload="after the crash")
+        worker = self.worker(WorkerClient())
+        try:
+            self.assertTrue(worker.run_cycle())
+            self.assertEqual(worker.state.get_provider_job(later_id).status, "result_ready")
+        finally:
+            worker.close()
+
     def worker(self, client: WorkerClient) -> CodexQueueWorker:
         return CodexQueueWorker(
             self.config,

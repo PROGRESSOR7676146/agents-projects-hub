@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+import threading
 import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -70,6 +71,20 @@ class Adapter:
             f"{self.runtime}-1" if self.session_id else None,
             "model-1",
         )
+
+
+class InterruptibleAdapter(Adapter):
+    def __init__(self, runtime: str) -> None:
+        super().__init__(runtime)
+        self.interrupted = threading.Event()
+
+    def run_turn(self, **kwargs: object) -> ExternalTurnResult:
+        # Long enough for the worker's stop monitor to poll several times.
+        self.interrupted.wait(0.6)
+        return super().run_turn(**kwargs)
+
+    def interrupt(self) -> None:
+        self.interrupted.set()
 
 
 class ExternalQueueWorkerTests(unittest.TestCase):
@@ -141,14 +156,19 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         self.tempdir.cleanup()
 
     def enqueue(
-        self, agent_id: str, message_id: int, *, provider_session_id: str | None = None
+        self,
+        agent_id: str,
+        message_id: int,
+        *,
+        provider_session_id: str | None = None,
+        thread_id: int | None = None,
     ) -> str:
         state = HubState.open(self.config.state_path)
         try:
             topic = state.observe_topic(
                 project_id="example-project",
                 chat_id=-1001234567890,
-                thread_id=70 + message_id,
+                thread_id=70 + message_id if thread_id is None else thread_id,
                 title="Example",
             )
             agent = self.config.require_agent(agent_id)
@@ -631,6 +651,38 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             job = worker.state.get_provider_job(job_id)
             self.assertEqual((job.status, job.error_code), ("cancelled", "emergency_stop"))
             self.assertIsNone(worker.state.pending_emergency_stop(topics[0], "opencode"))
+        finally:
+            worker.close()
+
+    def test_an_unfinished_older_stop_never_interrupts_or_cancels_later_work(self) -> None:
+        old_id = self.enqueue("opencode", 32, thread_id=132)
+        state = HubState.open(self.config.state_path)
+        try:
+            leased = state.lease_provider_job("opencode", "crashed-worker")
+            assert leased is not None and leased.lease_token is not None
+            self.assertEqual(leased.job_id, old_id)
+            state.mark_provider_job_executing(leased.job_id, leased.lease_token)
+            _, _, pending = state.request_emergency_stop(
+                topic_id=leased.topic_id,
+                chat_id=-1001234567890,
+                message_id=932,
+                target_agent_id="opencode",
+            )
+            self.assertTrue(pending)
+            # The worker died after cancelling, before completing the stop.
+            state.cancel_active_provider_job(leased.job_id, leased.lease_token)
+            topic_id = leased.topic_id
+        finally:
+            state.close()
+        later_id = self.enqueue("opencode", 33, thread_id=132)
+        adapter = InterruptibleAdapter("opencode")
+        worker = self.worker("opencode", adapter)
+        try:
+            worker.run_cycle()
+            self.assertEqual(adapter.calls, 1)
+            self.assertFalse(adapter.interrupted.is_set())
+            self.assertEqual(worker.state.get_provider_job(later_id).status, "result_ready")
+            self.assertIsNotNone(worker.state.pending_emergency_stop(topic_id, "opencode"))
         finally:
             worker.close()
 

@@ -398,6 +398,69 @@ class ProviderJobQueueTests(unittest.TestCase):
         )
 
         self.assertEqual((started.job_id, started.status), (later.job_id, "executing"))
+        self.assertIsNone(self.state.pending_emergency_stop_for_job(later.job_id))
+
+    def test_stop_cannot_commit_between_the_start_check_and_the_transition(self) -> None:
+        job, _ = self.satellite_job(664)
+        leased = self.state.lease_provider_job("opencode", "opencode-worker")
+        assert leased is not None and leased.lease_token is not None
+        recorded = threading.Event()
+
+        def record_stop() -> None:
+            peer = HubState.open(self.path)
+            try:
+                peer.request_emergency_stop(
+                    topic_id=self.topic.topic_id,
+                    chat_id=self.topic.chat_id,
+                    message_id=665,
+                    target_agent_id="codex",
+                )
+            finally:
+                peer.close()
+                recorded.set()
+
+        writer = threading.Thread(target=record_stop)
+        committed_inside: list[bool] = []
+
+        def after_stop_check(statement: str) -> None:
+            # The transition statement starts only after the stop check read.
+            if "SET status = 'executing'" in statement and not committed_inside:
+                writer.start()
+                committed_inside.append(recorded.wait(0.5))
+
+        self.state._connection.set_trace_callback(after_stop_check)
+        try:
+            started = self.state.mark_provider_job_executing(
+                leased.job_id, leased.lease_token, honor_stop=True
+            )
+        finally:
+            self.state._connection.set_trace_callback(None)
+        writer.join(10)
+
+        self.assertEqual(committed_inside, [False], "a stop committed inside the start")
+        self.assertEqual(started.status, "executing")
+        self.assertIsNotNone(self.state.pending_emergency_stop_for_job(job.job_id))
+
+    def test_cancelling_stopped_work_completes_its_stop_in_the_same_transaction(self) -> None:
+        job, _ = self.enqueue(666)
+        leased = self.state.lease_provider_job("codex", "worker")
+        assert leased is not None and leased.lease_token is not None
+        self.state.mark_provider_job_executing(leased.job_id, leased.lease_token)
+        request_id, _, pending = self.stop(667)
+        self.assertTrue(pending)
+        self.assertEqual(self.state.pending_emergency_stop_for_job(job.job_id), request_id)
+
+        with self.assertRaises(StateError):
+            self.state.cancel_active_provider_job(
+                job.job_id, "wrong-token", stop_request_id=request_id
+            )
+        self.assertEqual(self.state.pending_emergency_stop_for_job(job.job_id), request_id)
+        self.state.cancel_active_provider_job(
+            job.job_id, leased.lease_token, stop_request_id=request_id
+        )
+
+        self.assertEqual(self.state.get_provider_job(job.job_id).status, "cancelled")
+        self.assertIsNone(self.state.pending_emergency_stop(self.topic.topic_id, "codex"))
 
     def test_emergency_stop_notice_is_durable_idempotent_and_keeps_cancelled_job(self) -> None:
         active, _ = self.enqueue(613)
