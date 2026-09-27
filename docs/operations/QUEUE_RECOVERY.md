@@ -174,6 +174,17 @@ before enabling the two numbered units. Do this only as part of an authorized
 deployment with a verified rollback artifact and a validated private config.
 The bootstrap installer copies the same template for new installations.
 
+Claude uses the same capacity rule with its own `claude_worker_count` and
+`agents-projects-hub-claude-worker@2.service` / `@3.service` template slots;
+slot one is `agents-projects-hub-worker@claude.service`. With three Codex and
+three Claude slots, `max_parallel_roots` remains a single shared limit: set it
+to three for at most three productive projects total, or increase it explicitly
+only after assessing the combined load. The Claude adapter currently has no
+tool access or human approval bridge. Keep its units disabled until private CPA
+routing, account/fallback policy, exact revision and live acceptance are checked.
+To reduce Claude capacity, drain and stop the highest numbered Claude units
+before lowering `claude_worker_count` and restarting the remaining workers.
+
 To reduce the Codex slot count, stop and disable the highest numbered units
 first, then lower `codex_worker_count` in the private config and restart the
 remaining workers. Wait for active turns in the stopped units to finish before

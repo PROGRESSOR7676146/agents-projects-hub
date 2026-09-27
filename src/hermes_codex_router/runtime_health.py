@@ -112,7 +112,7 @@ def project_runtime_health(
     if config.dispatch_mode == "queue" and config.queue_runtime == "external":
         for agent_id in sorted(config.external_worker_agent_ids or ("codex",)):
             agent = config.require_agent(agent_id)
-            slot_count = config.codex_worker_count if agent_id == "codex" else 1
+            slot_count = config.worker_count_for_agent(agent_id)
             for slot in range(1, slot_count + 1):
                 instance_id = f"{agent_id}-worker" if slot == 1 else f"{agent_id}-worker-{slot}"
                 workers.append(

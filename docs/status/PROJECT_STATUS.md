@@ -14,13 +14,21 @@ Deployment and live three-project acceptance remain pending. See
 [REQ-QUEUE-002](../product/PERSISTENCE_AND_RECOVERY.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
 and [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md).
 
+Claude Code now has a repository-only, text-only external worker scaffold with
+separate three-slot configuration, exact result/session checks and a local CPA
+route preflight. Offline tests cover these boundaries and shared queue admission;
+no Claude service or private configuration was deployed. Human approvals,
+write-capable lead, isolated advisor, native local transfer, session connect and
+live CPA/account acceptance remain pending. See [REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md)
+and [ADR 0039](../decisions/0039-claude-cpa-worker-scaffold.md).
+
 Participant evaluation and resource-aware task allocation are an accepted
 product foundation; implementation and acceptance remain pending. See
 [the owning requirements](../product/EVALUATION_AND_ALLOCATION.md) and
 [ADR 0037](../decisions/0037-evidence-based-task-allocation.md).
 The initial [Claude/Codex milestone](../operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
 is scoped to one lead, a read-only advisor and a minimal outcome journal;
-automated scoring and parallel writers are deferred. Provider integration,
+automated scoring and parallel writers are deferred. Full provider integration,
 role enforcement and live acceptance remain pending.
 
 Schema 35 durable root-blocker admission, held-job owner decisions and Hub

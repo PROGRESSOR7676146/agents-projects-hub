@@ -128,23 +128,29 @@ recreate unsaved provider context or a partially executed turn.
   and MUST NOT invoke an externally managed provider merely to refresh a model
   catalog. Codex is the Controller's primary local provider and cannot be
   declared `managed_externally` in this architecture.
-- **REQ-QUEUE-002 (Implemented for Codex, OpenCode, and Antigravity behind
+- **REQ-QUEUE-002 (Implemented for Codex, OpenCode, Antigravity, and a limited
+  Claude Code CLI adapter behind
   `queue_runtime: "external"`):** Provider execution MAY occur in isolated
   workers for explicitly configured local agent IDs. A worker owns its adapter or
   Codex app-server lifecycle and SQLite connection, leases only its own jobs,
   and has no Telegram transport or token-reading capability. The default
   external-worker list remains Codex for rollback compatibility; OpenCode and
-  Antigravity are enabled independently through `external_worker_agent_ids`.
+  Antigravity and Claude are enabled independently through
+  `external_worker_agent_ids`. Locally managed Claude MUST use external queue
+  mode; its first repository adapter is text-only pending approval integration.
   `max_parallel_roots` MUST default to one and MUST bound simultaneous
   Hub-owned productive execution across all external workers. A value above one
   MUST require external queue mode. `codex_worker_count` MUST default to one and
   MAY configure 1–16 independently identified Codex worker processes only in
-  external queue mode with `manage_codex_server: false`; other providers retain
-  one worker each. Each process MUST own its own SQLite connection and Codex
-  client, and one worker slot MUST NOT lease two active turns. The queue MUST
-  enforce both the configured Codex slot count and canonical-root exclusion
+  external queue mode with `manage_codex_server: false`.
+  `claude_worker_count` MUST separately default to one and MAY configure 1–16
+  independent Claude CLI workers only in external queue mode; OpenCode and
+  Antigravity retain one worker each. Each process MUST own its own SQLite
+  connection and provider client or adapter, and one worker slot MUST NOT lease
+  two active turns. The queue MUST enforce both configured provider slot counts
+  and canonical-root exclusion
   transactionally, preserve provider fairness and FIFO, and drain active turns
-  without cancellation when global capacity or Codex slot count is reduced.
+  without cancellation when global capacity or either slot count is reduced.
   Runtime health and revision convergence MUST include every configured slot.
   Actual parallelism remains bounded by running worker processes and
   `max_parallel_roots`.

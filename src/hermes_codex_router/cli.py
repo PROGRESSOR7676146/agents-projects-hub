@@ -537,7 +537,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "worker":
             config = load_external_worker_config(args.config)
-            slot_count = config.codex_worker_count if args.agent == "codex" else 1
+            slot_count = config.worker_count_for_agent(args.agent)
             if not 1 <= args.slot <= slot_count:
                 raise HubConfigError("worker slot is not configured for this agent")
             worker_id = (

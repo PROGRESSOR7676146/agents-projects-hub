@@ -39,6 +39,8 @@ install -m 644 "$repo_root/systemd/agents-projects-hub-worker@.service" \
   "$systemd_root/agents-projects-hub-worker@.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-codex-worker@.service" \
   "$systemd_root/agents-projects-hub-codex-worker@.service"
+install -m 644 "$repo_root/systemd/agents-projects-hub-claude-worker@.service" \
+  "$systemd_root/agents-projects-hub-claude-worker@.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-sender.service" \
   "$systemd_root/agents-projects-hub-sender.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-project-provisioner.service" \

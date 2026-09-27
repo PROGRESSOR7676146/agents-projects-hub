@@ -18,8 +18,10 @@ This normative module is part of the
   machine. An off-machine WSL backup and cold-restore drill is now specified,
   but its automation and first private drill remain planned; exact recovery of
   an in-flight provider turn remains impossible.
-- OpenCode and Antigravity have one worker slot each. Codex defaults to one;
-  extra configured Codex processes require an explicit external-worker rollout.
+- OpenCode and Antigravity have one worker slot each. Codex and Claude default
+  to one each; extra processes require an explicit external-worker rollout.
+  Claude currently has text-only queue execution; approvals, write access,
+  advisor isolation and live CPA route acceptance remain pending.
 - Topic creation depends on the deployment bot's Telegram Manage Topics
   permission.
 

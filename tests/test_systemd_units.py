@@ -20,6 +20,8 @@ class SystemdTopologyTests(unittest.TestCase):
         self.assertIn("--agent %i", worker)
         codex_slot = self.unit("agents-projects-hub-codex-worker@.service")
         self.assertIn("--agent codex --slot %i", codex_slot)
+        claude_slot = self.unit("agents-projects-hub-claude-worker@.service")
+        self.assertIn("--agent claude --slot %i", claude_slot)
         self.assertNotIn("agents-projects-hub serve ", worker)
         self.assertIn("agents-projects-hub sender ", sender)
 
@@ -28,6 +30,7 @@ class SystemdTopologyTests(unittest.TestCase):
             "agents-projects-hub.service",
             "agents-projects-hub-worker@.service",
             "agents-projects-hub-codex-worker@.service",
+            "agents-projects-hub-claude-worker@.service",
             "agents-projects-hub-sender.service",
             "agents-projects-hub-project-provisioner.service",
         )
@@ -39,6 +42,7 @@ class SystemdTopologyTests(unittest.TestCase):
         installer = (self.root / "scripts" / "install.sh").read_text(encoding="utf-8")
         self.assertIn("agents-projects-hub-worker@.service", installer)
         self.assertIn("agents-projects-hub-codex-worker@.service", installer)
+        self.assertIn("agents-projects-hub-claude-worker@.service", installer)
         self.assertIn("agents-projects-hub-sender.service", installer)
         self.assertIn("agents-projects-hub-project-provisioner.service", installer)
         provisioner = self.unit("agents-projects-hub-project-provisioner.service")

@@ -122,6 +122,112 @@ class BoundedConcurrencyTests(unittest.TestCase):
         )
         self.assertEqual(self.state.get_provider_job(jobs[3].job_id).status, "queued")
 
+    def test_three_claude_workers_lease_distinct_roots_and_share_global_limit(self) -> None:
+        for index in range(1, 5):
+            topic, session = self.topic_session(
+                project_id=f"example-project-{index}",
+                thread_id=1250 + index,
+                agent_id="claude",
+                root=self.base / f"claude-root-{index}",
+            )
+            self.enqueue(topic, session, 925 + index)
+        for slot in range(1, 4):
+            worker_id = "claude-worker" if slot == 1 else f"claude-worker-{slot}"
+            lease = self.state.lease_provider_job(
+                "claude",
+                worker_id,
+                max_parallel_roots=3,
+                scheduler_agents=("claude",),
+                agent_capacities={"claude": 3},
+            )
+            self.assertIsNotNone(lease)
+            assert lease is not None and lease.lease_token is not None
+            self.state.mark_provider_job_executing(lease.job_id, lease.lease_token)
+        self.assertIsNone(
+            self.state.lease_provider_job(
+                "claude",
+                "claude-worker-4",
+                max_parallel_roots=4,
+                scheduler_agents=("claude",),
+                agent_capacities={"claude": 3},
+            )
+        )
+
+    def test_claude_slot_declaration_preserves_rolling_global_reduction(self) -> None:
+        clock = datetime.now(timezone.utc)
+        for index in range(1, 4):
+            topic, session = self.topic_session(
+                project_id=f"example-project-{index}",
+                thread_id=1280 + index,
+                agent_id="claude",
+                root=self.base / f"claude-rolling-{index}",
+            )
+            self.enqueue(topic, session, 940 + index)
+        first = self.state.lease_provider_job(
+            "claude",
+            "claude-worker",
+            max_parallel_roots=3,
+            scheduler_agents=("claude",),
+            agent_capacities={"claude": 3},
+            now=clock,
+        )
+        self.assertIsNotNone(first)
+        self.assertIsNone(
+            self.state.lease_provider_job(
+                "claude",
+                "claude-worker-2",
+                max_parallel_roots=1,
+                scheduler_agents=("claude",),
+                agent_capacities={"claude": 3},
+                now=clock,
+            )
+        )
+        self.assertIsNone(
+            self.state.lease_provider_job(
+                "claude",
+                "claude-worker-3",
+                max_parallel_roots=3,
+                scheduler_agents=("claude",),
+                agent_capacities={"claude": 3},
+                now=clock,
+            )
+        )
+
+    def test_codex_and_claude_share_global_project_capacity(self) -> None:
+        for index, agent_id in enumerate(("codex", "claude", "claude"), 1):
+            topic, session = self.topic_session(
+                project_id=f"example-project-{index}",
+                thread_id=1290 + index,
+                agent_id=agent_id,
+                root=self.base / f"mixed-root-{index}",
+            )
+            self.enqueue(topic, session, 970 + index)
+        capacities = {"codex": 3, "claude": 3}
+        self.assertIsNotNone(
+            self.state.lease_provider_job(
+                "codex",
+                "codex-worker",
+                max_parallel_roots=2,
+                agent_capacities=capacities,
+            )
+        )
+        self.assertIsNotNone(
+            self.state.lease_provider_job(
+                "claude",
+                "claude-worker",
+                max_parallel_roots=2,
+                agent_capacities=capacities,
+            )
+        )
+        self.assertIsNone(
+            self.state.lease_provider_job(
+                "claude",
+                "claude-worker-2",
+                max_parallel_roots=2,
+                agent_capacities=capacities,
+            )
+        )
+
     def test_codex_slot_count_defaults_to_one_even_with_global_capacity(self) -> None:
         for index in range(1, 3):
             topic, session = self.topic_session(

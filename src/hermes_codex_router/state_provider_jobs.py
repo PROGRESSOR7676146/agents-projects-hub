@@ -8,9 +8,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Mapping, Sequence
 
 PROVIDER_WORKER_FAIRNESS_FRESHNESS = timedelta(minutes=2)
-_CODEX_WORKER_DECLARATIONS = ("codex-worker",) + tuple(
-    f"codex-worker-{slot}" for slot in range(2, 17)
-)
+
+
+def _parallel_worker_declarations(agent_id: str) -> tuple[str, ...]:
+    if agent_id not in {"codex", "claude"}:
+        return ()
+    return (f"{agent_id}-worker",) + tuple(f"{agent_id}-worker-{slot}" for slot in range(2, 17))
+
 
 _ELIGIBLE_PROVIDER_JOB_SQL = """SELECT candidate.* FROM provider_jobs candidate
    JOIN topics candidate_topic ON candidate_topic.topic_id = candidate.topic_id
@@ -511,20 +515,21 @@ class ProviderJobsStateFacade:
             freshness = self._timestamp(current - PROVIDER_WORKER_FAIRNESS_FRESHNESS)
             placeholders = ", ".join("?" for _ in scheduled_agents)
             if scheduled_agents:
-                # Schema 32 keys declarations by text. Canonical Codex slots
+                # Schema 32 keys declarations by text. Canonical parallel slots
                 # use distinct keys so a rolling reduction cannot be overwritten
-                # by another old process. The legacy "codex" key stays in the
+                # by another old process. The legacy agent key stays in the
                 # read set until it ages out after an upgrade.
-                declaration_key = (
-                    worker
-                    if target_agent == "codex" and worker in _CODEX_WORKER_DECLARATIONS
-                    else target_agent
-                )
+                slot_declarations = _parallel_worker_declarations(target_agent)
+                declaration_key = worker if worker in slot_declarations else target_agent
                 declaration_keys = tuple(
                     dict.fromkeys(
                         (
                             *scheduled_agents,
-                            *(_CODEX_WORKER_DECLARATIONS if "codex" in scheduled_agents else ()),
+                            *(
+                                slot
+                                for agent in scheduled_agents
+                                for slot in _parallel_worker_declarations(agent)
+                            ),
                         )
                     )
                 )
@@ -599,8 +604,10 @@ class ProviderJobsStateFacade:
                     contender_agent = str(item["agent_id"])
                     instance_id = str(item["instance_id"])
                     expected_ids = (
-                        _CODEX_WORKER_DECLARATIONS[: capacities.get("codex", 1)]
-                        if contender_agent == "codex"
+                        _parallel_worker_declarations(contender_agent)[
+                            : capacities.get(contender_agent, 1)
+                        ]
+                        if contender_agent in {"codex", "claude"}
                         else (f"{contender_agent}-worker",)
                     )
                     if instance_id in expected_ids and instance_id not in busy_workers:

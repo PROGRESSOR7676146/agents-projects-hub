@@ -125,7 +125,7 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
     for agent in config.agents:
         if agent.service_unit is not None:
             checks.append(_service_check(agent.service_unit))
-        if agent.runtime in {"gemini", "antigravity", "opencode"}:
+        if agent.runtime in {"gemini", "antigravity", "opencode", "claude"}:
             executable = agent.executable or (
                 "agy" if agent.runtime == "antigravity" else agent.runtime
             )

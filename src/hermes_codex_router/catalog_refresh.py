@@ -90,7 +90,23 @@ def refresh_provider_catalogs(
     added: dict[str, tuple[str, ...]] = {}
 
     for agent in config.agents:
-        if agent.managed_externally or agent.runtime not in {"codex", "opencode", "antigravity"}:
+        if agent.managed_externally or agent.runtime not in {
+            "codex",
+            "claude",
+            "opencode",
+            "antigravity",
+        }:
+            continue
+        if agent.runtime == "claude":
+            if not cache.is_stale(agent.agent_id, max_age=max_age, now=observed_at):
+                continue
+            cache.store(
+                agent.agent_id,
+                (ProviderModel(agent.default_model, agent.default_model, (agent.default_effort,)),),
+                source_version="configured Claude model",
+                observed_at=observed_at,
+            )
+            refreshed.append(agent.agent_id)
             continue
         if agent.runtime == "codex" and (
             config.codex_multi_auth_executable is None or config.codex_model_provider is not None

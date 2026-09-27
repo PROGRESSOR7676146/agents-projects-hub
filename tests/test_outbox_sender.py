@@ -163,6 +163,31 @@ class TelegramOutboxSenderTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
+    def test_claude_is_an_external_result_delivery_identity(self) -> None:
+        claude = AgentDefinition(
+            "claude",
+            "Claude",
+            "example_claude_bot",
+            "claude",
+            None,
+            False,
+            False,
+            "sonnet",
+            "high",
+        )
+        config = replace(self.config, agents=(*self.config.agents, claude))
+        sender = TelegramOutboxSender(
+            config,
+            telegram_bots=cast(
+                dict[str, Any],
+                {"opencode": Bot(), "antigravity": Bot(), "claude": Bot()},
+            ),
+        )
+        try:
+            self.assertIn("claude", sender.provider_agent_ids)
+        finally:
+            sender.close()
+
     def test_sender_retries_only_blocker_notice_after_transport_failure(self) -> None:
         token = self.base / "hub.token"
         token.write_text("fictional-token", encoding="utf-8")

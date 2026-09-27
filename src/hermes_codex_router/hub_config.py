@@ -11,7 +11,7 @@ USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
 SERVICE_UNIT = re.compile(r"^[A-Za-z0-9_.@-]+\.service$")
 ACCOUNT_HINT = re.compile(r"^[A-Za-z0-9]{2,8}$")
 TELEGRAM_BOT_TOKEN = re.compile(r"^[0-9]{6,12}:[A-Za-z0-9_-]{5,100}$")
-SUPPORTED_RUNTIMES = {"codex", "hermes", "gemini", "antigravity", "opencode", "api"}
+SUPPORTED_RUNTIMES = {"codex", "claude", "hermes", "gemini", "antigravity", "opencode", "api"}
 
 
 class HubConfigError(ValueError):
@@ -125,6 +125,7 @@ class HubConfig:
     max_parallel_roots: int = 1
     # Independent Codex queue processes, each with its own client and state connection.
     codex_worker_count: int = 1
+    claude_worker_count: int = 1
     # Consecutive productive messages with identical routing are collected
     # into one provider turn.  Zero keeps legacy one-message/one-turn behavior.
     message_batch_quiet_ms: int = 0
@@ -168,6 +169,13 @@ class HubConfig:
             if agent.agent_id == agent_id:
                 return agent
         raise KeyError(f"unknown agent_id: {agent_id}")
+
+    def worker_count_for_agent(self, agent_id: str) -> int:
+        if agent_id == "codex":
+            return self.codex_worker_count
+        if agent_id == "claude":
+            return self.claude_worker_count
+        return 1
 
     def project_for_chat(self, chat_id: int) -> ProjectBinding:
         for project in self.projects:
@@ -513,6 +521,8 @@ def load_hub_config(
         default_effort = data.get("default_effort", "high")
         if not isinstance(default_model, str) or not default_model.strip():
             raise HubConfigError(f"default_model is invalid for {agent_id}")
+        if runtime == "claude" and (agent_id != "claude" or default_model == "unknown"):
+            raise HubConfigError("claude runtime requires agent_id claude and an explicit model")
         if default_effort not in {
             "none",
             "minimal",
@@ -523,6 +533,8 @@ def load_hub_config(
             "max",
             "ultra",
         }:
+            raise HubConfigError(f"default_effort is invalid for {agent_id}")
+        if runtime == "claude" and default_effort not in {"low", "medium", "high", "xhigh", "max"}:
             raise HubConfigError(f"default_effort is invalid for {agent_id}")
         executable = data.get("executable")
         if executable is not None and (not isinstance(executable, str) or not executable.strip()):
@@ -683,12 +695,21 @@ def load_hub_config(
         agent = configured_agents.get(agent_id)
         if agent is None:
             raise HubConfigError(f"external worker references unknown agent_id: {agent_id}")
-        if agent.runtime not in {"codex", "opencode", "antigravity"}:
+        if agent.runtime not in {"codex", "claude", "opencode", "antigravity"}:
             raise HubConfigError(
                 f"external worker agent {agent_id} must use a supported local runtime"
             )
         if agent.managed_externally:
             raise HubConfigError(f"external worker agent {agent_id} must be locally managed")
+    if any(agent.runtime == "claude" and not agent.managed_externally for agent in agents):
+        if queue_runtime != "external" or dispatch_mode != "queue":
+            raise HubConfigError("claude runtime requires external queue mode")
+        if not any(
+            agent.agent_id in external_worker_agent_ids
+            for agent in agents
+            if agent.runtime == "claude" and not agent.managed_externally
+        ):
+            raise HubConfigError("claude runtime requires an external worker")
     max_parallel_roots = root.get("max_parallel_roots", 1)
     if (
         not isinstance(max_parallel_roots, int)
@@ -714,6 +735,20 @@ def load_hub_config(
             raise HubConfigError("codex_worker_count requires codex agent runtime")
         if manage_codex_server:
             raise HubConfigError("codex_worker_count above 1 requires manage_codex_server false")
+    claude_worker_count = root.get("claude_worker_count", 1)
+    if (
+        not isinstance(claude_worker_count, int)
+        or isinstance(claude_worker_count, bool)
+        or not 1 <= claude_worker_count <= 16
+    ):
+        raise HubConfigError("claude_worker_count must be an integer from 1 to 16")
+    if claude_worker_count > 1:
+        if queue_runtime != "external" or dispatch_mode != "queue":
+            raise HubConfigError("claude_worker_count above 1 requires external queue runtime")
+        if "claude" not in external_worker_agent_ids:
+            raise HubConfigError("claude_worker_count above 1 requires a claude external worker")
+        if configured_agents["claude"].runtime != "claude":
+            raise HubConfigError("claude_worker_count requires claude agent runtime")
     message_batch_quiet_ms = root.get("message_batch_quiet_ms", 0)
     message_batch_max_ms = root.get("message_batch_max_ms", 8000)
     if (
@@ -735,7 +770,7 @@ def load_hub_config(
             agent.agent_id
             for agent in agents
             if not agent.managed_externally
-            and agent.runtime not in {"codex", "opencode", "antigravity"}
+            and agent.runtime not in {"codex", "claude", "opencode", "antigravity"}
         )
         if unsupported_local:
             raise HubConfigError(
@@ -852,6 +887,7 @@ def load_hub_config(
         external_worker_agent_ids=external_worker_agent_ids,
         max_parallel_roots=max_parallel_roots,
         codex_worker_count=codex_worker_count,
+        claude_worker_count=claude_worker_count,
         message_batch_quiet_ms=message_batch_quiet_ms,
         message_batch_max_ms=message_batch_max_ms,
         direct_message_project_id=direct_message_project_id,

@@ -78,7 +78,7 @@ class ExternalQueueWorkerError(RuntimeError):
 class ExternalQueueWorker:
     """One provider-scoped queue worker with no Telegram transport capability."""
 
-    _LOCAL_RUNTIMES = frozenset({"codex", "opencode", "antigravity"})
+    _LOCAL_RUNTIMES = frozenset({"codex", "claude", "opencode", "antigravity"})
 
     def __init__(
         self,
@@ -107,17 +107,15 @@ class ExternalQueueWorker:
             )
         if self.agent.runtime not in self._LOCAL_RUNTIMES:
             raise ExternalQueueWorkerError(
-                "external worker supports codex, opencode, and antigravity"
+                "external worker supports codex, claude, opencode, and antigravity"
             )
         if self.agent.managed_externally:
             raise ExternalQueueWorkerError("external worker agent must be locally managed")
-        if worker_slot > 1 and config.manage_codex_server:
+        if self.agent.runtime == "codex" and worker_slot > 1 and config.manage_codex_server:
             raise ExternalQueueWorkerError(
                 "multiple Codex slots require a separately managed server"
             )
-        if worker_slot < 1 or worker_slot > (
-            config.codex_worker_count if agent_id == "codex" else 1
-        ):
+        if worker_slot < 1 or worker_slot > config.worker_count_for_agent(agent_id):
             raise ExternalQueueWorkerError("worker slot is not configured for this agent")
         validate_adoption_mode(config)
         self.registry = registry or load_registry(config.registry_path)
@@ -305,7 +303,10 @@ class ExternalQueueWorker:
             self.worker_id,
             max_parallel_roots=self.config.max_parallel_roots,
             scheduler_agents=self.config.external_worker_agent_ids,
-            agent_capacities={"codex": self.config.codex_worker_count},
+            agent_capacities={
+                "codex": self.config.codex_worker_count,
+                "claude": self.config.claude_worker_count,
+            },
         )
         if job is None:
             return self._run_connect_cycle() if self.agent.runtime == "codex" else False

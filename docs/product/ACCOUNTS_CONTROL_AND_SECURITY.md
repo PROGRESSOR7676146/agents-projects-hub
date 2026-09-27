@@ -34,6 +34,17 @@ This normative module is part of the
   share a Unix control socket, boot ordering MUST wait for a successful socket
   connection rather than the presence of a socket inode. The ordering MUST NOT
   make either recovery channel a hard requirement of the other.
+- **REQ-AUTH-009 (Claude repository scaffold; live acceptance pending):** A
+  Hub-owned Claude Code CLI turn routed through CPA MUST require an explicit
+  loopback `ANTHROPIC_BASE_URL` and exactly one CPA client credential source
+  before invocation. Cloud-provider selectors and an ambiguous mix of bearer
+  token and API key MUST fail before a provider process starts. The private CPA
+  configuration MUST exclude paid/API and extra-usage fallback before deployment;
+  a local URL check alone does not prove its upstream account or billing route.
+  Until a human approval host is integrated and accepted, the worker MUST expose
+  no Claude built-in tools, customizations, skills, or MCP servers, and MUST deny
+  permission prompts. It MUST NOT claim write-capable lead or read-only advisor
+  parity on the strength of prompt instructions alone.
 
 ### Compact control surface
 

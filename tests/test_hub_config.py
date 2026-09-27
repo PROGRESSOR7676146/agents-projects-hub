@@ -435,6 +435,7 @@ class HubConfigTests(unittest.TestCase):
         self.assertEqual(load_hub_config(self.write_config()).outbox_runtime, "controller")
         self.assertEqual(load_hub_config(self.write_config()).max_parallel_roots, 1)
         self.assertEqual(load_hub_config(self.write_config()).codex_worker_count, 1)
+        self.assertEqual(load_hub_config(self.write_config()).claude_worker_count, 1)
         self.assertEqual(load_hub_config(self.write_config()).message_batch_quiet_ms, 0)
         self.assertEqual(load_hub_config(self.write_config()).message_batch_max_ms, 8000)
         batched = load_hub_config(
@@ -517,6 +518,48 @@ class HubConfigTests(unittest.TestCase):
                     queue_runtime="external",
                     codex_worker_count=3,
                     manage_codex_server=True,
+                )
+            )
+        claude = {
+            "agent_id": "claude",
+            "display_name": "Claude",
+            "telegram_username": "project_claude_bot",
+            "runtime": "claude",
+            "token_file": str(self.token),
+            "terminal_enabled": False,
+            "default_model": "sonnet",
+        }
+        claude_config = self.write_config(
+            dispatch_mode="queue",
+            queue_runtime="external",
+            external_worker_agent_ids=["claude"],
+            claude_worker_count=3,
+            agents=[claude],
+        )
+        self.assertEqual(load_hub_config(claude_config).claude_worker_count, 3)
+        with self.assertRaisesRegex(HubConfigError, "claude runtime requires.*explicit model"):
+            load_hub_config(
+                self.write_config(
+                    dispatch_mode="queue",
+                    queue_runtime="external",
+                    external_worker_agent_ids=["claude"],
+                    agents=[
+                        {key: value for key, value in claude.items() if key != "default_model"}
+                    ],
+                )
+            )
+        for invalid in (0, 17, True, "3"):
+            with self.subTest(claude_worker_count=invalid):
+                with self.assertRaisesRegex(HubConfigError, "claude_worker_count"):
+                    load_hub_config(self.write_config(claude_worker_count=invalid))
+        with self.assertRaisesRegex(HubConfigError, "claude_worker_count.*external"):
+            load_hub_config(self.write_config(claude_worker_count=3))
+        with self.assertRaisesRegex(HubConfigError, "claude_worker_count.*claude"):
+            load_hub_config(
+                self.write_config(
+                    dispatch_mode="queue",
+                    queue_runtime="external",
+                    claude_worker_count=3,
                 )
             )
         for invalid in (0, 17, True, "2"):

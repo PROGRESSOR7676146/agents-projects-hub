@@ -427,6 +427,61 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual(worker["runtime"], "codex")
         self.assertEqual(worker["agent_id"], "codex")
 
+    def test_claude_and_codex_slots_are_all_required_for_revision(self) -> None:
+        base = Path(self.tempdir.name)
+        config = HubConfig(
+            schema_version=1,
+            owner_user_ids=(42,),
+            registry_path=base / "projects.json",
+            state_path=base / "state.db",
+            codex_socket_path=base / "codex.sock",
+            manage_codex_server=False,
+            terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+            projects=(),
+            agents=(
+                AgentDefinition(
+                    "codex",
+                    "Codex",
+                    "example_codex_bot",
+                    "codex",
+                    None,
+                    True,
+                    False,
+                    "gpt-example",
+                    "high",
+                ),
+                AgentDefinition(
+                    "claude",
+                    "Claude",
+                    "example_claude_bot",
+                    "claude",
+                    None,
+                    False,
+                    False,
+                    "sonnet",
+                    "high",
+                ),
+            ),
+            dispatch_mode="queue",
+            queue_runtime="external",
+            external_worker_agent_ids=("codex", "claude"),
+            codex_worker_count=3,
+            claude_worker_count=3,
+        )
+        projection = project_runtime_health(self.state, config, now=self.now)
+        self.assertEqual(
+            [item["instance_id"] for item in projection["provider_workers"]],
+            [
+                "claude-worker",
+                "claude-worker-2",
+                "claude-worker-3",
+                "codex-worker",
+                "codex-worker-2",
+                "codex-worker-3",
+            ],
+        )
+        self.assertEqual(projection["deployment_revision"]["status"], "unknown")
+
     def test_three_codex_slots_are_required_for_health_and_revision(self) -> None:
         base = Path(self.tempdir.name)
         config = HubConfig(
