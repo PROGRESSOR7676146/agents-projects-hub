@@ -29,6 +29,9 @@ and releases use semantic versioning while the public API is still evolving.
   ([ADR 0044](docs/decisions/0044-hotspot-growth-ratchet.md)).
 - Summarize capabilities, evidence and pending live acceptance in one table in
   the project status, and close six completed implementation plans.
+- Withdraw the temporary provider-expansion gate and list Claude Code as a
+  provider scaffold in the requirements
+  ([ADR 0045](docs/decisions/0045-withdraw-provider-expansion-gate.md)).
 - Let Telegram progress and final messages begin with their actual content,
   keeping their separate delivery and notification policies; guide optional
   final reports to use task-appropriate visuals without a fixed template.

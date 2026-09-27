@@ -241,4 +241,4 @@ necessary but not sufficient for items marked live.
 | Automatic OS terminal window/PID management | Rejected | Explicit resume commands and writer leases are simpler and safer. |
 | Message-by-message CLI transcript mirroring | Rejected | Provider sessions plus explicit bounded history retrieval are sufficient. |
 | Automatic approval or security relaxation | Rejected | Violates the trust model. |
-| New provider expansion now | Rejected | Current providers must pass E2E first. |
+| Claude Code CLI worker | Repository scaffold; live acceptance pending | Text-only adapter behind a loopback CPA route with independent slots; approvals, advisor isolation and parity work continue (REQ-AUTH-009, ADR 0039, ADR 0045). |

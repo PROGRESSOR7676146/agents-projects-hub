@@ -108,10 +108,9 @@ revision and highest proven level.
 - Only the owner merges into `main`. Agents open pull requests and may push
   their own branches; tags, branch deletion and deployment need the owner's
   explicit authorization each time.
-- Product principle 10 applies: do not add providers or provider capabilities
-  while the live-acceptance backlog in
-  `docs/operations/STABILIZATION_PLAN.md` is open, unless the owner amends the
-  requirements first.
+- Provider work may proceed while live acceptance is pending (ADR 0045), but
+  never present repository evidence as deployment evidence; track open live
+  acceptance in `docs/operations/STABILIZATION_PLAN.md`.
 
 ## Safety invariants
 

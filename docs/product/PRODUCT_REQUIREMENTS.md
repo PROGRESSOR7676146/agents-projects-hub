@@ -51,8 +51,8 @@ model spend.
    history plane for exactly one registered local project.
 2. **Deterministic routing.** Local code, not another model, decides which agent
    receives a request.
-3. **Provider identity remains visible.** Codex, Hermes, OpenCode, and
-   Antigravity remain directly addressable identities with provider-owned
+3. **Provider identity remains visible.** Codex, Claude Code, Hermes,
+   OpenCode, and Antigravity remain directly addressable identities with provider-owned
    sessions and credentials.
 4. **One coherent user input, one provider turn by default.** A short burst of
    consecutive compatible Telegram messages is one coherent input. Passive
@@ -69,8 +69,6 @@ model spend.
 9. **Reversible failure.** Small deterministic adapters SHOULD fail visibly and
    locally. The system SHOULD prefer a clear degraded state over fragile CLI
    coupling or concealed repair.
-10. **Evidence before breadth.** Existing providers and project isolation MUST
-    pass acceptance before more providers or more autonomous behavior are added.
 
 ## 3. Scope and non-goals
 
@@ -81,7 +79,7 @@ model spend.
 - One active/main agent plus explicitly invoked satellite agents.
 - Direct provider identity, deterministic Reply/mention routing, and bounded
   shared visible context.
-- Codex, Hermes, OpenCode, and Antigravity provider boundaries.
+- Codex, Claude Code, Hermes, OpenCode, and Antigravity provider boundaries.
 - Explicit model/session management and safe operational diagnostics.
 - Optional Codex multi-account rotation with an official Codex fallback.
 - Native provider CLI continuity, explicit writer ownership, and tmux as a
@@ -103,7 +101,6 @@ model spend.
 - Guaranteed portability of an in-flight turn after process or machine loss.
 - A bot for every model or account; bot identity represents an agent runtime.
 - Treating tlive as semantic integration for unsupported providers.
-- New providers before the current provider set passes the required live E2E.
 
 ## 4. User mental model and terminology
 
@@ -112,7 +109,7 @@ model spend.
 | Project | A locally registered immutable `project_id`, display name, and canonical allowlisted Git root. |
 | Project group | One private Telegram forum supergroup bound locally to one project. |
 | Topic | A work stream identified by numeric `(chat_id, message_thread_id)`; its title is mutable display metadata. |
-| Agent | A directly addressable runtime identity such as Codex, Hermes, OpenCode, or Antigravity. |
+| Agent | A directly addressable runtime identity such as Codex, Claude Code, Hermes, OpenCode, or Antigravity. |
 | Active/main agent | The default recipient of ordinary messages in one topic and the eventual observer of visible satellite dialogue. |
 | Satellite agent | An agent invoked by mention or Reply without changing the active agent. |
 | Provider session | The provider-owned thread/session/conversation associated with one agent in one topic. |
