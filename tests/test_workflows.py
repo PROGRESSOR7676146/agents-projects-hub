@@ -118,11 +118,19 @@ def _assert_validation_contract(workflows: Path) -> None:
         if isinstance(step, dict) and isinstance(step.get("run"), str)
     ]
     if validation_commands != [
-        "python -m pip install -e '.[dev]'",
+        "uv sync --locked --extra dev",
         "python scripts/prepare_public_author_policy.py",
-        "python scripts/validate.py",
+        ".venv/bin/python scripts/validate.py",
+        ".venv/bin/python -m unittest discover -s tests -q",
     ]:
         raise AssertionError("validation must prepare policy input and run only the canonical gate")
+    install = next(
+        step
+        for step in steps
+        if isinstance(step, dict) and step.get("run") == "uv sync --locked --extra dev"
+    )
+    if install.get("env") != {"UV_PYTHON": "${{ matrix.python-version }}"}:
+        raise AssertionError("locked install must target the matrix Python version")
 
     ci = _workflow(workflows / "ci.yml")
     if ci.get("on") != {"push": {"branches": ["main"]}, "pull_request": None}:
@@ -208,6 +216,20 @@ class WorkflowContractTests(unittest.TestCase):
     def test_workflow_contract(self) -> None:
         _assert_validation_contract(WORKFLOWS)
 
+    def test_ruleset_requires_the_checks_the_validation_matrix_reports(self) -> None:
+        ci_job = next(
+            name
+            for name, job in _jobs(_workflow(WORKFLOWS / "ci.yml")).items()
+            if job.get("uses") == "./.github/workflows/validate.yml"
+        )
+        ((validate_job, job),) = _jobs(_workflow(WORKFLOWS / "validate.yml")).items()
+        expected = {
+            f"{ci_job} / {validate_job} ({version})"
+            for version in job["strategy"]["matrix"]["python-version"]
+        }
+        script = (ROOT / "scripts" / "configure-github.sh").read_text(encoding="utf-8")
+        self.assertEqual(set(re.findall(r'"context": "([^"]+)"', script)), expected)
+
     def test_contract_rejects_skipped_or_error_tolerant_validation(self) -> None:
         cases = (
             ("validate.yml", "validate", False, "if", "false"),
@@ -233,7 +255,7 @@ class WorkflowContractTests(unittest.TestCase):
                             if "run" in step
                             and (
                                 filename != "validate.yml"
-                                or step["run"] == "python scripts/validate.py"
+                                or step["run"] == ".venv/bin/python scripts/validate.py"
                             )
                         )
                     target[key] = value

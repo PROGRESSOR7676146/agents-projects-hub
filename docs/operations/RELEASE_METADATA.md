@@ -1,7 +1,7 @@
 # Release metadata synchronization
 
 Status: accepted policy
-Last updated: 2026-09-05
+Last updated: 2026-09-27
 
 This policy keeps reusable release claims consistent without treating a version
 or Git tag as deployment evidence.
@@ -11,6 +11,7 @@ or Git tag as deployment evidence.
 - `pyproject.toml` is the package-version source and uses canonical `X.Y.Z`
   SemVer while the public API is evolving.
 - `docs/status/PROJECT_STATUS.md` names the same version as `Release: vX.Y.Z`.
+- `README.md` declares the same version in its `> **Status:** vX.Y.Z` line.
 - `CHANGELOG.md` begins with `[Unreleased]`; its newest released entry equals
   the package version. Every existing `vX.Y.Z` tag has a matching changelog
   entry.
@@ -30,7 +31,8 @@ run this audit.
 
 1. Move the intended entries out of `[Unreleased]` into one dated version
    section.
-2. Update the package version and project-status release in the same commit.
+2. Update the package version, project-status release and README status in
+   the same commit.
 3. Run the canonical validation gate and build from an exact clean commit.
 4. With separate owner authorization, create `vX.Y.Z` only on that validated
    commit and push it without moving or rewriting an existing tag.

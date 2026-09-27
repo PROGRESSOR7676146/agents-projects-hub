@@ -33,8 +33,10 @@ path, importing modules exactly as discovery does.
 Local canonical tests take under a minute on eight CPUs instead of about six.
 Every module must now pass alone in a fresh process, so a hidden dependency on
 state created by another module fails instead of passing by import order. The
-converse check is lost: pollution that only appears when two modules share a
-process is no longer exercised. Parallel load exposed one such timing defect
+converse check is kept in CI only: every validation matrix entry, which is a
+required check for `main` and for releases, also runs classic single-process
+`unittest discover`, so pollution that only appears when two modules share a
+process still blocks a merge (owner decision, 2026-09-27). Parallel load exposed one such timing defect
 already, a fake Git signature verifier that exited before reading its stdin.
 
 ## Alternatives

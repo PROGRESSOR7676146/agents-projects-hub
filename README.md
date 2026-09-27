@@ -4,7 +4,7 @@ Privacy-first orchestration hub connecting Telegram project topics to persistent
 Codex, Hermes, and other agent sessions with explicit context retrieval, model
 switching, approvals, and terminal takeover.
 
-> **Status:** v0.5 alpha. Core multi-provider routing, persistent sessions,
+> **Status:** v0.7.0 alpha. Core multi-provider routing, persistent sessions,
 > compact controls, privacy-preserving explicit context, and recovery monitoring
 > are implemented and covered by the repository test gate.
 
