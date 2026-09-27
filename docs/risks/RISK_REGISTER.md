@@ -1,7 +1,7 @@
 # Risk register
 
 Status: active  
-Last updated: 2026-08-29
+Last updated: 2026-09-27
 
 | ID | Risk | Current control | Residual action/status |
 | --- | --- | --- | --- |
@@ -17,4 +17,11 @@ Last updated: 2026-08-29
 | R-010 | Antigravity account rotation duplicates side effects or corrupts auth | Automation deferred; manual provider-aware runbook only | Wait for stable supported headless pool/idle semantics. |
 | R-011 | Documentation contradicts code | Canonical PRD, status file, doc map, automated tests as implementation evidence | Update durable docs with behavior changes. |
 | R-012 | Private deployment data is committed | Mandatory privacy gate, fictional fixtures, no history/handoff directories | Block validation and CI; rewrite published Git history if exposure occurs. |
-| R-012 | Autonomous repair weakens approvals or hides failure | Deterministic runbooks, no auto-approval, independent channels | Reject repairs that expand authority or silently retry side effects. |
+| R-013 | Autonomous repair weakens approvals or hides failure | Deterministic runbooks, no auto-approval, independent channels | Reject repairs that expand authority or silently retry side effects. |
+| R-014 | Agent-authored changes merge without independent review | Owner-only merge; independent agent or owner review for large or lifecycle/security PRs (AGENTS.md) | Record findings in each PR; the rule is procedural, not enforced by GitHub for a single maintainer. |
+| R-015 | Survived failures leave no trace | Bounded class-and-site diagnostics in the journal; Ruff S110/S112 (ADR 0043) | Broad handlers that record elsewhere stay unflagged; exact causes need local reproduction. |
+| R-016 | Repository-complete features accumulate without live acceptance | Product principle 10; provider freeze and acceptance backlog in the stabilization plan | Owner-run canary per backlog item; repository tests are not deployment evidence. |
+| R-017 | Controller and state hotspots keep growing | Maintenance rules 10–14; bounded exceptions | Automated growth ratchet and extraction of `_handle_update` and configuration loading (stabilization stages 2–3). |
+| R-018 | Real-clock tests fail when the host suspends or is overloaded | Parallel runner names each failing module; commit gate blocks | Convert lease and join timing in tests to injected clocks. |
+| R-019 | Claude CPA failures hold canonical roots; billing route unproven | Loopback CPA preflight, text-only adapter, no replay (ADR 0039) | Owner decision on classifying side-effect-free failures; private CPA route acceptance. |
+| R-020 | Rollback worktrees under `/tmp` disappear | Rollback branches are also on the remote | Move them to a persistent location with the owner's approval. |

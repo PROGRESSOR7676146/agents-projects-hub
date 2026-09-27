@@ -51,12 +51,15 @@ stage, or commit it. Repository behavior must remain useful without it.
 - Distinguish useful disagreement from obstruction. Once an informed decision
   is made and is safe and authorized, execute it decisively.
 
-## agy Gemini Flash helper delegation
+## agy Gemini Flash helper delegation (Codex sessions)
+
 When `gemini-agent-mcp` is available, strongly prefer delegating ordinary and moderately complex subtasks to agy Gemini Flash helpers before spending Codex-side context and reasoning on them. This includes `git status`, `git diff`, `git log`, `rg`, file discovery, dependency inspection, log scanning, test-output triage, alternative hypotheses, summary passes and first-pass review.
 
 Use this delegation bias only when it is expected to preserve or improve task quality. Do not delegate when direct Codex reading, synthesis, or decision-making over the source material is likely to produce a better result, such as when nuanced summarization, cross-document judgment, sensitive context handling, or final integration depends on Codex's own analysis.
 
 Use `spawn_agent` for one narrow task and `spawn_many` for parallel independent checks. Keep helper prompts scoped and require compact structured results. Do not delegate secrets, credentials, destructive operations, final patch authority, or owner-level product decisions. Model and quota checks must remain passive or explicit; never run synthetic live probes.
+
+## Publication privacy
 
 The `docs/history/` and `docs/handoffs/` directories are forbidden. Never commit
 conversation exports, live acceptance transcripts, real project names, account
@@ -95,6 +98,20 @@ revision. Process liveness, a clean development tree, package version, and a
 passing test from another revision are not substitutes. Use the evidence levels
 defined in `docs/operations/ENGINEERING_BASELINE.md`; “all green” must state its
 revision and highest proven level.
+
+## Review, merge and scope
+
+- A pull request that changes more than about 300 lines, or touches Controller,
+  state, worker lifecycle, security, trust boundaries or release gates, needs an
+  independent review by an agent that did not write it (Claude for Codex work
+  and the reverse) or by the owner. Record the findings in the pull request.
+- Only the owner merges into `main`. Agents open pull requests and may push
+  their own branches; tags, branch deletion and deployment need the owner's
+  explicit authorization each time.
+- Product principle 10 applies: do not add providers or provider capabilities
+  while the live-acceptance backlog in
+  `docs/operations/STABILIZATION_PLAN.md` is open, unless the owner amends the
+  requirements first.
 
 ## Safety invariants
 
