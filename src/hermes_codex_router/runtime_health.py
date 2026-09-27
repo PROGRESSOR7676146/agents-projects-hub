@@ -133,7 +133,10 @@ def project_runtime_health(
     release_identities: set[tuple[str, str, str]] = set()
     unknown_release = False
     for item in required:
-        if item["status"] != "healthy":
+        # A row written under this key by another runtime cannot vouch for the
+        # slot's release. Ordinary degradation keeps its reported identity; it
+        # is surfaced by the component's own health status instead.
+        if item.get("identity_mismatch"):
             unknown_release = True
         version = item.get("release_version")
         git_sha = item.get("release_git_sha")

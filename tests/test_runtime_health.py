@@ -567,6 +567,25 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual(complete["deployment_revision"]["status"], "converged")
         self.assertEqual(complete["deployment_revision"]["required_components"], 5)
 
+        # Degraded health is reported separately; it does not erase a slot's
+        # correctly identified release.
+        self.state.upsert_runtime_health(
+            component="provider_worker",
+            instance_id="codex-worker-3",
+            runtime="codex",
+            agent_id="codex",
+            pid=1234,
+            process_start_marker="correct-start",
+            started_at=self.now,
+            heartbeat_at=self.now - timedelta(seconds=90),
+            provider_state="limited",
+            release_identity=release,
+        )
+        degraded = project_runtime_health(self.state, config, now=self.now)
+        self.assertEqual(degraded["provider_workers"][2]["status"], "degraded")
+        self.assertEqual(degraded["deployment_revision"]["status"], "converged")
+        self.assertEqual(degraded["deployment_revision"]["git_sha"], "a" * 40)
+
     def test_deployment_revision_requires_one_complete_identity(self) -> None:
         base = Path(self.tempdir.name)
         config = HubConfig(
