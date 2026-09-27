@@ -53,14 +53,20 @@ acceptance.
 
 ### Prerequisites
 
-- **Dedicated acceptance Telegram user (AC-F-011): account ready.** The owner
-  has a separate Telegram account for the acceptance actor as of 2026-09-27.
-  It is not configured yet. Setup stays private and outside Git: actor
-  configuration and `telegram-api-hash` with mode `0600`, `e2e-login` to pin the
-  numeric user ID in both the actor configuration and the private Hub
-  `acceptance_actors` entry, and one exclusive canary topic
-  ([testing guide](../testing/README.md#dedicated-acceptance-user)). No
-  identifier of this account belongs in the repository.
+- **Acceptance actor (AC-F-011): available.** The dedicated acceptance user
+  already exists and has run the bounded baseline before; its configuration,
+  session and pinned identity are private deployment state
+  ([testing guide](../testing/README.md#dedicated-acceptance-user)).
+- **Outsider account: available on request.** As of 2026-09-27 the owner also
+  has a second Telegram account that belongs to no project group and is in no
+  allowlist. It enables live negative checks that the scoped actor cannot
+  perform: direct messages and commands to the Hub and provider bots, stale or
+  foreign callbacks and one-time `/connect` codes, and attempts to reach
+  project data without authorization. Each must fail closed with no provider
+  invocation, no state change and no disclosure (REQ-SEC-006, AC-F-007,
+  AC-NF-001). The first pass is an owner-driven checklist; automation would
+  need a separate, reviewed actor mode. No identifier of either account
+  belongs in the repository.
 - **Deployment of the exact merged revision** through the immutable release
   procedure with a schema-compatible rollback artifact, under the
   [live canary](LIVE_CANARY.md) stop conditions. Each run needs the owner's
@@ -85,6 +91,7 @@ acceptance.
 | Registered-project editing | REQ-PROJECT-EDIT-001..004 | Rename and relocation canary |
 | Codex quota transition | REQ-AUTH-007 | Natural or controlled exhaustion |
 | Machine-loss recovery drill | REQ-OPS-012 | Private cold-restore drill |
+| Unauthorized access and disclosure | REQ-SEC-006, AC-F-007, AC-NF-001 | Outsider-account negative checklist |
 
 ## Follow-ups found during execution
 
