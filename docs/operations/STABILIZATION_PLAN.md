@@ -51,6 +51,42 @@ Each item needs deployment-local evidence at an exact clean revision, recorded
 privately (see [live canary](LIVE_CANARY.md)). Repository tests are not
 acceptance.
 
+### Prerequisites
+
+- **Acceptance actor (AC-F-011): available, currently an owner.** The dedicated
+  acceptance user already exists and has run the bounded baseline before; its
+  configuration, session and pinned identity are private deployment state
+  ([testing guide](../testing/README.md#dedicated-acceptance-user)). The account
+  is now also a configured owner, which configuration validation forbids for a
+  scoped actor, so it runs with owner authority instead of one canary topic.
+  Owner decision 2026-09-27: keep it for now and later restore a scoped,
+  non-owner actor on a separate account.
+- **First baseline at `ea5af70` (2026-09-27): 14 of 15 checks passed.** Routing,
+  Reply, forwarded quote, burst, artifact delivery, context isolation and the
+  Codex interaction contract passed. `stop_route` failed because the actor
+  depends on check order: `context_contract` changes the active agent, and the
+  emergency stop correctly targets the active agent, not the mentioned provider
+  running the test turn. The actor must select its stop target explicitly.
+- **Outsider account: available on request.** As of 2026-09-27 the owner also
+  has a second Telegram account that belongs to no project group and is in no
+  allowlist. It enables live negative checks that the scoped actor cannot
+  perform: direct messages and commands to the Hub and provider bots, stale or
+  foreign callbacks and one-time `/connect` codes, and attempts to reach
+  project data without authorization. Each must fail closed with no provider
+  invocation, no state change and no disclosure (REQ-SEC-006, AC-F-007,
+  AC-NF-001). The first pass is an owner-driven checklist; automation would
+  need a separate, reviewed actor mode. No identifier of either account
+  belongs in the repository.
+- **Deployment of the exact merged revision** through the immutable release
+  procedure with a schema-compatible rollback artifact, under the
+  [live canary](LIVE_CANARY.md) stop conditions. Each run needs the owner's
+  authorization and presence.
+- **Actor coverage.** The actor automates status, accounts, model menu,
+  provider ping, Reply/forward/burst/stop routing, artifact delivery, the
+  context contract and the restart-authorized `p0_p1_live` scenario. `/local`
+  and `/return`, `/connect`, provisioning, project editing, the quota
+  transition and the recovery drill remain owner-driven scenarios.
+
 | Capability | Requirement | Scenario |
 | --- | --- | --- |
 | Routing baseline: ordinary, mention, Reply, forward, burst, stop | AC-F-002, AC-F-011 | Acceptance actor bounded baseline |
@@ -65,6 +101,7 @@ acceptance.
 | Registered-project editing | REQ-PROJECT-EDIT-001..004 | Rename and relocation canary |
 | Codex quota transition | REQ-AUTH-007 | Natural or controlled exhaustion |
 | Machine-loss recovery drill | REQ-OPS-012 | Private cold-restore drill |
+| Unauthorized access and disclosure | REQ-SEC-006, AC-F-007, AC-NF-001 | Outsider-account negative checklist |
 
 ## Follow-ups found during execution
 
