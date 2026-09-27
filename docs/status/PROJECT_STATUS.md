@@ -29,7 +29,8 @@ product foundation; implementation and acceptance remain pending. See
 The initial [Claude/Codex milestone](../operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
 is scoped to one lead, a read-only advisor and a minimal outcome journal;
 automated scoring and parallel writers are deferred. Full provider integration,
-role enforcement and live acceptance remain pending.
+role enforcement and live acceptance remain pending; see
+[ADR 0040](../decisions/0040-bounded-claude-codex-lead-advisor.md).
 
 Schema 35 durable root-blocker admission, held-job owner decisions and Hub
 notices are in repository implementation; live Telegram/provider acceptance

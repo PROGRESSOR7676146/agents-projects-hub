@@ -10,6 +10,13 @@ Always read this file, `docs/SECURITY.ru.md`, and
 `docs/product/PRODUCT_REQUIREMENTS.md`, `docs/product/MAINTENANCE.md`,
 `docs/status/PROJECT_STATUS.md`, and `docs/INDEX.md`.
 
+For Claude Code/Codex collaboration or Claude integration, then read
+`docs/operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md` and
+`docs/operations/NEXT_DEVELOPMENT_SESSION.md` before proposing scope or asking
+the operator to choose roles, write concurrency, subscription mode, or scoring.
+Those decisions are already recorded there; recheck `docs/status/PROJECT_STATUS.md` and
+owning requirements before treating a plan statement as implemented behavior.
+
 For a local implementation/test fix or non-normative documentation edit, read
 only the capability modules selected by the requirements index and the relevant
 architecture, decisions, operations, and tests. If scope is uncertain, read the

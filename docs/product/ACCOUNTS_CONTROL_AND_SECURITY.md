@@ -235,6 +235,19 @@ This normative module is part of the
   The next later ordinary message continues the exact chosen thread without a
   separate `/return`; stale callbacks, cancellation and expiry create no new
   generation.
+- **REQ-WRITER-013 (Accepted; implementation pending):** In the initial
+  Claude Code/Codex collaboration workflow, the lead alone MAY change project
+  files, and the advisor MUST be technically limited to reading authorized
+  materials and sending visible advice. Prompt instructions or Plan mode alone
+  MUST NOT establish that boundary: shell, MCP, hooks, plugins, skills, child
+  processes and local transfer MUST NOT grant the advisor write capability.
+  The initial advisor has no subagents; optional lead helpers are limited to
+  one level of read/search/analysis and cannot write. A role change MUST occur
+  only after active work and approvals reach a safe boundary, revoke the prior
+  role before granting the new one, and MUST NOT retarget queued work. The
+  existing canonical-root writer exclusion still applies across topics;
+  additional worker slots never grant parallel writers on one root. Neither
+  provider MAY approve the other's actions.
 
 Initial reviewed resume shapes are `codex resume SESSION_ID -C ROOT`,
 with explicit provider/model `-c` overrides when local `codex_model_provider`

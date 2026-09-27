@@ -58,6 +58,7 @@ with a new record.
 | Evidence-based task allocation | Accepted foundation for participant evaluation and resource-aware allocation; implementation pending, optional judges and bounded experiments. | [ADR 0037](0037-evidence-based-task-allocation.md) |
 | Multiple Codex worker slots | Separate Codex processes share a bounded queue while retaining one client/connection per slot, root exclusion, fairness and exact revision health. | [ADR 0038](0038-multiple-codex-worker-slots.md) |
 | Limited Claude CPA workers | Separate Claude CLI slots share queue bounds; the initial adapter is text-only until approval and advisor isolation are proven. | [ADR 0039](0039-claude-cpa-worker-scaffold.md) |
+| Bounded Claude/Codex collaboration | One human-selected lead and one read-only advisor run a durable sequential review; parallel writers and automatic scoring are deferred. | [ADR 0040](0040-bounded-claude-codex-lead-advisor.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

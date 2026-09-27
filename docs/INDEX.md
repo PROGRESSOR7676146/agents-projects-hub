@@ -14,6 +14,12 @@ and the [decision map](decisions/README.md) routes durable rationale.
 The completed [requirements split](product/REQUIREMENTS_SPLIT_PLAN.md) is
 migration rationale, not a routine prerequisite or another specification.
 
+For Claude Code/Codex integration, read the accepted
+[lead/advisor plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md) and its
+[next development task](operations/NEXT_DEVELOPMENT_SESSION.md) after the
+baseline above. Check [status](status/PROJECT_STATUS.md) for the implemented
+subset; the plan's accepted role choices are not a claim of runtime parity.
+
 ## Delivery and operation
 
 - [Roadmap](ROADMAP.ru.md)

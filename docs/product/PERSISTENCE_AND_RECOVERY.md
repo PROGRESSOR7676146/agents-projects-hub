@@ -323,6 +323,15 @@ recreate unsaved provider context or a partially executed turn.
   pending material from migrating to a different productive binding. Migration
   33 is additive; rollout and runtime rollback both require artifacts that
   declare schema-33 compatibility.
+- **REQ-QUEUE-011 (Accepted; implementation pending):** An explicitly enabled
+  Claude Code/Codex review workflow MUST durably bind its request, permitted
+  materials, exact artifact/revision reference, advisor result, lead decision,
+  and continuation to the originating project, topic, provider sessions and
+  role generation. Duplicate delivery or restart MUST NOT create a second
+  advisor call or lead continuation. An uncertain provider turn MUST retain
+  the existing no-automatic-replay boundary. The lead MUST finish its turn
+  before the advisor takes a separate queue slot; a role change MUST NOT mutate
+  already accepted target snapshots.
 
 The detailed state machine, retry proof rule, reconciliation, and required
 fault acceptance are normative in [ADR 0001](../decisions/0001-durable-provider-job-queue.md).

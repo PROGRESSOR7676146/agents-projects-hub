@@ -106,6 +106,12 @@ the first collaboration release.
   Cross-project aggregation and transfer to an external evaluator require
   explicit data scope; ordinary context isolation remains in force. Models
   MUST NOT edit their own authoritative grades, usage or allocation receipts.
+- **REQ-EVAL-010 (Accepted initial milestone; implementation pending):** The
+  first Claude Code/Codex collaboration release MUST provide a minimal
+  private outcome journal: task, participant/model/effort, result or artifact,
+  accepted/rework/unknown decision with a short reason, and observable elapsed
+  time and usage. Unknown usage MUST remain unknown. It MUST NOT require an
+  automatic score, model judge, comparative trial, or learned dispatcher.
 
 ### Acceptance boundaries
 
