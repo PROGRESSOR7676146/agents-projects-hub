@@ -53,10 +53,20 @@ acceptance.
 
 ### Prerequisites
 
-- **Acceptance actor (AC-F-011): available.** The dedicated acceptance user
-  already exists and has run the bounded baseline before; its configuration,
-  session and pinned identity are private deployment state
-  ([testing guide](../testing/README.md#dedicated-acceptance-user)).
+- **Acceptance actor (AC-F-011): available, currently an owner.** The dedicated
+  acceptance user already exists and has run the bounded baseline before; its
+  configuration, session and pinned identity are private deployment state
+  ([testing guide](../testing/README.md#dedicated-acceptance-user)). The account
+  is now also a configured owner, which configuration validation forbids for a
+  scoped actor, so it runs with owner authority instead of one canary topic.
+  Owner decision 2026-09-27: keep it for now and later restore a scoped,
+  non-owner actor on a separate account.
+- **First baseline at `ea5af70` (2026-09-27): 14 of 15 checks passed.** Routing,
+  Reply, forwarded quote, burst, artifact delivery, context isolation and the
+  Codex interaction contract passed. `stop_route` failed because the actor
+  depends on check order: `context_contract` changes the active agent, and the
+  emergency stop correctly targets the active agent, not the mentioned provider
+  running the test turn. The actor must select its stop target explicitly.
 - **Outsider account: available on request.** As of 2026-09-27 the owner also
   has a second Telegram account that belongs to no project group and is in no
   allowlist. It enables live negative checks that the scoped actor cannot
