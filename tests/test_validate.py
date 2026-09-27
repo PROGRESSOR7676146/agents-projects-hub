@@ -93,6 +93,27 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("FAIL full tests", output)
         self.assertIn("test_example.py", output)
 
+    def test_commit_gate_runs_history_and_full_tests_but_leaves_types_to_push(self) -> None:
+        code, calls, output = self.invoke(["--profile", "commit", "--jobs", "2"])
+        self.assertEqual(code, 0)
+        privacy = [call for call in calls if "privacy_scan" in call]
+        self.assertEqual(len(privacy), 1)
+        self.assertIn("--history", privacy[0])
+        self.assertIn("all test modules jobs=2", calls)
+        self.assertFalse(any("pyright" in call for call in calls))
+        for marker in ("documentation_contract", "release_metadata", "lock", "ruff check"):
+            self.assertLess(
+                next(i for i, call in enumerate(calls) if marker in call),
+                next(i for i, call in enumerate(calls) if "privacy_scan" in call),
+            )
+        self.assertIn("Commit gate (not canonical acceptance", output)
+        with self.assertRaises(SystemExit) as error:
+            self.invoke(["--profile", "commit", "tests.test_validate"])
+        self.assertEqual(error.exception.code, 2)
+        with self.assertRaises(SystemExit) as error:
+            self.invoke(["--profile", "focused", "--jobs", "2"])
+        self.assertEqual(error.exception.code, 2)
+
     def test_documentation_failure_prevents_typing_and_test_suite(self) -> None:
         code, calls, output = self.invoke([], "documentation_contract")
         self.assertEqual(code, 1)

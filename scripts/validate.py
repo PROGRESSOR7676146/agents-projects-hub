@@ -133,20 +133,22 @@ def check_release_lock() -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Repository validation; canonical by default")
-    parser.add_argument("--profile", choices=("canonical", "focused"), default="canonical")
+    parser.add_argument(
+        "--profile", choices=("canonical", "commit", "focused"), default="canonical"
+    )
     parser.add_argument(
         "--jobs",
         type=parse_test_jobs,
-        help=f"canonical only: test modules run in parallel (1-{MAX_TEST_JOBS})",
+        help=f"canonical/commit: test modules run in parallel (1-{MAX_TEST_JOBS})",
     )
     parser.add_argument(
         "tests", nargs="*", help="focused only: dotted unittest modules/classes/methods"
     )
     args = parser.parse_args(argv)
     if args.tests and args.profile != "focused":
-        parser.error("test selectors require --profile focused; canonical always runs all tests")
-    if args.jobs is not None and args.profile != "canonical":
-        parser.error("--jobs applies only to the canonical full test stage")
+        parser.error("test selectors require --profile focused; other profiles run all tests")
+    if args.jobs is not None and args.profile == "focused":
+        parser.error("--jobs applies only to profiles that run the full test suite")
     jobs = default_test_jobs() if args.jobs is None else args.jobs
     if any(
         re.fullmatch(r"tests(?:\.[A-Za-z_][A-Za-z_0-9]*)+", name) is None for name in args.tests
@@ -179,23 +181,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         ("format", lambda: run(tool("ruff"), "format", "--check", ".")),
         ("lint", lambda: run(tool("ruff"), "check", ".")),
     ]
-    if args.profile == "canonical":
-        stages.extend(
-            [
-                (
-                    "privacy/history",
-                    lambda: run(
-                        sys.executable,
-                        "-m",
-                        "hermes_codex_router.privacy_scan",
-                        str(ROOT),
-                        "--history",
-                    ),
+    if args.profile in {"canonical", "commit"}:
+        stages.append(
+            (
+                "privacy/history",
+                lambda: run(
+                    sys.executable,
+                    "-m",
+                    "hermes_codex_router.privacy_scan",
+                    str(ROOT),
+                    "--history",
                 ),
-                ("types", lambda: run(tool("pyright"))),
-                ("full tests", lambda: run_test_modules(jobs=jobs)),
-            ]
+            )
         )
+        # The commit gate leaves whole-project typing to the pre-push
+        # canonical run and CI; every other canonical guarantee applies.
+        if args.profile == "canonical":
+            stages.append(("types", lambda: run(tool("pyright"))))
+        stages.append(("full tests", lambda: run_test_modules(jobs=jobs)))
     else:
         stages.append(
             (
@@ -221,11 +224,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
 
-    label = (
-        "Canonical validation"
-        if args.profile == "canonical"
-        else "Focused development checks (not canonical acceptance)"
-    )
+    label = {
+        "canonical": "Canonical validation",
+        "commit": "Commit gate (not canonical acceptance; types run at push)",
+        "focused": "Focused development checks (not canonical acceptance)",
+    }[args.profile]
     print(label, flush=True)
     started = time.monotonic()
     for name, action in stages:

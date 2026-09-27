@@ -9,6 +9,10 @@ and releases use semantic versioning while the public API is still evolving.
   and let focused selectors import sibling fixtures as discovery does; fix a
   fake Git signature verifier that failed intermittently under load
   ([ADR 0041](docs/decisions/0041-parallel-isolated-test-modules.md)).
+- Install a versioned pre-commit gate beside the pre-push hook: it refuses
+  unvalidated working-tree content and runs the history scan and full parallel
+  suite before every commit ([ADR 0042](docs/decisions/0042-pre-commit-gate.md)).
+  Re-run `publish_preflight --install` to activate it.
 - Let Telegram progress and final messages begin with their actual content,
   keeping their separate delivery and notification policies; guide optional
   final reports to use task-appropriate visuals without a fixed template.

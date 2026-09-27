@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[2]
 POLICY_FILE_ENV = "HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE"
 POLICY_GIT_CONFIG = "hub.publicAuthorEmailFile"
 REPOSITORY_VARIABLE = "HUB_PUBLIC_GIT_AUTHOR_EMAIL"
+# Versioned hooks copied into the shared, repository-managed hook directory.
+MANAGED_HOOKS = ("pre-commit", "pre-push")
 _ZERO_OID = "0" * 40
 _GITHUB_REMOTE = re.compile(
     r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
@@ -240,7 +242,6 @@ def _configure_all_worktree_hooks(root: Path, hook_directory: Path) -> None:
 def _install(root: Path) -> None:
     policy = _policy_path(root)
     _read_declared_email(root, policy)
-    source = root / ".githooks" / "pre-push"
     interpreter = Path(sys.executable)
     if (
         not interpreter.is_absolute()
@@ -248,12 +249,18 @@ def _install(root: Path) -> None:
         or not os.access(interpreter, os.X_OK)
     ):
         raise PreflightError("publication Python interpreter failed validation")
-    try:
-        source_details = source.lstat()
-    except OSError as error:
-        raise PreflightError("versioned publication hook is unavailable") from error
-    if not stat.S_ISREG(source_details.st_mode):
-        raise PreflightError("versioned publication hook is unavailable")
+    # Read every versioned hook before installing any, so a failure never
+    # leaves one gate updated and the other stale.
+    sources: dict[str, bytes] = {}
+    for name in MANAGED_HOOKS:
+        source = root / ".githooks" / name
+        try:
+            source_details = source.lstat()
+            if not stat.S_ISREG(source_details.st_mode):
+                raise PreflightError(f"versioned {name} hook is unavailable")
+            sources[name] = source.read_bytes()
+        except OSError as error:
+            raise PreflightError(f"versioned {name} hook is unavailable") from error
     common_raw = _git_stdout(root, "rev-parse", "--git-common-dir")
     common = Path(common_raw)
     if not common.is_absolute():
@@ -266,20 +273,21 @@ def _install(root: Path) -> None:
         if not stat.S_ISDIR(directory_details.st_mode) or directory_details.st_uid != os.getuid():
             raise PreflightError("shared Git hook directory failed validation")
         os.chmod(hook_directory, 0o700)
-        descriptor, temporary = tempfile.mkstemp(prefix="pre-push-", dir=hook_directory)
-        try:
-            with os.fdopen(descriptor, "wb") as target:
-                os.fchmod(descriptor, 0o700)
-                target.write(source.read_bytes())
-                target.flush()
-                os.fsync(target.fileno())
-            os.replace(temporary, hook_directory / "pre-push")
-        except BaseException:
+        for name, content in sources.items():
+            descriptor, temporary = tempfile.mkstemp(prefix=f"{name}-", dir=hook_directory)
             try:
-                Path(temporary).unlink()
-            except OSError:
-                pass
-            raise
+                with os.fdopen(descriptor, "wb") as target:
+                    os.fchmod(descriptor, 0o700)
+                    target.write(content)
+                    target.flush()
+                    os.fsync(target.fileno())
+                os.replace(temporary, hook_directory / name)
+            except BaseException:
+                try:
+                    Path(temporary).unlink()
+                except OSError:
+                    pass
+                raise
     except OSError as error:
         raise PreflightError("could not install the shared publication hook") from error
     for key, value in (
