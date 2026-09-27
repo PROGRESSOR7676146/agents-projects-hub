@@ -13,6 +13,10 @@ and releases use semantic versioning while the public API is still evolving.
   unvalidated working-tree content and runs the history scan and full parallel
   suite before every commit ([ADR 0042](docs/decisions/0042-pre-commit-gate.md)).
   Re-run `publish_preflight --install` to activate it.
+- Validate CI against the exact `uv.lock` dependencies instead of a fresh
+  `pip install`, publish a non-required branch-coverage summary, require the
+  README status line to name the package version, and correct the required
+  check names in `configure-github.sh`.
 - Let Telegram progress and final messages begin with their actual content,
   keeping their separate delivery and notification policies; guide optional
   final reports to use task-appropriate visuals without a fixed template.

@@ -21,6 +21,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         *,
         package: str = "1.2.3",
         status: str = "1.2.3",
+        readme: str = "1.2.3",
         changelog: tuple[str, ...] = ("1.2.3", "1.2.2"),
     ) -> None:
         (self.root / "pyproject.toml").write_text(
@@ -28,6 +29,9 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         (self.root / "docs" / "status" / "PROJECT_STATUS.md").write_text(
             f"# Project status\n\nRelease: v{status}\n", encoding="utf-8"
+        )
+        (self.root / "README.md").write_text(
+            f"# Example\n\n> **Status:** v{readme} alpha. Example summary.\n", encoding="utf-8"
         )
         entries = "\n\n".join(f"## [{version}] - 2026-09-05" for version in changelog)
         (self.root / "CHANGELOG.md").write_text(
@@ -55,6 +59,18 @@ class ReleaseMetadataTests(unittest.TestCase):
                 "latest changelog release 1.2.1 does not match package version 1.2.3",
             ),
         )
+
+    def test_readme_status_must_declare_the_package_version(self) -> None:
+        self.write_metadata(readme="1.2.2")
+
+        stale = audit_release_metadata(self.root, tags=("v1.2.2",), head_tags=())
+        (self.root / "README.md").write_text("# Example\n\nNo status line.\n", encoding="utf-8")
+        missing = audit_release_metadata(self.root, tags=("v1.2.2",), head_tags=())
+
+        self.assertEqual(
+            stale.errors, ("README status v1.2.2 does not match package version 1.2.3",)
+        )
+        self.assertEqual(missing.errors, ("README must declare **Status:** v<SemVer>",))
 
     def test_version_tag_requires_matching_changelog_entry(self) -> None:
         self.write_metadata()

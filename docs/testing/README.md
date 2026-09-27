@@ -56,8 +56,9 @@ recorded in [ADR 0042](../decisions/0042-pre-commit-gate.md).
 
 GitHub CI and tag-release validation both call the same reusable
 `.github/workflows/validate.yml` matrix for Python 3.11, 3.12, and 3.13. Each
-matrix entry installs `.[dev]`, including the test-only Telegram client used by
-the acceptance-actor unit tests, prepares an optional external public-author
+matrix entry installs the exact `uv.lock` dependencies of the `dev` extra with
+`uv sync --locked`, including the test-only Telegram client used by the
+acceptance-actor unit tests, prepares an optional external public-author
 declaration from a repository Actions variable, and runs this full canonical
 command. The value enters through the step environment and is written without
 output to a temporary `0600` file outside the checkout. It is not a secret or a
@@ -74,6 +75,11 @@ Git fixture executes the revision guard with matching and mismatched event,
 checkout and annotated-tag commits without publishing a release. These tests
 prove local wiring and guard behavior; a successful hosted Actions run remains
 separate evidence.
+
+A separate, non-required CI job publishes branch coverage per module in the
+run summary as a trend signal, not a gate. Locally, after installing the dev
+extra: `python -m coverage run -m unittest discover -s tests -q` followed by
+`python -m coverage report`. Code executed in test subprocesses is not counted.
 
 `tests/test_fault_injection_matrix.py` is the subprocess queue acceptance gate.
 It uses marker-synchronized fictional child actors, bounded parent waits, and

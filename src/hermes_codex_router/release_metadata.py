@@ -14,6 +14,7 @@ _CHANGELOG_RELEASE = re.compile(
     r"^## \[((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))\]", re.MULTILINE
 )
 _STATUS_RELEASE = re.compile(r"^Release: v([^\s]+)$", re.MULTILINE)
+_README_STATUS = re.compile(r"^> \*\*Status:\*\* v([0-9A-Za-z.+-]*[0-9A-Za-z])", re.MULTILINE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +54,7 @@ def audit_release_metadata(
     with (root / "pyproject.toml").open("rb") as stream:
         package_version = str(tomllib.load(stream)["project"]["version"])
     status_text = (root / "docs" / "status" / "PROJECT_STATUS.md").read_text(encoding="utf-8")
+    readme_text = (root / "README.md").read_text(encoding="utf-8")
     changelog_text = (root / "CHANGELOG.md").read_text(encoding="utf-8")
     errors: list[str] = []
     if _SEMVER.fullmatch(package_version) is None:
@@ -64,6 +66,15 @@ def audit_release_metadata(
     elif status_match.group(1) != package_version:
         errors.append(
             f"project status release v{status_match.group(1)} does not match "
+            f"package version {package_version}"
+        )
+
+    readme_match = _README_STATUS.search(readme_text)
+    if readme_match is None:
+        errors.append("README must declare **Status:** v<SemVer>")
+    elif readme_match.group(1) != package_version:
+        errors.append(
+            f"README status v{readme_match.group(1)} does not match "
             f"package version {package_version}"
         )
 
