@@ -51,6 +51,26 @@ Each item needs deployment-local evidence at an exact clean revision, recorded
 privately (see [live canary](LIVE_CANARY.md)). Repository tests are not
 acceptance.
 
+### Prerequisites
+
+- **Dedicated acceptance Telegram user (AC-F-011): account ready.** The owner
+  has a separate Telegram account for the acceptance actor as of 2026-09-27.
+  It is not configured yet. Setup stays private and outside Git: actor
+  configuration and `telegram-api-hash` with mode `0600`, `e2e-login` to pin the
+  numeric user ID in both the actor configuration and the private Hub
+  `acceptance_actors` entry, and one exclusive canary topic
+  ([testing guide](../testing/README.md#dedicated-acceptance-user)). No
+  identifier of this account belongs in the repository.
+- **Deployment of the exact merged revision** through the immutable release
+  procedure with a schema-compatible rollback artifact, under the
+  [live canary](LIVE_CANARY.md) stop conditions. Each run needs the owner's
+  authorization and presence.
+- **Actor coverage.** The actor automates status, accounts, model menu,
+  provider ping, Reply/forward/burst/stop routing, artifact delivery, the
+  context contract and the restart-authorized `p0_p1_live` scenario. `/local`
+  and `/return`, `/connect`, provisioning, project editing, the quota
+  transition and the recovery drill remain owner-driven scenarios.
+
 | Capability | Requirement | Scenario |
 | --- | --- | --- |
 | Routing baseline: ordinary, mention, Reply, forward, burst, stop | AC-F-002, AC-F-011 | Acceptance actor bounded baseline |
