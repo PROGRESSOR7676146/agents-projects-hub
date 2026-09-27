@@ -235,6 +235,7 @@ Current provider status:
 | Hermes | Implemented integration | Native Gateway owns Telegram/session; Hub plugin/hook owns fail-closed project admission and bounded visible exchange. |
 | OpenCode | Implemented adapter | Go-authenticated provider-owned session through structured CLI output; centrally routed bot identity. |
 | Antigravity | Implemented adapter | `agy` conversation in sandboxed `accept-edits` work mode; no dangerous permission bypass. |
+| Claude Code | Repository scaffold; live acceptance pending | Headless CLI through an explicit loopback CPA route with independent worker slots; text-only, with no tools, MCP, skills or permission prompts until a human approval host is accepted (REQ-AUTH-009). |
 | Gemini CLI | Rejected for active product | Google provider work uses Antigravity; do not reactivate a parallel Gemini CLI path without a new decision. |
 
 Provider bot identity maps to a runtime, not to a model or paid account. Model

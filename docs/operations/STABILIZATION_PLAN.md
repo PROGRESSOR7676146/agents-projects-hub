@@ -19,9 +19,10 @@ accumulated without live acceptance, contrary to product principle 10.
 
 ## Owner decisions (2026-09-27)
 
-- The Claude CPA worker scaffold is fixed, reviewed and merged as a scaffold
-  only. No new provider or provider capability follows until the acceptance
-  backlog below is closed or the owner amends the requirements.
+- The Claude CPA worker scaffold is fixed, reviewed and merged as a scaffold.
+  The owner later withdrew the provider-expansion gate (ADR 0045): Claude work
+  toward Codex parity continues, and the backlog below is tracked debt, not a
+  gate.
 - Large or lifecycle/security pull requests receive an independent review by
   an agent that did not write them, recorded in the pull request. Only the
   owner merges into `main`.
@@ -78,8 +79,9 @@ acceptance.
   `worker@claude` (PR #80 review, item 5).
 - Slot identity format and bounds are duplicated in four modules (PR #80 review, items 7–8).
 - Real-clock lease tests fail when the host suspends (R-018).
-- Product principle 10 and the capability matrix ("New provider expansion now:
-  Rejected") contradict the Claude scaffold; the owner should amend or confirm.
+- Product principle 10 and the capability matrix contradicted the Claude
+  scaffold; resolved by withdrawing the gate (ADR 0045).
+- An analysis of the Claude integration path to Codex parity follows stage 3.
 - `configure-github.sh` required nonexistent check names (fixed in #82).
 
 ## Closure
