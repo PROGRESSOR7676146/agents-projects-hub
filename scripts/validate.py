@@ -243,6 +243,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
         ),
         ("release lock", check_release_lock),
+        (
+            "hotspots",
+            lambda: run(sys.executable, "-m", "hermes_codex_router.hotspot_audit", str(ROOT)),
+        ),
         ("format", lambda: run(tool("ruff"), "format", "--check", ".")),
         ("lint", lambda: run(tool("ruff"), "check", ".")),
     ]

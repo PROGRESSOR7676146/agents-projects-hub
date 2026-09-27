@@ -37,7 +37,9 @@ accumulated without live acceptance, contrary to product principle 10.
 | 1.2 | Bounded diagnostics for survived failures; Ruff S110/S112 | In review: #83 | ADR 0043 |
 | 1.3 | CI from `uv.lock`; non-required coverage report | In review: #82 | Hosted run on 3.11–3.13 and coverage job green |
 | 1.4 | README version checked by the release metadata audit | In review: #82 | Audit test |
-| 2 | `CLAUDE.md`; review/merge rules; risk register; ADR 0016 tombstone; this plan; hotspot ratchet; status as a table; plan closures | In progress | — |
+| 2a | `CLAUDE.md`; review/merge rules; risk register; ADR 0016 tombstone; this plan | In review: #84 | — |
+| 2b | Hotspot growth ratchet in every validation profile; rules 12 and 14 amended | In review | ADR 0044; 21 recorded hotspots |
+| 2c | Project status as a table; closure sections for open plans | Planned | — |
 | 3 | Extract `_handle_update`, `load_hub_config`, `cli.main`; remove dead code; tests for weak modules; injected clocks in timing tests | Planned | — |
 | 4 | Release 0.8.0; branch and worktree hygiene | Planned; each action needs owner approval | — |
 

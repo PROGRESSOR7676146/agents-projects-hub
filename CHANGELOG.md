@@ -24,6 +24,9 @@ and releases use semantic versioning while the public API is still evolving.
 - Add `CLAUDE.md`, review/merge/scope rules in AGENTS.md, the stabilization
   plan with its live-acceptance backlog, current risks, and a record of the
   withdrawn ADR 0016.
+- Enforce maintenance rule 12 with a hotspot growth ratchet: new hotspots or
+  growth past a recorded bound fail validation
+  ([ADR 0044](docs/decisions/0044-hotspot-growth-ratchet.md)).
 - Let Telegram progress and final messages begin with their actual content,
   keeping their separate delivery and notification policies; guide optional
   final reports to use task-appropriate visuals without a fixed template.

@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "hotspots": [
+    {
+      "target": "src/hermes_codex_router/acceptance_actor.py::_run_check",
+      "max_lines": 409,
+      "rationale": "Ordered live acceptance checks with one restoration boundary (ADR 0034 bounded actor follow-up).",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/alerts.py::evaluate_operational_alerts",
+      "max_lines": 291,
+      "rationale": "Passive alert evaluation; extract an alert family when it next changes.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/cli.py::_parser",
+      "max_lines": 229,
+      "rationale": "Declarative argument-parser construction; long but linear.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/cli.py::main",
+      "max_lines": 396,
+      "rationale": "Command dispatch chain. Stabilization stage 3 moves commands into handler functions.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/external_runtime.py::ExternalCliAdapter.run_turn",
+      "max_lines": 201,
+      "rationale": "Per-runtime CLI process lifecycle; runtime-specific parsing is the extraction candidate.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/external_service.py::ExternalAgentService.handle_update",
+      "max_lines": 286,
+      "rationale": "Legacy inline direct-message endpoint; retire with inline mode rather than refactor.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/external_worker.py::ExternalQueueWorker._execute_codex",
+      "max_lines": 256,
+      "rationale": "Codex execution lifecycle over explicit worker phases (refactoring package 5); changes need a rule-13 lifecycle review.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/hub_config.py::load_hub_config",
+      "max_lines": 666,
+      "rationale": "Monolithic configuration validation. Stabilization stage 3 splits it into per-section parsers.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/migrations.py",
+      "max_lines": 1572,
+      "rationale": "Released migrations are append-only and must never be rewritten (refactoring non-goal).",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/monitoring.py::run_monitor_once",
+      "max_lines": 308,
+      "rationale": "Passive monitor cycle; extract a probe when it next changes.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/p0_p1_acceptance.py::run_p0_p1_live_scenario",
+      "max_lines": 315,
+      "rationale": "Fixed seven-result live scenario isolated in refactoring package 2; its order is the contract.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/project_provisioner.py::TelethonProvisioningClient.configure_group",
+      "max_lines": 253,
+      "rationale": "Ordered MTProto provisioning with fenced external boundaries (ADR 0025).",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/service.py",
+      "max_lines": 3658,
+      "rationale": "Controller facade; command, ingress, admission and publication seams were extracted in refactoring package 3, but Telegram dispatch still lives here. Stabilization stage 3 extracts the dispatcher.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/service.py::ProjectHubService._execute_embedded_provider_job",
+      "max_lines": 283,
+      "rationale": "Embedded compatibility consumer that owns one execution lifecycle; retire with embedded mode rather than split it.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/service.py::ProjectHubService._handle_callback",
+      "max_lines": 226,
+      "rationale": "Callback dispatch; extracted together with the update dispatcher in stabilization stage 3.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/service.py::ProjectHubService._handle_hub_direct",
+      "max_lines": 218,
+      "rationale": "Hub-private control-plane dispatch; extracted together with the update dispatcher in stabilization stage 3.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/service.py::ProjectHubService._handle_update",
+      "max_lines": 876,
+      "rationale": "Central Telegram update dispatcher with every routing branch. Stabilization stage 3 extracts it one vertical seam at a time behind characterization tests.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/state.py",
+      "max_lines": 3114,
+      "rationale": "Single-connection HubState facade that keeps the public state API stable while domain facades own queries (refactoring package 4).",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/state.py::HubState.enqueue_provider_job",
+      "max_lines": 251,
+      "rationale": "Owns one atomic admission transaction; splitting it risks the single-transaction invariant (maintenance rule 14).",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/state_provider_jobs.py::ProviderJobsStateFacade.lease",
+      "max_lines": 202,
+      "rationale": "Owns the lease transaction with capacity, fairness and root exclusion; changes need a rule-13 lifecycle review.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/state_runtime_health.py::RuntimeHealthStateFacade.upsert_runtime_health",
+      "max_lines": 207,
+      "rationale": "Wide health-row upsert that is mostly column mapping.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    }
+  ]
+}
