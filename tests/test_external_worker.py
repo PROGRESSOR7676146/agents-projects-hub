@@ -604,6 +604,36 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         finally:
             worker.close()
 
+    def test_emergency_stop_after_lease_cancels_before_the_provider_runs(self) -> None:
+        job_id = self.enqueue("opencode", 31)
+        adapter = Adapter("opencode")
+        worker = self.worker("opencode", adapter)
+        original_lease = worker.state.lease_provider_job
+        topics: list[int] = []
+
+        def lease_then_emergency_stop(*args: object, **kwargs: object) -> object:
+            leased = cast(Any, original_lease)(*args, **kwargs)
+            if leased is not None:
+                topics.append(leased.topic_id)
+                _, _, pending = worker.state.request_emergency_stop(
+                    topic_id=leased.topic_id,
+                    chat_id=-1001234567890,
+                    message_id=931,
+                    target_agent_id="codex",
+                )
+                self.assertTrue(pending)
+            return leased
+
+        worker.state.lease_provider_job = lease_then_emergency_stop  # type: ignore[method-assign]
+        try:
+            worker.run_cycle()
+            self.assertEqual(adapter.calls, 0)
+            job = worker.state.get_provider_job(job_id)
+            self.assertEqual((job.status, job.error_code), ("cancelled", "emergency_stop"))
+            self.assertIsNone(worker.state.pending_emergency_stop(topics[0], "opencode"))
+        finally:
+            worker.close()
+
     def test_hand_built_config_cannot_make_an_externally_managed_agent_a_worker(self) -> None:
         externally_managed = replace(
             self.config,

@@ -415,7 +415,10 @@ class ExternalQueueWorker:
         self.registry = target.registry
         project = target.project
         topic = target.topic
-        executing = self.state.mark_provider_job_executing(job.job_id, lease_token)
+        executing = self.state.mark_provider_job_executing(job.job_id, lease_token, honor_stop=True)
+        if executing.status == "cancelled":
+            self._record_event("info", "provider_turn_stopped", self.agent.agent_id)
+            return
         self._publish_health(activity_state="executing", active_job=executing)
         token = executing.lease_token
         assert token is not None

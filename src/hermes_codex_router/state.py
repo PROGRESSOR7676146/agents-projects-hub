@@ -1394,7 +1394,9 @@ class HubState:
                    SET status = 'cancelled', next_attempt_at = NULL,
                        error_class = 'user_stop', error_code = 'emergency_stop',
                        updated_at = ?
-                   WHERE topic_id = ? AND status IN ('queued', 'retry_wait')""",
+                   WHERE topic_id = ? AND status IN ('queued', 'retry_wait')
+                     AND NOT EXISTS (SELECT 1 FROM provider_job_holds held WHERE
+                       held.job_id = provider_jobs.job_id AND held.decision = 'pending')""",
                 (timestamp, topic_id),
             )
             active = self._connection.execute(
@@ -1445,7 +1447,7 @@ class HubState:
                 """SELECT jobs.job_id, topics.thread_id
                    FROM provider_jobs jobs
                    JOIN topics ON topics.topic_id = jobs.topic_id
-                   WHERE jobs.topic_id = ? AND (
+                   WHERE jobs.topic_id = ? AND jobs.created_at <= ? AND (
                        (jobs.agent_id = ? AND jobs.status IN ('leased', 'executing')) OR (
                            jobs.status = 'cancelled'
                            AND jobs.error_class = 'user_stop'
@@ -1458,6 +1460,7 @@ class HubState:
                    LIMIT 1""",
                 (
                     request["topic_id"],
+                    request["created_at"],
                     request["target_agent_id"],
                     request["created_at"],
                 ),
@@ -1577,8 +1580,11 @@ class HubState:
         lease_token: str,
         *,
         now: datetime | None = None,
+        honor_stop: bool = False,
     ) -> ProviderJobRecord:
-        return self._provider_job_state.mark_executing(job_id, lease_token, now=now)
+        return self._provider_job_state.mark_executing(
+            job_id, lease_token, now=now, honor_stop=honor_stop
+        )
 
     def release_provider_job_lease(self, job_id: str, lease_token: str) -> None:
         """Return work that was leased but not invoked to the durable queue."""

@@ -22,7 +22,13 @@ per Telegram message still suffices and no schema change is needed; when
 nothing runs, the request is addressed to the active agent and completes at
 once, as before. Held jobs awaiting an owner decision are left for that
 decision. The stop acknowledgement can now be attached to a cancelled job of
-any provider.
+any provider, but only to work that existed when the stop was recorded, so a
+duplicate stop message never attaches a notice to a later job.
+
+A leased job counts as running. When its worker moves it to `executing`, the
+same transaction honors a pending stop recorded after the job was created: the
+job is cancelled without invoking the provider and the stop completes. An older
+unfinished stop, for example after a worker crash, never cancels later work.
 
 ## Consequences
 

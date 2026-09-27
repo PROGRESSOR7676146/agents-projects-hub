@@ -813,9 +813,48 @@ class ProviderJobsStateFacade:
         lease_token: str,
         *,
         now: datetime | None = None,
+        honor_stop: bool = False,
     ) -> ProviderJobRecord:
+        """Start a leased job, or with ``honor_stop`` cancel it before the provider runs.
+
+        A pending emergency stop for this topic and provider that was recorded
+        after the job was created targets this job; honoring it in the same
+        transaction closes the window between the stop and provider invocation.
+        An older unfinished stop never cancels later work.
+        """
         timestamp = self._timestamp(now)
         with self._write_transaction():
+            stop = (
+                self._connection.execute(
+                    """SELECT stop.request_id FROM provider_stop_requests stop
+                       JOIN provider_jobs job ON job.job_id = ?
+                       WHERE stop.topic_id = job.topic_id AND stop.status = 'pending'
+                         AND stop.target_agent_id = job.agent_id
+                         AND stop.created_at >= job.created_at
+                       ORDER BY stop.created_at LIMIT 1""",
+                    (job_id,),
+                ).fetchone()
+                if honor_stop
+                else None
+            )
+            if stop is not None:
+                cancelled = self._connection.execute(
+                    """UPDATE provider_jobs
+                       SET status = 'cancelled', lease_owner = NULL, lease_token = NULL,
+                           lease_expires_at = NULL, next_attempt_at = NULL,
+                           error_class = 'user_stop', error_code = 'emergency_stop',
+                           updated_at = ?
+                       WHERE job_id = ? AND status = 'leased' AND lease_token = ?""",
+                    (timestamp, job_id, lease_token),
+                )
+                if cancelled.rowcount != 1:
+                    raise self._state_error("provider job lease is missing, expired, or invalid")
+                self._connection.execute(
+                    """UPDATE provider_stop_requests SET status = 'completed', completed_at = ?
+                       WHERE request_id = ? AND status = 'pending'""",
+                    (timestamp, stop["request_id"]),
+                )
+                return self.get(job_id)
             cursor = self._connection.execute(
                 """UPDATE provider_jobs
                    SET status = 'executing', attempt_count = attempt_count + 1,
