@@ -14,12 +14,15 @@ selectors failed at import, so the documented iteration loop could not run them.
 
 ## Decision
 
-The canonical `full tests` stage runs every `tests/test*.py` module in its own
-`unittest discover -s tests -p <module>` process, several at a time. The default
-is the CPU count capped at eight; `--jobs 1..32` overrides it. Every module
-finishes before failures are reported, every failing module is named with its
-output, a module that collects no tests fails, and each module has a 600-second
-deadline. The stage still runs the complete suite and still follows the cheap
+The canonical `full tests` stage first asks `unittest` discovery, in a child
+process that runs no tests, for every test module under `tests` by dotted name
+(nested test packages included) and its test count. Each module then runs in
+its own `python -m unittest <module>` process with the same import path,
+several at a time. The default is the CPU count capped at eight; `--jobs 1..32`
+overrides it. Every module finishes before failures are reported, every failing
+module is named with its output (also after a timeout), a module must run
+exactly the tests discovery found, a `test*.py` file that contributes no tests
+fails, and each module has a 600-second deadline. The stage still runs the complete suite and still follows the cheap
 contracts, history scan and Pyright.
 
 Focused selectors keep the `tests.` form and run with `tests/` on the import

@@ -187,7 +187,9 @@ class TestModuleRunnerTests(unittest.TestCase):
         root = Path(directory.name)
         (root / "tests").mkdir()
         for name, source in modules.items():
-            (root / "tests" / name).write_text(textwrap.dedent(source), encoding="utf-8")
+            path = root / "tests" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(textwrap.dedent(source), encoding="utf-8")
         return root
 
     def test_each_module_runs_in_its_own_discovery_process_with_sibling_imports(self) -> None:
@@ -224,55 +226,138 @@ class TestModuleRunnerTests(unittest.TestCase):
             validator.run_test_modules(jobs=2, root=root)
         self.assertIn("Ran 3 tests in 2 test modules", output.getvalue())
 
-    def test_every_module_finishes_and_every_failure_is_named(self) -> None:
+    def test_nested_packages_and_repeated_basenames_each_run_once(self) -> None:
+        passing = """
+            import unittest
+
+
+            class Tests(unittest.TestCase):
+                def test_passes(self):
+                    pass
+        """
+        failing = """
+            import unittest
+
+
+            class Tests(unittest.TestCase):
+                def test_regression(self):
+                    self.fail("nested regression")
+        """
         root = self.fixture_root(
-            {name: "" for name in ("test_alpha.py", "test_beta.py", "test_gamma.py")}
+            {
+                "test_top.py": passing,
+                "nested/__init__.py": "",
+                "nested/test_top.py": failing,
+                "loose/test_ignored.py": failing,
+            }
         )
+        errors = io.StringIO()
+        with (
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(errors),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            validator.run_test_modules(jobs=2, root=root)
+        self.assertIn("1 of 2 test modules failed: nested.test_top", str(raised.exception))
+        self.assertIn("nested regression", errors.getvalue())
+        (root / "tests" / "nested" / "test_top.py").write_text(
+            textwrap.dedent(passing), encoding="utf-8"
+        )
+        output = io.StringIO()
+        with redirect_stdout(output):
+            validator.run_test_modules(jobs=2, root=root)
+        self.assertIn("Ran 2 tests in 2 test modules", output.getvalue())
+
+    def test_every_module_finishes_and_every_failure_is_named(self) -> None:
+        root = self.fixture_root({})
+        expected = {"test_alpha": 2, "test_beta": 1, "test_gamma": 4, "test_delta": 3}
         started: list[str] = []
 
         def fake_run(argv: tuple[str, ...], **kwargs: Any) -> subprocess.CompletedProcess[str]:
             self.assertEqual(kwargs["cwd"], root)
-            self.assertEqual(argv[1:5], ("-m", "unittest", "discover", "-s"))
-            name = argv[argv.index("-p") + 1]
+            self.assertEqual(argv[1:3], ("-m", "unittest"))
+            name = argv[3]
             started.append(name)
-            if name == "test_alpha.py":
+            if name == "test_alpha":
                 return subprocess.CompletedProcess(
                     argv, 1, "Ran 2 tests in 0.010s\n\nFAILED (failures=1)\n"
                 )
-            if name == "test_beta.py":
-                raise subprocess.TimeoutExpired(argv, kwargs["timeout"], output="partial output")
+            if name == "test_beta":
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"], output=b"partial \xff")
+            if name == "test_delta":
+                return subprocess.CompletedProcess(argv, 0, "Ran 2 tests in 0.010s\n\nOK\n")
             return subprocess.CompletedProcess(argv, 0, "Ran 4 tests in 0.010s\n\nOK\n")
 
         errors = io.StringIO()
         with (
+            patch.object(validator, "discover_test_modules", return_value=expected),
+            patch.object(validator, "discoverable_test_files", return_value=sorted(expected)),
             patch.object(validator.subprocess, "run", side_effect=fake_run),
             redirect_stdout(io.StringIO()),
             redirect_stderr(errors),
             self.assertRaises(RuntimeError) as raised,
         ):
             validator.run_test_modules(jobs=3, root=root)
-        self.assertEqual(sorted(started), ["test_alpha.py", "test_beta.py", "test_gamma.py"])
-        self.assertIn("2 of 3 test modules failed", str(raised.exception))
-        self.assertIn("test_alpha.py", str(raised.exception))
-        self.assertIn("test_beta.py", str(raised.exception))
-        self.assertNotIn("test_gamma.py", str(raised.exception))
+        self.assertEqual(sorted(started), sorted(expected))
+        message = str(raised.exception)
+        self.assertIn("3 of 4 test modules failed", message)
+        for name in ("test_alpha", "test_beta", "test_delta"):
+            self.assertIn(name, message)
+        self.assertNotIn("test_gamma", message)
         self.assertIn("FAILED (failures=1)", errors.getvalue())
         self.assertIn("timed out", errors.getvalue())
+        self.assertIn("partial \ufffd", errors.getvalue())
+        self.assertIn("ran 2 of 3 discovered tests", errors.getvalue())
+
+    def test_real_timeout_keeps_the_output_printed_before_it(self) -> None:
+        root = self.fixture_root(
+            {
+                "test_slow.py": """
+                    import sys
+                    import time
+                    import unittest
+
+
+                    class SlowTests(unittest.TestCase):
+                        def test_hangs(self):
+                            print("MARKER-BEFORE-TIMEOUT", flush=True)
+                            time.sleep(30)
+                """,
+            }
+        )
+        errors = io.StringIO()
+        with (
+            patch.object(validator, "TEST_MODULE_TIMEOUT_SECONDS", 3),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(errors),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            validator.run_test_modules(jobs=1, root=root)
+        self.assertIn("test_slow", str(raised.exception))
+        self.assertIn("timed out after 3s", errors.getvalue())
+        self.assertIn("MARKER-BEFORE-TIMEOUT", errors.getvalue())
 
     def test_module_without_collected_tests_fails_closed(self) -> None:
-        root = self.fixture_root({"test_empty.py": ""})
+        root = self.fixture_root(
+            {
+                "test_empty.py": "VALUE = 1\n",
+                "test_ok.py": """
+                    import unittest
 
-        def fake_run(argv: tuple[str, ...], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-            return subprocess.CompletedProcess(argv, 0, "Ran 0 tests in 0.000s\n\nOK\n")
 
+                    class Tests(unittest.TestCase):
+                        def test_ok(self):
+                            pass
+                """,
+            }
+        )
         with (
-            patch.object(validator.subprocess, "run", side_effect=fake_run),
             redirect_stdout(io.StringIO()),
             redirect_stderr(io.StringIO()) as errors,
             self.assertRaises(RuntimeError) as raised,
         ):
             validator.run_test_modules(jobs=1, root=root)
-        self.assertIn("test_empty.py", str(raised.exception))
+        self.assertIn("1 of 2 test modules failed: test_empty", str(raised.exception))
         self.assertIn("no tests collected", errors.getvalue())
 
     def test_missing_test_modules_fail_closed(self) -> None:

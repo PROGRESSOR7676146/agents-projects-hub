@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -41,33 +42,95 @@ def parse_test_jobs(value: str) -> int:
     return jobs
 
 
-def sibling_import_environment() -> dict[str, str]:
-    """Let selected modules import sibling fixtures exactly as discovery does."""
+def sibling_import_environment(root: Path = ROOT) -> dict[str, str]:
+    """Let modules import sibling fixtures from ``tests`` exactly as discovery does."""
     environment = os.environ.copy()
     inherited = environment.get("PYTHONPATH")
     environment["PYTHONPATH"] = os.pathsep.join(
-        path for path in (str(ROOT / "tests"), inherited) if path
+        path for path in (str(root / "tests"), inherited) if path
     )
     return environment
 
 
-def run_test_modules(*, jobs: int, root: Path = ROOT) -> None:
-    """Run every test module in its own discovery process, several at a time.
+# Runs in a child process: import every test module the way whole-suite
+# discovery does and report how many tests each module contributes.
+_DISCOVERY_PROBE = """
+import json, sys, unittest
+from unittest.loader import _FailedTest
 
-    Each process uses ``unittest discover`` rooted at ``tests`` with a single
-    file pattern, so imports behave as in whole-suite discovery. All modules
-    finish before failures are reported; none is skipped after a failure.
+counts = {}
+
+def visit(item):
+    if isinstance(item, unittest.TestSuite):
+        for child in item:
+            visit(child)
+        return
+    module = item._testMethodName if isinstance(item, _FailedTest) else type(item).__module__
+    counts[module] = counts.get(module, 0) + 1
+
+visit(unittest.defaultTestLoader.discover("tests", top_level_dir="tests"))
+json.dump(counts, sys.stdout)
+"""
+
+
+def _text(value: object) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value if isinstance(value, str) else ""
+
+
+def discoverable_test_files(root: Path = ROOT) -> list[str]:
+    """Dotted names of every ``test*.py`` file discovery can import from ``tests``."""
+    tests = root / "tests"
+    names: list[str] = []
+    for path in sorted(tests.rglob("test*.py")):
+        parts = path.relative_to(tests).parts
+        packages = [tests.joinpath(*parts[: index + 1]) for index in range(len(parts) - 1)]
+        if all((package / "__init__.py").is_file() for package in packages):
+            names.append(".".join((*parts[:-1], path.stem)))
+    return names
+
+
+def discover_test_modules(root: Path = ROOT) -> dict[str, int]:
+    """Return ``{dotted module: test count}`` exactly as ``unittest`` discovery sees it."""
+    completed = subprocess.run(
+        (sys.executable, "-c", _DISCOVERY_PROBE),
+        cwd=root,
+        env=sibling_import_environment(root),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=TEST_MODULE_TIMEOUT_SECONDS,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("test discovery failed:\n" + completed.stderr.rstrip()[-4000:])
+    return {str(name): int(count) for name, count in json.loads(completed.stdout).items()}
+
+
+def run_test_modules(*, jobs: int, root: Path = ROOT) -> None:
+    """Run every discovered test module in its own process, several at a time.
+
+    Discovery supplies the dotted module names, including nested test
+    packages, and each module's test count. Every module then runs alone with
+    the same import path, and must run exactly the tests discovery found. A
+    ``test*.py`` file that contributes no tests fails. All modules finish before
+    failures are reported; none is skipped after a failure.
     """
-    modules = sorted(path.name for path in (root / "tests").glob("test*.py"))
-    if not modules:
+    expected = discover_test_modules(root)
+    empty = sorted(set(discoverable_test_files(root)) - set(expected))
+    modules = sorted(expected)
+    if not modules and not empty:
         raise RuntimeError("no test modules discovered under tests/")
+    environment = sibling_import_environment(root)
 
     def run_module(name: str) -> tuple[str, str | None, int, str]:
-        argv = (sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", name, "-q")
+        argv = (sys.executable, "-m", "unittest", name, "-q")
         try:
             completed = subprocess.run(
                 argv,
                 cwd=root,
+                env=environment,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -76,26 +139,28 @@ def run_test_modules(*, jobs: int, root: Path = ROOT) -> None:
                 check=False,
             )
         except subprocess.TimeoutExpired as error:
-            partial = error.output if isinstance(error.output, str) else ""
-            return name, f"timed out after {TEST_MODULE_TIMEOUT_SECONDS}s", 0, partial
+            return name, f"timed out after {TEST_MODULE_TIMEOUT_SECONDS}s", 0, _text(error.output)
         output = completed.stdout or ""
         counted = _RAN_TESTS.search(output)
         count = int(counted.group(1)) if counted else 0
         if completed.returncode != 0:
             return name, f"exit {completed.returncode}", count, output
-        if count == 0:
-            return name, "no tests collected", 0, output
+        if count != expected[name]:
+            return name, f"ran {count} of {expected[name]} discovered tests", count, output
         return name, None, count, output
 
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         results = list(pool.map(run_module, modules))
     failed = [(name, reason, output) for name, reason, _, output in results if reason]
+    failed += [(name, "no tests collected", "") for name in empty]
     for name, reason, output in failed:
         print(f"--- {name}: {reason}", file=sys.stderr)
-        print(output.rstrip()[-8000:], file=sys.stderr)
+        if output:
+            print(output.rstrip()[-8000:], file=sys.stderr)
     if failed:
         names = ", ".join(name for name, _, _ in failed)
-        raise RuntimeError(f"{len(failed)} of {len(modules)} test modules failed: {names}")
+        total_modules = len(modules) + len(empty)
+        raise RuntimeError(f"{len(failed)} of {total_modules} test modules failed: {names}")
     total = sum(count for _, _, count, _ in results)
     print(f"Ran {total} tests in {len(modules)} test modules with {jobs} parallel jobs")
 

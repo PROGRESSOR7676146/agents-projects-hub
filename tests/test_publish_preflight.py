@@ -593,6 +593,95 @@ class PublishPreflightTests(unittest.TestCase):
             self.assertIn("pre-commit", str(raised.exception))
             self.assertFalse((root / ".git" / "hub-managed-hooks").exists())
 
+    def installed_fixture(self, base: Path) -> tuple[Path, Path, Path]:
+        """A repository with version-one hooks installed and version-two sources."""
+        root = base / "checkout"
+        root.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        hooks = root / ".githooks"
+        hooks.mkdir()
+        policy = base / "public-author-policy"
+        policy.write_text("owner@example.com\n", encoding="ascii")
+        policy.chmod(0o600)
+        for name in publish_preflight.MANAGED_HOOKS:
+            (hooks / name).write_text(f"#!/bin/sh\n# {name} v1\n", encoding="utf-8")
+        with patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)}):
+            publish_preflight._install(root)
+        for name in publish_preflight.MANAGED_HOOKS:
+            (hooks / name).write_text(f"#!/bin/sh\n# {name} v2\n", encoding="utf-8")
+        return root, root / ".git" / "hub-managed-hooks", policy
+
+    def local_config(self, root: Path) -> dict[str, str]:
+        keys = ("core.hooksPath", "hub.publicAuthorEmailFile", "hub.publishPython")
+        return {
+            key: subprocess.run(
+                ["git", "config", "--local", "--get", key],
+                cwd=root,
+                text=True,
+                capture_output=True,
+            ).stdout
+            for key in keys
+        }
+
+    def assert_version_one_hooks(self, hook_directory: Path) -> None:
+        for name in publish_preflight.MANAGED_HOOKS:
+            self.assertEqual(
+                (hook_directory / name).read_text(encoding="utf-8"), f"#!/bin/sh\n# {name} v1\n"
+            )
+        self.assertEqual(
+            sorted(path.name for path in hook_directory.iterdir()),
+            sorted(publish_preflight.MANAGED_HOOKS),
+        )
+
+    def test_failed_second_activation_restores_the_previous_hook_set(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, hook_directory, policy = self.installed_fixture(Path(directory))
+            before = self.local_config(root)
+            real_replace = os.replace
+            activations: list[str] = []
+
+            def replace(source: object, destination: object) -> None:
+                if Path(str(destination)).parent == hook_directory:
+                    activations.append(Path(str(destination)).name)
+                    if len(activations) == 2:
+                        raise OSError(28, "No space left on device")
+                real_replace(source, destination)  # type: ignore[arg-type]
+
+            with (
+                patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)}),
+                patch.object(publish_preflight.os, "replace", side_effect=replace),
+                self.assertRaises(publish_preflight.PreflightError),
+            ):
+                publish_preflight._install(root)
+            self.assertGreaterEqual(len(activations), 2)
+            self.assert_version_one_hooks(hook_directory)
+            self.assertEqual(self.local_config(root), before)
+
+    def test_failed_configuration_restores_hooks_and_local_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, hook_directory, policy = self.installed_fixture(Path(directory))
+            subprocess.run(
+                ["git", "config", "--local", "hub.publishPython", "/home/example/python"],
+                cwd=root,
+                check=True,
+            )
+            before = self.local_config(root)
+            real_run = publish_preflight._run
+
+            def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                if argv[:3] == ["git", "config", "--local"] and argv[3] == "hub.publishPython":
+                    return subprocess.CompletedProcess(argv, 1, "", "")
+                return real_run(argv, **kwargs)  # type: ignore[arg-type]
+
+            with (
+                patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)}),
+                patch.object(publish_preflight, "_run", side_effect=run),
+                self.assertRaises(publish_preflight.PreflightError),
+            ):
+                publish_preflight._install(root)
+            self.assert_version_one_hooks(hook_directory)
+            self.assertEqual(self.local_config(root), before)
+
     def test_commit_hook_validates_exactly_what_is_committed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

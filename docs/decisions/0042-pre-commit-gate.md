@@ -16,8 +16,9 @@ minute, so running it before every commit is affordable.
 
 The repository-managed hook directory also receives a versioned
 `pre-commit` hook, installed together with `pre-push` by
-`publish_preflight --install`. Installation reads every versioned hook first
-and installs none if one is missing.
+`publish_preflight --install`. Installation stages every versioned hook
+completely before activating any; if an activation, configuration or worktree
+step fails, it restores the previous hook files and local settings.
 
 The hook refuses a commit while unstaged changes or untracked, non-ignored
 files exist, because the checks read the working tree. This check uses the
