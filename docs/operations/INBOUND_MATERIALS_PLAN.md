@@ -122,3 +122,11 @@ selected quote, duplicate update, явный oversized отказ, native Codex
 `localImage`, schema-32 upgrade и symlink/integrity refusal. Repository checks
 не являются доказательством работающей установки; live Telegram/provider E2E
 по-прежнему требует отдельной разрешённой задачи и exact-revision evidence.
+
+## Закрытие
+
+Репозиторная часть закрыта: реализация входит в `main` на ревизии `ea5af70`
+(точка аудита 2026-09-27). Открытой остаётся только живая приёмка; она ведётся в
+[бэклоге плана стабилизации](STABILIZATION_PLAN.md#live-acceptance-backlog), и
+этот документ больше не является действующим поручением. Следующий trigger:
+владелец запускает соответствующий пункт бэклога.

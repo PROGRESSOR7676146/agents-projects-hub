@@ -120,3 +120,11 @@ an explicit deployment task with private live acceptance.
 The 48–72 hour observation, real host reboot, and off-machine restore remain
 separate deployment work and evidence. Do not call the product operationally
 mature on the strength of these repository packages alone.
+
+## Closure
+
+Repository scope is closed: the implementation is in `main` at `ea5af70` (audit
+point, 2026-09-27). Only live acceptance remains; it is tracked in the
+[stabilization plan backlog](STABILIZATION_PLAN.md#live-acceptance-backlog), and
+this document is no longer an active task. Next trigger: the owner runs the
+corresponding backlog item.

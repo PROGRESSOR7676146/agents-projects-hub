@@ -27,6 +27,8 @@ and releases use semantic versioning while the public API is still evolving.
 - Enforce maintenance rule 12 with a hotspot growth ratchet: new hotspots or
   growth past a recorded bound fail validation
   ([ADR 0044](docs/decisions/0044-hotspot-growth-ratchet.md)).
+- Summarize capabilities, evidence and pending live acceptance in one table in
+  the project status, and close six completed implementation plans.
 - Let Telegram progress and final messages begin with their actual content,
   keeping their separate delivery and notification policies; guide optional
   final reports to use task-appropriate visuals without a fixed template.
