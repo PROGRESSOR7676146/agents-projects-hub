@@ -242,3 +242,11 @@ queue/context/migration tests, затем canonical validator и privacy/history
 Live замена настоящей session, `/stop` в действующей теме, credential/service
 changes и публикация не разрешены этим планом. На review принести отдельную
 evidence по delayed-message boundary и old-context isolation.
+
+## Закрытие
+
+Репозиторная часть закрыта: реализация входит в `main` на ревизии `ea5af70`
+(точка аудита 2026-09-27). Открытой остаётся только живая приёмка; она ведётся в
+[бэклоге плана стабилизации](STABILIZATION_PLAN.md#live-acceptance-backlog), и
+этот документ больше не является действующим поручением. Следующий trigger:
+владелец запускает соответствующий пункт бэклога.

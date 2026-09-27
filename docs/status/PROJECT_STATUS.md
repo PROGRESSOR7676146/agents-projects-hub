@@ -6,6 +6,37 @@ Release: v0.7.0
 This file describes repository capabilities only. It intentionally contains no
 operator deployment inventory or live conversation evidence.
 
+## Capability summary
+
+Highest evidence for every row is automated offline tests at the stated
+schema unless the row says otherwise; no row is live-accepted by this
+repository. Live items are tracked in the
+[stabilization backlog](../operations/STABILIZATION_PLAN.md#live-acceptance-backlog).
+The prose sections below keep the detailed history until it moves into the
+owning modules.
+
+| Capability | Repository state | Live acceptance | Contract |
+| --- | --- | --- | --- |
+| Multiple Codex worker slots | Implemented | Pending (three projects) | [REQ-QUEUE-002](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md) |
+| Claude Code CPA worker | Text-only scaffold | Pending; approvals and advisor isolation not implemented | [REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0039](../decisions/0039-claude-cpa-worker-scaffold.md) |
+| Claude/Codex lead and advisor | Accepted plan; not implemented | — | [REQ-COLLAB-001](../product/IDENTITY_AND_INTERACTION.md), [ADR 0040](../decisions/0040-bounded-claude-codex-lead-advisor.md) |
+| Participant evaluation and allocation | Accepted foundation; not implemented | — | [Requirements](../product/EVALUATION_AND_ALLOCATION.md), [ADR 0037](../decisions/0037-evidence-based-task-allocation.md) |
+| Durable local-root blockers (schema 35) | Implemented | Pending | [REQ-WRITER-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0036](../decisions/0036-durable-local-root-blockers.md) |
+| Exact Codex turn recovery (schema 34) | Implemented | Pending | [REQ-QUEUE-004](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0035](../decisions/0035-exact-terminal-turn-reconciliation.md) |
+| Inbound Telegram materials (schema 33) | Implemented | Pending | [REQ-UX-009](../product/IDENTITY_AND_INTERACTION.md), [ADR 0032](../decisions/0032-durable-inbound-telegram-materials.md) |
+| Context and quota telemetry | Implemented | Pending | [REQ-CMD-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0033](../decisions/0033-truthful-context-and-quota-telemetry.md) |
+| Root exclusion, bounded concurrency, worktree lanes (schemas 31–32) | Implemented | Pending | [REQ-QUEUE-003](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0031](../decisions/0031-bounded-root-concurrency.md) |
+| Saved Codex session connect | Implemented | Pending | [REQ-CMD-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0023](../decisions/0023-deterministic-session-connect.md) |
+| CLI session adoption and replacement | Implemented | Pending | [REQ-WRITER-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0022](../decisions/0022-explicit-codex-session-adoption.md) |
+| Explicit Codex provider routing | Implemented | Pending | [ADR 0028](../decisions/0028-explicit-codex-provider-routing.md) |
+| Summary-free Codex `/local` and `/return` | Implemented | Required per deployed revision | [REQ-WRITER-006](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0011](../decisions/0011-explicit-native-session-ownership-transfer.md) |
+| Project-group provisioning | Implemented offline; deployment opt-in | Pending canary | [REQ-ONBOARD-006](../product/ONBOARDING_AND_ACCEPTANCE.md), [ADR 0024](../decisions/0024-user-authorized-project-group-provisioning.md) |
+| Registered-project editing (schema 29) | Implemented offline | Pending canary | [REQ-PROJECT-EDIT-001](../product/ONBOARDING_AND_ACCEPTANCE.md), [ADR 0027](../decisions/0027-no-silent-session-rebind-on-project-relocation.md) |
+| Scoped acceptance actor | Implemented | Live authorization pending | [AC-F-011](../product/ONBOARDING_AND_ACCEPTANCE.md), [ADR 0003](../decisions/0003-scoped-telegram-acceptance-actor.md) |
+| Immutable releases and rollback rehearsal | Implemented offline | Deployment-owned | [REQ-OPS-010](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0012](../decisions/0012-verifiable-immutable-deployments.md) |
+| Codex quota transition | Implemented | Pending | [REQ-AUTH-007](../product/ACCOUNTS_CONTROL_AND_SECURITY.md) |
+| Off-machine recovery | Planned | Drill pending | [REQ-OPS-012](../product/PERSISTENCE_AND_RECOVERY.md) |
+
 ## Quality checkpoint
 
 Multiple Codex worker slots are implemented behind external queue configuration;

@@ -120,3 +120,16 @@ an explicit deployment task with private live acceptance.
 The 48–72 hour observation, real host reboot, and off-machine restore remain
 separate deployment work and evidence. Do not call the product operationally
 mature on the strength of these repository packages alone.
+
+## Closure
+
+Partially closed at `ea5af70` (audit point, 2026-09-27). The reliability
+milestones and packages A and F are in `main`; their live acceptance is tracked
+in the [stabilization plan backlog](STABILIZATION_PLAN.md#live-acceptance-backlog).
+
+Packages B–E are **not implemented**. For example, `codex_multi_auth_dir` and
+`codex_multi_auth_executable` are still accepted configuration, so package B's
+retirement contract does not exist. Owner decision 2026-09-27: package B moves
+to the [stabilization plan](STABILIZATION_PLAN.md#stages) as stage 3b; packages
+C, D and E are deferred and remain described above. This plan stays open only
+for those deferred packages. Next trigger: the owner reschedules C, D or E.
