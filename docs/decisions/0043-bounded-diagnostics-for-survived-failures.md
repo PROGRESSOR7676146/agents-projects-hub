@@ -32,7 +32,10 @@ The diagnostic path never raises into its caller. Its stream handler drops
 its own write, flush or closed-stream failures silently instead of using the
 standard logging error dump, which prints a traceback that would include the
 exception being survived; the package logger does not propagate to handlers
-it does not control.
+it does not control. The path is also safe in a forked child: the module lock
+is reinitialized after fork, and a descriptor-backed stream is written with one
+`os.write` per record instead of through its Python buffer, whose lock another
+parent thread may hold at fork time.
 
 The package logger has a `NullHandler`, so library use stays silent. The CLI
 entry point attaches one stderr handler, which systemd captures in the user

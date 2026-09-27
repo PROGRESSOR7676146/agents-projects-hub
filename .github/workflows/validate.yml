@@ -36,4 +36,4 @@ jobs:
       - name: Shared-process test discovery
         timeout-minutes: 20
         # A hang ends after 15 minutes with every thread's traceback in the log.
-        run: timeout --signal=ABRT 900 .venv/bin/python -X faulthandler -m unittest discover -s tests -q
+        run: timeout --signal=ABRT --kill-after=60 900 .venv/bin/python -X faulthandler -m unittest discover -s tests -q

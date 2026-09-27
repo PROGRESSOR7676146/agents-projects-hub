@@ -4,8 +4,12 @@ import ast
 import io
 import logging
 import multiprocessing
+import os
+import threading
+import time
 import unittest
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import patch
 
 from hermes_codex_router import diagnostic_log
@@ -117,6 +121,40 @@ class DiagnosticLogTests(unittest.TestCase):
                 process.kill()
                 process.join(2)
         self.assertEqual(process.exitcode, 0, "forked child deadlocked on the diagnostic lock")
+
+    def test_forked_child_logs_while_a_parent_thread_holds_the_stream_buffer(self) -> None:
+        read_fd, write_fd = os.pipe()
+        stream = open(write_fd, "w", buffering=1 << 16, encoding="utf-8")
+        self.addCleanup(stream.close)
+        self.use_stream(cast(Any, stream))
+        drained = threading.Event()
+
+        def fill_pipe() -> None:
+            # Blocks inside the buffered write, holding its lock, until drained.
+            stream.write("x" * 200_000)
+            stream.flush()
+
+        def child() -> None:
+            diagnostic_log.survived("service.health_publish", RuntimeError("x"))
+
+        def drain() -> None:
+            with open(read_fd, "rb") as reader:
+                while reader.read(65536):
+                    pass
+            drained.set()
+
+        writer = threading.Thread(target=fill_pipe, daemon=True)
+        writer.start()
+        time.sleep(0.5)
+        process = multiprocessing.get_context("fork").Process(target=child)
+        process.start()
+        threading.Thread(target=drain, daemon=True).start()
+        process.join(10)
+        if process.is_alive():
+            process.kill()
+            process.join(2)
+        writer.join(10)
+        self.assertEqual(process.exitcode, 0, "forked child deadlocked on the stream buffer")
 
     def test_repeats_are_bounded_and_counted(self) -> None:
         clock = iter((0.0, 1.0, 2.0, 61.0))
