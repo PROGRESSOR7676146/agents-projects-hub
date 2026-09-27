@@ -57,6 +57,7 @@ class ValidationTests(unittest.TestCase):
             "release_metadata",
             "cli validate config/projects.example.json --allow-missing",
             "lock",
+            "hotspot_audit",
             "format --check",
             "ruff check",
         )

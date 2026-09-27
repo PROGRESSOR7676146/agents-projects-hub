@@ -63,6 +63,7 @@ with a new record.
 | Parallel isolated test modules | Canonical tests run every module in its own discovery process in parallel; focused selectors import sibling fixtures as discovery does. | [ADR 0041](0041-parallel-isolated-test-modules.md) |
 | Pre-commit gate | A versioned pre-commit hook refuses unvalidated working-tree content and runs cheap contracts, the history scan and the full parallel suite; Pyright stays at push. | [ADR 0042](0042-pre-commit-gate.md) |
 | Survived-failure diagnostics | Deliberately survived failures log only exception class and a static site label, rate-limited, to stderr/journald; Ruff S110/S112 forbid new silent handlers. | [ADR 0043](0043-bounded-diagnostics-for-survived-failures.md) |
+| Hotspot growth ratchet | Every module ≥1,500 lines and function ≥200 lines needs a bounded exception in `docs/operations/hotspots.json`; growth past its bound fails validation. | [ADR 0044](0044-hotspot-growth-ratchet.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

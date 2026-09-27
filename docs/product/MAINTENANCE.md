@@ -75,7 +75,10 @@ This normative module is part of the
 12. A feature PR that touches an already triggered hotspot MUST either reduce
     the component's responsibility or include the bounded exception defined
     above. Mechanical splitting solely to pass a size or complexity metric is
-    prohibited.
+    prohibited. The canonical gate enforces this rule through
+    `docs/operations/hotspots.json`: a new hotspot or growth past a recorded
+    bound fails validation, and raising a bound in the same change is the
+    reviewed bounded exception.
 13. A PR that materially changes Controller, state, or worker lifecycle behavior
     MUST identify the component owner, transaction owner, provider-invocation
     boundary, replay safety, failure certainty, cleanup owner, focused tests,
@@ -85,8 +88,9 @@ This normative module is part of the
     applicable state or domain facade. Orchestration and facades MAY depend on
     dependency-neutral contracts and domain helpers; lower layers MUST NOT
     import Controller, provider-worker, or Telegram runtime orchestration.
-    Size and complexity measurements are for trend reporting and review
-    selection, not a standalone blocking quality gate.
+    Beyond the growth ratchet of rule 12, size and complexity measurements are
+    for trend reporting and review selection, not a standalone blocking
+    quality gate.
 15. Before a major feature wave, review active hotspots, accepted bounded
     exceptions, unclosed accepted plans, and debt in worktrees, branches, and
     release tags. Resolve or explicitly carry each item before opening the wave.

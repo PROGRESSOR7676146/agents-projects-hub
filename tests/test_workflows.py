@@ -204,6 +204,7 @@ def _assert_validation_contract(workflows: Path) -> None:
     for required_stage in (
         '"hermes_codex_router.privacy_scan", str(ROOT), "--history"',
         "check_release_lock()",
+        '"hermes_codex_router.hotspot_audit", str(ROOT)',
         '("full tests", lambda: run_test_modules(jobs=jobs))',
         '"hermes_codex_router.documentation_contract", str(ROOT)',
         '"hermes_codex_router.cli",',
