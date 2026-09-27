@@ -22,6 +22,7 @@ subset; the plan's accepted role choices are not a claim of runtime parity.
 
 ## Delivery and operation
 
+- [Stabilization plan and live-acceptance backlog](operations/STABILIZATION_PLAN.md)
 - [Roadmap](ROADMAP.ru.md)
 - [Next development session](operations/NEXT_DEVELOPMENT_SESSION.md)
 - [Claude Code and Codex: bounded lead/advisor plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)

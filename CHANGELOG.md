@@ -21,6 +21,9 @@ and releases use semantic versioning while the public API is still evolving.
   diagnostics that record only the exception class and a static site in the
   process journal, and forbid new ones with Ruff S110/S112
   ([ADR 0043](docs/decisions/0043-bounded-diagnostics-for-survived-failures.md)).
+- Add `CLAUDE.md`, review/merge/scope rules in AGENTS.md, the stabilization
+  plan with its live-acceptance backlog, current risks, and a record of the
+  withdrawn ADR 0016.
 - Let Telegram progress and final messages begin with their actual content,
   keeping their separate delivery and notification policies; guide optional
   final reports to use task-appropriate visuals without a fixed template.
