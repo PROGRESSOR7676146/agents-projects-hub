@@ -12,6 +12,7 @@ from typing import Any, Callable
 from .alerts import DEFAULT_LOW_QUOTA_PERCENT, OperationalAlert, evaluate_operational_alerts
 from .catalog_refresh import refresh_provider_catalogs
 from .codex_accounts import CodexPoolStatus, encode_codex_pool_snapshot, read_codex_pool_status
+from .diagnostic_log import survived
 from .diagnostics import run_doctor
 from .hermes_health import (
     HermesBotApiHealth,
@@ -447,6 +448,6 @@ def run_monitor_once(
                     heartbeat_at=datetime.now(timezone.utc),
                     error_code="monitor_cycle_error",
                 )
-            except Exception:
-                pass
+            except Exception as survived_error:
+                survived("monitoring.error_health_publish", survived_error)
         state.close()

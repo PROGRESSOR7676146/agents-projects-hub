@@ -22,6 +22,7 @@ from .codex_appserver import (
     UnixWebSocketTransport,
 )
 from .codex_failure import codex_failure_notice
+from .diagnostic_log import survived
 from .execution_journal import ExecutionJournal
 from .hub_config import HubConfig
 from .project_resolution import resolve_project_context
@@ -210,8 +211,8 @@ class TurnObservation:
         for artifact in artifacts:
             try:
                 remove_spooled_artifact(artifact.path, artifact_spool_root(self.config.state_path))
-            except Exception:
-                pass
+            except Exception as survived_error:
+                survived("turn_observation.artifact_cleanup", survived_error)
 
     def _record_uncertain(self, job_id: str, status: str) -> None:
         with self.state._immediate_transaction():

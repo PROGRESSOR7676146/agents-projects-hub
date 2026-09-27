@@ -10,6 +10,7 @@ from .artifacts import (
     cleanup_job_staging,
     remove_spooled_artifact,
 )
+from .diagnostic_log import survived
 from .incoming_materials import (
     PreparedIncomingMaterials,
     cleanup_consumed_raw_inputs,
@@ -76,8 +77,8 @@ class PreparedResultPublisher:
             for artifact in publication.artifacts:
                 try:
                     remove_spooled_artifact(artifact.path, spool_root)
-                except Exception:
-                    pass
+                except Exception as survived_error:
+                    survived("controller_result_publication.artifact_cleanup", survived_error)
             raise
         cleanup_consumed_raw_inputs(publication.prepared_materials)
         cleanup_materialized_inputs(publication.prepared_materials)
@@ -87,6 +88,6 @@ class PreparedResultPublisher:
             if self.cleanup_error is not None:
                 try:
                     self.cleanup_error("artifact_staging_cleanup_error", type(exc).__name__)
-                except Exception:
-                    pass
+                except Exception as survived_error:
+                    survived("controller_result_publication.cleanup_report", survived_error)
         return PublishedProviderResult(result=result, artifacts=publication.artifacts)

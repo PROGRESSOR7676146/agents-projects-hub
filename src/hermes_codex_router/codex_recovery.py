@@ -12,6 +12,7 @@ from .artifacts import (
 )
 from .codex_appserver import CodexAppServerClient, CodexTurnError, RpcError
 from .codex_failure import CodexPreparationError, codex_failure_notice
+from .diagnostic_log import survived
 from .execution_journal import ExecutionJournal
 from .hub_config import HubConfig
 from .project_resolution import resolve_project_context
@@ -73,8 +74,8 @@ def reconcile_codex_completion(
         finally:
             try:
                 client.close()
-            except Exception:
-                pass
+            except Exception as survived_error:
+                survived("codex_recovery.client_close", survived_error)
         if result is not None:
             text = result.text
             journal.record_completion(job_id, lease_token, text)
@@ -111,8 +112,8 @@ def reconcile_codex_completion(
         for artifact in artifacts:
             try:
                 remove_spooled_artifact(artifact.path, artifact_spool_root(config.state_path))
-            except Exception:
-                pass
+            except Exception as survived_error:
+                survived("codex_recovery.artifact_cleanup", survived_error)
         raise
     return "completed"
 

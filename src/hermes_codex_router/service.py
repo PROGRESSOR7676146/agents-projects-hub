@@ -55,6 +55,7 @@ from .controller_result_publication import (
     PreparedResultPublisher,
 )
 from .delivery_retry import delivery_retry_delay
+from .diagnostic_log import survived
 from .execution_journal import ExecutionJournal
 from .external_runtime import ProviderUnavailableError
 from .external_service import ExternalAgentService
@@ -362,8 +363,8 @@ class ProjectHubService:
                 transport_success_at=self._health_transport_success_at,
             )
             self._health_last_publish_monotonic = now_monotonic
-        except Exception:
-            pass
+        except Exception as survived_error:
+            survived("service.health_publish", survived_error)
 
     def _record_telegram_poll_success(self, ingress_identity: str) -> None:
         observed_at = datetime.now(timezone.utc)
@@ -470,8 +471,8 @@ class ProjectHubService:
         if client is not None:
             try:
                 client.close()
-            except Exception:
-                pass
+            except Exception as survived_error:
+                survived("service.client_close", survived_error)
 
     def _send_text(self, message: TopicMessage, text: str) -> None:
         self.telegram.send_html(message.chat_id, message.thread_id, html.escape(text))
@@ -723,8 +724,8 @@ class ProjectHubService:
                         )
                     finally:
                         error_state.close()
-                except Exception:
-                    pass
+                except Exception as survived_error:
+                    survived("service.outbox_error_record", survived_error)
                 worked = False
             self._outbox_stop.wait(0.01 if worked else 0.2)
 
@@ -773,10 +774,10 @@ class ProjectHubService:
                         )
                     finally:
                         error_state.close()
-                except Exception:
+                except Exception as survived_error:
                     # A transient state-open failure must not kill the daemon
                     # thread that will retry durable work on its next cycle.
-                    pass
+                    survived("service.queue_error_record", survived_error)
                 worked = False
             self._queue_stop.wait(0.01 if worked else 0.2)
 
@@ -949,10 +950,10 @@ class ProjectHubService:
                     queue_state.set_context_remaining(
                         executing.session_id, context_remaining_percent(result)
                     )
-                except Exception:
+                except Exception as survived_error:
                     # Context percentage is display telemetry, not part of
                     # the productive result's durable commit.
-                    pass
+                    survived("service.context_telemetry", survived_error)
                 provider_session_id = thread.thread_id
                 actual_model = thread.model
                 try:
@@ -1119,8 +1120,8 @@ class ProjectHubService:
                             else uncertain_provider_notice(agent.display_name)
                         ),
                     )
-            except Exception:
-                pass
+            except Exception as survived_error:
+                survived("service.failure_notice_record", survived_error)
             if not recovered:
                 queue_state.record_runtime_event(
                     agent.agent_id,

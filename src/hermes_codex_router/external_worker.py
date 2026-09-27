@@ -24,6 +24,7 @@ from .controller_result_publication import (
     PreparedResultPublication,
     PreparedResultPublisher,
 )
+from .diagnostic_log import survived
 from .execution_journal import ExecutionJournal
 from .external_runtime import (
     ExternalCliAdapter,
@@ -186,8 +187,8 @@ class ExternalQueueWorker:
         if client is not None:
             try:
                 client.close()
-            except Exception:
-                pass
+            except Exception as survived_error:
+                survived("external_worker.client_close", survived_error)
 
     def _record_event(self, level: str, code: str, detail: str) -> None:
         try:
@@ -196,8 +197,8 @@ class ExternalQueueWorker:
                 event_state.record_runtime_event(self.agent.agent_id, level, code, detail)
             finally:
                 event_state.close()
-        except Exception:
-            pass
+        except Exception as survived_error:
+            survived("external_worker.runtime_event_record", survived_error)
 
     def _publish_health(
         self,
@@ -231,8 +232,8 @@ class ExternalQueueWorker:
                 quota_remaining_percent=self._quota_remaining_percent,
                 quota_reset_at=self._quota_reset_at,
             )
-        except Exception:
-            pass
+        except Exception as survived_error:
+            survived("external_worker.health_publish", survived_error)
 
     def run_forever(self, *, poll_seconds: float = 0.2) -> None:
         if poll_seconds <= 0:
@@ -572,8 +573,8 @@ class ExternalQueueWorker:
                             "queued_provider_error",
                             f"{failure.error_class}:{failure.error_code}",
                         )
-            except Exception:
-                pass
+            except Exception as survived_error:
+                survived("external_worker.failure_notice_record", survived_error)
             if self.agent.runtime == "codex":
                 self._discard_client()
         finally:
@@ -781,8 +782,8 @@ class ExternalQueueWorker:
                         if steer_client is not None:
                             try:
                                 steer_client.close()
-                            except Exception:
-                                pass
+                            except Exception as survived_error:
+                                survived("external_worker.steer_client_close", survived_error)
             finally:
                 monitor_state.close()
 
@@ -814,8 +815,8 @@ class ExternalQueueWorker:
             raise ProviderTurnStopped(late_request)
         try:
             self.state.set_context_remaining(job.session_id, context_remaining_percent(result))
-        except Exception:
-            pass
+        except Exception as survived_error:
+            survived("external_worker.context_telemetry", survived_error)
         try:
             limits = client.read_rate_limits()
         except Exception:
