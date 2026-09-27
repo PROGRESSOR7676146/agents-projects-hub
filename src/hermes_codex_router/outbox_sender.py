@@ -68,7 +68,7 @@ class TelegramSender(Protocol):
 class TelegramOutboxSender:
     """Deliver durable provider results and Hub control notices."""
 
-    _LOCAL_QUEUE_RUNTIMES = frozenset({"codex", "gemini", "opencode", "antigravity"})
+    _LOCAL_QUEUE_RUNTIMES = frozenset({"codex", "claude", "gemini", "opencode", "antigravity"})
     _CHAT_ACTION_INTERVAL_SECONDS = 4.0
 
     def __init__(

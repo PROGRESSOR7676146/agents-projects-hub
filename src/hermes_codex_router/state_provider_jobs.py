@@ -5,9 +5,16 @@ import uuid
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 
 PROVIDER_WORKER_FAIRNESS_FRESHNESS = timedelta(minutes=2)
+
+
+def _parallel_worker_declarations(agent_id: str) -> tuple[str, ...]:
+    if agent_id not in {"codex", "claude"}:
+        return ()
+    return (f"{agent_id}-worker",) + tuple(f"{agent_id}-worker-{slot}" for slot in range(2, 17))
+
 
 _ELIGIBLE_PROVIDER_JOB_SQL = """SELECT candidate.* FROM provider_jobs candidate
    JOIN topics candidate_topic ON candidate_topic.topic_id = candidate.topic_id
@@ -474,6 +481,7 @@ class ProviderJobsStateFacade:
         lease_seconds: int = 90,
         max_parallel_roots: int = 1,
         scheduler_agents: Sequence[str] = (),
+        agent_capacities: Mapping[str, int] | None = None,
         now: datetime | None = None,
     ) -> ProviderJobRecord | None:
         target_agent = self._bounded(agent_id, name="agent id", maximum=64)
@@ -490,6 +498,15 @@ class ProviderJobsStateFacade:
             raise self._state_error("scheduler agents contain duplicates")
         if scheduled_agents and target_agent not in scheduled_agents:
             raise self._state_error("scheduler agents must include the target agent")
+        capacities = {
+            self._bounded(key, name="capacity agent id", maximum=64): value
+            for key, value in (agent_capacities or {}).items()
+        }
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 16
+            for value in capacities.values()
+        ):
+            raise self._state_error("invalid agent capacity")
         current = now or datetime.now(timezone.utc)
         timestamp = self._timestamp(current)
         expires_at = self._timestamp(current + timedelta(seconds=lease_seconds))
@@ -498,18 +515,37 @@ class ProviderJobsStateFacade:
             freshness = self._timestamp(current - PROVIDER_WORKER_FAIRNESS_FRESHNESS)
             placeholders = ", ".join("?" for _ in scheduled_agents)
             if scheduled_agents:
+                # Schema 32 keys declarations by text. Canonical parallel slots
+                # use distinct keys so a rolling reduction cannot be overwritten
+                # by another old process. The legacy agent key stays in the
+                # read set until it ages out after an upgrade.
+                slot_declarations = _parallel_worker_declarations(target_agent)
+                declaration_key = worker if worker in slot_declarations else target_agent
+                declaration_keys = tuple(
+                    dict.fromkeys(
+                        (
+                            *scheduled_agents,
+                            *(
+                                slot
+                                for agent in scheduled_agents
+                                for slot in _parallel_worker_declarations(agent)
+                            ),
+                        )
+                    )
+                )
+                capacity_placeholders = ", ".join("?" for _ in declaration_keys)
                 self._connection.execute(
                     """INSERT INTO execution_scheduler_workers
                        (agent_id, declared_capacity, observed_at) VALUES (?, ?, ?)
                        ON CONFLICT(agent_id) DO UPDATE SET
                          declared_capacity = excluded.declared_capacity,
                          observed_at = excluded.observed_at""",
-                    (target_agent, max_parallel_roots, timestamp),
+                    (declaration_key, max_parallel_roots, timestamp),
                 )
                 advertised = self._connection.execute(
                     f"""SELECT MIN(declared_capacity) FROM execution_scheduler_workers
-                         WHERE agent_id IN ({placeholders}) AND observed_at >= ?""",
-                    (*scheduled_agents, freshness),
+                         WHERE agent_id IN ({capacity_placeholders}) AND observed_at >= ?""",
+                    (*declaration_keys, freshness),
                 ).fetchone()[0]
                 if advertised is not None:
                     effective_capacity = min(effective_capacity, int(advertised))
@@ -527,15 +563,26 @@ class ProviderJobsStateFacade:
             if occupied >= effective_capacity:
                 return None
             busy_agents = {
-                str(item["agent_id"])
+                str(item["agent_id"]): int(item["active_count"])
                 for item in self._connection.execute(
-                    """SELECT DISTINCT agent_id FROM provider_jobs
+                    """SELECT agent_id, COUNT(*) AS active_count FROM provider_jobs
+                       WHERE status IN ('leased', 'executing')
+                         AND lease_expires_at > ? GROUP BY agent_id""",
+                    (timestamp,),
+                ).fetchall()
+            }
+            busy_workers = {
+                str(item["lease_owner"])
+                for item in self._connection.execute(
+                    """SELECT DISTINCT lease_owner FROM provider_jobs
                        WHERE status IN ('leased', 'executing')
                          AND lease_expires_at > ?""",
                     (timestamp,),
                 ).fetchall()
             }
-            if target_agent in busy_agents:
+            if worker in busy_workers or busy_agents.get(target_agent, 0) >= capacities.get(
+                target_agent, 1
+            ):
                 return None
             row = self._connection.execute(
                 _ELIGIBLE_PROVIDER_JOB_SQL,
@@ -545,17 +592,29 @@ class ProviderJobsStateFacade:
                 return None
             if scheduled_agents:
                 health_rows = self._connection.execute(
-                    f"""SELECT DISTINCT agent_id FROM runtime_health
+                    f"""SELECT DISTINCT agent_id, instance_id FROM runtime_health
                          WHERE component = 'provider_worker'
                            AND agent_id IN ({placeholders})
+                           AND active_job_id IS NULL
                            AND heartbeat_at >= ?""",
                     (*scheduled_agents, freshness),
                 ).fetchall()
-                live_agents = {target_agent}
-                live_agents.update(str(item["agent_id"]) for item in health_rows)
+                live_idle_agents = {target_agent}
+                for item in health_rows:
+                    contender_agent = str(item["agent_id"])
+                    instance_id = str(item["instance_id"])
+                    expected_ids = (
+                        _parallel_worker_declarations(contender_agent)[
+                            : capacities.get(contender_agent, 1)
+                        ]
+                        if contender_agent in {"codex", "claude"}
+                        else (f"{contender_agent}-worker",)
+                    )
+                    if instance_id in expected_ids and instance_id not in busy_workers:
+                        live_idle_agents.add(contender_agent)
                 contenders: list[tuple[int, str, int, int, sqlite3.Row]] = []
-                for contender_agent in sorted(live_agents.intersection(scheduled_agents)):
-                    if contender_agent in busy_agents:
+                for contender_agent in sorted(live_idle_agents.intersection(scheduled_agents)):
+                    if busy_agents.get(contender_agent, 0) >= capacities.get(contender_agent, 1):
                         continue
                     candidate = self._connection.execute(
                         _ELIGIBLE_PROVIDER_JOB_SQL,

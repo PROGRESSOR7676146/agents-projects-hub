@@ -1467,6 +1467,10 @@ class ProjectHubService:
             return opencode_models(agent.executable or "opencode")
         if agent.runtime == "antigravity":
             return antigravity_models(agent.executable or "agy")
+        if agent.runtime == "claude":
+            return (
+                ProviderModel(agent.default_model, agent.default_model, (agent.default_effort,)),
+            )
         return (ProviderModel("provider-selected", "Provider selected", ("high",)),)
 
     def _provider_catalog(

@@ -112,16 +112,18 @@ def project_runtime_health(
     if config.dispatch_mode == "queue" and config.queue_runtime == "external":
         for agent_id in sorted(config.external_worker_agent_ids or ("codex",)):
             agent = config.require_agent(agent_id)
-            instance_id = f"{agent_id}-worker"
-            workers.append(
-                _project(
-                    state.runtime_health_status("provider_worker", instance_id, now=now),
-                    component="provider_worker",
-                    instance_id=instance_id,
-                    runtime=agent.runtime,
-                    agent_id=agent_id,
+            slot_count = config.worker_count_for_agent(agent_id)
+            for slot in range(1, slot_count + 1):
+                instance_id = f"{agent_id}-worker" if slot == 1 else f"{agent_id}-worker-{slot}"
+                workers.append(
+                    _project(
+                        state.runtime_health_status("provider_worker", instance_id, now=now),
+                        component="provider_worker",
+                        instance_id=instance_id,
+                        runtime=agent.runtime,
+                        agent_id=agent_id,
+                    )
                 )
-            )
     required = [controller, monitor]
     if sender["status"] != "not_configured":
         required.append(sender)
@@ -131,6 +133,11 @@ def project_runtime_health(
     release_identities: set[tuple[str, str, str]] = set()
     unknown_release = False
     for item in required:
+        # A row written under this key by another runtime cannot vouch for the
+        # slot's release. Ordinary degradation keeps its reported identity; it
+        # is surfaced by the component's own health status instead.
+        if item.get("identity_mismatch"):
+            unknown_release = True
         version = item.get("release_version")
         git_sha = item.get("release_git_sha")
         built_at = item.get("release_built_at")

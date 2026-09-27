@@ -14,10 +14,17 @@ and the [decision map](decisions/README.md) routes durable rationale.
 The completed [requirements split](product/REQUIREMENTS_SPLIT_PLAN.md) is
 migration rationale, not a routine prerequisite or another specification.
 
+For Claude Code/Codex integration, read the accepted
+[lead/advisor plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md) and its
+[next development task](operations/NEXT_DEVELOPMENT_SESSION.md) after the
+baseline above. Check [status](status/PROJECT_STATUS.md) for the implemented
+subset; the plan's accepted role choices are not a claim of runtime parity.
+
 ## Delivery and operation
 
 - [Roadmap](ROADMAP.ru.md)
 - [Next development session](operations/NEXT_DEVELOPMENT_SESSION.md)
+- [Claude Code and Codex: bounded lead/advisor plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
 - [Inbound materials implementation plan](operations/INBOUND_MATERIALS_PLAN.md)
 - [Operations](operations/README.md)
 - [Queue and process recovery](operations/QUEUE_RECOVERY.md)
@@ -34,6 +41,16 @@ migration rationale, not a routine prerequisite or another specification.
 - [Saved Codex session connection](operations/SESSION_CONNECT.md)
 - [Project/group onboarding](operations/PROJECT_GROUP_ONBOARDING_PLAN.md)
 - [Testing and privacy gate](testing/README.md)
+
+## Research proposals
+
+- [Agent scoring and resource-aware allocation](research/AGENT_SCORING_AND_ALLOCATION.ru.md)
+  — metrics, comparative trials, subscription constraints and Jev assessment;
+  the [product foundation](product/EVALUATION_AND_ALLOCATION.md) is accepted,
+  while methods and implementation remain subject to validation.
+- [Multi-provider agent collaboration](research/MULTI_AGENT_COLLABORATION.ru.md)
+  — non-normative research on team chat, coordination protocols, isolated work,
+  delegation, and acceptance; not an implemented or accepted product contract.
 
 ## Truth rules
 

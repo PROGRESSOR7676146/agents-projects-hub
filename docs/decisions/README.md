@@ -1,7 +1,7 @@
 # Decision map
 
 Status: active  
-Last updated: 2026-09-13
+Last updated: 2026-09-27
 
 This directory is the durable entry point for consequential product and
 architecture decisions. New records should be named `NNNN-short-title.md`.
@@ -46,7 +46,6 @@ with a new record.
 | Provisioning fencing and owner membership | Schema-28 snapshots every configured owner, fences the private user session and workflow lease, centralizes project resolution, and persists command/result delivery recovery. | [ADR 0025](0025-provisioning-fencing-and-owner-membership.md) |
 | Signed GitHub merge privacy boundary | A pinned-signature merge may exempt an externally declared exact author-email span and only the fingerprint rule on a complete author-name or hosted source-owner span equal to local origin; all surrounding metadata remains scanned. | [ADR 0026](0026-signed-github-merge-privacy-boundary.md) |
 | No silent session rebind on project relocation | Schema-29 project editing preserves immutable group identity, blocks live provider state, and recovers the registry/SQLite commit without rewriting provider-native roots. | [ADR 0027](0027-no-silent-session-rebind-on-project-relocation.md) |
-
 | Explicit Codex provider routing | Schema-30 retains source provenance while a local provider setting pins start/resume and native CLI transfer without replacing the thread. | [ADR 0028](0028-explicit-codex-provider-routing.md) |
 | Execution root validation | Recheck the registered canonical allowlisted Git root before Hub-owned execution; invalid roots fail before invocation with no automatic replay. | [ADR 0029](0029-execution-time-root-validation.md) |
 | Root execution exclusion | Schema-31 transactional ownership permits at most one Hub-owned productive writer per canonical root across topics/providers; unresolved uncertainty retains the scope. | [ADR 0030](0030-canonical-root-execution-exclusion.md) |
@@ -56,6 +55,10 @@ with a new record.
 | Maintenance validation | Cheap contracts fail before expensive checks; focused iteration and one canonical pre-push run preserve independent CI without a receipt cache. | [ADR 0034](0034-fail-fast-maintenance-validation.md) |
 | Exact Codex turn recovery | Schema 34 separates provider terminality from incomplete job history, enables explicit same-session continuation, and gates adoption of an already opened CLI. | [ADR 0035](0035-exact-terminal-turn-reconciliation.md) |
 | Durable local-root blockers | Schema 35 refuses new blocked input, holds already accepted queue work for an exact owner decision, and delivers Hub notices independently of provider execution. | [ADR 0036](0036-durable-local-root-blockers.md) |
+| Evidence-based task allocation | Accepted foundation for participant evaluation and resource-aware allocation; implementation pending, optional judges and bounded experiments. | [ADR 0037](0037-evidence-based-task-allocation.md) |
+| Multiple Codex worker slots | Separate Codex processes share a bounded queue while retaining one client/connection per slot, root exclusion, fairness and exact revision health. | [ADR 0038](0038-multiple-codex-worker-slots.md) |
+| Limited Claude CPA workers | Separate Claude CLI slots share queue bounds; the initial adapter is text-only until approval and advisor isolation are proven. | [ADR 0039](0039-claude-cpa-worker-scaffold.md) |
+| Bounded Claude/Codex collaboration | One human-selected lead and one read-only advisor run a durable sequential review; parallel writers and automatic scoring are deferred. | [ADR 0040](0040-bounded-claude-codex-lead-advisor.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

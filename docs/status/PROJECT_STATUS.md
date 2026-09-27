@@ -8,6 +8,30 @@ operator deployment inventory or live conversation evidence.
 
 ## Quality checkpoint
 
+Multiple Codex worker slots are implemented behind external queue configuration;
+offline admission, root exclusion, fairness and health checks are covered.
+Deployment and live three-project acceptance remain pending. See
+[REQ-QUEUE-002](../product/PERSISTENCE_AND_RECOVERY.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
+and [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md).
+
+Claude Code now has a repository-only, text-only external worker scaffold with
+separate three-slot configuration, exact result/session checks and a local CPA
+route preflight. Offline tests cover these boundaries and shared queue admission;
+no Claude service or private configuration was deployed. Human approvals,
+write-capable lead, isolated advisor, native local transfer, session connect and
+live CPA/account acceptance remain pending. See [REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md)
+and [ADR 0039](../decisions/0039-claude-cpa-worker-scaffold.md).
+
+Participant evaluation and resource-aware task allocation are an accepted
+product foundation; implementation and acceptance remain pending. See
+[the owning requirements](../product/EVALUATION_AND_ALLOCATION.md) and
+[ADR 0037](../decisions/0037-evidence-based-task-allocation.md).
+The initial [Claude/Codex milestone](../operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
+is scoped to one lead, a read-only advisor and a minimal outcome journal;
+automated scoring and parallel writers are deferred. Full provider integration,
+role enforcement and live acceptance remain pending; see
+[ADR 0040](../decisions/0040-bounded-claude-codex-lead-advisor.md).
+
 Schema 35 durable root-blocker admission, held-job owner decisions and Hub
 notices are in repository implementation; live Telegram/provider acceptance
 and immutable deployment remain separate. Offline evidence covers refusal,
@@ -577,11 +601,10 @@ artifact for schema 33 remain deployment-specific; the current target is schema 
   alone may also be suppressed on a complete author-name or hosted source-owner
   span that exactly repeats the valid local origin owner; all surrounding
   metadata and unrelated rules remain scanned.
-- Documentation validation inventories all 102 normative product requirement IDs,
-  protects all 20 numbered baseline sections by content hash, and checks local
-  Markdown files/anchors repository-wide. The product baseline is split into a
-  short normative index and five stable capability modules; the guarded move
-  changed no numbered normative section content.
+- Documentation validation inventories normative requirement IDs, protects
+  numbered baseline sections by content hash, and checks local Markdown
+  files/anchors repository-wide. The product index routes capability modules;
+  the manifest records their current integrity inventory.
 
 ## Acceptance still required per deployment
 

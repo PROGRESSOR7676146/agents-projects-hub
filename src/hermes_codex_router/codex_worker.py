@@ -22,6 +22,7 @@ class CodexQueueWorker(ExternalQueueWorker):
         supervisor: CodexAppServerSupervisor | None = None,
         adapter: ExternalCliAdapter | None = None,
         worker_id: str | None = None,
+        worker_slot: int = 1,
     ) -> None:
         try:
             super().__init__(
@@ -31,6 +32,7 @@ class CodexQueueWorker(ExternalQueueWorker):
                 supervisor=supervisor,
                 adapter=adapter,
                 worker_id=worker_id,
+                worker_slot=worker_slot,
             )
         except ExternalQueueWorkerError as exc:
             raise CodexWorkerError(str(exc)) from exc

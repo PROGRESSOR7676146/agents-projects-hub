@@ -237,6 +237,141 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         self.assertTrue(worker.run_cycle())
         self.assertEqual(adapter.last_cwd, target)
 
+    def test_three_claude_slots_have_separate_state_and_adapter_instances(self) -> None:
+        claude = AgentDefinition(
+            "claude",
+            "Claude",
+            "example_claude_bot",
+            "claude",
+            None,
+            False,
+            False,
+            "sonnet",
+            "high",
+            executable="claude",
+        )
+        config = replace(
+            self.config,
+            agents=(*self.config.agents, claude),
+            external_worker_agent_ids=(*self.config.external_worker_agent_ids, "claude"),
+            claude_worker_count=3,
+        )
+        workers = [
+            ExternalQueueWorker(config, "claude", registry=self.registry, worker_slot=slot)
+            for slot in (1, 2, 3)
+        ]
+        try:
+            self.assertEqual(
+                [worker.worker_id for worker in workers],
+                ["claude-worker", "claude-worker-2", "claude-worker-3"],
+            )
+            self.assertEqual(len({id(worker.state) for worker in workers}), 3)
+            self.assertEqual(len({id(worker.adapter) for worker in workers}), 3)
+            with self.assertRaisesRegex(RuntimeError, "worker slot"):
+                ExternalQueueWorker(config, "claude", registry=self.registry, worker_slot=4)
+        finally:
+            for worker in workers:
+                worker.close()
+
+    def test_cli_starts_only_configured_claude_slot(self) -> None:
+        claude = AgentDefinition(
+            "claude",
+            "Claude",
+            "example_claude_bot",
+            "claude",
+            None,
+            False,
+            False,
+            "sonnet",
+            "high",
+            executable="claude",
+        )
+        config = replace(
+            self.config,
+            agents=(*self.config.agents, claude),
+            external_worker_agent_ids=(*self.config.external_worker_agent_ids, "claude"),
+            claude_worker_count=3,
+        )
+        started: list[int] = []
+
+        class FakeWorker:
+            def __init__(self, _config: HubConfig, _agent_id: str, *, worker_slot: int = 1) -> None:
+                started.append(worker_slot)
+
+            def run_forever(self, *, poll_seconds: float) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        with (
+            patch("hermes_codex_router.cli.load_external_worker_config", return_value=config),
+            patch("hermes_codex_router.cli.ExternalQueueWorker", FakeWorker),
+        ):
+            self.assertEqual(
+                main(["worker", "example.json", "--agent", "claude", "--slot", "3"]), 0
+            )
+            self.assertEqual(
+                main(["worker", "example.json", "--agent", "claude", "--slot", "4"]), 2
+            )
+        self.assertEqual(started, [3])
+
+    def test_claude_worker_commits_visible_result_to_existing_outbox(self) -> None:
+        claude = AgentDefinition(
+            "claude",
+            "Claude",
+            "example_claude_bot",
+            "claude",
+            None,
+            False,
+            False,
+            "sonnet",
+            "high",
+            executable="claude",
+        )
+        config = replace(
+            self.config,
+            agents=(*self.config.agents, claude),
+            external_worker_agent_ids=(*self.config.external_worker_agent_ids, "claude"),
+        )
+        state = HubState.open(config.state_path)
+        try:
+            topic = state.observe_topic(
+                project_id="example-project",
+                chat_id=-1001234567890,
+                thread_id=145,
+                title="Example",
+            )
+            session = state.activate_agent(topic.topic_id, "claude", "sonnet", "high")
+            job, _ = state.enqueue_provider_job(
+                idempotency_key="claude:fictional:first",
+                chat_id=topic.chat_id,
+                message_id=145,
+                topic_id=topic.topic_id,
+                agent_id="claude",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                model="sonnet",
+                effort="high",
+                payload_text="fictional task",
+            )
+        finally:
+            state.close()
+        adapter = Adapter("claude")
+        worker = ExternalQueueWorker(
+            config, "claude", registry=self.registry, adapter=cast(Any, adapter)
+        )
+        try:
+            self.assertTrue(worker.run_cycle())
+            completed = worker.state.get_provider_job(job.job_id)
+            self.assertEqual(completed.status, "result_ready")
+            self.assertEqual(
+                worker.state.get_session(session.session_id).provider_session_id, "claude-1"
+            )
+            self.assertEqual(adapter.calls, 1)
+        finally:
+            worker.close()
+
     def test_running_worker_loads_new_dynamic_project_before_provider_boundary(self) -> None:
         adapter = Adapter("opencode")
         worker = ExternalQueueWorker(

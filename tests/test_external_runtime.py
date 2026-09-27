@@ -6,7 +6,9 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from hermes_codex_router.external_runtime import (
     ExternalCliAdapter,
@@ -17,6 +19,185 @@ from hermes_codex_router.external_runtime import (
 
 
 class ExternalRuntimeTests(unittest.TestCase):
+    def test_claude_requires_explicit_local_cpa_route_before_provider_start(self) -> None:
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = ExternalCliAdapter("claude", run=fake_run)
+            for env in (
+                {},
+                {
+                    "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+                    "ANTHROPIC_AUTH_TOKEN": "example",
+                },
+                {
+                    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                    "ANTHROPIC_API_KEY": "example",
+                    "ANTHROPIC_AUTH_TOKEN": "example",
+                },
+                {
+                    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                    "ANTHROPIC_AUTH_TOKEN": "example",
+                    "CLAUDE_CODE_USE_BEDROCK": "1",
+                },
+            ):
+                with self.subTest(env=tuple(env)), patch.dict("os.environ", env, clear=True):
+                    with self.assertRaises(ProviderUnavailableError):
+                        adapter.run_turn(cwd=Path(directory), prompt="hello")
+        self.assertEqual(calls, [])
+
+    def test_claude_start_and_exact_resume_use_only_terminal_visible_result(self) -> None:
+        session = str(uuid.uuid4())
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            output = (
+                '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"private"}]}}\n'
+                '{"type":"result","subtype":"success","is_error":false,'
+                f'"session_id":"{session}","result":"Visible answer"}}\n'
+            )
+            return subprocess.CompletedProcess(argv, 0, output, "")
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(
+                "os.environ",
+                {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+                clear=True,
+            ),
+        ):
+            adapter = ExternalCliAdapter("claude", run=fake_run)
+            started = adapter.run_turn(
+                cwd=Path(directory), prompt="hello", model="sonnet", effort="high"
+            )
+            resumed = adapter.run_turn(cwd=Path(directory), prompt="again", session_id=session)
+        self.assertEqual((started.text, resumed.provider_session_id), ("Visible answer", session))
+        self.assertNotIn("private", started.text)
+        self.assertIn("--strict-mcp-config", calls[0])
+        self.assertIn("--safe-mode", calls[0])
+        self.assertEqual(calls[0][calls[0].index("--tools") + 1], "")
+        self.assertEqual(calls[1][calls[1].index("--resume") + 1], session)
+        for call, prompt in zip(calls, ("hello", "again")):
+            self.assertEqual(call[-2:], ("--", prompt))
+
+    def test_claude_prompt_cannot_be_read_as_an_option_value(self) -> None:
+        session = str(uuid.uuid4())
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            output = (
+                '{"type":"result","subtype":"success","is_error":false,'
+                f'"session_id":"{session}","result":"Visible answer"}}\n'
+            )
+            return subprocess.CompletedProcess(argv, 0, output, "")
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(
+                "os.environ",
+                {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+                clear=True,
+            ),
+        ):
+            ExternalCliAdapter("claude", run=fake_run).run_turn(
+                cwd=Path(directory), prompt="- first item"
+            )
+        # `--tools <tools...>` is variadic; without a separator a prompt that
+        # directly follows it would be parsed as another tool name.
+        self.assertEqual(calls[0][-4:], ("--tools", "", "--", "- first item"))
+
+    def test_claude_reports_the_model_the_cli_actually_used(self) -> None:
+        session = str(uuid.uuid4())
+        outputs = (
+            (
+                '{"type":"system","subtype":"init","model":"claude-example-routed",'
+                f'"session_id":"{session}"}}\n'
+                '{"type":"assistant","message":{"model":"claude-example-answered",'
+                '"content":[{"type":"text","text":"Visible answer"}]}}\n',
+                "claude-example-answered",
+            ),
+            (
+                '{"type":"system","subtype":"init","model":"claude-example-routed",'
+                f'"session_id":"{session}"}}\n',
+                "claude-example-routed",
+            ),
+            ("", "sonnet"),
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(
+                "os.environ",
+                {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+                clear=True,
+            ),
+        ):
+            for events, expected in outputs:
+
+                def fake_run(
+                    argv: tuple[str, ...], **_: object
+                ) -> subprocess.CompletedProcess[str]:
+                    output = events + (
+                        '{"type":"result","subtype":"success","is_error":false,'
+                        f'"session_id":"{session}","result":"Visible answer"}}\n'
+                    )
+                    return subprocess.CompletedProcess(argv, 0, output, "")
+
+                with self.subTest(expected=expected):
+                    result = ExternalCliAdapter("claude", run=fake_run).run_turn(
+                        cwd=Path(directory), prompt="hello", model="sonnet"
+                    )
+                    self.assertEqual(result.model, expected)
+
+    def test_claude_rejects_missing_completion_and_session_switch(self) -> None:
+        original = str(uuid.uuid4())
+        different = str(uuid.uuid4())
+        outputs = (
+            '{"type":"assistant","message":{"content":[]}}\n',
+            f'{{"type":"result","subtype":"success","is_error":false,"session_id":"{different}","result":"answer"}}\n',
+            f'{{"type":"result","subtype":"error","is_error":true,"session_id":"{original}","result":"error"}}\n',
+            '{"type":"result", broken\n',
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(
+                "os.environ",
+                {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+                clear=True,
+            ),
+        ):
+            for output in outputs:
+
+                def fake_run(
+                    argv: tuple[str, ...], **_: object
+                ) -> subprocess.CompletedProcess[str]:
+                    return subprocess.CompletedProcess(argv, 0, output, "")
+
+                with self.subTest(output=output):
+                    with self.assertRaises(RuntimeError):
+                        ExternalCliAdapter("claude", run=fake_run).run_turn(
+                            cwd=Path(directory), prompt="again", session_id=original
+                        )
+
+    def test_claude_missing_cli_fails_before_provider_execution(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(
+                "os.environ",
+                {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+                clear=True,
+            ),
+        ):
+            adapter = ExternalCliAdapter("claude", executable=str(Path(directory) / "missing-cli"))
+            with self.assertRaises(ProviderUnavailableError) as raised:
+                adapter.run_turn(cwd=Path(directory), prompt="hello")
+        self.assertEqual(raised.exception.code, "claude_cli_unavailable")
+
     def test_each_cli_adapter_fails_closed_on_incompatible_output(self) -> None:
         def incompatible(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(argv, 0, "human-only output", "")

@@ -16,6 +16,38 @@ from hermes_codex_router.provider_catalog_cache import ProviderCatalogCache
 
 
 class CatalogRefreshTests(unittest.TestCase):
+    def test_claude_catalog_uses_only_explicit_model_without_provider_call(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = replace(
+                self._config(root),
+                agents=(
+                    AgentDefinition(
+                        "claude",
+                        "Claude",
+                        "claude_bot",
+                        "claude",
+                        None,
+                        False,
+                        False,
+                        "sonnet",
+                        "high",
+                    ),
+                ),
+            )
+
+            def unexpected_run(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
+                self.fail("catalog refresh must not invoke Claude CLI")
+
+            result = refresh_provider_catalogs(config, run=unexpected_run)
+            snapshot = ProviderCatalogCache(root / "provider-model-catalogs.json").load("claude")
+            self.assertEqual(result.refreshed, ("claude",))
+            assert snapshot is not None
+            self.assertEqual(
+                [(model.model_id, model.efforts) for model in snapshot.models],
+                [("sonnet", ("high",))],
+            )
+
     def test_native_metadata_discovery_closes_connection_without_turns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = self._config(Path(directory))

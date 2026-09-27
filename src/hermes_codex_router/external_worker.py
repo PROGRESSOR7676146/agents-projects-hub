@@ -78,7 +78,7 @@ class ExternalQueueWorkerError(RuntimeError):
 class ExternalQueueWorker:
     """One provider-scoped queue worker with no Telegram transport capability."""
 
-    _LOCAL_RUNTIMES = frozenset({"codex", "opencode", "antigravity"})
+    _LOCAL_RUNTIMES = frozenset({"codex", "claude", "opencode", "antigravity"})
 
     def __init__(
         self,
@@ -89,6 +89,7 @@ class ExternalQueueWorker:
         supervisor: CodexAppServerSupervisor | None = None,
         adapter: ExternalCliAdapter | None = None,
         worker_id: str | None = None,
+        worker_slot: int = 1,
     ) -> None:
         if config.dispatch_mode != "queue" or config.queue_runtime != "external":
             raise ExternalQueueWorkerError(
@@ -106,10 +107,16 @@ class ExternalQueueWorker:
             )
         if self.agent.runtime not in self._LOCAL_RUNTIMES:
             raise ExternalQueueWorkerError(
-                "external worker supports codex, opencode, and antigravity"
+                "external worker supports codex, claude, opencode, and antigravity"
             )
         if self.agent.managed_externally:
             raise ExternalQueueWorkerError("external worker agent must be locally managed")
+        if self.agent.runtime == "codex" and worker_slot > 1 and config.manage_codex_server:
+            raise ExternalQueueWorkerError(
+                "multiple Codex slots require a separately managed server"
+            )
+        if worker_slot < 1 or worker_slot > config.worker_count_for_agent(agent_id):
+            raise ExternalQueueWorkerError("worker slot is not configured for this agent")
         validate_adoption_mode(config)
         self.registry = registry or load_registry(config.registry_path)
         self.state = HubState.open(config.state_path)
@@ -120,7 +127,11 @@ class ExternalQueueWorker:
         except BaseException:
             self.state.close()
             raise
-        self.worker_id = worker_id or f"{self.agent.agent_id}-worker"
+        self.worker_id = worker_id or (
+            f"{self.agent.agent_id}-worker"
+            if worker_slot == 1
+            else f"{self.agent.agent_id}-worker-{worker_slot}"
+        )
         self._started_at = datetime.now(timezone.utc)
         self._process_start_marker = uuid.uuid4().hex
         self._last_success_at: datetime | None = None
@@ -292,6 +303,10 @@ class ExternalQueueWorker:
             self.worker_id,
             max_parallel_roots=self.config.max_parallel_roots,
             scheduler_agents=self.config.external_worker_agent_ids,
+            agent_capacities={
+                "codex": self.config.codex_worker_count,
+                "claude": self.config.claude_worker_count,
+            },
         )
         if job is None:
             return self._run_connect_cycle() if self.agent.runtime == "codex" else False

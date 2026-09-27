@@ -6,9 +6,11 @@ import signal
 import subprocess
 import tempfile
 import threading
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit
 
 from .antigravity_model import model_arguments
 from .provider_limits import ProviderLimit, parse_antigravity_limit, parse_opencode_limit
@@ -68,6 +70,102 @@ def _json_values(output: str) -> list[dict[str, object]]:
     return values
 
 
+def _claude_cpa_environment(environment: dict[str, str]) -> None:
+    """Refuse an ambiguous route before a productive Claude CLI invocation."""
+    try:
+        route = urlsplit(environment.get("ANTHROPIC_BASE_URL", ""))
+        local_port = route.port
+    except ValueError as exc:
+        raise ProviderUnavailableError(
+            "claude_cpa_route_unverified", "Claude requires an explicit local CPA route."
+        ) from exc
+    if (
+        route.scheme != "http"
+        or route.hostname not in {"127.0.0.1", "::1"}
+        or local_port is None
+        or route.username is not None
+        or route.password is not None
+        or route.path not in {"", "/"}
+        or route.query
+        or route.fragment
+    ):
+        raise ProviderUnavailableError(
+            "claude_cpa_route_unverified", "Claude requires an explicit local CPA route."
+        )
+    if bool(environment.get("ANTHROPIC_AUTH_TOKEN")) == bool(
+        environment.get("ANTHROPIC_API_KEY")
+    ) or any(
+        environment.get(key)
+        for key in (
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "CLAUDE_CODE_USE_FOUNDRY",
+        )
+    ):
+        raise ProviderUnavailableError(
+            "claude_cpa_credential_ambiguous",
+            "Claude CPA credentials or provider selection are ambiguous.",
+        )
+
+
+def _claude_result(
+    values: list[dict[str, object]], session_id: str | None, model: str | None
+) -> ExternalTurnResult:
+    results = [value for value in values if value.get("type") == "result"]
+    if len(results) != 1:
+        raise ExternalRuntimeError("claude returned no unique terminal result")
+    terminal = results[0]
+    actual_session = terminal.get("session_id")
+    if not isinstance(actual_session, str):
+        raise ExternalRuntimeError("claude returned no session id")
+    try:
+        uuid.UUID(actual_session)
+    except ValueError as exc:
+        raise ExternalRuntimeError("claude returned an invalid session id") from exc
+    if session_id is not None and actual_session != session_id:
+        raise ExternalRuntimeError("claude resumed a different session")
+    if terminal.get("is_error") is not False or terminal.get("subtype") != "success":
+        raise ExternalRuntimeError("claude did not complete successfully")
+    visible = terminal.get("result")
+    if not isinstance(visible, str) or not visible.strip():
+        raise ExternalRuntimeError("claude completed without visible text")
+    return ExternalTurnResult(
+        "claude", visible.strip(), actual_session, _claude_model(values, model)
+    )
+
+
+def _claude_model(values: list[dict[str, object]], requested: str | None) -> str | None:
+    """Prefer the model that answered, then the session model, over the request."""
+    initialized: str | None = None
+    answered: str | None = None
+    for value in values:
+        if value.get("type") == "system" and value.get("subtype") == "init":
+            reported = value.get("model")
+            if isinstance(reported, str) and reported.strip():
+                initialized = reported.strip()[:200]
+        message = value.get("message")
+        if value.get("type") == "assistant" and isinstance(message, dict):
+            reported = message.get("model")
+            if isinstance(reported, str) and reported.strip():
+                answered = reported.strip()[:200]
+    return answered or initialized or requested
+
+
+def _claude_json_events(output: str) -> list[dict[str, object]]:
+    values: list[dict[str, object]] = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ExternalRuntimeError("claude returned malformed structured output") from exc
+        if not isinstance(value, dict):
+            raise ExternalRuntimeError("claude returned a non-object event")
+        values.append(value)
+    return values
+
+
 class ExternalCliAdapter:
     def __init__(
         self,
@@ -79,7 +177,7 @@ class ExternalCliAdapter:
         antigravity_log_path: Path | None = None,
         run: Run = subprocess.run,
     ) -> None:
-        if runtime not in {"gemini", "antigravity", "opencode"}:
+        if runtime not in {"gemini", "antigravity", "opencode", "claude"}:
             raise ExternalRuntimeError(f"unsupported external runtime: {runtime}")
         self.runtime = runtime
         self.executable = executable or ("agy" if runtime == "antigravity" else runtime)
@@ -168,6 +266,44 @@ class ExternalCliAdapter:
                 argv.extend(("--conversation", session_id))
             argv.extend(model_arguments(model, effort))
             return tuple(argv)
+        if self.runtime == "claude":
+            if session_id:
+                try:
+                    uuid.UUID(session_id)
+                except ValueError as exc:
+                    raise ProviderUnavailableError(
+                        "claude_resume_invalid", "Claude session identity is invalid."
+                    ) from exc
+            argv = [
+                self.executable,
+                "--print",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--restricted",
+                "--safe-mode",
+                "--strict-mcp-config",
+                "--disable-slash-commands",
+                "--permission-mode",
+                "dontAsk",
+                "--permission-prompts",
+                "none",
+                "--tools",
+                "",
+            ]
+            if session_id:
+                argv.extend(("--resume", session_id))
+            if model and model != "unknown":
+                argv.extend(("--model", model))
+            if effort and effort not in {"none", "minimal"}:
+                if effort not in {"low", "medium", "high", "xhigh", "max"}:
+                    raise ProviderUnavailableError(
+                        "claude_effort_unsupported", "Claude effort is unsupported."
+                    )
+                argv.extend(("--effort", effort))
+            # `--tools` is variadic, so the prompt must not directly follow it.
+            argv.extend(("--", prompt))
+            return tuple(argv)
         argv = [
             self.executable,
             "run",
@@ -205,6 +341,8 @@ class ExternalCliAdapter:
             effort=effort,
         )
         environment = os.environ.copy()
+        if self.runtime == "claude":
+            _claude_cpa_environment(environment)
         if staging_dir is not None:
             environment["HUB_STAGING_DIR"] = str(staging_dir)
             environment["HUB_ARTIFACTS_DIR"] = str(staging_dir)
@@ -235,16 +373,23 @@ class ExternalCliAdapter:
                         log_offset = self.opencode_log_path.stat().st_size
                 except OSError:
                     pass
-            process = subprocess.Popen(
-                argv,
-                cwd=cwd,
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                start_new_session=True,
-            )
+            try:
+                process = subprocess.Popen(
+                    argv,
+                    cwd=cwd,
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                )
+            except OSError as exc:
+                if self.runtime == "claude":
+                    raise ProviderUnavailableError(
+                        "claude_cli_unavailable", "Claude CLI could not be started."
+                    ) from exc
+                raise
             with self._process_lock:
                 self._active_process = process
             limit_stop = threading.Event()
@@ -331,6 +476,10 @@ class ExternalCliAdapter:
         if detected_limit:
             raise ProviderLimitError(detected_limit[0])
         if result.returncode != 0:
+            if self.runtime == "claude":
+                raise ExternalRuntimeError(
+                    "claude failed safely; inspect private provider diagnostics"
+                )
             detail = (result.stderr or result.stdout).strip()[:1000]
             if self.runtime == "opencode" and (limit := parse_opencode_limit(detail)):
                 raise ProviderLimitError(limit)
@@ -345,9 +494,15 @@ class ExternalCliAdapter:
                         "Antigravity is unavailable from the computer's current network location.",
                     )
             raise ExternalRuntimeError(f"{self.runtime} failed safely: {detail}")
-        values = _json_values(result.stdout)
+        values = (
+            _claude_json_events(result.stdout)
+            if self.runtime == "claude"
+            else _json_values(result.stdout)
+        )
         if not values:
             raise ExternalRuntimeError(f"{self.runtime} returned no structured output")
+        if self.runtime == "claude":
+            return _claude_result(values, session_id, model)
         provider_session_id: str | None = session_id
         detected_model: str | None = model
         text_parts: list[str] = []

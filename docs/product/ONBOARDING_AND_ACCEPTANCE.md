@@ -178,6 +178,14 @@ necessary but not sufficient for items marked live.
   block relocation; crash recovery and callback replay converge once; new
   Controller/worker resolution uses the new root while archived provider origins
   retain the old root.
+- **AC-F-015 (Planned; REQ-COLLAB-001..002, REQ-WRITER-013,
+  REQ-QUEUE-011, REQ-EVAL-010):** Offline tests MUST prove either provider can
+  lead; an uninvoked advisor spends no tokens; advisor tools, local transfer
+  and descendants cannot write; role handover cannot race active work; one
+  bounded review and continuation survive duplicate delivery and restart
+  without replay. Subscription/CPA routing, human approvals, Telegram behavior
+  and exact-session local return require separate live acceptance before parity
+  is claimed.
 
 ## 16. Non-functional acceptance criteria
 
