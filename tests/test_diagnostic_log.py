@@ -5,6 +5,9 @@ import io
 import logging
 import multiprocessing
 import os
+import subprocess
+import sys
+import textwrap
 import threading
 import time
 import unittest
@@ -155,6 +158,58 @@ class DiagnosticLogTests(unittest.TestCase):
             process.join(2)
         writer.join(10)
         self.assertEqual(process.exitcode, 0, "forked child deadlocked on the stream buffer")
+
+    def test_forked_child_exits_normally_while_a_parent_thread_holds_the_stream_buffer(
+        self,
+    ) -> None:
+        # A normal exit runs logging.shutdown(), which flushes every handler.
+        script = textwrap.dedent(
+            """
+            import os, sys, threading, time
+            from hermes_codex_router import diagnostic_log
+
+            read_fd, write_fd = os.pipe()
+            stream = open(write_fd, "w", buffering=1 << 16, encoding="utf-8")
+            diagnostic_log.configure_process_logging(stream)
+
+            def fill_pipe():
+                # Blocks inside the buffered write, holding its lock, until drained.
+                stream.write("x" * 200_000)
+                stream.flush()
+
+            threading.Thread(target=fill_pipe, daemon=True).start()
+            time.sleep(0.5)
+            child = os.fork()
+            if child == 0:
+                diagnostic_log.survived("service.health_publish", RuntimeError("x"))
+                sys.exit(0)
+
+            def drain():
+                with open(read_fd, "rb") as reader:
+                    while reader.read(65536):
+                        pass
+
+            threading.Thread(target=drain, daemon=True).start()
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                done, status = os.waitpid(child, os.WNOHANG)
+                if done:
+                    os._exit(os.waitstatus_to_exitcode(status))
+                time.sleep(0.05)
+            os.kill(child, 9)
+            os.waitpid(child, 0)
+            os._exit(3)
+            """
+        )
+        environment = {**os.environ, "PYTHONPATH": str(PACKAGE.parent)}
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            env=environment,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, "forked child hung at its normal exit")
 
     def test_repeats_are_bounded_and_counted(self) -> None:
         clock = iter((0.0, 1.0, 2.0, 61.0))

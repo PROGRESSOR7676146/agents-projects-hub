@@ -90,15 +90,22 @@ class DiagnosticHandler(logging.StreamHandler):  # type: ignore[type-arg]
     """Stream handler that drops its own failures without printing anything.
 
     For a stream backed by a file descriptor, each record is written with one
-    ``os.write`` call instead of through the stream's Python buffer. A forked
-    child otherwise inherits that buffer's lock in whatever state another
-    thread left it, and a record logged in the child would wait forever.
+    ``os.write`` call instead of through the stream's Python buffer, and
+    ``flush`` leaves that buffer alone because no record is ever in it. A
+    forked child otherwise inherits the buffer's lock in whatever state
+    another thread left it, and a record logged in the child, or the flush
+    ``logging.shutdown`` runs at its normal exit, would wait forever.
     """
 
-    def emit(self, record: logging.LogRecord) -> None:
+    def _descriptor(self) -> int | None:
         try:
-            descriptor = self.stream.fileno()
+            return int(self.stream.fileno())
         except (AttributeError, OSError, ValueError):
+            return None
+
+    def emit(self, record: logging.LogRecord) -> None:
+        descriptor = self._descriptor()
+        if descriptor is None:
             super().emit(record)
             return
         try:
@@ -107,6 +114,10 @@ class DiagnosticHandler(logging.StreamHandler):  # type: ignore[type-arg]
                 data = data[os.write(descriptor, data) :]
         except Exception:  # noqa: BLE001 - reported through handleError, never raised
             self.handleError(record)
+
+    def flush(self) -> None:
+        if self._descriptor() is None:
+            super().flush()
 
     def handleError(self, record: logging.LogRecord) -> None:  # noqa: N802 - logging API
         _count_dropped()
