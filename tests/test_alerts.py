@@ -602,6 +602,30 @@ class OperationalAlertTests(unittest.TestCase):
             self.assertEqual(input_tokens, 75000)
             self.assertEqual(total_tokens, 75500)
 
+    def test_session_parsers_skip_too_deeply_nested_json_lines(self) -> None:
+        nested = "[" * 100_000 + "]" * 100_000
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            rollout = base / "rollout-test.jsonl"
+            rollout.write_text(
+                '{"type":"token_usage_record","payload":{"session_id":"sess-1",'
+                '"usage":{"input_tokens":10,"total_tokens":12}}}\n'
+                f'{{"type":"token_usage_record","payload":{nested}}}\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(_extract_latest_session_token_usage(rollout), ("sess-1", 10, 12))
+            sessions = base / "codex" / "sessions"
+            sessions.mkdir(parents=True)
+            (sessions.parent / "session_index.jsonl").write_text(
+                f'{{"id":"sess-1","thread_name":"Example task"}}\n'
+                f'{{"id":"sess-1","thread_name":{nested}}}\n',
+                encoding="utf-8",
+            )
+            label = _resolve_codex_session_label("sess-1", sessions)
+            self.assertIsNotNone(label)
+            assert label is not None
+            self.assertIn("Example task", label)
+
     def test_check_codex_session_bloat_alerts_and_ignores(self) -> None:
         with TemporaryDirectory() as directory:
             sessions_dir = Path(directory)

@@ -19,12 +19,20 @@ and logs.
 
 ## Decision
 
-`diagnostic_log.survived(site, error)` records one warning containing only the
-exception class name and a static `module.step` label. It never writes the
-exception text, arguments or traceback. A label that does not match the static
-form is replaced, so a caller cannot pass dynamic identifiers. The same site
-and class are emitted at most once a minute, with a count of the suppressed
-repeats.
+`diagnostic_log.survived(site, error)` records one warning containing only a
+registered site label and the exception class name. It never writes the
+exception text, arguments or traceback. Labels come from a closed registry
+that a test keeps equal to the literal call sites; any other label, and any
+class name that is not a plain identifier, is replaced by a neutral value, so
+dynamic identifiers cannot reach the log. The same site and class are emitted
+at most once a minute with a count of suppressed repeats, and the repeat state
+holds a bounded number of keys.
+
+The diagnostic path never raises into its caller. Its stream handler drops
+its own write, flush or closed-stream failures silently instead of using the
+standard logging error dump, which prints a traceback that would include the
+exception being survived; the package logger does not propagate to handlers
+it does not control.
 
 The package logger has a `NullHandler`, so library use stays silent. The CLI
 entry point attaches one stderr handler, which systemd captures in the user

@@ -48,7 +48,7 @@ def _extract_latest_session_token_usage(
         if '"token_usage_record"' in line:
             try:
                 data = json.loads(line)
-            except ValueError:  # a partial or malformed log line
+            except (ValueError, RecursionError):  # partial, malformed or too deeply nested
                 continue
             if data.get("type") == "token_usage_record":
                 payload = data.get("payload")
@@ -121,7 +121,7 @@ def _resolve_codex_session_label(
                             data = json.loads(line)
                             if data.get("id") == session_id and data.get("thread_name"):
                                 thread_name = _clean_text(str(data["thread_name"]))
-                        except (ValueError, AttributeError):  # malformed or non-object line
+                        except (ValueError, AttributeError, RecursionError):  # unusable line
                             continue
         except OSError:
             pass
