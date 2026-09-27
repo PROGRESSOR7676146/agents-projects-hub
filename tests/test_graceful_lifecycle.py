@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import signal
+import tempfile
 import threading
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -59,7 +62,8 @@ class GracefulLifecycleTests(unittest.TestCase):
         instances: list[Any] = []
 
         class Component:
-            def __init__(self, *_args: object, **_kwargs: object) -> None:
+            def __init__(self, *_args: object, **kwargs: object) -> None:
+                self.kwargs = kwargs
                 self.stopped = False
                 self.closed = False
                 instances.append(self)
@@ -75,6 +79,14 @@ class GracefulLifecycleTests(unittest.TestCase):
             def close(self) -> None:
                 self.closed = True
 
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        # The worker command reads its slot capacity and takes a private
+        # per-slot process lock beside the state database before starting.
+        worker_config = SimpleNamespace(
+            state_path=Path(directory.name) / "state.sqlite3",
+            worker_count_for_agent=lambda _agent_id: 3,
+        )
         commands = (
             ("controller", ["controller", "example.json"], "ProjectHubService"),
             ("serve", ["serve", "example.json"], "ProjectHubService"),
@@ -84,6 +96,7 @@ class GracefulLifecycleTests(unittest.TestCase):
                 "ExternalAgentService",
             ),
             ("worker", ["worker", "example.json"], "ExternalQueueWorker"),
+            ("worker slot", ["worker", "example.json", "--slot", "2"], "ExternalQueueWorker"),
             ("sender", ["sender", "example.json"], "TelegramOutboxSender"),
         )
         for label, argv, component_name in commands:
@@ -101,7 +114,7 @@ class GracefulLifecycleTests(unittest.TestCase):
                     patch("hermes_codex_router.cli.load_hub_config", return_value=object()),
                     patch(
                         "hermes_codex_router.cli.load_external_worker_config",
-                        return_value=object(),
+                        return_value=worker_config,
                     ),
                     patch(
                         "hermes_codex_router.cli.load_outbox_sender_config",
@@ -113,6 +126,8 @@ class GracefulLifecycleTests(unittest.TestCase):
                 self.assertEqual(len(instances), 1)
                 self.assertTrue(instances[0].stopped)
                 self.assertTrue(instances[0].closed)
+                if label == "worker slot":
+                    self.assertEqual(instances[0].kwargs, {"worker_slot": 2})
 
     def test_telegram_services_use_bounded_long_poll_and_stop_before_another_poll(self) -> None:
         class State:
