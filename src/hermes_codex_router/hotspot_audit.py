@@ -1,7 +1,8 @@
 """Growth ratchet for maintenance hotspots (maintenance rules 10–12).
 
-A hotspot is a package module of at least ``FILE_THRESHOLD`` lines or a
-function of at least ``FUNCTION_THRESHOLD`` lines. Every hotspot needs a
+A hotspot is a package module, including modules of nested subpackages, of
+at least ``FILE_THRESHOLD`` lines or a function of at least
+``FUNCTION_THRESHOLD`` lines. Every hotspot needs a
 bounded exception in ``docs/operations/hotspots.json`` naming its rationale,
 owner, next review and reopening event (rule 11). A hotspot that grows past its
 recorded ``max_lines`` fails; raising the bound is itself the reviewed
@@ -54,7 +55,7 @@ def _functions(node: ast.AST, prefix: str = "") -> list[tuple[str, int]]:
 def measure_hotspots(root: Path) -> dict[str, int]:
     """Return ``{target: lines}`` for every current file and function hotspot."""
     measured: dict[str, int] = {}
-    for path in sorted((root / PACKAGE_PATH).glob("*.py")):
+    for path in sorted((root / PACKAGE_PATH).rglob("*.py")):
         relative = path.relative_to(root).as_posix()
         source = path.read_text(encoding="utf-8")
         lines = len(source.splitlines())
@@ -92,9 +93,15 @@ def audit_hotspots(root: Path, *, today: date | None = None) -> HotspotAudit:
             if not isinstance(value, str) or not value.strip():
                 errors.append(f"hotspot entry {target} needs a non-empty {field}")
         review = entry.get("next_review")
-        if not isinstance(review, str) or _ISO_DATE.fullmatch(review) is None:
+        review_date: date | None = None
+        if isinstance(review, str) and _ISO_DATE.fullmatch(review) is not None:
+            try:
+                review_date = date.fromisoformat(review)
+            except ValueError:
+                review_date = None
+        if review_date is None:
             errors.append(f"hotspot entry {target} needs next_review as YYYY-MM-DD")
-        elif date.fromisoformat(review) < current_date:
+        elif review_date < current_date:
             debts.append(f"bounded exception review overdue: {target} ({review})")
 
     measured = measure_hotspots(root)

@@ -40,7 +40,9 @@ class HotspotAuditTests(unittest.TestCase):
         lines = ["class Service:", "    def handle(self):"]
         lines += [f"        value_{index} = {index}" for index in range(function_lines - 1)]
         lines += [""] * padding
-        (self.root / PACKAGE_PATH / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        path = self.root / PACKAGE_PATH / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def write_baseline(self, *entries: dict[str, object]) -> None:
         (self.root / BASELINE_PATH).write_text(
@@ -118,6 +120,31 @@ class HotspotAuditTests(unittest.TestCase):
                 "needs next_review as YYYY-MM-DD",
             ),
         )
+
+    def test_modules_in_nested_subpackages_are_measured(self) -> None:
+        self.write_module("nested/extracted.py", 202)
+        (self.root / PACKAGE_PATH / "nested" / "__init__.py").write_text("", encoding="utf-8")
+        self.write_baseline()
+        result = audit_hotspots(self.root, today=date(2026, 10, 1))
+        self.assertEqual(
+            result.errors,
+            (
+                "new hotspot needs a bounded exception: "
+                "src/hermes_codex_router/nested/extracted.py::Service.handle (202 lines)",
+            ),
+        )
+
+    def test_impossible_review_date_is_a_reported_error(self) -> None:
+        self.write_module("service.py", 220)
+        target = "src/hermes_codex_router/service.py::Service.handle"
+        for review, valid in (("2026-02-30", False), ("2028-02-29", True), ("2026-13-01", False)):
+            with self.subTest(review=review):
+                self.write_baseline(_entry(target, 220, next_review=review))
+                result = audit_hotspots(self.root, today=date(2026, 10, 1))
+                expected = (
+                    () if valid else (f"hotspot entry {target} needs next_review as YYYY-MM-DD",)
+                )
+                self.assertEqual(result.errors, expected)
 
     def test_repository_baseline_matches_the_current_tree(self) -> None:
         root = Path(__file__).resolve().parents[1]

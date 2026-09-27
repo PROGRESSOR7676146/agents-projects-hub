@@ -14,8 +14,9 @@ checked them. After the refactoring plan closed, seven commits grew
 ## Decision
 
 `hermes_codex_router.hotspot_audit` runs as a cheap stage of every validation
-profile. It measures every package module of at least 1,500 lines and every
-function of at least 200 lines. Each hotspot needs an entry in
+profile. It measures every package module, including nested subpackages, of at
+least 1,500 lines and every function of at least 200 lines. An impossible
+review date is reported as an error rather than crashing the audit. Each hotspot needs an entry in
 `docs/operations/hotspots.json` with `max_lines` and the rule-11 fields:
 rationale, owner, next review and reopening event.
 
