@@ -3,11 +3,13 @@ from __future__ import annotations
 import ast
 import io
 import logging
+import sqlite3
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from hermes_codex_router import diagnostic_log
+from hermes_codex_router.state import StateError
 
 PACKAGE = Path(__file__).resolve().parents[1] / "src" / "hermes_codex_router"
 SECRET = "https://api.telegram.org/bot123456:ABCdefGHIjkl/sendMessage /home/example/x"
@@ -58,18 +60,20 @@ class DiagnosticLogTests(unittest.TestCase):
         diagnostic_log.reset_repeat_state()
 
     def test_record_names_class_and_site_but_never_exception_text(self) -> None:
-        diagnostic_log.survived("service.health_publish", TokenBearingError(SECRET))
+        diagnostic_log.survived("service.health_publish", sqlite3.OperationalError(SECRET))
+        diagnostic_log.survived("service.client_close", StateError(SECRET))
         output = self.stream.getvalue()
-        self.assertIn("survived TokenBearingError at service.health_publish", output)
+        self.assertIn("survived OperationalError at service.health_publish", output)
+        self.assertIn("survived StateError at service.client_close", output)
         self.assertNotIn("123456", output)
         self.assertNotIn("/home/example", output)
         self.assertNotIn("Traceback", output)
 
     def test_unregistered_or_dynamic_sites_are_not_logged(self) -> None:
-        for index, site in enumerate(
-            ("service.session_fictional_1234", "service.topic -1001234567890", "/home/example/db")
+        for site, error_type in zip(
+            ("service.session_fictional_1234", "service.topic -1001234567890", "/home/example/db"),
+            (RuntimeError, ValueError, KeyError),
         ):
-            error_type = type(f"Error{index}", (RuntimeError,), {})
             diagnostic_log.survived(site, error_type("x"))
         output = self.stream.getvalue()
         self.assertNotIn("fictional_1234", output)
@@ -81,9 +85,26 @@ class DiagnosticLogTests(unittest.TestCase):
         weird = type("Bad\nname /home/example/token", (RuntimeError,), {})
         diagnostic_log.survived("service.health_publish", weird("x"))
         output = self.stream.getvalue()
-        self.assertIn(f"survived {diagnostic_log.UNNAMED_ERROR} at", output)
+        self.assertIn("survived RuntimeError at service.health_publish", output)
         self.assertNotIn("/home/example", output)
         self.assertEqual(len(output.splitlines()), 1)
+
+    def test_a_class_built_at_run_time_never_names_the_record(self) -> None:
+        dynamic = type("Session_fictional_1234_Error", (TimeoutError,), {})
+        spoofed = type(
+            "Session_fictional_5678_Error",
+            (RuntimeError,),
+            {"__module__": "hermes_codex_router.state"},
+        )
+        diagnostic_log.survived("service.health_publish", dynamic("x"))
+        diagnostic_log.survived("service.client_close", spoofed("x"))
+        diagnostic_log.survived("service.context_telemetry", TokenBearingError("x"))
+        output = self.stream.getvalue()
+        self.assertIn("survived TimeoutError at service.health_publish", output)
+        self.assertIn("survived RuntimeError at service.client_close", output)
+        self.assertIn("survived RuntimeError at service.context_telemetry", output)
+        self.assertNotIn("fictional", output)
+        self.assertNotIn("TokenBearingError", output)
 
     def test_failing_log_stream_is_silent_and_never_raises(self) -> None:
         streams = (

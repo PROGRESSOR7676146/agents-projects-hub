@@ -1,7 +1,8 @@
 """Bounded process diagnostics for failures a component deliberately survives.
 
-A record carries only a registered site label and a validated exception class
-name. Exception text, arguments and tracebacks are never written because
+A record carries only a registered site label and the name of the nearest
+exception class defined in code. Exception text, arguments and tracebacks are
+never written because
 provider and Telegram errors can embed tokens, URLs, prompts or local paths
 (REQ-OPS-009, REQ-SEC-004, AC-NF-001). The diagnostic path itself is
 best-effort: a failing log stream is dropped silently instead of printing the
@@ -62,6 +63,12 @@ SITES = frozenset(
     }
 )
 _ERROR_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+# Modules whose classes may name a record: the interpreter, this package and
+# its declared runtime dependencies. A class elsewhere, or one built at run
+# time, is named by its nearest ancestor from this closed set.
+_NAMED_ROOTS = frozenset(
+    {"builtins", __name__.partition(".")[0], "aiohttp", "telethon"}
+) | frozenset(sys.stdlib_module_names)
 _OVERFLOW_KEY = "overflow"
 
 _logger = logging.getLogger(LOGGER_NAME)
@@ -104,17 +111,37 @@ def configure_process_logging(stream: TextIO | None = None) -> None:
     _logger.setLevel(logging.INFO)
 
 
+def _defined_in_code(cls: type) -> bool:
+    name = getattr(cls, "__name__", None)
+    module_name = getattr(cls, "__module__", None)
+    if not isinstance(name, str) or not isinstance(module_name, str):
+        return False
+    if not _ERROR_NAME.fullmatch(name) or module_name.partition(".")[0] not in _NAMED_ROOTS:
+        return False
+    # A class built at run time is not its module's attribute under its own
+    # name, so a dynamic name that merely looks like an identifier never
+    # qualifies. The module dictionary is read without running module hooks.
+    module = sys.modules.get(module_name)
+    return module is not None and vars(module).get(name) is cls
+
+
+def _error_kind(error: BaseException) -> str:
+    for cls in type(error).__mro__:
+        if _defined_in_code(cls):
+            return str(cls.__name__)
+    return UNNAMED_ERROR
+
+
 def survived(site: str, error: BaseException) -> None:
     """Record that a best-effort step failed and execution deliberately continues.
 
-    Never raises. ``site`` must be a registered label; the exception class name
-    is written only when it is a plain identifier. Repeats of the same site and
-    class are emitted at most once per interval with a count.
+    Never raises. ``site`` must be a registered label. The record names the
+    nearest class of ``error`` that is defined in code, so a class built at run
+    time never contributes its name. Repeats of the same site and class are
+    emitted at most once per interval with a count.
     """
     label = site if site in SITES else INVALID_SITE
-    raw_name = getattr(type(error), "__name__", "")
-    kind = raw_name if isinstance(raw_name, str) and _ERROR_NAME.fullmatch(raw_name) else ""
-    kind = kind or UNNAMED_ERROR
+    kind = _error_kind(error)
     key = f"{label}:{kind}"
     current = time.monotonic()
     with _lock:

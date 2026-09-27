@@ -20,11 +20,16 @@ and logs.
 ## Decision
 
 `diagnostic_log.survived(site, error)` records one warning containing only a
-registered site label and the exception class name. It never writes the
+registered site label and an exception class name. It never writes the
 exception text, arguments or traceback. Labels come from a closed registry
-that a test keeps equal to the literal call sites; any other label, and any
-class name that is not a plain identifier, is replaced by a neutral value, so
-dynamic identifiers cannot reach the log. The same site and class are emitted
+that a test keeps equal to the literal call sites; any other label is replaced
+by a neutral value. The class name comes from a closed set too: the nearest
+class of the exception, in method resolution order, that belongs to the
+interpreter, the standard library, this package or its declared runtime
+dependencies and is its module's attribute under its own name. A class built
+at run time, whose name could carry data even when it looks like an
+identifier, is therefore named by such an ancestor, so dynamic identifiers
+cannot reach the log. The same site and class are emitted
 at most once a minute with a count of suppressed repeats, and the repeat state
 holds a bounded number of keys.
 
