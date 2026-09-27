@@ -1,0 +1,51 @@
+#!/usr/bin/env sh
+set -eu
+
+root="$(git rev-parse --show-toplevel)"
+
+# The checks read the working tree, so it must equal what is being committed.
+# Git still provides the commit's own index here; check before clearing it.
+if ! git diff --quiet --no-ext-diff; then
+    echo "Commit gate failed: unstaged changes would be validated but not committed." >&2
+    exit 1
+fi
+if [ -n "$(git ls-files --others --exclude-standard)" ]; then
+    echo "Commit gate failed: untracked files would be validated but not committed." >&2
+    exit 1
+fi
+
+# Nested Git commands in the test suite must operate on their own temporary
+# repositories, not on this commit's index or object database.
+local_git_environment="$(git rev-parse --local-env-vars)"
+for variable in $local_git_environment; do
+    unset "$variable"
+done
+
+python="$(git -C "$root" config --local --get hub.publishPython || true)"
+if [ -z "$python" ]; then
+    python="$root/.venv/bin/python"
+fi
+if [ ! -x "$python" ]; then
+    echo "Commit gate failed: configured Python is unavailable." >&2
+    exit 1
+fi
+
+policy="$(git -C "$root" config --local --get hub.publicAuthorEmailFile || true)"
+if [ -n "$policy" ]; then
+    export HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE="$policy"
+fi
+if [ -n "${PYTHONPATH:-}" ]; then
+    export PYTHONPATH="$root/src:$PYTHONPATH"
+else
+    export PYTHONPATH="$root/src"
+fi
+
+validator="$root/scripts/validate.py"
+if "$python" "$validator" --help 2>/dev/null | grep -q 'commit'; then
+    exec "$python" "$validator" --profile commit
+fi
+# A branch that predates the commit gate still gets the mandatory
+# pre-commit privacy/history scan and its static contracts.
+echo "Commit gate: this checkout predates the commit profile; running focused checks." >&2
+"$python" "$validator" --profile focused
+exec "$python" -m hermes_codex_router.privacy_scan "$root" --history

@@ -83,6 +83,12 @@ profile described in `docs/testing/README.md` during iteration. Full canonical
 validation remains mandatory for publication and CI; distinguish automated
 coverage from owner-driven live E2E.
 
+Never commit on a red test suite. The installed pre-commit hook runs the history
+scan and the full parallel suite (`scripts/validate.py --profile commit`); do
+not bypass it with `--no-verify`. Without the hook, run that profile yourself
+before committing. Commit messages must not contain email addresses: the
+history scan rejects them permanently, including co-author trailers.
+
 Never call a deployment current or accepted without naming the exact clean Git
 revision and confirming that every required long-running component reports that
 revision. Process liveness, a clean development tree, package version, and a

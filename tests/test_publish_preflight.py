@@ -198,6 +198,9 @@ class PublishPreflightTests(unittest.TestCase):
             source.parent.mkdir()
             source.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             source.chmod(0o755)
+            commit_source = root / ".githooks" / "pre-commit"
+            commit_source.write_text("#!/bin/sh\nexit 3\n", encoding="utf-8")
+            commit_source.chmod(0o755)
             policy = base / "public-author-policy"
             policy.write_text("owner@example.com\n", encoding="ascii")
             policy.chmod(0o600)
@@ -217,9 +220,10 @@ class PublishPreflightTests(unittest.TestCase):
                     check=True,
                 ).stdout.strip()
             )
-            installed = hook_directory / "pre-push"
-            self.assertEqual(installed.read_bytes(), source.read_bytes())
-            self.assertEqual(installed.stat().st_mode & 0o777, 0o700)
+            for name, expected in (("pre-push", source), ("pre-commit", commit_source)):
+                installed = hook_directory / name
+                self.assertEqual(installed.read_bytes(), expected.read_bytes())
+                self.assertEqual(installed.stat().st_mode & 0o777, 0o700)
             self.assertEqual(hook_directory.stat().st_mode & 0o777, 0o700)
             linked_hook_directory = subprocess.run(
                 ["git", "config", "--get", "core.hooksPath"],
@@ -568,6 +572,204 @@ class PublishPreflightTests(unittest.TestCase):
                 capture_output=True,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_install_refuses_an_incomplete_hook_set_without_partial_install(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "checkout"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            source = root / ".githooks" / "pre-push"
+            source.parent.mkdir()
+            source.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            policy = base / "public-author-policy"
+            policy.write_text("owner@example.com\n", encoding="ascii")
+            policy.chmod(0o600)
+            with (
+                patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)}),
+                self.assertRaises(publish_preflight.PreflightError) as raised,
+            ):
+                publish_preflight._install(root)
+            self.assertIn("pre-commit", str(raised.exception))
+            self.assertFalse((root / ".git" / "hub-managed-hooks").exists())
+
+    def installed_fixture(self, base: Path) -> tuple[Path, Path, Path]:
+        """A repository with version-one hooks installed and version-two sources."""
+        root = base / "checkout"
+        root.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        hooks = root / ".githooks"
+        hooks.mkdir()
+        policy = base / "public-author-policy"
+        policy.write_text("owner@example.com\n", encoding="ascii")
+        policy.chmod(0o600)
+        for name in publish_preflight.MANAGED_HOOKS:
+            (hooks / name).write_text(f"#!/bin/sh\n# {name} v1\n", encoding="utf-8")
+        with patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)}):
+            publish_preflight._install(root)
+        for name in publish_preflight.MANAGED_HOOKS:
+            (hooks / name).write_text(f"#!/bin/sh\n# {name} v2\n", encoding="utf-8")
+        return root, root / ".git" / "hub-managed-hooks", policy
+
+    def local_config(self, root: Path) -> dict[str, str]:
+        keys = ("core.hooksPath", "hub.publicAuthorEmailFile", "hub.publishPython")
+        return {
+            key: subprocess.run(
+                ["git", "config", "--local", "--get", key],
+                cwd=root,
+                text=True,
+                capture_output=True,
+            ).stdout
+            for key in keys
+        }
+
+    def assert_version_one_hooks(self, hook_directory: Path) -> None:
+        for name in publish_preflight.MANAGED_HOOKS:
+            self.assertEqual(
+                (hook_directory / name).read_text(encoding="utf-8"), f"#!/bin/sh\n# {name} v1\n"
+            )
+        self.assertEqual(
+            sorted(path.name for path in hook_directory.iterdir()),
+            sorted(publish_preflight.MANAGED_HOOKS),
+        )
+
+    def test_failed_second_activation_restores_the_previous_hook_set(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, hook_directory, policy = self.installed_fixture(Path(directory))
+            before = self.local_config(root)
+            real_replace = os.replace
+            activations: list[str] = []
+
+            def replace(source: object, destination: object) -> None:
+                if Path(str(destination)).parent == hook_directory:
+                    activations.append(Path(str(destination)).name)
+                    if len(activations) == 2:
+                        raise OSError(28, "No space left on device")
+                real_replace(source, destination)  # type: ignore[arg-type]
+
+            with (
+                patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)}),
+                patch.object(publish_preflight.os, "replace", side_effect=replace),
+                self.assertRaises(publish_preflight.PreflightError),
+            ):
+                publish_preflight._install(root)
+            self.assertGreaterEqual(len(activations), 2)
+            self.assert_version_one_hooks(hook_directory)
+            self.assertEqual(self.local_config(root), before)
+
+    def test_failed_configuration_restores_hooks_and_local_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, hook_directory, policy = self.installed_fixture(Path(directory))
+            subprocess.run(
+                ["git", "config", "--local", "hub.publishPython", "/home/example/python"],
+                cwd=root,
+                check=True,
+            )
+            before = self.local_config(root)
+            real_run = publish_preflight._run
+
+            def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                if argv[:3] == ["git", "config", "--local"] and argv[3] == "hub.publishPython":
+                    return subprocess.CompletedProcess(argv, 1, "", "")
+                return real_run(argv, **kwargs)  # type: ignore[arg-type]
+
+            with (
+                patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)}),
+                patch.object(publish_preflight, "_run", side_effect=run),
+                self.assertRaises(publish_preflight.PreflightError),
+            ):
+                publish_preflight._install(root)
+            self.assert_version_one_hooks(hook_directory)
+            self.assertEqual(self.local_config(root), before)
+
+    def test_commit_hook_validates_exactly_what_is_committed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "checkout"
+            root.mkdir()
+            log = base / "calls.log"
+            environment = {
+                **_isolated_git_environment(),
+                "GIT_AUTHOR_NAME": "Example Author",
+                "GIT_AUTHOR_EMAIL": "author@example.com",
+                "GIT_COMMITTER_NAME": "Example Committer",
+                "GIT_COMMITTER_EMAIL": "committer@example.com",
+            }
+
+            def git(*args: str) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    ["git", *args], cwd=root, env=environment, text=True, capture_output=True
+                )
+
+            git("init", "-q")
+            (root / "scripts").mkdir()
+            (root / "scripts" / "validate.py").write_text("", encoding="utf-8")
+            (root / "tracked.txt").write_text("one\n", encoding="utf-8")
+            git("add", ".")
+            git("commit", "-q", "-m", "initial")
+            hooks = base / "hooks"
+            hooks.mkdir()
+            hook = hooks / "pre-commit"
+            hook.write_bytes((publish_preflight.ROOT / ".githooks" / "pre-commit").read_bytes())
+            hook.chmod(0o700)
+            interpreter = base / "fake python"
+            git("config", "--local", "core.hooksPath", str(hooks))
+            git("config", "--local", "hub.publishPython", str(interpreter))
+
+            def install_interpreter(help_text: str) -> None:
+                # Git exports the commit's index to hooks; the validator must
+                # never see it, or nested test repositories would use it.
+                interpreter.write_text(
+                    "#!/bin/sh\n"
+                    'if [ "${GIT_DIR+x}" = x ] || [ "${GIT_INDEX_FILE+x}" = x ]; then\n'
+                    "  exit 9\n"
+                    "fi\n"
+                    'if [ "$2" = --help ]; then\n'
+                    f"  echo '{help_text}'\n"
+                    "  exit 0\n"
+                    "fi\n"
+                    f'echo "$*" >> "{log}"\n'
+                    "exit 0\n",
+                    encoding="utf-8",
+                )
+                interpreter.chmod(0o700)
+
+            def calls() -> list[str]:
+                return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+            install_interpreter("--profile {canonical,commit,focused}")
+            (root / "tracked.txt").write_text("two\n", encoding="utf-8")
+            git("add", "tracked.txt")
+            committed = git("commit", "-q", "-m", "staged change")
+            self.assertEqual(committed.returncode, 0, committed.stderr)
+            self.assertTrue(calls()[-1].endswith("scripts/validate.py --profile commit"))
+
+            # `commit -a` validates Git's temporary commit index, not the old one.
+            (root / "tracked.txt").write_text("three\n", encoding="utf-8")
+            committed = git("commit", "-q", "-a", "-m", "all tracked changes")
+            self.assertEqual(committed.returncode, 0, committed.stderr)
+            self.assertEqual(len(calls()), 2)
+
+            (root / "tracked.txt").write_text("four\n", encoding="utf-8")
+            (root / "other.txt").write_text("staged\n", encoding="utf-8")
+            git("add", "other.txt")
+            refused = git("commit", "-q", "-m", "partial")
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("unstaged changes", refused.stderr)
+            git("add", "tracked.txt")
+            (root / "untracked.txt").write_text("loose\n", encoding="utf-8")
+            refused = git("commit", "-q", "-m", "with untracked")
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("untracked files", refused.stderr)
+            self.assertEqual(len(calls()), 2)
+
+            (root / "untracked.txt").unlink()
+            install_interpreter("--profile {canonical,focused}")
+            committed = git("commit", "-q", "-m", "older validator")
+            self.assertEqual(committed.returncode, 0, committed.stderr)
+            self.assertTrue(calls()[-2].endswith("scripts/validate.py --profile focused"))
+            self.assertIn("-m hermes_codex_router.privacy_scan", calls()[-1])
+            self.assertTrue(calls()[-1].endswith("--history"))
 
 
 if __name__ == "__main__":

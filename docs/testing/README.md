@@ -26,18 +26,33 @@ whole-project Pyright and all unit/integration tests. The full privacy/history
 scan remains mandatory before every commit, even after focused checks pass.
 Each stage reports elapsed time and stops on failure; exit 0 means the selected
 profile passed, 1 means a failed/unavailable stage, and 2 means invalid arguments.
-Test selectors are accepted only in the focused profile. Automated tests
+Test selectors are accepted only in the focused profile; they import sibling
+fixtures from `tests/` exactly as discovery does. The canonical test stage asks
+discovery for every test module, including nested test packages, then runs
+each in its own process, several in parallel (CPU count up to eight; override
+with `--jobs N`). It names every failing, empty, short-counted or timed-out
+module after all modules finish, so each module must pass on its own. See [ADR 0041](../decisions/0041-parallel-isolated-test-modules.md).
+Automated tests
 use fake transports and temporary Git/SQLite fixtures. They must not contact
 real Telegram groups or consume provider tokens.
 
-Publication sequence with the installed hook: focused checks → mandatory
-privacy/history scan → commit → push (one full canonical run on the clean commit)
-→ independent exact-revision CI/CodeQL. Do not run the same full validator
-manually immediately before this push. Without the hook, run the canonical
-command on the final clean commit before publication. A failed gate blocks
-publication; fix it, rerun the affected checks, and commit before retrying.
-There is no validation receipt/cache: another push runs the full hook again.
-The trade-off is recorded in [ADR 0034](../decisions/0034-fail-fast-maintenance-validation.md).
+Publication sequence with the installed hooks: focused checks → commit (the
+pre-commit gate) → push (one full canonical run on the clean commit) →
+independent exact-revision CI/CodeQL. Do not run the same full validator
+manually immediately before this push. Without the hooks, run the
+privacy/history scan before every commit and the canonical command on the final
+clean commit before publication. A failed gate blocks publication; fix it,
+rerun the affected checks, and commit before retrying. There is no validation
+receipt/cache: another push runs the full hook again. The trade-off is recorded
+in [ADR 0034](../decisions/0034-fail-fast-maintenance-validation.md).
+
+The pre-commit gate (`--profile commit`) runs every cheap contract, the
+privacy/history scan and the complete parallel test suite; only whole-project
+Pyright is left to the pre-push canonical run and CI. It takes about a minute
+and a half. It refuses a commit while unstaged or untracked, non-ignored files
+exist, because it validates the working tree. A checkout that predates the
+profile falls back to focused checks plus the history scan. The rationale is
+recorded in [ADR 0042](../decisions/0042-pre-commit-gate.md).
 
 GitHub CI and tag-release validation both call the same reusable
 `.github/workflows/validate.yml` matrix for Python 3.11, 3.12, and 3.13. Each
@@ -108,8 +123,8 @@ The reusable go/no-go sequence and rollback boundary are defined in
 
 ## Publication preflight
 
-Repository maintainers can install the versioned pre-push hook after creating
-the external author-policy file used by the canonical privacy scan:
+Repository maintainers can install the versioned pre-commit and pre-push hooks
+after creating the external author-policy file used by the canonical privacy scan:
 
 ```bash
 HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE=/home/example/.config/agents-projects-hub/public-author-policy \
@@ -117,7 +132,8 @@ HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE=/home/example/.config/agents-projects-hub/publi
 ```
 
 The installation records only the private file path in local Git configuration
-and copies `.githooks/pre-push` into a mode-`0700` directory under the shared
+and copies `.githooks/pre-commit` and `.githooks/pre-push` into a mode-`0700`
+directory under the shared
 Git common directory. It also records the validated Python executable used for
 installation so linked worktrees do not require separate virtual environments.
 The configured hook therefore covers every worktree, including a branch that

@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[2]
 POLICY_FILE_ENV = "HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE"
 POLICY_GIT_CONFIG = "hub.publicAuthorEmailFile"
 REPOSITORY_VARIABLE = "HUB_PUBLIC_GIT_AUTHOR_EMAIL"
+# Versioned hooks copied into the shared, repository-managed hook directory.
+MANAGED_HOOKS = ("pre-commit", "pre-push")
 _ZERO_OID = "0" * 40
 _GITHUB_REMOTE = re.compile(
     r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
@@ -240,7 +242,6 @@ def _configure_all_worktree_hooks(root: Path, hook_directory: Path) -> None:
 def _install(root: Path) -> None:
     policy = _policy_path(root)
     _read_declared_email(root, policy)
-    source = root / ".githooks" / "pre-push"
     interpreter = Path(sys.executable)
     if (
         not interpreter.is_absolute()
@@ -248,16 +249,28 @@ def _install(root: Path) -> None:
         or not os.access(interpreter, os.X_OK)
     ):
         raise PreflightError("publication Python interpreter failed validation")
-    try:
-        source_details = source.lstat()
-    except OSError as error:
-        raise PreflightError("versioned publication hook is unavailable") from error
-    if not stat.S_ISREG(source_details.st_mode):
-        raise PreflightError("versioned publication hook is unavailable")
+    # Read every versioned hook before installing any, so a failure never
+    # leaves one gate updated and the other stale.
+    sources: dict[str, bytes] = {}
+    for name in MANAGED_HOOKS:
+        source = root / ".githooks" / name
+        try:
+            source_details = source.lstat()
+            if not stat.S_ISREG(source_details.st_mode):
+                raise PreflightError(f"versioned {name} hook is unavailable")
+            sources[name] = source.read_bytes()
+        except OSError as error:
+            raise PreflightError(f"versioned {name} hook is unavailable") from error
     common_raw = _git_stdout(root, "rev-parse", "--git-common-dir")
     common = Path(common_raw)
     if not common.is_absolute():
         common = root / common
+    settings = {
+        "core.hooksPath": None,
+        POLICY_GIT_CONFIG: str(policy),
+        "hub.publishPython": str(interpreter),
+    }
+    previous_settings = {key: _local_git_config(root, key) for key in settings}
     try:
         common = common.resolve(strict=True)
         hook_directory = common / "hub-managed-hooks"
@@ -266,31 +279,90 @@ def _install(root: Path) -> None:
         if not stat.S_ISDIR(directory_details.st_mode) or directory_details.st_uid != os.getuid():
             raise PreflightError("shared Git hook directory failed validation")
         os.chmod(hook_directory, 0o700)
-        descriptor, temporary = tempfile.mkstemp(prefix="pre-push-", dir=hook_directory)
-        try:
-            with os.fdopen(descriptor, "wb") as target:
-                os.fchmod(descriptor, 0o700)
-                target.write(source.read_bytes())
-                target.flush()
-                os.fsync(target.fileno())
-            os.replace(temporary, hook_directory / "pre-push")
-        except BaseException:
-            try:
-                Path(temporary).unlink()
-            except OSError:
-                pass
-            raise
+        previous_hooks = {name: _read_optional(hook_directory / name) for name in sources}
     except OSError as error:
         raise PreflightError("could not install the shared publication hook") from error
-    for key, value in (
-        ("core.hooksPath", str(hook_directory)),
-        (POLICY_GIT_CONFIG, str(policy)),
-        ("hub.publishPython", str(interpreter)),
-    ):
-        result = _run(["git", "config", "--local", key, value], cwd=root)
-        if result.returncode != 0:
-            raise PreflightError("could not install the repository publication hook")
-    _configure_all_worktree_hooks(root, hook_directory)
+    settings["core.hooksPath"] = str(hook_directory)
+    # Stage every hook completely before activating any. If an activation,
+    # configuration or worktree step fails, restore the previous hook set and
+    # local settings so the repository never runs a mixed gate.
+    staged: dict[str, Path] = {}
+    try:
+        try:
+            for name, content in sources.items():
+                staged[name] = _write_private_temporary(hook_directory, name, content)
+            for name, temporary in staged.items():
+                os.replace(temporary, hook_directory / name)
+        except OSError as error:
+            raise PreflightError("could not install the shared publication hook") from error
+        for key, value in settings.items():
+            result = _run(["git", "config", "--local", key, value], cwd=root)
+            if result.returncode != 0:
+                raise PreflightError("could not install the repository publication hook")
+        _configure_all_worktree_hooks(root, hook_directory)
+    except BaseException:
+        for temporary in staged.values():
+            _remove_quietly(temporary)
+        _restore_hooks(hook_directory, previous_hooks)
+        _restore_local_git_config(root, previous_settings)
+        raise
+
+
+def _read_optional(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _remove_quietly(path: Path) -> bool:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _write_private_temporary(directory: Path, name: str, content: bytes) -> Path:
+    descriptor, temporary = tempfile.mkstemp(prefix=f"{name}-", dir=directory)
+    try:
+        with os.fdopen(descriptor, "wb") as target:
+            os.fchmod(descriptor, 0o700)
+            target.write(content)
+            target.flush()
+            os.fsync(target.fileno())
+    except BaseException:
+        _remove_quietly(Path(temporary))
+        raise
+    return Path(temporary)
+
+
+def _restore_hooks(directory: Path, previous: dict[str, bytes | None]) -> None:
+    """Best-effort return to the exact previous hook files after a failed install."""
+    for name, content in previous.items():
+        target = directory / name
+        if content is None:
+            _remove_quietly(target)
+            continue
+        try:
+            os.replace(_write_private_temporary(directory, name, content), target)
+        except OSError:
+            continue
+
+
+def _local_git_config(root: Path, key: str) -> str | None:
+    result = _run(["git", "config", "--local", "--get", key], cwd=root)
+    return result.stdout.removesuffix("\n") if result.returncode == 0 else None
+
+
+def _restore_local_git_config(root: Path, previous: dict[str, str | None]) -> None:
+    for key, value in previous.items():
+        if value is None:
+            _run(["git", "config", "--local", "--unset", key], cwd=root)
+        else:
+            _run(["git", "config", "--local", key, value], cwd=root)
 
 
 def _parser() -> argparse.ArgumentParser:
