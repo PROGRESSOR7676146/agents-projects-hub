@@ -250,6 +250,63 @@ class ProviderJobQueueTests(unittest.TestCase):
         self.assertEqual(self.state.get_provider_job(active.job_id).status, "cancelled")
         self.assertIsNone(self.state.pending_emergency_stop(self.topic.topic_id, "codex"))
 
+    def satellite_job(self, message_id: int):
+        satellite = self.state.ensure_satellite(
+            self.topic.topic_id, "opencode", "provider-selected", "high"
+        )
+        return self.enqueue(
+            message_id,
+            agent_id="opencode",
+            session_id=satellite.session_id,
+            generation=satellite.generation,
+            model=satellite.model,
+        )
+
+    def test_emergency_stop_cancels_every_provider_queue_in_the_topic(self) -> None:
+        codex_job, _ = self.enqueue(640)
+        satellite_job, _ = self.satellite_job(641)
+
+        request_id, cancelled, pending = self.state.request_emergency_stop(
+            topic_id=self.topic.topic_id,
+            chat_id=self.topic.chat_id,
+            message_id=642,
+            target_agent_id="codex",
+        )
+
+        self.assertEqual((cancelled, pending), (2, False))
+        for job in (codex_job, satellite_job):
+            self.assertEqual(self.state.get_provider_job(job.job_id).status, "cancelled")
+        self.assertIsNone(self.state.pending_emergency_stop(self.topic.topic_id, "codex"))
+        self.assertTrue(
+            self.state.enqueue_emergency_stop_notice(request_id, "Активной работы нет.")
+        )
+
+    def test_emergency_stop_targets_the_running_turn_not_the_active_agent(self) -> None:
+        running, _ = self.satellite_job(643)
+        leased = self.state.lease_provider_job("opencode", "opencode-worker")
+        assert leased is not None and leased.lease_token is not None
+        self.state.mark_provider_job_executing(leased.job_id, leased.lease_token)
+        queued, _ = self.enqueue(644)
+
+        request_id, cancelled, pending = self.state.request_emergency_stop(
+            topic_id=self.topic.topic_id,
+            chat_id=self.topic.chat_id,
+            message_id=645,
+            target_agent_id="codex",
+        )
+
+        self.assertEqual((cancelled, pending), (1, True))
+        self.assertEqual(self.state.get_provider_job(queued.job_id).status, "cancelled")
+        self.assertEqual(
+            self.state.pending_emergency_stop(self.topic.topic_id, "opencode"), request_id
+        )
+        self.assertIsNone(self.state.pending_emergency_stop(self.topic.topic_id, "codex"))
+        self.assertTrue(
+            self.state.enqueue_emergency_stop_notice(request_id, "Останавливаю активную работу.")
+        )
+        notice = self.state.get_telegram_outbox_for_job(running.job_id)
+        self.assertEqual(notice.sender_agent_id, "hub")
+
     def test_emergency_stop_notice_is_durable_idempotent_and_keeps_cancelled_job(self) -> None:
         active, _ = self.enqueue(613)
         leased = self.state.lease_provider_job("codex", "worker")

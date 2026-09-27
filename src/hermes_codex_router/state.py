@@ -1368,7 +1368,7 @@ class HubState:
         message_id: int,
         target_agent_id: str,
     ) -> tuple[str, int, bool]:
-        """Persist a stop request and cancel work that has not started."""
+        """Stop the topic: cancel unstarted jobs; target the running turn's provider."""
         target = _bounded(target_agent_id, name="agent id", maximum=64)
         timestamp = _now()
         with self._immediate_transaction():
@@ -1394,17 +1394,16 @@ class HubState:
                    SET status = 'cancelled', next_attempt_at = NULL,
                        error_class = 'user_stop', error_code = 'emergency_stop',
                        updated_at = ?
-                   WHERE topic_id = ? AND agent_id = ?
-                     AND status IN ('queued', 'retry_wait')""",
-                (timestamp, topic_id, target),
+                   WHERE topic_id = ? AND status IN ('queued', 'retry_wait')""",
+                (timestamp, topic_id),
             )
             active = self._connection.execute(
-                """SELECT 1 FROM provider_jobs
-                   WHERE topic_id = ? AND agent_id = ?
-                     AND status IN ('leased', 'executing') LIMIT 1""",
-                (topic_id, target),
+                """SELECT agent_id FROM provider_jobs WHERE topic_id = ?
+                     AND status IN ('leased', 'executing') ORDER BY created_at LIMIT 1""",
+                (topic_id,),
             ).fetchone()
             pending = active is not None
+            target = str(active["agent_id"]) if pending else target
             request_id = str(uuid.uuid4())
             self._connection.execute(
                 """INSERT INTO provider_stop_requests (
@@ -1446,8 +1445,8 @@ class HubState:
                 """SELECT jobs.job_id, topics.thread_id
                    FROM provider_jobs jobs
                    JOIN topics ON topics.topic_id = jobs.topic_id
-                   WHERE jobs.topic_id = ? AND jobs.agent_id = ? AND (
-                       jobs.status IN ('leased', 'executing') OR (
+                   WHERE jobs.topic_id = ? AND (
+                       (jobs.agent_id = ? AND jobs.status IN ('leased', 'executing')) OR (
                            jobs.status = 'cancelled'
                            AND jobs.error_class = 'user_stop'
                            AND jobs.error_code = 'emergency_stop'

@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Make the emergency stop topic-wide: it cancels queued work of every provider
+  in the topic and interrupts the running turn even when that provider was
+  invoked by mention ([ADR 0046](docs/decisions/0046-topic-wide-emergency-stop.md)).
 - Run canonical tests as isolated per-module discovery processes in parallel
   and let focused selectors import sibling fixtures as discovery does; fix a
   fake Git signature verifier that failed intermittently under load
