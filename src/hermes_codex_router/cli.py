@@ -18,6 +18,7 @@ from .deployment_manifest import (
     create_deployment_manifest,
     verify_deployment_manifest,
 )
+from .diagnostic_log import configure_process_logging
 from .diagnostics import run_doctor
 from .external_service import ExternalAgentService
 from .external_worker import ExternalQueueWorker
@@ -404,6 +405,8 @@ def _lane_command(args: argparse.Namespace) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    # Survived failures go to stderr (journald under systemd); stdout stays JSON.
+    configure_process_logging()
     try:
         if args.command == "session":
             if args.session_command == "reconcile-existing-local":

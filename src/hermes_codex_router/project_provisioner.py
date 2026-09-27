@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+from .diagnostic_log import survived
 from .hub_config import HubConfig
 from .project_admin import ensure_project, prepare_project_root
 from .project_onboarding import OnboardingWorkflow, ProjectOnboardingStore
@@ -233,8 +234,8 @@ class TelethonProvisioningClient:
             return
         try:
             await asyncio.wait_for(disconnect(), timeout=5)
-        except Exception:
-            pass
+        except Exception as survived_error:
+            survived("project_provisioner.disconnect_after_unknown", survived_error)
 
     async def preflight_members(
         self,
@@ -598,8 +599,8 @@ class TelethonProvisioningClient:
         try:
             try:
                 await self._client.disconnect()
-            except Exception:
-                pass
+            except Exception as survived_error:
+                survived("project_provisioner.client_disconnect", survived_error)
         finally:
             for path in self._session_path.parent.glob(f"{self._session_path.name}*"):
                 if path.is_file():
@@ -754,8 +755,8 @@ class ProjectProvisioner:
                 activity_state=activity_state,
                 active_job_id=workflow_id,
             )
-        except Exception:
-            pass
+        except Exception as survived_error:
+            survived("project_provisioner.health_publish", survived_error)
 
     def _publish_failure(self, error_code: str) -> None:
         self._last_error_code = error_code[:128]

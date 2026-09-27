@@ -61,6 +61,7 @@ with a new record.
 | Bounded Claude/Codex collaboration | One human-selected lead and one read-only advisor run a durable sequential review; parallel writers and automatic scoring are deferred. | [ADR 0040](0040-bounded-claude-codex-lead-advisor.md) |
 | Parallel isolated test modules | Canonical tests run every module in its own discovery process in parallel; focused selectors import sibling fixtures as discovery does. | [ADR 0041](0041-parallel-isolated-test-modules.md) |
 | Pre-commit gate | A versioned pre-commit hook refuses unvalidated working-tree content and runs cheap contracts, the history scan and the full parallel suite; Pyright stays at push. | [ADR 0042](0042-pre-commit-gate.md) |
+| Survived-failure diagnostics | Deliberately survived failures log only exception class and a static site label, rate-limited, to stderr/journald; Ruff S110/S112 forbid new silent handlers. | [ADR 0043](0043-bounded-diagnostics-for-survived-failures.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

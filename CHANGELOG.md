@@ -17,6 +17,10 @@ and releases use semantic versioning while the public API is still evolving.
   `pip install`, publish a non-required branch-coverage summary, require the
   README status line to name the package version, and correct the required
   check names in `configure-github.sh`.
+- Replace 31 silent `except Exception: pass`/`continue` handlers with bounded
+  diagnostics that record only the exception class and a static site in the
+  process journal, and forbid new ones with Ruff S110/S112
+  ([ADR 0043](docs/decisions/0043-bounded-diagnostics-for-survived-failures.md)).
 - Let Telegram progress and final messages begin with their actual content,
   keeping their separate delivery and notification policies; guide optional
   final reports to use task-appropriate visuals without a fixed template.

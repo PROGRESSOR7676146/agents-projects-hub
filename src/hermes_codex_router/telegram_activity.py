@@ -4,6 +4,7 @@ import threading
 from contextlib import contextmanager
 from typing import Iterator
 
+from .diagnostic_log import survived
 from .telegram import TelegramBotApi
 
 
@@ -12,8 +13,8 @@ def _publish(telegram: TelegramBotApi, chat_id: int, thread_id: int, message_id:
     if chat_id > 0:
         try:
             telegram.send_message_draft(chat_id, thread_id, draft_id=message_id)
-        except Exception:
-            pass
+        except Exception as survived_error:
+            survived("telegram_activity.message_draft", survived_error)
 
 
 @contextmanager
@@ -34,14 +35,14 @@ def telegram_activity(
         while not stop.wait(interval):
             try:
                 _publish(telegram, chat_id, thread_id, message_id)
-            except Exception:
-                pass
+            except Exception as survived_error:
+                survived("telegram_activity.refresh", survived_error)
 
     try:
         try:
             _publish(telegram, chat_id, thread_id, message_id)
-        except Exception:
-            pass
+        except Exception as survived_error:
+            survived("telegram_activity.initial_publish", survived_error)
         worker = threading.Thread(target=refresh, name="telegram-activity", daemon=True)
         worker.start()
         yield

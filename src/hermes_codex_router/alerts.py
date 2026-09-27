@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Mapping
 
 from .codex_accounts import CodexPoolStatus
+from .diagnostic_log import survived
 from .operational_alert import OperationalAlert
 from .quota_windows import quota_window_label
 from .reliability_alerts import evaluate_reliability_alerts
@@ -47,7 +48,7 @@ def _extract_latest_session_token_usage(
         if '"token_usage_record"' in line:
             try:
                 data = json.loads(line)
-            except Exception:
+            except ValueError:  # a partial or malformed log line
                 continue
             if data.get("type") == "token_usage_record":
                 payload = data.get("payload")
@@ -120,7 +121,7 @@ def _resolve_codex_session_label(
                             data = json.loads(line)
                             if data.get("id") == session_id and data.get("thread_name"):
                                 thread_name = _clean_text(str(data["thread_name"]))
-                        except Exception:
+                        except (ValueError, AttributeError):  # malformed or non-object line
                             continue
         except OSError:
             pass
@@ -141,8 +142,8 @@ def _resolve_codex_session_label(
                         thread_name = _clean_text(str(row[1]))
                     if row[2]:
                         cwd = str(row[2]).strip()
-        except Exception:
-            pass
+        except Exception as survived_error:
+            survived("alerts.thread_metadata_read", survived_error)
 
     # 4. Fallback cwd from rollout file header if needed
     if not cwd and rollout_path and rollout_path.is_file():
@@ -155,8 +156,8 @@ def _resolve_codex_session_label(
                         payload = meta.get("payload")
                         if isinstance(payload, dict) and payload.get("cwd"):
                             cwd = str(payload["cwd"]).strip()
-        except Exception:
-            pass
+        except Exception as survived_error:
+            survived("alerts.session_meta_read", survived_error)
 
     parts: list[str] = []
     if thread_name:

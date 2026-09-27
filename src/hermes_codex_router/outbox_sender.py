@@ -18,6 +18,7 @@ from .artifacts import (
 from .blocker_notice_sender import deliver_root_blocker_notice
 from .command_menu import GROUP_COMMANDS
 from .delivery_retry import delivery_retry_delay
+from .diagnostic_log import survived
 from .hub_config import HubConfig
 from .progress_delivery import ProgressDeliveryQueue
 from .project_onboarding import ProjectOnboardingStore
@@ -155,8 +156,8 @@ class TelegramOutboxSender:
     def _record_event(self, level: str, code: str, detail: str) -> None:
         try:
             self.state.record_runtime_event("outbox", level, code, detail)
-        except Exception:
-            pass
+        except Exception as survived_error:
+            survived("outbox_sender.runtime_event_record", survived_error)
 
     def _publish_health(
         self,
@@ -201,8 +202,8 @@ class TelegramOutboxSender:
                 transport_success_at=self._transport_success_at,
             )
             self._last_health_publish_monotonic = now_monotonic
-        except Exception:
-            pass
+        except Exception as survived_error:
+            survived("outbox_sender.health_publish", survived_error)
 
     def _record_transport_failure(self, error: TelegramError) -> None:
         self._transport_consecutive_failures += 1
@@ -437,8 +438,8 @@ class TelegramOutboxSender:
                             activity.thread_id,
                             draft_id=activity.message_id,
                         )
-                    except Exception:
-                        pass
+                    except Exception as survived_error:
+                        survived("outbox_sender.message_draft", survived_error)
             except Exception as exc:
                 error = (
                     exc
