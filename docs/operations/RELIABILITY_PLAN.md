@@ -123,8 +123,14 @@ mature on the strength of these repository packages alone.
 
 ## Closure
 
-Repository scope is closed: the implementation is in `main` at `ea5af70` (audit
-point, 2026-09-27). Only live acceptance remains; it is tracked in the
-[stabilization plan backlog](STABILIZATION_PLAN.md#live-acceptance-backlog), and
-this document is no longer an active task. Next trigger: the owner runs the
-corresponding backlog item.
+Partially closed at `ea5af70` (audit point, 2026-09-27). The reliability
+milestones and packages A and F are in `main`; their live acceptance is tracked
+in the [stabilization plan backlog](STABILIZATION_PLAN.md#live-acceptance-backlog).
+
+Packages B–E are **not implemented**. For example, `codex_multi_auth_dir` and
+`codex_multi_auth_executable` are still accepted configuration, so package B's
+retirement contract does not exist. Their disposition — do, move, defer or
+cancel — is an open owner decision recorded in the
+[stabilization plan](STABILIZATION_PLAN.md#follow-ups-found-during-execution).
+Until it is made, this plan stays open for B–E only. Next trigger: that owner
+decision.

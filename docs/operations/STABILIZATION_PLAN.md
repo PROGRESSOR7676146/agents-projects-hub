@@ -66,6 +66,11 @@ acceptance.
 
 ## Follow-ups found during execution
 
+- Reliability plan packages B–E are open (owner decision). Recommended:
+  B, retiring multi-auth, moves into this plan as a simplification; C, onboarding
+  acceptance machinery, merges into the live-acceptance backlog; D, one
+  justified extraction, is superseded by stage 3; E, pending-decision
+  controls, is deferred as a product feature.
 - Claude failures always become `indeterminate` and hold the root, although
   the text-only adapter cannot change files; owner decision (PR #80 review, item 2).
 - `codex-worker@1` / `claude-worker@1` duplicate slot 1 of `worker@codex` /
