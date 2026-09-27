@@ -40,7 +40,8 @@ accumulated without live acceptance, contrary to product principle 10.
 | 2a | `CLAUDE.md`; review/merge rules; risk register; ADR 0016 tombstone; this plan | In review: #84 | — |
 | 2b | Hotspot growth ratchet in every validation profile; rules 12 and 14 amended | In review: #85 | ADR 0044; 21 recorded hotspots |
 | 2c | Capability summary table in project status; closure sections for six completed plans | In review | Prose still to move into owning modules |
-| 3 | Extract `_handle_update`, `load_hub_config`, `cli.main`; remove dead code; tests for weak modules; injected clocks in timing tests | Planned | — |
+| 3 | Extract `_handle_update`, `load_hub_config`, `cli.main`; remove dead code; tests for weak modules; injected clocks in timing tests | Characterization in review: #89 | Dispatcher coverage 316 → 359 of 421 |
+| 3b | Retire the multi-auth integration (reliability package B): migration contract, retired keys rejected before helper access, superseded ADRs | Planned | — |
 | 4 | Release 0.8.0; branch and worktree hygiene | Planned; each action needs owner approval | — |
 
 ## Live-acceptance backlog
@@ -66,13 +67,13 @@ acceptance.
 
 ## Follow-ups found during execution
 
-- Reliability plan packages B–E are open (owner decision). Recommended:
-  B, retiring multi-auth, moves into this plan as a simplification; C, onboarding
-  acceptance machinery, merges into the live-acceptance backlog; D, one
-  justified extraction, is superseded by stage 3; E, pending-decision
-  controls, is deferred as a product feature.
-- Claude failures always become `indeterminate` and hold the root, although
-  the text-only adapter cannot change files; owner decision (PR #80 review, item 2).
+- Reliability plan packages B–E: owner decision 2026-09-27 — B, retiring
+  multi-auth, moves into this plan as stage 3b; C, D and E are deferred and
+  stay recorded in the reliability plan.
+- Claude failure classification (PR #80 review, item 2), owner decision
+  2026-09-27: an unknown outcome keeps the root hold and never replays; a
+  confirmed, structured terminal quota or provider rejection is classified
+  separately, also without replay. Implemented with the Claude parity work.
 - `codex-worker@1` / `claude-worker@1` duplicate slot 1 of `worker@codex` /
   `worker@claude` (PR #80 review, item 5).
 - Slot identity format and bounds are duplicated in four modules (PR #80 review, items 7–8).

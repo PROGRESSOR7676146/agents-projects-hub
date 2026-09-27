@@ -129,8 +129,7 @@ in the [stabilization plan backlog](STABILIZATION_PLAN.md#live-acceptance-backlo
 
 Packages B–E are **not implemented**. For example, `codex_multi_auth_dir` and
 `codex_multi_auth_executable` are still accepted configuration, so package B's
-retirement contract does not exist. Their disposition — do, move, defer or
-cancel — is an open owner decision recorded in the
-[stabilization plan](STABILIZATION_PLAN.md#follow-ups-found-during-execution).
-Until it is made, this plan stays open for B–E only. Next trigger: that owner
-decision.
+retirement contract does not exist. Owner decision 2026-09-27: package B moves
+to the [stabilization plan](STABILIZATION_PLAN.md#stages) as stage 3b; packages
+C, D and E are deferred and remain described above. This plan stays open only
+for those deferred packages. Next trigger: the owner reschedules C, D or E.
