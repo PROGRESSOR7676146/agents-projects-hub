@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
+from hermes_codex_router.cli import main
 from hermes_codex_router.codex_appserver import CodexThread, RateLimits, TurnResult
 from hermes_codex_router.codex_worker import CodexQueueWorker
 from hermes_codex_router.external_runtime import ExternalTurnResult
@@ -315,6 +316,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def close(self) -> None:
                 pass
 
+            def stop(self) -> None:
+                pass
+
         class Supervisor:
             transport_mode = "socket"
 
@@ -530,6 +534,50 @@ class CodexQueueWorkerTests(unittest.TestCase):
         finally:
             worker.close()
             controller_state.close()
+
+    def test_numbered_workers_have_distinct_identity_and_connections(self) -> None:
+        config = replace(self.config, codex_worker_count=3)
+        workers = [
+            CodexQueueWorker(
+                config,
+                registry=self.registry,
+                supervisor=cast(Any, WorkerSupervisor(WorkerClient())),
+                worker_slot=slot,
+            )
+            for slot in (1, 2, 3)
+        ]
+        try:
+            self.assertEqual(
+                [worker.worker_id for worker in workers],
+                ["codex-worker", "codex-worker-2", "codex-worker-3"],
+            )
+            self.assertEqual(len({id(worker.state) for worker in workers}), 3)
+            self.assertEqual(len({id(worker.supervisor) for worker in workers}), 3)
+        finally:
+            for worker in workers:
+                worker.close()
+
+    def test_cli_starts_only_configured_codex_slot(self) -> None:
+        config = replace(self.config, codex_worker_count=3)
+        started_slots: list[int] = []
+
+        class FakeWorker:
+            def __init__(self, _config: HubConfig, _agent_id: str, *, worker_slot: int = 1) -> None:
+                started_slots.append(worker_slot)
+
+            def run_forever(self, *, poll_seconds: float) -> None:
+                self.poll_seconds = poll_seconds
+
+            def close(self) -> None:
+                pass
+
+        with (
+            patch("hermes_codex_router.cli.load_external_worker_config", return_value=config),
+            patch("hermes_codex_router.cli.ExternalQueueWorker", FakeWorker),
+        ):
+            self.assertEqual(main(["worker", "example.json", "--slot", "2"]), 0)
+            self.assertEqual(main(["worker", "example.json", "--slot", "4"]), 2)
+        self.assertEqual(started_slots, [2])
 
     def test_worker_starts_supervisor_and_is_stoppable(self) -> None:
         supervisor = WorkerSupervisor(WorkerClient())

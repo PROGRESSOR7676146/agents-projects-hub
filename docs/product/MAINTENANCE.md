@@ -18,9 +18,8 @@ This normative module is part of the
   machine. An off-machine WSL backup and cold-restore drill is now specified,
   but its automation and first private drill remain planned; exact recovery of
   an in-flight provider turn remains impossible.
-- Each locally managed provider currently has one execution slot across all
-  projects. A long turn can delay that same provider in another topic, while
-  deterministic Hub commands and unrelated providers remain available.
+- OpenCode and Antigravity have one worker slot each. Codex defaults to one;
+  extra configured Codex processes require an explicit external-worker rollout.
 - Topic creation depends on the deployment bot's Telegram Manage Topics
   permission.
 

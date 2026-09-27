@@ -155,6 +155,31 @@ all fresh workers use the lowest advertised value and take no new lease until
 occupied execution falls below it. An increase remains conservatively at the
 old advertised value until each old worker restarts or its declaration ages out.
 
+For three simultaneous Codex projects, set `max_parallel_roots: 3` and
+`codex_worker_count: 3` in the private configuration, with external queue mode,
+Codex in `external_worker_agent_ids`, and `manage_codex_server: false`. Install
+the versioned Codex slot template and start the existing
+`agents-projects-hub-worker@codex.service` plus
+`agents-projects-hub-codex-worker@2.service` and
+`agents-projects-hub-codex-worker@3.service`. Each process owns a separate
+Codex client and SQLite connection. The shared Codex socket service remains a
+separate component. Check `status.runtime_health.provider_workers` for all three
+slot IDs and require an exact clean revision convergence before calling the
+rollout current. Queue, root exclusion, and fairness remain the acceptance
+boundaries; a running process alone is not provider E2E evidence.
+
+For an existing installation, copy the new template from the exact clean
+candidate revision into the private user unit directory, then reload systemd
+before enabling the two numbered units. Do this only as part of an authorized
+deployment with a verified rollback artifact and a validated private config.
+The bootstrap installer copies the same template for new installations.
+
+To reduce the Codex slot count, stop and disable the highest numbered units
+first, then lower `codex_worker_count` in the private config and restart the
+remaining workers. Wait for active turns in the stopped units to finish before
+stopping them; do not force-stop a productive turn to reclaim capacity. A
+configuration edit does not reconfigure an already running process.
+
 Create and bind a lane only through the local CLI. Binding and archival refuse
 queued, leased, executing, retrying, result-ready, unresolved, dispatch-owned,
 local-writer-owned, or provider-bound topics. Start a fresh unbound session

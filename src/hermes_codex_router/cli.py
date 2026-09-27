@@ -52,6 +52,7 @@ from .release_identity import CURRENT_RELEASE
 from .runtime_health import project_runtime_health
 from .service import ProjectHubService
 from .state import HubState, StateError
+from .worker_process_lock import worker_process_lock
 from .worktrees import WorktreeError, cleanup_worktree, create_worktree
 
 
@@ -122,6 +123,7 @@ def _parser() -> argparse.ArgumentParser:
     worker = commands.add_parser("worker", help="run one isolated provider queue worker")
     worker.add_argument("config", type=Path)
     worker.add_argument("--agent", default="codex")
+    worker.add_argument("--slot", type=int, default=1)
     worker.add_argument("--poll-seconds", type=float, default=0.2)
 
     sender = commands.add_parser("sender", help="deliver external-worker Telegram outbox")
@@ -534,12 +536,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 service.close()
             return 0
         if args.command == "worker":
-            worker = ExternalQueueWorker(load_external_worker_config(args.config), args.agent)
-            try:
-                with stop_on_signals(worker):
-                    worker.run_forever(poll_seconds=args.poll_seconds)
-            finally:
-                worker.close()
+            config = load_external_worker_config(args.config)
+            slot_count = config.codex_worker_count if args.agent == "codex" else 1
+            if not 1 <= args.slot <= slot_count:
+                raise HubConfigError("worker slot is not configured for this agent")
+            worker_id = (
+                f"{args.agent}-worker" if args.slot == 1 else f"{args.agent}-worker-{args.slot}"
+            )
+            with worker_process_lock(config.state_path, worker_id):
+                if args.slot == 1:
+                    worker = ExternalQueueWorker(config, args.agent)
+                else:
+                    worker = ExternalQueueWorker(config, args.agent, worker_slot=args.slot)
+                try:
+                    with stop_on_signals(worker):
+                        worker.run_forever(poll_seconds=args.poll_seconds)
+                finally:
+                    worker.close()
             return 0
         if args.command == "sender":
             sender = TelegramOutboxSender(load_outbox_sender_config(args.config))

@@ -56,6 +56,7 @@ with a new record.
 | Exact Codex turn recovery | Schema 34 separates provider terminality from incomplete job history, enables explicit same-session continuation, and gates adoption of an already opened CLI. | [ADR 0035](0035-exact-terminal-turn-reconciliation.md) |
 | Durable local-root blockers | Schema 35 refuses new blocked input, holds already accepted queue work for an exact owner decision, and delivers Hub notices independently of provider execution. | [ADR 0036](0036-durable-local-root-blockers.md) |
 | Evidence-based task allocation | Accepted foundation for participant evaluation and resource-aware allocation; implementation pending, optional judges and bounded experiments. | [ADR 0037](0037-evidence-based-task-allocation.md) |
+| Multiple Codex worker slots | Separate Codex processes share a bounded queue while retaining one client/connection per slot, root exclusion, fairness and exact revision health. | [ADR 0038](0038-multiple-codex-worker-slots.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

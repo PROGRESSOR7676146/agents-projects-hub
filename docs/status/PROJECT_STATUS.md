@@ -8,6 +8,12 @@ operator deployment inventory or live conversation evidence.
 
 ## Quality checkpoint
 
+Multiple Codex worker slots are implemented behind external queue configuration;
+offline admission, root exclusion, fairness and health checks are covered.
+Deployment and live three-project acceptance remain pending. See
+[REQ-QUEUE-002](../product/PERSISTENCE_AND_RECOVERY.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
+and [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md).
+
 Participant evaluation and resource-aware task allocation are an accepted
 product foundation; implementation and acceptance remain pending. See
 [the owning requirements](../product/EVALUATION_AND_ALLOCATION.md) and

@@ -89,6 +89,7 @@ class ExternalQueueWorker:
         supervisor: CodexAppServerSupervisor | None = None,
         adapter: ExternalCliAdapter | None = None,
         worker_id: str | None = None,
+        worker_slot: int = 1,
     ) -> None:
         if config.dispatch_mode != "queue" or config.queue_runtime != "external":
             raise ExternalQueueWorkerError(
@@ -110,6 +111,14 @@ class ExternalQueueWorker:
             )
         if self.agent.managed_externally:
             raise ExternalQueueWorkerError("external worker agent must be locally managed")
+        if worker_slot > 1 and config.manage_codex_server:
+            raise ExternalQueueWorkerError(
+                "multiple Codex slots require a separately managed server"
+            )
+        if worker_slot < 1 or worker_slot > (
+            config.codex_worker_count if agent_id == "codex" else 1
+        ):
+            raise ExternalQueueWorkerError("worker slot is not configured for this agent")
         validate_adoption_mode(config)
         self.registry = registry or load_registry(config.registry_path)
         self.state = HubState.open(config.state_path)
@@ -120,7 +129,11 @@ class ExternalQueueWorker:
         except BaseException:
             self.state.close()
             raise
-        self.worker_id = worker_id or f"{self.agent.agent_id}-worker"
+        self.worker_id = worker_id or (
+            f"{self.agent.agent_id}-worker"
+            if worker_slot == 1
+            else f"{self.agent.agent_id}-worker-{worker_slot}"
+        )
         self._started_at = datetime.now(timezone.utc)
         self._process_start_marker = uuid.uuid4().hex
         self._last_success_at: datetime | None = None
@@ -292,6 +305,7 @@ class ExternalQueueWorker:
             self.worker_id,
             max_parallel_roots=self.config.max_parallel_roots,
             scheduler_agents=self.config.external_worker_agent_ids,
+            agent_capacities={"codex": self.config.codex_worker_count},
         )
         if job is None:
             return self._run_connect_cycle() if self.agent.runtime == "codex" else False

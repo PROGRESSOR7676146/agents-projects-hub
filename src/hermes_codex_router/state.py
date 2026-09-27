@@ -1523,6 +1523,7 @@ class HubState:
         lease_seconds: int = 90,
         max_parallel_roots: int = 1,
         scheduler_agents: Sequence[str] = (),
+        agent_capacities: Mapping[str, int] | None = None,
         now: datetime | None = None,
     ) -> ProviderJobRecord | None:
         return self._provider_job_state.lease(
@@ -1531,6 +1532,7 @@ class HubState:
             lease_seconds=lease_seconds,
             max_parallel_roots=max_parallel_roots,
             scheduler_agents=scheduler_agents,
+            agent_capacities=agent_capacities,
             now=now,
         )
 

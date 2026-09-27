@@ -89,6 +89,248 @@ class BoundedConcurrencyTests(unittest.TestCase):
     def test_config_defaults_to_one_parallel_root(self) -> None:
         self.assertEqual(self.harness.config.max_parallel_roots, 1)
 
+    def test_three_codex_workers_lease_distinct_roots_with_one_slot_each(self) -> None:
+        jobs = []
+        for index in range(1, 5):
+            topic, session = self.topic_session(
+                project_id=f"example-project-{index}",
+                thread_id=1200 + index,
+                agent_id="codex",
+                root=self.base / f"codex-root-{index}",
+            )
+            jobs.append(self.enqueue(topic, session, 900 + index))
+
+        for index in range(1, 4):
+            worker_id = "codex-worker" if index == 1 else f"codex-worker-{index}"
+            lease = self.state.lease_provider_job(
+                "codex", worker_id, max_parallel_roots=3, agent_capacities={"codex": 3}
+            )
+            self.assertIsNotNone(lease)
+            assert lease is not None and lease.lease_token is not None
+            self.assertEqual(lease.job_id, jobs[index - 1].job_id)
+            self.state.mark_provider_job_executing(lease.job_id, lease.lease_token)
+            self.assertIsNone(
+                self.state.lease_provider_job(
+                    "codex", worker_id, max_parallel_roots=4, agent_capacities={"codex": 3}
+                )
+            )
+
+        self.assertIsNone(
+            self.state.lease_provider_job(
+                "codex", "codex-worker-4", max_parallel_roots=4, agent_capacities={"codex": 3}
+            )
+        )
+        self.assertEqual(self.state.get_provider_job(jobs[3].job_id).status, "queued")
+
+    def test_codex_slot_count_defaults_to_one_even_with_global_capacity(self) -> None:
+        for index in range(1, 3):
+            topic, session = self.topic_session(
+                project_id=f"example-project-{index}",
+                thread_id=1300 + index,
+                agent_id="codex",
+                root=self.base / f"codex-default-root-{index}",
+            )
+            self.enqueue(topic, session, 950 + index)
+        self.assertIsNotNone(
+            self.state.lease_provider_job("codex", "codex-worker", max_parallel_roots=3)
+        )
+        self.assertIsNone(
+            self.state.lease_provider_job("codex", "codex-worker-2", max_parallel_roots=3)
+        )
+
+    def test_codex_slots_still_exclude_the_same_root(self) -> None:
+        for index in range(1, 3):
+            topic, session = self.topic_session(
+                project_id="example-project",
+                thread_id=1400 + index,
+                agent_id="codex",
+                root=self.base / "shared-codex-root",
+            )
+            self.enqueue(topic, session, 1000 + index)
+        first = self.state.lease_provider_job(
+            "codex",
+            "codex-worker",
+            max_parallel_roots=3,
+            agent_capacities={"codex": 3},
+        )
+        self.assertIsNotNone(first)
+        self.assertIsNone(
+            self.state.lease_provider_job(
+                "codex",
+                "codex-worker-2",
+                max_parallel_roots=3,
+                agent_capacities={"codex": 3},
+            )
+        )
+
+    def test_extra_codex_slot_yields_to_waiting_provider(self) -> None:
+        clock = datetime.now(timezone.utc)
+        agents = ("codex", "opencode")
+        for index, agent_id in enumerate(("codex", "codex", "opencode"), 1):
+            topic, session = self.topic_session(
+                project_id=f"example-project-{index}",
+                thread_id=1500 + index,
+                agent_id=agent_id,
+                root=self.base / f"fair-root-{index}",
+            )
+            self.enqueue(topic, session, 1050 + index)
+        for agent_id in agents:
+            self.publish_worker(agent_id, clock)
+        first = self.state.lease_provider_job(
+            "codex",
+            "codex-worker",
+            max_parallel_roots=3,
+            scheduler_agents=agents,
+            agent_capacities={"codex": 3},
+            now=clock,
+        )
+        self.assertIsNotNone(first)
+        self.assertIsNone(
+            self.state.lease_provider_job(
+                "codex",
+                "codex-worker-2",
+                max_parallel_roots=3,
+                scheduler_agents=agents,
+                agent_capacities={"codex": 3},
+                now=clock,
+            )
+        )
+        self.assertIsNotNone(
+            self.state.lease_provider_job(
+                "opencode",
+                "opencode-worker",
+                max_parallel_roots=3,
+                scheduler_agents=agents,
+                agent_capacities={"codex": 3},
+                now=clock,
+            )
+        )
+
+    def test_concurrent_codex_processes_cannot_exceed_three_slots(self) -> None:
+        for index in range(1, 5):
+            topic, session = self.topic_session(
+                project_id=f"example-project-{index}",
+                thread_id=1600 + index,
+                agent_id="codex",
+                root=self.base / f"race-root-{index}",
+            )
+            self.enqueue(topic, session, 1100 + index)
+        barrier = threading.Barrier(5)
+        leased_ids: list[str] = []
+
+        def compete(slot: int) -> None:
+            contender = HubState.open(self.harness.config.state_path)
+            try:
+                barrier.wait()
+                lease = contender.lease_provider_job(
+                    "codex",
+                    f"codex-worker-{slot}",
+                    max_parallel_roots=4,
+                    agent_capacities={"codex": 3},
+                )
+                if lease is not None:
+                    leased_ids.append(lease.job_id)
+            finally:
+                contender.close()
+
+        threads = [threading.Thread(target=compete, args=(slot,)) for slot in range(1, 5)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=5)
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(len(leased_ids), 3)
+        self.assertEqual(len(set(leased_ids)), 3)
+
+    def test_codex_slots_keep_the_lowest_global_limit_during_rolling_reduction(self) -> None:
+        clock = datetime.now(timezone.utc)
+        for index in range(1, 4):
+            topic, session = self.topic_session(
+                project_id=f"example-project-{index}",
+                thread_id=1700 + index,
+                agent_id="codex",
+                root=self.base / f"rolling-root-{index}",
+            )
+            self.enqueue(topic, session, 1200 + index)
+        lease = self.state.lease_provider_job(
+            "codex",
+            "codex-worker",
+            max_parallel_roots=3,
+            scheduler_agents=("codex",),
+            agent_capacities={"codex": 3},
+            now=clock,
+        )
+        self.assertIsNotNone(lease)
+        self.assertIsNone(
+            self.state.lease_provider_job(
+                "codex",
+                "codex-worker-2",
+                max_parallel_roots=1,
+                scheduler_agents=("codex",),
+                agent_capacities={"codex": 3},
+                now=clock,
+            )
+        )
+        self.assertIsNone(
+            self.state.lease_provider_job(
+                "codex",
+                "codex-worker-3",
+                max_parallel_roots=3,
+                scheduler_agents=("codex",),
+                agent_capacities={"codex": 3},
+                now=clock,
+            )
+        )
+
+    def test_busy_only_codex_process_cannot_reserve_a_fairness_turn(self) -> None:
+        clock = datetime.now(timezone.utc)
+        agents = ("codex", "opencode")
+        for index, agent_id in enumerate(("codex", "codex", "opencode", "opencode"), 1):
+            topic, session = self.topic_session(
+                project_id=f"example-project-{index}",
+                thread_id=1800 + index,
+                agent_id=agent_id,
+                root=self.base / f"single-live-root-{index}",
+            )
+            self.enqueue(topic, session, 1300 + index)
+        for agent_id in agents:
+            self.publish_worker(agent_id, clock)
+        codex = self.state.lease_provider_job(
+            "codex",
+            "codex-worker",
+            max_parallel_roots=3,
+            scheduler_agents=agents,
+            agent_capacities={"codex": 3},
+            now=clock,
+        )
+        assert codex is not None and codex.lease_token is not None
+        self.state.mark_provider_job_executing(codex.job_id, codex.lease_token, now=clock)
+        first_open = self.state.lease_provider_job(
+            "opencode",
+            "opencode-worker",
+            max_parallel_roots=3,
+            scheduler_agents=agents,
+            agent_capacities={"codex": 3},
+            now=clock,
+        )
+        assert first_open is not None and first_open.lease_token is not None
+        self.state.fail_provider_job(
+            first_open.job_id,
+            first_open.lease_token,
+            error_class="fictional",
+            error_code="fictional_done",
+        )
+        second_open = self.state.lease_provider_job(
+            "opencode",
+            "opencode-worker",
+            max_parallel_roots=3,
+            scheduler_agents=agents,
+            agent_capacities={"codex": 3},
+            now=clock,
+        )
+        self.assertIsNotNone(second_open)
+
     def test_capacity_one_blocks_a_different_root_and_two_allows_it(self) -> None:
         first_topic, first_session = self.topic_session(
             project_id="example-project-a",

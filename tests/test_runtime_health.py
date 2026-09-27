@@ -427,6 +427,91 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual(worker["runtime"], "codex")
         self.assertEqual(worker["agent_id"], "codex")
 
+    def test_three_codex_slots_are_required_for_health_and_revision(self) -> None:
+        base = Path(self.tempdir.name)
+        config = HubConfig(
+            schema_version=1,
+            owner_user_ids=(42,),
+            registry_path=base / "projects.json",
+            state_path=base / "state.db",
+            codex_socket_path=base / "codex.sock",
+            manage_codex_server=False,
+            terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+            projects=(),
+            agents=(
+                AgentDefinition(
+                    "codex",
+                    "Codex",
+                    "example_bot",
+                    "codex",
+                    None,
+                    True,
+                    False,
+                    "gpt-example",
+                    "high",
+                ),
+            ),
+            dispatch_mode="queue",
+            queue_runtime="external",
+            external_worker_agent_ids=("codex",),
+            codex_worker_count=3,
+        )
+        release = ReleaseIdentity("0.6.0", "a" * 40, "2026-09-04T12:00:00+00:00", True)
+        for component, instance_id, runtime, agent_id in (
+            ("controller", "project-hub-controller", None, None),
+            ("monitor", "operations-monitor", None, None),
+            ("provider_worker", "codex-worker", "codex", "codex"),
+            ("provider_worker", "codex-worker-2", "codex", "codex"),
+        ):
+            self.state.upsert_runtime_health(
+                component=component,
+                instance_id=instance_id,
+                runtime=runtime,
+                agent_id=agent_id,
+                pid=1234,
+                process_start_marker=f"{instance_id}-start",
+                started_at=self.now,
+                heartbeat_at=self.now,
+                release_identity=release,
+            )
+        missing = project_runtime_health(self.state, config, now=self.now)
+        self.assertEqual(
+            [item["instance_id"] for item in missing["provider_workers"]],
+            ["codex-worker", "codex-worker-2", "codex-worker-3"],
+        )
+        self.assertEqual(missing["provider_workers"][2]["status"], "unknown")
+        self.assertEqual(missing["deployment_revision"]["status"], "unknown")
+
+        self.state.upsert_runtime_health(
+            component="provider_worker",
+            instance_id="codex-worker-3",
+            runtime="opencode",
+            agent_id="wrong-agent",
+            pid=1234,
+            process_start_marker="wrong-start",
+            started_at=self.now,
+            heartbeat_at=self.now,
+            release_identity=release,
+        )
+        mismatched = project_runtime_health(self.state, config, now=self.now)
+        self.assertEqual(mismatched["provider_workers"][2]["status"], "degraded")
+        self.assertEqual(mismatched["deployment_revision"]["status"], "unknown")
+
+        self.state.upsert_runtime_health(
+            component="provider_worker",
+            instance_id="codex-worker-3",
+            runtime="codex",
+            agent_id="codex",
+            pid=1234,
+            process_start_marker="correct-start",
+            started_at=self.now,
+            heartbeat_at=self.now,
+            release_identity=release,
+        )
+        complete = project_runtime_health(self.state, config, now=self.now)
+        self.assertEqual(complete["deployment_revision"]["status"], "converged")
+        self.assertEqual(complete["deployment_revision"]["required_components"], 5)
+
     def test_deployment_revision_requires_one_complete_identity(self) -> None:
         base = Path(self.tempdir.name)
         config = HubConfig(
