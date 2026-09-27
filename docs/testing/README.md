@@ -58,7 +58,8 @@ GitHub CI and tag-release validation both call the same reusable
 `.github/workflows/validate.yml` matrix for Python 3.11, 3.12, and 3.13. Each
 matrix entry installs the exact `uv.lock` dependencies of the `dev` extra with
 `uv sync --locked`, including the test-only Telegram client used by the
-acceptance-actor unit tests, prepares an optional external public-author
+acceptance-actor unit tests, runs the suite once more in a single shared process
+to catch cross-module state leaks, prepares an optional external public-author
 declaration from a repository Actions variable, and runs this full canonical
 command. The value enters through the step environment and is written without
 output to a temporary `0600` file outside the checkout. It is not a secret or a

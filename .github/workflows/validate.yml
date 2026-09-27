@@ -31,3 +31,7 @@ jobs:
         run: python scripts/prepare_public_author_policy.py
       - name: Canonical repository validation
         run: .venv/bin/python scripts/validate.py
+      # Canonical runs isolate each test module; this also catches state that
+      # leaks between modules sharing one process (ADR 0041).
+      - name: Shared-process test discovery
+        run: .venv/bin/python -m unittest discover -s tests -q

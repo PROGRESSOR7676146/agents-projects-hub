@@ -121,6 +121,7 @@ def _assert_validation_contract(workflows: Path) -> None:
         "uv sync --locked --extra dev",
         "python scripts/prepare_public_author_policy.py",
         ".venv/bin/python scripts/validate.py",
+        ".venv/bin/python -m unittest discover -s tests -q",
     ]:
         raise AssertionError("validation must prepare policy input and run only the canonical gate")
     install = next(
