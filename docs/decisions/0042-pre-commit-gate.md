@@ -16,9 +16,13 @@ minute, so running it before every commit is affordable.
 
 The repository-managed hook directory also receives a versioned
 `pre-commit` hook, installed together with `pre-push` by
-`publish_preflight --install`. Installation stages every versioned hook
-completely before activating any; if an activation, configuration or worktree
-step fails, it restores the previous hook files and local settings.
+`publish_preflight --install`. Installation writes both hooks as one
+complete, immutable set and activates it with a single atomic switch of the
+link Git runs hooks through, so no worktree ever runs a mixed gate. The
+previous set, the local settings and every per-worktree hook path stay intact
+until the installation is verified; a failure returns to them, reads the
+result back, and reports when the return could not be confirmed instead of
+claiming it.
 
 The hook refuses a commit while unstaged changes or untracked, non-ignored
 files exist, because the checks read the working tree. This check uses the

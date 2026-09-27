@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import os
 import subprocess
 import tempfile
@@ -271,23 +272,27 @@ class TestModuleRunnerTests(unittest.TestCase):
 
     def test_every_module_finishes_and_every_failure_is_named(self) -> None:
         root = self.fixture_root({})
-        expected = {"test_alpha": 2, "test_beta": 1, "test_gamma": 4, "test_delta": 3}
+        expected = {
+            name: [f"{name}.Tests.test_{index}" for index in range(count)]
+            for name, count in (("test_alpha", 2), ("test_beta", 1), ("test_gamma", 4))
+        }
+        expected["test_delta"] = [f"test_delta.Tests.test_{index}" for index in range(3)]
         started: list[str] = []
 
         def fake_run(argv: tuple[str, ...], **kwargs: Any) -> subprocess.CompletedProcess[str]:
             self.assertEqual(kwargs["cwd"], root)
-            self.assertEqual(argv[1:3], ("-m", "unittest"))
-            name = argv[3]
+            self.assertEqual(argv[1], "-c")
+            name, report = argv[3], Path(argv[4])
             started.append(name)
+            if name == "test_beta":
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"], output=b"partial \xff")
+            ran = expected[name][:2] if name == "test_delta" else expected[name]
+            report.write_text(json.dumps(ran), encoding="utf-8")
             if name == "test_alpha":
                 return subprocess.CompletedProcess(
                     argv, 1, "Ran 2 tests in 0.010s\n\nFAILED (failures=1)\n"
                 )
-            if name == "test_beta":
-                raise subprocess.TimeoutExpired(argv, kwargs["timeout"], output=b"partial \xff")
-            if name == "test_delta":
-                return subprocess.CompletedProcess(argv, 0, "Ran 2 tests in 0.010s\n\nOK\n")
-            return subprocess.CompletedProcess(argv, 0, "Ran 4 tests in 0.010s\n\nOK\n")
+            return subprocess.CompletedProcess(argv, 0, "OK\n")
 
         errors = io.StringIO()
         with (
@@ -308,7 +313,80 @@ class TestModuleRunnerTests(unittest.TestCase):
         self.assertIn("FAILED (failures=1)", errors.getvalue())
         self.assertIn("timed out", errors.getvalue())
         self.assertIn("partial \ufffd", errors.getvalue())
-        self.assertIn("ran 2 of 3 discovered tests", errors.getvalue())
+        self.assertIn(
+            "ran 2 of 3 discovered tests; not run: test_delta.Tests.test_2", errors.getvalue()
+        )
+
+    def test_load_tests_receives_the_discovery_pattern(self) -> None:
+        # Discovery passes the pattern to load_tests; loading by name alone
+        # passes None and would run a different, passing selection.
+        root = self.fixture_root(
+            {
+                "test_selective.py": """
+                    import unittest
+
+
+                    class Smoke(unittest.TestCase):
+                        def test_smoke(self):
+                            pass
+
+
+                    class Regression(unittest.TestCase):
+                        def test_regression(self):
+                            self.fail("discovered regression")
+
+
+                    def load_tests(loader, tests, pattern):
+                        return loader.loadTestsFromTestCase(Regression if pattern else Smoke)
+                """,
+            }
+        )
+        errors = io.StringIO()
+        with (
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(errors),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            validator.run_test_modules(jobs=1, root=root)
+        self.assertIn("1 of 1 test modules failed: test_selective", str(raised.exception))
+        self.assertIn("discovered regression", errors.getvalue())
+
+    def test_equal_count_with_different_tests_fails(self) -> None:
+        root = self.fixture_root(
+            {
+                "test_shifting.py": """
+                    import sys
+                    import unittest
+
+
+                    class Discovered(unittest.TestCase):
+                        def test_one(self):
+                            pass
+
+
+                    class Substitute(unittest.TestCase):
+                        def test_one(self):
+                            pass
+
+
+                    def load_tests(loader, tests, pattern):
+                        # The discovery probe runs with no arguments; the runner does not.
+                        chosen = Discovered if len(sys.argv) == 1 else Substitute
+                        return loader.loadTestsFromTestCase(chosen)
+                """,
+            }
+        )
+        errors = io.StringIO()
+        with (
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(errors),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            validator.run_test_modules(jobs=1, root=root)
+        self.assertIn("test_shifting", str(raised.exception))
+        self.assertIn("ran 1 of 1 discovered tests", errors.getvalue())
+        self.assertIn("not run: test_shifting.Discovered.test_one", errors.getvalue())
+        self.assertIn("not discovered: test_shifting.Substitute.test_one", errors.getvalue())
 
     def test_real_timeout_keeps_the_output_printed_before_it(self) -> None:
         root = self.fixture_root(

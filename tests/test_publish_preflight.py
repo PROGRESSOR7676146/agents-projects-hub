@@ -591,7 +591,7 @@ class PublishPreflightTests(unittest.TestCase):
             ):
                 publish_preflight._install(root)
             self.assertIn("pre-commit", str(raised.exception))
-            self.assertFalse((root / ".git" / "hub-managed-hooks").exists())
+            self.assertFalse((root / ".git" / publish_preflight.HOOK_ROOT).exists())
 
     def installed_fixture(self, base: Path) -> tuple[Path, Path, Path]:
         """A repository with version-one hooks installed and version-two sources."""
@@ -609,7 +609,7 @@ class PublishPreflightTests(unittest.TestCase):
             publish_preflight._install(root)
         for name in publish_preflight.MANAGED_HOOKS:
             (hooks / name).write_text(f"#!/bin/sh\n# {name} v2\n", encoding="utf-8")
-        return root, root / ".git" / "hub-managed-hooks", policy
+        return root, root / ".git" / publish_preflight.HOOK_ROOT / "active", policy
 
     def local_config(self, root: Path) -> dict[str, str]:
         keys = ("core.hooksPath", "hub.publicAuthorEmailFile", "hub.publishPython")
@@ -623,39 +623,56 @@ class PublishPreflightTests(unittest.TestCase):
             for key in keys
         }
 
-    def assert_version_one_hooks(self, hook_directory: Path) -> None:
+    def assert_hooks(self, hook_directory: Path, version: str) -> None:
         for name in publish_preflight.MANAGED_HOOKS:
             self.assertEqual(
-                (hook_directory / name).read_text(encoding="utf-8"), f"#!/bin/sh\n# {name} v1\n"
+                (hook_directory / name).read_text(encoding="utf-8"),
+                f"#!/bin/sh\n# {name} {version}\n",
             )
         self.assertEqual(
             sorted(path.name for path in hook_directory.iterdir()),
             sorted(publish_preflight.MANAGED_HOOKS),
         )
 
-    def test_failed_second_activation_restores_the_previous_hook_set(self) -> None:
+    def assert_version_one_hooks(self, hook_directory: Path) -> None:
+        self.assert_hooks(hook_directory, "v1")
+
+    def test_update_switches_the_whole_set_and_removes_the_old_one(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root, hook_directory, policy = self.installed_fixture(Path(directory))
-            before = self.local_config(root)
-            real_replace = os.replace
-            activations: list[str] = []
-
-            def replace(source: object, destination: object) -> None:
-                if Path(str(destination)).parent == hook_directory:
-                    activations.append(Path(str(destination)).name)
-                    if len(activations) == 2:
-                        raise OSError(28, "No space left on device")
-                real_replace(source, destination)  # type: ignore[arg-type]
-
-            with (
-                patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)}),
-                patch.object(publish_preflight.os, "replace", side_effect=replace),
-                self.assertRaises(publish_preflight.PreflightError),
-            ):
+            root, active, policy = self.installed_fixture(Path(directory))
+            sets = active.parent / "sets"
+            first = os.readlink(active)
+            with patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)}):
                 publish_preflight._install(root)
-            self.assertGreaterEqual(len(activations), 2)
-            self.assert_version_one_hooks(hook_directory)
-            self.assertEqual(self.local_config(root), before)
+            self.assertNotEqual(os.readlink(active), first)
+            self.assert_hooks(active, "v2")
+            self.assertEqual(
+                [path.name for path in sets.iterdir()], [Path(os.readlink(active)).name]
+            )
+            self.assertEqual(self.local_config(root)["core.hooksPath"], f"{active}\n")
+
+    def test_persistent_filesystem_failure_keeps_the_previous_set_active(self) -> None:
+        for operation in ("rename", "symlink", "replace"):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as directory:
+                root, active, policy = self.installed_fixture(Path(directory))
+                before = self.local_config(root)
+                sets_before = sorted(path.name for path in (active.parent / "sets").iterdir())
+
+                def fail(*_args: object, **_kwargs: object) -> None:
+                    raise OSError(28, "No space left on device")
+
+                with (
+                    patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)}),
+                    patch.object(publish_preflight.os, operation, side_effect=fail),
+                    self.assertRaises(publish_preflight.PreflightError) as raised,
+                ):
+                    publish_preflight._install(root)
+                self.assertNotIn("could not be confirmed", str(raised.exception))
+                self.assert_version_one_hooks(active)
+                self.assertEqual(self.local_config(root), before)
+                self.assertEqual(
+                    sorted(path.name for path in (active.parent / "sets").iterdir()), sets_before
+                )
 
     def test_failed_configuration_restores_hooks_and_local_settings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -681,6 +698,157 @@ class PublishPreflightTests(unittest.TestCase):
                 publish_preflight._install(root)
             self.assert_version_one_hooks(hook_directory)
             self.assertEqual(self.local_config(root), before)
+            self.assertEqual(len(list((hook_directory.parent / "sets").iterdir())), 1)
+
+    def test_rollback_that_cannot_be_confirmed_is_reported_not_claimed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, active, policy = self.installed_fixture(Path(directory))
+            real_run = publish_preflight._run
+            real_replace = os.replace
+            switches: list[str] = []
+
+            def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                if argv[:3] == ["git", "config", "--local"] and argv[3] == "hub.publishPython":
+                    return subprocess.CompletedProcess(argv, 1, "", "")
+                return real_run(argv, **kwargs)  # type: ignore[arg-type]
+
+            def replace(source: object, destination: object) -> None:
+                switches.append(str(destination))
+                if len(switches) > 1:
+                    raise OSError(28, "No space left on device")
+                real_replace(source, destination)  # type: ignore[arg-type]
+
+            with (
+                patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)}),
+                patch.object(publish_preflight, "_run", side_effect=run),
+                patch.object(publish_preflight.os, "replace", side_effect=replace),
+                self.assertRaises(publish_preflight.PreflightError) as raised,
+            ):
+                publish_preflight._install(root)
+            self.assertIn("could not be confirmed restored", str(raised.exception))
+            self.assertEqual(switches, [str(active), str(active)])
+            # The link never points at a partial set, whichever set it ended on.
+            self.assert_hooks(active, "v2")
+
+    def test_failed_worktree_update_restores_every_worktree_on_first_install(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "checkout"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            identity = {
+                **_isolated_git_environment(),
+                "GIT_AUTHOR_NAME": "Example Author",
+                "GIT_AUTHOR_EMAIL": "author@example.com",
+                "GIT_COMMITTER_NAME": "Example Committer",
+                "GIT_COMMITTER_EMAIL": "committer@example.com",
+            }
+            (root / "tracked.txt").write_text("example\n", encoding="utf-8")
+            subprocess.run(["git", "add", "tracked.txt"], cwd=root, env=identity, check=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "example commit"], cwd=root, env=identity, check=True
+            )
+            subprocess.run(
+                ["git", "config", "extensions.worktreeConfig", "true"], cwd=root, check=True
+            )
+            linked = base / "linked"
+            subprocess.run(
+                ["git", "worktree", "add", "-q", "-b", "linked-example", str(linked)],
+                cwd=root,
+                check=True,
+            )
+            previous: dict[Path, Path] = {}
+            for worktree in (root, linked):
+                old_hooks = base / f"old-hooks-{worktree.name}"
+                old_hooks.mkdir()
+                for name in publish_preflight.MANAGED_HOOKS:
+                    (old_hooks / name).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                    (old_hooks / name).chmod(0o700)
+                subprocess.run(
+                    ["git", "config", "--worktree", "core.hooksPath", str(old_hooks)],
+                    cwd=worktree,
+                    check=True,
+                )
+                previous[worktree] = old_hooks
+            hooks = root / ".githooks"
+            hooks.mkdir()
+            for name in publish_preflight.MANAGED_HOOKS:
+                (hooks / name).write_text(f"#!/bin/sh\n# {name} v1\n", encoding="utf-8")
+            policy = base / "public-author-policy"
+            policy.write_text("owner@example.com\n", encoding="ascii")
+            policy.chmod(0o600)
+            before = self.local_config(root)
+            real_run = publish_preflight._run
+
+            def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                if (
+                    argv[:4] == ["git", "config", "--worktree", "core.hooksPath"]
+                    and len(argv) == 5
+                    and Path(str(kwargs["cwd"])) == linked
+                ):
+                    return subprocess.CompletedProcess(argv, 1, "", "")
+                return real_run(argv, **kwargs)  # type: ignore[arg-type]
+
+            with (
+                patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)}),
+                patch.object(publish_preflight, "_run", side_effect=run),
+                self.assertRaises(publish_preflight.PreflightError) as raised,
+            ):
+                publish_preflight._install(root)
+            self.assertNotIn("could not be confirmed", str(raised.exception))
+            for worktree, old_hooks in previous.items():
+                effective = subprocess.run(
+                    ["git", "config", "--get", "core.hooksPath"],
+                    cwd=worktree,
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout.strip()
+                self.assertEqual(effective, str(old_hooks))
+                for name in publish_preflight.MANAGED_HOOKS:
+                    self.assertTrue((old_hooks / name).is_file())
+            self.assertEqual(self.local_config(root), before)
+            self.assertFalse(
+                os.path.lexists(root / ".git" / publish_preflight.HOOK_ROOT / "active")
+            )
+
+    def test_migration_from_the_single_directory_keeps_it_until_success(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "checkout"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            legacy = root / ".git" / publish_preflight.LEGACY_HOOK_DIRECTORY
+            legacy.mkdir(mode=0o700)
+            hooks = root / ".githooks"
+            hooks.mkdir()
+            for name in publish_preflight.MANAGED_HOOKS:
+                (legacy / name).write_text(f"#!/bin/sh\n# {name} v1\n", encoding="utf-8")
+                (hooks / name).write_text(f"#!/bin/sh\n# {name} v2\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "config", "--local", "core.hooksPath", str(legacy)], cwd=root, check=True
+            )
+            policy = base / "public-author-policy"
+            policy.write_text("owner@example.com\n", encoding="ascii")
+            policy.chmod(0o600)
+            before = self.local_config(root)
+            with (
+                patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)}),
+                patch.object(
+                    publish_preflight.os, "replace", side_effect=OSError(28, "No space left")
+                ),
+                self.assertRaises(publish_preflight.PreflightError),
+            ):
+                publish_preflight._install(root)
+            self.assert_version_one_hooks(legacy)
+            self.assertEqual(self.local_config(root), before)
+
+            with patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)}):
+                publish_preflight._install(root)
+            active = root / ".git" / publish_preflight.HOOK_ROOT / "active"
+            self.assert_hooks(active, "v2")
+            self.assertEqual(self.local_config(root)["core.hooksPath"], f"{active}\n")
+            self.assertFalse(legacy.exists())
 
     def test_commit_hook_validates_exactly_what_is_committed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
