@@ -14,6 +14,7 @@ trace.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sys
 import threading
@@ -70,6 +71,16 @@ _logger = logging.getLogger(LOGGER_NAME)
 _logger.addHandler(logging.NullHandler())
 _logger.propagate = False
 _lock = threading.Lock()
+
+
+def _reinitialize_after_fork() -> None:
+    # A lock held by another thread at fork time would never be released in
+    # the child; logging reinitializes its own locks the same way.
+    global _lock
+    _lock = threading.Lock()
+
+
+os.register_at_fork(after_in_child=_reinitialize_after_fork)
 _last_emitted: dict[str, float] = {}
 _repeats: dict[str, int] = {}
 _dropped = 0

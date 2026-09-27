@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import io
 import logging
+import multiprocessing
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -103,6 +104,19 @@ class DiagnosticLogTests(unittest.TestCase):
                         diagnostic_log.survived("service.health_publish", error)
                 self.assertEqual(captured.getvalue(), "")
                 self.assertEqual(diagnostic_log.dropped_records(), 1)
+
+    def test_forked_child_can_log_while_the_parent_holds_the_lock(self) -> None:
+        def child() -> None:
+            diagnostic_log.survived("service.health_publish", RuntimeError("x"))
+
+        with diagnostic_log._lock:
+            process = multiprocessing.get_context("fork").Process(target=child)
+            process.start()
+            process.join(10)
+            if process.is_alive():
+                process.kill()
+                process.join(2)
+        self.assertEqual(process.exitcode, 0, "forked child deadlocked on the diagnostic lock")
 
     def test_repeats_are_bounded_and_counted(self) -> None:
         clock = iter((0.0, 1.0, 2.0, 61.0))

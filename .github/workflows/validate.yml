@@ -34,4 +34,6 @@ jobs:
       # Canonical runs isolate each test module; this also catches state that
       # leaks between modules sharing one process (ADR 0041).
       - name: Shared-process test discovery
-        run: .venv/bin/python -m unittest discover -s tests -q
+        timeout-minutes: 20
+        # A hang ends after 15 minutes with every thread's traceback in the log.
+        run: timeout --signal=ABRT 900 .venv/bin/python -X faulthandler -m unittest discover -s tests -q
