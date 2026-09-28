@@ -17,6 +17,7 @@ from .incoming_materials import (
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
 from .release_identity import CURRENT_RELEASE, ReleaseIdentity
 from .root_blockers import RootBlockerNotice, RootBlockerState, persistent_root_blocker
+from .state_connection import connect_existing
 from .state_delivery import (
     DeliveryStateFacade,
     TelegramOutboxPartRecord,
@@ -205,26 +206,12 @@ class HubState:
     @classmethod
     def open_read_only(cls, path: Path) -> "HubState":
         """Open an existing current-schema database without creating or migrating it."""
-        try:
-            resolved = path.expanduser().resolve(strict=True)
-            if not resolved.is_file():
-                raise StateError("state_unavailable")
-            connection = sqlite3.connect(
-                resolved.as_uri() + "?mode=ro",
-                uri=True,
-                timeout=5.0,
-            )
-            connection.execute("PRAGMA query_only=ON")
-            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version != LATEST_SCHEMA_VERSION:
-                connection.close()
-                raise StateError("state_schema_unsupported")
-            connection.execute("PRAGMA foreign_keys=ON")
-            return cls(connection, resolved)
-        except StateError:
-            raise
-        except (OSError, sqlite3.Error):
-            raise StateError("state_unavailable") from None
+        return cls(*connect_existing(path, writable=False, state_error=StateError))
+
+    @classmethod
+    def open_existing(cls, path: Path) -> "HubState":
+        """Open an existing current-schema database for writing; never create or migrate it."""
+        return cls(*connect_existing(path, writable=True, state_error=StateError))
 
     @property
     def schema_version(self) -> int:

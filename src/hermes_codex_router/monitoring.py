@@ -7,7 +7,6 @@ import time
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Callable
 
 from .alerts import DEFAULT_LOW_QUOTA_PERCENT, OperationalAlert, evaluate_operational_alerts
@@ -144,16 +143,6 @@ def _hermes_health(
     )
 
 
-def _open_current_state(path: Path) -> HubState:
-    """Open live state for the monitor's own records; never create or migrate it.
-
-    The read-only probe refuses a missing database and a non-current schema, so
-    a monitor started from another release cannot initialize or migrate state.
-    """
-    HubState.open_read_only(path).close()
-    return HubState.open(path)
-
-
 def run_monitor_once(
     config: HubConfig,
     *,
@@ -161,7 +150,7 @@ def run_monitor_once(
     repair: bool = False,
     cooldown_seconds: int = 60 * 60,
 ) -> dict[str, object]:
-    state = _open_current_state(config.state_path)
+    state = HubState.open_existing(config.state_path)
     monitor_started = datetime.now(timezone.utc)
     monitor_marker = uuid.uuid4().hex
     monitor_completed = False

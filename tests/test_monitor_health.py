@@ -64,6 +64,48 @@ class MonitorHealthTests(unittest.TestCase):
                 [],
             )
 
+    def test_existing_state_open_checks_schema_on_its_own_connection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = self._config(directory)
+            with closing(HubState.open_existing(config.state_path)) as state:
+                self.assertEqual(state.schema_version, LATEST_SCHEMA_VERSION)
+                state.record_runtime_event("monitor", "info", "probe", "ok")
+
+            # Swap in an older database after path resolution, before the connection.
+            older = Path(directory) / "older.db"
+            with closing(sqlite3.connect(older)) as connection, connection:
+                connection.execute(f"PRAGMA user_version = {LATEST_SCHEMA_VERSION - 1}")
+            original_is_file = Path.is_file
+
+            def replace_then_check(path: Path) -> bool:
+                if path == config.state_path.resolve():
+                    older.replace(config.state_path)
+                return original_is_file(path)
+
+            with patch.object(Path, "is_file", replace_then_check):
+                with self.assertRaisesRegex(StateError, "state_schema_unsupported"):
+                    HubState.open_existing(config.state_path)
+            with closing(sqlite3.connect(config.state_path)) as connection:
+                self.assertEqual(
+                    connection.execute("PRAGMA user_version").fetchone()[0],
+                    LATEST_SCHEMA_VERSION - 1,
+                )
+            self.assertEqual(
+                [item.name for item in Path(directory).iterdir() if "backup" in item.name],
+                [],
+            )
+
+            # A file removed after resolution is refused rather than created.
+            def remove_then_check(path: Path) -> bool:
+                if path == config.state_path.resolve():
+                    config.state_path.unlink()
+                return True
+
+            with patch.object(Path, "is_file", remove_then_check):
+                with self.assertRaisesRegex(StateError, "state_unavailable"):
+                    HubState.open_existing(config.state_path)
+            self.assertFalse(config.state_path.exists())
+
     def test_monitor_cycle_publishes_completed_runtime_health(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = self._config(directory)

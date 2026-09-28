@@ -139,7 +139,7 @@
     },
     {
       "target": "src/hermes_codex_router/state.py",
-      "max_lines": 3099,
+      "max_lines": 3086,
       "rationale": "Single-connection HubState facade that keeps the public state API stable while domain facades own queries (refactoring package 4).",
       "owner": "repository owner",
       "next_review": "2026-12-31",
