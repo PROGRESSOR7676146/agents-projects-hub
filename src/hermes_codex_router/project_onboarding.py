@@ -9,9 +9,10 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
 from .registry import PROJECT_ID
-from .state import HubState, StateError, _now
+from .state import HubState, StateError
 
 WORKFLOW_TTL = timedelta(minutes=30)
 WORKER_LEASE = timedelta(minutes=2)
@@ -21,10 +22,6 @@ MAX_ROOTS = 12
 
 def _token() -> str:
     return secrets.token_hex(8)
-
-
-def _deadline(delta: timedelta) -> str:
-    return (datetime.now(timezone.utc) + delta).isoformat()
 
 
 def _parse_time(value: str) -> datetime:
@@ -94,9 +91,17 @@ class ProjectCommandScope:
 class ProjectOnboardingStore:
     """State transitions for the private Hub wizard and provisioning worker."""
 
-    def __init__(self, state: HubState) -> None:
+    def __init__(self, state: HubState, *, clock: Callable[[], datetime] | None = None) -> None:
         self.state = state
         self.connection = state._connection
+        # Tests inject a clock so lease expiry does not depend on host timing (R-018).
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+
+    def _now(self) -> str:
+        return self._clock().isoformat()
+
+    def _deadline(self, delta: timedelta) -> str:
+        return (self._clock() + delta).isoformat()
 
     @staticmethod
     def _workflow(row: sqlite3.Row) -> OnboardingWorkflow:
@@ -179,7 +184,7 @@ class ProjectOnboardingStore:
         if row is None:
             return None
         workflow = self._workflow(row)
-        if _parse_time(workflow.expires_at) <= datetime.now(timezone.utc) and workflow.stage in {
+        if _parse_time(workflow.expires_at) <= self._clock() and workflow.stage in {
             "awaiting_name",
             "choosing_root",
             "awaiting_folder",
@@ -189,7 +194,7 @@ class ProjectOnboardingStore:
                 self.connection.execute(
                     """UPDATE project_onboarding_workflows
                        SET stage='expired',updated_at=? WHERE workflow_id=? AND stage=?""",
-                    (_now(), workflow.workflow_id, workflow.stage),
+                    (self._now(), workflow.workflow_id, workflow.stage),
                 )
             return None
         return workflow
@@ -204,7 +209,7 @@ class ProjectOnboardingStore:
                 raise StateError("onboarding_root_invalid")
             resolved.append(candidate)
         workflow_id = _token()
-        now = _now()
+        now = self._now()
         with self.state._immediate_transaction():
             self.connection.execute(
                 """UPDATE project_onboarding_workflows SET stage='cancelled',updated_at=?
@@ -216,7 +221,7 @@ class ProjectOnboardingStore:
                 """INSERT INTO project_onboarding_workflows
                    (workflow_id,owner_user_id,stage,expires_at,created_at,updated_at)
                    VALUES (?,?,'awaiting_name',?,?,?)""",
-                (workflow_id, owner_user_id, _deadline(WORKFLOW_TTL), now, now),
+                (workflow_id, owner_user_id, self._deadline(WORKFLOW_TTL), now, now),
             )
             for index, root in enumerate(resolved, start=1):
                 label = root.name or f"Allowed root {index}"
@@ -232,7 +237,7 @@ class ProjectOnboardingStore:
         name = _safe_name(value)
         if not 1 <= len(name) <= 128 or not name.isprintable():
             raise StateError("onboarding_name_invalid")
-        now = _now()
+        now = self._now()
         stale = False
         with self.state._immediate_transaction():
             changed = self.connection.execute(
@@ -279,7 +284,7 @@ class ProjectOnboardingStore:
         return {"inline_keyboard": rows}
 
     def select_root(self, owner_user_id: int, option_id: str) -> OnboardingWorkflow:
-        now = _now()
+        now = self._now()
         stale = False
         with self.state._immediate_transaction():
             row = self.connection.execute(
@@ -327,7 +332,7 @@ class ProjectOnboardingStore:
             raise StateError("onboarding_root_invalid") from None
         if len(relative.parts) != 1:
             raise StateError("onboarding_root_invalid")
-        now = _now()
+        now = self._now()
         stale = False
         with self.state._immediate_transaction():
             if self.connection.execute(
@@ -397,7 +402,7 @@ class ProjectOnboardingStore:
         ):
             raise StateError("onboarding_owner_snapshot_invalid")
         owner_snapshot = json.dumps(sorted(required), separators=(",", ":"))
-        now = _now()
+        now = self._now()
         stale = False
         repeated: OnboardingWorkflow | None = None
         with self.state._immediate_transaction():
@@ -432,9 +437,10 @@ class ProjectOnboardingStore:
             ).rowcount
             if changed != 1:
                 workflow = self.get(workflow_id)
-                if workflow.stage == "confirming" and _parse_time(
-                    workflow.expires_at
-                ) <= datetime.now(timezone.utc):
+                if (
+                    workflow.stage == "confirming"
+                    and _parse_time(workflow.expires_at) <= self._clock()
+                ):
                     self.connection.execute(
                         """UPDATE project_onboarding_workflows SET stage='expired',updated_at=?
                            WHERE workflow_id=? AND owner_user_id=? AND stage='confirming'""",
@@ -476,14 +482,14 @@ class ProjectOnboardingStore:
                     """UPDATE project_onboarding_workflows SET stage='cancelled',updated_at=?
                        WHERE workflow_id=? AND owner_user_id=? AND stage IN
                        ('awaiting_name','choosing_root','awaiting_folder','confirming')""",
-                    (_now(), workflow_id, owner_user_id),
+                    (self._now(), workflow_id, owner_user_id),
                 ).rowcount
                 == 1
             )
 
     def claim_next(self, worker_id: str) -> OnboardingWorkflow | None:
         token = _token()
-        now = _now()
+        now = self._now()
         with self.state._immediate_transaction():
             stale = self.connection.execute(
                 """SELECT workflow_id,owner_user_id,stage FROM project_onboarding_workflows
@@ -543,7 +549,7 @@ class ProjectOnboardingStore:
                    lease_owner=?,lease_token=?,lease_expires_at=?,updated_at=?
                    WHERE workflow_id=? AND (stage='queued' OR
                    (stage='committing_binding' AND lease_expires_at<=?))""",
-                (worker_id, token, _deadline(WORKER_LEASE), now, workflow_id, now),
+                (worker_id, token, self._deadline(WORKER_LEASE), now, workflow_id, now),
             ).rowcount
             if changed != 1:
                 return None
@@ -559,7 +565,7 @@ class ProjectOnboardingStore:
         telegram_chat_id: int | None = None,
         telegram_access_hash: int | None = None,
     ) -> OnboardingWorkflow:
-        now = _now()
+        now = self._now()
         fields = "stage=?,updated_at=?"
         values: list[object] = [stage, now]
         if telegram_chat_id is not None:
@@ -582,7 +588,7 @@ class ProjectOnboardingStore:
     ) -> OnboardingWorkflow:
         if not 30 <= lease_seconds <= 300:
             raise StateError("onboarding_lease_duration_invalid")
-        now = datetime.now(timezone.utc)
+        now = self._clock()
         current = now.isoformat()
         deadline = (now + timedelta(seconds=lease_seconds)).isoformat()
         with self.state._immediate_transaction():
@@ -598,7 +604,7 @@ class ProjectOnboardingStore:
         return self.get(workflow_id)
 
     def assert_lease(self, workflow_id: str, lease_token: str, *, expected: str) -> None:
-        now = _now()
+        now = self._now()
         row = self.connection.execute(
             """SELECT 1 FROM project_onboarding_workflows
                WHERE workflow_id=? AND lease_token=? AND stage=? AND lease_expires_at>?""",
@@ -612,7 +618,7 @@ class ProjectOnboardingStore:
     ) -> OnboardingWorkflow:
         if expected not in {"creating_group", "configuring_group"}:
             raise StateError("onboarding_worker_release_invalid")
-        now = _now()
+        now = self._now()
         with self.state._immediate_transaction():
             changed = self.connection.execute(
                 """UPDATE project_onboarding_workflows SET stage='queued',lease_owner=NULL,
@@ -684,7 +690,7 @@ class ProjectOnboardingStore:
                    telegram_access_hash=?,stage='queued',error_code=NULL,
                    required_owner_ids_json=?,updated_at=?
                    WHERE workflow_id=? AND stage IN ('group_unknown','configuration_unknown')""",
-                (chat_id, access_hash, owner_snapshot, _now(), workflow_id),
+                (chat_id, access_hash, owner_snapshot, self._now(), workflow_id),
             ).rowcount
             if changed != 1:
                 raise StateError("onboarding_selection_stale")
@@ -727,7 +733,7 @@ class ProjectOnboardingStore:
         error_code: str,
         notice: str,
     ) -> OnboardingWorkflow:
-        now = _now()
+        now = self._now()
         with self.state._immediate_transaction():
             changed = self.connection.execute(
                 """UPDATE project_onboarding_workflows SET stage=?,error_code=?,updated_at=?,
@@ -757,7 +763,7 @@ class ProjectOnboardingStore:
     ) -> OnboardingWorkflow:
         if resume_stage not in {"preparing_root", "configuring_group"}:
             raise StateError("onboarding_resume_stage_invalid")
-        now = _now()
+        now = self._now()
         with self.state._immediate_transaction():
             changed = self.connection.execute(
                 """UPDATE project_onboarding_workflows SET stage='failed',resume_stage=?,
@@ -821,7 +827,7 @@ class ProjectOnboardingStore:
                    error_code=NULL,required_owner_ids_json=?,updated_at=?
                    WHERE workflow_id=? AND stage='failed'
                    AND resume_stage IS NOT NULL""",
-                (owner_snapshot, _now(), workflow_id),
+                (owner_snapshot, self._now(), workflow_id),
             ).rowcount
             if changed != 1:
                 raise StateError("onboarding_resume_not_blocked")
@@ -894,7 +900,7 @@ class ProjectOnboardingStore:
         )
 
     def complete(self, workflow_id: str, lease_token: str) -> OnboardingWorkflow:
-        now = _now()
+        now = self._now()
         with self.state._immediate_transaction():
             row = self.connection.execute(
                 """SELECT * FROM project_onboarding_workflows
@@ -980,7 +986,7 @@ class ProjectOnboardingStore:
 
     def claim_outbox(self, sender_id: str) -> OnboardingOutbox | None:
         token = _token()
-        now = _now()
+        now = self._now()
         with self.state._immediate_transaction():
             self.connection.execute(
                 """UPDATE project_onboarding_outbox SET status='unknown',
@@ -1000,7 +1006,7 @@ class ProjectOnboardingStore:
                 """UPDATE project_onboarding_outbox SET status='leased',lease_owner=?,
                    lease_token=?,lease_expires_at=?,attempt_count=attempt_count+1,updated_at=?
                    WHERE outbox_id=? AND status='prepared'""",
-                (sender_id, token, _deadline(OUTBOX_LEASE), now, str(row["outbox_id"])),
+                (sender_id, token, self._deadline(OUTBOX_LEASE), now, str(row["outbox_id"])),
             ).rowcount
             if changed != 1:
                 return None
@@ -1019,7 +1025,7 @@ class ProjectOnboardingStore:
                 """UPDATE project_onboarding_outbox SET status='delivered',
                    telegram_message_id=?,delivered_at=?,updated_at=?
                    WHERE outbox_id=? AND lease_token=? AND status='leased'""",
-                (telegram_message_id, _now(), _now(), outbox_id, lease_token),
+                (telegram_message_id, self._now(), self._now(), outbox_id, lease_token),
             ).rowcount
             if changed != 1:
                 raise StateError("onboarding_outbox_lease_lost")
@@ -1029,7 +1035,7 @@ class ProjectOnboardingStore:
     ) -> None:
         if not 0 <= delay_seconds <= 86_400:
             raise StateError("onboarding_outbox_retry_invalid")
-        now = datetime.now(timezone.utc)
+        now = self._clock()
         available = (now + timedelta(seconds=delay_seconds)).isoformat()
         with self.state._immediate_transaction():
             changed = self.connection.execute(
@@ -1049,7 +1055,7 @@ class ProjectOnboardingStore:
                 """UPDATE project_onboarding_outbox SET status='failed',error_code=?,updated_at=?,
                    lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL
                    WHERE outbox_id=? AND lease_token=? AND status='leased'""",
-                (error_code[:128], _now(), outbox_id, lease_token),
+                (error_code[:128], self._now(), outbox_id, lease_token),
             ).rowcount
             if changed != 1:
                 raise StateError("onboarding_outbox_lease_lost")
@@ -1060,7 +1066,7 @@ class ProjectOnboardingStore:
                 """UPDATE project_onboarding_outbox SET status='unknown',error_code=?,updated_at=?,
                    lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL
                    WHERE outbox_id=? AND lease_token=? AND status='leased'""",
-                (error_code[:128], _now(), outbox_id, lease_token),
+                (error_code[:128], self._now(), outbox_id, lease_token),
             ).rowcount
             if changed != 1:
                 raise StateError("onboarding_outbox_lease_lost")
@@ -1072,7 +1078,7 @@ class ProjectOnboardingStore:
             or any(not identity or len(identity) > 64 for identity in bot_identities)
         ):
             raise StateError("project_command_scope_identities_invalid")
-        now = _now()
+        now = self._now()
         with self.state._immediate_transaction():
             for identity in bot_identities:
                 self.connection.execute(
@@ -1091,7 +1097,7 @@ class ProjectOnboardingStore:
         if not bot_identities:
             return None
         token = _token()
-        now = _now()
+        now = self._now()
         placeholders = ",".join("?" for _ in bot_identities)
         with self.state._immediate_transaction():
             self.connection.execute(
@@ -1126,7 +1132,7 @@ class ProjectOnboardingStore:
                    total_attempt_count=total_attempt_count+1,updated_at=?
                    WHERE telegram_chat_id=? AND bot_identity=? AND status='pending'
                    AND attempt_count<20 AND total_attempt_count<40""",
-                (sender_id, token, _deadline(OUTBOX_LEASE), now, chat_id, bot_identity),
+                (sender_id, token, self._deadline(OUTBOX_LEASE), now, chat_id, bot_identity),
             ).rowcount
             if changed != 1:
                 return None
@@ -1153,7 +1159,13 @@ class ProjectOnboardingStore:
                    lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,error_code=NULL
                    WHERE telegram_chat_id=? AND bot_identity=?
                    AND status='leased' AND lease_token=? AND phase='verify'""",
-                (_now(), _now(), task.telegram_chat_id, task.bot_identity, task.lease_token),
+                (
+                    self._now(),
+                    self._now(),
+                    task.telegram_chat_id,
+                    task.bot_identity,
+                    task.lease_token,
+                ),
             ).rowcount
             if changed != 1:
                 raise StateError("project_command_scope_lease_lost")
@@ -1169,7 +1181,13 @@ class ProjectOnboardingStore:
                                    THEN 'command_verify_budget_exhausted' ELSE NULL END
                    WHERE telegram_chat_id=? AND bot_identity=? AND phase='set'
                    AND status='leased' AND lease_token=?""",
-                (_now(), _now(), task.telegram_chat_id, task.bot_identity, task.lease_token),
+                (
+                    self._now(),
+                    self._now(),
+                    task.telegram_chat_id,
+                    task.bot_identity,
+                    task.lease_token,
+                ),
             ).rowcount
             if changed != 1:
                 raise StateError("project_command_scope_lease_lost")
@@ -1185,7 +1203,7 @@ class ProjectOnboardingStore:
     ) -> None:
         if not 0 <= delay_seconds <= 86_400:
             raise StateError("project_command_scope_retry_invalid")
-        now = datetime.now(timezone.utc)
+        now = self._clock()
         available = (now + timedelta(seconds=delay_seconds)).isoformat()
         with self.state._immediate_transaction():
             changed = self.connection.execute(
@@ -1231,7 +1249,7 @@ class ProjectOnboardingStore:
                    total_attempt_count=MAX(0,total_attempt_count-1),
                    lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=?
                    WHERE telegram_chat_id=? AND bot_identity=? AND status='leased' AND lease_token=?""",
-                (_now(), task.telegram_chat_id, task.bot_identity, task.lease_token),
+                (self._now(), task.telegram_chat_id, task.bot_identity, task.lease_token),
             ).rowcount
             if changed != 1:
                 raise StateError("project_command_scope_lease_lost")
@@ -1244,7 +1262,7 @@ class ProjectOnboardingStore:
                    available_at=?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,
                    error_code=NULL,updated_at=?,ready_at=NULL
                    WHERE telegram_chat_id=? AND bot_identity=? AND status='failed'""",
-                (_now(), _now(), telegram_chat_id, bot_identity),
+                (self._now(), self._now(), telegram_chat_id, bot_identity),
             ).rowcount
             if changed != 1:
                 raise StateError("project_command_scope_not_failed")

@@ -39,7 +39,12 @@ class ValidationTests(unittest.TestCase):
         output = io.StringIO()
         with (
             patch.object(validator, "run", side_effect=run),
-            patch.object(validator, "check_release_lock", side_effect=lambda: calls.append("lock")),
+            # A distinctive marker: a checkout path may itself contain "lock".
+            patch.object(
+                validator,
+                "check_release_lock",
+                side_effect=lambda: calls.append("release-lock check"),
+            ),
             patch.object(validator, "run_test_modules", side_effect=run_test_modules),
             patch("sys.argv", ["validate.py", *args]),
             redirect_stdout(output),
@@ -57,7 +62,7 @@ class ValidationTests(unittest.TestCase):
             "documentation_contract",
             "release_metadata",
             "cli validate config/projects.example.json --allow-missing",
-            "lock",
+            "release-lock check",
             "hotspot_audit",
             "format --check",
             "ruff check",
@@ -103,7 +108,13 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("--history", privacy[0])
         self.assertIn("all test modules jobs=2", calls)
         self.assertFalse(any("pyright" in call for call in calls))
-        for marker in ("documentation_contract", "release_metadata", "lock", "ruff check"):
+        self.assertEqual(calls.count("release-lock check"), 1)
+        for marker in (
+            "documentation_contract",
+            "release_metadata",
+            "release-lock check",
+            "ruff check",
+        ):
             self.assertLess(
                 next(i for i, call in enumerate(calls) if marker in call),
                 next(i for i, call in enumerate(calls) if "privacy_scan" in call),
