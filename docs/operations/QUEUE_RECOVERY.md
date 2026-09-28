@@ -26,10 +26,21 @@ agents-projects-hub doctor HUB_CONFIG
 agents-projects-hub status HUB_CONFIG
 agents-projects-hub monitor HUB_CONFIG
 agents-projects-hub indeterminate-audit HUB_CONFIG
-agents-projects-hub indeterminate-resolve HUB_CONFIG JOB_ID --resolution acknowledged
 systemctl --user status agents-projects-hub.service
 systemctl --user status agents-projects-hub-sender.service
 systemctl --user status 'agents-projects-hub-worker@*.service'
+```
+
+These commands never create or migrate state. `doctor` and `status` only read
+it and refuse a missing database or a non-current schema; `monitor` refuses
+the same and records only its own health, alert and repair bookkeeping.
+
+Resolving an indeterminate job is a deliberate state change, not triage: it
+records the operator's decision and lifts the root hold, so later work on that
+root may start. Run it only after the audit and a private review of the job:
+
+```bash
+agents-projects-hub indeterminate-resolve HUB_CONFIG JOB_ID --resolution acknowledged
 ```
 
 Interpret the components independently:

@@ -1,13 +1,63 @@
 from __future__ import annotations
 
+import sqlite3
 import subprocess
+import tempfile
 import unittest
+from contextlib import closing
+from dataclasses import replace
+from pathlib import Path
 
-from hermes_codex_router.diagnostics import _service_check, _telegram_contract_checks
-from hermes_codex_router.state import TelegramContractProvenance
+from hermes_codex_router.diagnostics import (
+    _service_check,
+    _telegram_contract_checks,
+    run_doctor,
+)
+from hermes_codex_router.hub_config import HubConfig, TerminalSettings
+from hermes_codex_router.migrations import LATEST_SCHEMA_VERSION
+from hermes_codex_router.state import HubState, TelegramContractProvenance
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_doctor_never_creates_or_migrates_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = HubConfig(
+                schema_version=1,
+                owner_user_ids=(42,),
+                registry_path=root / "projects.json",
+                state_path=root / "absent" / "state.db",
+                codex_socket_path=root / "codex.sock",
+                manage_codex_server=False,
+                terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+                projects=(),
+                agents=(),
+            )
+
+            def state_check(report: dict[str, object]) -> object:
+                checks = report["checks"]
+                assert isinstance(checks, list)
+                return next(item for item in checks if item["name"] == "state")
+
+            missing = state_check(run_doctor(config))
+            self.assertEqual((missing["ok"], missing["detail"]), (False, "state_unavailable"))
+            self.assertFalse(config.state_path.parent.exists())
+
+            older = replace(config, state_path=root / "state.db")
+            HubState.open(older.state_path).close()
+            with closing(sqlite3.connect(older.state_path)) as connection, connection:
+                connection.execute(f"PRAGMA user_version = {LATEST_SCHEMA_VERSION - 1}")
+            unsupported = state_check(run_doctor(older))
+            self.assertEqual(
+                (unsupported["ok"], unsupported["detail"]), (False, "state_schema_unsupported")
+            )
+            with closing(sqlite3.connect(older.state_path)) as connection:
+                self.assertEqual(
+                    connection.execute("PRAGMA user_version").fetchone()[0],
+                    LATEST_SCHEMA_VERSION - 1,
+                )
+            self.assertEqual([item.name for item in root.iterdir() if "backup" in item.name], [])
+
     def test_service_check_uses_fixed_systemctl_argv(self) -> None:
         calls: list[tuple[str, ...]] = []
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -15,16 +17,17 @@ from hermes_codex_router.hub_config import (
     OperationalAlertSettings,
     TerminalSettings,
 )
+from hermes_codex_router.migrations import LATEST_SCHEMA_VERSION
 from hermes_codex_router.monitoring import _operational_telegram, run_monitor_once
 from hermes_codex_router.release_identity import CURRENT_RELEASE
 from hermes_codex_router.runtime_health import MONITOR_INSTANCE_ID
-from hermes_codex_router.state import HubState
+from hermes_codex_router.state import HubState, StateError
 
 
 class MonitorHealthTests(unittest.TestCase):
     def _config(self, directory: str) -> HubConfig:
         root = Path(directory)
-        return HubConfig(
+        config = HubConfig(
             schema_version=1,
             owner_user_ids=(42,),
             registry_path=root / "projects.json",
@@ -35,6 +38,31 @@ class MonitorHealthTests(unittest.TestCase):
             projects=(),
             agents=(),
         )
+        # The Controller creates state; the monitor only uses an existing one.
+        HubState.open(config.state_path).close()
+        return config
+
+    def test_monitor_never_creates_or_migrates_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "absent" / "state.db"
+            config = replace(self._config(directory), state_path=missing)
+            with self.assertRaisesRegex(StateError, "state_unavailable"):
+                run_monitor_once(config, notify=False)
+            self.assertFalse(missing.parent.exists())
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = self._config(directory)
+            older = LATEST_SCHEMA_VERSION - 1
+            with closing(sqlite3.connect(config.state_path)) as connection, connection:
+                connection.execute(f"PRAGMA user_version = {older}")
+            with self.assertRaisesRegex(StateError, "state_schema_unsupported"):
+                run_monitor_once(config, notify=False)
+            with closing(sqlite3.connect(config.state_path)) as connection:
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], older)
+            self.assertEqual(
+                [item.name for item in Path(directory).iterdir() if "backup" in item.name],
+                [],
+            )
 
     def test_monitor_cycle_publishes_completed_runtime_health(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
