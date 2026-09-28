@@ -12,7 +12,8 @@ Project Hub, Hermes Gateway и tlive не должны образовывать 
 
 - отказ Project Hub не останавливает личный чат Hermes;
 - отказ Hermes не останавливает проектных Codex/OpenCode/Antigravity-ботов;
-- отказ `codex-multi-auth` переводит Codex-бота на официальный stdio app-server;
+- отказ общего Codex app-server переводит Codex-бота на официальный stdio
+  app-server (интеграция `codex-multi-auth` выведена, ADR 0047);
 - отказ tlive не разрешает действия автоматически: approval остаётся локальным
   и fail-closed.
 
@@ -69,8 +70,7 @@ Monitor делает отдельные cooldown claims для Codex project gro
 1. Если Project Hub не отвечает, писать Hermes в существующий личный чат.
 2. Проверить user services и последние журналы без вывода секретов.
 3. Исправлять только отказавшийся компонент; не перезапускать исправные каналы.
-4. Для Codex сначала восстановить официальный standalone login; multi-auth можно
-   чинить отдельно после возврата основного канала.
+4. Для Codex восстановить официальный standalone login.
 5. tlive в `full` переносит approval на телефон. Неотвеченный запрос ничего не
    разрешает автоматически.
 

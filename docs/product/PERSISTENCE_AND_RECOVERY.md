@@ -38,27 +38,18 @@ This normative module is part of the
   provider bot identities MUST NOT be used when `hub_bot` is absent. Hermes may
   fall back only to that same topic. A configured operations topic MUST fail
   configuration validation when `hub_bot` is absent. Routine monitoring MUST
-  NOT emit Codex session context-size advice; session compaction remains an explicit user decision. An optional
-  Codex account pool that is not configured MUST NOT produce an unavailable-pool
-  alert. Quota alerts include a recognizable masked account hint and never
-  expose a full identity.
-  Stale quota may remain visible as cached status but MUST NOT alert. Fresh
-  Codex quota warns once per ≤5% episode and re-arms only after recovery above
-  5%; unchanged conditions MUST NOT repeat. Other operational alerts are also
-  edge-triggered and re-arm after recovery. The first two consecutive Telegram
+  NOT emit Codex session context-size advice; session compaction remains an explicit user decision.
+  Operational alerts are edge-triggered: unchanged conditions MUST NOT repeat,
+  and an alert re-arms only after recovery. An alert episode whose condition is
+  no longer evaluated, including one left by a retired feature, MUST be released
+  on the next notifying cycle. The first two consecutive Telegram
   transport failures remain visible diagnostic state; the third MUST degrade
   the owning required component and emit one error edge for that episode. A
   successful transport request MUST clear it, emit one recovery edge only if
-  the threshold was crossed, and re-arm the threshold. An exhausted inactive
-  account stays in `/accounts` but is not an auth failure while a replacement
-  is ready.
-- **REQ-OPS-007 (Implemented):** Codex rotation reacts to the upstream provider
-  `429` handled by the optional multi-auth proxy, never to a forecast threshold.
-  The transition is always reported to Hub Operations with masked source/target
-  identity. It is also reported to the work topic only when exactly one Codex
-  topic is active; multiple work topics are never spammed. Observability reports
-  a quota-driven pre-`429` account transition without initiating it and includes
-  the replacement account's fresh status.
+  the threshold was crossed, and re-arm the threshold.
+- **REQ-OPS-007 (Retired by ADR 0047):** Hub no longer observes or reports
+  Codex account rotation; the monitor MUST NOT read rotation counters or send
+  rotation notices.
 - **REQ-OPS-008 (Accepted):** On replacement hardware, stale writer leases from
   the lost host MUST be reset safely after verifying the old processes cannot
   exist.

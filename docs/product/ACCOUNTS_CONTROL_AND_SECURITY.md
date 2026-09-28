@@ -3,37 +3,41 @@
 This normative module is part of the
 [product requirements baseline](PRODUCT_REQUIREMENTS.md).
 
-## 10. Codex accounts and optional multi-auth
+## 10. Codex accounts and transports
 
 - **REQ-AUTH-001 (Implemented):** Only account profiles explicitly allowlisted
   by the operator are in scope. Discovered but unapproved accounts MUST NOT be
   selected for project work, and account identifiers MUST remain outside Git.
-- **REQ-AUTH-002 (Implemented):** `codex-multi-auth` is an optional accelerator,
-  not a Project Hub dependency.
-- **REQ-AUTH-003 (Implemented):** When a healthy rotating app-server is
-  configured, Hub MAY use its account pool while preserving the same Codex
-  thread and exposing bounded quota/account health without tokens.
-- **REQ-AUTH-004 (Implemented):** When multi-auth is unavailable, Hub MUST be
-  able to use the official Codex stdio app-server rather than fail the entire
-  Project Hub. Socket presence alone is insufficient health evidence: when the
-  app-server's advertised multi-auth runtime proxy is unreachable, a configured
-  official stdio transport MUST be selected before starting a turn. Because a
-  shared app-server may retain the old thread's writer lease, fallback starts a
-  new official thread and prepends only bounded persisted visible context.
-  Explicitly adopted CLI threads are an exception: stdio MUST resume their exact
-  identity or fail visibly, never substitute a new thread or a summary.
+- **REQ-AUTH-002 (Implemented; ADR 0047):** Codex runs only under the
+  operator's official Codex login, through the configured shared app-server
+  socket or the official stdio app-server. Project Hub has no Codex
+  multi-account integration. The retired configuration keys
+  `codex_multi_auth_dir`, `codex_multi_auth_executable`, and
+  `codex_account_hints` MUST fail configuration loading, naming the keys, before
+  any filesystem or helper access.
+- **REQ-AUTH-003 (Retired by ADR 0047):** Hub MUST NOT read, execute, display, or
+  alert on a Codex account pool. State written by an earlier release, such as a
+  pool snapshot or a latched pool alert, MUST be ignored or released rather than
+  presented as current.
+- **REQ-AUTH-004 (Implemented):** When the shared Codex app-server is
+  unavailable, Hub MUST be able to use the official Codex stdio app-server
+  rather than fail the entire Project Hub. Socket presence alone is insufficient
+  health evidence: a socket that refuses connection MUST select a configured
+  official stdio transport before starting a turn. Because a shared app-server
+  may retain the old thread's writer lease, fallback starts a new official
+  thread and prepends only bounded persisted visible context. Explicitly adopted
+  CLI threads are an exception: stdio MUST resume their exact identity or fail
+  visibly, never substitute a new thread or a summary.
 - **REQ-AUTH-005 (Implemented):** Account changes and quota state MUST remain
   visible to the owner; switching MUST NOT be silent.
 - **REQ-AUTH-006 (Accepted):** Hermes MAY guide a mode-aware manual device-login
   recovery, but MUST NOT copy or display tokens, change the wrong credential
   store, or replace deterministic locking and health checks.
-- **REQ-AUTH-007 (Planned acceptance):** A natural or controlled quota-exhaustion
-  test must demonstrate one response, the same persisted thread, bounded retry,
-  and a visible account transition.
-- **REQ-AUTH-008 (Implemented):** When tlive and the optional rotating app-server
-  share a Unix control socket, boot ordering MUST wait for a successful socket
-  connection rather than the presence of a socket inode. The ordering MUST NOT
-  make either recovery channel a hard requirement of the other.
+- **REQ-AUTH-007 (Retired by ADR 0047):** Hub no longer switches Codex
+  accounts, so no account-transition acceptance applies.
+- **REQ-AUTH-008 (Retired by ADR 0047):** The repository no longer ships unit
+  ordering for a rotating app-server. tlive and any shared app-server remain
+  independent; neither is a hard requirement of the other.
 - **REQ-AUTH-009 (Claude repository scaffold; live acceptance pending):** A
   Hub-owned Claude Code CLI turn routed through CPA MUST require an explicit
   loopback `ANTHROPIC_BASE_URL` and exactly one CPA client credential source
@@ -49,7 +53,8 @@ This normative module is part of the
 ### Compact control surface
 
 - **REQ-CMD-001 (Implemented):** `/status` shows the active provider, model,
-  effort, context remainder when observable, masked active account, and compact
+  effort, context remainder when observable, masked active account when the
+  provider reports one, and compact
   provider-supplied limit/reset windows. Codex context remainder MUST use the
   latest current-context usage snapshot, not cumulative lifetime token usage;
   a missing current snapshot is unknown and MUST clear an older displayed
@@ -66,27 +71,25 @@ This normative module is part of the
   private atomic last-known-good catalog with source version and timestamp.
   Telegram callbacks use bounded opaque keys rather than provider model IDs;
   long catalogs are paginated. Failed discovery uses the cache and becomes an
-  Operations warning only after the cached success is older than 24 hours. When
-  Codex multi-auth is not configured, monitoring MUST NOT execute a discovered
-  `codex-multi-auth` binary. Instead, the monitor reads native Codex `model/list`
-  metadata through the configured socket, without starting threads or inference.
-  Discovery failures preserve the last good catalog. The isolated Controller
+  Operations warning only after the cached success is older than 24 hours.
+  The monitor reads native Codex `model/list` metadata through the configured
+  socket, without starting threads or inference, and MUST NOT execute an account
+  helper; a Codex catalog cached from any other source is replaced on the next
+  refresh. Discovery failures preserve the last good catalog. The isolated Controller
   never discovers models itself: Refresh requests monitor refresh while keeping
   cached choices usable. Only an empty cache uses the configured default.
 - **REQ-CMD-003 (Implemented):** `/accounts` lists configured provider accounts
   and observable limits. OpenCode Go exact exhaustion/reset telemetry is shown
-  only after a real provider `429`; plan caps are labelled separately. In the
-  isolated-worker topology the Controller MUST read a bounded, masked Codex
-  account snapshot from durable local state and MUST NOT invoke a provider,
-  model, or account helper. Other providers MAY declare short masked account
+  only after a real provider `429`; plan caps are labelled separately. The
+  Controller MUST build `/accounts` from private configuration and durable local
+  state only and MUST NOT invoke a provider, model, or account helper. Codex has
+  no account list (REQ-AUTH-003). Other providers MAY declare short masked account
   prefixes in private configuration; unknown limits remain explicitly unknown,
   while a provider-reported exhaustion is shown for the current unknown account.
   A configured private Antigravity status cache MAY supply structured current
   account, per-model quota, reset time, current model/effort, and matching-session
   context without ANSI parsing or a provider/model invocation. Stale, mismatched,
-  oversized, or non-private cache files MUST degrade to unknown. Passive Codex
-  account snapshots MUST retain each window's reported duration and freshness;
-  stale values remain explicitly cached and MUST NOT be presented as current.
+  oversized, or non-private cache files MUST degrade to unknown.
 - **REQ-CMD-004 (Implemented):** `/new` requires an owner callback confirmation
   and resets only the active provider session; mass reset behavior is removed.
   `/local` transfers writer ownership. Codex `/return` changes only the lease,

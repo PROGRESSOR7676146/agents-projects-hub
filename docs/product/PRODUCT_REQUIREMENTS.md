@@ -81,7 +81,8 @@ model spend.
   shared visible context.
 - Codex, Claude Code, Hermes, OpenCode, and Antigravity provider boundaries.
 - Explicit model/session management and safe operational diagnostics.
-- Optional Codex multi-account rotation with an official Codex fallback.
+- Official Codex login through a shared app-server socket with an official stdio
+  fallback; no Codex multi-account integration (ADR 0047).
 - Native provider CLI continuity, explicit writer ownership, and tmux as a
   low-level fallback.
 - Independent Hermes and tlive service/recovery capabilities.

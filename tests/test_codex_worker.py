@@ -1102,17 +1102,3 @@ class CodexQueueWorkerTests(unittest.TestCase):
             )
         finally:
             controller.state.close()
-
-    def test_external_controller_pool_status_never_runs_multi_auth(self) -> None:
-        controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
-        controller.config = replace(
-            self.config,
-            codex_multi_auth_dir=Path(self.tempdir.name),
-            codex_multi_auth_executable=Path("/example/codex-multi-auth"),
-        )
-        with patch(
-            "hermes_codex_router.service.read_codex_pool_status",
-            side_effect=AssertionError("controller invoked multi-auth"),
-        ) as reader:
-            self.assertIsNone(controller._codex_pool())
-            reader.assert_not_called()

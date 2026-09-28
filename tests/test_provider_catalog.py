@@ -6,29 +6,11 @@ import unittest
 from hermes_codex_router.provider_catalog import (
     ProviderModel,
     antigravity_models,
-    codex_models,
     opencode_models,
 )
 
 
 class ProviderCatalogTests(unittest.TestCase):
-    def test_parses_available_codex_model_matrix(self) -> None:
-        output = (
-            '{"matrix":{"entries":['
-            '{"model":"gpt-5.6-sol","normalizedModel":"gpt-5.6-sol",'
-            '"available":true,"defaultReasoningEffort":"high",'
-            '"supportedReasoningEfforts":["medium","high","xhigh"]},'
-            '{"model":"gpt-hidden","available":false}]}}'
-        )
-        models = codex_models(
-            "/usr/bin/codex-multi-auth",
-            run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, output, ""),
-        )
-        self.assertEqual(
-            models,
-            (ProviderModel("gpt-5.6-sol", "GPT 5.6 Sol", ("medium", "high", "xhigh")),),
-        )
-
     def test_parses_opencode_verbose_models_and_variants(self) -> None:
         output = """opencode-go/deepseek-v4-flash
 {"id":"deepseek-v4-flash","providerID":"opencode-go","name":"DeepSeek V4 Flash","variants":{"low":{"reasoningEffort":"low"},"high":{"reasoningEffort":"high"},"max":{"reasoningEffort":"max"}}}

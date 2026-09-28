@@ -692,9 +692,28 @@ class HubConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(HubConfigError, "manage_codex_server"):
             load_hub_config(self.write_config(manage_codex_server="no"))
 
-    def test_loads_three_character_codex_account_hints(self) -> None:
-        config = load_hub_config(self.write_config(codex_account_hints={"1": "acc", "2": "alt"}))
-        self.assertEqual(config.codex_account_hints, {1: "acc", 2: "alt"})
+    def test_rejects_retired_multi_auth_keys_before_any_path_access(self) -> None:
+        retired = {
+            "codex_multi_auth_dir": "/home/example/.codex/multi-auth",
+            "codex_multi_auth_executable": "/home/example/.local/bin/codex-multi-auth",
+            "codex_account_hints": {"1": "acc"},
+        }
+        cases = [*retired.items(), *((key, None) for key in retired)]
+        for key, value in cases:
+            with self.subTest(key=key, value=value):
+                # A missing registry proves the key is rejected before any path check.
+                path = self.write_config(registry_path="/home/example/missing.json", **{key: value})
+                with (
+                    patch(
+                        "hermes_codex_router.hub_config._absolute_path",
+                        side_effect=AssertionError("path accessed before retirement check"),
+                    ),
+                    self.assertRaisesRegex(
+                        HubConfigError, f"{key}: .*multi-auth.*ADR 0047"
+                    ) as raised,
+                ):
+                    load_hub_config(path)
+                self.assertNotIn("example", str(raised.exception))
 
     def test_rejects_group_chat_id_that_is_not_supergroup_shaped(self) -> None:
         with self.assertRaisesRegex(HubConfigError, "telegram_chat_id"):

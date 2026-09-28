@@ -119,8 +119,10 @@ necessary but not sufficient for items marked live.
   Codex thread and never permit two simultaneous writers.
 - **AC-F-007 (REQ-SEC-001..007):** Invalid owner/root/topic/policy, missing state,
   approval timeout, and provider failure all fail closed without secret output.
-- **AC-F-008 (REQ-AUTH-002..004):** Failure of optional multi-auth degrades or
-  falls back only the Codex runtime and does not stop Hub, Hermes, or tlive.
+- **AC-F-008 (REQ-AUTH-002, REQ-AUTH-004):** Failure of the shared Codex
+  app-server falls back or degrades only the Codex runtime and does not stop Hub,
+  Hermes, or tlive. A configuration with a retired multi-auth key fails to load
+  and names the key.
 - **AC-F-009 (REQ-ONBOARD-001..007):** Telegram cannot select or rebind an
   arbitrary local path. Project creation is bounded to one safe project ID and
   one opaque `allowed_root` option; crafted text, titles, quotes, forwards and
@@ -224,7 +226,7 @@ necessary but not sufficient for items marked live.
 | Hermes project integration | Implemented | Native Gateway plus fail-closed plugin/hook boundary. |
 | OpenCode and Antigravity adapters | Implemented | Contract tests; live provider acceptance is deployment-local. |
 | Codex tmux takeover/release | Implemented | Fallback frontend, not preferred long-term UX. |
-| Optional Codex account pool/fallback | Implemented | Natural exhaustion E2E remains an acceptance item. |
+| Codex official login and stdio fallback | Implemented | Multi-auth account pool retired by ADR 0047; retired keys are rejected at load. |
 | Telegram E2E baseline | Bounded actor implemented; live authorization pending | Results remain private deployment evidence. |
 | `/local` and `/return` | Implemented | Codex return is model-free and same-session; other providers retain prior behavior pending acceptance. |
 | Project/group onboarding | Implemented offline; deployment opt-in and live canary required | Owner-only Hub wizard, schema-28 owner/lease/command receipts, bounded Git-root preparation and a separately authorized owner user-session provisioner; unknown Telegram outcomes stop without blind retry. |
@@ -232,7 +234,7 @@ necessary but not sufficient for items marked live.
 | Compact command surface | Implemented | Provider defaults remain bounded; project Hub scope exposes `/menu`, `/connect`, `/stop`, and Hub private scope exposes `/start`, `/projects`, `/connect`, `/cancel`. |
 | Saved Codex session connect | Implemented; live Telegram acceptance pending | One durable workflow serves topic selection, Hub-private selection/new-topic creation, and owner-scoped local one-time codes. |
 | Summary-free Codex return | Implemented | Local lease change; no model, transcript, handoff, or session change. |
-| Provider-limit rotation events | Implemented | Provider `429` drives Codex rotation visibility; natural exhaustion E2E remains pending. |
+| Codex account rotation events | Retired | Removed with the multi-auth integration (ADR 0047). |
 | Durable embedded queue compatibility path | Implemented | `dispatch_mode: "inline"` remains default; `"queue"` with `queue_runtime: "embedded"` consumes work on a background thread. |
 | Isolated local provider workers | Implemented behind feature gate | `dispatch_mode: "queue"`, `queue_runtime: "external"`, explicit `external_worker_agent_ids`, and opt-in `outbox_runtime: "external"`; controller delivery remains the default rollback path. |
 | Bounded independent-root concurrency | Implemented behind feature gate | `max_parallel_roots` defaults to one; values up to 16 require external workers, durable fairness, canonical-root exclusion, and explicitly bound/revalidated Git worktree lanes. Deployment/live acceptance remains separate. |

@@ -1,7 +1,7 @@
 # Decision map
 
 Status: active  
-Last updated: 2026-09-27
+Last updated: 2026-09-28
 
 This directory is the durable entry point for consequential product and
 architecture decisions. New records should be named `NNNN-short-title.md`.
@@ -17,10 +17,10 @@ with a new record.
 | Routing | One central ingress; ordinary → active, Reply → author, mention → target, selected/pasted quote → active. | Product requirements; tests and commit history |
 | Context | No automatic handoff or unseen-dialogue injection; bounded visible history is supplied only by explicit user request. | [ADR 0009](0009-explicit-context-no-automatic-handoff.md) |
 | Provider identity | One bot identity per runtime, not per model or account. | Product requirements and tests |
-| Codex accounts | Multi-auth is optional; official Codex app-server is the fallback. | Product requirements; `RECOVERY_PLANE.ru.md` |
+| Codex accounts | Official Codex login only; the multi-auth integration is retired and its configuration keys are rejected. | [ADR 0047](0047-retire-codex-multi-auth.md) |
 | Headless Codex approvals | Shared sockets use companion-backed `on-request`; isolated stdio fallback denies escalation instead of waiting on an unreachable approval channel. | [ADR 0006](0006-headless-codex-fallback-approvals.md) |
 | Shared Codex socket boot | Readiness requires a successful Unix connection; stale socket inodes cannot release tlive ordering. | [ADR 0007](0007-connectable-shared-socket-readiness.md) |
-| Resident Codex proxy lifetime | systemd owns resident helper cleanup; CLI-oriented proxy reapers are disabled for the service launch. | [ADR 0008](0008-resident-codex-proxy-lifetime.md) |
+| Resident Codex proxy lifetime (superseded) | systemd owned the multi-auth proxy helper's cleanup; retired with the integration. | [ADR 0008](0008-resident-codex-proxy-lifetime.md), superseded by [ADR 0047](0047-retire-codex-multi-auth.md) |
 | Recovery plane | Hermes Gateway and Agent Session Remote/tlive are independent service channels, not project groups or mandatory Hub dependencies. | Product requirements; `RECOVERY_PLANE.ru.md` |
 | Operational alerts | One explicit Hub Operations/Alerts topic; configured Hub bot primary, legacy Codex fallback when no Hub bot exists, Hermes recovery fallback to the same topic; no automatic session-size advice. | Product requirements REQ-OPS-006 |
 | Local frontend | Native CLI is preferred; one-writer lease is mandatory; tmux remains fallback. | Product requirements and tests |
@@ -66,6 +66,7 @@ with a new record.
 | Hotspot growth ratchet | Every module ≥1,500 lines and function ≥200 lines needs a bounded exception in `docs/operations/hotspots.json`; growth past its bound fails validation. | [ADR 0044](0044-hotspot-growth-ratchet.md) |
 | Provider-expansion gate withdrawn | New provider work, including Claude parity, no longer waits for live acceptance of existing providers; evidence levels and security boundaries are unchanged. | [ADR 0045](0045-withdraw-provider-expansion-gate.md) |
 | Topic-wide emergency stop | `stop` cancels every unstarted job in the topic and interrupts the running turn of whichever provider owns it, not only the active agent. | [ADR 0046](0046-topic-wide-emergency-stop.md) |
+| Codex multi-auth retirement | Account pool, rotation, pool alerts and helper calls removed; retired keys fail at load before any path or helper access; no schema change. | [ADR 0047](0047-retire-codex-multi-auth.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

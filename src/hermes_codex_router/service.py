@@ -20,11 +20,6 @@ from .artifacts import (
     verify_spooled_artifact,
 )
 from .catalog_refresh import native_codex_catalog_source
-from .codex_accounts import (
-    CodexPoolStatus,
-    decode_codex_pool_snapshot,
-    read_codex_pool_status,
-)
 from .codex_appserver import (
     CodexAppServerClient,
     RateLimits,
@@ -1199,37 +1194,6 @@ class ProjectHubService:
             )
         return True
 
-    def _codex_pool(self) -> CodexPoolStatus | None:
-        if self._uses_external_codex_worker():
-            state = getattr(self, "state", None)
-            if state is None:
-                return None
-            event = state.latest_runtime_event("codex", "account_pool_snapshot")
-            if event is None:
-                return None
-            try:
-                pool = decode_codex_pool_snapshot(str(event["detail"]))
-                observed_at = datetime.fromisoformat(str(event["created_at"]))
-            except (TypeError, ValueError):
-                return None
-            if datetime.now(timezone.utc) - observed_at > timedelta(minutes=30):
-                pool = replace(
-                    pool,
-                    accounts=tuple(replace(account, quota_stale=True) for account in pool.accounts),
-                )
-            return pool
-        if self.config.codex_multi_auth_dir is None:
-            return None
-        return read_codex_pool_status(
-            self.config.codex_multi_auth_dir,
-            executable=(
-                str(self.config.codex_multi_auth_executable)
-                if self.config.codex_multi_auth_executable
-                else "codex-multi-auth"
-            ),
-            identity_hints=self.config.codex_account_hints,
-        )
-
     def _topic(self, message: TopicMessage, project_id: str) -> TopicRecord:
         existing = self.state.find_topic(message.chat_id, message.thread_id)
         title = (
@@ -1731,23 +1695,24 @@ class ProjectHubService:
 
     def _show_status(self, message: TopicMessage, topic: TopicRecord) -> None:
         active = self.state.active_session(topic.topic_id)
-        pool = None
         live_limits = None
         if active is not None:
             agent = self.config.require_agent(active.agent_id)
-            if agent.runtime == "codex":
-                pool = self._codex_pool()
-                if active.provider_session_id and not self._queue_enabled(agent.agent_id):
-                    live_limits = self._client().read_rate_limits()
+            if (
+                agent.runtime == "codex"
+                and active.provider_session_id
+                and not self._queue_enabled(agent.agent_id)
+            ):
+                live_limits = self._client().read_rate_limits()
         self._render_command_decision(
             message,
-            self._command_orchestrator().status(topic, pool, live_limits),
+            self._command_orchestrator().status(topic, live_limits),
         )
 
     def _show_accounts(self, message: TopicMessage) -> None:
         self._render_command_decision(
             message,
-            self._command_orchestrator().accounts(self._codex_pool()),
+            self._command_orchestrator().accounts(),
         )
 
     def _show_provider_menu(self, message: TopicMessage, topic: TopicRecord) -> None:

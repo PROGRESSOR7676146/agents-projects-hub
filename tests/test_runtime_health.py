@@ -357,32 +357,6 @@ class RuntimeHealthTests(unittest.TestCase):
         self.assertEqual(rendered["runtime_health"]["sender"]["status"], "unknown")
         self.assertEqual(len(rendered["runtime_health"]["provider_workers"]), 2)
 
-    def test_status_never_invokes_optional_account_helper(self) -> None:
-        base = Path(self.tempdir.name)
-        config = HubConfig(
-            schema_version=1,
-            owner_user_ids=(42,),
-            registry_path=base / "projects.json",
-            state_path=base / "state.db",
-            codex_socket_path=base / "codex.sock",
-            manage_codex_server=False,
-            terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
-            projects=(),
-            agents=(),
-            codex_multi_auth_dir=base / "optional-helper",
-        )
-        output = io.StringIO()
-        with (
-            patch("hermes_codex_router.cli.load_hub_config", return_value=config),
-            patch(
-                "hermes_codex_router.codex_accounts.read_codex_pool_status",
-                side_effect=AssertionError("status must stay cache-only"),
-            ),
-            redirect_stdout(output),
-        ):
-            self.assertEqual(main(["status", "example.json"]), 0)
-        self.assertNotIn("codex_account_pool", json.loads(output.getvalue()))
-
     def test_projection_degrades_mismatched_cached_worker_identity(self) -> None:
         base = Path(self.tempdir.name)
         config = HubConfig(

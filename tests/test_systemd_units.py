@@ -47,20 +47,14 @@ class SystemdTopologyTests(unittest.TestCase):
         self.assertIn("agents-projects-hub-project-provisioner.service", installer)
         provisioner = self.unit("agents-projects-hub-project-provisioner.service")
         self.assertIn("agents-projects-hub project-provisioner ", provisioner)
-        self.assertNotIn("codex-multi-auth-appserver.service.d/socket-ready.conf", installer)
-        self.assertNotIn("tlive.service.d/multi-auth-order.conf", installer)
 
-    def test_shared_codex_socket_order_waits_for_a_connectable_listener(self) -> None:
-        readiness = self.unit("codex-multi-auth-appserver.service.d/socket-ready.conf")
-        ordering = self.unit("tlive.service.d/multi-auth-order.conf")
-
-        self.assertIn("agents-projects-hub-wait-socket", readiness)
-        self.assertIn("CODEX_MULTI_AUTH_APP_ROTATION_DETACHED_IDLE_MS=0", readiness)
-        self.assertIn("CODEX_MULTI_AUTH_APP_ROTATION_MAX_LIFETIME_MS=0", readiness)
-        self.assertIn("CODEX_MULTI_AUTH_APP_ROTATION_IDLE_MS=315360000000", readiness)
-        self.assertNotIn("[ -S ", readiness)
-        self.assertIn("After=codex-multi-auth-appserver.service", ordering)
-        self.assertNotIn("Requires=", ordering)
+    def test_retired_multi_auth_unit_templates_are_gone(self) -> None:
+        installer = (self.root / "scripts" / "install.sh").read_text(encoding="utf-8")
+        units = [
+            path.relative_to(self.root).as_posix() for path in (self.root / "systemd").rglob("*")
+        ]
+        self.assertEqual([item for item in units if "multi-auth" in item], [])
+        self.assertNotIn("multi-auth", installer)
 
     def test_monitor_timer_schedules_from_each_activation(self) -> None:
         timer = self.unit("agents-projects-hub-monitor.timer")

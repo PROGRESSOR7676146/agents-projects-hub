@@ -14,7 +14,6 @@ from .codex_appserver import (
     context_remaining_percent,
 )
 from .codex_failure import codex_preparation, uncertain_provider_notice
-from .codex_proxy_health import probe_codex_runtime_proxy
 from .codex_recovery import (
     checkpoint_failure_notice,
     reconcile_codex_completion,
@@ -149,11 +148,6 @@ class ExternalQueueWorker:
                 manage_process=config.manage_codex_server,
                 stdio_executable=config.codex_stdio_executable,
                 model_provider=config.codex_model_provider,
-                shared_socket_health=(
-                    (lambda: probe_codex_runtime_proxy().ok)
-                    if config.codex_multi_auth_dir is not None
-                    else None
-                ),
             )
         else:
             self.adapter = adapter or ExternalCliAdapter(
@@ -671,9 +665,6 @@ class ExternalQueueWorker:
                 )
                 if Path(git_root.stdout.strip()).resolve(strict=True) != root:
                     raise ExternalQueueWorkerError("adopted Codex project root mismatch")
-            ensure_socket_health = getattr(self.supervisor, "ensure_shared_socket_health", None)
-            if callable(ensure_socket_health) and not ensure_socket_health():
-                self._discard_client()
             client = self._client()
             if origin is not None:
                 metadata = client.read_thread_metadata(

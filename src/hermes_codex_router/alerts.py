@@ -7,13 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
-from .codex_accounts import CodexPoolStatus
 from .diagnostic_log import survived
 from .operational_alert import OperationalAlert
-from .quota_windows import quota_window_label
 from .reliability_alerts import evaluate_reliability_alerts
 
-DEFAULT_LOW_QUOTA_PERCENT = 5
 DEFAULT_CONTEXT_BLOAT_THRESHOLD = 65_000
 DEFAULT_SESSION_SCAN_MAX_AGE_SECONDS = 7200
 DEFAULT_MAX_TAIL_BYTES = 524288
@@ -223,7 +220,6 @@ def check_codex_session_bloat(
 
 def evaluate_operational_alerts(
     *,
-    pool: CodexPoolStatus,
     state_snapshot: Mapping[str, object],
     doctor_ok: bool,
     recovery_status: Mapping[str, bool] | None = None,
@@ -232,7 +228,6 @@ def evaluate_operational_alerts(
     runtime_health: Mapping[str, object] | None = None,
     codex_config_proxy_ok: bool | None = None,
     now: datetime | None = None,
-    low_quota_percent: int = DEFAULT_LOW_QUOTA_PERCENT,
     stuck_after_seconds: int = 15 * 60,
 ) -> tuple[OperationalAlert, ...]:
     evaluated_at = now or datetime.now(timezone.utc)
@@ -379,99 +374,6 @@ def evaluate_operational_alerts(
                     f"Hermes has {pending} Telegram update(s) waiting for its gateway.",
                 )
             )
-    if not pool.available and pool.error != "not_configured":
-        alerts.append(
-            OperationalAlert(
-                "codex:pool",
-                "codex_pool_unavailable",
-                "error",
-                "Codex account-pool status is unavailable.",
-            )
-        )
-    elif pool.available:
-        if not pool.rotation_enabled:
-            alerts.append(
-                OperationalAlert(
-                    "codex:rotation",
-                    "codex_rotation_disabled",
-                    "error",
-                    "Codex account rotation is disabled.",
-                )
-            )
-        usable_replacement = any(account.availability == "ready" for account in pool.accounts)
-        for account in pool.accounts:
-            identity = f" ({account.identity_hint})" if account.identity_hint else ""
-            if account.auth_invalidated:
-                alerts.append(
-                    OperationalAlert(
-                        f"codex:account:{account.index}:token_invalid",
-                        "codex_account_token_invalid",
-                        "error",
-                        f"Codex account {account.index}{identity} has an invalid or revoked token; "
-                        f"re-authenticate via 'codex-multi-auth login --account {account.index} --device-auth'.",
-                    )
-                )
-                continue
-            fresh_quota_exhausted = not account.quota_stale and any(
-                remaining is not None and remaining <= low_quota_percent
-                for remaining in (account.five_hour_remaining, account.weekly_remaining)
-            )
-            # An inactive unavailable account is ordinary pool state while a
-            # replacement is ready. Keep it visible in /accounts, but do not
-            # page Operations or guess that authentication is broken.
-            unavailable_alert_relevant = account.active or not usable_replacement
-            if (
-                account.availability == "unavailable"
-                and unavailable_alert_relevant
-                and not fresh_quota_exhausted
-            ):
-                alerts.append(
-                    OperationalAlert(
-                        f"codex:account:{account.index}:unavailable",
-                        "codex_account_unavailable",
-                        "error",
-                        f"Codex account {account.index}{identity} is unavailable and no ready replacement exists; inspect quota and authentication state.",
-                    )
-                )
-            quota_alert_relevant = account.active or not usable_replacement
-            if (
-                quota_alert_relevant
-                and not account.quota_stale
-                and account.five_hour_remaining is not None
-                and account.five_hour_remaining <= low_quota_percent
-            ):
-                label = quota_window_label(
-                    account.primary_duration_minutes,
-                    slot="primary",
-                    compact=False,
-                ).casefold()
-                alerts.append(
-                    OperationalAlert(
-                        f"codex:account:{account.index}:5h-low",
-                        "codex_5h_low",
-                        "warning",
-                        f"Codex account {account.index}{identity} has {account.five_hour_remaining}% of its {label} quota left.",
-                    )
-                )
-            if (
-                quota_alert_relevant
-                and not account.quota_stale
-                and account.weekly_remaining is not None
-                and account.weekly_remaining <= low_quota_percent
-            ):
-                label = quota_window_label(
-                    account.secondary_duration_minutes,
-                    slot="secondary",
-                    compact=False,
-                ).casefold()
-                alerts.append(
-                    OperationalAlert(
-                        f"codex:account:{account.index}:week-low",
-                        "codex_weekly_low",
-                        "warning",
-                        f"Codex account {account.index}{identity} has {account.weekly_remaining}% of its {label} quota left.",
-                    )
-                )
     pending = state_snapshot.get("pending_dispatches")
     if isinstance(pending, list):
         topic_lookup: dict[int, str] = {}

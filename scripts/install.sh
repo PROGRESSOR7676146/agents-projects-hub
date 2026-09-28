@@ -54,7 +54,6 @@ if [[ ! -e "$systemd_root/tlive.service" ]]; then
 fi
 install -m 644 "$repo_root/systemd/hermes-gateway.service.d/20-agents-projects-hub.conf" \
   "$systemd_root/hermes-gateway.service.d/20-agents-projects-hub.conf"
-# Legacy multi-auth ordering templates are archival, not bootstrap defaults.
 
 install -d -m 700 \
   "$hermes_root/plugins/hermes-project-hub" \

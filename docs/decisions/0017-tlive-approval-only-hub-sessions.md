@@ -1,6 +1,6 @@
 # ADR 0017: tlive is approval-only for Hub-managed Codex sessions
 
-Status: accepted
+Status: accepted; multi-auth context superseded by [ADR 0047](0047-retire-codex-multi-auth.md)
 Date: 2026-09-05
 
 ## Context

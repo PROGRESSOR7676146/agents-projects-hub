@@ -88,13 +88,12 @@ Operational truth is split by purpose:
 
 - Keep real configuration, state, tokens, OAuth material, sockets, logs, and
   provider sessions outside Git with restrictive permissions.
-- Repair only the failed component. Do not make Hub, Hermes, tlive, or optional
-  multi-auth mandatory dependencies of each other.
-- A systemd-managed multi-auth app-server owns its runtime proxy for the whole
-  unit lifetime. Keep the installed resident-helper lifetime overrides; if the
-  proxy is already unavailable, install/reload first and coordinate a later
-  restart from an independent recovery channel rather than disconnecting an
-  active Codex/tlive session.
+- Repair only the failed component. Do not make Hub, Hermes, tlive, or a shared
+  Codex app-server mandatory dependencies of each other.
+- The Codex multi-auth integration is retired
+  ([ADR 0047](../decisions/0047-retire-codex-multi-auth.md)). Delete its keys
+  from the Hub configuration before upgrading; removing a leftover helper,
+  data directory or drop-in from a host is a separate authorized task.
 - Back up SQLite consistently before migration and verify recovery artifacts.
 - Do not restart services, alter bot/privacy settings, or run live Telegram E2E
   as part of a documentation-only task.

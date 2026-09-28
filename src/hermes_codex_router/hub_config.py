@@ -145,12 +145,9 @@ class HubConfig:
         default_factory=lambda: OperationalAlertSettings(None, None)
     )
     acceptance_actors: tuple[AcceptanceActor, ...] = ()
-    codex_multi_auth_dir: Path | None = None
     codex_sessions_dir: Path | None = None
-    codex_multi_auth_executable: Path | None = None
     codex_stdio_executable: Path | None = None
     codex_model_provider: str | None = None
-    codex_account_hints: dict[int, str] = field(default_factory=dict)
     provider_account_hints: dict[str, tuple[str, ...]] = field(default_factory=dict)
     provider_telemetry: dict[str, ProviderTelemetrySettings] = field(default_factory=dict)
     project_provisioning: ProjectProvisioningSettings = field(
@@ -249,6 +246,13 @@ def read_telegram_token(path: Path, identity: str) -> str:
     return token
 
 
+# Keys of the retired Codex multi-auth integration (ADR 0047). They are rejected
+# before any filesystem or helper access so an old config cannot half-apply.
+_RETIRED_KEYS = frozenset(
+    {"codex_multi_auth_dir", "codex_multi_auth_executable", "codex_account_hints"}
+)
+
+
 def load_hub_config(
     path: Path,
     *,
@@ -265,6 +269,12 @@ def load_hub_config(
     root = _object(document, "hub config")
     if root.get("schema_version") != 1:
         raise HubConfigError("schema_version must be 1")
+    retired = sorted(_RETIRED_KEYS.intersection(root))
+    if retired:
+        raise HubConfigError(
+            f"{', '.join(retired)}: Codex multi-auth support was removed (ADR 0047); "
+            "delete these keys and sign in with the official Codex login"
+        )
 
     raw_owners = root.get("owner_user_ids")
     if not isinstance(raw_owners, list) or not raw_owners:
@@ -310,42 +320,6 @@ def load_hub_config(
     manage_codex_server = root.get("manage_codex_server", False)
     if not isinstance(manage_codex_server, bool):
         raise HubConfigError("manage_codex_server must be boolean")
-    multi_auth_value = root.get("codex_multi_auth_dir")
-    codex_multi_auth_dir = None
-    if multi_auth_value is not None:
-        codex_multi_auth_dir = _absolute_path(
-            multi_auth_value, "codex_multi_auth_dir", must_exist=True
-        )
-        if not codex_multi_auth_dir.is_dir():
-            raise HubConfigError("codex_multi_auth_dir must be a directory")
-        if codex_multi_auth_dir.stat().st_mode & 0o077:
-            raise HubConfigError("codex_multi_auth_dir must have mode 0700")
-    multi_auth_executable_value = root.get("codex_multi_auth_executable")
-    codex_multi_auth_executable = None
-    if multi_auth_executable_value is not None:
-        codex_multi_auth_executable = _absolute_path(
-            multi_auth_executable_value, "codex_multi_auth_executable", must_exist=True
-        )
-        if not codex_multi_auth_executable.is_file() or not (
-            codex_multi_auth_executable.stat().st_mode & 0o111
-        ):
-            raise HubConfigError("codex_multi_auth_executable must be executable")
-    raw_account_hints = root.get("codex_account_hints", {})
-    if not isinstance(raw_account_hints, dict):
-        raise HubConfigError("codex_account_hints must be an object")
-    codex_account_hints: dict[int, str] = {}
-    for raw_index, raw_hint in raw_account_hints.items():
-        try:
-            account_index = int(raw_index)
-        except (TypeError, ValueError) as exc:
-            raise HubConfigError("codex_account_hints has an invalid index") from exc
-        if (
-            account_index <= 0
-            or not isinstance(raw_hint, str)
-            or not re.fullmatch(r"[A-Za-z0-9]{3}", raw_hint)
-        ):
-            raise HubConfigError("codex_account_hints values must be three characters")
-        codex_account_hints[account_index] = raw_hint
     codex_model_provider = root.get("codex_model_provider")
     if codex_model_provider is not None and (
         not isinstance(codex_model_provider, str)
@@ -891,12 +865,9 @@ def load_hub_config(
         message_batch_quiet_ms=message_batch_quiet_ms,
         message_batch_max_ms=message_batch_max_ms,
         direct_message_project_id=direct_message_project_id,
-        codex_multi_auth_dir=codex_multi_auth_dir,
         codex_sessions_dir=codex_sessions_dir,
-        codex_multi_auth_executable=codex_multi_auth_executable,
         codex_stdio_executable=codex_stdio_executable,
         codex_model_provider=codex_model_provider,
-        codex_account_hints=codex_account_hints,
         provider_account_hints=provider_account_hints,
         provider_telemetry=provider_telemetry,
         project_provisioning=ProjectProvisioningSettings(

@@ -42,7 +42,7 @@ accumulated without live acceptance, contrary to product principle 10.
 | 2b | Hotspot growth ratchet in every validation profile; rules 12 and 14 amended | In review: #85 | ADR 0044; 21 recorded hotspots |
 | 2c | Capability summary table in project status; closure sections for six completed plans | In review | Prose still to move into owning modules |
 | 3 | Extract `_handle_update`, `load_hub_config`, `cli.main`; remove dead code; tests for weak modules; injected clocks in timing tests | Characterization in review: #89 | Dispatcher coverage 316 → 359 of 421 |
-| 3b | Retire the multi-auth integration (reliability package B): migration contract, retired keys rejected before helper access, superseded ADRs | Planned | — |
+| 3b | Retire the multi-auth integration (reliability package B): migration contract, retired keys rejected before helper access, superseded ADRs | In review | ADR 0047; no schema change |
 | 4 | Release 0.8.0; branch and worktree hygiene | Planned; each action needs owner approval | — |
 
 ## Live-acceptance backlog
@@ -96,15 +96,16 @@ acceptance.
   context and quota label check failed: the live Codex response carried a
   numeric context remainder but no quota window. The deployed Codex route uses
   a custom model provider, whose app-server supplies no rate-limit windows, and
-  the Hub omits unknown windows (REQ-CMD-001); `/status` shows the cached
-  multi-auth quota instead. The runner stops at the first failure, so the
+  the Hub omits unknown windows (REQ-CMD-001). `/status` has no Codex quota
+  either: multi-auth is not configured on the deployment, so no cached pool
+  quota exists to show. The runner stops at the first failure, so the
   read-only status and account check did not run. The queue, the outbox and
   pending stops were empty before and after both runs.
 - **Actor coverage.** The actor automates status, accounts, model menu,
   provider ping, Reply/forward/burst/stop routing, artifact delivery, the
   context contract and the restart-authorized `p0_p1_live` scenario. `/local`
-  and `/return`, `/connect`, provisioning, project editing, the quota
-  transition and the recovery drill remain owner-driven scenarios.
+  and `/return`, `/connect`, provisioning, project editing and the recovery
+  drill remain owner-driven scenarios.
 
 | Capability | Requirement | Scenario |
 | --- | --- | --- |
@@ -118,7 +119,6 @@ acceptance.
 | Root concurrency, worktree lanes, Codex slots | REQ-QUEUE-002, REQ-QUEUE-003 | Three projects on independent roots |
 | Project-group provisioning | REQ-ONBOARD-003, REQ-ONBOARD-006 | New project canary |
 | Registered-project editing | REQ-PROJECT-EDIT-001..004 | Rename and relocation canary |
-| Codex quota transition | REQ-AUTH-007 | Natural or controlled exhaustion |
 | Machine-loss recovery drill | REQ-OPS-012 | Private cold-restore drill |
 | Unauthorized access and disclosure | REQ-SEC-006, AC-F-007, AC-NF-001 | Outsider-account negative checklist |
 
@@ -150,11 +150,12 @@ acceptance.
   scaffold; resolved by withdrawing the gate (ADR 0045).
 - An analysis of the Claude integration path to Codex parity follows stage 3.
 - Response quota labels on a custom Codex model provider (found by
-  `p0_p1_live` at `adb8b37`): owner decision pending. Options: the response
-  footer falls back to the cached quota that `/status` shows, marked as
-  cached; or the P0/P1 check accepts a missing label on a route without
-  provider rate-limit telemetry; or the question closes with stage 3b if
-  retiring multi-auth returns Codex to a route that reports its windows.
+  `p0_p1_live` at `adb8b37`): owner decision pending. Stage 3b does not close
+  it: the deployment does not use multi-auth, and the windows are missing
+  because the app-server on this route reports none. Options: read the windows
+  from another passive local source on this route, if one exists; or the P0/P1
+  check accepts a missing label on a route without provider rate-limit
+  telemetry.
 - `configure-github.sh` required nonexistent check names (fixed in #82).
 
 ## Closure
