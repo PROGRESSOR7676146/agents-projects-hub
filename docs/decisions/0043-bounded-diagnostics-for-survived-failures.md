@@ -32,8 +32,11 @@ registry entry, and it writes the registry's own string, never an attribute of
 the class. A class built at run time, even one registered in a module under its
 own name or carrying string subclasses with their own hashing, equality or
 text, is therefore named by a registered ancestor, so dynamic identifiers
-cannot reach the log. Site labels are looked up the same way. Naming never
-raises: a class whose attributes fail to read is recorded under a neutral name.
+cannot reach the log. Site labels are looked up the same way. The class
+metadata is read through the descriptors of `type` itself, so no metaclass
+hook or descriptor of the exception's class runs while naming it, and naming
+never raises: a class whose metadata cannot be read is recorded under a
+neutral name.
 The same site and class are emitted
 at most once a minute with a count of suppressed repeats, and the repeat state
 holds a bounded number of keys.

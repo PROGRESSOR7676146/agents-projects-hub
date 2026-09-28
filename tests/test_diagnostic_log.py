@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import importlib
 import io
 import logging
@@ -137,9 +138,11 @@ class DiagnosticLogTests(unittest.TestCase):
                 return "Session_fictional_3456_Error /home/example/private"
 
         class RaisingMeta(type):
+            # Fails on every metadata read, even with an exception that is not
+            # an Exception subclass.
             def __getattribute__(cls, name: str) -> object:
-                if name == "__qualname__":
-                    raise ValueError("fictional attribute failure")
+                if name in {"__qualname__", "__module__", "__mro__", "__name__"}:
+                    raise asyncio.CancelledError
                 return super().__getattribute__(name)
 
         unhashable = type(
@@ -161,9 +164,7 @@ class DiagnosticLogTests(unittest.TestCase):
         output = self.stream.getvalue()
         self.assertIn("survived RuntimeError at service.health_publish", output)
         self.assertIn("survived RuntimeError at service.client_close", output)
-        self.assertIn(
-            f"survived {diagnostic_log.UNNAMED_ERROR} at service.context_telemetry", output
-        )
+        self.assertIn("survived RuntimeError at service.context_telemetry", output)
         self.assertIn(f"survived RuntimeError at {diagnostic_log.INVALID_SITE}", output)
         self.assertNotIn("fictional", output)
         self.assertNotIn("/home/example", output)
