@@ -11,7 +11,12 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from hermes_codex_router.cli import main
-from hermes_codex_router.codex_appserver import CodexThread, RateLimits, TurnResult
+from hermes_codex_router.codex_appserver import (
+    CodexThread,
+    RateLimits,
+    RpcRejectedError,
+    TurnResult,
+)
 from hermes_codex_router.codex_worker import CodexQueueWorker
 from hermes_codex_router.external_runtime import ExternalTurnResult
 from hermes_codex_router.hub_config import (
@@ -364,6 +369,189 @@ class CodexQueueWorkerTests(unittest.TestCase):
             sender.join(1)
             worker.close()
 
+    def test_stop_after_a_follow_up_lease_never_steers_it_into_the_turn(self) -> None:
+        parent_id = self.enqueue(1, "first")
+        entered = threading.Event()
+        release = threading.Event()
+        interrupted = threading.Event()
+        steered: list[str] = []
+
+        class MainClient(WorkerClient):
+            def wait_for_turn(self, _turn_id: str) -> TurnResult:
+                entered.set()
+                release.wait(5)
+                return TurnResult("Interrupted answer", 1000, 100)
+
+        class ControlClient:
+            def steer_turn(self, **kwargs: object) -> str:
+                steered.append(str(kwargs["text"]))
+                return str(kwargs["turn_id"])
+
+            def interrupt_turn(self, **_kwargs: object) -> None:
+                interrupted.set()
+                release.set()
+
+            def close(self) -> None:
+                pass
+
+        class Supervisor:
+            transport_mode = "socket"
+
+            def __init__(self) -> None:
+                self.main = MainClient()
+                self.calls = 0
+
+            def start(self) -> None:
+                pass
+
+            def client(self) -> object:
+                self.calls += 1
+                return self.main if self.calls == 1 else ControlClient()
+
+            def stop(self) -> None:
+                pass
+
+        worker = CodexQueueWorker(
+            self.config,
+            registry=self.registry,
+            supervisor=cast(Any, Supervisor()),
+            worker_id="test-codex-worker",
+        )
+        original_lease = HubState.lease_steer_followup
+        state_path = self.config.state_path
+        stops: list[str] = []
+
+        def lease_then_stop(state: HubState, *args: Any, **kwargs: Any) -> Any:
+            leased = original_lease(state, *args, **kwargs)
+            if leased is not None and not stops:
+                # The owner's stop lands after the lease, before the start.
+                peer = HubState.open(state_path)
+                try:
+                    request_id, _, _ = peer.request_emergency_stop(
+                        topic_id=leased.topic_id,
+                        chat_id=-1001234567890,
+                        message_id=99,
+                        target_agent_id="codex",
+                    )
+                    stops.append(request_id)
+                finally:
+                    peer.close()
+            return leased
+
+        follow_ups: list[str] = []
+
+        def send_follow_up() -> None:
+            if entered.wait(2):
+                follow_ups.append(self.enqueue(2, "follow up now"))
+
+        sender = threading.Thread(target=send_follow_up)
+        try:
+            with patch.object(HubState, "lease_steer_followup", lease_then_stop):
+                sender.start()
+                self.assertTrue(worker.run_cycle())
+            sender.join(2)
+            self.assertEqual(len(stops), 1)
+            self.assertEqual(steered, [])
+            self.assertTrue(interrupted.is_set())
+            self.assertEqual(worker.state.get_provider_job(parent_id).status, "cancelled")
+            self.assertEqual(worker.state.get_provider_job(follow_ups[0]).status, "cancelled")
+            topic = worker.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            self.assertIsNone(worker.state.pending_emergency_stop(topic.topic_id, "codex"))
+        finally:
+            release.set()
+            sender.join(1)
+            worker.close()
+
+    def test_follow_up_rejected_during_a_stop_never_runs_later(self) -> None:
+        parent_id = self.enqueue(1, "first")
+        entered = threading.Event()
+        release = threading.Event()
+        state_path = self.config.state_path
+        turns: list[str] = []
+
+        class MainClient(WorkerClient):
+            def start_turn(self, **kwargs: object) -> str:
+                turns.append("started")
+                return super().start_turn(**kwargs)
+
+            def wait_for_turn(self, _turn_id: str) -> TurnResult:
+                entered.set()
+                release.wait(5)
+                return TurnResult("Interrupted answer", 1000, 100)
+
+        class ControlClient:
+            def steer_turn(self, **_kwargs: object) -> str:
+                # The owner's stop lands while the steering call is in flight,
+                # and the app-server then rejects the call.
+                peer = HubState.open(state_path)
+                try:
+                    topic = peer.find_topic(-1001234567890, 77)
+                    assert topic is not None
+                    peer.request_emergency_stop(
+                        topic_id=topic.topic_id,
+                        chat_id=-1001234567890,
+                        message_id=99,
+                        target_agent_id="codex",
+                    )
+                finally:
+                    peer.close()
+                raise RpcRejectedError("fictional rejection")
+
+            def interrupt_turn(self, **_kwargs: object) -> None:
+                release.set()
+
+            def close(self) -> None:
+                pass
+
+        class Supervisor:
+            transport_mode = "socket"
+
+            def __init__(self) -> None:
+                self.main = MainClient()
+                self.calls = 0
+
+            def start(self) -> None:
+                pass
+
+            def client(self) -> object:
+                self.calls += 1
+                return self.main if self.calls == 1 else ControlClient()
+
+            def stop(self) -> None:
+                pass
+
+        worker = CodexQueueWorker(
+            self.config,
+            registry=self.registry,
+            supervisor=cast(Any, Supervisor()),
+            worker_id="test-codex-worker",
+        )
+        follow_ups: list[str] = []
+
+        def send_follow_up() -> None:
+            if entered.wait(2):
+                follow_ups.append(self.enqueue(2, "follow up now"))
+
+        sender = threading.Thread(target=send_follow_up)
+        try:
+            sender.start()
+            self.assertTrue(worker.run_cycle())
+            sender.join(2)
+            self.assertEqual(worker.state.get_provider_job(parent_id).status, "cancelled")
+            self.assertEqual(worker.state.get_provider_job(follow_ups[0]).status, "queued")
+            # The rejected follow-up existed before the stop; it must not run later.
+            worker.run_cycle()
+            self.assertEqual(worker.state.get_provider_job(follow_ups[0]).status, "cancelled")
+            self.assertEqual(turns, ["started"])
+            topic = worker.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            self.assertIsNone(worker.state.pending_emergency_stop(topic.topic_id, "codex"))
+        finally:
+            release.set()
+            sender.join(1)
+            worker.close()
+
     def test_emergency_stop_interrupts_running_codex_turn_without_model_analysis(self) -> None:
         job_id = self.enqueue()
         entered = threading.Event()
@@ -515,6 +703,33 @@ class CodexQueueWorkerTests(unittest.TestCase):
         finally:
             closed.set()
             sender.join(1)
+            worker.close()
+
+    def test_an_unfinished_older_stop_never_stops_later_codex_work(self) -> None:
+        old_id = self.enqueue(message_id=102)
+        state = HubState.open(self.config.state_path)
+        try:
+            leased = state.lease_provider_job("codex", "crashed-worker")
+            assert leased is not None and leased.lease_token is not None
+            self.assertEqual(leased.job_id, old_id)
+            state.mark_provider_job_executing(leased.job_id, leased.lease_token)
+            _, _, pending = state.request_emergency_stop(
+                topic_id=leased.topic_id,
+                chat_id=-1001234567890,
+                message_id=103,
+                target_agent_id="codex",
+            )
+            self.assertTrue(pending)
+            # The worker died after cancelling, before completing the stop.
+            state.cancel_active_provider_job(leased.job_id, leased.lease_token)
+        finally:
+            state.close()
+        later_id = self.enqueue(message_id=104, payload="after the crash")
+        worker = self.worker(WorkerClient())
+        try:
+            self.assertTrue(worker.run_cycle())
+            self.assertEqual(worker.state.get_provider_job(later_id).status, "result_ready")
+        finally:
             worker.close()
 
     def worker(self, client: WorkerClient) -> CodexQueueWorker:

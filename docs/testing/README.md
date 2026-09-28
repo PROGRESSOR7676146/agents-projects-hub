@@ -30,8 +30,12 @@ Test selectors are accepted only in the focused profile; they import sibling
 fixtures from `tests/` exactly as discovery does. The canonical test stage asks
 discovery for every test module, including nested test packages, then runs
 each in its own process, several in parallel (CPU count up to eight; override
-with `--jobs N`). It names every failing, empty, short-counted or timed-out
-module after all modules finish, so each module must pass on its own. See [ADR 0041](../decisions/0041-parallel-isolated-test-modules.md).
+with `--jobs N`). Each test runs in the module discovery found it in, the tests
+that start must be exactly the discovered ones by test id, and any module
+under `tests` that defines `load_tests` is refused, because the suite such a
+hook builds cannot be reproduced by an isolated module run. It names every
+failing, empty, mismatched or timed-out module after all modules finish, so
+each module must pass on its own. See [ADR 0041](../decisions/0041-parallel-isolated-test-modules.md).
 Automated tests
 use fake transports and temporary Git/SQLite fixtures. They must not contact
 real Telegram groups or consume provider tokens.
@@ -139,16 +143,24 @@ HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE=/home/example/.config/agents-projects-hub/publi
 ```
 
 The installation records only the private file path in local Git configuration
-and copies `.githooks/pre-commit` and `.githooks/pre-push` into a mode-`0700`
-directory under the shared
-Git common directory. It also records the validated Python executable used for
+and installs `.githooks/pre-commit` and `.githooks/pre-push` as one immutable,
+mode-`0700` hook set under the shared Git common directory
+(`hub-hooks/sets/<digest>`). Git runs hooks through the `hub-hooks/active`
+link, which one atomic rename switches to a new set; the previous set and all
+settings stay untouched until the new installation is verified, and a failed
+installation returns to them or reports that it could not confirm doing so.
+Settings are restored before a newly created link is removed, so Git never
+points at a missing hook directory.
+Older installations in `hub-managed-hooks` are migrated the same way and the
+old directory is removed only after success. It also records the validated
+Python executable used for
 installation so linked worktrees do not require separate virtual environments.
 The configured hook therefore covers every worktree, including a branch that
 predates the versioned hook. When per-worktree Git
 configuration is enabled, installation updates and verifies each registered
 active worktree's effective hook path so a stale override cannot bypass the
 shared hook. Git entries explicitly marked `prunable` are ignored because their
-worktree directories no longer exist. The copied file is local Git state and
+worktree directories no longer exist. The installed set is local Git state and
 must be refreshed by running `--install` after a hook update.
 
 Before a push, the hook captures the current worktree root and unsets every
@@ -231,6 +243,8 @@ that it is visible to the next explicit turn as quoted context.
 
 The `burst_route` check sends one harmless instruction as three concurrent
 Telegram API requests and requires one coherent provider answer. The
-`stop_route` check must appear after `model_menu`: it targets only the first
+`stop_route` check must appear after `model_menu`: it mentions the first
 provider selected there, starts a harmless wait, sends deterministic `stop`,
 requires the Hub acknowledgement, and proves that a new turn works afterward.
+The stop applies to the whole topic, so it interrupts the mentioned provider
+even when an earlier check left another agent active.
