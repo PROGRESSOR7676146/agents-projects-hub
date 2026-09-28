@@ -12,7 +12,7 @@ import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_TEST_JOBS = 32
@@ -111,6 +111,7 @@ _MODULE_RUNNER = """
 import importlib, json, sys, unittest
 from unittest.loader import _make_skipped_test
 from unittest.suite import _ErrorHolder
+from unittest.util import strclass
 
 name, report = sys.argv[1], sys.argv[2]
 started = []
@@ -143,7 +144,10 @@ except unittest.SkipTest as skipped:
     suite = _make_skipped_test(name, skipped, loader.suiteClass)
 else:
     suite = loader.loadTestsFromModule(module, pattern=PATTERN)
-loaded = [test.id() for test in tests_in(suite)]
+# The module and class unittest itself uses for set-up fixtures.
+loaded = [
+    [test.id(), type(test).__module__, strclass(type(test))] for test in tests_in(suite)
+]
 runner = unittest.TextTestRunner(
     resultclass=Result, verbosity=0, warnings=None if sys.warnoptions else "default"
 )
@@ -154,22 +158,21 @@ sys.exit(0 if result.wasSuccessful() else 1)
 """.replace("PATTERN", repr(DISCOVERY_PATTERN))
 
 
-def accounted_tests(report: dict[str, list[str]]) -> list[str]:
-    """Tests that started, plus those a module or class set-up skipped."""
-    scopes: list[tuple[str, str]] = []
+def accounted_tests(report: dict[str, list[Any]]) -> list[str]:
+    """Tests that started, plus those a module or class set-up skipped.
+
+    A set-up skip names its exact module or class, as unittest's fixtures do,
+    so a skip never covers a test of another module or class.
+    """
+    scopes: set[tuple[str, str]] = set()
     for description in report["setup_skips"]:
         kind, _, rest = str(description).partition(" (")
         if kind in {"setUpModule", "setUpClass"} and rest.endswith(")"):
-            scopes.append((kind, rest[:-1]))
+            scopes.add((kind, rest[:-1]))
     skipped = [
-        str(test)
-        for test in report["loaded"]
-        if any(
-            str(test).startswith(scope + ".")
-            if kind == "setUpModule"
-            else str(test).rpartition(".")[0] == scope
-            for kind, scope in scopes
-        )
+        str(test_id)
+        for test_id, module, test_class in report["loaded"]
+        if ("setUpModule", str(module)) in scopes or ("setUpClass", str(test_class)) in scopes
     ]
     return [str(test) for test in report["started"]] + skipped
 
@@ -249,7 +252,17 @@ def run_test_modules(*, jobs: int, root: Path = ROOT) -> None:
     after a failure.
     """
     expected = discover_test_modules(root)
-    empty = sorted(set(discoverable_test_files(root)) - set(expected))
+    # A package that skips itself on import hides its test files from discovery.
+    skipped_packages = {
+        name
+        for name, tests in expected.items()
+        if tests == [f"unittest.loader.ModuleSkipped.{name}"]
+    }
+    empty = sorted(
+        name
+        for name in set(discoverable_test_files(root)) - set(expected)
+        if not any(name.startswith(package + ".") for package in skipped_packages)
+    )
     modules = sorted(expected)
     if not modules and not empty:
         raise RuntimeError("no test modules discovered under tests/")

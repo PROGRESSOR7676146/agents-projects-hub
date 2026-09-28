@@ -287,8 +287,10 @@ class TestModuleRunnerTests(unittest.TestCase):
             if name == "test_beta":
                 raise subprocess.TimeoutExpired(argv, kwargs["timeout"], output=b"partial \xff")
             ran = expected[name][:2] if name == "test_delta" else expected[name]
+            loaded = [[test, name, f"{name}.Tests"] for test in ran]
             report.write_text(
-                json.dumps({"started": ran, "loaded": ran, "setup_skips": []}), encoding="utf-8"
+                json.dumps({"started": ran, "loaded": loaded, "setup_skips": []}),
+                encoding="utf-8",
             )
             if name == "test_alpha":
                 return subprocess.CompletedProcess(
@@ -499,6 +501,86 @@ class TestModuleRunnerTests(unittest.TestCase):
                 with redirect_stdout(output), redirect_stderr(io.StringIO()):
                     validator.run_test_modules(jobs=1, root=root)
                 self.assertIn("in 1 test modules", output.getvalue())
+
+    def test_a_module_skip_never_covers_a_class_from_another_module(self) -> None:
+        # The package skips its own set-up; the class it imports from a
+        # submodule still runs, and its test must be accounted for by running.
+        root = self.fixture_root(
+            {
+                "example/__init__.py": """
+                    import unittest
+
+                    from example.helper import B
+
+
+                    def setUpModule():
+                        raise unittest.SkipTest("example dependency unavailable")
+
+
+                    class A(unittest.TestCase):
+                        def test_a(self):
+                            pass
+                """,
+                "example/helper.py": """
+                    import unittest
+
+
+                    class B(unittest.TestCase):
+                        def test_b(self):
+                            pass
+                """,
+                "example/test_entry.py": """
+                    import unittest
+
+
+                    class Entry(unittest.TestCase):
+                        def test_entry(self):
+                            pass
+                """,
+            }
+        )
+        report = {
+            "started": ["example.helper.B.test_b"],
+            "loaded": [
+                ["example.A.test_a", "example", "example.A"],
+                ["example.helper.B.test_b", "example.helper", "example.helper.B"],
+            ],
+            "setup_skips": ["setUpModule (example)"],
+        }
+        self.assertEqual(
+            sorted(validator.accounted_tests(report)),
+            ["example.A.test_a", "example.helper.B.test_b"],
+        )
+        # A skipped module never accounts for a test of another module that did not run.
+        report["started"] = []
+        self.assertEqual(validator.accounted_tests(report), ["example.A.test_a"])
+        output = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(io.StringIO()):
+            validator.run_test_modules(jobs=1, root=root)
+        self.assertIn("in 2 test modules", output.getvalue())
+
+    def test_test_files_of_a_package_that_skips_on_import_are_not_empty(self) -> None:
+        root = self.fixture_root(
+            {
+                "example/__init__.py": """
+                    import unittest
+
+                    raise unittest.SkipTest("example dependency unavailable")
+                """,
+                "example/test_child.py": """
+                    import unittest
+
+
+                    class Child(unittest.TestCase):
+                        def test_child(self):
+                            pass
+                """,
+            }
+        )
+        output = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(io.StringIO()):
+            validator.run_test_modules(jobs=1, root=root)
+        self.assertIn("in 1 test modules", output.getvalue())
 
     def test_a_skipped_class_does_not_hide_a_failure_beside_it(self) -> None:
         root = self.fixture_root(
