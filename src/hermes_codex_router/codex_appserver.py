@@ -395,6 +395,10 @@ class CodexAppServerClient:
         self._session_providers = tuple(dict.fromkeys(("openai", model_provider or "openai")))
         self._next_request_id = 1
         self.notifications: deque[dict[str, Any]] = deque()
+        # Windows from the current turn's `account/rateLimits/updated` events.
+        # A route whose `account/rateLimits/read` has no windows (a custom model
+        # provider) still reports them in these header-derived rolling updates.
+        self._turn_rate_limits: RateLimits | None = None
         self.on_visible_item: Callable[[str, str, str], None] | None = None
         self.on_completed: Callable[[TurnResult], None] | None = None
 
@@ -807,6 +811,7 @@ class CodexAppServerClient:
         seen_items: set[str] = set()
         context_window: int | None = None
         context_tokens_used: int | None = None
+        self._turn_rate_limits = None
         while True:
             # Model turns routinely exceed the short RPC handshake timeout.
             # Keep a finite ceiling so a lost app-server cannot strand a worker
@@ -827,6 +832,9 @@ class CodexAppServerClient:
                 continue
             params = message.get("params")
             if not isinstance(params, dict):
+                continue
+            if method == "account/rateLimits/updated":
+                self._observe_rate_limits(params.get("rateLimits"))
                 continue
             if method == "thread/tokenUsage/updated" and params.get("turnId") == turn_id:
                 usage = params.get("tokenUsage")
@@ -1066,12 +1074,41 @@ class CodexAppServerClient:
             duration_minutes=duration if isinstance(duration, int) else None,
         )
 
+    def _observe_rate_limits(self, snapshot: object) -> None:
+        """Merge one sparse rolling update; an absent window keeps its last value."""
+        if not isinstance(snapshot, dict):
+            return
+        previous = self._turn_rate_limits or RateLimits(None, None)
+        self._turn_rate_limits = RateLimits(
+            primary=self._limit_window(snapshot.get("primary")) or previous.primary,
+            secondary=self._limit_window(snapshot.get("secondary")) or previous.secondary,
+        )
+
     def read_rate_limits(self) -> RateLimits:
-        result = self._request("account/rateLimits/read", {})
+        """Read the account snapshot, filling missing windows from the last turn.
+
+        The turn's windows are used once, by the read that follows the turn, so a
+        later read never presents them as current.
+        """
+        rolling, self._turn_rate_limits = self._turn_rate_limits, None
+        try:
+            result = self._request("account/rateLimits/read", {})
+        except RpcError:
+            if rolling is None:
+                raise
+            return rolling
         snapshot = result.get("rateLimits") if isinstance(result, dict) else None
         if not isinstance(snapshot, dict):
-            raise RpcError("account/rateLimits/read returned invalid data")
-        return RateLimits(
+            if rolling is None:
+                raise RpcError("account/rateLimits/read returned invalid data")
+            return rolling
+        read = RateLimits(
             primary=self._limit_window(snapshot.get("primary")),
             secondary=self._limit_window(snapshot.get("secondary")),
+        )
+        if rolling is None:
+            return read
+        return RateLimits(
+            primary=read.primary or rolling.primary,
+            secondary=read.secondary or rolling.secondary,
         )
