@@ -81,7 +81,12 @@ class RecordingLoader(unittest.TestLoader):
 
 suite = RecordingLoader().discover("tests", pattern=PATTERN, top_level_dir="tests")
 for test in tests_in(suite):
-    if isinstance(test, _FailedTest) and test.id() not in found.get(test._testMethodName, []):
+    # Import failures and modules that skip themselves on import become
+    # placeholder tests named after the module.
+    placeholder = isinstance(test, _FailedTest) or (
+        type(test).__name__ == "ModuleSkipped" and type(test).__module__ == "unittest.loader"
+    )
+    if placeholder and test.id() not in found.get(test._testMethodName, []):
         found.setdefault(test._testMethodName, []).append(test.id())
 root = os.path.realpath("tests")
 
@@ -104,26 +109,69 @@ json.dump({"tests": found, "custom_loaders": custom}, sys.stdout)
 # of every test that starts is written to the report file named by argv[2].
 _MODULE_RUNNER = """
 import importlib, json, sys, unittest
+from unittest.loader import _make_skipped_test
+from unittest.suite import _ErrorHolder
 
 name, report = sys.argv[1], sys.argv[2]
 started = []
+setup_skips = []
+
+def tests_in(item):
+    if isinstance(item, unittest.TestSuite):
+        for child in item:
+            yield from tests_in(child)
+    else:
+        yield item
 
 class Result(unittest.TextTestResult):
     def startTest(self, test):
         started.append(test.id())
         super().startTest(test)
 
-suite = unittest.defaultTestLoader.loadTestsFromModule(
-    importlib.import_module(name), pattern=PATTERN
-)
+    def addSkip(self, test, reason):
+        # A module or class set-up that raises SkipTest skips its tests
+        # without starting them, exactly as under discovery.
+        if isinstance(test, _ErrorHolder):
+            setup_skips.append(test.description)
+        super().addSkip(test, reason)
+
+loader = unittest.defaultTestLoader
+try:
+    module = importlib.import_module(name)
+except unittest.SkipTest as skipped:
+    # Discovery turns a module that skips itself on import into this test.
+    suite = _make_skipped_test(name, skipped, loader.suiteClass)
+else:
+    suite = loader.loadTestsFromModule(module, pattern=PATTERN)
+loaded = [test.id() for test in tests_in(suite)]
 runner = unittest.TextTestRunner(
     resultclass=Result, verbosity=0, warnings=None if sys.warnoptions else "default"
 )
 result = runner.run(suite)
 with open(report, "w", encoding="utf-8") as handle:
-    json.dump(started, handle)
+    json.dump({"started": started, "loaded": loaded, "setup_skips": setup_skips}, handle)
 sys.exit(0 if result.wasSuccessful() else 1)
 """.replace("PATTERN", repr(DISCOVERY_PATTERN))
+
+
+def accounted_tests(report: dict[str, list[str]]) -> list[str]:
+    """Tests that started, plus those a module or class set-up skipped."""
+    scopes: list[tuple[str, str]] = []
+    for description in report["setup_skips"]:
+        kind, _, rest = str(description).partition(" (")
+        if kind in {"setUpModule", "setUpClass"} and rest.endswith(")"):
+            scopes.append((kind, rest[:-1]))
+    skipped = [
+        str(test)
+        for test in report["loaded"]
+        if any(
+            str(test).startswith(scope + ".")
+            if kind == "setUpModule"
+            else str(test).rpartition(".")[0] == scope
+            for kind, scope in scopes
+        )
+    ]
+    return [str(test) for test in report["started"]] + skipped
 
 
 def _text(value: object) -> str:
@@ -229,16 +277,15 @@ def run_test_modules(*, jobs: int, root: Path = ROOT) -> None:
                 return name, reason, 0, _text(error.output)
             output = completed.stdout or ""
             try:
-                started = json.loads(report.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                started = None
-            if not isinstance(started, list):
+                run_report = json.loads(report.read_text(encoding="utf-8"))
+                accounted = accounted_tests(run_report)
+                started = len(run_report["started"])
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 reason = f"exit {completed.returncode}" if completed.returncode else "no run report"
                 return name, reason, 0, output
             if completed.returncode != 0:
-                return name, f"exit {completed.returncode}", len(started), output
-            mismatch = composition_mismatch(expected[name], [str(test) for test in started])
-            return name, mismatch, len(started), output
+                return name, f"exit {completed.returncode}", started, output
+            return name, composition_mismatch(expected[name], accounted), started, output
 
         with ThreadPoolExecutor(max_workers=jobs) as pool:
             results = list(pool.map(run_module, modules))

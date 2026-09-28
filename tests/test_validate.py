@@ -287,7 +287,9 @@ class TestModuleRunnerTests(unittest.TestCase):
             if name == "test_beta":
                 raise subprocess.TimeoutExpired(argv, kwargs["timeout"], output=b"partial \xff")
             ran = expected[name][:2] if name == "test_delta" else expected[name]
-            report.write_text(json.dumps(ran), encoding="utf-8")
+            report.write_text(
+                json.dumps({"started": ran, "loaded": ran, "setup_skips": []}), encoding="utf-8"
+            )
             if name == "test_alpha":
                 return subprocess.CompletedProcess(
                     argv, 1, "Ran 2 tests in 0.010s\n\nFAILED (failures=1)\n"
@@ -452,6 +454,82 @@ class TestModuleRunnerTests(unittest.TestCase):
             validator.run_test_modules(jobs=2, root=root)
         self.assertIn("1 of 2 test modules failed: nested", str(raised.exception))
         self.assertIn("strict regression", errors.getvalue())
+
+    def test_set_up_and_import_skips_count_as_discovery_counts_them(self) -> None:
+        cases = {
+            "module set-up": """
+                import unittest
+
+
+                def setUpModule():
+                    raise unittest.SkipTest("example dependency unavailable")
+
+
+                class Tests(unittest.TestCase):
+                    def test_one(self):
+                        pass
+            """,
+            "class set-up": """
+                import unittest
+
+
+                class Skipped(unittest.TestCase):
+                    @classmethod
+                    def setUpClass(cls):
+                        raise unittest.SkipTest("example dependency unavailable")
+
+                    def test_one(self):
+                        pass
+
+
+                class Running(unittest.TestCase):
+                    def test_two(self):
+                        pass
+            """,
+            "import": """
+                import unittest
+
+                raise unittest.SkipTest("example dependency unavailable")
+            """,
+        }
+        for kind, source in cases.items():
+            with self.subTest(kind=kind):
+                root = self.fixture_root({"test_example.py": source})
+                output = io.StringIO()
+                with redirect_stdout(output), redirect_stderr(io.StringIO()):
+                    validator.run_test_modules(jobs=1, root=root)
+                self.assertIn("in 1 test modules", output.getvalue())
+
+    def test_a_skipped_class_does_not_hide_a_failure_beside_it(self) -> None:
+        root = self.fixture_root(
+            {
+                "test_example.py": """
+                    import unittest
+
+
+                    class Skipped(unittest.TestCase):
+                        @classmethod
+                        def setUpClass(cls):
+                            raise unittest.SkipTest("example dependency unavailable")
+
+                        def test_one(self):
+                            pass
+
+
+                    class Failing(unittest.TestCase):
+                        def test_two(self):
+                            self.fail("example regression")
+                """,
+            }
+        )
+        errors = io.StringIO()
+        with (
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(errors),
+            self.assertRaises(RuntimeError),
+        ):
+            validator.run_test_modules(jobs=1, root=root)
+        self.assertIn("example regression", errors.getvalue())
 
     def test_composition_mismatch_names_missing_and_extra_tests(self) -> None:
         self.assertIsNone(

@@ -23,7 +23,9 @@ import path, several at a time, and is loaded as discovery loaded it. The
 default is the CPU count capped at eight; `--jobs 1..32` overrides it. Every
 module finishes before failures are reported, every failing module is named
 with its output (also after a timeout), the ids of the tests that started must
-equal the discovered ids (an equal count with different tests fails), any
+equal the discovered ids (an equal count with different tests fails; tests
+that a module or class set-up skips, and a module that skips itself on import,
+count as discovery counts them), any
 module under `tests` that defines `load_tests` is refused because its hook can
 build suites an isolated module run would not reproduce, a `test*.py` file
 that contributes no tests
