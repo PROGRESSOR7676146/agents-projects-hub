@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from hermes_codex_router.hub_config import (
     HubConfigError,
@@ -63,11 +65,15 @@ class HubConfigTests(unittest.TestCase):
 
     def test_loads_token_by_file_reference_without_embedding_secret(self) -> None:
         path = self.write_config()
-        config = load_hub_config(path)
+        # A private home keeps the default independent of the real Codex install,
+        # whose control socket may be a link that path resolution would follow.
+        home = self.base / "home"
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            config = load_hub_config(path)
         self.assertEqual(config.require_agent("codex").token_file, self.token.resolve())
         self.assertEqual(
             config.codex_socket_path,
-            Path.home() / ".codex/app-server-control/app-server-control.sock",
+            home.resolve() / ".codex/app-server-control/app-server-control.sock",
         )
         self.assertFalse(config.manage_codex_server)
         self.assertEqual(config.terminal.backend, "auto")
