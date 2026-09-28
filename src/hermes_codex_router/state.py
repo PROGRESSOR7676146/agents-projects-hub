@@ -1368,10 +1368,10 @@ class HubState:
         message_id: int,
         target_agent_id: str,
     ) -> tuple[str, int, bool]:
-        """Persist a stop request and cancel work that has not started."""
+        """Stop the topic: cancel unstarted jobs; target the running turn's provider."""
         target = _bounded(target_agent_id, name="agent id", maximum=64)
-        timestamp = _now()
         with self._immediate_transaction():
+            timestamp = _now()  # under the write lock: covers exactly the work committed before
             duplicate = self._connection.execute(
                 """SELECT request_id, cancelled_queued_count, status
                    FROM provider_stop_requests WHERE chat_id = ? AND message_id = ?""",
@@ -1389,22 +1389,14 @@ class HubState:
                    VALUES (?, ?, 'hub', ?)""",
                 (chat_id, message_id, timestamp),
             )
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs
-                   SET status = 'cancelled', next_attempt_at = NULL,
-                       error_class = 'user_stop', error_code = 'emergency_stop',
-                       updated_at = ?
-                   WHERE topic_id = ? AND agent_id = ?
-                     AND status IN ('queued', 'retry_wait')""",
-                (timestamp, topic_id, target),
-            )
+            cancelled = self._provider_job_state.cancel_unstarted_for_stop(topic_id, timestamp)
             active = self._connection.execute(
-                """SELECT 1 FROM provider_jobs
-                   WHERE topic_id = ? AND agent_id = ?
-                     AND status IN ('leased', 'executing') LIMIT 1""",
-                (topic_id, target),
+                """SELECT agent_id FROM provider_jobs WHERE topic_id = ?
+                     AND status IN ('leased', 'executing') ORDER BY created_at LIMIT 1""",
+                (topic_id,),
             ).fetchone()
             pending = active is not None
+            target = str(active["agent_id"]) if pending else target
             request_id = str(uuid.uuid4())
             self._connection.execute(
                 """INSERT INTO provider_stop_requests (
@@ -1418,12 +1410,15 @@ class HubState:
                     message_id,
                     target,
                     "pending" if pending else "completed",
-                    cursor.rowcount,
+                    cancelled,
                     timestamp,
                     None if pending else timestamp,
                 ),
             )
-            return request_id, cursor.rowcount, pending
+            # Work this stop cancelled may have been all that an earlier stop
+            # still waited for.
+            self._provider_job_state.complete_finished_stops(topic_id, timestamp)
+            return request_id, cancelled, pending
 
     def enqueue_emergency_stop_notice(self, request_id: str, telegram_html: str) -> bool:
         """Durably queue a Hub-owned stop acknowledgement when work was affected."""
@@ -1436,33 +1431,12 @@ class HubState:
         timestamp = _now()
         with self._immediate_transaction():
             request = self._connection.execute(
-                """SELECT topic_id, chat_id, target_agent_id, created_at
-                   FROM provider_stop_requests WHERE request_id = ?""",
+                "SELECT chat_id FROM provider_stop_requests WHERE request_id = ?",
                 (identifier,),
             ).fetchone()
             if request is None:
                 raise StateError("emergency stop request does not exist")
-            candidate = self._connection.execute(
-                """SELECT jobs.job_id, topics.thread_id
-                   FROM provider_jobs jobs
-                   JOIN topics ON topics.topic_id = jobs.topic_id
-                   WHERE jobs.topic_id = ? AND jobs.agent_id = ? AND (
-                       jobs.status IN ('leased', 'executing') OR (
-                           jobs.status = 'cancelled'
-                           AND jobs.error_class = 'user_stop'
-                           AND jobs.error_code = 'emergency_stop'
-                           AND jobs.updated_at >= ?
-                       )
-                   )
-                   ORDER BY CASE WHEN jobs.status IN ('leased', 'executing') THEN 0 ELSE 1 END,
-                            jobs.updated_at DESC, jobs.created_at DESC
-                   LIMIT 1""",
-                (
-                    request["topic_id"],
-                    request["target_agent_id"],
-                    request["created_at"],
-                ),
-            ).fetchone()
+            candidate = self._provider_job_state.stop_notice_job(identifier)
             if candidate is None:
                 return False
             existing = self._connection.execute(
@@ -1494,26 +1468,34 @@ class HubState:
         return True
 
     def pending_emergency_stop(self, topic_id: int, agent_id: str) -> str | None:
-        row = self._connection.execute(
-            """SELECT request_id FROM provider_stop_requests
-               WHERE topic_id = ? AND target_agent_id = ? AND status = 'pending'
-               ORDER BY created_at LIMIT 1""",
-            (topic_id, agent_id),
-        ).fetchone()
-        return None if row is None else str(row["request_id"])
+        return self._provider_job_state.pending_stop_for_agent(topic_id, agent_id)
+
+    def pending_emergency_stop_for_job(self, job_id: str) -> str | None:
+        """The pending stop that covers this job; later work is never covered."""
+        return self._provider_job_state.pending_stop_for_job(job_id)
 
     def complete_emergency_stop(self, request_id: str) -> None:
-        with self._connection:
-            self._connection.execute(
-                """UPDATE provider_stop_requests SET status = 'completed', completed_at = ?
-                   WHERE request_id = ? AND status = 'pending'""",
-                (_now(), request_id),
-            )
+        self._provider_job_state.complete_stop(request_id)
 
     def cancel_active_provider_job(
-        self, job_id: str, lease_token: str, *, error_code: str = "emergency_stop"
+        self,
+        job_id: str,
+        lease_token: str,
+        *,
+        error_code: str = "emergency_stop",
+        complete_stops: bool = False,
     ) -> None:
-        self._provider_job_state.cancel_active(job_id, lease_token, error_code=error_code)
+        self._provider_job_state.cancel_active(
+            job_id, lease_token, error_code=error_code, complete_stops=complete_stops
+        )
+
+    def start_steer_followup(
+        self, job_id: str, lease_token: str, *, parent_job_id: str
+    ) -> ProviderJobRecord:
+        """Start a leased follow-up for steering unless an emergency stop intervenes."""
+        return self._provider_job_state.start_steer(
+            job_id, lease_token, parent_job_id=parent_job_id
+        )
 
     def lease_provider_job(
         self,
@@ -1578,8 +1560,11 @@ class HubState:
         lease_token: str,
         *,
         now: datetime | None = None,
+        honor_stop: bool = False,
     ) -> ProviderJobRecord:
-        return self._provider_job_state.mark_executing(job_id, lease_token, now=now)
+        return self._provider_job_state.mark_executing(
+            job_id, lease_token, now=now, honor_stop=honor_stop
+        )
 
     def release_provider_job_lease(self, job_id: str, lease_token: str) -> None:
         """Return work that was leased but not invoked to the durable queue."""

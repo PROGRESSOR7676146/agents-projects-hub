@@ -112,9 +112,12 @@ This normative module is part of the
   text itself has no reliable cross-client color API.
 - **REQ-CMD-007 (Implemented for queued project-group providers):** `/stop` and
   an exact case-insensitive emergency utterance (`stop`, `halt`, `стоп`, `стой`,
-  `остановись`, or `прекрати`) MUST bypass model analysis. Hub cancels the
-  selected active provider's not-yet-started FIFO tail and interrupts its active
-  turn through provider-native control or its owned process. Matching applies
+  `остановись`, or `прекрати`) MUST bypass model analysis. Hub cancels every
+  not-yet-started FIFO job in the numeric topic, whatever its provider, and
+  interrupts the topic's running turn, which topic FIFO limits to one, through
+  that provider's native control or its owned process, even when the provider
+  was invoked by mention rather than being the active agent. Held work awaiting
+  an owner decision is left for that decision. Matching applies
   to the complete normalized message only, never to a word embedded in prose.
   An owned external CLI process group MUST be force-stoppable even when the
   provider ignores graceful termination.

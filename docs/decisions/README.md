@@ -65,6 +65,7 @@ with a new record.
 | Survived-failure diagnostics | Deliberately survived failures log only exception class and a static site label, rate-limited, to stderr/journald; Ruff S110/S112 forbid new silent handlers. | [ADR 0043](0043-bounded-diagnostics-for-survived-failures.md) |
 | Hotspot growth ratchet | Every module ≥1,500 lines and function ≥200 lines needs a bounded exception in `docs/operations/hotspots.json`; growth past its bound fails validation. | [ADR 0044](0044-hotspot-growth-ratchet.md) |
 | Provider-expansion gate withdrawn | New provider work, including Claude parity, no longer waits for live acceptance of existing providers; evidence levels and security boundaries are unchanged. | [ADR 0045](0045-withdraw-provider-expansion-gate.md) |
+| Topic-wide emergency stop | `stop` cancels every unstarted job in the topic and interrupts the running turn of whichever provider owns it, not only the active agent. | [ADR 0046](0046-topic-wide-emergency-stop.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or
