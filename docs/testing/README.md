@@ -30,10 +30,10 @@ Test selectors are accepted only in the focused profile; they import sibling
 fixtures from `tests/` exactly as discovery does. The canonical test stage asks
 discovery for every test module, including nested test packages, then runs
 each in its own process, several in parallel (CPU count up to eight; override
-with `--jobs N`). The tests that start must be exactly the discovered ones, by
-test id, and a test module or package that defines `load_tests` is refused,
-because the suite such a hook builds cannot be reproduced by an isolated
-module run. It names every
+with `--jobs N`). Each test runs in the module discovery found it in, the tests
+that start must be exactly the discovered ones by test id, and any module
+under `tests` that defines `load_tests` is refused, because the suite such a
+hook builds cannot be reproduced by an isolated module run. It names every
 failing, empty, mismatched or timed-out module after all modules finish, so
 each module must pass on its own. See [ADR 0041](../decisions/0041-parallel-isolated-test-modules.md).
 Automated tests

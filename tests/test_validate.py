@@ -377,6 +377,82 @@ class TestModuleRunnerTests(unittest.TestCase):
                 self.assertIn("load_tests hooks are not supported", message)
                 self.assertIn("test_selective" if kind == "module" else "nested", message)
 
+    def test_load_tests_in_any_module_under_tests_is_refused(self) -> None:
+        root = self.fixture_root(
+            {
+                "helper.py": """
+                    import unittest
+
+
+                    class Check(unittest.TestCase):
+                        strict = True
+
+                        def test_check(self):
+                            self.assertFalse(self.strict, "strict regression")
+
+
+                    def load_tests(loader, tests, pattern):
+                        for test in tests:
+                            for case in test:
+                                case.strict = False
+                        return tests
+                """,
+                "nested/__init__.py": "from helper import Check\n",
+                "test_entry.py": """
+                    import unittest
+
+
+                    class Entry(unittest.TestCase):
+                        def test_entry(self):
+                            pass
+                """,
+            }
+        )
+        with (
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO()),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            validator.run_test_modules(jobs=2, root=root)
+        self.assertIn("load_tests hooks are not supported", str(raised.exception))
+        self.assertIn("helper", str(raised.exception))
+
+    def test_tests_run_in_the_module_discovery_found_them_in(self) -> None:
+        # The package changes an imported class, so the test fails under
+        # discovery; running the class's own module alone would pass it.
+        root = self.fixture_root(
+            {
+                "helper.py": """
+                    import unittest
+
+
+                    class Check(unittest.TestCase):
+                        strict = False
+
+                        def test_check(self):
+                            self.assertFalse(self.strict, "strict regression")
+                """,
+                "nested/__init__.py": "from helper import Check\n\nCheck.strict = True\n",
+                "test_entry.py": """
+                    import unittest
+
+
+                    class Entry(unittest.TestCase):
+                        def test_entry(self):
+                            pass
+                """,
+            }
+        )
+        errors = io.StringIO()
+        with (
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(errors),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            validator.run_test_modules(jobs=2, root=root)
+        self.assertIn("1 of 2 test modules failed: nested", str(raised.exception))
+        self.assertIn("strict regression", errors.getvalue())
+
     def test_composition_mismatch_names_missing_and_extra_tests(self) -> None:
         self.assertIsNone(
             validator.composition_mismatch(["m.A.test", "m.B.test"], ["m.B.test", "m.A.test"])

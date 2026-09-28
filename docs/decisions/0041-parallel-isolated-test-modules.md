@@ -16,14 +16,15 @@ selectors failed at import, so the documented iteration loop could not run them.
 
 The canonical `full tests` stage first asks `unittest` discovery, in a child
 process that runs no tests, for every test module under `tests` by dotted name
-(nested test packages included) and the id of every test it contributes. Each
-module then runs in its own Python process with the same import path, several
-at a time, and is loaded with the pattern discovery passes to `load_tests`. The
+(nested test packages included) and the id of every test discovery found in
+it; a test class imported into a package or module counts where discovery
+found it. Each such module then runs in its own Python process with the same
+import path, several at a time, and is loaded as discovery loaded it. The
 default is the CPU count capped at eight; `--jobs 1..32` overrides it. Every
 module finishes before failures are reported, every failing module is named
 with its output (also after a timeout), the ids of the tests that started must
-equal the discovered ids (an equal count with different tests fails), a test
-module or package that defines `load_tests` is refused because its hook can
+equal the discovered ids (an equal count with different tests fails), any
+module under `tests` that defines `load_tests` is refused because its hook can
 build suites an isolated module run would not reproduce, a `test*.py` file
 that contributes no tests
 fails, and each module has a 600-second deadline. The stage still runs the complete suite and still follows the cheap

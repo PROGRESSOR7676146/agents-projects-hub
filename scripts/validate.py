@@ -54,36 +54,48 @@ def sibling_import_environment(root: Path = ROOT) -> dict[str, str]:
     return environment
 
 
-# Runs in a child process: import every test module the way whole-suite
-# discovery does and report the id of every test each module contributes, and
-# every test module or package that defines ``load_tests``.
+# Runs in a child process: run whole-suite discovery and record, for every
+# module it loads tests from, the id of every test found in that module (a
+# class imported into several modules counts in each, as in discovery). Also
+# report every module under ``tests`` that defines ``load_tests``.
 _DISCOVERY_PROBE = """
-import fnmatch, json, os, sys, unittest
+import json, os, sys, unittest
 from unittest.loader import _FailedTest
 
 found = {}
 
-def visit(item):
+def tests_in(item):
     if isinstance(item, unittest.TestSuite):
         for child in item:
-            visit(child)
-        return
-    module = item._testMethodName if isinstance(item, _FailedTest) else type(item).__module__
-    found.setdefault(module, []).append(item.id())
+            yield from tests_in(child)
+    else:
+        yield item
 
-visit(unittest.defaultTestLoader.discover("tests", pattern=PATTERN, top_level_dir="tests"))
+class RecordingLoader(unittest.TestLoader):
+    def loadTestsFromModule(self, module, *args, **kwargs):
+        suite = super().loadTestsFromModule(module, *args, **kwargs)
+        ids = [test.id() for test in tests_in(suite)]
+        if ids:
+            found.setdefault(module.__name__, []).extend(ids)
+        return suite
+
+suite = RecordingLoader().discover("tests", pattern=PATTERN, top_level_dir="tests")
+for test in tests_in(suite):
+    if isinstance(test, _FailedTest) and test.id() not in found.get(test._testMethodName, []):
+        found.setdefault(test._testMethodName, []).append(test.id())
 root = os.path.realpath("tests")
 
-def builds_its_own_suite(module):
+def under_tests(module):
     path = getattr(module, "__file__", None)
-    if not isinstance(path, str) or "load_tests" not in vars(module):
+    if not isinstance(path, str):
         return False
-    path = os.path.realpath(path)
-    name = os.path.basename(path)
-    inside = os.path.commonpath([path, root]) == root
-    return inside and (name == "__init__.py" or fnmatch.fnmatch(name, PATTERN))
+    return os.path.commonpath([os.path.realpath(path), root]) == root
 
-custom = sorted(n for n, m in list(sys.modules.items()) if builds_its_own_suite(m))
+custom = sorted(
+    name
+    for name, module in list(sys.modules.items())
+    if under_tests(module) and "load_tests" in getattr(module, "__dict__", {})
+)
 json.dump({"tests": found, "custom_loaders": custom}, sys.stdout)
 """.replace("PATTERN", repr(DISCOVERY_PATTERN))
 
@@ -135,10 +147,12 @@ def discoverable_test_files(root: Path = ROOT) -> list[str]:
 def discover_test_modules(root: Path = ROOT) -> dict[str, list[str]]:
     """Return ``{dotted module: test ids}`` exactly as ``unittest`` discovery sees it.
 
-    A test module or package that defines ``load_tests`` is refused: its hook
+    Tests are listed under the module discovery loaded them from, so an
+    isolated run of that module imports the same modules and packages. Any
+    module under ``tests`` that defines ``load_tests`` is refused: such a hook
     can build suites (other tests, parameterized instances, package-level
-    wrappers) that a module run in isolation would not reproduce, and equal
-    test ids cannot prove otherwise.
+    wrappers) that an isolated run would not reproduce, and equal test ids
+    cannot prove otherwise.
     """
     completed = subprocess.run(
         (sys.executable, "-c", _DISCOVERY_PROBE),
