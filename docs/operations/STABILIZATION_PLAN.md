@@ -87,8 +87,19 @@ acceptance.
   the synthetic rollout and rollback passed. Every long-running component
   (controller, sender, provisioner, monitor and the three provider workers)
   reports the clean revision, and one monitor cycle through its unit reported
-  no alerts. Live E2E on this revision (the actor baseline, including the
-  topic-wide `stop_route`, and `p0_p1_live`) is still pending the owner.
+  no alerts.
+- **Live E2E at `adb8b37` (2026-09-28, owner-authorized).** The actor
+  baseline passed 15 of 15 checks, including the topic-wide `stop_route` that
+  failed at `ea5af70`. `p0_p1_live` passed 5 of 6: caption-only document,
+  album, FIFO admission during an active turn, exactly-once recovery across a
+  Controller and Codex-worker restart, and the explicit 20 MB notice. The
+  context and quota label check failed: the live Codex response carried a
+  numeric context remainder but no quota window. The deployed Codex route uses
+  a custom model provider, whose app-server supplies no rate-limit windows, and
+  the Hub omits unknown windows (REQ-CMD-001); `/status` shows the cached
+  multi-auth quota instead. The runner stops at the first failure, so the
+  read-only status and account check did not run. The queue, the outbox and
+  pending stops were empty before and after both runs.
 - **Actor coverage.** The actor automates status, accounts, model menu,
   provider ping, Reply/forward/burst/stop routing, artifact delivery, the
   context contract and the restart-authorized `p0_p1_live` scenario. `/local`
@@ -138,6 +149,12 @@ acceptance.
 - Product principle 10 and the capability matrix contradicted the Claude
   scaffold; resolved by withdrawing the gate (ADR 0045).
 - An analysis of the Claude integration path to Codex parity follows stage 3.
+- Response quota labels on a custom Codex model provider (found by
+  `p0_p1_live` at `adb8b37`): owner decision pending. Options: the response
+  footer falls back to the cached quota that `/status` shows, marked as
+  cached; or the P0/P1 check accepts a missing label on a route without
+  provider rate-limit telemetry; or the question closes with stage 3b if
+  retiring multi-auth returns Codex to a route that reports its windows.
 - `configure-github.sh` required nonexistent check names (fixed in #82).
 
 ## Closure
