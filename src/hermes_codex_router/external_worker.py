@@ -534,14 +534,19 @@ class ExternalQueueWorker:
                                 client_factory=self.supervisor.client,
                             )
                             recovered = turn_status == "completed"
+                        except ProviderTurnStopped:  # won the recovery commit (R-021)
+                            turn_status = "stopped"
                         except Exception:
-                            recovered = False
                             turn_status = "unknown"
                     if recovered:
                         self._last_success_at = datetime.now(timezone.utc)
                         self._last_error_code = None
                         self._provider_state = "ready"
                         self._record_event("info", "provider_result_recovered", self.agent.agent_id)
+                    elif turn_status == "stopped":  # the stop already cancelled the job
+                        self._last_error_code = None
+                        self._provider_state = "ready"
+                        self._record_event("info", "provider_turn_stopped", self.agent.agent_id)
                     else:
                         self._last_error_code = type(exc).__name__[:128]
                         self._provider_state = "unavailable"

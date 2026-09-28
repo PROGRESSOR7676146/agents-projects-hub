@@ -1056,9 +1056,9 @@ class ProjectHubService:
                         client_factory=self.supervisor.client,
                     )
                     recovered = turn_status == "completed"
-                except Exception:
-                    recovered = False
-                    turn_status = "unknown"
+                except Exception as recovery_error:  # a stop may win the commit (R-021)
+                    stopped = classify_worker_failure(recovery_error, runtime=agent.runtime)
+                    failure = stopped if stopped.notice == "emergency_stop" else failure
             try:
                 if failure.notice == "execution_root":
                     assert isinstance(exc, ExecutionRootError)
