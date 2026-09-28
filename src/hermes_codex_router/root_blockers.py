@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Literal, cast
 
+from .state_provider_jobs import COMPLETE_FINISHED_STOPS_SQL
+
 
 @dataclass(frozen=True, slots=True)
 class RootBlocker:
@@ -584,8 +586,8 @@ class RootBlockerState:
         """Bind a callback to its delivered notice and exact original job."""
         with self.transaction():
             row = self.db.execute(
-                """SELECT jobs.status, jobs.chat_id, topics.thread_id, holds.decision,
-                          notice.telegram_message_id
+                """SELECT jobs.status, jobs.chat_id, jobs.topic_id, topics.thread_id,
+                          holds.decision, notice.telegram_message_id
                    FROM provider_jobs jobs
                    JOIN topics ON topics.topic_id=jobs.topic_id
                    JOIN provider_job_holds holds ON holds.job_id=jobs.job_id
@@ -625,6 +627,8 @@ class RootBlockerState:
                        WHERE job_id=?""",
                     (now, job_id),
                 )
+                # A job held after a stop stays covered; its end may finish the stop.
+                self.db.execute(COMPLETE_FINISHED_STOPS_SQL, (now, int(row["topic_id"])))
             return chosen
 
     def lease_notice(

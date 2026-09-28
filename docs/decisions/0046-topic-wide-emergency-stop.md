@@ -28,8 +28,9 @@ then held for an owner decision. The stop takes its time under the write lock,
 and a job takes its creation time inside its own admission transaction, so
 "existed" means committed before the stop. Every stop check uses this one rule:
 the start of a turn, the start of a same-turn steering follow-up, the worker's
-stop monitor, its checks after the provider returns or fails, and the choice of
-the job that carries the Hub acknowledgement. An older unfinished stop
+stop monitor, its checks after the provider returns or fails, the commit of the
+job's outcome, and the choice of the job that carries the Hub acknowledgement.
+An older unfinished stop
 therefore never interrupts or cancels later work, and a repeated stop message
 never attaches a notice to a job that started after the stop, including a held
 job the owner confirmed after it. The acknowledgement can be attached to a
@@ -42,13 +43,29 @@ finds the job executing and interrupts it. A steering follow-up is started the
 same way: a follow-up the stop covers is cancelled without the steering call,
 and one it does not cover returns to the queue when a stop covers the parent or
 the parent turn has ended. No follow-up is leased into a turn that a pending
-stop covers, or while it is held for an owner decision. Every cancellation of
-stopped work, including the queue cancellation of a later stop, completes in
-the same transaction each pending stop of the topic once none of its covered
-work is still queued, leased or running. A stop
-therefore outlives neither its work nor a worker that dies after the
-cancellation, and it never ends while a covered follow-up, leased or returned
-by a rejected steering call, could still start.
+stop covers, or while it is held for an owner decision.
+
+The commit of a job's outcome is the last stop check (R-021, 2026-09-28). The
+result commit and the failure commit look for a covering pending stop inside
+their own write transaction; when one exists, they cancel the job instead. The
+provider's output or failure notice is then discarded, as for a turn stopped
+earlier, and the job's single outbox row stays free for the Hub
+acknowledgement. A stop recorded after the worker's final check, while it
+prepares artifacts for example, therefore still ends the work: in the provider
+worker, in Codex recovery after a worker died, and in the embedded consumer,
+which has no stop monitor and relies on this check alone. Cancelling work that
+a commit has already stopped is a no-op.
+
+A stop completes in the same transaction that ends the last of its covered
+work, however that work ends: a cancellation of stopped work, the queue
+cancellation of a later stop, a failure, an exhausted pre-execution retry, the
+cancellation of a queued job, the owner's cancellation of a job held after the
+stop, an absorbed steering follow-up, or stale recovery marking a dead
+worker's turn indeterminate. A pending stop of the
+topic completes once none of its covered work is still queued, leased or
+running. A stop therefore outlives neither its work nor a worker that dies
+after the cancellation, and it never ends while a covered follow-up, leased or
+returned by a rejected steering call, could still start.
 
 ## Consequences
 
@@ -56,3 +73,9 @@ by a rejected steering call, could still start.
 worker interruption path, the no-replay rule and the durable Hub
 acknowledgement are unchanged. Other topics are unaffected. Rollback to a
 schema-35 release remains possible because the schema is unchanged.
+
+A turn that finishes just after the stop is recorded as stopped and its result
+is not published; the stop does not undo changes the turn has already made. As
+for an interrupted turn, an outcome that would otherwise be indeterminate is
+recorded as cancelled when a covering stop ends it, so it does not hold the
+root for owner review.

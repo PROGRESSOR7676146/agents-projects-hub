@@ -17,7 +17,7 @@ from hermes_codex_router.incoming_materials import (
     PreparedIncomingMaterials,
 )
 from hermes_codex_router.state import HubState, ProviderJobRecord, StateError
-from hermes_codex_router.worker_execution import prepare_worker_artifacts
+from hermes_codex_router.worker_execution import ProviderTurnStopped, prepare_worker_artifacts
 
 
 class PreparedResultPublisherTests(unittest.TestCase):
@@ -163,6 +163,26 @@ class PreparedResultPublisherTests(unittest.TestCase):
         assert publication.prepared_materials.materialized_directory is not None
         self.assertTrue(publication.prepared_materials.materialized_directory.exists())
         self.assertTrue(staged_artifact.exists())
+
+    def test_a_stop_at_the_commit_raises_and_removes_the_spooled_artifacts(self) -> None:
+        job, raw = self.executing_job(105)
+        self.stage_artifact(job)
+        publication = self.publication(job, raw)
+        artifact_path = publication.artifacts[0].path
+        self.state.request_emergency_stop(
+            topic_id=self.topic.topic_id,
+            chat_id=self.topic.chat_id,
+            message_id=106,
+            target_agent_id="codex",
+        )
+
+        with self.assertRaises(ProviderTurnStopped):
+            self.publisher.publish(publication)
+
+        self.assertEqual(self.state.get_provider_job(job.job_id).status, "cancelled")
+        self.assertFalse(artifact_path.exists())
+        with self.assertRaisesRegex(StateError, "has no result"):
+            self.state.get_provider_result(job.job_id)
 
     def test_cleanup_failure_does_not_reverse_commit_and_is_reported(self) -> None:
         job, raw = self.executing_job(104)

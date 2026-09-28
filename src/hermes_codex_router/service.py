@@ -1056,9 +1056,9 @@ class ProjectHubService:
                         client_factory=self.supervisor.client,
                     )
                     recovered = turn_status == "completed"
-                except Exception:
-                    recovered = False
-                    turn_status = "unknown"
+                except Exception as recovery_error:  # a stop may win the commit (R-021)
+                    stopped = classify_worker_failure(recovery_error, runtime=agent.runtime)
+                    failure = stopped if stopped.notice == "emergency_stop" else failure
             try:
                 if failure.notice == "execution_root":
                     assert isinstance(exc, ExecutionRootError)
@@ -1071,11 +1071,11 @@ class ProjectHubService:
                         sender_agent_id=agent.agent_id,
                         telegram_html=exc.public_message,
                     )
-                elif recovered:
+                elif recovered or failure.notice == "emergency_stop":
                     queue_state.record_runtime_event(
                         agent.agent_id,
                         "info",
-                        "provider_result_recovered",
+                        "provider_result_recovered" if recovered else "provider_turn_stopped",
                         agent.agent_id,
                     )
                 elif failure.notice == "provider_limit":
@@ -1126,7 +1126,8 @@ class ProjectHubService:
                     )
             except Exception as survived_error:
                 survived("service.failure_notice_record", survived_error)
-            if not recovered:
+            stopped = queue_state.get_provider_job(executing.job_id).error_class == "user_stop"
+            if not recovered and not stopped:  # a stop may have won any commit (R-021)
                 queue_state.record_runtime_event(
                     agent.agent_id,
                     "warning",

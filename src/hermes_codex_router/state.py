@@ -1467,15 +1467,9 @@ class HubState:
             self._insert_telegram_outbox_parts(outbox_id, body)
         return True
 
-    def pending_emergency_stop(self, topic_id: int, agent_id: str) -> str | None:
-        return self._provider_job_state.pending_stop_for_agent(topic_id, agent_id)
-
     def pending_emergency_stop_for_job(self, job_id: str) -> str | None:
         """The pending stop that covers this job; later work is never covered."""
         return self._provider_job_state.pending_stop_for_job(job_id)
-
-    def complete_emergency_stop(self, request_id: str) -> None:
-        self._provider_job_state.complete_stop(request_id)
 
     def cancel_active_provider_job(
         self,
@@ -1654,7 +1648,7 @@ class HubState:
         terminal_turn_status: str | None = None,
         now: datetime | None = None,
     ) -> ProviderJobRecord:
-        """Atomically terminalize invoked work and queue one visible failure notice."""
+        """Terminalize work with one failure notice, or cancel it for a covering stop."""
         if status not in {"failed", "indeterminate"}:
             raise StateError("provider failure notice requires a terminal failure status")
         if expected_status not in {"leased", "executing"}:
@@ -1678,6 +1672,8 @@ class HubState:
         detail = error_detail.strip()[:1000] if error_detail else None
         timestamp = _timestamp(now)
         with self._immediate_transaction():
+            if self._provider_job_state.honor_stop(job_id, lease_token, expected_status):
+                return self.get_provider_job(job_id)
             row = self._connection.execute(
                 """SELECT jobs.*, topics.thread_id FROM provider_jobs jobs
                    JOIN topics ON topics.topic_id = jobs.topic_id
@@ -1824,8 +1820,8 @@ class HubState:
         telegram_contract_version: int | None = None,
         artifacts: tuple[ValidatedArtifact, ...] = (),
         now: datetime | None = None,
-    ) -> ProviderJobResultRecord:
-        """Commit result, acknowledgements, and outbox without a network call."""
+    ) -> ProviderJobResultRecord | None:
+        """Commit result, acknowledgements and outbox; None if a covering stop cancels the job."""
         response = _bounded(
             visible_response,
             name="visible response",
@@ -1855,6 +1851,8 @@ class HubState:
             raise StateError("Telegram contract version must be positive")
         timestamp = _timestamp(now)
         with self._immediate_transaction():
+            if self._provider_job_state.honor_stop(job_id, lease_token, "executing"):
+                return None
             job_row = self._connection.execute(
                 """SELECT jobs.*, topics.thread_id FROM provider_jobs jobs
                    JOIN topics ON topics.topic_id = jobs.topic_id
@@ -1999,13 +1997,7 @@ class HubState:
             )
             if cursor.rowcount != 1:
                 raise StateError("provider job lease changed during result commit")
-            result_row = self._connection.execute(
-                "SELECT * FROM provider_job_results WHERE result_id = ?", (result_id,)
-            ).fetchone()
-            if result_row is None:
-                raise StateError("provider result disappeared")
-            result = self._provider_result(result_row)
-        return result
+            return self.get_provider_result(job_id)
 
     def get_provider_result(self, job_id: str) -> ProviderJobResultRecord:
         row = self._connection.execute(
