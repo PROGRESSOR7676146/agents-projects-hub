@@ -1389,16 +1389,7 @@ class HubState:
                    VALUES (?, ?, 'hub', ?)""",
                 (chat_id, message_id, timestamp),
             )
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs
-                   SET status = 'cancelled', next_attempt_at = NULL,
-                       error_class = 'user_stop', error_code = 'emergency_stop',
-                       updated_at = ?
-                   WHERE topic_id = ? AND status IN ('queued', 'retry_wait')
-                     AND NOT EXISTS (SELECT 1 FROM provider_job_holds held WHERE
-                       held.job_id = provider_jobs.job_id AND held.decision = 'pending')""",
-                (timestamp, topic_id),
-            )
+            cancelled = self._provider_job_state.cancel_unstarted_for_stop(topic_id, timestamp)
             active = self._connection.execute(
                 """SELECT agent_id FROM provider_jobs WHERE topic_id = ?
                      AND status IN ('leased', 'executing') ORDER BY created_at LIMIT 1""",
@@ -1419,12 +1410,15 @@ class HubState:
                     message_id,
                     target,
                     "pending" if pending else "completed",
-                    cursor.rowcount,
+                    cancelled,
                     timestamp,
                     None if pending else timestamp,
                 ),
             )
-            return request_id, cursor.rowcount, pending
+            # Work this stop cancelled may have been all that an earlier stop
+            # still waited for.
+            self._provider_job_state.complete_finished_stops(topic_id, timestamp)
+            return request_id, cancelled, pending
 
     def enqueue_emergency_stop_notice(self, request_id: str, telegram_html: str) -> bool:
         """Durably queue a Hub-owned stop acknowledgement when work was affected."""

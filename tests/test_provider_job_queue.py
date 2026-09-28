@@ -647,6 +647,32 @@ class ProviderJobQueueTests(unittest.TestCase):
 
         self.assertEqual((started.status, started.lease_token), ("queued", None))
 
+    def test_a_later_stop_completes_an_earlier_one_it_leaves_without_work(self) -> None:
+        parent, follow_up = self.running_parent_and_follow_up(694, 695)
+        assert parent.lease_token is not None
+        leased = self.state.lease_steer_followup(parent.job_id, "worker-steer")
+        assert leased is not None and leased.lease_token is not None
+        self.state.start_steer_followup(
+            follow_up.job_id, leased.lease_token, parent_job_id=parent.job_id
+        )
+        first, _, pending = self.stop(696)
+        self.assertTrue(pending)
+        self.state.reject_unaccepted_steer(follow_up.job_id, leased.lease_token)
+        self.state.cancel_active_provider_job(
+            parent.job_id, parent.lease_token, complete_stops=True
+        )
+        self.assertEqual(self.state.pending_emergency_stop_for_job(follow_up.job_id), first)
+
+        # A second stop cancels the returned follow-up in the queue directly.
+        _, cancelled, pending_again = self.stop(697)
+
+        self.assertEqual((cancelled, pending_again), (1, False))
+        self.assertEqual(self.state.get_provider_job(follow_up.job_id).status, "cancelled")
+        pending_stops = self.state._connection.execute(
+            "SELECT COUNT(*) FROM provider_stop_requests WHERE status = 'pending'"
+        ).fetchone()[0]
+        self.assertEqual(pending_stops, 0)
+
     def test_follow_up_without_a_stop_starts_normally(self) -> None:
         parent, follow_up = self.running_parent_and_follow_up(684, 685)
         leased = self.state.lease_steer_followup(parent.job_id, "worker-steer")

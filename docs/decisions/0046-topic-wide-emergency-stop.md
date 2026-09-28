@@ -42,9 +42,10 @@ finds the job executing and interrupts it. A steering follow-up is started the
 same way: a follow-up the stop covers is cancelled without the steering call,
 and one it does not cover returns to the queue when a stop covers the parent or
 the parent turn has ended. No follow-up is leased into a turn that a pending
-stop covers, or while it is held for an owner decision. Cancelling stopped work
-completes, in the same transaction, every pending stop that covers it once none
-of that stop's covered work is still queued, leased or running. A stop
+stop covers, or while it is held for an owner decision. Every cancellation of
+stopped work, including the queue cancellation of a later stop, completes in
+the same transaction each pending stop of the topic once none of its covered
+work is still queued, leased or running. A stop
 therefore outlives neither its work nor a worker that dies after the
 cancellation, and it never ends while a covered follow-up, leased or returned
 by a rejected steering call, could still start.

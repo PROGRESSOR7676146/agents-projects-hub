@@ -37,15 +37,16 @@ _PENDING_STOP_FOR_JOB_SQL = f"""SELECT stop.request_id FROM provider_stop_reques
    WHERE stop.status = 'pending' AND {STOP_COVERS_JOB_SQL}
    ORDER BY stop.created_at LIMIT 1"""
 
-# A stop is complete once none of its covered work can still start or run:
-# a follow-up that is leased, or that a rejected steering call returned to the
-# queue, keeps the stop pending even after the parent turn was cancelled.
+# A stop is complete once none of its covered work can still start or run: a
+# follow-up that is leased, or that a rejected steering call returned to the
+# queue, keeps the stop pending even after the parent turn was cancelled. The
+# rule is applied to every pending stop of the topic at each cancellation, so
+# work cancelled by a later stop also completes the earlier one.
 _COMPLETE_FINISHED_STOPS_SQL = f"""UPDATE provider_stop_requests
    SET status = 'completed', completed_at = ?
-   WHERE status = 'pending' AND request_id IN (
+   WHERE request_id IN (
      SELECT stop.request_id FROM provider_stop_requests stop
-     JOIN provider_jobs job ON job.job_id = ?
-     WHERE stop.status = 'pending' AND {STOP_COVERS_JOB_SQL}
+     WHERE stop.status = 'pending' AND stop.topic_id = ?
        AND NOT EXISTS (
          SELECT 1 FROM provider_jobs other
          WHERE other.status IN ('queued', 'retry_wait', 'leased', 'executing')
@@ -593,8 +594,36 @@ class ProviderJobsStateFacade:
         if cursor.rowcount != 1:
             return False
         if complete_stops:
-            self._connection.execute(_COMPLETE_FINISHED_STOPS_SQL, (timestamp, job_id))
+            topic = self._connection.execute(
+                "SELECT topic_id FROM provider_jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            self.complete_finished_stops(int(topic["topic_id"]), timestamp)
         return True
+
+    def complete_finished_stops(self, topic_id: int, timestamp: str) -> None:
+        """Complete the topic's pending stops whose covered work is all over.
+
+        The caller holds the write transaction.
+        """
+        self._connection.execute(_COMPLETE_FINISHED_STOPS_SQL, (timestamp, topic_id))
+
+    def cancel_unstarted_for_stop(self, topic_id: int, timestamp: str) -> int:
+        """Cancel the topic's queued and retry-waiting jobs that are not held.
+
+        Held jobs wait for the owner's decision. The caller holds the write
+        transaction of the stop request.
+        """
+        cursor = self._connection.execute(
+            """UPDATE provider_jobs
+               SET status = 'cancelled', next_attempt_at = NULL,
+                   error_class = 'user_stop', error_code = 'emergency_stop',
+                   updated_at = ?
+               WHERE topic_id = ? AND status IN ('queued', 'retry_wait')
+                 AND NOT EXISTS (SELECT 1 FROM provider_job_holds held WHERE
+                   held.job_id = provider_jobs.job_id AND held.decision = 'pending')""",
+            (timestamp, topic_id),
+        )
+        return cursor.rowcount
 
     def lease(
         self,
