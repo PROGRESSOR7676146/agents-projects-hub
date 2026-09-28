@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import ast
+import importlib
 import io
 import logging
 import sqlite3
+import sys
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -96,15 +99,35 @@ class DiagnosticLogTests(unittest.TestCase):
             (RuntimeError,),
             {"__module__": "hermes_codex_router.state"},
         )
+        # A factory can also register the class under its own name, as pickle needs.
+        factory = types.ModuleType("hermes_codex_router.fictional_factory")
+        registered = type(
+            "Session_fictional_9012_Error",
+            (RuntimeError,),
+            {"__module__": factory.__name__},
+        )
+        setattr(factory, registered.__name__, registered)
+        self.addCleanup(sys.modules.pop, factory.__name__, None)
+        sys.modules[factory.__name__] = factory
         diagnostic_log.survived("service.health_publish", dynamic("x"))
         diagnostic_log.survived("service.client_close", spoofed("x"))
         diagnostic_log.survived("service.context_telemetry", TokenBearingError("x"))
+        diagnostic_log.survived("service.queue_error_record", registered("x"))
         output = self.stream.getvalue()
         self.assertIn("survived TimeoutError at service.health_publish", output)
         self.assertIn("survived RuntimeError at service.client_close", output)
         self.assertIn("survived RuntimeError at service.context_telemetry", output)
+        self.assertIn("survived RuntimeError at service.queue_error_record", output)
         self.assertNotIn("fictional", output)
         self.assertNotIn("TokenBearingError", output)
+
+    def test_every_registered_name_is_a_real_exception_class(self) -> None:
+        for module_name, name in sorted(diagnostic_log.NAMED_ERRORS):
+            with self.subTest(module=module_name, name=name):
+                value = getattr(importlib.import_module(module_name), name)
+                self.assertTrue(isinstance(value, type) and issubclass(value, BaseException))
+                if module_name != "builtins":
+                    self.assertEqual((value.__module__, value.__qualname__), (module_name, name))
 
     def test_failing_log_stream_is_silent_and_never_raises(self) -> None:
         streams = (

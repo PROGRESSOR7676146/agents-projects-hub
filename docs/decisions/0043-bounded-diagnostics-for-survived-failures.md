@@ -23,13 +23,14 @@ and logs.
 registered site label and an exception class name. It never writes the
 exception text, arguments or traceback. Labels come from a closed registry
 that a test keeps equal to the literal call sites; any other label is replaced
-by a neutral value. The class name comes from a closed set too: the nearest
-class of the exception, in method resolution order, that belongs to the
-interpreter, the standard library, this package or its declared runtime
-dependencies and is its module's attribute under its own name. A class built
-at run time, whose name could carry data even when it looks like an
-identifier, is therefore named by such an ancestor, so dynamic identifiers
-cannot reach the log. The same site and class are emitted
+by a neutral value. The class name comes from a closed registry too: every
+exception class of the interpreter, taken when the module is imported, plus an
+explicit list of standard-library, dependency and package exceptions
+(`NAMED_ERRORS`). A record names the nearest class of the exception, in method
+resolution order, that is in the registry, and the written text always equals
+a registry entry. A class built at run time, even one registered in a module
+under its own name, is therefore named by a registered ancestor, so dynamic
+identifiers cannot reach the log. The same site and class are emitted
 at most once a minute with a count of suppressed repeats, and the repeat state
 holds a bounded number of keys.
 

@@ -1,8 +1,8 @@
 """Bounded process diagnostics for failures a component deliberately survives.
 
 A record carries only a registered site label and the name of the nearest
-exception class defined in code. Exception text, arguments and tracebacks are
-never written because
+exception class from a closed registry. Exception text, arguments and
+tracebacks are never written because
 provider and Telegram errors can embed tokens, URLs, prompts or local paths
 (REQ-OPS-009, REQ-SEC-004, AC-NF-001). The diagnostic path itself is
 best-effort: a failing log stream is dropped silently instead of printing the
@@ -14,8 +14,8 @@ trace.
 
 from __future__ import annotations
 
+import builtins
 import logging
-import re
 import sys
 import threading
 import time
@@ -62,13 +62,52 @@ SITES = frozenset(
         "turn_observation.artifact_cleanup",
     }
 )
-_ERROR_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
-# Modules whose classes may name a record: the interpreter, this package and
-# its declared runtime dependencies. A class elsewhere, or one built at run
-# time, is named by its nearest ancestor from this closed set.
-_NAMED_ROOTS = frozenset(
-    {"builtins", __name__.partition(".")[0], "aiohttp", "telethon"}
-) | frozenset(sys.stdlib_module_names)
+# The only class names a record can carry, as (module, qualified name): every
+# exception class of the interpreter, taken once at import, and the classes
+# listed here. A record names the nearest registered class of the exception;
+# the written text always equals a registry entry, so no class built or
+# registered at run time can put a name of its own into the log.
+NAMED_ERRORS = frozenset(
+    ("builtins", name)
+    for name, value in vars(builtins).items()
+    if isinstance(value, type) and issubclass(value, BaseException)
+) | frozenset(
+    {
+        ("sqlite3", "Error"),
+        ("sqlite3", "DatabaseError"),
+        ("sqlite3", "OperationalError"),
+        ("sqlite3", "IntegrityError"),
+        ("sqlite3", "ProgrammingError"),
+        ("sqlite3", "InterfaceError"),
+        ("json.decoder", "JSONDecodeError"),
+        ("subprocess", "SubprocessError"),
+        ("subprocess", "CalledProcessError"),
+        ("subprocess", "TimeoutExpired"),
+        ("socket", "gaierror"),
+        ("ssl", "SSLError"),
+        ("http.client", "HTTPException"),
+        ("http.client", "RemoteDisconnected"),
+        ("urllib.error", "URLError"),
+        ("urllib.error", "HTTPError"),
+        ("aiohttp.client_exceptions", "ClientError"),
+        ("aiohttp.client_exceptions", "ClientConnectionError"),
+        ("aiohttp.client_exceptions", "ClientConnectorError"),
+        ("aiohttp.client_exceptions", "ClientOSError"),
+        ("aiohttp.client_exceptions", "ClientResponseError"),
+        ("aiohttp.client_exceptions", "ServerDisconnectedError"),
+        ("aiohttp.client_exceptions", "ServerTimeoutError"),
+        ("hermes_codex_router.codex_appserver", "CodexTurnError"),
+        ("hermes_codex_router.codex_appserver", "RpcError"),
+        ("hermes_codex_router.codex_appserver", "RpcRejectedError"),
+        ("hermes_codex_router.external_runtime", "ExternalRuntimeError"),
+        ("hermes_codex_router.external_runtime", "ProviderLimitError"),
+        ("hermes_codex_router.external_runtime", "ProviderUnavailableError"),
+        ("hermes_codex_router.outbox_sender", "TelegramOutboxSenderError"),
+        ("hermes_codex_router.state", "StateError"),
+        ("hermes_codex_router.supervisor", "AppServerError"),
+        ("hermes_codex_router.telegram", "TelegramError"),
+    }
+)
 _OVERFLOW_KEY = "overflow"
 
 _logger = logging.getLogger(LOGGER_NAME)
@@ -111,24 +150,12 @@ def configure_process_logging(stream: TextIO | None = None) -> None:
     _logger.setLevel(logging.INFO)
 
 
-def _defined_in_code(cls: type) -> bool:
-    name = getattr(cls, "__name__", None)
-    module_name = getattr(cls, "__module__", None)
-    if not isinstance(name, str) or not isinstance(module_name, str):
-        return False
-    if not _ERROR_NAME.fullmatch(name) or module_name.partition(".")[0] not in _NAMED_ROOTS:
-        return False
-    # A class built at run time is not its module's attribute under its own
-    # name, so a dynamic name that merely looks like an identifier never
-    # qualifies. The module dictionary is read without running module hooks.
-    module = sys.modules.get(module_name)
-    return module is not None and vars(module).get(name) is cls
-
-
 def _error_kind(error: BaseException) -> str:
     for cls in type(error).__mro__:
-        if _defined_in_code(cls):
-            return str(cls.__name__)
+        module = getattr(cls, "__module__", None)
+        name = getattr(cls, "__qualname__", None)
+        if isinstance(module, str) and isinstance(name, str) and (module, name) in NAMED_ERRORS:
+            return name
     return UNNAMED_ERROR
 
 
@@ -136,9 +163,9 @@ def survived(site: str, error: BaseException) -> None:
     """Record that a best-effort step failed and execution deliberately continues.
 
     Never raises. ``site`` must be a registered label. The record names the
-    nearest class of ``error`` that is defined in code, so a class built at run
-    time never contributes its name. Repeats of the same site and class are
-    emitted at most once per interval with a count.
+    nearest class of ``error`` found in ``NAMED_ERRORS``, so a class built or
+    registered at run time never contributes its name. Repeats of the same
+    site and class are emitted at most once per interval with a count.
     """
     label = site if site in SITES else INVALID_SITE
     kind = _error_kind(error)
