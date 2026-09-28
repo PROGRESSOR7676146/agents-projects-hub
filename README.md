@@ -323,43 +323,26 @@ permission-bypass flag is never used. Automatic Google account rotation remains
 disabled until `agy` exposes a stable account-pool or headless authentication
 interface.
 
-For transparent Codex account rotation, run one persistent `codex-multi-auth`
-app-server on `codex_socket_path`, leave `manage_codex_server` disabled, and set
-`codex_multi_auth_dir` plus `codex_multi_auth_executable`. Also set
-`codex_stdio_executable` to the official Codex executable. The Hub prefers the
-shared rotating socket while it is healthy and automatically uses an isolated
-official stdio app-server when that socket is absent. Multi-auth is therefore an
-optional accelerator, not a service dependency. Hub resumes the same persisted
-provider thread ID in either mode and exposes only redacted account numbers and
-cached quota health in `/status` and `/accounts`; OAuth tokens and account emails
-are never returned. The isolated stdio fallback cannot expose an approval to a
-tlive companion connection, so it pins `approvalPolicy: never` inside the same
-`workspace-write` sandbox: sandboxed work proceeds, escalation is unavailable,
-and any unexpected approval request is explicitly declined instead of hanging.
-Hub traffic uses this rotating backend independently of interactive clients.
-Codex Desktop must be attached with `codex-multi-auth rotation bind-app`, while
-a native terminal session must be launched through `codex-multi-auth-codex`
-(for example `tlive run codex-multi-auth-codex`). An already running plain
-`codex` process cannot be rebound in place and must not be reported as rotated
-merely because the Hub backend changed accounts.
-In an external-worker deployment the monitor publishes a
-bounded masked snapshot to local durable state, so `/accounts` remains a local
-Controller command and never spends model tokens. A snapshot older than thirty
-minutes is displayed as stale.
+Codex uses the operator's official Codex login. The Hub prefers a shared Codex
+app-server on `codex_socket_path` (leave `manage_codex_server` disabled when
+another service owns it) and uses an isolated official stdio app-server when that
+socket is absent or refuses connections; set `codex_stdio_executable` to the
+official Codex executable for that fallback. A fallback turn starts a new
+official thread with bounded visible context, except an explicitly adopted CLI
+thread, which resumes exactly or fails visibly. The isolated stdio fallback
+cannot expose an approval to a tlive companion connection, so it pins
+`approvalPolicy: never` inside the same `workspace-write` sandbox: sandboxed work
+proceeds, escalation is unavailable, and any unexpected approval request is
+explicitly declined instead of hanging. The earlier `codex-multi-auth`
+integration is retired ([ADR 0047](docs/decisions/0047-retire-codex-multi-auth.md)):
+a configuration that still contains `codex_multi_auth_dir`,
+`codex_multi_auth_executable`, or `codex_account_hints` fails to load until those
+keys are deleted.
 
 The monitor also refreshes deterministic provider model catalogs when their
 private cache reaches 12 hours old. It uses provider discovery commands only,
 never an LLM turn. New entries are retained with first-seen metadata for the
 `/model` badge; a failed refresh leaves the last known-good menu active.
-
-If tlive and a persistent multi-auth app-server share Codex's default control
-socket, order tlive after the multi-auth unit and make that unit's activation
-wait until the socket accepts a real connection. A Unix socket inode can survive
-an abrupt host or WSL stop, so a file-existence check is not readiness and can
-recreate the ownership race on every reboot. The installed drop-ins use the
-bounded `agents-projects-hub-wait-socket` probe. This is an ordering constraint
-only: neither service is a hard requirement of the other, and Hub retains its
-official Codex fallback.
 
 Hub Codex turns start with the `TLIVE APPROVAL-ONLY SESSION` transport marker.
 A compatible tlive companion keeps remote Allow/Deny available for those turns

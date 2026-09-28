@@ -9,7 +9,7 @@ Last updated: 2026-09-28
 | R-002 | Wrong agent answers or idle providers spend tokens | Central deterministic ingress, Reply/mention precedence, provider pollers disabled, bounded journal | Run deployment-local E2E and observe provider invocation metadata. |
 | R-003 | Duplicate or concurrent turns | Idempotency receipts, one active turn/lane, writer lease | Verify offset/session continuity during live restart E2E. |
 | R-004 | Secret or hidden-context disclosure | Token files, restrictive permissions, redaction, visible-only hooks/handoffs | Keep raw rollouts and environment dumps outside Git and Telegram. |
-| R-005 | Optional multi-auth breaks Codex/Hub | Official stdio fallback; component health checks; manual Hermes recovery | Test controlled/natural exhaustion and version upgrades. |
+| R-005 | Optional multi-auth breaks Codex/Hub | The integration is retired; its configuration keys fail at load (ADR 0047) | Closed 2026-09-28. |
 | R-006 | Provider CLI upgrade breaks adapter | Structured interfaces, capability probes, visible failure | Pin/test versions and retain rollback; never screen-scrape as fallback. |
 | R-007 | Hermes or tlive becomes a mandatory dependency | Independent services and alerts; Hub continues without either | Exercise independent failure recovery periodically. |
 | R-008 | Machine loss destroys session continuity | Separate off-machine WSL backup and isolated cold-restore drill plan covers immutable releases, durable state, projects, provider stores, and secrets | Implement encrypted automation and complete the first timed private drill; in-flight turns remain unrecoverable. |

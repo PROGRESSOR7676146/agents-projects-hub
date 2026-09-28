@@ -5,7 +5,6 @@ import time
 from dataclasses import dataclass
 from typing import cast
 
-from .codex_accounts import CodexPoolStatus
 from .codex_appserver import LimitWindow, RateLimits
 from .hub_config import HubConfig
 from .model_selection import ModelSelectionError
@@ -14,7 +13,7 @@ from .provider_limits import ProviderLimit, decode_provider_limit
 from .provider_telemetry import load_antigravity_telemetry
 from .session_controls import bind_controls
 from .state import HubState, StateError, TopicRecord
-from .status_view import cached_codex_rate_limits, format_accounts, format_session_status
+from .status_view import format_accounts, format_session_status
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +56,6 @@ class ControllerCommandOrchestrator:
     def status(
         self,
         topic: TopicRecord,
-        codex_pool: CodexPoolStatus | None,
         codex_rate_limits: RateLimits | None,
     ) -> TextCommandDecision:
         active = self.state.active_session(topic.topic_id)
@@ -69,16 +67,11 @@ class ControllerCommandOrchestrator:
             return TextCommandDecision(detail)
 
         agent = self.config.require_agent(active.agent_id)
-        current_account = (
-            next((item for item in codex_pool.accounts if item.active), None)
-            if agent.runtime == "codex" and codex_pool and codex_pool.available
-            else None
-        )
-        limits = codex_rate_limits or cached_codex_rate_limits(current_account)
+        limits = codex_rate_limits or RateLimits(None, None)
         status_model = active.model
         status_effort = active.effort
         status_context = active.context_remaining_percent
-        status_account = current_account.identity_hint if current_account else None
+        status_account = None
         worker_health = next(
             (
                 item
@@ -119,7 +112,6 @@ class ControllerCommandOrchestrator:
             account_hint=status_account,
             limits=limits,
             timezone_name="Europe/Moscow",
-            limits_stale=current_account.quota_stale if current_account else False,
             provider_state=(worker_health.provider_state if worker_health is not None else None),
             provider_error_code=(worker_health.error_code if worker_health is not None else None),
         )
@@ -155,14 +147,8 @@ class ControllerCommandOrchestrator:
                 )
         return TextCommandDecision(detail, response_agent_id=active.agent_id)
 
-    def accounts(
-        self,
-        codex_pool: CodexPoolStatus | None,
-        *,
-        now: float | None = None,
-    ) -> TextCommandDecision:
+    def accounts(self, *, now: float | None = None) -> TextCommandDecision:
         observed_at = time.time() if now is None else now
-        pool = codex_pool or CodexPoolStatus(False, False, (), None, 0, "not_configured")
         include_opencode = any(item.runtime == "opencode" for item in self.config.agents)
         event = self.state.latest_runtime_event("opencode", "provider_limit")
         opencode_limit = decode_provider_limit(str(event["detail"])) if event else None
@@ -200,7 +186,6 @@ class ControllerCommandOrchestrator:
                     resets_at=telemetry.quota_resets_at,
                 )
         detail = format_accounts(
-            pool,
             include_opencode_go=include_opencode,
             opencode_limit=opencode_limit,
             provider_account_hints=self.config.provider_account_hints,

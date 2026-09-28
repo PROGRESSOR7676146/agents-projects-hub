@@ -34,7 +34,7 @@ owning modules.
 | Registered-project editing (schema 29) | Implemented offline | Pending canary | [REQ-PROJECT-EDIT-001](../product/ONBOARDING_AND_ACCEPTANCE.md), [ADR 0027](../decisions/0027-no-silent-session-rebind-on-project-relocation.md) |
 | Scoped acceptance actor | Implemented | Live authorization pending | [AC-F-011](../product/ONBOARDING_AND_ACCEPTANCE.md), [ADR 0003](../decisions/0003-scoped-telegram-acceptance-actor.md) |
 | Immutable releases and rollback rehearsal | Implemented offline | Deployment-owned | [REQ-OPS-010](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0012](../decisions/0012-verifiable-immutable-deployments.md) |
-| Codex quota transition | Implemented | Pending | [REQ-AUTH-007](../product/ACCOUNTS_CONTROL_AND_SECURITY.md) |
+| Codex multi-auth account pool and rotation | Retired | Not applicable | [ADR 0047](../decisions/0047-retire-codex-multi-auth.md) |
 | Off-machine recovery | Planned | Drill pending | [REQ-OPS-012](../product/PERSISTENCE_AND_RECOVERY.md) |
 
 ## Quality checkpoint
@@ -361,8 +361,8 @@ artifact for schema 33 remain deployment-specific; the current target is schema 
   or RPC capability. The controller neither constructs adapters for isolated
   agents nor delivers their prepared rows. Direct-message provider services remain
   separate endpoints. Hermes remains externally managed
-  and out of worker scope. Controller status/account commands do not invoke
-  `codex-multi-auth` when Codex is isolated. No live queue cutover is implied by
+  and out of worker scope. Controller status/account commands never invoke a
+  provider or account helper. No live queue cutover is implied by
   this repository change. Controller, direct-provider, worker, and sender
   processes handle `SIGTERM`/`SIGINT` as stop requests, use bounded Telegram
   polling and cleanup joins, release work when stop is observed before
@@ -507,9 +507,8 @@ artifact for schema 33 remain deployment-specific; the current target is schema 
   output, safe argv/approval modes, app-server RPC shapes, Hermes hook fields,
   and Antigravity statusline cache safety; incompatible output fails only the
   owning adapter/worker.
-- Codex worker admission probes the multi-auth runtime proxy behind a shared
-  app-server socket and selects the official stdio fallback before `turn/start`
-  when the socket is alive but its model upstream is not. Transport transfer
+- The Codex worker selects the official stdio fallback before `turn/start` when
+  the shared app-server socket is absent or refuses connections. Transport transfer
   starts a new thread with bounded visible context instead of attempting to
   resume a thread still writer-locked by the shared server.
 - Shared Codex sockets retain `on-request` approvals for their companion client.
@@ -528,33 +527,23 @@ artifact for schema 33 remain deployment-specific; the current target is schema 
 - Private last-known-good provider catalogs with bounded callback keys. The
   deterministic monitor refreshes stale Codex, OpenCode, and Antigravity
   catalogs every 12 hours without invoking a model; failed discovery preserves
-  the last good snapshot and raises one edge-triggered warning. With Codex
-  multi-auth omitted, the monitor never executes a leftover multi-auth binary
-  and replaces its cached matrix with the configured Codex default, preventing
-  selection of models unsupported by the active ChatGPT account transport.
-- Event-driven Codex quota rotation telemetry and provider-supplied OpenCode
-  reset telemetry. The isolated OpenCode worker watches only runtime-log bytes
+  the last good snapshot and raises one edge-triggered warning. The monitor
+  never executes an account helper; a Codex catalog cached from the retired
+  multi-auth matrix is replaced by native `model/list` metadata on the next
+  refresh.
+- Provider-supplied OpenCode reset telemetry. The isolated OpenCode worker watches only runtime-log bytes
   appended after its owned process starts, recognizes the provider's exact
   usage-limit/reset phrase even when the CLI omits HTTP status, terminates a CLI
   that otherwise remains alive, and releases topic FIFO with a cached quota
   failure instead of waiting for the general turn timeout.
-- Codex quota monitoring reads passive account/cache status outside the Controller,
-  warns once when a fresh window first reaches 5% remaining, re-arms only after
-  confirmed recovery, and reports provider-driven or quota-driven account
-  transitions with the replacement account's fresh status. Ordinary account
-  selection changes are not mislabeled as quota rotation.
 - Operational notifications are edge-triggered: unchanged deployment, catalog,
-  provider, and account conditions are sent once and re-arm only after recovery.
-  A configured Hub bot owns these service messages, including Codex account
-  rotation events. Provider bot identities are never used for Hub-owned
+  and provider conditions are sent once and re-arm only after recovery. A
+  configured Hub bot owns these service messages. Provider bot identities are
+  never used for Hub-owned
   operational notifications, and an operations topic without `hub_bot` is
   rejected during configuration loading. Automatic Codex session context-size advice is
-  disabled; compaction remains user initiated. An intentionally unconfigured
-  optional Codex account pool is silent rather than reported as unavailable.
-  Exhausted inactive accounts remain status data after a successful rotation;
-  they are not reported as authentication failures while a replacement is ready.
-  Explicit token-invalidation markers from the supported redacted Codex
-  multi-auth report alert independently even when another account is ready.
+  disabled; compaction remains user initiated. Alert episodes left by the
+  retired Codex account pool are released on the next notifying cycle.
   Doctor also checks a configured loopback Codex provider proxy without probing
   remote provider URLs or disclosing the configured endpoint; monitoring emits
   one alert per unreachable episode and re-arms after recovery.
@@ -608,14 +597,9 @@ artifact for schema 33 remain deployment-specific; the current target is schema 
   probe.
 - Sandboxed Antigravity `accept-edits` mode; dangerous permission bypass is
   rejected.
-- Optional `codex-multi-auth` with official Codex stdio fallback.
-- Optional shared-socket boot integration orders tlive after the rotating Codex
-  app-server and verifies an accepting Unix listener, rejecting stale socket
-  inodes left by abrupt host or WSL shutdown.
-- The resident multi-auth app-server drop-in delegates proxy-helper lifetime to
-  the systemd cgroup instead of CLI-oriented detached and maximum-lifetime
-  reapers. Runtime-proxy monitoring remains independent and never restarts a
-  shared app-server underneath an active Codex or tlive session.
+- Official Codex login with a shared-socket preference and official stdio
+  fallback; the `codex-multi-auth` integration is retired and its configuration
+  keys are rejected ([ADR 0047](../decisions/0047-retire-codex-multi-auth.md)).
 - Independent Hub, Hermes Gateway, and tlive diagnostics and monitoring.
 - A clean-tree Hub-owned recovery capsule publishes a self-contained schema-33
   immutable-deployment triage guide, source revision, timestamp, and content

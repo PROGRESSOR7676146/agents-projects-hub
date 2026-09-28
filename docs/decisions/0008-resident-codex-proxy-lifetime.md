@@ -1,6 +1,6 @@
 # ADR 0008: Resident Codex proxy lifetime belongs to systemd
 
-Status: accepted
+Status: superseded by [ADR 0047](0047-retire-codex-multi-auth.md) (2026-09-28)
 Date: 2026-09-03
 
 ## Context

@@ -42,8 +42,8 @@ printing process environment. This optional-channel warning does not stop Hub,
 but a deployment must not be accepted while it is mismatched.
 
 Never repair a deployed Hub by rerunning the bootstrap installer: it refuses an
-existing unit before mutation. Legacy multi-auth ordering templates are not
-installed automatically. Do not restore a Hermes PATH shim from old capsules.
+existing unit before mutation. Do not restore the retired multi-auth ordering
+drop-ins or a Hermes PATH shim from old capsules.
 Check the current owner guide, not only the validity of an old capsule's hashes.
 
 An optional CLIProxyAPI route belongs to Codex's local provider configuration;
