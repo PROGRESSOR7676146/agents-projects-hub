@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import io
 import json
+import sqlite3
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -18,6 +19,7 @@ from hermes_codex_router.hub_config import (
     ProjectProvisioningSettings,
     TerminalSettings,
 )
+from hermes_codex_router.migrations import LATEST_SCHEMA_VERSION
 from hermes_codex_router.release_identity import ReleaseIdentity
 from hermes_codex_router.runtime_health import project_runtime_health
 from hermes_codex_router.state import HubState, StateError
@@ -356,6 +358,53 @@ class RuntimeHealthTests(unittest.TestCase):
         rendered = json.loads(output.getvalue())
         self.assertEqual(rendered["runtime_health"]["sender"]["status"], "unknown")
         self.assertEqual(len(rendered["runtime_health"]["provider_workers"]), 2)
+
+    def run_status(self, state_path: Path) -> tuple[int, dict[str, object]]:
+        base = Path(self.tempdir.name)
+        config = HubConfig(
+            schema_version=1,
+            owner_user_ids=(42,),
+            registry_path=base / "projects.json",
+            state_path=state_path,
+            codex_socket_path=base / "codex.sock",
+            manage_codex_server=False,
+            terminal=TerminalSettings("tmux-only", None, "Ubuntu"),
+            projects=(),
+            agents=(),
+        )
+        output = io.StringIO()
+        with (
+            patch("hermes_codex_router.cli.load_hub_config", return_value=config),
+            redirect_stdout(output),
+        ):
+            code = main(["status", "example.json"])
+        return code, json.loads(output.getvalue())
+
+    def test_status_never_migrates_an_older_database(self) -> None:
+        # A newer checkout must not migrate a live database it only inspects.
+        path = Path(self.tempdir.name) / "older" / "state.db"
+        HubState.open(path).close()
+        older = LATEST_SCHEMA_VERSION - 1
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.execute(f"PRAGMA user_version = {older}")
+
+        code, rendered = self.run_status(path)
+
+        self.assertEqual((code, rendered), (2, {"ok": False, "error": "state_schema_unsupported"}))
+        with closing(sqlite3.connect(path)) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], older)
+        self.assertEqual(
+            [item.name for item in path.parent.iterdir() if "backup" in item.name.casefold()],
+            [],
+        )
+
+    def test_status_never_creates_a_missing_database(self) -> None:
+        path = Path(self.tempdir.name) / "absent" / "state.db"
+
+        code, rendered = self.run_status(path)
+
+        self.assertEqual((code, rendered), (2, {"ok": False, "error": "state_unavailable"}))
+        self.assertFalse(path.parent.exists())
 
     def test_projection_degrades_mismatched_cached_worker_identity(self) -> None:
         base = Path(self.tempdir.name)

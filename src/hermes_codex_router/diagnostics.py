@@ -94,7 +94,8 @@ def run_doctor(config: HubConfig) -> dict[str, object]:
         checks.append(Check("registry", False, str(exc)))
 
     try:
-        state = HubState.open(config.state_path)
+        # Diagnostics never create or migrate state; a non-current schema fails here.
+        state = HubState.open_read_only(config.state_path)
         try:
             version = state.schema_version
             checks.append(

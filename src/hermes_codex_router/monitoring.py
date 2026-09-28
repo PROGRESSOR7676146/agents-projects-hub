@@ -130,7 +130,7 @@ def run_monitor_once(
     repair: bool = False,
     cooldown_seconds: int = 60 * 60,
 ) -> dict[str, object]:
-    state = HubState.open(config.state_path)
+    state = HubState.open_existing(config.state_path)
     monitor_started = datetime.now(timezone.utc)
     monitor_marker = uuid.uuid4().hex
     monitor_completed = False

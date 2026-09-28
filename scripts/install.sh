@@ -77,5 +77,7 @@ systemctl --user daemon-reload
 printf '%s\n' \
   "Installed Agents Projects Hub." \
   "Edit $config_root/projects.json, hub.json, and environment." \
+  "Create the configured state: $data_root/venv/bin/agents-projects-hub migrate STATE_PATH" \
+  "  (STATE_PATH is state_path in hub.json; diagnostics never create state)." \
   "Then run: $data_root/venv/bin/agents-projects-hub doctor $config_root/hub.json" \
   "Enable only after doctor succeeds: systemctl --user enable --now agents-projects-hub.service"

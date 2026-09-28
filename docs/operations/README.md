@@ -37,15 +37,18 @@ Operational truth is split by purpose:
   rewriting them.
 - Immutable artifact manifest and schema-compatibility gate:
   [`IMMUTABLE_RELEASES.md`](IMMUTABLE_RELEASES.md).
-- Read-only deployment diagnostics: `agents-projects-hub doctor HUB_CONFIG` and
-  `agents-projects-hub monitor HUB_CONFIG`.
+- Deployment diagnostics that never create or migrate state:
+  `agents-projects-hub doctor HUB_CONFIG` reads it only, and
+  `agents-projects-hub monitor HUB_CONFIG` records only its own health, alert
+  and repair bookkeeping.
 - Cache-only status and component health: `agents-projects-hub status HUB_CONFIG` reports
   the expected Controller and monitor, the standalone sender when configured,
   and every configured external provider worker as `healthy`, `degraded`,
   `stale`, or `unknown`. Their bounded release fields produce one deterministic
   deployment status: `converged`, `mixed`, or `unknown`. Only `converged` names
-  one clean package version, exact Git SHA, and build time. This projection reads
-  SQLite only and never invokes a provider, model, or optional account helper.
+  one clean package version, exact Git SHA, and build time. This projection opens
+  SQLite read-only, never creates or migrates it, and never invokes a provider,
+  model, or optional account helper.
   Monitoring uses the same projection and sends one transition alert for a
   mixed/unknown episode to the configured Hub Operations topic, re-arming only
   after convergence.
