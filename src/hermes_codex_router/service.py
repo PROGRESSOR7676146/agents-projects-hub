@@ -860,7 +860,11 @@ class ProjectHubService:
 
         assert isinstance(job, ProviderJobRecord)
         lease_token = require_provider_job_lease(job, error_factory=AssertionError)
-        executing = queue_state.mark_provider_job_executing(job.job_id, lease_token)
+        executing = queue_state.mark_provider_job_executing(
+            job.job_id, lease_token, honor_stop=True
+        )
+        if executing.status == "cancelled":
+            return
         token = executing.lease_token
         assert token is not None
         agent = self.config.require_agent(executing.agent_id)

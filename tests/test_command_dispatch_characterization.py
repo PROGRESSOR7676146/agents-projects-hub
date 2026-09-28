@@ -239,6 +239,38 @@ class CommandDispatchCharacterizationTests(unittest.TestCase):
         self.assertFalse(hub.service.handle_update(update))
         self.assertEqual(len(hub.telegram.sent), replies)
 
+    # emergency stop
+
+    def test_stop_interrupts_a_running_mentioned_provider_and_its_queue(self) -> None:
+        hub = self.harness(agents=(CODEX, ANTIGRAVITY))
+        codex = hub.activate(CODEX)
+        hub.activate(ANTIGRAVITY)
+        state = hub.service.state
+        topic = hub.topic()
+        for message_id in (40, 41):
+            state.enqueue_provider_job(
+                idempotency_key=f"telegram:example:{message_id}",
+                chat_id=topic.chat_id,
+                message_id=message_id,
+                topic_id=topic.topic_id,
+                agent_id="codex",
+                session_id=codex.session_id,
+                session_generation=codex.generation,
+                model=codex.model,
+                effort=codex.effort,
+                payload_text="mentioned work",
+            )
+        leased = state.lease_provider_job("codex", "codex-worker")
+        assert leased is not None and leased.lease_token is not None
+        state.mark_provider_job_executing(leased.job_id, leased.lease_token)
+
+        self.assertTrue(hub.send("stop", message_id=42))
+
+        self.assertIn("Останавливаю активную работу; отменено задач в очереди: 1", hub.last_reply)
+        self.assertIsNotNone(state.pending_emergency_stop(topic.topic_id, "codex"))
+        self.assertIsNone(state.pending_emergency_stop(topic.topic_id, "antigravity"))
+        self.assertEqual(hub.session().agent_id, "antigravity")
+
     # /agent
 
     def test_agent_without_a_name_offers_every_configured_agent(self) -> None:

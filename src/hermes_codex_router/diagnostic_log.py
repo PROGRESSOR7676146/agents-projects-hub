@@ -14,6 +14,7 @@ trace.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sys
 import threading
@@ -70,13 +71,53 @@ _logger = logging.getLogger(LOGGER_NAME)
 _logger.addHandler(logging.NullHandler())
 _logger.propagate = False
 _lock = threading.Lock()
+
+
+def _reinitialize_after_fork() -> None:
+    # A lock held by another thread at fork time would never be released in
+    # the child; logging reinitializes its own locks the same way.
+    global _lock
+    _lock = threading.Lock()
+
+
+os.register_at_fork(after_in_child=_reinitialize_after_fork)
 _last_emitted: dict[str, float] = {}
 _repeats: dict[str, int] = {}
 _dropped = 0
 
 
 class DiagnosticHandler(logging.StreamHandler):  # type: ignore[type-arg]
-    """Stream handler that drops its own failures without printing anything."""
+    """Stream handler that drops its own failures without printing anything.
+
+    For a stream backed by a file descriptor, each record is written with one
+    ``os.write`` call instead of through the stream's Python buffer, and
+    ``flush`` leaves that buffer alone because no record is ever in it. A
+    forked child otherwise inherits the buffer's lock in whatever state
+    another thread left it, and a record logged in the child, or the flush
+    ``logging.shutdown`` runs at its normal exit, would wait forever.
+    """
+
+    def _descriptor(self) -> int | None:
+        try:
+            return int(self.stream.fileno())
+        except (AttributeError, OSError, ValueError):
+            return None
+
+    def emit(self, record: logging.LogRecord) -> None:
+        descriptor = self._descriptor()
+        if descriptor is None:
+            super().emit(record)
+            return
+        try:
+            data = (self.format(record) + self.terminator).encode("utf-8", "replace")
+            while data:
+                data = data[os.write(descriptor, data) :]
+        except Exception:  # noqa: BLE001 - reported through handleError, never raised
+            self.handleError(record)
+
+    def flush(self) -> None:
+        if self._descriptor() is None:
+            super().flush()
 
     def handleError(self, record: logging.LogRecord) -> None:  # noqa: N802 - logging API
         _count_dropped()

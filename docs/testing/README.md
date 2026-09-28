@@ -243,6 +243,8 @@ that it is visible to the next explicit turn as quoted context.
 
 The `burst_route` check sends one harmless instruction as three concurrent
 Telegram API requests and requires one coherent provider answer. The
-`stop_route` check must appear after `model_menu`: it targets only the first
+`stop_route` check must appear after `model_menu`: it mentions the first
 provider selected there, starts a harmless wait, sends deterministic `stop`,
 requires the Hub acknowledgement, and proves that a new turn works afterward.
+The stop applies to the whole topic, so it interrupts the mentioned provider
+even when an earlier check left another agent active.
