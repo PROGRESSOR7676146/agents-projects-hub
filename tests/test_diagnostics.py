@@ -7,6 +7,7 @@ import unittest
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 from hermes_codex_router.diagnostics import (
     _service_check,
@@ -34,9 +35,8 @@ class DiagnosticsTests(unittest.TestCase):
                 agents=(),
             )
 
-            def state_check(report: dict[str, object]) -> object:
-                checks = report["checks"]
-                assert isinstance(checks, list)
+            def state_check(report: dict[str, object]) -> dict[str, object]:
+                checks = cast(list[dict[str, object]], report["checks"])
                 return next(item for item in checks if item["name"] == "state")
 
             missing = state_check(run_doctor(config))
