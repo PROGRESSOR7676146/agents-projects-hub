@@ -109,9 +109,13 @@ acceptance.
   multi-auth, moves into this plan as stage 3b; C, D and E are deferred and
   stay recorded in the reliability plan.
 - Claude failure classification (PR #80 review, item 2), owner decision
-  2026-09-27: an unknown outcome keeps the root hold and never replays; a
-  confirmed, structured terminal quota or provider rejection is classified
-  separately, also without replay. Implemented with the Claude parity work.
+  2026-09-27. **Planned, not implemented;** it is to be implemented with the
+  Claude parity work. Decided target: an unknown outcome keeps the root hold
+  and never replays; a confirmed, structured terminal quota or provider
+  rejection gets its own classification, also without replay. Current
+  scaffold behavior: any unsuccessful terminal result becomes a generic
+  runtime error and the job is recorded as `indeterminate`
+  (`ambiguous_execution`), holding the root until the owner resolves it.
 - `codex-worker@1` / `claude-worker@1` duplicate slot 1 of `worker@codex` /
   `worker@claude` (PR #80 review, item 5).
 - Slot identity format and bounds are duplicated in four modules (PR #80 review, items 7–8).

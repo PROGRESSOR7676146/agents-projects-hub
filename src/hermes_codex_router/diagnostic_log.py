@@ -1,7 +1,8 @@
 """Bounded process diagnostics for failures a component deliberately survives.
 
-A record carries only a registered site label and a validated exception class
-name. Exception text, arguments and tracebacks are never written because
+A record carries only a registered site label and the name of the nearest
+exception class from a closed registry. Exception text, arguments and
+tracebacks are never written because
 provider and Telegram errors can embed tokens, URLs, prompts or local paths
 (REQ-OPS-009, REQ-SEC-004, AC-NF-001). The diagnostic path itself is
 best-effort: a failing log stream is dropped silently instead of printing the
@@ -13,12 +14,13 @@ trace.
 
 from __future__ import annotations
 
+import builtins
 import logging
 import os
-import re
 import sys
 import threading
 import time
+from types import ModuleType
 from typing import TextIO
 
 LOGGER_NAME = "hermes_codex_router"
@@ -62,7 +64,68 @@ SITES = frozenset(
         "turn_observation.artifact_cleanup",
     }
 )
-_ERROR_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+# The only class names a record can carry, as (module, qualified name): every
+# exception class of the interpreter, taken once at import, and the classes
+# listed here. A record names the nearest registered class of the exception;
+# the written text always equals a registry entry, so no class built or
+# registered at run time can put a name of its own into the log.
+NAMED_ERRORS = frozenset(
+    ("builtins", name)
+    for name, value in vars(builtins).items()
+    if isinstance(value, type) and issubclass(value, BaseException)
+) | frozenset(
+    {
+        ("sqlite3", "Error"),
+        ("sqlite3", "DatabaseError"),
+        ("sqlite3", "OperationalError"),
+        ("sqlite3", "IntegrityError"),
+        ("sqlite3", "ProgrammingError"),
+        ("sqlite3", "InterfaceError"),
+        ("json.decoder", "JSONDecodeError"),
+        ("subprocess", "SubprocessError"),
+        ("subprocess", "CalledProcessError"),
+        ("subprocess", "TimeoutExpired"),
+        ("socket", "gaierror"),
+        ("ssl", "SSLError"),
+        ("http.client", "HTTPException"),
+        ("http.client", "RemoteDisconnected"),
+        ("urllib.error", "URLError"),
+        ("urllib.error", "HTTPError"),
+        ("aiohttp.client_exceptions", "ClientError"),
+        ("aiohttp.client_exceptions", "ClientConnectionError"),
+        ("aiohttp.client_exceptions", "ClientConnectorError"),
+        ("aiohttp.client_exceptions", "ClientOSError"),
+        ("aiohttp.client_exceptions", "ClientResponseError"),
+        ("aiohttp.client_exceptions", "ServerDisconnectedError"),
+        ("aiohttp.client_exceptions", "ServerTimeoutError"),
+        ("hermes_codex_router.codex_appserver", "CodexTurnError"),
+        ("hermes_codex_router.codex_appserver", "RpcError"),
+        ("hermes_codex_router.codex_appserver", "RpcRejectedError"),
+        ("hermes_codex_router.external_runtime", "ExternalRuntimeError"),
+        ("hermes_codex_router.external_runtime", "ProviderLimitError"),
+        ("hermes_codex_router.external_runtime", "ProviderUnavailableError"),
+        ("hermes_codex_router.outbox_sender", "TelegramOutboxSenderError"),
+        ("hermes_codex_router.state", "StateError"),
+        ("hermes_codex_router.supervisor", "AppServerError"),
+        ("hermes_codex_router.telegram", "TelegramError"),
+    }
+)
+# Canonical text for every registered class and site. Lookups accept only
+# exact ``str`` values, whose hashing, equality and text cannot be overridden,
+# and the logged text is always the registry's own string.
+_CANONICAL_SITES = {site: site for site in SITES}
+# Registered classes by object identity. A class is found in its module once
+# the module has defined it (an exception of a class from a module that was
+# never imported cannot exist) and is kept alive here, so its id stays unique
+# for the life of the process.
+_NAMED_BY_ID: dict[int, str] = {}
+_NAMED_CLASSES: list[type] = []
+_WANTED_NAMES: dict[str, frozenset[str]] = {
+    module: frozenset(name for owner, name in NAMED_ERRORS if owner == module)
+    for module in {owner for owner, _ in NAMED_ERRORS}
+}
+_SEEN_MODULES: dict[str, ModuleType] = {}
+_SCANNED_SIZES: dict[str, int] = {}
 _OVERFLOW_KEY = "overflow"
 
 _logger = logging.getLogger(LOGGER_NAME)
@@ -145,17 +208,69 @@ def configure_process_logging(stream: TextIO | None = None) -> None:
     _logger.setLevel(logging.INFO)
 
 
+# Only the method resolution order of the exception's class is read, through
+# the member of ``type`` itself; its name, module and namespace are never
+# consulted, so no metaclass, descriptor or namespace key code of that class
+# runs while it is named.
+_CLASS_MRO = type.__dict__["__mro__"]
+_CLASS_QUALNAME = type.__dict__["__qualname__"]
+
+
+def _resolve_registered_errors() -> None:
+    # Namespaces are iterated rather than searched, and only exact str keys
+    # are compared, so no key object's own comparison ever runs. A module is
+    # scanned again while its namespace grows, which covers a module that was
+    # still being imported at the previous scan.
+    if len(_SEEN_MODULES) < len(_WANTED_NAMES):
+        for key, module in list(sys.modules.items()):
+            if type(key) is str and key in _WANTED_NAMES and type(module) is ModuleType:
+                _SEEN_MODULES[key] = module
+    for key, module in list(_SEEN_MODULES.items()):
+        namespace = vars(module)
+        wanted = _WANTED_NAMES.get(key)
+        if wanted is None or _SCANNED_SIZES.get(key) == len(namespace):
+            continue
+        _SCANNED_SIZES[key] = len(namespace)
+        for attribute, value in list(namespace.items()):
+            if type(attribute) is not str or attribute not in wanted:
+                continue
+            if not (isinstance(value, type) and issubclass(value, BaseException)):
+                continue
+            # Aliases such as builtins.IOError never replace a class's own name.
+            qualname = _CLASS_QUALNAME.__get__(value)
+            if type(qualname) is str and qualname == attribute and id(value) not in _NAMED_BY_ID:
+                _NAMED_BY_ID[id(value)] = attribute
+                _NAMED_CLASSES.append(value)
+
+
+def _error_kind(error: BaseException) -> str:
+    try:
+        _resolve_registered_errors()
+        for cls in _CLASS_MRO.__get__(type(error)):
+            name = _NAMED_BY_ID.get(id(cls))
+            if name is not None:
+                return name
+    except Exception:  # noqa: BLE001 - naming a failure must never fail its caller
+        return UNNAMED_ERROR
+    return UNNAMED_ERROR
+
+
+def _site_label(site: object) -> str:
+    if type(site) is not str:
+        return INVALID_SITE
+    return _CANONICAL_SITES.get(site, INVALID_SITE)
+
+
 def survived(site: str, error: BaseException) -> None:
     """Record that a best-effort step failed and execution deliberately continues.
 
-    Never raises. ``site`` must be a registered label; the exception class name
-    is written only when it is a plain identifier. Repeats of the same site and
-    class are emitted at most once per interval with a count.
+    Never raises. ``site`` must be a registered label. The record names the
+    nearest class of ``error`` found in ``NAMED_ERRORS``, so a class built or
+    registered at run time never contributes its name. Repeats of the same
+    site and class are emitted at most once per interval with a count.
     """
-    label = site if site in SITES else INVALID_SITE
-    raw_name = getattr(type(error), "__name__", "")
-    kind = raw_name if isinstance(raw_name, str) and _ERROR_NAME.fullmatch(raw_name) else ""
-    kind = kind or UNNAMED_ERROR
+    label = _site_label(site)
+    kind = _error_kind(error)
     key = f"{label}:{kind}"
     current = time.monotonic()
     with _lock:

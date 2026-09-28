@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import ast
+import asyncio
+import importlib
 import io
 import logging
 import multiprocessing
 import os
+import sqlite3
 import subprocess
 import sys
 import textwrap
 import threading
 import time
+import types
 import unittest
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
 from hermes_codex_router import diagnostic_log
+from hermes_codex_router.state import StateError
 
 PACKAGE = Path(__file__).resolve().parents[1] / "src" / "hermes_codex_router"
 SECRET = "https://api.telegram.org/bot123456:ABCdefGHIjkl/sendMessage /home/example/x"
@@ -66,18 +71,20 @@ class DiagnosticLogTests(unittest.TestCase):
         diagnostic_log.reset_repeat_state()
 
     def test_record_names_class_and_site_but_never_exception_text(self) -> None:
-        diagnostic_log.survived("service.health_publish", TokenBearingError(SECRET))
+        diagnostic_log.survived("service.health_publish", sqlite3.OperationalError(SECRET))
+        diagnostic_log.survived("service.client_close", StateError(SECRET))
         output = self.stream.getvalue()
-        self.assertIn("survived TokenBearingError at service.health_publish", output)
+        self.assertIn("survived OperationalError at service.health_publish", output)
+        self.assertIn("survived StateError at service.client_close", output)
         self.assertNotIn("123456", output)
         self.assertNotIn("/home/example", output)
         self.assertNotIn("Traceback", output)
 
     def test_unregistered_or_dynamic_sites_are_not_logged(self) -> None:
-        for index, site in enumerate(
-            ("service.session_fictional_1234", "service.topic -1001234567890", "/home/example/db")
+        for site, error_type in zip(
+            ("service.session_fictional_1234", "service.topic -1001234567890", "/home/example/db"),
+            (RuntimeError, ValueError, KeyError),
         ):
-            error_type = type(f"Error{index}", (RuntimeError,), {})
             diagnostic_log.survived(site, error_type("x"))
         output = self.stream.getvalue()
         self.assertNotIn("fictional_1234", output)
@@ -89,9 +96,147 @@ class DiagnosticLogTests(unittest.TestCase):
         weird = type("Bad\nname /home/example/token", (RuntimeError,), {})
         diagnostic_log.survived("service.health_publish", weird("x"))
         output = self.stream.getvalue()
-        self.assertIn(f"survived {diagnostic_log.UNNAMED_ERROR} at", output)
+        self.assertIn("survived RuntimeError at service.health_publish", output)
         self.assertNotIn("/home/example", output)
         self.assertEqual(len(output.splitlines()), 1)
+
+    def test_a_class_built_at_run_time_never_names_the_record(self) -> None:
+        dynamic = type("Session_fictional_1234_Error", (TimeoutError,), {})
+        spoofed = type(
+            "Session_fictional_5678_Error",
+            (RuntimeError,),
+            {"__module__": "hermes_codex_router.state"},
+        )
+        # A factory can also register the class under its own name, as pickle needs.
+        factory = types.ModuleType("hermes_codex_router.fictional_factory")
+        registered = type(
+            "Session_fictional_9012_Error",
+            (RuntimeError,),
+            {"__module__": factory.__name__},
+        )
+        setattr(factory, registered.__name__, registered)
+        self.addCleanup(sys.modules.pop, factory.__name__, None)
+        sys.modules[factory.__name__] = factory
+        diagnostic_log.survived("service.health_publish", dynamic("x"))
+        diagnostic_log.survived("service.client_close", spoofed("x"))
+        diagnostic_log.survived("service.context_telemetry", TokenBearingError("x"))
+        diagnostic_log.survived("service.queue_error_record", registered("x"))
+        output = self.stream.getvalue()
+        self.assertIn("survived TimeoutError at service.health_publish", output)
+        self.assertIn("survived RuntimeError at service.client_close", output)
+        self.assertIn("survived RuntimeError at service.context_telemetry", output)
+        self.assertIn("survived RuntimeError at service.queue_error_record", output)
+        self.assertNotIn("fictional", output)
+        self.assertNotIn("TokenBearingError", output)
+
+    def test_class_supplied_text_never_reaches_the_log_or_raises(self) -> None:
+        class Unhashable(str):
+            __hash__ = None  # type: ignore[assignment]
+
+        class Disguised(str):
+            def __str__(self) -> str:
+                return "Session_fictional_3456_Error /home/example/private"
+
+        class RaisingMeta(type):
+            # Fails on every metadata read, even with an exception that is not
+            # an Exception subclass.
+            def __getattribute__(cls, name: str) -> object:
+                if name in {"__qualname__", "__module__", "__mro__", "__name__"}:
+                    raise asyncio.CancelledError
+                return super().__getattribute__(name)
+
+        unhashable = type(
+            "ExampleError",
+            (RuntimeError,),
+            {"__module__": "builtins", "__qualname__": Unhashable("RuntimeError")},
+        )
+        disguised = type(
+            "ExampleError",
+            (RuntimeError,),
+            {"__module__": "builtins", "__qualname__": Disguised("RuntimeError")},
+        )
+        raising = cast(type[RuntimeError], RaisingMeta("ExampleError", (RuntimeError,), {}))
+        armed = False
+
+        class Key(str):
+            # A namespace key whose comparison fails once the class exists.
+            __hash__ = str.__hash__
+
+            def __eq__(self, other: object) -> bool:
+                if armed:
+                    raise asyncio.CancelledError
+                return str.__eq__(self, other)
+
+        keyed = type("ExampleError", (RuntimeError,), {Key("__module__"): "example"})
+        diagnostic_log.survived("service.health_publish", unhashable("x"))
+        diagnostic_log.survived("service.client_close", disguised("x"))
+        diagnostic_log.survived("service.context_telemetry", raising("x"))
+        keyed_error = keyed("x")
+        armed = True
+        diagnostic_log.survived("service.outbox_error_record", keyed_error)
+        armed = False
+        site = Disguised("service.queue_error_record")
+        diagnostic_log.survived(site, RuntimeError("x"))
+        output = self.stream.getvalue()
+        self.assertIn("survived RuntimeError at service.health_publish", output)
+        self.assertIn("survived RuntimeError at service.client_close", output)
+        self.assertIn("survived RuntimeError at service.context_telemetry", output)
+        self.assertIn("survived RuntimeError at service.outbox_error_record", output)
+        self.assertIn(f"survived RuntimeError at {diagnostic_log.INVALID_SITE}", output)
+        self.assertNotIn("fictional", output)
+        self.assertNotIn("/home/example", output)
+
+    def registry_module(self, name: str, wanted: str) -> types.ModuleType:
+        """A registry module under test; resolver caches are restored afterwards."""
+        module = types.ModuleType(name)
+        self.addCleanup(sys.modules.pop, name, None)
+        for registry in (
+            diagnostic_log._WANTED_NAMES,
+            diagnostic_log._SEEN_MODULES,
+            diagnostic_log._SCANNED_SIZES,
+        ):
+            patcher = patch.dict(cast(Any, registry))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        diagnostic_log._WANTED_NAMES[name] = frozenset({wanted})
+        sys.modules[name] = module
+        return module
+
+    def test_a_module_still_importing_is_resolved_once_it_defines_the_class(self) -> None:
+        module = self.registry_module("example_partial", "PartialError")
+        # The first failure is named while the module has not defined the class yet.
+        diagnostic_log.survived("service.health_publish", RuntimeError("x"))
+        partial = type("PartialError", (RuntimeError,), {"__module__": module.__name__})
+        module.PartialError = partial  # type: ignore[attr-defined]
+        diagnostic_log.survived("service.client_close", partial("x"))
+        self.assertIn("survived PartialError at service.client_close", self.stream.getvalue())
+
+    def test_a_registered_module_namespace_key_never_runs(self) -> None:
+        armed = False
+
+        class Key(str):
+            __hash__ = str.__hash__
+
+            def __eq__(self, other: object) -> bool:
+                if armed:
+                    raise asyncio.CancelledError
+                return str.__eq__(self, other)
+
+        module = self.registry_module("example_tampered", "TamperedError")
+        tampered = type("TamperedError", (RuntimeError,), {"__module__": module.__name__})
+        vars(module)[Key("TamperedError")] = tampered
+        armed = True
+        diagnostic_log.survived("service.health_publish", tampered("x"))
+        armed = False
+        self.assertIn("survived RuntimeError at service.health_publish", self.stream.getvalue())
+
+    def test_every_registered_name_is_a_real_exception_class(self) -> None:
+        for module_name, name in sorted(diagnostic_log.NAMED_ERRORS):
+            with self.subTest(module=module_name, name=name):
+                value = getattr(importlib.import_module(module_name), name)
+                self.assertTrue(isinstance(value, type) and issubclass(value, BaseException))
+                if module_name != "builtins":
+                    self.assertEqual((value.__module__, value.__qualname__), (module_name, name))
 
     def test_failing_log_stream_is_silent_and_never_raises(self) -> None:
         streams = (
