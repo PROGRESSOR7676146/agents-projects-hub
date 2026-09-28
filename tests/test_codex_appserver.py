@@ -503,12 +503,14 @@ class CodexAppServerTests(unittest.TestCase):
         self.assertEqual(limits.secondary.duration_minutes, 10080)
 
     @staticmethod
-    def _turn_with_rolling_limits(*updates: dict) -> list[dict]:
+    def _turn_with_rolling_limits(request_id: int, *updates: dict) -> list[dict]:
+        """A turn/start response, the turn's rolling updates, and its completion."""
         rolling = [
             {"method": "account/rateLimits/updated", "params": {"rateLimits": update}}
             for update in updates
         ]
         return [
+            {"id": request_id, "result": {"turn": {"id": "turn-9"}}},
             *rolling,
             {
                 "method": "item/completed",
@@ -524,19 +526,27 @@ class CodexAppServerTests(unittest.TestCase):
             },
         ]
 
+    def _run_turn(self, client: CodexAppServerClient) -> None:
+        turn_id = client.start_turn(
+            thread_id="thread-123", cwd=self.cwd, text="Example", model="gpt", effort="low"
+        )
+        client.wait_for_turn(turn_id)
+
     def test_turn_rolling_update_fills_windows_the_read_does_not_report(self) -> None:
         # A custom model provider route: the read has no windows, the turn's
         # header-derived rolling update has the weekly one.
         weekly = {"usedPercent": 40, "resetsAt": 1770500000, "windowDurationMins": 10080}
         transport = FakeTransport(
             [
-                *self._turn_with_rolling_limits({"primary": weekly}, {"secondary": None}),
-                {"id": 1, "result": {"rateLimits": {"primary": None, "secondary": None}}},
+                *self._turn_with_rolling_limits(
+                    1, {"limitId": "codex", "primary": weekly}, {"secondary": None}
+                ),
                 {"id": 2, "result": {"rateLimits": {"primary": None, "secondary": None}}},
+                {"id": 3, "result": {"rateLimits": {"primary": None, "secondary": None}}},
             ]
         )
         client = CodexAppServerClient(transport, initialized=True)
-        client.wait_for_turn("turn-9")
+        self._run_turn(client)
         limits = client.read_rate_limits()
         assert limits.primary is not None
         self.assertEqual(
@@ -550,10 +560,10 @@ class CodexAppServerTests(unittest.TestCase):
         transport = FakeTransport(
             [
                 *self._turn_with_rolling_limits(
-                    {"primary": {"usedPercent": 90, "windowDurationMins": 300}}
+                    1, {"primary": {"usedPercent": 90, "windowDurationMins": 300}}
                 ),
                 {
-                    "id": 1,
+                    "id": 2,
                     "result": {
                         "rateLimits": {"primary": {"usedPercent": 10, "windowDurationMins": 300}}
                     },
@@ -561,41 +571,92 @@ class CodexAppServerTests(unittest.TestCase):
             ]
         )
         client = CodexAppServerClient(transport, initialized=True)
-        client.wait_for_turn("turn-9")
+        self._run_turn(client)
         limits = client.read_rate_limits()
         assert limits.primary is not None
         self.assertEqual(limits.primary.remaining_percent, 90)
+
+    def test_windows_of_another_limit_never_complete_the_codex_view(self) -> None:
+        other = {"limitId": "example-other-quota", "secondary": {"usedPercent": 99}}
+        transport = FakeTransport(
+            [
+                *self._turn_with_rolling_limits(
+                    1, {"limitId": "codex", "primary": {"usedPercent": 20}}, other
+                ),
+                {"id": 2, "result": {"rateLimits": {"limitId": "codex"}}},
+                *self._turn_with_rolling_limits(3, other),
+                {"id": 4, "result": {"rateLimits": {"primary": {"usedPercent": 30}}}},
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True)
+        self._run_turn(client)
+        mixed_update = client.read_rate_limits()
+        assert mixed_update.primary is not None
+        self.assertEqual(mixed_update.primary.remaining_percent, 80)
+        self.assertIsNone(mixed_update.secondary)
+        self._run_turn(client)
+        other_only = client.read_rate_limits()
+        assert other_only.primary is not None
+        self.assertEqual(other_only.primary.remaining_percent, 70)
+        self.assertIsNone(other_only.secondary)
 
     def test_failed_read_falls_back_to_the_turn_update_only_when_one_exists(self) -> None:
         weekly = {"usedPercent": 25, "windowDurationMins": 10080}
         transport = FakeTransport(
             [
-                *self._turn_with_rolling_limits({"primary": weekly}),
-                {"id": 1, "error": {"code": -32600, "message": "unsupported"}},
+                *self._turn_with_rolling_limits(1, {"primary": weekly}),
                 {"id": 2, "error": {"code": -32600, "message": "unsupported"}},
+                {"id": 3, "error": {"code": -32600, "message": "unsupported"}},
             ]
         )
         client = CodexAppServerClient(transport, initialized=True)
-        client.wait_for_turn("turn-9")
+        self._run_turn(client)
         limits = client.read_rate_limits()
         assert limits.primary is not None
         self.assertEqual(limits.primary.remaining_percent, 75)
         with self.assertRaisesRegex(RpcError, "unsupported"):
             client.read_rate_limits()
 
-    def test_each_turn_starts_without_an_earlier_turns_windows(self) -> None:
+    def test_update_outside_a_turn_never_reaches_the_next_turn(self) -> None:
         weekly = {"usedPercent": 25, "windowDurationMins": 10080}
+        late = {
+            "method": "account/rateLimits/updated",
+            "params": {"rateLimits": {"primary": {"usedPercent": 90}}},
+        }
         transport = FakeTransport(
             [
-                *self._turn_with_rolling_limits({"primary": weekly}),
-                *self._turn_with_rolling_limits(),
-                {"id": 1, "result": {"rateLimits": {}}},
+                *self._turn_with_rolling_limits(1, {"primary": weekly}),
+                # Arrives while the post-turn read is outstanding.
+                late,
+                {"id": 2, "result": {"rateLimits": {}}},
+                *self._turn_with_rolling_limits(3),
+                {"id": 4, "result": {"rateLimits": {}}},
             ]
         )
         client = CodexAppServerClient(transport, initialized=True)
-        client.wait_for_turn("turn-9")
-        client.wait_for_turn("turn-9")
+        self._run_turn(client)
+        first = client.read_rate_limits()
+        assert first.primary is not None
+        self.assertEqual(first.primary.remaining_percent, 75)
+        self._run_turn(client)
         self.assertEqual(client.read_rate_limits(), RateLimits(None, None))
+
+    def test_update_during_turn_start_belongs_to_that_turn(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "method": "account/rateLimits/updated",
+                    "params": {"rateLimits": {"primary": {"usedPercent": 5}}},
+                },
+                *self._turn_with_rolling_limits(1),
+                {"id": 2, "result": {"rateLimits": {}}},
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True)
+        self._run_turn(client)
+        limits = client.read_rate_limits()
+        assert limits.primary is not None
+        self.assertEqual(limits.primary.remaining_percent, 95)
 
     def test_wait_for_turn_returns_only_completed_agent_message_and_usage(self) -> None:
         transport = FakeTransport(

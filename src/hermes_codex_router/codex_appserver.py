@@ -395,10 +395,12 @@ class CodexAppServerClient:
         self._session_providers = tuple(dict.fromkeys(("openai", model_provider or "openai")))
         self._next_request_id = 1
         self.notifications: deque[dict[str, Any]] = deque()
-        # Windows from the current turn's `account/rateLimits/updated` events.
-        # A route whose `account/rateLimits/read` has no windows (a custom model
-        # provider) still reports them in these header-derived rolling updates.
-        self._turn_rate_limits: RateLimits | None = None
+        # Windows from the current turn's `account/rateLimits/updated` events, by
+        # limit. A route whose `account/rateLimits/read` has no windows (a custom
+        # model provider) still reports them in these header-derived updates.
+        # They are collected only from `turn/start` until the turn ends.
+        self._turn_rate_limits: dict[str, RateLimits] = {}
+        self._collecting_rate_limits = False
         self.on_visible_item: Callable[[str, str, str], None] | None = None
         self.on_completed: Callable[[TurnResult], None] | None = None
 
@@ -474,6 +476,11 @@ class CodexAppServerClient:
             # only bounded protocol objects; hidden reasoning is never emitted
             # to Telegram by this client.
             if "method" in message and "id" not in message:
+                if message.get("method") == "account/rateLimits/updated":
+                    update = message.get("params")
+                    if isinstance(update, dict):
+                        self._observe_rate_limits(update.get("rateLimits"))
+                    continue
                 if len(self.notifications) >= 1024:
                     raise RpcError("Codex notification buffer exceeded its bound")
                 self.notifications.append(message)
@@ -752,22 +759,29 @@ class CodexAppServerClient:
             if not canonical_image.is_file() or not canonical_image.is_relative_to(canonical_cwd):
                 raise RpcError("turn/start local image is outside the execution root")
             turn_input.append({"type": "localImage", "path": str(canonical_image)})
-        result = self._request(
-            "turn/start",
-            {
-                "threadId": thread_id,
-                "cwd": str(canonical_cwd),
-                "input": turn_input,
-                "model": model,
-                "effort": effort,
-                **self._approval_params(),
-                "sandboxPolicy": {
-                    "type": "workspaceWrite",
-                    "writableRoots": [str(canonical_cwd)],
-                    "networkAccess": False,
+        # Updates arriving during turn/start belong to this turn; older ones do not.
+        self._turn_rate_limits = {}
+        self._collecting_rate_limits = True
+        try:
+            result = self._request(
+                "turn/start",
+                {
+                    "threadId": thread_id,
+                    "cwd": str(canonical_cwd),
+                    "input": turn_input,
+                    "model": model,
+                    "effort": effort,
+                    **self._approval_params(),
+                    "sandboxPolicy": {
+                        "type": "workspaceWrite",
+                        "writableRoots": [str(canonical_cwd)],
+                        "networkAccess": False,
+                    },
                 },
-            },
-        )
+            )
+        except BaseException:
+            self._collecting_rate_limits = False
+            raise
         turn = result.get("turn") if isinstance(result, dict) else None
         turn_id = turn.get("id") if isinstance(turn, dict) else None
         if not isinstance(turn_id, str) or not turn_id:
@@ -806,12 +820,17 @@ class CodexAppServerClient:
 
     def wait_for_turn(self, turn_id: str) -> TurnResult:
         """Wait for one turn while excluding hidden reasoning from the result."""
+        try:
+            return self._wait_for_turn(turn_id)
+        finally:
+            self._collecting_rate_limits = False
+
+    def _wait_for_turn(self, turn_id: str) -> TurnResult:
         answers: list[str] = []
         final_items: list[tuple[str, str]] = []
         seen_items: set[str] = set()
         context_window: int | None = None
         context_tokens_used: int | None = None
-        self._turn_rate_limits = None
         while True:
             # Model turns routinely exceed the short RPC handshake timeout.
             # Keep a finite ceiling so a lost app-server cannot strand a worker
@@ -1074,12 +1093,20 @@ class CodexAppServerClient:
             duration_minutes=duration if isinstance(duration, int) else None,
         )
 
+    @staticmethod
+    def _limit_id(snapshot: dict[str, Any]) -> str:
+        # The read's single-bucket `rateLimits` mirrors the historical `codex`
+        # limit; a snapshot without an id is that limit.
+        value = snapshot.get("limitId")
+        return value if isinstance(value, str) and value else "codex"
+
     def _observe_rate_limits(self, snapshot: object) -> None:
-        """Merge one sparse rolling update; an absent window keeps its last value."""
-        if not isinstance(snapshot, dict):
+        """Merge one sparse rolling update into its own limit's windows."""
+        if not self._collecting_rate_limits or not isinstance(snapshot, dict):
             return
-        previous = self._turn_rate_limits or RateLimits(None, None)
-        self._turn_rate_limits = RateLimits(
+        limit_id = self._limit_id(snapshot)
+        previous = self._turn_rate_limits.get(limit_id) or RateLimits(None, None)
+        self._turn_rate_limits[limit_id] = RateLimits(
             primary=self._limit_window(snapshot.get("primary")) or previous.primary,
             secondary=self._limit_window(snapshot.get("secondary")) or previous.secondary,
         )
@@ -1090,18 +1117,20 @@ class CodexAppServerClient:
         The turn's windows are used once, by the read that follows the turn, so a
         later read never presents them as current.
         """
-        rolling, self._turn_rate_limits = self._turn_rate_limits, None
+        observed, self._turn_rate_limits = self._turn_rate_limits, {}
         try:
             result = self._request("account/rateLimits/read", {})
         except RpcError:
-            if rolling is None:
+            if "codex" not in observed:
                 raise
-            return rolling
+            return observed["codex"]
         snapshot = result.get("rateLimits") if isinstance(result, dict) else None
         if not isinstance(snapshot, dict):
-            if rolling is None:
+            if "codex" not in observed:
                 raise RpcError("account/rateLimits/read returned invalid data")
-            return rolling
+            return observed["codex"]
+        # Only windows of the same limit may complete the read.
+        rolling = observed.get(self._limit_id(snapshot))
         read = RateLimits(
             primary=self._limit_window(snapshot.get("primary")),
             secondary=self._limit_window(snapshot.get("secondary")),
