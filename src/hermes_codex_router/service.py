@@ -1071,11 +1071,11 @@ class ProjectHubService:
                         sender_agent_id=agent.agent_id,
                         telegram_html=exc.public_message,
                     )
-                elif recovered:
+                elif recovered or failure.notice == "emergency_stop":
                     queue_state.record_runtime_event(
                         agent.agent_id,
                         "info",
-                        "provider_result_recovered",
+                        "provider_result_recovered" if recovered else "provider_turn_stopped",
                         agent.agent_id,
                     )
                 elif failure.notice == "provider_limit":
@@ -1126,7 +1126,7 @@ class ProjectHubService:
                     )
             except Exception as survived_error:
                 survived("service.failure_notice_record", survived_error)
-            if not recovered:
+            if not recovered and failure.notice != "emergency_stop":
                 queue_state.record_runtime_event(
                     agent.agent_id,
                     "warning",

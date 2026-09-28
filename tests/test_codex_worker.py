@@ -29,6 +29,7 @@ from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.state import HubState
 from tests.git_fixtures import init_git_root
+from tests.stop_fixtures import pending_stop
 
 
 class WorkerClient:
@@ -457,7 +458,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             self.assertEqual(worker.state.get_provider_job(follow_ups[0]).status, "cancelled")
             topic = worker.state.find_topic(-1001234567890, 77)
             assert topic is not None
-            self.assertIsNone(worker.state.pending_emergency_stop(topic.topic_id, "codex"))
+            self.assertIsNone(pending_stop(worker.state, topic.topic_id, "codex"))
         finally:
             release.set()
             sender.join(1)
@@ -546,7 +547,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             self.assertEqual(turns, ["started"])
             topic = worker.state.find_topic(-1001234567890, 77)
             assert topic is not None
-            self.assertIsNone(worker.state.pending_emergency_stop(topic.topic_id, "codex"))
+            self.assertIsNone(pending_stop(worker.state, topic.topic_id, "codex"))
         finally:
             release.set()
             sender.join(1)
@@ -623,7 +624,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             assert topic is not None
             self.assertTrue(interrupted.wait(2))
             self.assertEqual(worker.state.get_provider_job(job_id).status, "cancelled")
-            self.assertIsNone(worker.state.pending_emergency_stop(topic.topic_id, "codex"))
+            self.assertIsNone(pending_stop(worker.state, topic.topic_id, "codex"))
         finally:
             release.set()
             sender.join(1)
@@ -692,7 +693,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             topic = worker.state.find_topic(-1001234567890, 77)
             assert topic is not None
             self.assertEqual(worker.state.get_provider_job(job_id).status, "cancelled")
-            self.assertIsNone(worker.state.pending_emergency_stop(topic.topic_id, "codex"))
+            self.assertIsNone(pending_stop(worker.state, topic.topic_id, "codex"))
             next_job_id = self.enqueue(message_id=101, payload="after stop")
             self.assertTrue(worker.run_cycle())
             self.assertEqual(

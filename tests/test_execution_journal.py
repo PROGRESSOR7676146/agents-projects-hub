@@ -394,6 +394,58 @@ class ExecutionJournalTests(unittest.TestCase):
         finally:
             state.close()
 
+    def test_recovered_result_of_a_stopped_turn_is_cancelled_not_published(self) -> None:
+        from hermes_codex_router.codex_recovery import recover_codex_job
+        from hermes_codex_router.execution_journal import ExecutionJournal
+
+        job_id = self.fixture.enqueue()
+        state = HubState.open(self.fixture.config.state_path)
+        try:
+            lease = state.lease_provider_job("codex", "lost-worker")
+            assert lease is not None and lease.lease_token is not None
+            state.mark_provider_job_executing(job_id, lease.lease_token)
+            journal = ExecutionJournal(state)
+            root = self.fixture.registry.projects[0].root.resolve()
+            journal.record_thread(job_id, lease.lease_token, "stopped-thread", root)
+            journal.record_turn(job_id, lease.lease_token, "stopped-turn")
+            journal.record_completion(job_id, lease.lease_token, "Result nobody should see")
+            # The owner stopped the turn; the worker died before it could act.
+            _, _, pending = state.request_emergency_stop(
+                topic_id=lease.topic_id,
+                chat_id=-1001234567890,
+                message_id=79,
+                target_agent_id="codex",
+            )
+            self.assertTrue(pending)
+            state.heartbeat_provider_job(
+                job_id,
+                lease.lease_token,
+                lease_seconds=1,
+                now=datetime.now(timezone.utc) - timedelta(seconds=10),
+            )
+
+            self.assertTrue(
+                recover_codex_job(
+                    state,
+                    self.fixture.config,
+                    self.fixture.registry,
+                    "codex",
+                    "recovery-worker",
+                    lambda: self.fail("completed checkpoint must not access a provider"),
+                )
+            )
+
+            job = state.get_provider_job(job_id)
+            self.assertEqual((job.status, job.error_code), ("cancelled", "emergency_stop"))
+            with self.assertRaisesRegex(StateError, "has no result"):
+                state.get_provider_result(job_id)
+            pending_stops = state._connection.execute(
+                "SELECT COUNT(*) FROM provider_stop_requests WHERE status = 'pending'"
+            ).fetchone()[0]
+            self.assertEqual(pending_stops, 0)
+        finally:
+            state.close()
+
     def test_wrong_thread_root_and_unfinished_turn_never_become_success(self) -> None:
         from hermes_codex_router.codex_appserver import RpcError
 

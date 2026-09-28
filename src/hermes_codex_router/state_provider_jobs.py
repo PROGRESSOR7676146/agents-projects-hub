@@ -42,7 +42,7 @@ _PENDING_STOP_FOR_JOB_SQL = f"""SELECT stop.request_id FROM provider_stop_reques
 # queue, keeps the stop pending even after the parent turn was cancelled. The
 # rule is applied to every pending stop of the topic at each cancellation, so
 # work cancelled by a later stop also completes the earlier one.
-_COMPLETE_FINISHED_STOPS_SQL = f"""UPDATE provider_stop_requests
+COMPLETE_FINISHED_STOPS_SQL = f"""UPDATE provider_stop_requests
    SET status = 'completed', completed_at = ?
    WHERE request_id IN (
      SELECT stop.request_id FROM provider_stop_requests stop
@@ -509,7 +509,9 @@ class ProviderJobsStateFacade:
         cancellation never leaves a stop pending, where it would keep blocking
         the topic. Every pending stop covering the job completes once none of
         its other covered work can still run, so a repeated stop message does
-        not outlive the work it stopped and no stop ends before its work.
+        not outlive the work it stopped and no stop ends before its work. Work
+        that a stop has already cancelled, at its result commit for example,
+        is left as it is.
         """
         with self._transaction():
             stopped = self._cancel_stopped(
@@ -520,26 +522,39 @@ class ProviderJobsStateFacade:
                 complete_stops=complete_stops,
                 timestamp=self._now(),
             )
-            if not stopped:
+            if not stopped and not self._ended_by_stop(job_id):
                 raise self._state_error("active provider job cannot be cancelled")
 
-    def pending_stop_for_agent(self, topic_id: int, agent_id: str) -> str | None:
-        """The oldest pending stop addressed to this provider in the topic."""
-        row = self._connection.execute(
-            """SELECT request_id FROM provider_stop_requests
-               WHERE topic_id = ? AND target_agent_id = ? AND status = 'pending'
-               ORDER BY created_at LIMIT 1""",
-            (topic_id, agent_id),
-        ).fetchone()
-        return None if row is None else str(row["request_id"])
+    def honor_stop(self, job_id: str, lease_token: str, status: str, timestamp: str) -> bool:
+        """Cancel the job for a covering pending stop instead of committing it.
 
-    def complete_stop(self, request_id: str) -> None:
-        with self._transaction():
-            self._connection.execute(
-                """UPDATE provider_stop_requests SET status = 'completed', completed_at = ?
-                   WHERE request_id = ? AND status = 'pending'""",
-                (self._now(), request_id),
-            )
+        The result and failure commits call this first, inside their own write
+        transaction, so each commit is the last stop check (R-021): a stop
+        recorded after the worker's final check still ends the job, whose
+        single outbox row stays free for the stop's Hub acknowledgement, and
+        the stops left without work complete with it. True when a stop has
+        ended the job, now or earlier; False leaves the commit to proceed.
+        """
+        if self._ended_by_stop(job_id):
+            return True
+        if self.pending_stop_for_job(job_id) is None:
+            return False
+        return self._cancel_stopped(
+            job_id,
+            lease_token,
+            statuses=(status,),
+            error_code="emergency_stop",
+            complete_stops=True,
+            timestamp=timestamp,
+        )
+
+    def _ended_by_stop(self, job_id: str) -> bool:
+        row = self._connection.execute(
+            """SELECT 1 FROM provider_jobs
+               WHERE job_id = ? AND status = 'cancelled' AND error_class = 'user_stop'""",
+            (job_id,),
+        ).fetchone()
+        return row is not None
 
     def pending_stop_for_job(self, job_id: str) -> str | None:
         """Return the oldest pending emergency stop that covers this job."""
@@ -594,10 +609,7 @@ class ProviderJobsStateFacade:
         if cursor.rowcount != 1:
             return False
         if complete_stops:
-            topic = self._connection.execute(
-                "SELECT topic_id FROM provider_jobs WHERE job_id = ?", (job_id,)
-            ).fetchone()
-            self.complete_finished_stops(int(topic["topic_id"]), timestamp)
+            self._complete_stops_after(job_id, timestamp)
         return True
 
     def complete_finished_stops(self, topic_id: int, timestamp: str) -> None:
@@ -605,7 +617,21 @@ class ProviderJobsStateFacade:
 
         The caller holds the write transaction.
         """
-        self._connection.execute(_COMPLETE_FINISHED_STOPS_SQL, (timestamp, topic_id))
+        self._connection.execute(COMPLETE_FINISHED_STOPS_SQL, (timestamp, topic_id))
+
+    def _complete_stops_after(self, job_id: str, timestamp: str) -> None:
+        """Complete the stops that the end of this job left without work.
+
+        The transitions that end leased, waiting or running work call this in
+        their own transaction, so a stop completes however its covered work
+        ended, not only when it was cancelled (R-021); ``cancel_active`` does
+        so when its caller asks.
+        """
+        topic = self._connection.execute(
+            "SELECT topic_id FROM provider_jobs WHERE job_id = ?", (job_id,)
+        ).fetchone()
+        if topic is not None:
+            self.complete_finished_stops(int(topic["topic_id"]), timestamp)
 
     def cancel_unstarted_for_stop(self, topic_id: int, timestamp: str) -> int:
         """Cancel the topic's queued and retry-waiting jobs that are not held.
@@ -965,6 +991,7 @@ class ProviderJobsStateFacade:
             )
             if cursor.rowcount != 1:
                 raise self._state_error("steered job lease changed during completion")
+            self._complete_stops_after(child_job_id, timestamp)
 
     def mark_executing(
         self,
@@ -1131,6 +1158,7 @@ class ProviderJobsStateFacade:
                      AND lease_expires_at > ?""",
                 (available_at, code, detail, timestamp, job_id, lease_token, timestamp),
             )
+            self._complete_stops_after(job_id, timestamp)
         if cursor.rowcount != 1:
             raise self._state_error("retry requires a current pre-execution provider job lease")
         return self.get(job_id)
@@ -1159,6 +1187,7 @@ class ProviderJobsStateFacade:
                      AND lease_token = ? AND lease_expires_at > ?""",
                 (failure_class, code, detail, timestamp, job_id, lease_token, timestamp),
             )
+            self._complete_stops_after(job_id, timestamp)
         if cursor.rowcount != 1:
             raise self._state_error("provider job lease is missing or invalid")
         return self.get(job_id)
@@ -1185,18 +1214,21 @@ class ProviderJobsStateFacade:
                      AND lease_expires_at > ?""",
                 (code, detail, timestamp, job_id, lease_token, timestamp),
             )
+            self._complete_stops_after(job_id, timestamp)
         if cursor.rowcount != 1:
             raise self._state_error("provider job lease is missing or invalid")
         return self.get(job_id)
 
     def cancel(self, job_id: str) -> ProviderJobRecord:
+        timestamp = self._now()
         with self._write_transaction():
             cursor = self._connection.execute(
                 """UPDATE provider_jobs
                    SET status = 'cancelled', next_attempt_at = NULL, updated_at = ?
                    WHERE job_id = ? AND status IN ('queued', 'retry_wait')""",
-                (self._now(), job_id),
+                (timestamp, job_id),
             )
+            self._complete_stops_after(job_id, timestamp)
         if cursor.rowcount != 1:
             raise self._state_error("only queued provider work can be cancelled")
         return self.get(job_id)
@@ -1217,7 +1249,7 @@ class ProviderJobsStateFacade:
                 params,
             ).fetchall()
             executing = self._connection.execute(
-                "SELECT job_id FROM provider_jobs "
+                "SELECT job_id, topic_id FROM provider_jobs "
                 "WHERE status = 'executing' AND lease_expires_at <= ? "
                 + scope
                 + " ORDER BY job_id",
@@ -1242,6 +1274,8 @@ class ProviderJobsStateFacade:
                 + scope,
                 (timestamp, timestamp) + ((target_agent,) if target_agent is not None else ()),
             )
+            for topic_id in sorted({int(row["topic_id"]) for row in executing}):
+                self.complete_finished_stops(topic_id, timestamp)
         return ProviderJobRecovery(
             requeued_job_ids=tuple(str(row["job_id"]) for row in leased),
             indeterminate_job_ids=tuple(str(row["job_id"]) for row in executing),

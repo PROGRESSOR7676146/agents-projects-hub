@@ -64,9 +64,13 @@ class PreparedWorkerResult:
 
 
 class ProviderTurnStopped(RuntimeError):
-    """An accepted provider turn was explicitly stopped by its owning user."""
+    """An accepted provider turn was explicitly stopped by its owning user.
 
-    def __init__(self, request_id: str) -> None:
+    ``request_id`` is None when the result commit found the stop itself and
+    has already cancelled the job (R-021).
+    """
+
+    def __init__(self, request_id: str | None = None) -> None:
         super().__init__("provider turn stopped by user")
         self.request_id = request_id
 
