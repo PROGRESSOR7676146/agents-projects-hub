@@ -318,6 +318,55 @@ class ExecutionScopeTests(unittest.TestCase):
         self.assertEqual(self.state.get_provider_job(later.job_id).status, "queued")
         self.assertEqual(owner_topic.execution_scope, destination.execution_scope)
 
+    def test_owner_cancelling_held_covered_work_completes_the_stop(self) -> None:
+        _, owner = self.topic_session(project_id="example-project", thread_id=173, agent_id="codex")
+        destination, selected = self.topic_session(
+            project_id="example-project", thread_id=174, agent_id="opencode"
+        )
+        waiting = self.enqueue(destination, selected, 1711)
+        leased = self.state.lease_provider_job("opencode", "fictional-worker")
+        assert leased is not None and leased.lease_token is not None
+        self.assertEqual(leased.job_id, waiting.job_id)
+        request_id, _, pending = self.state.request_emergency_stop(
+            topic_id=destination.topic_id,
+            chat_id=destination.chat_id,
+            message_id=1712,
+            target_agent_id="opencode",
+        )
+        self.assertTrue(pending)
+        # The worker shuts down before starting the job, which returns to the
+        # queue still covered by the stop; a local writer then holds it.
+        self.state.release_provider_job_lease(leased.job_id, leased.lease_token)
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE agent_sessions SET writer_mode='local' WHERE session_id=?",
+                (owner.session_id,),
+            )
+        self.assertEqual(self.state.materialize_held_provider_jobs(), 1)
+        notice = self.state.lease_root_blocker_notice("fictional-sender")
+        assert notice is not None
+        self.state.complete_root_blocker_notice(notice, 1803)
+
+        def stop_status() -> str:
+            row = self.state._connection.execute(
+                "SELECT status FROM provider_stop_requests WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            return str(row["status"])
+
+        self.assertEqual(stop_status(), "pending")
+
+        decision = self.state.decide_held_provider_job(
+            job_id=waiting.job_id,
+            action="cancel",
+            chat_id=destination.chat_id,
+            thread_id=destination.thread_id,
+            notice_message_id=1803,
+        )
+
+        self.assertEqual(decision, "cancelled")
+        self.assertEqual(stop_status(), "completed")
+
     def test_repeated_stop_leaves_a_held_job_confirmed_after_it_alone(self) -> None:
         _, owner = self.topic_session(project_id="example-project", thread_id=175, agent_id="codex")
         destination, selected = self.topic_session(

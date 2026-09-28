@@ -8,7 +8,10 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
+from hermes_codex_router import codex_recovery as codex_recovery_module
+from hermes_codex_router import service as service_module
 from hermes_codex_router.codex_appserver import CodexThread, RateLimits, TurnResult
 from hermes_codex_router.hub_config import (
     AgentDefinition,
@@ -671,6 +674,129 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         self.assertEqual(job.status, "indeterminate")
         self.assertEqual(job.error_class, "ambiguous_execution")
         self.assertFalse(service.run_embedded_queue_cycle())
+        service.close()
+
+    def test_stop_during_a_turn_wins_at_the_result_commit(self) -> None:
+        # The embedded consumer has no stop monitor; the result commit is the
+        # stop check, and it must also complete the stop (R-021).
+        service, telegram = self.service(QueueClient())
+        self.assertTrue(service.handle_update(update(1, "long task")))
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        prepare_artifacts = service_module.prepare_worker_artifacts
+
+        def stop_while_preparing_artifacts(*args: Any, **kwargs: Any) -> Any:
+            _, _, pending = service.state.request_emergency_stop(
+                topic_id=topic.topic_id,
+                chat_id=-1001234567890,
+                message_id=2,
+                target_agent_id="codex",
+            )
+            self.assertTrue(pending)
+            return prepare_artifacts(*args, **kwargs)
+
+        with (
+            patch.object(
+                service_module, "prepare_worker_artifacts", stop_while_preparing_artifacts
+            ),
+            self.assertNoLogs("hermes_codex_router", level="WARNING"),
+        ):
+            self.assertTrue(service.run_embedded_queue_cycle())
+
+        job = service.state.provider_jobs_for_topic(topic.topic_id)[0]
+        self.assertEqual((job.status, job.error_code), ("cancelled", "emergency_stop"))
+        pending_stops = service.state._connection.execute(
+            "SELECT COUNT(*) FROM provider_stop_requests WHERE status = 'pending'"
+        ).fetchone()[0]
+        self.assertEqual(pending_stops, 0)
+        self.assertNotIn("Visible answer", "".join(telegram.sent))
+        codes = [
+            str(row[0])
+            for row in service.state._connection.execute(
+                "SELECT code FROM runtime_events WHERE component = 'codex'"
+            )
+        ]
+        self.assertIn("provider_turn_stopped", codes)
+        self.assertNotIn("queued_provider_error", codes)
+        service.close()
+
+    def test_a_stop_that_wins_the_recovery_commit_is_recorded_as_a_stop(self) -> None:
+        service, telegram = self.service(QueueClient())
+        self.assertTrue(service.handle_update(update(1, "long task")))
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        spool = codex_recovery_module.spool_staged_artifacts
+
+        def stop_then_spool(*args: Any, **kwargs: Any) -> Any:
+            _, _, pending = service.state.request_emergency_stop(
+                topic_id=topic.topic_id,
+                chat_id=-1001234567890,
+                message_id=2,
+                target_agent_id="codex",
+            )
+            self.assertTrue(pending)
+            return spool(*args, **kwargs)
+
+        with (
+            patch.object(
+                service_module,
+                "prepare_worker_artifacts",
+                side_effect=OSError("fictional artifact failure"),
+            ),
+            patch.object(codex_recovery_module, "spool_staged_artifacts", stop_then_spool),
+        ):
+            self.assertTrue(service.run_embedded_queue_cycle())
+
+        job = service.state.provider_jobs_for_topic(topic.topic_id)[0]
+        self.assertEqual((job.status, job.error_code), ("cancelled", "emergency_stop"))
+        self.assertNotIn("Visible answer", "".join(telegram.sent))
+        codes = [
+            str(row[0])
+            for row in service.state._connection.execute(
+                "SELECT code FROM runtime_events WHERE component = 'codex'"
+            )
+        ]
+        self.assertIn("provider_turn_stopped", codes)
+        self.assertNotIn("queued_provider_error", codes)
+        service.close()
+
+    def test_a_stop_that_wins_the_failure_commit_is_not_a_provider_error(self) -> None:
+        service, telegram = self.service(QueueClient())
+        self.assertTrue(service.handle_update(update(1, "long task")))
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+
+        def stop_then_fail(*_args: Any, **_kwargs: Any) -> Any:
+            # Recovery cannot read the artifacts either; the failure commit follows.
+            service.state.request_emergency_stop(
+                topic_id=topic.topic_id,
+                chat_id=-1001234567890,
+                message_id=2,
+                target_agent_id="codex",
+            )
+            raise OSError("fictional artifact failure")
+
+        with (
+            patch.object(
+                service_module,
+                "prepare_worker_artifacts",
+                side_effect=OSError("fictional artifact failure"),
+            ),
+            patch.object(codex_recovery_module, "spool_staged_artifacts", stop_then_fail),
+            self.assertNoLogs("hermes_codex_router", level="WARNING"),
+        ):
+            self.assertTrue(service.run_embedded_queue_cycle())
+
+        job = service.state.provider_jobs_for_topic(topic.topic_id)[0]
+        self.assertEqual((job.status, job.error_code), ("cancelled", "emergency_stop"))
+        self.assertNotIn("Visible answer", "".join(telegram.sent))
+        codes = [
+            str(row[0])
+            for row in service.state._connection.execute(
+                "SELECT code FROM runtime_events WHERE component = 'codex'"
+            )
+        ]
+        self.assertNotIn("queued_provider_error", codes)
         service.close()
 
     def test_failed_enqueue_is_replayed_without_a_preclaim(self) -> None:

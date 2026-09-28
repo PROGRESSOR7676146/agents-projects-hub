@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
+from hermes_codex_router import external_worker as external_worker_module
 from hermes_codex_router.cli import main
 from hermes_codex_router.external_runtime import (
     ExternalTurnResult,
@@ -31,6 +32,7 @@ from hermes_codex_router.service import ProjectHubService, QueueAcceptanceError,
 from hermes_codex_router.state import HubState
 from hermes_codex_router.telegram import TopicMessage
 from tests.git_fixtures import init_git_root
+from tests.stop_fixtures import pending_stop
 
 
 class Adapter:
@@ -650,7 +652,91 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             self.assertEqual(adapter.calls, 0)
             job = worker.state.get_provider_job(job_id)
             self.assertEqual((job.status, job.error_code), ("cancelled", "emergency_stop"))
-            self.assertIsNone(worker.state.pending_emergency_stop(topics[0], "opencode"))
+            self.assertIsNone(pending_stop(worker.state, topics[0], "opencode"))
+        finally:
+            worker.close()
+
+    def test_a_stop_after_the_final_check_still_wins_at_the_result_commit(self) -> None:
+        job_id = self.enqueue("opencode", 34)
+        adapter = Adapter("opencode")
+        worker = self.worker("opencode", adapter)
+        prepare_artifacts = external_worker_module.prepare_worker_artifacts
+
+        def stop_while_preparing_artifacts(*args: Any, **kwargs: Any) -> Any:
+            # R-021: the stop lands after the worker's last stop check.
+            job = worker.state.get_provider_job(job_id)
+            request_id, _, pending = worker.state.request_emergency_stop(
+                topic_id=job.topic_id,
+                chat_id=-1001234567890,
+                message_id=934,
+                target_agent_id="opencode",
+            )
+            self.assertTrue(pending)
+            self.assertTrue(
+                worker.state.enqueue_emergency_stop_notice(
+                    request_id, "Останавливаю активную работу."
+                )
+            )
+            return prepare_artifacts(*args, **kwargs)
+
+        try:
+            with (
+                patch.object(
+                    external_worker_module,
+                    "prepare_worker_artifacts",
+                    stop_while_preparing_artifacts,
+                ),
+                self.assertNoLogs("hermes_codex_router", level="WARNING"),
+            ):
+                self.assertTrue(worker.run_cycle())
+            self.assertEqual(adapter.calls, 1)
+            job = worker.state.get_provider_job(job_id)
+            self.assertEqual((job.status, job.error_code), ("cancelled", "emergency_stop"))
+            self.assertEqual(
+                worker.state.get_telegram_outbox_for_job(job_id).sender_agent_id, "hub"
+            )
+            self.assertIsNone(pending_stop(worker.state, job.topic_id, "opencode"))
+            codes = [
+                str(row[0])
+                for row in worker.state._connection.execute(
+                    "SELECT code FROM runtime_events WHERE component = 'opencode'"
+                )
+            ]
+            self.assertIn("provider_turn_stopped", codes)
+            self.assertNotIn("queued_provider_error", codes)
+        finally:
+            worker.close()
+
+    def test_a_stop_that_wins_the_failure_commit_is_not_a_provider_error(self) -> None:
+        job_id = self.enqueue("opencode", 35)
+        worker = self.worker("opencode", Adapter("opencode"))
+
+        def stop_then_fail(*_args: Any, **_kwargs: Any) -> Any:
+            job = worker.state.get_provider_job(job_id)
+            _, _, pending = worker.state.request_emergency_stop(
+                topic_id=job.topic_id,
+                chat_id=-1001234567890,
+                message_id=935,
+                target_agent_id="opencode",
+            )
+            self.assertTrue(pending)
+            raise OSError("fictional artifact failure")
+
+        try:
+            with patch.object(external_worker_module, "prepare_worker_artifacts", stop_then_fail):
+                self.assertTrue(worker.run_cycle())
+            job = worker.state.get_provider_job(job_id)
+            self.assertEqual((job.status, job.error_code), ("cancelled", "emergency_stop"))
+            self.assertIsNone(pending_stop(worker.state, job.topic_id, "opencode"))
+            codes = [
+                str(row[0])
+                for row in worker.state._connection.execute(
+                    "SELECT code FROM runtime_events WHERE component = 'opencode'"
+                )
+            ]
+            self.assertIn("provider_turn_stopped", codes)
+            self.assertNotIn("queued_provider_error", codes)
+            self.assertEqual(worker._provider_state, "ready")
         finally:
             worker.close()
 
@@ -682,7 +768,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             self.assertEqual(adapter.calls, 1)
             self.assertFalse(adapter.interrupted.is_set())
             self.assertEqual(worker.state.get_provider_job(later_id).status, "result_ready")
-            self.assertIsNotNone(worker.state.pending_emergency_stop(topic_id, "opencode"))
+            self.assertIsNotNone(pending_stop(worker.state, topic_id, "opencode"))
         finally:
             worker.close()
 

@@ -459,133 +459,153 @@ class ExternalQueueWorker:
             else:
                 self._execute_external(executing, token, project, topic)
         except Exception as exc:
-            failure = classify_worker_failure(exc, runtime=self.agent.runtime)
-            try:
-                if failure.notice == "execution_root":
-                    assert isinstance(exc, ExecutionRootError)
-                    self._last_error_code = failure.error_code
-                    self._provider_state = "unavailable"
-                    self.state.terminate_provider_job_with_notice(
-                        executing.job_id,
-                        token,
-                        status=failure.status,
-                        error_class=failure.error_class,
-                        error_code=failure.error_code,
-                        sender_agent_id=self.agent.agent_id,
-                        telegram_html=exc.public_message,
-                    )
-                elif failure.notice == "emergency_stop":
-                    assert isinstance(exc, ProviderTurnStopped)
-                    self.state.cancel_active_provider_job(
-                        executing.job_id,
-                        token,
-                        error_code=failure.error_code,
-                        complete_stops=True,
-                    )
+            self._record_failure(executing, token, Path(project.root), exc)
+        finally:
+            heartbeat_stop.set()
+            heartbeat.join(timeout=2)
+            self._cleanup_incoming_material_staging(Path(project.root), executing.job_id)
+
+    def _record_failure(
+        self, executing: ProviderJobRecord, token: str, project_root: Path, exc: Exception
+    ) -> None:
+        """Commit the durable outcome of a failed execution; never raises.
+
+        A covering stop can win the result, recovery or failure commit (R-021);
+        the job is then already cancelled and the outcome is a stopped turn.
+        """
+        failure = classify_worker_failure(exc, runtime=self.agent.runtime)
+        try:
+            if failure.notice == "execution_root":
+                assert isinstance(exc, ExecutionRootError)
+                self._last_error_code = failure.error_code
+                self._provider_state = "unavailable"
+                self.state.terminate_provider_job_with_notice(
+                    executing.job_id,
+                    token,
+                    status=failure.status,
+                    error_class=failure.error_class,
+                    error_code=failure.error_code,
+                    sender_agent_id=self.agent.agent_id,
+                    telegram_html=exc.public_message,
+                )
+            elif failure.notice == "emergency_stop":
+                assert isinstance(exc, ProviderTurnStopped)
+                self.state.cancel_active_provider_job(
+                    executing.job_id,
+                    token,
+                    error_code=failure.error_code,
+                    complete_stops=True,
+                )
+                self._last_error_code = None
+                self._provider_state = "ready"
+                self._record_event("info", "provider_turn_stopped", self.agent.agent_id)
+            elif failure.notice == "provider_limit":
+                assert isinstance(exc, ProviderLimitError)
+                self._last_error_code = "provider_limit"
+                self._provider_state = "limited"
+                self._quota_remaining_percent = float(exc.limit.remaining_percent)
+                self._quota_reset_at = datetime.fromtimestamp(exc.limit.resets_at, timezone.utc)
+                self.state.terminate_provider_job_with_notice(
+                    executing.job_id,
+                    token,
+                    status=failure.status,
+                    error_class=failure.error_class,
+                    error_code=failure.error_code,
+                    sender_agent_id=self.agent.agent_id,
+                    telegram_html=(
+                        f"{self.agent.display_name} limit reached. Reset telemetry was "
+                        "recorded; use /accounts for the current status."
+                    ),
+                )
+                self._record_event("warning", "provider_limit", exc.limit.to_json())
+            elif failure.notice == "provider_unavailable":
+                assert isinstance(exc, ProviderUnavailableError)
+                self._last_error_code = failure.error_code
+                self._provider_state = "unavailable"
+                self.state.terminate_provider_job_with_notice(
+                    executing.job_id,
+                    token,
+                    status=failure.status,
+                    error_class=failure.error_class,
+                    error_code=failure.error_code,
+                    sender_agent_id=self.agent.agent_id,
+                    telegram_html=exc.public_message,
+                )
+                self._record_event("warning", "provider_unavailable", failure.error_code)
+            else:
+                recovered = False
+                turn_status = "unknown"
+                if failure.reconcile_codex:
+                    assert self.supervisor is not None
+                    try:
+                        turn_status = reconcile_codex_completion(
+                            self.state,
+                            self.config,
+                            project_root=project_root,
+                            job_id=executing.job_id,
+                            lease_token=token,
+                            agent_id=self.agent.agent_id,
+                            client_factory=self.supervisor.client,
+                        )
+                        recovered = turn_status == "completed"
+                    except ProviderTurnStopped:  # won the recovery commit (R-021)
+                        turn_status = "stopped"
+                    except Exception:
+                        turn_status = "unknown"
+                if recovered:
+                    self._last_success_at = datetime.now(timezone.utc)
+                    self._last_error_code = None
+                    self._provider_state = "ready"
+                    self._record_event("info", "provider_result_recovered", self.agent.agent_id)
+                elif turn_status == "stopped":  # the stop already cancelled the job
                     self._last_error_code = None
                     self._provider_state = "ready"
                     self._record_event("info", "provider_turn_stopped", self.agent.agent_id)
-                elif failure.notice == "provider_limit":
-                    assert isinstance(exc, ProviderLimitError)
-                    self._last_error_code = "provider_limit"
-                    self._provider_state = "limited"
-                    self._quota_remaining_percent = float(exc.limit.remaining_percent)
-                    self._quota_reset_at = datetime.fromtimestamp(exc.limit.resets_at, timezone.utc)
-                    self.state.terminate_provider_job_with_notice(
+                else:
+                    self._last_error_code = type(exc).__name__[:128]
+                    self._provider_state = "unavailable"
+                    # Keep the provider's bounded diagnostic in the private state DB.
+                    # Without it every app-server protocol or quota failure collapses
+                    # to an unhelpful ``RpcError`` and cannot be repaired remotely.
+                    error_detail = " ".join(str(exc).split())[:1000] or None
+                    # Invocation has been marked executing; no automatic replay
+                    # is safe without runtime-specific proof that it never began.
+                    record = self.state.terminate_provider_job_with_notice(
                         executing.job_id,
                         token,
                         status=failure.status,
                         error_class=failure.error_class,
                         error_code=failure.error_code,
+                        error_detail=error_detail,
+                        terminal_turn_status=(
+                            turn_status if turn_status in {"failed", "interrupted"} else None
+                        ),
                         sender_agent_id=self.agent.agent_id,
                         telegram_html=(
-                            f"{self.agent.display_name} limit reached. Reset telemetry was "
-                            "recorded; use /accounts for the current status."
+                            "Incoming material integrity validation failed; "
+                            "the provider was not started. Send the material again."
+                            if failure.notice == "incoming_material"
+                            else checkpoint_failure_notice(
+                                self.state, executing.job_id, exc, turn_status=turn_status
+                            )
+                            if failure.notice == "checkpoint"
+                            else uncertain_provider_notice(self.agent.display_name)
                         ),
                     )
-                    self._record_event("warning", "provider_limit", exc.limit.to_json())
-                elif failure.notice == "provider_unavailable":
-                    assert isinstance(exc, ProviderUnavailableError)
-                    self._last_error_code = failure.error_code
-                    self._provider_state = "unavailable"
-                    self.state.terminate_provider_job_with_notice(
-                        executing.job_id,
-                        token,
-                        status=failure.status,
-                        error_class=failure.error_class,
-                        error_code=failure.error_code,
-                        sender_agent_id=self.agent.agent_id,
-                        telegram_html=exc.public_message,
-                    )
-                    self._record_event("warning", "provider_unavailable", failure.error_code)
-                else:
-                    recovered = False
-                    turn_status = "unknown"
-                    if failure.reconcile_codex:
-                        assert self.supervisor is not None
-                        try:
-                            turn_status = reconcile_codex_completion(
-                                self.state,
-                                self.config,
-                                project_root=Path(project.root),
-                                job_id=executing.job_id,
-                                lease_token=token,
-                                agent_id=self.agent.agent_id,
-                                client_factory=self.supervisor.client,
-                            )
-                            recovered = turn_status == "completed"
-                        except Exception:
-                            recovered = False
-                            turn_status = "unknown"
-                    if recovered:
-                        self._last_success_at = datetime.now(timezone.utc)
+                    if record.status == "cancelled":  # a covering stop won the commit
                         self._last_error_code = None
                         self._provider_state = "ready"
-                        self._record_event("info", "provider_result_recovered", self.agent.agent_id)
+                        self._record_event("info", "provider_turn_stopped", self.agent.agent_id)
                     else:
-                        self._last_error_code = type(exc).__name__[:128]
-                        self._provider_state = "unavailable"
-                        # Keep the provider's bounded diagnostic in the private state DB.
-                        # Without it every app-server protocol or quota failure collapses
-                        # to an unhelpful ``RpcError`` and cannot be repaired remotely.
-                        error_detail = " ".join(str(exc).split())[:1000] or None
-                        # Invocation has been marked executing; no automatic replay
-                        # is safe without runtime-specific proof that it never began.
-                        self.state.terminate_provider_job_with_notice(
-                            executing.job_id,
-                            token,
-                            status=failure.status,
-                            error_class=failure.error_class,
-                            error_code=failure.error_code,
-                            error_detail=error_detail,
-                            terminal_turn_status=(
-                                turn_status if turn_status in {"failed", "interrupted"} else None
-                            ),
-                            sender_agent_id=self.agent.agent_id,
-                            telegram_html=(
-                                "Incoming material integrity validation failed; "
-                                "the provider was not started. Send the material again."
-                                if failure.notice == "incoming_material"
-                                else checkpoint_failure_notice(
-                                    self.state, executing.job_id, exc, turn_status=turn_status
-                                )
-                                if failure.notice == "checkpoint"
-                                else uncertain_provider_notice(self.agent.display_name)
-                            ),
-                        )
                         self._record_event(
                             "warning",
                             "queued_provider_error",
                             f"{failure.error_class}:{failure.error_code}",
                         )
-            except Exception as survived_error:
-                survived("external_worker.failure_notice_record", survived_error)
-            if self.agent.runtime == "codex":
-                self._discard_client()
-        finally:
-            heartbeat_stop.set()
-            heartbeat.join(timeout=2)
-            self._cleanup_incoming_material_staging(Path(project.root), executing.job_id)
+        except Exception as survived_error:
+            survived("external_worker.failure_notice_record", survived_error)
+        if self.agent.runtime == "codex":
+            self._discard_client()
 
     def _cleanup_incoming_material_staging(self, project_root: Path, job_id: str) -> None:
         directory = project_root / ".hub" / "incoming" / job_id
