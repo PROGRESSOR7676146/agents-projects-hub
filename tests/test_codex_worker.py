@@ -364,6 +364,100 @@ class CodexQueueWorkerTests(unittest.TestCase):
             sender.join(1)
             worker.close()
 
+    def test_stop_after_a_follow_up_lease_never_steers_it_into_the_turn(self) -> None:
+        parent_id = self.enqueue(1, "first")
+        entered = threading.Event()
+        release = threading.Event()
+        interrupted = threading.Event()
+        steered: list[str] = []
+
+        class MainClient(WorkerClient):
+            def wait_for_turn(self, _turn_id: str) -> TurnResult:
+                entered.set()
+                release.wait(5)
+                return TurnResult("Interrupted answer", 1000, 100)
+
+        class ControlClient:
+            def steer_turn(self, **kwargs: object) -> str:
+                steered.append(str(kwargs["text"]))
+                return str(kwargs["turn_id"])
+
+            def interrupt_turn(self, **_kwargs: object) -> None:
+                interrupted.set()
+                release.set()
+
+            def close(self) -> None:
+                pass
+
+        class Supervisor:
+            transport_mode = "socket"
+
+            def __init__(self) -> None:
+                self.main = MainClient()
+                self.calls = 0
+
+            def start(self) -> None:
+                pass
+
+            def client(self) -> object:
+                self.calls += 1
+                return self.main if self.calls == 1 else ControlClient()
+
+            def stop(self) -> None:
+                pass
+
+        worker = CodexQueueWorker(
+            self.config,
+            registry=self.registry,
+            supervisor=cast(Any, Supervisor()),
+            worker_id="test-codex-worker",
+        )
+        original_lease = HubState.lease_steer_followup
+        state_path = self.config.state_path
+        stops: list[str] = []
+
+        def lease_then_stop(state: HubState, *args: Any, **kwargs: Any) -> Any:
+            leased = original_lease(state, *args, **kwargs)
+            if leased is not None and not stops:
+                # The owner's stop lands after the lease, before the start.
+                peer = HubState.open(state_path)
+                try:
+                    request_id, _, _ = peer.request_emergency_stop(
+                        topic_id=leased.topic_id,
+                        chat_id=-1001234567890,
+                        message_id=99,
+                        target_agent_id="codex",
+                    )
+                    stops.append(request_id)
+                finally:
+                    peer.close()
+            return leased
+
+        follow_ups: list[str] = []
+
+        def send_follow_up() -> None:
+            if entered.wait(2):
+                follow_ups.append(self.enqueue(2, "follow up now"))
+
+        sender = threading.Thread(target=send_follow_up)
+        try:
+            with patch.object(HubState, "lease_steer_followup", lease_then_stop):
+                sender.start()
+                self.assertTrue(worker.run_cycle())
+            sender.join(2)
+            self.assertEqual(len(stops), 1)
+            self.assertEqual(steered, [])
+            self.assertTrue(interrupted.is_set())
+            self.assertEqual(worker.state.get_provider_job(parent_id).status, "cancelled")
+            self.assertEqual(worker.state.get_provider_job(follow_ups[0]).status, "cancelled")
+            topic = worker.state.find_topic(-1001234567890, 77)
+            assert topic is not None
+            self.assertIsNone(worker.state.pending_emergency_stop(topic.topic_id, "codex"))
+        finally:
+            release.set()
+            sender.join(1)
+            worker.close()
+
     def test_emergency_stop_interrupts_running_codex_turn_without_model_analysis(self) -> None:
         job_id = self.enqueue()
         entered = threading.Event()

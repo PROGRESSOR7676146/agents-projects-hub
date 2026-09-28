@@ -24,20 +24,27 @@ once, as before. Held jobs awaiting an owner decision are left for that
 decision.
 
 A stop covers exactly the work that existed when it was recorded, except work
-then held for an owner decision. Every stop check uses this one rule: the start
-of a turn, the worker's stop monitor, its checks after the provider returns or
-fails, and the choice of the job that carries the Hub acknowledgement. An older
-unfinished stop therefore never interrupts or cancels later work, and a
-repeated stop message never attaches a notice to a job that started after the
-stop, including a held job the owner confirmed after it. The acknowledgement
-can be attached to a covered job of any provider.
+then held for an owner decision. The stop takes its time under the write lock,
+and a job takes its creation time inside its own admission transaction, so
+"existed" means committed before the stop. Every stop check uses this one rule:
+the start of a turn, the start of a same-turn steering follow-up, the worker's
+stop monitor, its checks after the provider returns or fails, and the choice of
+the job that carries the Hub acknowledgement. An older unfinished stop
+therefore never interrupts or cancels later work, and a repeated stop message
+never attaches a notice to a job that started after the stop, including a held
+job the owner confirmed after it. The acknowledgement can be attached to a
+covered job of any provider.
 
 A leased job counts as running. Moving it to `executing` checks for a covering
 pending stop inside the same immediate write transaction: a stop committed
-first cancels the job without invoking the provider and completes, and a stop
-committed later finds the job executing and interrupts it. Cancelling stopped
-work and completing its stop are likewise one transaction, so a worker that
-dies in between cannot leave the stop pending.
+first cancels the job without invoking the provider, and a stop committed later
+finds the job executing and interrupts it. A steering follow-up is started the
+same way: a follow-up the stop covers is cancelled without the steering call,
+while the stop stays pending until it has interrupted the parent turn, and no
+follow-up is leased into a turn that a pending stop covers or while the
+follow-up is held for an owner decision. Cancelling stopped work completes, in
+the same transaction, every pending stop that covers it, so neither a worker
+that dies in between nor a repeated stop message leaves a stop pending.
 
 ## Consequences
 

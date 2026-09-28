@@ -1370,8 +1370,8 @@ class HubState:
     ) -> tuple[str, int, bool]:
         """Stop the topic: cancel unstarted jobs; target the running turn's provider."""
         target = _bounded(target_agent_id, name="agent id", maximum=64)
-        timestamp = _now()
         with self._immediate_transaction():
+            timestamp = _now()  # under the write lock: covers exactly the work committed before
             duplicate = self._connection.execute(
                 """SELECT request_id, cancelled_queued_count, status
                    FROM provider_stop_requests WHERE chat_id = ? AND message_id = ?""",
@@ -1474,25 +1474,14 @@ class HubState:
         return True
 
     def pending_emergency_stop(self, topic_id: int, agent_id: str) -> str | None:
-        row = self._connection.execute(
-            """SELECT request_id FROM provider_stop_requests
-               WHERE topic_id = ? AND target_agent_id = ? AND status = 'pending'
-               ORDER BY created_at LIMIT 1""",
-            (topic_id, agent_id),
-        ).fetchone()
-        return None if row is None else str(row["request_id"])
+        return self._provider_job_state.pending_stop_for_agent(topic_id, agent_id)
 
     def pending_emergency_stop_for_job(self, job_id: str) -> str | None:
         """The pending stop that covers this job; later work is never covered."""
         return self._provider_job_state.pending_stop_for_job(job_id)
 
     def complete_emergency_stop(self, request_id: str) -> None:
-        with self._connection:
-            self._connection.execute(
-                """UPDATE provider_stop_requests SET status = 'completed', completed_at = ?
-                   WHERE request_id = ? AND status = 'pending'""",
-                (_now(), request_id),
-            )
+        self._provider_job_state.complete_stop(request_id)
 
     def cancel_active_provider_job(
         self,
@@ -1500,10 +1489,18 @@ class HubState:
         lease_token: str,
         *,
         error_code: str = "emergency_stop",
-        stop_request_id: str | None = None,
+        complete_stops: bool = False,
     ) -> None:
         self._provider_job_state.cancel_active(
-            job_id, lease_token, error_code=error_code, stop_request_id=stop_request_id
+            job_id, lease_token, error_code=error_code, complete_stops=complete_stops
+        )
+
+    def start_steer_followup(
+        self, job_id: str, lease_token: str, *, parent_job_id: str
+    ) -> ProviderJobRecord:
+        """Start a leased follow-up for steering unless an emergency stop intervenes."""
+        return self._provider_job_state.start_steer(
+            job_id, lease_token, parent_job_id=parent_job_id
         )
 
     def lease_provider_job(

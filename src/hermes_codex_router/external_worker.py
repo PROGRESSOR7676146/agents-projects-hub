@@ -480,7 +480,7 @@ class ExternalQueueWorker:
                         executing.job_id,
                         token,
                         error_code=failure.error_code,
-                        stop_request_id=exc.request_id,
+                        complete_stops=True,
                     )
                     self._last_error_code = None
                     self._provider_state = "ready"
@@ -750,43 +750,7 @@ class ExternalQueueWorker:
                         # A fallback client owns a private app-server process;
                         # a second client cannot address its active turn.
                         continue
-                    followup = monitor_state.lease_steer_followup(
-                        job.job_id, f"{self.worker_id}-steer", lease_seconds=120
-                    )
-                    if followup is None or followup.lease_token is None:
-                        continue
-                    steer_token = followup.lease_token
-                    monitor_state.mark_provider_job_executing(followup.job_id, steer_token)
-                    steer_client = None
-                    try:
-                        steer_client = self.supervisor.client()
-                        returned_turn = steer_client.steer_turn(
-                            thread_id=thread.thread_id,
-                            turn_id=turn_id,
-                            text=followup.payload_text,
-                            client_user_message_id=followup.job_id,
-                        )
-                        monitor_state.complete_steered_job(
-                            followup.job_id,
-                            steer_token,
-                            parent_job_id=job.job_id,
-                            provider_turn_id=returned_turn,
-                        )
-                    except RpcRejectedError:
-                        monitor_state.reject_unaccepted_steer(followup.job_id, steer_token)
-                    except Exception as exc:
-                        monitor_state.mark_provider_job_indeterminate(
-                            followup.job_id,
-                            steer_token,
-                            error_code=type(exc).__name__,
-                            error_detail="same-turn steering outcome is unknown",
-                        )
-                    finally:
-                        if steer_client is not None:
-                            try:
-                                steer_client.close()
-                            except Exception as survived_error:
-                                survived("external_worker.steer_client_close", survived_error)
+                    self._steer_ready_followup(monitor_state, job, thread.thread_id, turn_id)
             finally:
                 monitor_state.close()
 
@@ -859,6 +823,56 @@ class ExternalQueueWorker:
                 artifacts=artifacts.artifacts,
             )
         )
+
+    def _steer_ready_followup(
+        self, state: HubState, job: ProviderJobRecord, thread_id: str, turn_id: str
+    ) -> None:
+        """Steer the next compatible queued message into the running Codex turn.
+
+        The follow-up starts only through ``start_steer_followup``, which honors
+        a pending emergency stop in the same transaction, so a follow-up that
+        is cancelled or returned to the queue never reaches the provider.
+        """
+        followup = state.lease_steer_followup(
+            job.job_id, f"{self.worker_id}-steer", lease_seconds=120
+        )
+        if followup is None or followup.lease_token is None:
+            return
+        steer_token = followup.lease_token
+        started = state.start_steer_followup(followup.job_id, steer_token, parent_job_id=job.job_id)
+        if started.status != "executing":
+            return
+        assert self.supervisor is not None
+        steer_client = None
+        try:
+            steer_client = self.supervisor.client()
+            returned_turn = steer_client.steer_turn(
+                thread_id=thread_id,
+                turn_id=turn_id,
+                text=followup.payload_text,
+                client_user_message_id=followup.job_id,
+            )
+            state.complete_steered_job(
+                followup.job_id,
+                steer_token,
+                parent_job_id=job.job_id,
+                provider_turn_id=returned_turn,
+            )
+        except RpcRejectedError:
+            state.reject_unaccepted_steer(followup.job_id, steer_token)
+        except Exception as exc:
+            state.mark_provider_job_indeterminate(
+                followup.job_id,
+                steer_token,
+                error_code=type(exc).__name__,
+                error_detail="same-turn steering outcome is unknown",
+            )
+        finally:
+            if steer_client is not None:
+                try:
+                    steer_client.close()
+                except Exception as survived_error:
+                    survived("external_worker.steer_client_close", survived_error)
 
     def _execute_external(
         self, job: ProviderJobRecord, token: str, project: object, topic: object
