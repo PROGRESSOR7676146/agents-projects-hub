@@ -99,16 +99,16 @@
     },
     {
       "target": "src/hermes_codex_router/service.py",
-      "max_lines": 3662,
-      "rationale": "Controller facade; command, ingress, admission and publication seams were extracted in refactoring package 3, but Telegram dispatch still lives here. Stabilization stage 3 extracts the dispatcher. Raised on 2026-09-27 for emergency-stop correctness from the PR #90 review (atomic stop at job start); extraction remains planned.",
+      "max_lines": 3663,
+      "rationale": "Controller facade; command, ingress, admission and publication seams were extracted in refactoring package 3, but Telegram dispatch still lives here. Stabilization stage 3 extracts the dispatcher. Raised on 2026-09-27 for emergency-stop correctness from the PR #90 review (atomic stop at job start); extraction remains planned. Raised by one line on 2026-09-28 for R-021: a stop that wins a failure commit is not recorded as a provider error.",
       "owner": "repository owner",
       "next_review": "2026-12-31",
       "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
     },
     {
       "target": "src/hermes_codex_router/service.py::ProjectHubService._execute_embedded_provider_job",
-      "max_lines": 287,
-      "rationale": "Embedded compatibility consumer that owns one execution lifecycle; retire with embedded mode rather than split it. Raised on 2026-09-27 for emergency-stop correctness from the PR #90 review (atomic stop at job start); extraction remains planned.",
+      "max_lines": 288,
+      "rationale": "Embedded compatibility consumer that owns one execution lifecycle; retire with embedded mode rather than split it. Raised on 2026-09-27 for emergency-stop correctness from the PR #90 review (atomic stop at job start); extraction remains planned. Raised by one line on 2026-09-28 for R-021: a stop that wins a failure commit is not recorded as a provider error.",
       "owner": "repository owner",
       "next_review": "2026-12-31",
       "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
@@ -139,7 +139,7 @@
     },
     {
       "target": "src/hermes_codex_router/state.py",
-      "max_lines": 3099,
+      "max_lines": 3091,
       "rationale": "Single-connection HubState facade that keeps the public state API stable while domain facades own queries (refactoring package 4).",
       "owner": "repository owner",
       "next_review": "2026-12-31",

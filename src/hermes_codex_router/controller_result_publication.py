@@ -17,6 +17,7 @@ from .incoming_materials import (
     cleanup_materialized_inputs,
 )
 from .state import HubState, ProviderJobRecord, ProviderJobResultRecord, StateError
+from .worker_execution import ProviderTurnStopped
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +73,9 @@ class PreparedResultPublisher:
                 telegram_contract_version=publication.telegram_contract_version,
                 artifacts=publication.artifacts,
             )
+            if result is None:
+                # A covering stop cancelled the job in the commit (R-021).
+                raise ProviderTurnStopped()
         except BaseException:
             spool_root = artifact_spool_root(self.state_path)
             for artifact in publication.artifacts:

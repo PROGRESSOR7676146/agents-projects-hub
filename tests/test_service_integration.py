@@ -24,6 +24,7 @@ from hermes_codex_router.provider_catalog_cache import CatalogSnapshot
 from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.state import HubState
 from tests.git_fixtures import init_git_root
+from tests.stop_fixtures import pending_stop
 
 
 class FakeTelegram:
@@ -520,7 +521,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             self.assertEqual(telegram.sent, [])
             topic = value.state.find_topic(-1001234567890, 77)
             assert topic is not None
-            self.assertIsNone(value.state.pending_emergency_stop(topic.topic_id, "codex"))
+            self.assertIsNone(pending_stop(value.state, topic.topic_id, "codex"))
             self.assertTrue(value.handle_update(update(19, "What does that quote mean?")))
             value.state.close()
 

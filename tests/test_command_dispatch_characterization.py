@@ -16,6 +16,7 @@ from hermes_codex_router.hub_config import HubTelegramBot
 from hermes_codex_router.registry import ExecutionRootError
 from hermes_codex_router.state import StateError
 from tests.hub_service_harness import ANTIGRAVITY, CODEX, HubHarness, text_update
+from tests.stop_fixtures import pending_stop
 
 
 class ExternalSummary:
@@ -267,8 +268,8 @@ class CommandDispatchCharacterizationTests(unittest.TestCase):
         self.assertTrue(hub.send("stop", message_id=42))
 
         self.assertIn("Останавливаю активную работу; отменено задач в очереди: 1", hub.last_reply)
-        self.assertIsNotNone(state.pending_emergency_stop(topic.topic_id, "codex"))
-        self.assertIsNone(state.pending_emergency_stop(topic.topic_id, "antigravity"))
+        self.assertIsNotNone(pending_stop(state, topic.topic_id, "codex"))
+        self.assertIsNone(pending_stop(state, topic.topic_id, "antigravity"))
         self.assertEqual(hub.session().agent_id, "antigravity")
 
     # /agent

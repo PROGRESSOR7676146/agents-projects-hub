@@ -128,10 +128,10 @@ acceptance.
   `worker@claude` (PR #80 review, item 5).
 - Slot identity format and bounds are duplicated in four modules (PR #80 review, items 7–8).
 - Real-clock lease tests fail when the host suspends (R-018).
-- Emergency stop: R-021 stays open. A stop recorded between the worker's final
-  check and the result commit still collides with the result's outbox row, and
-  a stop whose covered work ended some other way completes only at the next
-  cancellation or stop in the topic.
+- Emergency stop: R-021 closed on 2026-09-28. The result and failure commits
+  are the last stop check, so a stop recorded after the worker's final check
+  cancels the job instead of colliding with its outbox row, and a stop
+  completes however its covered work ends (ADR 0046).
 - Parallel test runner (Codex review of #93, P3, fails closed): a module or
   class fixture that runs twice in one module run can make a set-up skip also
   count tests that already ran, so the gate fails although discovery passes.

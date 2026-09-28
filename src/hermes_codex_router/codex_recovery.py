@@ -19,6 +19,7 @@ from .project_resolution import resolve_project_context
 from .registry import ProjectRegistry
 from .state import RECOVERED_RESULT_METADATA_JSON, HubState, StateError
 from .topic_execution import resolve_topic_execution_root
+from .worker_execution import ProviderTurnStopped
 
 
 def checkpoint_failure_notice(
@@ -95,7 +96,7 @@ def reconcile_codex_completion(
         if rejections:
             visible += "\n\nSome staged artifacts could not be recovered; inspect the task staging."
         job = state.get_provider_job(job_id)
-        state.commit_provider_result(
+        committed = state.commit_provider_result(
             job_id,
             lease_token,
             visible_response=visible,
@@ -108,6 +109,9 @@ def reconcile_codex_completion(
             acknowledge_handoff=job.handoff_id is not None,
             artifacts=artifacts,
         )
+        if committed is None:
+            # A covering stop cancelled the job in the commit (R-021).
+            raise ProviderTurnStopped()
     except BaseException:
         for artifact in artifacts:
             try:
