@@ -596,7 +596,7 @@ def _doctor_command(args: argparse.Namespace) -> int:
 
 def _status_command(args: argparse.Namespace) -> int:
     config = load_hub_config(args.config)
-    state = HubState.open(config.state_path)
+    state = HubState.open_read_only(config.state_path)
     try:
         result = {"ok": True, **state.status_snapshot()}
         result["runtime_health"] = project_runtime_health(state, config)

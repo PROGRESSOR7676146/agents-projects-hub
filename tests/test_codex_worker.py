@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
+from hermes_codex_router import codex_recovery as codex_recovery_module
+from hermes_codex_router import external_worker as external_worker_module
 from hermes_codex_router.cli import main
 from hermes_codex_router.codex_appserver import (
     CodexThread,
@@ -29,6 +31,7 @@ from hermes_codex_router.models import Project, ProjectRegistry
 from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.state import HubState
 from tests.git_fixtures import init_git_root
+from tests.stop_fixtures import pending_stop
 
 
 class WorkerClient:
@@ -457,7 +460,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             self.assertEqual(worker.state.get_provider_job(follow_ups[0]).status, "cancelled")
             topic = worker.state.find_topic(-1001234567890, 77)
             assert topic is not None
-            self.assertIsNone(worker.state.pending_emergency_stop(topic.topic_id, "codex"))
+            self.assertIsNone(pending_stop(worker.state, topic.topic_id, "codex"))
         finally:
             release.set()
             sender.join(1)
@@ -546,7 +549,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             self.assertEqual(turns, ["started"])
             topic = worker.state.find_topic(-1001234567890, 77)
             assert topic is not None
-            self.assertIsNone(worker.state.pending_emergency_stop(topic.topic_id, "codex"))
+            self.assertIsNone(pending_stop(worker.state, topic.topic_id, "codex"))
         finally:
             release.set()
             sender.join(1)
@@ -623,7 +626,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             assert topic is not None
             self.assertTrue(interrupted.wait(2))
             self.assertEqual(worker.state.get_provider_job(job_id).status, "cancelled")
-            self.assertIsNone(worker.state.pending_emergency_stop(topic.topic_id, "codex"))
+            self.assertIsNone(pending_stop(worker.state, topic.topic_id, "codex"))
         finally:
             release.set()
             sender.join(1)
@@ -692,7 +695,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             topic = worker.state.find_topic(-1001234567890, 77)
             assert topic is not None
             self.assertEqual(worker.state.get_provider_job(job_id).status, "cancelled")
-            self.assertIsNone(worker.state.pending_emergency_stop(topic.topic_id, "codex"))
+            self.assertIsNone(pending_stop(worker.state, topic.topic_id, "codex"))
             next_job_id = self.enqueue(message_id=101, payload="after stop")
             self.assertTrue(worker.run_cycle())
             self.assertEqual(
@@ -739,6 +742,49 @@ class CodexQueueWorkerTests(unittest.TestCase):
             supervisor=cast(Any, WorkerSupervisor(client)),
             worker_id="test-codex-worker",
         )
+
+    def test_a_stop_that_wins_the_recovery_commit_is_not_a_provider_failure(self) -> None:
+        # The turn completed, a later step failed, and recovery found the
+        # result; a stop recorded meanwhile wins the recovery commit (R-021).
+        job_id = self.enqueue()
+        worker = self.worker(WorkerClient())
+        spool = codex_recovery_module.spool_staged_artifacts
+
+        def stop_then_spool(*args: Any, **kwargs: Any) -> Any:
+            job = worker.state.get_provider_job(job_id)
+            _, _, pending = worker.state.request_emergency_stop(
+                topic_id=job.topic_id,
+                chat_id=-1001234567890,
+                message_id=990,
+                target_agent_id="codex",
+            )
+            self.assertTrue(pending)
+            return spool(*args, **kwargs)
+
+        try:
+            with (
+                patch.object(
+                    external_worker_module,
+                    "prepare_worker_artifacts",
+                    side_effect=OSError("fictional artifact failure"),
+                ),
+                patch.object(codex_recovery_module, "spool_staged_artifacts", stop_then_spool),
+            ):
+                self.assertTrue(worker.run_cycle())
+            job = worker.state.get_provider_job(job_id)
+            self.assertEqual((job.status, job.error_code), ("cancelled", "emergency_stop"))
+            self.assertIsNone(pending_stop(worker.state, job.topic_id, "codex"))
+            codes = [
+                str(row[0])
+                for row in worker.state._connection.execute(
+                    "SELECT code FROM runtime_events WHERE component = 'codex'"
+                )
+            ]
+            self.assertIn("provider_turn_stopped", codes)
+            self.assertNotIn("queued_provider_error", codes)
+            self.assertEqual(worker._provider_state, "ready")
+        finally:
+            worker.close()
 
     def test_worker_has_no_telegram_capability_and_uses_its_own_state_connection(self) -> None:
         controller_state = HubState.open(self.config.state_path)

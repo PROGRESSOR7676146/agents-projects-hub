@@ -67,10 +67,11 @@ delete a socket merely to make the canary continue.
    offline configuration check and therefore validates every configured local
    token file. It does not prove the Controller's role-scoped credential
    boundary; the Controller runtime loader reads only its selected ingress
-   token. Run `agents-projects-hub status SHADOW_CONFIG` only after the backup
-   and intended schema migration. Status makes no provider/network request, but
-   opening state may initialize or migrate SQLite. Missing processes may be
-   `unknown` before launch. Repeat `release-manifest verify --state` only against
+   token. Run `agents-projects-hub status SHADOW_CONFIG` after the backup and
+   intended schema migration. Status makes no provider/network request and
+   opens state read-only: it never creates, initializes or migrates SQLite, and
+   it reports `state_schema_unsupported` until the database has the current
+   schema. Missing processes may be `unknown` before launch. Repeat `release-manifest verify --state` only against
    the disposable migrated copy during preparation; the live-state gate belongs
    inside the separately authorized controlled rollout.
 5. Confirm the service topology before changing Telegram settings: one central
