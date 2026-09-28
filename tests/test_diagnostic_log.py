@@ -9,6 +9,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 from hermes_codex_router import diagnostic_log
@@ -120,6 +121,46 @@ class DiagnosticLogTests(unittest.TestCase):
         self.assertIn("survived RuntimeError at service.queue_error_record", output)
         self.assertNotIn("fictional", output)
         self.assertNotIn("TokenBearingError", output)
+
+    def test_class_supplied_text_never_reaches_the_log_or_raises(self) -> None:
+        class Unhashable(str):
+            __hash__ = None  # type: ignore[assignment]
+
+        class Disguised(str):
+            def __str__(self) -> str:
+                return "Session_fictional_3456_Error /home/example/private"
+
+        class RaisingMeta(type):
+            def __getattribute__(cls, name: str) -> object:
+                if name == "__qualname__":
+                    raise ValueError("fictional attribute failure")
+                return super().__getattribute__(name)
+
+        unhashable = type(
+            "ExampleError",
+            (RuntimeError,),
+            {"__module__": "builtins", "__qualname__": Unhashable("RuntimeError")},
+        )
+        disguised = type(
+            "ExampleError",
+            (RuntimeError,),
+            {"__module__": "builtins", "__qualname__": Disguised("RuntimeError")},
+        )
+        raising = cast(type[RuntimeError], RaisingMeta("ExampleError", (RuntimeError,), {}))
+        diagnostic_log.survived("service.health_publish", unhashable("x"))
+        diagnostic_log.survived("service.client_close", disguised("x"))
+        diagnostic_log.survived("service.context_telemetry", raising("x"))
+        site = Disguised("service.queue_error_record")
+        diagnostic_log.survived(site, RuntimeError("x"))
+        output = self.stream.getvalue()
+        self.assertIn("survived RuntimeError at service.health_publish", output)
+        self.assertIn("survived RuntimeError at service.client_close", output)
+        self.assertIn(
+            f"survived {diagnostic_log.UNNAMED_ERROR} at service.context_telemetry", output
+        )
+        self.assertIn(f"survived RuntimeError at {diagnostic_log.INVALID_SITE}", output)
+        self.assertNotIn("fictional", output)
+        self.assertNotIn("/home/example", output)
 
     def test_every_registered_name_is_a_real_exception_class(self) -> None:
         for module_name, name in sorted(diagnostic_log.NAMED_ERRORS):

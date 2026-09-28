@@ -108,6 +108,11 @@ NAMED_ERRORS = frozenset(
         ("hermes_codex_router.telegram", "TelegramError"),
     }
 )
+# Canonical text for every registered class and site. Lookups accept only
+# exact ``str`` values, whose hashing, equality and text cannot be overridden,
+# and the logged text is always the registry's own string.
+_CANONICAL_ERRORS = {entry: entry[1] for entry in NAMED_ERRORS}
+_CANONICAL_SITES = {site: site for site in SITES}
 _OVERFLOW_KEY = "overflow"
 
 _logger = logging.getLogger(LOGGER_NAME)
@@ -151,12 +156,23 @@ def configure_process_logging(stream: TextIO | None = None) -> None:
 
 
 def _error_kind(error: BaseException) -> str:
-    for cls in type(error).__mro__:
-        module = getattr(cls, "__module__", None)
-        name = getattr(cls, "__qualname__", None)
-        if isinstance(module, str) and isinstance(name, str) and (module, name) in NAMED_ERRORS:
-            return name
+    try:
+        for cls in type(error).__mro__:
+            module = getattr(cls, "__module__", None)
+            name = getattr(cls, "__qualname__", None)
+            if type(module) is str and type(name) is str:
+                canonical = _CANONICAL_ERRORS.get((module, name))
+                if canonical is not None:
+                    return canonical
+    except Exception:  # noqa: BLE001 - naming a failure must never fail its caller
+        return UNNAMED_ERROR
     return UNNAMED_ERROR
+
+
+def _site_label(site: object) -> str:
+    if type(site) is not str:
+        return INVALID_SITE
+    return _CANONICAL_SITES.get(site, INVALID_SITE)
 
 
 def survived(site: str, error: BaseException) -> None:
@@ -167,7 +183,7 @@ def survived(site: str, error: BaseException) -> None:
     registered at run time never contributes its name. Repeats of the same
     site and class are emitted at most once per interval with a count.
     """
-    label = site if site in SITES else INVALID_SITE
+    label = _site_label(site)
     kind = _error_kind(error)
     key = f"{label}:{kind}"
     current = time.monotonic()

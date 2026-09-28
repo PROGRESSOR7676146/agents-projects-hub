@@ -27,10 +27,14 @@ by a neutral value. The class name comes from a closed registry too: every
 exception class of the interpreter, taken when the module is imported, plus an
 explicit list of standard-library, dependency and package exceptions
 (`NAMED_ERRORS`). A record names the nearest class of the exception, in method
-resolution order, that is in the registry, and the written text always equals
-a registry entry. A class built at run time, even one registered in a module
-under its own name, is therefore named by a registered ancestor, so dynamic
-identifiers cannot reach the log. The same site and class are emitted
+resolution order, whose module and qualified name are exact strings matching a
+registry entry, and it writes the registry's own string, never an attribute of
+the class. A class built at run time, even one registered in a module under its
+own name or carrying string subclasses with their own hashing, equality or
+text, is therefore named by a registered ancestor, so dynamic identifiers
+cannot reach the log. Site labels are looked up the same way. Naming never
+raises: a class whose attributes fail to read is recorded under a neutral name.
+The same site and class are emitted
 at most once a minute with a count of suppressed repeats, and the repeat state
 holds a bounded number of keys.
 
