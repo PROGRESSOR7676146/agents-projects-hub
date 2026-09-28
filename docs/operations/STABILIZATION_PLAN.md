@@ -81,6 +81,14 @@ acceptance.
   procedure with a schema-compatible rollback artifact, under the
   [live canary](LIVE_CANARY.md) stop conditions. Each run needs the owner's
   authorization and presence.
+  2026-09-28, on the owner's authorization: `adb8b37` (#90–#94, schema 35)
+  replaced `ea5af70` with an empty queue. Evidence level: release identity. The
+  manifest binds both wheels, the configuration and a consistent backup, and
+  the synthetic rollout and rollback passed. Every long-running component
+  (controller, sender, provisioner, monitor and the three provider workers)
+  reports the clean revision, and one monitor cycle through its unit reported
+  no alerts. Live E2E on this revision (the actor baseline, including the
+  topic-wide `stop_route`, and `p0_p1_live`) is still pending the owner.
 - **Actor coverage.** The actor automates status, accounts, model menu,
   provider ping, Reply/forward/burst/stop routing, artifact delivery, the
   context contract and the restart-authorized `p0_p1_live` scenario. `/local`
@@ -120,6 +128,13 @@ acceptance.
   `worker@claude` (PR #80 review, item 5).
 - Slot identity format and bounds are duplicated in four modules (PR #80 review, items 7–8).
 - Real-clock lease tests fail when the host suspends (R-018).
+- Emergency stop: R-021 stays open. A stop recorded between the worker's final
+  check and the result commit still collides with the result's outbox row, and
+  a stop whose covered work ended some other way completes only at the next
+  cancellation or stop in the topic.
+- Parallel test runner (Codex review of #93, P3, fails closed): a module or
+  class fixture that runs twice in one module run can make a set-up skip also
+  count tests that already ran, so the gate fails although discovery passes.
 - Product principle 10 and the capability matrix contradicted the Claude
   scaffold; resolved by withdrawing the gate (ADR 0045).
 - An analysis of the Claude integration path to Codex parity follows stage 3.
