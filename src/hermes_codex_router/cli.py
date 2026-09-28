@@ -5,7 +5,7 @@ import asyncio
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from .acceptance_actor import (
     AcceptanceActorError,
@@ -403,387 +403,463 @@ def _lane_command(args: argparse.Namespace) -> int:
         state.close()
 
 
+def _session_command(args: argparse.Namespace) -> int:
+    if args.session_command == "reconcile-existing-local":
+        from .existing_local_reconciliation import reconcile_existing_local
+
+        try:
+            result = reconcile_existing_local(
+                load_external_worker_config(args.config),
+                session_id=args.session_id,
+                provider_thread_id=args.provider_thread_id,
+                old_job_id=args.old_job_id,
+                expected_generation=args.generation,
+                expected_root=args.root,
+                apply=args.apply,
+                confirm_cli_closed=args.confirm_cli_closed,
+                confirm_remote_idle=args.confirm_remote_idle,
+            )
+        except Exception as exc:
+            _print(
+                {
+                    "format_version": 1,
+                    "ok": False,
+                    "reason_code": (
+                        str(exc)[:180] if isinstance(exc, StateError) else type(exc).__name__
+                    ),
+                }
+            )
+            return 2
+        _print({"format_version": 1, "ok": True, **asdict(result)})
+        return 0
+    if args.session_command == "connect":
+        from .session_connect_cli import ConnectCliError, prepare_connect_code
+
+        if args.config is None:
+            _print(
+                {
+                    "format_version": 1,
+                    "ok": False,
+                    "reason_code": "configuration_required",
+                }
+            )
+            return 2
+        try:
+            config = load_external_worker_config(args.config)
+            result = prepare_connect_code(
+                config,
+                owner_user_id=args.owner_user_id,
+                project_id=args.project,
+                codex_thread_id=args.codex_thread_id,
+                interactive=not args.json,
+            )
+        except ConnectCliError as exc:
+            _print({"format_version": 1, "ok": False, "reason_code": exc.reason})
+            return exc.exit_code
+        except (ValueError, KeyError, OSError):
+            _print(
+                {
+                    "format_version": 1,
+                    "ok": False,
+                    "reason_code": "configuration_invalid",
+                }
+            )
+            return 2
+        _print(result)
+        return 0
+    from .codex_session_adoption import AdoptionError, attach_codex_session
+
+    try:
+        config = load_external_worker_config(args.config)
+        result = attach_codex_session(
+            config,
+            project_id=args.project,
+            chat_id=args.chat_id,
+            thread_id=args.thread_id,
+            codex_thread_id=args.codex_thread_id,
+            model=args.model,
+            effort=args.effort,
+            replace_session=args.replace_session,
+            apply=args.apply,
+            confirm_cli_closed=args.confirm_cli_closed,
+        )
+    except AdoptionError as exc:
+        _print({"format_version": 1, "ok": False, "reason_code": exc.reason})
+        return exc.exit_code
+    except (ValueError, KeyError, OSError):
+        _print({"format_version": 1, "ok": False, "reason_code": "configuration_invalid"})
+        return 2
+    _print(result)
+    return 0
+
+
+def _validate_hub_command(args: argparse.Namespace) -> int:
+    config = load_hub_config(args.config, allow_unbound=args.allow_unbound)
+    load_registry(config.registry_path)
+    _print(
+        {
+            "ok": True,
+            "projects": [project.project_id for project in config.projects],
+            "agents": [agent.agent_id for agent in config.agents],
+        }
+    )
+    return 0
+
+
+def _serve_command(args: argparse.Namespace) -> int:
+    config = load_provider_service_config(args.config, args.agent)
+    service = (
+        ProjectHubService(
+            config,
+            ingress_identity="codex",
+            direct_messages_only=config.hub_bot is not None,
+        )
+        if args.agent == "codex"
+        else ExternalAgentService(config, args.agent, direct_messages_only=True)
+    )
+    try:
+        with stop_on_signals(service):
+            service.run_forever()
+    finally:
+        service.close()
+    return 0
+
+
+def _controller_command(args: argparse.Namespace) -> int:
+    config = load_controller_config(args.config)
+    service = ProjectHubService(
+        config,
+        ingress_identity="hub" if config.hub_bot is not None else "codex",
+    )
+    try:
+        with stop_on_signals(service):
+            service.run_forever()
+    finally:
+        service.close()
+    return 0
+
+
+def _worker_command(args: argparse.Namespace) -> int:
+    config = load_external_worker_config(args.config)
+    slot_count = config.worker_count_for_agent(args.agent)
+    if not 1 <= args.slot <= slot_count:
+        raise HubConfigError("worker slot is not configured for this agent")
+    worker_id = f"{args.agent}-worker" if args.slot == 1 else f"{args.agent}-worker-{args.slot}"
+    with worker_process_lock(config.state_path, worker_id):
+        if args.slot == 1:
+            worker = ExternalQueueWorker(config, args.agent)
+        else:
+            worker = ExternalQueueWorker(config, args.agent, worker_slot=args.slot)
+        try:
+            with stop_on_signals(worker):
+                worker.run_forever(poll_seconds=args.poll_seconds)
+        finally:
+            worker.close()
+    return 0
+
+
+def _sender_command(args: argparse.Namespace) -> int:
+    sender = TelegramOutboxSender(load_outbox_sender_config(args.config))
+    try:
+        with stop_on_signals(sender):
+            sender.run_forever(poll_seconds=args.poll_seconds)
+    finally:
+        sender.close()
+    return 0
+
+
+def _pilot_command(args: argparse.Namespace) -> int:
+    result = run_codex_pilot(
+        load_hub_config(args.config),
+        project_id=args.project,
+        chat_id=args.chat_id,
+        thread_id=args.thread_id,
+        topic_title=args.topic_title,
+    )
+    _print(
+        {
+            "ok": True,
+            "local_session_id": result.local_session_id,
+            "provider_session_id": result.provider_session_id,
+            "telegram_message_id": result.telegram_message_id,
+            "terminal_name": result.terminal_name,
+        }
+    )
+    return 0
+
+
+def _doctor_command(args: argparse.Namespace) -> int:
+    result = run_doctor(load_hub_config(args.config))
+    _print(result)
+    return 0 if result["ok"] else 1
+
+
+def _status_command(args: argparse.Namespace) -> int:
+    config = load_hub_config(args.config)
+    state = HubState.open_read_only(config.state_path)
+    try:
+        result = {"ok": True, **state.status_snapshot()}
+        result["runtime_health"] = project_runtime_health(state, config)
+        _print(result)
+    finally:
+        state.close()
+    return 0
+
+
+def _indeterminate_audit_command(args: argparse.Namespace) -> int:
+    config = load_external_worker_config(args.config)
+    report = classify_indeterminate_jobs(config.state_path)
+    if args.output is not None:
+        write_private_indeterminate_report(args.output, report)
+    _print(
+        {
+            "ok": True,
+            "total": report["total"],
+            "evidence": report["evidence"],
+            "notice_status": report["notice_status"],
+            "resolution_status": report["resolution_status"],
+            "resolutions": report["resolutions"],
+            "productive_replay_authorized": False,
+            "report_written": args.output is not None,
+        }
+    )
+    return 0
+
+
+def _indeterminate_resolve_command(args: argparse.Namespace) -> int:
+    config = load_external_worker_config(args.config)
+    state = HubState.open(config.state_path)
+    try:
+        created = state.resolve_indeterminate_job(args.job_id, args.resolution)
+    finally:
+        state.close()
+    _print(
+        {
+            "ok": True,
+            "job_id": args.job_id,
+            "resolution": args.resolution,
+            "created": created,
+            "productive_replay_authorized": False,
+        }
+    )
+    return 0
+
+
+def _release_info_command(args: argparse.Namespace) -> int:
+    _print({"ok": CURRENT_RELEASE.verified, **asdict(CURRENT_RELEASE)})
+    return 0 if CURRENT_RELEASE.verified else 1
+
+
+def _release_manifest_command(args: argparse.Namespace) -> int:
+    if args.manifest_command == "create":
+        manifest = create_deployment_manifest(
+            args.manifest,
+            active_artifact=args.active_artifact,
+            rollback_artifact=args.rollback_artifact,
+            configuration=args.config,
+            state_backup=args.backup,
+        )
+    else:
+        manifest = verify_deployment_manifest(args.manifest, state_path=args.state)
+    _print({"ok": True, **asdict(manifest)})
+    return 0
+
+
+def _release_dry_run_command(args: argparse.Namespace) -> int:
+    _print(report_dict(run_release_dry_run(args.active_artifact, args.rollback_artifact)))
+    return 0
+
+
+def _migrate_command(args: argparse.Namespace) -> int:
+    result = migrate_database(args.state, create_backup=not args.no_backup)
+    _print(
+        {
+            "ok": True,
+            "previous_version": result.previous_version,
+            "current_version": result.current_version,
+            "backup_path": str(result.backup_path) if result.backup_path else None,
+        }
+    )
+    return 0
+
+
+def _backup_command(args: argparse.Namespace) -> int:
+    destination = backup_database(args.state, args.destination)
+    _print({"ok": True, "backup_path": str(destination)})
+    return 0
+
+
+def _monitor_command(args: argparse.Namespace) -> int:
+    if args.cooldown_seconds < 0:
+        raise ValueError("cooldown-seconds cannot be negative")
+    result = run_monitor_once(
+        load_hub_config(args.config),
+        notify=args.notify,
+        repair=args.repair,
+        cooldown_seconds=args.cooldown_seconds,
+    )
+    _print(result)
+    return 0
+
+
+def _telegram_commands_command(args: argparse.Namespace) -> int:
+    result = configure_public_commands(load_hub_config(args.config), sync=args.sync)
+    _print(result)
+    return 0 if result["ok"] else 1
+
+
+def _e2e_validate_command(args: argparse.Namespace) -> int:
+    config = load_acceptance_actor_config(args.config)
+    _print({"ok": True, "checks": list(config.checks)})
+    return 0
+
+
+def _e2e_login_command(args: argparse.Namespace) -> int:
+    result = asyncio.run(
+        login_acceptance_actor(load_acceptance_actor_config(args.config, require_identity=False))
+    )
+    _print(result)
+    return 0
+
+
+def _e2e_run_command(args: argparse.Namespace) -> int:
+    result = asyncio.run(run_acceptance_checks(load_acceptance_actor_config(args.config)))
+    _print(result)
+    return 0 if result["ok"] else 1
+
+
+def _project_provision_login_command(args: argparse.Namespace) -> int:
+    result = asyncio.run(
+        login_project_provisioner(
+            load_project_provisioner_config(args.config, require_identity=False)
+        )
+    )
+    _print(result)
+    return 0
+
+
+def _project_provisioner_command(args: argparse.Namespace) -> int:
+    worker = ProjectProvisioner(load_project_provisioner_config(args.config))
+    try:
+        if args.once:
+            _print({"ok": True, "processed": worker.run_cycle()})
+        else:
+            with stop_on_signals(worker):
+                worker.run_forever(poll_seconds=args.poll_seconds)
+    finally:
+        worker.close()
+    return 0
+
+
+def _project_provision_reconcile_command(args: argparse.Namespace) -> int:
+    config = load_project_provisioner_config(args.config)
+    state = HubState.open(config.state_path)
+    try:
+        workflow = ProjectOnboardingStore(state).reconcile_unknown(
+            args.workflow_id,
+            telegram_chat_id=args.chat_id,
+            telegram_access_hash=args.access_hash,
+            required_owner_user_ids=config.owner_user_ids,
+            confirm=args.confirm,
+        )
+    finally:
+        state.close()
+    _print({"ok": True, "workflow_id": workflow.workflow_id, "stage": workflow.stage})
+    return 0
+
+
+def _project_provision_resume_command(args: argparse.Namespace) -> int:
+    config = load_project_provisioner_config(args.config)
+    state = HubState.open(config.state_path)
+    try:
+        workflow = ProjectOnboardingStore(state).resume_blocked(
+            args.workflow_id,
+            required_owner_user_ids=config.owner_user_ids,
+            confirm=args.confirm,
+        )
+    finally:
+        state.close()
+    _print({"ok": True, "workflow_id": workflow.workflow_id, "stage": workflow.stage})
+    return 0
+
+
+def _project_command_retry_command(args: argparse.Namespace) -> int:
+    config = load_hub_config(args.config)
+    expected = f"{args.chat_id}:{args.bot_identity}"
+    if args.confirm != expected:
+        raise StateError("project_command_scope_confirmation_invalid")
+    identities = set(config.external_worker_agent_ids)
+    if config.hub_bot is not None:
+        identities.add("hub")
+    if args.bot_identity not in identities:
+        raise StateError("project_command_scope_identity_invalid")
+    state = HubState.open(config.state_path)
+    try:
+        ProjectOnboardingStore(state).reset_failed_command_scope(args.chat_id, args.bot_identity)
+    finally:
+        state.close()
+    _print(
+        {
+            "ok": True,
+            "chat_id": args.chat_id,
+            "bot_identity": args.bot_identity,
+            "status": "pending",
+        }
+    )
+    return 0
+
+
+def _validate_command(args: argparse.Namespace) -> int:
+    registry = load_registry(args.registry, require_exists=not args.allow_missing)
+    _print(
+        {
+            "ok": True,
+            "schema_version": registry.schema_version,
+            "projects": [project.project_id for project in registry.projects],
+        }
+    )
+    return 0
+
+
+_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
+    "session": _session_command,
+    "validate-hub": _validate_hub_command,
+    "serve": _serve_command,
+    "controller": _controller_command,
+    "worker": _worker_command,
+    "sender": _sender_command,
+    "pilot": _pilot_command,
+    "doctor": _doctor_command,
+    "status": _status_command,
+    "indeterminate-audit": _indeterminate_audit_command,
+    "indeterminate-resolve": _indeterminate_resolve_command,
+    "release-info": _release_info_command,
+    "release-manifest": _release_manifest_command,
+    "release-dry-run": _release_dry_run_command,
+    "migrate": _migrate_command,
+    "backup": _backup_command,
+    "monitor": _monitor_command,
+    "telegram-commands": _telegram_commands_command,
+    "e2e-validate": _e2e_validate_command,
+    "e2e-login": _e2e_login_command,
+    "e2e-run": _e2e_run_command,
+    "project-provision-login": _project_provision_login_command,
+    "project-provisioner": _project_provisioner_command,
+    "project-provision-reconcile": _project_provision_reconcile_command,
+    "project-provision-resume": _project_provision_resume_command,
+    "project-command-retry": _project_command_retry_command,
+    "project": _project_command,
+    "lane": _lane_command,
+    "validate": _validate_command,
+}
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     # Survived failures go to stderr (journald under systemd); stdout stays JSON.
     configure_process_logging()
     try:
-        if args.command == "session":
-            if args.session_command == "reconcile-existing-local":
-                from .existing_local_reconciliation import reconcile_existing_local
-
-                try:
-                    result = reconcile_existing_local(
-                        load_external_worker_config(args.config),
-                        session_id=args.session_id,
-                        provider_thread_id=args.provider_thread_id,
-                        old_job_id=args.old_job_id,
-                        expected_generation=args.generation,
-                        expected_root=args.root,
-                        apply=args.apply,
-                        confirm_cli_closed=args.confirm_cli_closed,
-                        confirm_remote_idle=args.confirm_remote_idle,
-                    )
-                except Exception as exc:
-                    _print(
-                        {
-                            "format_version": 1,
-                            "ok": False,
-                            "reason_code": (
-                                str(exc)[:180]
-                                if isinstance(exc, StateError)
-                                else type(exc).__name__
-                            ),
-                        }
-                    )
-                    return 2
-                _print({"format_version": 1, "ok": True, **asdict(result)})
-                return 0
-            if args.session_command == "connect":
-                from .session_connect_cli import ConnectCliError, prepare_connect_code
-
-                if args.config is None:
-                    _print(
-                        {
-                            "format_version": 1,
-                            "ok": False,
-                            "reason_code": "configuration_required",
-                        }
-                    )
-                    return 2
-                try:
-                    config = load_external_worker_config(args.config)
-                    result = prepare_connect_code(
-                        config,
-                        owner_user_id=args.owner_user_id,
-                        project_id=args.project,
-                        codex_thread_id=args.codex_thread_id,
-                        interactive=not args.json,
-                    )
-                except ConnectCliError as exc:
-                    _print({"format_version": 1, "ok": False, "reason_code": exc.reason})
-                    return exc.exit_code
-                except (ValueError, KeyError, OSError):
-                    _print(
-                        {
-                            "format_version": 1,
-                            "ok": False,
-                            "reason_code": "configuration_invalid",
-                        }
-                    )
-                    return 2
-                _print(result)
-                return 0
-            from .codex_session_adoption import AdoptionError, attach_codex_session
-
-            try:
-                config = load_external_worker_config(args.config)
-                result = attach_codex_session(
-                    config,
-                    project_id=args.project,
-                    chat_id=args.chat_id,
-                    thread_id=args.thread_id,
-                    codex_thread_id=args.codex_thread_id,
-                    model=args.model,
-                    effort=args.effort,
-                    replace_session=args.replace_session,
-                    apply=args.apply,
-                    confirm_cli_closed=args.confirm_cli_closed,
-                )
-            except AdoptionError as exc:
-                _print({"format_version": 1, "ok": False, "reason_code": exc.reason})
-                return exc.exit_code
-            except (ValueError, KeyError, OSError):
-                _print({"format_version": 1, "ok": False, "reason_code": "configuration_invalid"})
-                return 2
-            _print(result)
-            return 0
-        if args.command == "validate-hub":
-            config = load_hub_config(args.config, allow_unbound=args.allow_unbound)
-            load_registry(config.registry_path)
-            _print(
-                {
-                    "ok": True,
-                    "projects": [project.project_id for project in config.projects],
-                    "agents": [agent.agent_id for agent in config.agents],
-                }
-            )
-            return 0
-        if args.command == "serve":
-            config = load_provider_service_config(args.config, args.agent)
-            service = (
-                ProjectHubService(
-                    config,
-                    ingress_identity="codex",
-                    direct_messages_only=config.hub_bot is not None,
-                )
-                if args.agent == "codex"
-                else ExternalAgentService(config, args.agent, direct_messages_only=True)
-            )
-            try:
-                with stop_on_signals(service):
-                    service.run_forever()
-            finally:
-                service.close()
-            return 0
-        if args.command == "controller":
-            config = load_controller_config(args.config)
-            service = ProjectHubService(
-                config,
-                ingress_identity="hub" if config.hub_bot is not None else "codex",
-            )
-            try:
-                with stop_on_signals(service):
-                    service.run_forever()
-            finally:
-                service.close()
-            return 0
-        if args.command == "worker":
-            config = load_external_worker_config(args.config)
-            slot_count = config.worker_count_for_agent(args.agent)
-            if not 1 <= args.slot <= slot_count:
-                raise HubConfigError("worker slot is not configured for this agent")
-            worker_id = (
-                f"{args.agent}-worker" if args.slot == 1 else f"{args.agent}-worker-{args.slot}"
-            )
-            with worker_process_lock(config.state_path, worker_id):
-                if args.slot == 1:
-                    worker = ExternalQueueWorker(config, args.agent)
-                else:
-                    worker = ExternalQueueWorker(config, args.agent, worker_slot=args.slot)
-                try:
-                    with stop_on_signals(worker):
-                        worker.run_forever(poll_seconds=args.poll_seconds)
-                finally:
-                    worker.close()
-            return 0
-        if args.command == "sender":
-            sender = TelegramOutboxSender(load_outbox_sender_config(args.config))
-            try:
-                with stop_on_signals(sender):
-                    sender.run_forever(poll_seconds=args.poll_seconds)
-            finally:
-                sender.close()
-            return 0
-        if args.command == "pilot":
-            result = run_codex_pilot(
-                load_hub_config(args.config),
-                project_id=args.project,
-                chat_id=args.chat_id,
-                thread_id=args.thread_id,
-                topic_title=args.topic_title,
-            )
-            _print(
-                {
-                    "ok": True,
-                    "local_session_id": result.local_session_id,
-                    "provider_session_id": result.provider_session_id,
-                    "telegram_message_id": result.telegram_message_id,
-                    "terminal_name": result.terminal_name,
-                }
-            )
-            return 0
-        if args.command == "doctor":
-            result = run_doctor(load_hub_config(args.config))
-            _print(result)
-            return 0 if result["ok"] else 1
-        if args.command == "status":
-            config = load_hub_config(args.config)
-            state = HubState.open_read_only(config.state_path)
-            try:
-                result = {"ok": True, **state.status_snapshot()}
-                result["runtime_health"] = project_runtime_health(state, config)
-                _print(result)
-            finally:
-                state.close()
-            return 0
-        if args.command == "indeterminate-audit":
-            config = load_external_worker_config(args.config)
-            report = classify_indeterminate_jobs(config.state_path)
-            if args.output is not None:
-                write_private_indeterminate_report(args.output, report)
-            _print(
-                {
-                    "ok": True,
-                    "total": report["total"],
-                    "evidence": report["evidence"],
-                    "notice_status": report["notice_status"],
-                    "resolution_status": report["resolution_status"],
-                    "resolutions": report["resolutions"],
-                    "productive_replay_authorized": False,
-                    "report_written": args.output is not None,
-                }
-            )
-            return 0
-        if args.command == "indeterminate-resolve":
-            config = load_external_worker_config(args.config)
-            state = HubState.open(config.state_path)
-            try:
-                created = state.resolve_indeterminate_job(args.job_id, args.resolution)
-            finally:
-                state.close()
-            _print(
-                {
-                    "ok": True,
-                    "job_id": args.job_id,
-                    "resolution": args.resolution,
-                    "created": created,
-                    "productive_replay_authorized": False,
-                }
-            )
-            return 0
-        if args.command == "release-info":
-            _print({"ok": CURRENT_RELEASE.verified, **asdict(CURRENT_RELEASE)})
-            return 0 if CURRENT_RELEASE.verified else 1
-        if args.command == "release-manifest":
-            if args.manifest_command == "create":
-                manifest = create_deployment_manifest(
-                    args.manifest,
-                    active_artifact=args.active_artifact,
-                    rollback_artifact=args.rollback_artifact,
-                    configuration=args.config,
-                    state_backup=args.backup,
-                )
-            else:
-                manifest = verify_deployment_manifest(args.manifest, state_path=args.state)
-            _print({"ok": True, **asdict(manifest)})
-            return 0
-        if args.command == "release-dry-run":
-            _print(report_dict(run_release_dry_run(args.active_artifact, args.rollback_artifact)))
-            return 0
-        if args.command == "migrate":
-            result = migrate_database(args.state, create_backup=not args.no_backup)
-            _print(
-                {
-                    "ok": True,
-                    "previous_version": result.previous_version,
-                    "current_version": result.current_version,
-                    "backup_path": str(result.backup_path) if result.backup_path else None,
-                }
-            )
-            return 0
-        if args.command == "backup":
-            destination = backup_database(args.state, args.destination)
-            _print({"ok": True, "backup_path": str(destination)})
-            return 0
-        if args.command == "monitor":
-            if args.cooldown_seconds < 0:
-                raise ValueError("cooldown-seconds cannot be negative")
-            result = run_monitor_once(
-                load_hub_config(args.config),
-                notify=args.notify,
-                repair=args.repair,
-                cooldown_seconds=args.cooldown_seconds,
-            )
-            _print(result)
-            return 0
-        if args.command == "telegram-commands":
-            result = configure_public_commands(load_hub_config(args.config), sync=args.sync)
-            _print(result)
-            return 0 if result["ok"] else 1
-        if args.command == "e2e-validate":
-            config = load_acceptance_actor_config(args.config)
-            _print({"ok": True, "checks": list(config.checks)})
-            return 0
-        if args.command == "e2e-login":
-            result = asyncio.run(
-                login_acceptance_actor(
-                    load_acceptance_actor_config(args.config, require_identity=False)
-                )
-            )
-            _print(result)
-            return 0
-        if args.command == "e2e-run":
-            result = asyncio.run(run_acceptance_checks(load_acceptance_actor_config(args.config)))
-            _print(result)
-            return 0 if result["ok"] else 1
-        if args.command == "project-provision-login":
-            result = asyncio.run(
-                login_project_provisioner(
-                    load_project_provisioner_config(args.config, require_identity=False)
-                )
-            )
-            _print(result)
-            return 0
-        if args.command == "project-provisioner":
-            worker = ProjectProvisioner(load_project_provisioner_config(args.config))
-            try:
-                if args.once:
-                    _print({"ok": True, "processed": worker.run_cycle()})
-                else:
-                    with stop_on_signals(worker):
-                        worker.run_forever(poll_seconds=args.poll_seconds)
-            finally:
-                worker.close()
-            return 0
-        if args.command == "project-provision-reconcile":
-            config = load_project_provisioner_config(args.config)
-            state = HubState.open(config.state_path)
-            try:
-                workflow = ProjectOnboardingStore(state).reconcile_unknown(
-                    args.workflow_id,
-                    telegram_chat_id=args.chat_id,
-                    telegram_access_hash=args.access_hash,
-                    required_owner_user_ids=config.owner_user_ids,
-                    confirm=args.confirm,
-                )
-            finally:
-                state.close()
-            _print({"ok": True, "workflow_id": workflow.workflow_id, "stage": workflow.stage})
-            return 0
-        if args.command == "project-provision-resume":
-            config = load_project_provisioner_config(args.config)
-            state = HubState.open(config.state_path)
-            try:
-                workflow = ProjectOnboardingStore(state).resume_blocked(
-                    args.workflow_id,
-                    required_owner_user_ids=config.owner_user_ids,
-                    confirm=args.confirm,
-                )
-            finally:
-                state.close()
-            _print({"ok": True, "workflow_id": workflow.workflow_id, "stage": workflow.stage})
-            return 0
-        if args.command == "project-command-retry":
-            config = load_hub_config(args.config)
-            expected = f"{args.chat_id}:{args.bot_identity}"
-            if args.confirm != expected:
-                raise StateError("project_command_scope_confirmation_invalid")
-            identities = set(config.external_worker_agent_ids)
-            if config.hub_bot is not None:
-                identities.add("hub")
-            if args.bot_identity not in identities:
-                raise StateError("project_command_scope_identity_invalid")
-            state = HubState.open(config.state_path)
-            try:
-                ProjectOnboardingStore(state).reset_failed_command_scope(
-                    args.chat_id, args.bot_identity
-                )
-            finally:
-                state.close()
-            _print(
-                {
-                    "ok": True,
-                    "chat_id": args.chat_id,
-                    "bot_identity": args.bot_identity,
-                    "status": "pending",
-                }
-            )
-            return 0
-        if args.command == "project":
-            return _project_command(args)
-        if args.command == "lane":
-            return _lane_command(args)
-
-        registry = load_registry(args.registry, require_exists=not args.allow_missing)
-        _print(
-            {
-                "ok": True,
-                "schema_version": registry.schema_version,
-                "projects": [project.project_id for project in registry.projects],
-            }
-        )
-        return 0
+        return _COMMANDS[args.command](args)
     except KeyboardInterrupt:
         return 130
     except (
