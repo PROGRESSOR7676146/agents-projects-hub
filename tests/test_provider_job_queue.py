@@ -833,6 +833,47 @@ class ProviderJobQueueTests(unittest.TestCase):
         with self.assertRaisesRegex(StateError, "cannot be cancelled"):
             self.state.cancel_active_provider_job(job_id, token, complete_stops=True)
 
+    def test_a_stop_just_before_the_commit_lock_keeps_its_durable_notice(self) -> None:
+        # A commit takes its own timestamp before the write lock; a stop that
+        # lands in between must still be able to attach its notice to the job.
+        for index, ending in enumerate(("result", "failure")):
+            with self.subTest(ending=ending):
+                job_id, token = self.executing(750 + 2 * index)
+                before_lock = datetime.now(timezone.utc)
+                request_id, _, pending = self.stop(751 + 2 * index)
+                self.assertTrue(pending)
+
+                if ending == "result":
+                    committed = self.state.commit_provider_result(
+                        job_id,
+                        token,
+                        visible_response="late result",
+                        sender_agent_id="codex",
+                        telegram_html="late result",
+                        now=before_lock,
+                    )
+                    self.assertIsNone(committed)
+                else:
+                    record = self.state.terminate_provider_job_with_notice(
+                        job_id,
+                        token,
+                        status="failed",
+                        error_class="provider",
+                        error_code="late_failure",
+                        sender_agent_id="codex",
+                        telegram_html="late failure",
+                        now=before_lock,
+                    )
+                    self.assertEqual(record.status, "cancelled")
+
+                self.assertTrue(
+                    self.state.enqueue_emergency_stop_notice(
+                        request_id, "Останавливаю активную работу."
+                    )
+                )
+                notice = self.state.get_telegram_outbox_for_job(job_id)
+                self.assertEqual(notice.sender_agent_id, "hub")
+
     def test_stale_recovery_completes_a_stop_left_without_work(self) -> None:
         # The worker died while its stopped turn was running.
         job_id, _ = self.executing(737)

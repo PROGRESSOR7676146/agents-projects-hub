@@ -1126,7 +1126,8 @@ class ProjectHubService:
                     )
             except Exception as survived_error:
                 survived("service.failure_notice_record", survived_error)
-            if not recovered and failure.notice != "emergency_stop":
+            stopped = queue_state.get_provider_job(executing.job_id).error_class == "user_stop"
+            if not recovered and not stopped:  # a stop may have won any commit (R-021)
                 queue_state.record_runtime_event(
                     agent.agent_id,
                     "warning",

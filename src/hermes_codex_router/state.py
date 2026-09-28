@@ -1672,7 +1672,7 @@ class HubState:
         detail = error_detail.strip()[:1000] if error_detail else None
         timestamp = _timestamp(now)
         with self._immediate_transaction():
-            if self._provider_job_state.honor_stop(job_id, lease_token, expected_status, timestamp):
+            if self._provider_job_state.honor_stop(job_id, lease_token, expected_status):
                 return self.get_provider_job(job_id)
             row = self._connection.execute(
                 """SELECT jobs.*, topics.thread_id FROM provider_jobs jobs
@@ -1851,7 +1851,7 @@ class HubState:
             raise StateError("Telegram contract version must be positive")
         timestamp = _timestamp(now)
         with self._immediate_transaction():
-            if self._provider_job_state.honor_stop(job_id, lease_token, "executing", timestamp):
+            if self._provider_job_state.honor_stop(job_id, lease_token, "executing"):
                 return None
             job_row = self._connection.execute(
                 """SELECT jobs.*, topics.thread_id FROM provider_jobs jobs

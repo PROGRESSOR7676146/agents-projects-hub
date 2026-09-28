@@ -707,6 +707,39 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         finally:
             worker.close()
 
+    def test_a_stop_that_wins_the_failure_commit_is_not_a_provider_error(self) -> None:
+        job_id = self.enqueue("opencode", 35)
+        worker = self.worker("opencode", Adapter("opencode"))
+
+        def stop_then_fail(*_args: Any, **_kwargs: Any) -> Any:
+            job = worker.state.get_provider_job(job_id)
+            _, _, pending = worker.state.request_emergency_stop(
+                topic_id=job.topic_id,
+                chat_id=-1001234567890,
+                message_id=935,
+                target_agent_id="opencode",
+            )
+            self.assertTrue(pending)
+            raise OSError("fictional artifact failure")
+
+        try:
+            with patch.object(external_worker_module, "prepare_worker_artifacts", stop_then_fail):
+                self.assertTrue(worker.run_cycle())
+            job = worker.state.get_provider_job(job_id)
+            self.assertEqual((job.status, job.error_code), ("cancelled", "emergency_stop"))
+            self.assertIsNone(pending_stop(worker.state, job.topic_id, "opencode"))
+            codes = [
+                str(row[0])
+                for row in worker.state._connection.execute(
+                    "SELECT code FROM runtime_events WHERE component = 'opencode'"
+                )
+            ]
+            self.assertIn("provider_turn_stopped", codes)
+            self.assertNotIn("queued_provider_error", codes)
+            self.assertEqual(worker._provider_state, "ready")
+        finally:
+            worker.close()
+
     def test_an_unfinished_older_stop_never_interrupts_or_cancels_later_work(self) -> None:
         old_id = self.enqueue("opencode", 32, thread_id=132)
         state = HubState.open(self.config.state_path)

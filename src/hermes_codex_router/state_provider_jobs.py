@@ -525,15 +525,17 @@ class ProviderJobsStateFacade:
             if not stopped and not self._ended_by_stop(job_id):
                 raise self._state_error("active provider job cannot be cancelled")
 
-    def honor_stop(self, job_id: str, lease_token: str, status: str, timestamp: str) -> bool:
+    def honor_stop(self, job_id: str, lease_token: str, status: str) -> bool:
         """Cancel the job for a covering pending stop instead of committing it.
 
         The result and failure commits call this first, inside their own write
         transaction, so each commit is the last stop check (R-021): a stop
         recorded after the worker's final check still ends the job, whose
         single outbox row stays free for the stop's Hub acknowledgement, and
-        the stops left without work complete with it. True when a stop has
-        ended the job, now or earlier; False leaves the commit to proceed.
+        the stops left without work complete with it. The cancellation takes
+        its time here, under the write lock, so it is never earlier than the
+        stop and the stop's notice can still choose the job. True when a stop
+        has ended the job, now or earlier; False leaves the commit to proceed.
         """
         if self._ended_by_stop(job_id):
             return True
@@ -545,7 +547,7 @@ class ProviderJobsStateFacade:
             statuses=(status,),
             error_code="emergency_stop",
             complete_stops=True,
-            timestamp=timestamp,
+            timestamp=self._now(),
         )
 
     def _ended_by_stop(self, job_id: str) -> bool:
