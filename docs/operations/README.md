@@ -44,8 +44,9 @@ Operational truth is split by purpose:
   and every configured external provider worker as `healthy`, `degraded`,
   `stale`, or `unknown`. Their bounded release fields produce one deterministic
   deployment status: `converged`, `mixed`, or `unknown`. Only `converged` names
-  one clean package version, exact Git SHA, and build time. This projection reads
-  SQLite only and never invokes a provider, model, or optional account helper.
+  one clean package version, exact Git SHA, and build time. This projection opens
+  SQLite read-only, never creates or migrates it, and never invokes a provider,
+  model, or optional account helper.
   Monitoring uses the same projection and sends one transition alert for a
   mixed/unknown episode to the configured Hub Operations topic, re-arming only
   after convergence.
