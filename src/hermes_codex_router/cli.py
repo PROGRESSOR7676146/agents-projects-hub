@@ -589,7 +589,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0 if result["ok"] else 1
         if args.command == "status":
             config = load_hub_config(args.config)
-            state = HubState.open(config.state_path)
+            state = HubState.open_read_only(config.state_path)
             try:
                 result = {"ok": True, **state.status_snapshot()}
                 result["runtime_health"] = project_runtime_health(state, config)
