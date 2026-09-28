@@ -43,7 +43,7 @@
     },
     {
       "target": "src/hermes_codex_router/hub_config.py::load_hub_config",
-      "max_lines": 633,
+      "max_lines": 638,
       "rationale": "Monolithic configuration validation. Stabilization stage 3 splits it into per-section parsers.",
       "owner": "repository owner",
       "next_review": "2026-12-31",

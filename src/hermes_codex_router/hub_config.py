@@ -560,6 +560,11 @@ def load_hub_config(
     for agent_id, raw_hints in raw_provider_hints.items():
         if agent_id not in agent_ids:
             raise HubConfigError("provider_account_hints references an unknown agent")
+        if any(agent.agent_id == agent_id and agent.runtime == "codex" for agent in agents):
+            raise HubConfigError(
+                "provider_account_hints cannot list a Codex agent: "
+                "Codex has no account list (ADR 0047)"
+            )
         if not isinstance(raw_hints, list) or not raw_hints:
             raise HubConfigError("provider_account_hints values must be non-empty arrays")
         if len(raw_hints) > 16:

@@ -83,7 +83,8 @@ This normative module is part of the
   only after a real provider `429`; plan caps are labelled separately. The
   Controller MUST build `/accounts` from private configuration and durable local
   state only and MUST NOT invoke a provider, model, or account helper. Codex has
-  no account list (REQ-AUTH-003). Other providers MAY declare short masked account
+  no account list (REQ-AUTH-003): a Codex agent in `provider_account_hints` MUST
+  fail configuration loading. Other providers MAY declare short masked account
   prefixes in private configuration; unknown limits remain explicitly unknown,
   while a provider-reported exhaustion is shown for the current unknown account.
   A configured private Antigravity status cache MAY supply structured current

@@ -29,7 +29,7 @@ or the official stdio app-server.
 | --- | --- |
 | `codex_multi_auth_dir`, `codex_multi_auth_executable`, `codex_account_hints` | **Rejected.** Presence of any of these keys fails configuration loading, whatever the value, `null` included. The check runs right after the schema version, before any path check, filesystem access or helper call, and names only the keys, never their values. |
 | Account pool (`codex_accounts.py`), rotation observer (`provider_events.py`) | **Removed.** No pool read, snapshot, rotation counter or rotation notice. |
-| `/status`, `/accounts` | **Kept for other providers.** Codex shows no account; its limits come only from what the provider reports, otherwise none are shown. A pool snapshot left in state by an earlier release is ignored. |
+| `/status`, `/accounts` | **Kept for other providers.** Codex shows no account; its limits come only from what the provider reports, otherwise none are shown. A pool snapshot left in state by an earlier release is ignored. A Codex agent in the generic `provider_account_hints` fails configuration loading, so the list cannot return by that route. |
 | Operational alerts | **Pool, rotation, token-invalidation and runtime-proxy alerts removed.** Episodes latched by an earlier release are released on the next notifying monitor cycle by the existing alert reconciliation. |
 | `doctor` | **Multi-auth checks removed.** The generic `codex_config_proxy` check of a configured loopback provider stays. |
 | Codex model catalog | **Native only.** The monitor reads `model/list` from the configured socket. A catalog cached from the multi-auth matrix has a different source version and is replaced on the next refresh, even when not yet stale. |

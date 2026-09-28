@@ -715,6 +715,10 @@ class HubConfigTests(unittest.TestCase):
                     load_hub_config(path)
                 self.assertNotIn("example", str(raised.exception))
 
+    def test_rejects_codex_account_hints_through_the_generic_key(self) -> None:
+        with self.assertRaisesRegex(HubConfigError, "Codex agent.*ADR 0047"):
+            load_hub_config(self.write_config(provider_account_hints={"codex": ["abc"]}))
+
     def test_rejects_group_chat_id_that_is_not_supergroup_shaped(self) -> None:
         with self.assertRaisesRegex(HubConfigError, "telegram_chat_id"):
             load_hub_config(
