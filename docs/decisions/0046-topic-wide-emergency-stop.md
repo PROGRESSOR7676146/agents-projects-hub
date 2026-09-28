@@ -40,11 +40,14 @@ pending stop inside the same immediate write transaction: a stop committed
 first cancels the job without invoking the provider, and a stop committed later
 finds the job executing and interrupts it. A steering follow-up is started the
 same way: a follow-up the stop covers is cancelled without the steering call,
-while the stop stays pending until it has interrupted the parent turn, and no
-follow-up is leased into a turn that a pending stop covers or while the
-follow-up is held for an owner decision. Cancelling stopped work completes, in
-the same transaction, every pending stop that covers it, so neither a worker
-that dies in between nor a repeated stop message leaves a stop pending.
+and one it does not cover returns to the queue when a stop covers the parent or
+the parent turn has ended. No follow-up is leased into a turn that a pending
+stop covers, or while it is held for an owner decision. Cancelling stopped work
+completes, in the same transaction, every pending stop that covers it once none
+of that stop's covered work is still queued, leased or running. A stop
+therefore outlives neither its work nor a worker that dies after the
+cancellation, and it never ends while a covered follow-up, leased or returned
+by a rejected steering call, could still start.
 
 ## Consequences
 

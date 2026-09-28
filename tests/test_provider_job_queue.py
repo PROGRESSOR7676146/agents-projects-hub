@@ -517,10 +517,11 @@ class ProviderJobQueueTests(unittest.TestCase):
         self.assertEqual(committed_first, [False], "the stop read its clock before the lock")
 
     def running_parent_and_follow_up(self, first: int, second: int):
-        parent, _ = self.enqueue(first)
-        leased = self.state.lease_provider_job("codex", "worker")
-        assert leased is not None and leased.lease_token is not None
-        self.state.mark_provider_job_executing(leased.job_id, leased.lease_token)
+        """A running parent turn (with its lease token) and a queued follow-up."""
+        self.enqueue(first)
+        parent = self.state.lease_provider_job("codex", "worker")
+        assert parent is not None and parent.lease_token is not None
+        self.state.mark_provider_job_executing(parent.job_id, parent.lease_token)
         follow_up, _ = self.enqueue(second)
         return parent, follow_up
 
@@ -580,6 +581,71 @@ class ProviderJobQueueTests(unittest.TestCase):
 
         self.assertIsNone(self.state.lease_steer_followup(parent.job_id, "worker-steer"))
         self.assertEqual(self.state.get_provider_job(follow_up.job_id).status, "queued")
+
+    def test_follow_up_rejected_during_a_stop_keeps_the_stop_until_it_is_stopped(self) -> None:
+        parent, follow_up = self.running_parent_and_follow_up(686, 687)
+        assert parent.lease_token is not None
+        leased = self.state.lease_steer_followup(parent.job_id, "worker-steer")
+        assert leased is not None and leased.lease_token is not None
+        started = self.state.start_steer_followup(
+            follow_up.job_id, leased.lease_token, parent_job_id=parent.job_id
+        )
+        self.assertEqual(started.status, "executing")
+        # The owner's stop lands while the steering call is in flight, and the
+        # app-server then rejects the call, which returns the follow-up.
+        request_id, _, pending = self.stop(688)
+        self.assertTrue(pending)
+        self.state.reject_unaccepted_steer(follow_up.job_id, leased.lease_token)
+        self.state.cancel_active_provider_job(
+            parent.job_id, parent.lease_token, complete_stops=True
+        )
+
+        self.assertEqual(self.state.pending_emergency_stop_for_job(follow_up.job_id), request_id)
+        again = self.state.lease_provider_job("codex", "worker")
+        assert again is not None and again.lease_token is not None
+        self.assertEqual(again.job_id, follow_up.job_id)
+        stopped = self.state.mark_provider_job_executing(
+            again.job_id, again.lease_token, honor_stop=True
+        )
+        self.assertEqual(stopped.status, "cancelled")
+        self.assertIsNone(self.state.pending_emergency_stop(self.topic.topic_id, "codex"))
+
+    def test_stop_stays_pending_while_a_leased_follow_up_can_still_start(self) -> None:
+        parent, follow_up = self.running_parent_and_follow_up(689, 690)
+        assert parent.lease_token is not None
+        leased = self.state.lease_steer_followup(parent.job_id, "worker-steer")
+        assert leased is not None and leased.lease_token is not None
+        request_id, _, _ = self.stop(691)
+        self.state.cancel_active_provider_job(
+            parent.job_id, parent.lease_token, complete_stops=True
+        )
+        self.assertEqual(self.state.pending_emergency_stop_for_job(follow_up.job_id), request_id)
+
+        started = self.state.start_steer_followup(
+            follow_up.job_id, leased.lease_token, parent_job_id=parent.job_id
+        )
+
+        self.assertEqual(started.status, "cancelled")
+        self.assertIsNone(self.state.pending_emergency_stop(self.topic.topic_id, "codex"))
+
+    def test_follow_up_of_a_turn_that_ended_returns_to_the_queue(self) -> None:
+        parent, follow_up = self.running_parent_and_follow_up(692, 693)
+        assert parent.lease_token is not None
+        leased = self.state.lease_steer_followup(parent.job_id, "worker-steer")
+        assert leased is not None and leased.lease_token is not None
+        self.state.commit_provider_result(
+            parent.job_id,
+            parent.lease_token,
+            visible_response="done",
+            sender_agent_id="codex",
+            telegram_html="done",
+        )
+
+        started = self.state.start_steer_followup(
+            follow_up.job_id, leased.lease_token, parent_job_id=parent.job_id
+        )
+
+        self.assertEqual((started.status, started.lease_token), ("queued", None))
 
     def test_follow_up_without_a_stop_starts_normally(self) -> None:
         parent, follow_up = self.running_parent_and_follow_up(684, 685)

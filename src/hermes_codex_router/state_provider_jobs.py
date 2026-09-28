@@ -20,25 +20,37 @@ def _parallel_worker_declarations(agent_id: str) -> tuple[str, ...]:
 # work then held for an owner decision (REQ-CMD-007, ADR 0046). Every stop
 # check uses this one rule, so an unfinished older stop or a repeated stop
 # message never reaches later work, including a held job confirmed after it.
-# ``stop`` aliases a provider_stop_requests row and ``job`` a provider_jobs row.
-STOP_COVERS_JOB_SQL = """stop.topic_id = job.topic_id AND job.created_at <= stop.created_at
+def _stop_covers(stop: str, job: str) -> str:
+    """SQL that is true when the ``stop`` request row covers the ``job`` row."""
+    return f"""{stop}.topic_id = {job}.topic_id AND {job}.created_at <= {stop}.created_at
      AND NOT EXISTS (
        SELECT 1 FROM provider_job_holds held
-       WHERE held.job_id = job.job_id AND held.held_at <= stop.created_at
-         AND (held.decision = 'pending' OR held.decided_at > stop.created_at)
+       WHERE held.job_id = {job}.job_id AND held.held_at <= {stop}.created_at
+         AND (held.decision = 'pending' OR held.decided_at > {stop}.created_at)
      )"""
+
+
+STOP_COVERS_JOB_SQL = _stop_covers("stop", "job")
 
 _PENDING_STOP_FOR_JOB_SQL = f"""SELECT stop.request_id FROM provider_stop_requests stop
    JOIN provider_jobs job ON job.job_id = ?
    WHERE stop.status = 'pending' AND {STOP_COVERS_JOB_SQL}
    ORDER BY stop.created_at LIMIT 1"""
 
-_COMPLETE_STOPS_COVERING_JOB_SQL = f"""UPDATE provider_stop_requests
+# A stop is complete once none of its covered work can still start or run:
+# a follow-up that is leased, or that a rejected steering call returned to the
+# queue, keeps the stop pending even after the parent turn was cancelled.
+_COMPLETE_FINISHED_STOPS_SQL = f"""UPDATE provider_stop_requests
    SET status = 'completed', completed_at = ?
    WHERE status = 'pending' AND request_id IN (
      SELECT stop.request_id FROM provider_stop_requests stop
      JOIN provider_jobs job ON job.job_id = ?
      WHERE stop.status = 'pending' AND {STOP_COVERS_JOB_SQL}
+       AND NOT EXISTS (
+         SELECT 1 FROM provider_jobs other
+         WHERE other.status IN ('queued', 'retry_wait', 'leased', 'executing')
+           AND {_stop_covers("stop", "other")}
+       )
    )"""
 
 
@@ -494,8 +506,9 @@ class ProviderJobsStateFacade:
 
         Both happen in one transaction, so a worker that dies right after the
         cancellation never leaves a stop pending, where it would keep blocking
-        the topic. Every pending stop covering the job completes, so a repeated
-        stop message does not outlive the work it stopped.
+        the topic. Every pending stop covering the job completes once none of
+        its other covered work can still run, so a repeated stop message does
+        not outlive the work it stopped and no stop ends before its work.
         """
         with self._transaction():
             stopped = self._cancel_stopped(
@@ -580,7 +593,7 @@ class ProviderJobsStateFacade:
         if cursor.rowcount != 1:
             return False
         if complete_stops:
-            self._connection.execute(_COMPLETE_STOPS_COVERING_JOB_SQL, (timestamp, job_id))
+            self._connection.execute(_COMPLETE_FINISHED_STOPS_SQL, (timestamp, job_id))
         return True
 
     def lease(
@@ -966,25 +979,29 @@ class ProviderJobsStateFacade:
     ) -> ProviderJobRecord:
         """Start a leased follow-up that is about to join its parent's running turn.
 
-        A pending emergency stop is honored for both jobs in the transaction
-        of the start. A follow-up the stop covers is cancelled. A follow-up that
-        arrived after a stop covering the parent returns to the queue and later
-        runs as its own turn instead of joining a turn that is being stopped.
-        Neither completes a stop that still has to interrupt the parent.
+        Everything is decided in the transaction of the start. A follow-up an
+        emergency stop covers is cancelled; the stop completes only once none
+        of its covered work, such as the parent turn, can still run. A follow-up
+        the stop does not cover returns to the queue when a stop covers the
+        parent or the parent no longer runs, and later runs as its own turn
+        instead of joining a turn that is being stopped or has ended.
         """
         with self._transaction():
             timestamp = self._timestamp(now)
-            parent_stopping = self.pending_stop_for_job(parent_job_id) is not None
+            parent = self._connection.execute(
+                "SELECT status FROM provider_jobs WHERE job_id = ?", (parent_job_id,)
+            ).fetchone()
+            parent_running = parent is not None and str(parent["status"]) == "executing"
             if self.pending_stop_for_job(job_id) is not None:
                 changed = self._cancel_stopped(
                     job_id,
                     lease_token,
                     statuses=("leased",),
                     error_code="emergency_stop",
-                    complete_stops=not parent_stopping,
+                    complete_stops=True,
                     timestamp=timestamp,
                 )
-            elif parent_stopping:
+            elif not parent_running or self.pending_stop_for_job(parent_job_id) is not None:
                 changed = (
                     self._connection.execute(
                         """UPDATE provider_jobs
