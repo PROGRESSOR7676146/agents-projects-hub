@@ -26,14 +26,6 @@
       "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
     },
     {
-      "target": "src/hermes_codex_router/cli.py::main",
-      "max_lines": 396,
-      "rationale": "Command dispatch chain. Stabilization stage 3 moves commands into handler functions.",
-      "owner": "repository owner",
-      "next_review": "2026-12-31",
-      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
-    },
-    {
       "target": "src/hermes_codex_router/external_runtime.py::ExternalCliAdapter.run_turn",
       "max_lines": 201,
       "rationale": "Per-runtime CLI process lifecycle; runtime-specific parsing is the extraction candidate.",
