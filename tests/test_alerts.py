@@ -14,12 +14,10 @@ from hermes_codex_router.alerts import (
     check_codex_session_bloat,
     evaluate_operational_alerts,
 )
-from hermes_codex_router.codex_accounts import CodexAccountStatus, CodexPoolStatus
 from hermes_codex_router.hub_config import OperationalAlertSettings
 from hermes_codex_router.monitoring import (
     _claim_operational_alert,
     _destination,
-    _release_recovered_quota_alerts,
     _release_resolved_operational_alerts,
     _send_hermes,
 )
@@ -65,31 +63,7 @@ class OperationalAlertTests(unittest.TestCase):
                     for connection in created:
                         connection.close()
 
-    def test_reports_unavailable_low_quota_and_stuck_dispatch(self) -> None:
-        pool = CodexPoolStatus(
-            available=True,
-            rotation_enabled=True,
-            accounts=(
-                CodexAccountStatus(
-                    1,
-                    True,
-                    "ready",
-                    "low",
-                    5,
-                    53,
-                    None,
-                    None,
-                    None,
-                    False,
-                    "pr***@***.com",
-                ),
-                CodexAccountStatus(
-                    2, False, "unavailable", "high", None, 67, None, None, None, False
-                ),
-            ),
-            recommended_account=1,
-            account_rotations=0,
-        )
+    def test_reports_stuck_dispatch_without_its_identifier(self) -> None:
         snapshot: dict[str, object] = {
             "pending_dispatches": [
                 {
@@ -104,243 +78,29 @@ class OperationalAlertTests(unittest.TestCase):
         }
 
         alerts = evaluate_operational_alerts(
-            pool=pool,
             state_snapshot=snapshot,
             doctor_ok=True,
             now=datetime(2026, 8, 29, 6, 30, tzinfo=timezone.utc),
         )
 
-        self.assertEqual(
-            {alert.code for alert in alerts},
-            {"codex_5h_low", "dispatch_stuck"},
-        )
+        self.assertEqual({alert.code for alert in alerts}, {"dispatch_stuck"})
         rendered = "\n".join(alert.message for alert in alerts)
         self.assertNotIn("dispatch-secret", rendered)
-        self.assertIn("account 1 (pr***@***.com)", rendered)
 
     def test_healthy_state_has_no_alerts(self) -> None:
-        pool = CodexPoolStatus(
-            available=True,
-            rotation_enabled=True,
-            accounts=(
-                CodexAccountStatus(1, True, "ready", "low", 60, 70, None, None, None, False),
-            ),
-            recommended_account=1,
-            account_rotations=2,
-        )
         alerts = evaluate_operational_alerts(
-            pool=pool,
             state_snapshot={"pending_dispatches": []},
             doctor_ok=True,
             now=datetime(2026, 8, 29, 6, 30, tzinfo=timezone.utc),
         )
         self.assertEqual(alerts, ())
-
-    def test_optional_codex_pool_is_silent_when_not_configured(self) -> None:
-        alerts = evaluate_operational_alerts(
-            pool=CodexPoolStatus(False, False, (), None, 0, "not_configured"),
-            state_snapshot={"pending_dispatches": []},
-            doctor_ok=True,
-        )
-
-        self.assertNotIn(
-            "codex_pool_unavailable",
-            {alert.code for alert in alerts},
-        )
-
-    def test_exhausted_inactive_account_is_status_not_alert_after_rotation(self) -> None:
-        alerts = evaluate_operational_alerts(
-            pool=CodexPoolStatus(
-                True,
-                True,
-                (
-                    CodexAccountStatus(
-                        1, True, "ready", "low", 100, 84, None, None, 1, False, "abc…"
-                    ),
-                    CodexAccountStatus(
-                        2, False, "unavailable", "high", 98, 0, None, None, 1, False, "xyz…"
-                    ),
-                ),
-                1,
-                0,
-            ),
-            state_snapshot={"pending_dispatches": []},
-            doctor_ok=True,
-        )
-
-        self.assertEqual(alerts, ())
-
-    def test_inactive_unavailable_account_is_status_while_replacement_is_ready(self) -> None:
-        alerts = evaluate_operational_alerts(
-            pool=CodexPoolStatus(
-                True,
-                True,
-                (
-                    CodexAccountStatus(1, True, "ready", "low", 80, 80, None, None, 1, False),
-                    CodexAccountStatus(
-                        2, False, "unavailable", "high", 90, 90, None, None, 1, False
-                    ),
-                ),
-                1,
-                0,
-            ),
-            state_snapshot={"pending_dispatches": []},
-            doctor_ok=True,
-        )
-
-        self.assertEqual(alerts, ())
-
-    def test_unavailable_account_alerts_when_no_replacement_is_ready(self) -> None:
-        alerts = evaluate_operational_alerts(
-            pool=CodexPoolStatus(
-                True,
-                True,
-                (
-                    CodexAccountStatus(
-                        1, True, "unavailable", "high", 90, 90, None, None, 1, False
-                    ),
-                    CodexAccountStatus(
-                        2, False, "unavailable", "high", 80, 80, None, None, 1, False
-                    ),
-                ),
-                None,
-                0,
-            ),
-            state_snapshot={"pending_dispatches": []},
-            doctor_ok=True,
-        )
-
-        self.assertEqual(
-            [alert.code for alert in alerts],
-            ["codex_account_unavailable", "codex_account_unavailable"],
-        )
-        self.assertTrue(all("quota and authentication" in alert.message for alert in alerts))
-
-    def test_stale_quota_does_not_page_as_if_it_were_current(self) -> None:
-        pool = CodexPoolStatus(
-            available=True,
-            rotation_enabled=True,
-            accounts=(
-                CodexAccountStatus(
-                    1,
-                    True,
-                    "ready",
-                    "low",
-                    0,
-                    1,
-                    None,
-                    None,
-                    1,
-                    True,
-                    "ac…",
-                ),
-            ),
-            recommended_account=1,
-            account_rotations=0,
-        )
-
-        alerts = evaluate_operational_alerts(
-            pool=pool,
-            state_snapshot={"pending_dispatches": []},
-            doctor_ok=True,
-        )
-
-        self.assertEqual(alerts, ())
-
-    def test_default_low_quota_band_starts_at_five_percent(self) -> None:
-        def pool(remaining: int) -> CodexPoolStatus:
-            return CodexPoolStatus(
-                True,
-                True,
-                (CodexAccountStatus(1, True, "ready", "low", remaining, 80, None, None, 1, False),),
-                1,
-                0,
-            )
-
-        six = evaluate_operational_alerts(
-            pool=pool(6), state_snapshot={"pending_dispatches": []}, doctor_ok=True
-        )
-        five = evaluate_operational_alerts(
-            pool=pool(5), state_snapshot={"pending_dispatches": []}, doctor_ok=True
-        )
-
-        self.assertEqual(six, ())
-        self.assertEqual([item.code for item in five], ["codex_5h_low"])
-
-    def test_low_quota_alert_uses_reported_window_duration(self) -> None:
-        alerts = evaluate_operational_alerts(
-            pool=CodexPoolStatus(
-                True,
-                True,
-                (
-                    CodexAccountStatus(
-                        1,
-                        True,
-                        "ready",
-                        "low",
-                        5,
-                        None,
-                        None,
-                        None,
-                        1,
-                        False,
-                        primary_duration_minutes=10080,
-                    ),
-                ),
-                1,
-                0,
-            ),
-            state_snapshot={"pending_dispatches": []},
-            doctor_ok=True,
-        )
-
-        self.assertEqual(len(alerts), 1)
-        self.assertIn("weekly quota", alerts[0].message)
-        self.assertNotIn("5-hour", alerts[0].message)
-
-    def test_quota_warning_is_once_per_low_band_and_rearms_after_recovery(self) -> None:
-        alert = evaluate_operational_alerts(
-            pool=CodexPoolStatus(
-                True,
-                True,
-                (CodexAccountStatus(1, True, "ready", "low", 5, 80, None, None, 1, False),),
-                1,
-                0,
-            ),
-            state_snapshot={"pending_dispatches": []},
-            doctor_ok=True,
-        )[0]
-        with TemporaryDirectory() as directory:
-            state = HubState.open(Path(directory) / "state.db")
-            self.assertTrue(_claim_operational_alert(state, alert, cooldown_seconds=0))
-            self.assertFalse(_claim_operational_alert(state, alert, cooldown_seconds=0))
-            _release_recovered_quota_alerts(
-                state,
-                CodexPoolStatus(
-                    True,
-                    True,
-                    (CodexAccountStatus(1, True, "ready", "low", 80, 80, None, None, 2, False),),
-                    1,
-                    0,
-                ),
-            )
-            self.assertTrue(_claim_operational_alert(state, alert, cooldown_seconds=0))
-            state.close()
 
     def test_monitor_uses_only_configured_hub_operations_topic(self) -> None:
         settings = OperationalAlertSettings(-1000000000001, 41)
         self.assertEqual(_destination(settings), (-1000000000001, 41))
 
     def test_recovery_channels_are_reported_independently(self) -> None:
-        pool = CodexPoolStatus(
-            available=True,
-            rotation_enabled=True,
-            accounts=(),
-            recommended_account=None,
-            account_rotations=0,
-        )
         one_down = evaluate_operational_alerts(
-            pool=pool,
             state_snapshot={"pending_dispatches": []},
             doctor_ok=True,
             recovery_status={"hermes": True, "tlive": False},
@@ -349,7 +109,6 @@ class OperationalAlertTests(unittest.TestCase):
         self.assertEqual(one_down[0].severity, "warning")
 
         both_down = evaluate_operational_alerts(
-            pool=pool,
             state_snapshot={"pending_dispatches": []},
             doctor_ok=True,
             recovery_status={"hermes": False, "tlive": False},
@@ -380,15 +139,7 @@ class OperationalAlertTests(unittest.TestCase):
         self.assertNotIn("shell", calls[0][1])
 
     def test_missing_bot_group_access_is_alerted_per_agent_and_project(self) -> None:
-        pool = CodexPoolStatus(
-            available=True,
-            rotation_enabled=True,
-            accounts=(),
-            recommended_account=None,
-            account_rotations=0,
-        )
         alerts = evaluate_operational_alerts(
-            pool=pool,
             state_snapshot={"pending_dispatches": []},
             doctor_ok=True,
             telegram_access={
@@ -406,15 +157,7 @@ class OperationalAlertTests(unittest.TestCase):
         )
 
     def test_hermes_policy_and_transport_failures_are_distinct(self) -> None:
-        pool = CodexPoolStatus(
-            available=True,
-            rotation_enabled=True,
-            accounts=(),
-            recommended_account=None,
-            account_rotations=0,
-        )
         alerts = evaluate_operational_alerts(
-            pool=pool,
             state_snapshot={"pending_dispatches": []},
             doctor_ok=True,
             hermes_telegram={
@@ -431,9 +174,7 @@ class OperationalAlertTests(unittest.TestCase):
         )
 
     def test_runtime_health_alerts_distinguish_each_expected_component(self) -> None:
-        pool = CodexPoolStatus(True, True, (), None, 0)
         alerts = evaluate_operational_alerts(
-            pool=pool,
             state_snapshot={"pending_dispatches": []},
             doctor_ok=True,
             runtime_health={
@@ -485,7 +226,6 @@ class OperationalAlertTests(unittest.TestCase):
         )
 
         transitioned = evaluate_operational_alerts(
-            pool=pool,
             state_snapshot={"pending_dispatches": []},
             doctor_ok=True,
             runtime_health={
@@ -499,11 +239,9 @@ class OperationalAlertTests(unittest.TestCase):
         self.assertEqual(transitioned[0].key, "runtime:controller:project-hub-controller")
 
     def test_deployment_revision_alert_is_one_per_episode_and_rearms(self) -> None:
-        pool = CodexPoolStatus(True, True, (), None, 0)
 
         def alerts(status: str):
             return evaluate_operational_alerts(
-                pool=pool,
                 state_snapshot={"pending_dispatches": []},
                 doctor_ok=True,
                 runtime_health={"deployment_revision": {"status": status}},
@@ -521,44 +259,23 @@ class OperationalAlertTests(unittest.TestCase):
             self.assertTrue(_claim_operational_alert(state, mixed[0], cooldown_seconds=0))
             state.close()
 
-    def test_invalid_token_account_alerts_even_if_replacement_is_ready(self) -> None:
-        pool = CodexPoolStatus(
-            available=True,
-            rotation_enabled=True,
-            accounts=(
-                CodexAccountStatus(
-                    1, True, "ready", "low", 100, 100, None, None, None, False, "acc-1"
-                ),
-                CodexAccountStatus(
-                    2,
-                    False,
-                    "unavailable",
-                    "high",
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    False,
-                    "acc-2",
-                    auth_invalidated=True,
-                ),
-            ),
-            recommended_account=1,
-            account_rotations=0,
-        )
-        alerts = evaluate_operational_alerts(
-            pool=pool,
-            state_snapshot={"pending_dispatches": []},
-            doctor_ok=True,
-        )
-        self.assertEqual({alert.code for alert in alerts}, {"codex_account_token_invalid"})
-        self.assertIn("device-auth", alerts[0].message)
+    def test_retired_codex_pool_alerts_are_released_on_the_next_cycle(self) -> None:
+        # Alert episodes claimed by a release with multi-auth must not stay latched.
+        retired = ("codex:account:1:5h-low", "codex:pool", "codex:runtime-proxy")
+        with TemporaryDirectory() as directory:
+            state = HubState.open(Path(directory) / "state.db")
+            for key in retired:
+                self.assertTrue(state.claim_alert_transition(f"{key}:operations"))
+            current = evaluate_operational_alerts(
+                state_snapshot={"pending_dispatches": []}, doctor_ok=True
+            )
+            _release_resolved_operational_alerts(state, current)
+            for key in retired:
+                self.assertTrue(state.claim_alert_transition(f"{key}:operations"))
+            state.close()
 
     def test_unreachable_configured_codex_proxy_alert_is_edge_triggered(self) -> None:
-        pool = CodexPoolStatus(True, True, (), None, 0)
         alerts = evaluate_operational_alerts(
-            pool=pool,
             state_snapshot={"pending_dispatches": []},
             doctor_ok=True,
             codex_config_proxy_ok=False,
@@ -571,7 +288,6 @@ class OperationalAlertTests(unittest.TestCase):
             _release_resolved_operational_alerts(
                 state,
                 evaluate_operational_alerts(
-                    pool=pool,
                     state_snapshot={"pending_dispatches": []},
                     doctor_ok=True,
                     codex_config_proxy_ok=True,
@@ -677,9 +393,7 @@ class OperationalAlertTests(unittest.TestCase):
 
             # Session-size inspection remains available as a local diagnostic,
             # but routine monitoring must not turn it into an operational alert.
-            pool = CodexPoolStatus(True, True, (), None, 0)
             evaluated = evaluate_operational_alerts(
-                pool=pool,
                 state_snapshot={"pending_dispatches": []},
                 doctor_ok=True,
                 now=now,

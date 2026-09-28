@@ -14,7 +14,6 @@ from .provider_catalog import (
     ProviderCatalogError,
     ProviderModel,
     antigravity_models,
-    codex_models,
     opencode_models,
 )
 from .provider_catalog_cache import ProviderCatalogCache
@@ -108,9 +107,7 @@ def refresh_provider_catalogs(
             )
             refreshed.append(agent.agent_id)
             continue
-        if agent.runtime == "codex" and (
-            config.codex_multi_auth_executable is None or config.codex_model_provider is not None
-        ):
+        if agent.runtime == "codex":
             before = cache.load(agent.agent_id)
             native_source = native_codex_catalog_source(config.codex_model_provider)
             if (
@@ -142,15 +139,11 @@ def refresh_provider_catalogs(
             continue
         before = cache.load(agent.agent_id)
         previous_ids = {item.model_id for item in before.models} if before else set()
-        if agent.runtime == "codex":
-            assert config.codex_multi_auth_executable is not None
-            executable = str(config.codex_multi_auth_executable)
-            discover: Callable[[], tuple[ProviderModel, ...]] = partial(
-                codex_models, executable, run=run
-            )
-        elif agent.runtime == "opencode":
+        if agent.runtime == "opencode":
             executable = agent.executable or "opencode"
-            discover = partial(opencode_models, executable, run=run)
+            discover: Callable[[], tuple[ProviderModel, ...]] = partial(
+                opencode_models, executable, run=run
+            )
         else:
             executable = agent.executable or "agy"
             discover = partial(antigravity_models, executable, run=run)

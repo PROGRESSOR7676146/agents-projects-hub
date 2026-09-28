@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .codex_accounts import CodexAccountStatus, CodexPoolStatus
 from .codex_appserver import LimitWindow, RateLimits
 from .provider_limits import ProviderLimit
 from .quota_windows import quota_window_label
@@ -54,31 +53,6 @@ def _window(
     if stale:
         text += " · cached"
     return text
-
-
-def cached_codex_rate_limits(account: CodexAccountStatus | None) -> RateLimits:
-    """Project a masked account snapshot into the normal compact status view."""
-    if account is None:
-        return RateLimits(None, None)
-    primary = (
-        LimitWindow(
-            account.five_hour_remaining,
-            account.five_hour_resets_at,
-            account.primary_duration_minutes,
-        )
-        if account.five_hour_remaining is not None
-        else None
-    )
-    secondary = (
-        LimitWindow(
-            account.weekly_remaining,
-            account.weekly_resets_at,
-            account.secondary_duration_minutes,
-        )
-        if account.weekly_remaining is not None
-        else None
-    )
-    return RateLimits(primary, secondary)
 
 
 def format_session_status(
@@ -140,7 +114,6 @@ def format_session_status(
 
 
 def format_accounts(
-    pool: CodexPoolStatus,
     *,
     include_opencode_go: bool,
     opencode_limit: ProviderLimit | None = None,
@@ -152,59 +125,6 @@ def format_accounts(
     timezone_name: str = "Europe/Moscow",
 ) -> str:
     lines: list[str] = []
-    if pool.available:
-        lines.append("Codex")
-        for account in pool.accounts:
-            remaining = [
-                value
-                for value in (account.five_hour_remaining, account.weekly_remaining)
-                if value is not None
-            ]
-            unavailable = account.availability.casefold() not in {
-                "available",
-                "ready",
-                "healthy",
-                "unknown",
-            }
-            if unavailable or any(value <= 0 for value in remaining):
-                marker = "🔴"
-            elif account.quota_stale or any(value <= 20 for value in remaining):
-                marker = "🟡"
-            else:
-                marker = "🟢"
-            active = " ✓" if account.active else ""
-            identity = account.identity_hint or f"account {account.index}"
-            limits: list[str] = []
-            if account.five_hour_remaining is not None:
-                label = quota_window_label(
-                    account.primary_duration_minutes,
-                    slot="primary",
-                    compact=True,
-                )
-                value = f"{label} {account.five_hour_remaining}%"
-                if account.five_hour_resets_at is not None:
-                    reset = datetime.fromtimestamp(
-                        account.five_hour_resets_at, ZoneInfo(timezone_name)
-                    )
-                    value += f" ↻ {reset:%d.%m %H:%M}"
-                limits.append(value)
-            if account.weekly_remaining is not None:
-                label = quota_window_label(
-                    account.secondary_duration_minutes,
-                    slot="secondary",
-                    compact=True,
-                )
-                value = f"{label} {account.weekly_remaining}%"
-                if account.weekly_resets_at is not None:
-                    reset = datetime.fromtimestamp(
-                        account.weekly_resets_at, ZoneInfo(timezone_name)
-                    )
-                    value += f" ↻ {reset:%d.%m %H:%M}"
-                limits.append(value)
-            if limits and account.quota_stale:
-                limits.append("cached")
-            suffix = f" · {' · '.join(limits)}" if limits else ""
-            lines.append(f"{marker}{active} {identity}{suffix}")
     if include_opencode_go:
         if lines:
             lines.append("")

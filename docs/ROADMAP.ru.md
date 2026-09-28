@@ -73,8 +73,8 @@ providers остаётся вне текущего scope.
 
 ### Последующие задачи
 
-1. Завершить E2E естественного исчерпания лимита Codex; выбор
-   provider/model/effort уже покрыт выделенным Telegram acceptance actor.
+1. Выбор provider/model/effort покрыт выделенным Telegram acceptance actor;
+   ротация аккаунтов Codex выведена вместе с multi-auth (ADR 0047).
 2. Поддерживать уже добавленные contract tests при обновлении Codex app-server,
    Hermes Gateway hook, OpenCode/Antigravity CLI и Antigravity statusline.
 3. Реализовать автоматическую ротацию Antigravity только после появления

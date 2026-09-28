@@ -1,17 +1,11 @@
 from __future__ import annotations
 
-import json
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
 
-from hermes_codex_router.codex_proxy_health import (
-    probe_codex_config_proxy,
-    probe_codex_multi_auth_accounts,
-    probe_codex_runtime_proxy,
-)
+from hermes_codex_router.codex_proxy_health import probe_codex_config_proxy
 
 
 class Connection:
@@ -19,44 +13,7 @@ class Connection:
         pass
 
 
-class CodexRuntimeProxyHealthTests(unittest.TestCase):
-    def test_requires_advertised_reachable_dynamic_proxy(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            proc = Path(directory)
-            process = proc / "123"
-            process.mkdir()
-            (process / "cmdline").write_bytes(
-                b"codex\x00-c\x00"
-                b'model_providers.codex-multi-auth-runtime-proxy.base_url="'
-                b'http://127.0.0.1:35411"\x00'
-            )
-            calls: list[tuple[tuple[str, int], float]] = []
-
-            def connect(address: tuple[str, int], *, timeout: float) -> Any:
-                calls.append((address, timeout))
-                return Connection()
-
-            result = probe_codex_runtime_proxy(proc_root=proc, connect=connect)
-            self.assertTrue(result.ok)
-            self.assertEqual(calls, [(("127.0.0.1", 35411), 1.0)])
-
-    def test_rejects_missing_or_unreachable_proxy(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            proc = Path(directory)
-            self.assertFalse(probe_codex_runtime_proxy(proc_root=proc).ok)
-            process = proc / "456"
-            process.mkdir()
-            (process / "cmdline").write_bytes(
-                b"codex\x00-c\x00"
-                b"model_providers.codex-multi-auth-runtime-proxy.base_url="
-                b"http://127.0.0.1:45789\x00"
-            )
-
-            def unavailable(*_args: object, **_kwargs: object) -> Any:
-                raise OSError("closed")
-
-            self.assertFalse(probe_codex_runtime_proxy(proc_root=proc, connect=unavailable).ok)
-
+class CodexConfigProxyHealthTests(unittest.TestCase):
     def test_config_proxy_direct_or_missing_file_is_ok(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             missing_path = Path(directory) / "config.toml"
@@ -121,38 +78,6 @@ class CodexRuntimeProxyHealthTests(unittest.TestCase):
             self.assertTrue(result.ok)
             self.assertNotIn("secret", result.detail)
             self.assertNotIn("example.com", result.detail)
-
-    def test_multi_auth_accounts_detects_invalid_token(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            (base / "settings.json").write_text(
-                json.dumps({"pluginConfig": {"codexRuntimeRotationProxy": True}})
-            )
-            (base / "quota-cache.json").write_text(json.dumps({"byAccountId": {}}))
-            invalid_report = {
-                "forecast": {
-                    "accounts": [
-                        {
-                            "index": 1,
-                            "label": "redacted account",
-                            "availability": "unavailable",
-                            "riskLevel": "high",
-                            "reasons": ["token-invalid — re-login needed"],
-                        }
-                    ]
-                },
-                "runtime": {"runtimeMetrics": {}},
-            }
-
-            def invalid_runner(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
-                return subprocess.CompletedProcess([], 0, json.dumps(invalid_report), "")
-
-            result = probe_codex_multi_auth_accounts(base, runner=invalid_runner)
-            self.assertFalse(result.ok)
-            self.assertIn("2", result.detail)
-
-            invalid_report["forecast"]["accounts"][0]["reasons"] = []
-            self.assertTrue(probe_codex_multi_auth_accounts(base, runner=invalid_runner).ok)
 
 
 if __name__ == "__main__":

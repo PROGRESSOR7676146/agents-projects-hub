@@ -1,6 +1,6 @@
 # ADR 0006: Headless Codex fallback cannot wait for unreachable approvals
 
-Status: accepted
+Status: accepted; multi-auth mention superseded by [ADR 0047](0047-retire-codex-multi-auth.md)
 Date: 2026-09-02
 
 ## Context

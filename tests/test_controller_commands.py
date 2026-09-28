@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
 
-from hermes_codex_router.codex_accounts import CodexAccountStatus, CodexPoolStatus
 from hermes_codex_router.codex_appserver import LimitWindow, RateLimits
 from hermes_codex_router.controller_commands import (
     ControllerCommandOrchestrator,
@@ -75,30 +74,6 @@ class ControllerCommandTests(unittest.TestCase):
         self.orchestrator = ControllerCommandOrchestrator(self.config, self.state)
 
     @staticmethod
-    def _pool() -> CodexPoolStatus:
-        return CodexPoolStatus(
-            True,
-            True,
-            (
-                CodexAccountStatus(
-                    1,
-                    True,
-                    "ready",
-                    "low",
-                    83,
-                    64,
-                    1_800_000_000,
-                    1_800_100_000,
-                    1_800_000_000,
-                    False,
-                    "exa…",
-                ),
-            ),
-            1,
-            0,
-        )
-
-    @staticmethod
     def _catalog(agent_id: str = "codex") -> CatalogSnapshot:
         return CatalogSnapshot(
             agent_id,
@@ -117,7 +92,7 @@ class ControllerCommandTests(unittest.TestCase):
         return [button for row in rows for button in row]
 
     def test_empty_status_is_deterministic_and_has_no_sender_identity(self) -> None:
-        decision = self.orchestrator.status(self.topic, self._pool(), RateLimits(None, None))
+        decision = self.orchestrator.status(self.topic, RateLimits(None, None))
         self.assertIsInstance(decision, TextCommandDecision)
         self.assertEqual(decision.text, "No active agent session has been created yet.")
         self.assertIsNone(decision.response_agent_id)
@@ -132,8 +107,8 @@ class ControllerCommandTests(unittest.TestCase):
         )
         self.state.activate_agent(other_topic.topic_id, "opencode", "opencode-example", "default")
         self.state.set_writer_mode(owner.session_id, "local")
-        owner_status = self.orchestrator.status(self.topic, None, None)
-        other_status = self.orchestrator.status(other_topic, None, None)
+        owner_status = self.orchestrator.status(self.topic, None)
+        other_status = self.orchestrator.status(other_topic, None)
         self.assertIn("/return here", owner_status.text)
         self.assertIn("owner topic", other_status.text)
         self.assertNotIn(str(self.base), other_status.text)
@@ -167,29 +142,40 @@ class ControllerCommandTests(unittest.TestCase):
                 (owner.session_id,),
             )
         self.state.set_writer_mode(owner.session_id, "telegram")
-        status = self.orchestrator.status(other_topic, None, None)
+        status = self.orchestrator.status(other_topic, None)
         self.assertIn("held before provider execution: 1", status.text)
         self.assertIn("confirm or cancel", status.text)
 
-    def test_status_uses_supplied_cached_identity_without_provider_access(self) -> None:
+    def test_status_uses_supplied_limits_without_provider_access(self) -> None:
         session = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-example", "high")
         self.state.set_context_remaining(session.session_id, 73.25)
         decision = self.orchestrator.status(
             self.topic,
-            self._pool(),
             RateLimits(LimitWindow(83, 1_800_000_000, 300), LimitWindow(64, 1_800_100_000, 10080)),
         )
         self.assertEqual(decision.response_agent_id, "codex")
         self.assertIn("Codex · Gpt Example · High", decision.text)
-        self.assertIn("Context 73.2% · Account exa…", decision.text)
+        self.assertIn("Context 73.2%", decision.text)
+        self.assertNotIn("Account", decision.text)
         self.assertIn("5h 83%", decision.text)
 
-    def test_accounts_is_cache_only_and_masks_the_account(self) -> None:
-        decision = self.orchestrator.accounts(self._pool())
+    def test_codex_status_without_reported_limits_shows_no_window(self) -> None:
+        self.state.activate_agent(self.topic.topic_id, "codex", "gpt-example", "high")
+        decision = self.orchestrator.status(self.topic, None)
+        self.assertIn("Codex · Gpt Example · High", decision.text)
+        self.assertNotIn("window", decision.text)
+        self.assertNotIn("%", decision.text)
+        self.assertNotIn("Account", decision.text)
+
+    def test_accounts_ignores_a_retired_codex_pool_snapshot(self) -> None:
+        # State written by a release with multi-auth may still hold its last snapshot.
+        self.state.record_runtime_event(
+            "codex", "info", "account_pool_snapshot", '{"available": true, "accounts": []}'
+        )
+        decision = self.orchestrator.accounts()
         self.assertIsInstance(decision, TextCommandDecision)
-        self.assertIn("Codex", decision.text)
-        self.assertIn("exa…", decision.text)
-        self.assertNotIn("1_800_000_000", decision.text)
+        self.assertNotIn("Codex", decision.text)
+        self.assertIn("OpenCode Go", decision.text)
 
     def test_accounts_uses_one_injected_time_for_cached_limit_expiry(self) -> None:
         self.state.record_runtime_event(
@@ -198,8 +184,8 @@ class ControllerCommandTests(unittest.TestCase):
             "provider_limit",
             ProviderLimit("opencode-go", "5-hour", 0, 2_000).to_json(),
         )
-        current = self.orchestrator.accounts(self._pool(), now=1_000)
-        expired = self.orchestrator.accounts(self._pool(), now=3_000)
+        current = self.orchestrator.accounts(now=1_000)
+        expired = self.orchestrator.accounts(now=3_000)
         self.assertIn("5h 0%", current.text)
         self.assertNotIn("5h 0%", expired.text)
 

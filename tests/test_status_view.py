@@ -2,40 +2,15 @@ from __future__ import annotations
 
 import unittest
 
-from hermes_codex_router.codex_accounts import CodexAccountStatus, CodexPoolStatus
 from hermes_codex_router.codex_appserver import LimitWindow, RateLimits
 from hermes_codex_router.provider_limits import ProviderLimit
 from hermes_codex_router.status_view import (
-    cached_codex_rate_limits,
     format_accounts,
     format_session_status,
 )
 
 
 class StatusViewTests(unittest.TestCase):
-    def test_cached_codex_account_projects_into_compact_rate_limits(self) -> None:
-        account = CodexAccountStatus(
-            1,
-            True,
-            "ready",
-            "low",
-            14,
-            62,
-            1_800_000_000,
-            1_800_100_000,
-            1_799_900_000,
-            True,
-            "abc…",
-        )
-
-        limits = cached_codex_rate_limits(account)
-
-        assert limits.primary is not None and limits.secondary is not None
-        self.assertEqual(limits.primary.remaining_percent, 14)
-        self.assertEqual(limits.primary.resets_at, 1_800_000_000)
-        self.assertEqual(limits.secondary.remaining_percent, 62)
-        self.assertEqual(limits.secondary.resets_at, 1_800_100_000)
-
     def test_stale_status_limits_are_yellow_and_labelled_cached(self) -> None:
         text = format_session_status(
             agent="Codex",
@@ -122,55 +97,15 @@ class StatusViewTests(unittest.TestCase):
         self.assertIn("🔴 Current network location unsupported", text)
         self.assertIn("🟢 Primary window 100%", text)
 
-    def test_accounts_lists_codex_and_opencode_go_capabilities(self) -> None:
-        pool = CodexPoolStatus(
-            True,
-            True,
-            (CodexAccountStatus(1, True, "ready", "low", 83, 64, None, None, None, False, "acc…"),),
-            1,
-            0,
-        )
-        text = format_accounts(pool, include_opencode_go=True)
-        self.assertIn("Codex", text)
-        self.assertIn("✓ acc…", text)
+    def test_accounts_lists_opencode_go_but_no_codex_account_pool(self) -> None:
+        text = format_accounts(include_opencode_go=True)
+        self.assertNotIn("Codex", text)
         self.assertIn("OpenCode Go", text)
         self.assertIn("🟢 plan", text)
         self.assertIn("plan: 5h $12", text)
 
-    def test_accounts_uses_duration_and_marks_stale_quota_as_cached(self) -> None:
-        pool = CodexPoolStatus(
-            True,
-            True,
-            (
-                CodexAccountStatus(
-                    1,
-                    True,
-                    "ready",
-                    "low",
-                    48,
-                    None,
-                    None,
-                    None,
-                    1_800_000_000,
-                    True,
-                    "acc…",
-                    primary_duration_minutes=10080,
-                ),
-            ),
-            1,
-            0,
-        )
-
-        text = format_accounts(pool, include_opencode_go=False)
-
-        self.assertIn("Week 48%", text)
-        self.assertIn("cached", text)
-        self.assertNotIn("5h", text)
-
     def test_accounts_shows_latest_provider_supplied_opencode_reset(self) -> None:
-        pool = CodexPoolStatus(False, False, (), None, 0, "not configured")
         text = format_accounts(
-            pool,
             include_opencode_go=True,
             opencode_limit=ProviderLimit("opencode-go", "monthly", 0, 1788040800),
             timezone_name="UTC",
@@ -180,9 +115,7 @@ class StatusViewTests(unittest.TestCase):
         self.assertIn("5h $12 · week $30 · month $60", text)
 
     def test_accounts_lists_antigravity_accounts_and_known_runtime_limit(self) -> None:
-        pool = CodexPoolStatus(False, False, (), None, 0, "not configured")
         text = format_accounts(
-            pool,
             include_opencode_go=False,
             provider_account_hints={"antigravity": ("abc", "xyz")},
             provider_limits={
@@ -196,9 +129,7 @@ class StatusViewTests(unittest.TestCase):
         self.assertIn("🔴 current account unknown · quota 0%", text)
 
     def test_accounts_marks_the_matching_telemetry_account_and_quota(self) -> None:
-        pool = CodexPoolStatus(False, False, (), None, 0, "not configured")
         text = format_accounts(
-            pool,
             include_opencode_go=False,
             provider_account_hints={"antigravity": ("abc", "xyz")},
             provider_limits={
@@ -212,9 +143,7 @@ class StatusViewTests(unittest.TestCase):
         self.assertNotIn("current account unknown", text)
 
     def test_accounts_does_not_present_quota_as_provider_availability(self) -> None:
-        pool = CodexPoolStatus(False, False, (), None, 0, "not configured")
         text = format_accounts(
-            pool,
             include_opencode_go=False,
             provider_account_hints={"antigravity": ("abc", "xyz")},
             provider_limits={
@@ -230,9 +159,7 @@ class StatusViewTests(unittest.TestCase):
         self.assertIn("🔴 ✓ abc… · quota 100%", text)
 
     def test_accounts_marks_fresh_worker_with_unknown_provider_state_yellow(self) -> None:
-        pool = CodexPoolStatus(False, False, (), None, 0, "not configured")
         text = format_accounts(
-            pool,
             include_opencode_go=False,
             provider_account_hints={"antigravity": ("abc",)},
             provider_limits={

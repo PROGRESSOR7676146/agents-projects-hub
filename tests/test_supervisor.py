@@ -19,7 +19,7 @@ class SupervisorFallbackTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
-    def test_prefers_shared_socket_when_multi_auth_is_healthy(self) -> None:
+    def test_prefers_shared_socket_when_it_exists(self) -> None:
         socket_path = self.base / "codex.sock"
         socket_path.touch()
         with patch.object(Path, "is_socket", return_value=True):
@@ -36,37 +36,6 @@ class SupervisorFallbackTests(unittest.TestCase):
             stdio_executable=self.fallback,
         )
         supervisor.start()
-        self.assertEqual(supervisor.transport_mode, "stdio-fallback")
-
-    def test_uses_official_stdio_when_shared_multi_auth_upstream_is_down(self) -> None:
-        socket_path = self.base / "codex.sock"
-        socket_path.touch()
-        with patch.object(Path, "is_socket", return_value=True):
-            supervisor = CodexAppServerSupervisor(
-                socket_path,
-                manage_process=False,
-                stdio_executable=self.fallback,
-                shared_socket_health=lambda: False,
-            )
-            supervisor.start()
-        self.assertEqual(supervisor.transport_mode, "stdio-fallback")
-
-    def test_rechecks_shared_upstream_before_a_later_turn(self) -> None:
-        socket_path = self.base / "codex.sock"
-        socket_path.touch()
-        healthy = True
-        with patch.object(Path, "is_socket", return_value=True):
-            supervisor = CodexAppServerSupervisor(
-                socket_path,
-                manage_process=False,
-                stdio_executable=self.fallback,
-                shared_socket_health=lambda: healthy,
-            )
-            supervisor.start()
-            self.assertTrue(supervisor.ensure_shared_socket_health())
-            healthy = False
-            self.assertFalse(supervisor.ensure_shared_socket_health())
-
         self.assertEqual(supervisor.transport_mode, "stdio-fallback")
 
     def test_missing_socket_still_fails_without_fallback(self) -> None:
