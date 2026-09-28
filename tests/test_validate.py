@@ -108,6 +108,7 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("--history", privacy[0])
         self.assertIn("all test modules jobs=2", calls)
         self.assertFalse(any("pyright" in call for call in calls))
+        self.assertEqual(calls.count("release-lock check"), 1)
         for marker in (
             "documentation_contract",
             "release_metadata",
