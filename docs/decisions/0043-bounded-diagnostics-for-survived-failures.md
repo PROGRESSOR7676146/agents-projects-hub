@@ -26,17 +26,17 @@ that a test keeps equal to the literal call sites; any other label is replaced
 by a neutral value. The class name comes from a closed registry too: every
 exception class of the interpreter, taken when the module is imported, plus an
 explicit list of standard-library, dependency and package exceptions
-(`NAMED_ERRORS`). A record names the nearest class of the exception, in method
-resolution order, whose module and qualified name are exact strings matching a
-registry entry, and it writes the registry's own string, never an attribute of
-the class. A class built at run time, even one registered in a module under its
-own name or carrying string subclasses with their own hashing, equality or
-text, is therefore named by a registered ancestor, so dynamic identifiers
-cannot reach the log. Site labels are looked up the same way. The class
-metadata is read through the descriptors of `type` itself, so no metaclass
-hook or descriptor of the exception's class runs while naming it, and naming
-never raises: a class whose metadata cannot be read is recorded under a
-neutral name.
+(`NAMED_ERRORS`). Registered classes are matched by object identity: each is
+resolved from its module once that module is imported and is kept alive, and a
+record names the nearest registered class in the exception's method resolution
+order with the registry's own string. Of the exception's class only that order
+is read, through the member of `type` itself; its name, module and namespace are
+never consulted, so no metaclass, descriptor or namespace-key code of that
+class runs and naming never raises. A class built at run time, even one
+registered in a module under its own name or carrying string subclasses with
+their own hashing, equality or text, is therefore named by a registered
+ancestor, so dynamic identifiers cannot reach the log. Site labels accept only
+exact strings and are written as the registry's own string.
 The same site and class are emitted
 at most once a minute with a count of suppressed repeats, and the repeat state
 holds a bounded number of keys.

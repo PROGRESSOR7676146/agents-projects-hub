@@ -156,15 +156,32 @@ class DiagnosticLogTests(unittest.TestCase):
             {"__module__": "builtins", "__qualname__": Disguised("RuntimeError")},
         )
         raising = cast(type[RuntimeError], RaisingMeta("ExampleError", (RuntimeError,), {}))
+        armed = False
+
+        class Key(str):
+            # A namespace key whose comparison fails once the class exists.
+            __hash__ = str.__hash__
+
+            def __eq__(self, other: object) -> bool:
+                if armed:
+                    raise asyncio.CancelledError
+                return str.__eq__(self, other)
+
+        keyed = type("ExampleError", (RuntimeError,), {Key("__module__"): "example"})
         diagnostic_log.survived("service.health_publish", unhashable("x"))
         diagnostic_log.survived("service.client_close", disguised("x"))
         diagnostic_log.survived("service.context_telemetry", raising("x"))
+        keyed_error = keyed("x")
+        armed = True
+        diagnostic_log.survived("service.outbox_error_record", keyed_error)
+        armed = False
         site = Disguised("service.queue_error_record")
         diagnostic_log.survived(site, RuntimeError("x"))
         output = self.stream.getvalue()
         self.assertIn("survived RuntimeError at service.health_publish", output)
         self.assertIn("survived RuntimeError at service.client_close", output)
         self.assertIn("survived RuntimeError at service.context_telemetry", output)
+        self.assertIn("survived RuntimeError at service.outbox_error_record", output)
         self.assertIn(f"survived RuntimeError at {diagnostic_log.INVALID_SITE}", output)
         self.assertNotIn("fictional", output)
         self.assertNotIn("/home/example", output)

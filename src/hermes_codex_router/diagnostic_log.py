@@ -112,8 +112,14 @@ NAMED_ERRORS = frozenset(
 # Canonical text for every registered class and site. Lookups accept only
 # exact ``str`` values, whose hashing, equality and text cannot be overridden,
 # and the logged text is always the registry's own string.
-_CANONICAL_ERRORS = {entry: entry[1] for entry in NAMED_ERRORS}
 _CANONICAL_SITES = {site: site for site in SITES}
+# Registered classes by object identity. A class is resolved from its module
+# once that module is imported (an exception of a class from a module that
+# was never imported cannot exist) and is kept alive here, so its id stays
+# unique for the life of the process.
+_NAMED_BY_ID: dict[int, str] = {}
+_NAMED_CLASSES: list[type] = []
+_UNRESOLVED_ERRORS = set(NAMED_ERRORS)
 _OVERFLOW_KEY = "overflow"
 
 _logger = logging.getLogger(LOGGER_NAME)
@@ -196,23 +202,39 @@ def configure_process_logging(stream: TextIO | None = None) -> None:
     _logger.setLevel(logging.INFO)
 
 
-# Class metadata is read through the descriptors of ``type`` itself, so no
-# metaclass hook or descriptor of the exception's class runs while naming it.
+# Only the method resolution order of the exception's class is read, through
+# the member of ``type`` itself; its name, module and namespace are never
+# consulted, so no metaclass, descriptor or namespace key code of that class
+# runs while it is named.
 _CLASS_MRO = type.__dict__["__mro__"]
-_CLASS_MODULE = type.__dict__["__module__"]
 _CLASS_QUALNAME = type.__dict__["__qualname__"]
+
+
+def _resolve_registered_errors() -> None:
+    for entry in tuple(_UNRESOLVED_ERRORS):
+        module = sys.modules.get(entry[0])
+        if module is None:
+            continue
+        _UNRESOLVED_ERRORS.discard(entry)
+        value = vars(module).get(entry[1])
+        if not (isinstance(value, type) and issubclass(value, BaseException)):
+            continue
+        # Aliases such as builtins.IOError never replace a class's own name.
+        qualname = _CLASS_QUALNAME.__get__(value)
+        if type(qualname) is str and qualname == entry[1]:
+            _NAMED_BY_ID[id(value)] = entry[1]
+            _NAMED_CLASSES.append(value)
 
 
 def _error_kind(error: BaseException) -> str:
     try:
+        if _UNRESOLVED_ERRORS:
+            _resolve_registered_errors()
         for cls in _CLASS_MRO.__get__(type(error)):
-            module = _CLASS_MODULE.__get__(cls)
-            name = _CLASS_QUALNAME.__get__(cls)
-            if type(module) is str and type(name) is str:
-                canonical = _CANONICAL_ERRORS.get((module, name))
-                if canonical is not None:
-                    return canonical
-    except Exception:  # noqa: BLE001 - e.g. a class without __module__; never fail the caller
+            name = _NAMED_BY_ID.get(id(cls))
+            if name is not None:
+                return name
+    except Exception:  # noqa: BLE001 - naming a failure must never fail its caller
         return UNNAMED_ERROR
     return UNNAMED_ERROR
 
