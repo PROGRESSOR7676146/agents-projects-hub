@@ -23,7 +23,7 @@ from hermes_codex_router.hub_config import (
     TerminalSettings,
 )
 from hermes_codex_router.outbox_sender import TelegramOutboxSender
-from hermes_codex_router.project_onboarding import ProjectOnboardingStore
+from hermes_codex_router.project_onboarding import WORKER_LEASE, ProjectOnboardingStore
 from hermes_codex_router.project_provisioner import (
     CreatedForum,
     ProjectProvisioner,
@@ -769,16 +769,42 @@ class ProjectOnboardingTests(unittest.TestCase):
                 await self.release_create.wait()
                 return CreatedForum(-1001234567890, 987654321)
 
+        # Virtual time (R-018): the lease outlives its original deadline only
+        # because the heartbeat renewed it, however slowly the host runs.
+        start = datetime.now(timezone.utc)
+        virtual = {"now": start}
+
+        def clock() -> datetime:
+            return virtual["now"]
+
         async def scenario() -> None:
             client = SlowClient()
             worker = ProjectProvisioner(self.config, client=client, worker_id="slow-worker")
+            worker.store = ProjectOnboardingStore(worker.state, clock=clock)
+            renewed_at: list[datetime] = []
+            renew = worker.store.heartbeat_lease
+
+            def recording_heartbeat(*args: Any, **kwargs: Any) -> Any:
+                result = renew(*args, **kwargs)
+                renewed_at.append(clock())
+                return result
+
+            worker.store.heartbeat_lease = recording_heartbeat  # type: ignore[method-assign]
             try:
                 task = asyncio.create_task(worker.run_cycle_async())
                 await client.create_started.wait()
-                await asyncio.sleep(0.36)
+                renew_point = start + timedelta(seconds=90)
+                virtual["now"] = renew_point
+                for _ in range(500):
+                    if any(item >= renew_point for item in renewed_at):
+                        break
+                    await asyncio.sleep(0.01)
+                self.assertTrue(any(item >= renew_point for item in renewed_at))
+                # Past the claim's original two-minute lease.
+                virtual["now"] = start + WORKER_LEASE + timedelta(seconds=30)
                 competing_state = HubState.open(self.config.state_path)
                 try:
-                    competing_store = ProjectOnboardingStore(competing_state)
+                    competing_store = ProjectOnboardingStore(competing_state, clock=clock)
                     self.assertIsNone(competing_store.claim_next("competing-worker"))
                     active = competing_store.connection.execute(
                         """SELECT lease_expires_at FROM project_onboarding_workflows
@@ -787,8 +813,7 @@ class ProjectOnboardingTests(unittest.TestCase):
                     ).fetchone()
                     assert active is not None and active["lease_expires_at"] is not None
                     self.assertGreater(
-                        datetime.fromisoformat(str(active["lease_expires_at"])),
-                        datetime.now(timezone.utc),
+                        datetime.fromisoformat(str(active["lease_expires_at"])), clock()
                     )
                 finally:
                     competing_state.close()
@@ -797,13 +822,7 @@ class ProjectOnboardingTests(unittest.TestCase):
             finally:
                 worker.close()
 
-        with (
-            patch(
-                "hermes_codex_router.project_onboarding.WORKER_LEASE",
-                timedelta(seconds=0.3),
-            ),
-            patch("hermes_codex_router.project_provisioner.LEASE_HEARTBEAT_SECONDS", 0.05),
-        ):
+        with patch("hermes_codex_router.project_provisioner.LEASE_HEARTBEAT_SECONDS", 0.01):
             asyncio.run(scenario())
 
     def test_stop_before_first_telegram_rpc_releases_workflow_without_mutation(self) -> None:
