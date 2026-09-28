@@ -30,8 +30,10 @@ Test selectors are accepted only in the focused profile; they import sibling
 fixtures from `tests/` exactly as discovery does. The canonical test stage asks
 discovery for every test module, including nested test packages, then runs
 each in its own process, several in parallel (CPU count up to eight; override
-with `--jobs N`), with the pattern discovery passes to `load_tests`. The tests
-that start must be exactly the discovered ones, by test id. It names every
+with `--jobs N`). The tests that start must be exactly the discovered ones, by
+test id, and a test module or package that defines `load_tests` is refused,
+because the suite such a hook builds cannot be reproduced by an isolated
+module run. It names every
 failing, empty, mismatched or timed-out module after all modules finish, so
 each module must pass on its own. See [ADR 0041](../decisions/0041-parallel-isolated-test-modules.md).
 Automated tests
@@ -147,6 +149,8 @@ mode-`0700` hook set under the shared Git common directory
 link, which one atomic rename switches to a new set; the previous set and all
 settings stay untouched until the new installation is verified, and a failed
 installation returns to them or reports that it could not confirm doing so.
+Settings are restored before a newly created link is removed, so Git never
+points at a missing hook directory.
 Older installations in `hub-managed-hooks` are migrated the same way and the
 old directory is removed only after success. It also records the validated
 Python executable used for

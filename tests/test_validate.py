@@ -317,11 +317,11 @@ class TestModuleRunnerTests(unittest.TestCase):
             "ran 2 of 3 discovered tests; not run: test_delta.Tests.test_2", errors.getvalue()
         )
 
-    def test_load_tests_receives_the_discovery_pattern(self) -> None:
-        # Discovery passes the pattern to load_tests; loading by name alone
-        # passes None and would run a different, passing selection.
-        root = self.fixture_root(
-            {
+    def test_custom_load_tests_hooks_are_refused(self) -> None:
+        # A hook can build a suite that an isolated module run would not
+        # reproduce, even with the same test ids.
+        cases = {
+            "module": {
                 "test_selective.py": """
                     import unittest
 
@@ -339,54 +339,55 @@ class TestModuleRunnerTests(unittest.TestCase):
                     def load_tests(loader, tests, pattern):
                         return loader.loadTestsFromTestCase(Regression if pattern else Smoke)
                 """,
-            }
-        )
-        errors = io.StringIO()
-        with (
-            redirect_stdout(io.StringIO()),
-            redirect_stderr(errors),
-            self.assertRaises(RuntimeError) as raised,
-        ):
-            validator.run_test_modules(jobs=1, root=root)
-        self.assertIn("1 of 1 test modules failed: test_selective", str(raised.exception))
-        self.assertIn("discovered regression", errors.getvalue())
-
-    def test_equal_count_with_different_tests_fails(self) -> None:
-        root = self.fixture_root(
-            {
-                "test_shifting.py": """
-                    import sys
+            },
+            "package": {
+                "nested/__init__.py": """
                     import unittest
 
-
-                    class Discovered(unittest.TestCase):
-                        def test_one(self):
-                            pass
-
-
-                    class Substitute(unittest.TestCase):
-                        def test_one(self):
-                            pass
+                    from nested.test_parameterized import Check
 
 
                     def load_tests(loader, tests, pattern):
-                        # The discovery probe runs with no arguments; the runner does not.
-                        chosen = Discovered if len(sys.argv) == 1 else Substitute
-                        return loader.loadTestsFromTestCase(chosen)
+                        return unittest.TestSuite([Check(strict=True)])
                 """,
-            }
+                "nested/test_parameterized.py": """
+                    import unittest
+
+
+                    class Check(unittest.TestCase):
+                        def __init__(self, methodName="runTest", strict=False):
+                            super().__init__(methodName)
+                            self.strict = strict
+
+                        def runTest(self):
+                            self.assertFalse(self.strict, "strict regression")
+                """,
+            },
+        }
+        for kind, modules in cases.items():
+            with self.subTest(kind=kind):
+                root = self.fixture_root(modules)
+                with (
+                    redirect_stdout(io.StringIO()),
+                    redirect_stderr(io.StringIO()),
+                    self.assertRaises(RuntimeError) as raised,
+                ):
+                    validator.run_test_modules(jobs=1, root=root)
+                message = str(raised.exception)
+                self.assertIn("load_tests hooks are not supported", message)
+                self.assertIn("test_selective" if kind == "module" else "nested", message)
+
+    def test_composition_mismatch_names_missing_and_extra_tests(self) -> None:
+        self.assertIsNone(
+            validator.composition_mismatch(["m.A.test", "m.B.test"], ["m.B.test", "m.A.test"])
         )
-        errors = io.StringIO()
-        with (
-            redirect_stdout(io.StringIO()),
-            redirect_stderr(errors),
-            self.assertRaises(RuntimeError) as raised,
-        ):
-            validator.run_test_modules(jobs=1, root=root)
-        self.assertIn("test_shifting", str(raised.exception))
-        self.assertIn("ran 1 of 1 discovered tests", errors.getvalue())
-        self.assertIn("not run: test_shifting.Discovered.test_one", errors.getvalue())
-        self.assertIn("not discovered: test_shifting.Substitute.test_one", errors.getvalue())
+        message = validator.composition_mismatch(["m.Discovered.test"], ["m.Substitute.test"])
+        assert message is not None
+        self.assertIn("ran 1 of 1 discovered tests", message)
+        self.assertIn("not run: m.Discovered.test", message)
+        self.assertIn("not discovered: m.Substitute.test", message)
+        duplicated = validator.composition_mismatch(["m.A.test", "m.A.test"], ["m.A.test"])
+        self.assertIn("not run: m.A.test", duplicated or "")
 
     def test_real_timeout_keeps_the_output_printed_before_it(self) -> None:
         root = self.fixture_root(

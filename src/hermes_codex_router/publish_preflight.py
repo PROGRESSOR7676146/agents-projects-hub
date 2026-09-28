@@ -412,27 +412,35 @@ def _roll_back(
 ) -> None:
     """Return to the exact previous hook link and settings, or say it could not.
 
-    Each step runs even when an earlier one fails, and the result is read back
-    instead of assumed. Hook sets are never deleted here, so whatever the link
-    and every worktree point to afterwards is a complete set.
+    Settings are restored first and read back. A link that this installation
+    created is removed only after that, when no setting can still point at
+    it; if the settings cannot be restored, the link keeps pointing at the
+    complete new set, so every worktree still runs a complete gate. A link
+    that existed before is switched back to its previous complete set. Hook
+    sets are never deleted here.
     """
-    with suppress(OSError, PreflightError):
-        if _link_target(active) != previous_link:
-            if previous_link is None:
-                active.unlink()
-            else:
-                _point_link(active, previous_link)
     for setting, value in previous.items():
         with suppress(PreflightError):
             if _read_setting(setting) != value:
                 _write_setting(setting, value)
     try:
-        restored = _link_target(active) == previous_link and all(
+        settings_restored = all(
             _read_setting(setting) == value for setting, value in previous.items()
         )
     except PreflightError:
-        restored = False
-    if not restored:
+        settings_restored = False
+    if settings_restored or previous_link is not None:
+        with suppress(OSError, PreflightError):
+            if _link_target(active) != previous_link:
+                if previous_link is None:
+                    active.unlink()
+                else:
+                    _point_link(active, previous_link)
+    try:
+        link_restored = _link_target(active) == previous_link
+    except PreflightError:
+        link_restored = False
+    if not (settings_restored and link_restored):
         raise PreflightError(
             "hook installation failed and the previous hook configuration could not be "
             "confirmed restored; check core.hooksPath in every worktree before committing"

@@ -730,6 +730,65 @@ class PublishPreflightTests(unittest.TestCase):
             # The link never points at a partial set, whichever set it ended on.
             self.assert_hooks(active, "v2")
 
+    def test_persistent_configuration_failure_never_leaves_git_without_hooks(self) -> None:
+        for migration in (False, True):
+            with self.subTest(migration=migration), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory)
+                root = base / "checkout"
+                root.mkdir()
+                subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+                hooks = root / ".githooks"
+                hooks.mkdir()
+                legacy = root / ".git" / publish_preflight.LEGACY_HOOK_DIRECTORY
+                if migration:
+                    legacy.mkdir(mode=0o700)
+                for name in publish_preflight.MANAGED_HOOKS:
+                    (hooks / name).write_text(f"#!/bin/sh\n# {name} v2\n", encoding="utf-8")
+                    if migration:
+                        (legacy / name).write_text(f"#!/bin/sh\n# {name} v1\n", encoding="utf-8")
+                if migration:
+                    subprocess.run(
+                        ["git", "config", "--local", "core.hooksPath", str(legacy)],
+                        cwd=root,
+                        check=True,
+                    )
+                policy = base / "public-author-policy"
+                policy.write_text("owner@example.com\n", encoding="ascii")
+                policy.chmod(0o600)
+                lock = root / ".git" / "config.lock"
+                real_run = publish_preflight._run
+
+                def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                    result = real_run(argv, **kwargs)  # type: ignore[arg-type]
+                    if argv[:4] == ["git", "config", "--local", "core.hooksPath"] and (
+                        len(argv) == 5 and result.returncode == 0
+                    ):
+                        # From here on Git can no longer change its configuration.
+                        lock.write_text("", encoding="utf-8")
+                    return result
+
+                try:
+                    with (
+                        patch.dict(os.environ, {"HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE": str(policy)}),
+                        patch.object(publish_preflight, "_run", side_effect=run),
+                        self.assertRaises(publish_preflight.PreflightError) as raised,
+                    ):
+                        publish_preflight._install(root)
+                finally:
+                    lock.unlink(missing_ok=True)
+                self.assertIn("could not be confirmed", str(raised.exception))
+                effective = subprocess.run(
+                    ["git", "config", "--get", "core.hooksPath"],
+                    cwd=root,
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout.strip()
+                # Whatever Git points at still holds a complete gate.
+                self.assert_hooks(Path(effective), "v2")
+                if migration:
+                    self.assert_version_one_hooks(legacy)
+
     def test_failed_worktree_update_restores_every_worktree_on_first_install(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

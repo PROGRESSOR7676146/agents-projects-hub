@@ -22,8 +22,10 @@ at a time, and is loaded with the pattern discovery passes to `load_tests`. The
 default is the CPU count capped at eight; `--jobs 1..32` overrides it. Every
 module finishes before failures are reported, every failing module is named
 with its output (also after a timeout), the ids of the tests that started must
-equal the discovered ids (an equal count with different tests fails), a
-`test*.py` file that contributes no tests
+equal the discovered ids (an equal count with different tests fails), a test
+module or package that defines `load_tests` is refused because its hook can
+build suites an isolated module run would not reproduce, a `test*.py` file
+that contributes no tests
 fails, and each module has a 600-second deadline. The stage still runs the complete suite and still follows the cheap
 contracts, history scan and Pyright.
 

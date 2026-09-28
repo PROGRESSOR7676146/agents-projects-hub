@@ -55,9 +55,10 @@ def sibling_import_environment(root: Path = ROOT) -> dict[str, str]:
 
 
 # Runs in a child process: import every test module the way whole-suite
-# discovery does and report the id of every test each module contributes.
+# discovery does and report the id of every test each module contributes, and
+# every test module or package that defines ``load_tests``.
 _DISCOVERY_PROBE = """
-import json, sys, unittest
+import fnmatch, json, os, sys, unittest
 from unittest.loader import _FailedTest
 
 found = {}
@@ -71,7 +72,19 @@ def visit(item):
     found.setdefault(module, []).append(item.id())
 
 visit(unittest.defaultTestLoader.discover("tests", pattern=PATTERN, top_level_dir="tests"))
-json.dump(found, sys.stdout)
+root = os.path.realpath("tests")
+
+def builds_its_own_suite(module):
+    path = getattr(module, "__file__", None)
+    if not isinstance(path, str) or "load_tests" not in vars(module):
+        return False
+    path = os.path.realpath(path)
+    name = os.path.basename(path)
+    inside = os.path.commonpath([path, root]) == root
+    return inside and (name == "__init__.py" or fnmatch.fnmatch(name, PATTERN))
+
+custom = sorted(n for n, m in list(sys.modules.items()) if builds_its_own_suite(m))
+json.dump({"tests": found, "custom_loaders": custom}, sys.stdout)
 """.replace("PATTERN", repr(DISCOVERY_PATTERN))
 
 # Runs one module in a child process. The module is loaded with the pattern
@@ -120,7 +133,13 @@ def discoverable_test_files(root: Path = ROOT) -> list[str]:
 
 
 def discover_test_modules(root: Path = ROOT) -> dict[str, list[str]]:
-    """Return ``{dotted module: test ids}`` exactly as ``unittest`` discovery sees it."""
+    """Return ``{dotted module: test ids}`` exactly as ``unittest`` discovery sees it.
+
+    A test module or package that defines ``load_tests`` is refused: its hook
+    can build suites (other tests, parameterized instances, package-level
+    wrappers) that a module run in isolation would not reproduce, and equal
+    test ids cannot prove otherwise.
+    """
     completed = subprocess.run(
         (sys.executable, "-c", _DISCOVERY_PROBE),
         cwd=root,
@@ -133,10 +152,13 @@ def discover_test_modules(root: Path = ROOT) -> dict[str, list[str]]:
     )
     if completed.returncode != 0:
         raise RuntimeError("test discovery failed:\n" + completed.stderr.rstrip()[-4000:])
-    return {
-        str(name): [str(test) for test in tests]
-        for name, tests in json.loads(completed.stdout).items()
-    }
+    report = json.loads(completed.stdout)
+    if report["custom_loaders"]:
+        raise RuntimeError(
+            "load_tests hooks are not supported by the parallel runner; remove them from: "
+            + ", ".join(str(name) for name in report["custom_loaders"])
+        )
+    return {str(name): [str(test) for test in tests] for name, tests in report["tests"].items()}
 
 
 def composition_mismatch(discovered: Sequence[str], started: Sequence[str]) -> str | None:

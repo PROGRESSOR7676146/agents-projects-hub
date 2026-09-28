@@ -22,7 +22,8 @@ link Git runs hooks through, so no worktree ever runs a mixed gate. The
 previous set, the local settings and every per-worktree hook path stay intact
 until the installation is verified; a failure returns to them, reads the
 result back, and reports when the return could not be confirmed instead of
-claiming it.
+claiming it. Settings are restored before a link the installation created is
+removed, so even a failed return leaves Git pointing at a complete set.
 
 The hook refuses a commit while unstaged changes or untracked, non-ignored
 files exist, because the checks read the working tree. This check uses the
