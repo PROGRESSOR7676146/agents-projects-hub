@@ -27,9 +27,10 @@ by a neutral value. The class name comes from a closed registry too: every
 exception class of the interpreter, taken when the module is imported, plus an
 explicit list of standard-library, dependency and package exceptions
 (`NAMED_ERRORS`). Registered classes are matched by object identity: each is
-resolved from its module once that module is imported and is kept alive, and a
-record names the nearest registered class in the exception's method resolution
-order with the registry's own string. Of the exception's class only that order
+found in its module once the module has defined it, by iterating the module
+namespace and comparing exact string keys only, and is kept alive; a record
+names the nearest registered class in the exception's method resolution order
+with the registry's own string. Of the exception's class only that order
 is read, through the member of `type` itself; its name, module and namespace are
 never consulted, so no metaclass, descriptor or namespace-key code of that
 class runs and naming never raises. A class built at run time, even one

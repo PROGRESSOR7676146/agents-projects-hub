@@ -186,6 +186,50 @@ class DiagnosticLogTests(unittest.TestCase):
         self.assertNotIn("fictional", output)
         self.assertNotIn("/home/example", output)
 
+    def registry_module(self, name: str, wanted: str) -> types.ModuleType:
+        """A registry module under test; resolver caches are restored afterwards."""
+        module = types.ModuleType(name)
+        self.addCleanup(sys.modules.pop, name, None)
+        for registry in (
+            diagnostic_log._WANTED_NAMES,
+            diagnostic_log._SEEN_MODULES,
+            diagnostic_log._SCANNED_SIZES,
+        ):
+            patcher = patch.dict(cast(Any, registry))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        diagnostic_log._WANTED_NAMES[name] = frozenset({wanted})
+        sys.modules[name] = module
+        return module
+
+    def test_a_module_still_importing_is_resolved_once_it_defines_the_class(self) -> None:
+        module = self.registry_module("example_partial", "PartialError")
+        # The first failure is named while the module has not defined the class yet.
+        diagnostic_log.survived("service.health_publish", RuntimeError("x"))
+        partial = type("PartialError", (RuntimeError,), {"__module__": module.__name__})
+        module.PartialError = partial  # type: ignore[attr-defined]
+        diagnostic_log.survived("service.client_close", partial("x"))
+        self.assertIn("survived PartialError at service.client_close", self.stream.getvalue())
+
+    def test_a_registered_module_namespace_key_never_runs(self) -> None:
+        armed = False
+
+        class Key(str):
+            __hash__ = str.__hash__
+
+            def __eq__(self, other: object) -> bool:
+                if armed:
+                    raise asyncio.CancelledError
+                return str.__eq__(self, other)
+
+        module = self.registry_module("example_tampered", "TamperedError")
+        tampered = type("TamperedError", (RuntimeError,), {"__module__": module.__name__})
+        vars(module)[Key("TamperedError")] = tampered
+        armed = True
+        diagnostic_log.survived("service.health_publish", tampered("x"))
+        armed = False
+        self.assertIn("survived RuntimeError at service.health_publish", self.stream.getvalue())
+
     def test_every_registered_name_is_a_real_exception_class(self) -> None:
         for module_name, name in sorted(diagnostic_log.NAMED_ERRORS):
             with self.subTest(module=module_name, name=name):

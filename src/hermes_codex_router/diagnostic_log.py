@@ -20,6 +20,7 @@ import os
 import sys
 import threading
 import time
+from types import ModuleType
 from typing import TextIO
 
 LOGGER_NAME = "hermes_codex_router"
@@ -113,13 +114,18 @@ NAMED_ERRORS = frozenset(
 # exact ``str`` values, whose hashing, equality and text cannot be overridden,
 # and the logged text is always the registry's own string.
 _CANONICAL_SITES = {site: site for site in SITES}
-# Registered classes by object identity. A class is resolved from its module
-# once that module is imported (an exception of a class from a module that
-# was never imported cannot exist) and is kept alive here, so its id stays
-# unique for the life of the process.
+# Registered classes by object identity. A class is found in its module once
+# the module has defined it (an exception of a class from a module that was
+# never imported cannot exist) and is kept alive here, so its id stays unique
+# for the life of the process.
 _NAMED_BY_ID: dict[int, str] = {}
 _NAMED_CLASSES: list[type] = []
-_UNRESOLVED_ERRORS = set(NAMED_ERRORS)
+_WANTED_NAMES: dict[str, frozenset[str]] = {
+    module: frozenset(name for owner, name in NAMED_ERRORS if owner == module)
+    for module in {owner for owner, _ in NAMED_ERRORS}
+}
+_SEEN_MODULES: dict[str, ModuleType] = {}
+_SCANNED_SIZES: dict[str, int] = {}
 _OVERFLOW_KEY = "overflow"
 
 _logger = logging.getLogger(LOGGER_NAME)
@@ -211,25 +217,35 @@ _CLASS_QUALNAME = type.__dict__["__qualname__"]
 
 
 def _resolve_registered_errors() -> None:
-    for entry in tuple(_UNRESOLVED_ERRORS):
-        module = sys.modules.get(entry[0])
-        if module is None:
+    # Namespaces are iterated rather than searched, and only exact str keys
+    # are compared, so no key object's own comparison ever runs. A module is
+    # scanned again while its namespace grows, which covers a module that was
+    # still being imported at the previous scan.
+    if len(_SEEN_MODULES) < len(_WANTED_NAMES):
+        for key, module in list(sys.modules.items()):
+            if type(key) is str and key in _WANTED_NAMES and type(module) is ModuleType:
+                _SEEN_MODULES[key] = module
+    for key, module in list(_SEEN_MODULES.items()):
+        namespace = vars(module)
+        wanted = _WANTED_NAMES.get(key)
+        if wanted is None or _SCANNED_SIZES.get(key) == len(namespace):
             continue
-        _UNRESOLVED_ERRORS.discard(entry)
-        value = vars(module).get(entry[1])
-        if not (isinstance(value, type) and issubclass(value, BaseException)):
-            continue
-        # Aliases such as builtins.IOError never replace a class's own name.
-        qualname = _CLASS_QUALNAME.__get__(value)
-        if type(qualname) is str and qualname == entry[1]:
-            _NAMED_BY_ID[id(value)] = entry[1]
-            _NAMED_CLASSES.append(value)
+        _SCANNED_SIZES[key] = len(namespace)
+        for attribute, value in list(namespace.items()):
+            if type(attribute) is not str or attribute not in wanted:
+                continue
+            if not (isinstance(value, type) and issubclass(value, BaseException)):
+                continue
+            # Aliases such as builtins.IOError never replace a class's own name.
+            qualname = _CLASS_QUALNAME.__get__(value)
+            if type(qualname) is str and qualname == attribute and id(value) not in _NAMED_BY_ID:
+                _NAMED_BY_ID[id(value)] = attribute
+                _NAMED_CLASSES.append(value)
 
 
 def _error_kind(error: BaseException) -> str:
     try:
-        if _UNRESOLVED_ERRORS:
-            _resolve_registered_errors()
+        _resolve_registered_errors()
         for cls in _CLASS_MRO.__get__(type(error)):
             name = _NAMED_BY_ID.get(id(cls))
             if name is not None:
