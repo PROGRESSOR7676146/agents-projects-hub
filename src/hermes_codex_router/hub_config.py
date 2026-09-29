@@ -253,29 +253,28 @@ _RETIRED_KEYS = frozenset(
 )
 
 
-def load_hub_config(
-    path: Path,
-    *,
-    allow_unbound: bool = False,
-    _validate_telegram_secrets: bool = True,
-    _controller_ingress_only: bool = False,
-    _provider_ingress_agent_id: str | None = None,
-    _validate_project_provisioning_secret: bool = True,
-) -> HubConfig:
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise HubConfigError(f"cannot read hub config: {exc}") from exc
-    root = _object(document, "hub config")
-    if root.get("schema_version") != 1:
-        raise HubConfigError("schema_version must be 1")
-    retired = sorted(_RETIRED_KEYS.intersection(root))
-    if retired:
-        raise HubConfigError(
-            f"{', '.join(retired)}: Codex multi-auth support was removed (ADR 0047); "
-            "delete these keys and sign in with the official Codex login"
-        )
+@dataclass(frozen=True, slots=True)
+class _CodexTransport:
+    manage_codex_server: bool
+    codex_model_provider: str | None
+    codex_stdio_executable: Path | None
+    codex_sessions_dir: Path | None
 
+
+@dataclass(frozen=True, slots=True)
+class _RuntimeTopology:
+    dispatch_mode: str
+    queue_runtime: str
+    outbox_runtime: str
+    external_worker_agent_ids: tuple[str, ...]
+    max_parallel_roots: int
+    codex_worker_count: int
+    claude_worker_count: int
+    message_batch_quiet_ms: int
+    message_batch_max_ms: int
+
+
+def _parse_owners(root: dict[str, Any]) -> list[int]:
     raw_owners = root.get("owner_user_ids")
     if not isinstance(raw_owners, list) or not raw_owners:
         raise HubConfigError("owner_user_ids must be a non-empty array")
@@ -283,7 +282,10 @@ def load_hub_config(
         raise HubConfigError("owner_user_ids must contain positive integers")
     if len(set(raw_owners)) != len(raw_owners):
         raise HubConfigError("owner_user_ids contains duplicates")
+    return raw_owners
 
+
+def _parse_acceptance_actors(root: dict[str, Any], raw_owners: list[int]) -> list[AcceptanceActor]:
     raw_acceptance_actors = root.get("acceptance_actors", [])
     if not isinstance(raw_acceptance_actors, list):
         raise HubConfigError("acceptance_actors must be an array")
@@ -306,17 +308,10 @@ def load_hub_config(
             raise HubConfigError("acceptance_actors must use distinct non-owner user IDs")
         acceptance_user_ids.add(user_id)
         acceptance_actors.append(AcceptanceActor(user_id, chat_id, thread_id))
+    return acceptance_actors
 
-    registry_path = _absolute_path(root.get("registry_path"), "registry_path", must_exist=True)
-    state_path = _absolute_path(root.get("state_path"), "state_path", must_exist=False)
-    codex_socket_path = _absolute_path(
-        root.get(
-            "codex_socket_path",
-            str(Path.home() / ".codex/app-server-control/app-server-control.sock"),
-        ),
-        "codex_socket_path",
-        must_exist=False,
-    )
+
+def _parse_codex_transport(root: dict[str, Any]) -> _CodexTransport:
     manage_codex_server = root.get("manage_codex_server", False)
     if not isinstance(manage_codex_server, bool):
         raise HubConfigError("manage_codex_server must be boolean")
@@ -348,7 +343,15 @@ def load_hub_config(
         )
         if not codex_sessions_dir.is_dir():
             raise HubConfigError("codex_sessions_dir must be a directory")
+    return _CodexTransport(
+        manage_codex_server=manage_codex_server,
+        codex_model_provider=codex_model_provider,
+        codex_stdio_executable=codex_stdio_executable,
+        codex_sessions_dir=codex_sessions_dir,
+    )
 
+
+def _parse_terminal(root: dict[str, Any]) -> TerminalSettings:
     terminal_data = _object(root.get("terminal", {}), "terminal")
     terminal_backend = terminal_data.get("backend", "auto")
     if terminal_backend not in {"auto", "wsl", "linux", "macos", "tmux-only"}:
@@ -361,7 +364,14 @@ def load_hub_config(
     wsl_distro = terminal_data.get("wsl_distro", "Ubuntu")
     if not isinstance(wsl_distro, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", wsl_distro):
         raise HubConfigError("terminal.wsl_distro is invalid")
+    return TerminalSettings(
+        backend=terminal_backend,
+        program=terminal_program.strip() if terminal_program else None,
+        wsl_distro=wsl_distro,
+    )
 
+
+def _parse_recovery_plane(root: dict[str, Any]) -> RecoveryPlaneSettings:
     recovery_data = _object(root.get("recovery_plane", {}), "recovery_plane")
     recovery_enabled = recovery_data.get("enabled", False)
     if not isinstance(recovery_enabled, bool):
@@ -392,7 +402,22 @@ def load_hub_config(
             "recovery_plane.tlive_config_path",
             must_exist=True,
         )
+    return RecoveryPlaneSettings(
+        enabled=recovery_enabled,
+        hermes_service=hermes_service,
+        tlive_service=tlive_service,
+        hermes_config_path=hermes_config_path,
+        tlive_config_path=tlive_config_path,
+        hermes_notify_target=hermes_notify_target,
+    )
 
+
+def _parse_projects(
+    root: dict[str, Any],
+    *,
+    allow_unbound: bool,
+    acceptance_actors: list[AcceptanceActor],
+) -> list[ProjectBinding]:
     raw_projects = root.get("projects")
     if not isinstance(raw_projects, list) or not raw_projects:
         raise HubConfigError("projects must be a non-empty array")
@@ -421,7 +446,12 @@ def load_hub_config(
     for actor in acceptance_actors:
         if actor.telegram_chat_id not in chat_ids:
             raise HubConfigError("acceptance_actors must reference a configured project group")
+    return projects
 
+
+def _parse_operational_alerts(
+    root: dict[str, Any], projects: list[ProjectBinding]
+) -> OperationalAlertSettings:
     alerts_data = _object(root.get("operational_alerts", {}), "operational_alerts")
     alerts_project_id = alerts_data.get("project_id")
     alerts_thread_id = alerts_data.get("telegram_thread_id")
@@ -437,8 +467,123 @@ def load_hub_config(
         if not isinstance(alerts_thread_id, int) or alerts_thread_id <= 1:
             raise HubConfigError("operational_alerts.telegram_thread_id is invalid")
         alerts_chat_id = matching_projects[0].telegram_chat_id
+    return OperationalAlertSettings(alerts_chat_id, alerts_thread_id)
 
-    raw_hub_bot = root.get("hub_bot")
+
+def _parse_agent(
+    index: int,
+    item: object,
+    *,
+    agent_ids: set[str],
+    usernames: set[str],
+    validate_telegram_secrets: bool,
+    controller_ingress_only: bool,
+    provider_ingress_agent_id: str | None,
+    hub_bot_configured: bool,
+) -> AgentDefinition:
+    data = _object(item, f"agents[{index}]")
+    if "token" in data:
+        raise HubConfigError("inline token fields are forbidden; use token_file")
+    agent_id = _text(data, "agent_id")
+    display_name = _text(data, "display_name")
+    username = _text(data, "telegram_username").removeprefix("@")
+    runtime = _text(data, "runtime")
+    if not IDENTIFIER.fullmatch(agent_id) or agent_id in agent_ids:
+        raise HubConfigError(f"invalid or duplicate agent_id: {agent_id}")
+    if not USERNAME.fullmatch(username) or username.casefold() in usernames:
+        raise HubConfigError(f"invalid or duplicate telegram_username: {username}")
+    if not username.casefold().endswith("bot"):
+        raise HubConfigError(f"telegram_username for {agent_id} must end in bot")
+    if runtime not in SUPPORTED_RUNTIMES:
+        raise HubConfigError(f"unsupported runtime for {agent_id}: {runtime}")
+    managed_externally = data.get("managed_externally", False)
+    terminal_enabled = data.get("terminal_enabled", False)
+    if not isinstance(managed_externally, bool) or not isinstance(terminal_enabled, bool):
+        raise HubConfigError(f"boolean agent flags are invalid for {agent_id}")
+    if agent_id == "codex" and managed_externally:
+        raise HubConfigError(
+            "codex cannot be managed_externally; it is the Controller's primary provider"
+        )
+    token_file = None
+    validate_agent_secret = validate_telegram_secrets and (
+        (not controller_ingress_only and provider_ingress_agent_id is None)
+        or (controller_ingress_only and not hub_bot_configured and agent_id == "codex")
+        or agent_id == provider_ingress_agent_id
+    )
+    if not managed_externally:
+        token_file = _private_token_file(
+            data.get("token_file"),
+            agent_id,
+            validate_secret=validate_agent_secret,
+        )
+    elif data.get("token_file") is not None:
+        token_file = _private_token_file(
+            data.get("token_file"),
+            agent_id,
+            validate_secret=validate_agent_secret,
+        )
+    agent_ids.add(agent_id)
+    usernames.add(username.casefold())
+    default_model = data.get("default_model", "gpt-5.6-sol" if runtime == "codex" else "unknown")
+    default_effort = data.get("default_effort", "high")
+    if not isinstance(default_model, str) or not default_model.strip():
+        raise HubConfigError(f"default_model is invalid for {agent_id}")
+    if runtime == "claude" and (agent_id != "claude" or default_model == "unknown"):
+        raise HubConfigError("claude runtime requires agent_id claude and an explicit model")
+    if default_effort not in {
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra",
+    }:
+        raise HubConfigError(f"default_effort is invalid for {agent_id}")
+    if runtime == "claude" and default_effort not in {"low", "medium", "high", "xhigh", "max"}:
+        raise HubConfigError(f"default_effort is invalid for {agent_id}")
+    executable = data.get("executable")
+    if executable is not None and (not isinstance(executable, str) or not executable.strip()):
+        raise HubConfigError(f"executable is invalid for {agent_id}")
+    runtime_home_value = data.get("runtime_home")
+    runtime_home = None
+    if runtime_home_value is not None:
+        runtime_home = _absolute_path(
+            runtime_home_value, f"runtime_home for {agent_id}", must_exist=True
+        )
+        if not runtime_home.is_dir():
+            raise HubConfigError(f"runtime_home for {agent_id} is not a directory")
+        if runtime_home.stat().st_mode & 0o077:
+            raise HubConfigError(f"runtime_home for {agent_id} must have mode 0700")
+    service_unit = data.get("service_unit")
+    if service_unit is not None and (
+        not isinstance(service_unit, str) or not SERVICE_UNIT.fullmatch(service_unit)
+    ):
+        raise HubConfigError(f"service_unit is invalid for {agent_id}")
+    return AgentDefinition(
+        agent_id=agent_id,
+        display_name=display_name,
+        telegram_username=username,
+        runtime=runtime,
+        token_file=token_file,
+        terminal_enabled=terminal_enabled,
+        managed_externally=managed_externally,
+        default_model=default_model.strip(),
+        default_effort=default_effort,
+        executable=executable.strip() if executable else None,
+        runtime_home=runtime_home,
+        service_unit=service_unit,
+    )
+
+
+def _parse_agents(
+    root: dict[str, Any],
+    *,
+    validate_telegram_secrets: bool,
+    controller_ingress_only: bool,
+    provider_ingress_agent_id: str | None,
+) -> list[AgentDefinition]:
     raw_agents = root.get("agents")
     if not isinstance(raw_agents, list) or not raw_agents:
         raise HubConfigError("agents must be a non-empty array")
@@ -446,102 +591,16 @@ def load_hub_config(
     agent_ids: set[str] = set()
     usernames: set[str] = set()
     for index, item in enumerate(raw_agents):
-        data = _object(item, f"agents[{index}]")
-        if "token" in data:
-            raise HubConfigError("inline token fields are forbidden; use token_file")
-        agent_id = _text(data, "agent_id")
-        display_name = _text(data, "display_name")
-        username = _text(data, "telegram_username").removeprefix("@")
-        runtime = _text(data, "runtime")
-        if not IDENTIFIER.fullmatch(agent_id) or agent_id in agent_ids:
-            raise HubConfigError(f"invalid or duplicate agent_id: {agent_id}")
-        if not USERNAME.fullmatch(username) or username.casefold() in usernames:
-            raise HubConfigError(f"invalid or duplicate telegram_username: {username}")
-        if not username.casefold().endswith("bot"):
-            raise HubConfigError(f"telegram_username for {agent_id} must end in bot")
-        if runtime not in SUPPORTED_RUNTIMES:
-            raise HubConfigError(f"unsupported runtime for {agent_id}: {runtime}")
-        managed_externally = data.get("managed_externally", False)
-        terminal_enabled = data.get("terminal_enabled", False)
-        if not isinstance(managed_externally, bool) or not isinstance(terminal_enabled, bool):
-            raise HubConfigError(f"boolean agent flags are invalid for {agent_id}")
-        if agent_id == "codex" and managed_externally:
-            raise HubConfigError(
-                "codex cannot be managed_externally; it is the Controller's primary provider"
-            )
-        token_file = None
-        validate_agent_secret = _validate_telegram_secrets and (
-            (not _controller_ingress_only and _provider_ingress_agent_id is None)
-            or (_controller_ingress_only and raw_hub_bot is None and agent_id == "codex")
-            or agent_id == _provider_ingress_agent_id
-        )
-        if not managed_externally:
-            token_file = _private_token_file(
-                data.get("token_file"),
-                agent_id,
-                validate_secret=validate_agent_secret,
-            )
-        elif data.get("token_file") is not None:
-            token_file = _private_token_file(
-                data.get("token_file"),
-                agent_id,
-                validate_secret=validate_agent_secret,
-            )
-        agent_ids.add(agent_id)
-        usernames.add(username.casefold())
-        default_model = data.get(
-            "default_model", "gpt-5.6-sol" if runtime == "codex" else "unknown"
-        )
-        default_effort = data.get("default_effort", "high")
-        if not isinstance(default_model, str) or not default_model.strip():
-            raise HubConfigError(f"default_model is invalid for {agent_id}")
-        if runtime == "claude" and (agent_id != "claude" or default_model == "unknown"):
-            raise HubConfigError("claude runtime requires agent_id claude and an explicit model")
-        if default_effort not in {
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max",
-            "ultra",
-        }:
-            raise HubConfigError(f"default_effort is invalid for {agent_id}")
-        if runtime == "claude" and default_effort not in {"low", "medium", "high", "xhigh", "max"}:
-            raise HubConfigError(f"default_effort is invalid for {agent_id}")
-        executable = data.get("executable")
-        if executable is not None and (not isinstance(executable, str) or not executable.strip()):
-            raise HubConfigError(f"executable is invalid for {agent_id}")
-        runtime_home_value = data.get("runtime_home")
-        runtime_home = None
-        if runtime_home_value is not None:
-            runtime_home = _absolute_path(
-                runtime_home_value, f"runtime_home for {agent_id}", must_exist=True
-            )
-            if not runtime_home.is_dir():
-                raise HubConfigError(f"runtime_home for {agent_id} is not a directory")
-            if runtime_home.stat().st_mode & 0o077:
-                raise HubConfigError(f"runtime_home for {agent_id} must have mode 0700")
-        service_unit = data.get("service_unit")
-        if service_unit is not None and (
-            not isinstance(service_unit, str) or not SERVICE_UNIT.fullmatch(service_unit)
-        ):
-            raise HubConfigError(f"service_unit is invalid for {agent_id}")
         agents.append(
-            AgentDefinition(
-                agent_id=agent_id,
-                display_name=display_name,
-                telegram_username=username,
-                runtime=runtime,
-                token_file=token_file,
-                terminal_enabled=terminal_enabled,
-                managed_externally=managed_externally,
-                default_model=default_model.strip(),
-                default_effort=default_effort,
-                executable=executable.strip() if executable else None,
-                runtime_home=runtime_home,
-                service_unit=service_unit,
+            _parse_agent(
+                index,
+                item,
+                agent_ids=agent_ids,
+                usernames=usernames,
+                validate_telegram_secrets=validate_telegram_secrets,
+                controller_ingress_only=controller_ingress_only,
+                provider_ingress_agent_id=provider_ingress_agent_id,
+                hub_bot_configured=root.get("hub_bot") is not None,
             )
         )
 
@@ -552,7 +611,13 @@ def load_hub_config(
         if agent.token_file in local_token_files:
             raise HubConfigError("locally managed agents must use distinct token_file paths")
         local_token_files.add(agent.token_file)
+    return agents
 
+
+def _parse_provider_account_hints(
+    root: dict[str, Any], agents: list[AgentDefinition]
+) -> dict[str, tuple[str, ...]]:
+    agent_ids = {agent.agent_id for agent in agents}
     raw_provider_hints = root.get("provider_account_hints", {})
     if not isinstance(raw_provider_hints, dict):
         raise HubConfigError("provider_account_hints must be an object")
@@ -574,6 +639,12 @@ def load_hub_config(
         if len(set(raw_hints)) != len(raw_hints):
             raise HubConfigError("provider_account_hints contains duplicate prefixes")
         provider_account_hints[str(agent_id)] = tuple(raw_hints)
+    return provider_account_hints
+
+
+def _parse_provider_telemetry(
+    root: dict[str, Any], agents: list[AgentDefinition]
+) -> dict[str, ProviderTelemetrySettings]:
     raw_provider_telemetry = root.get("provider_telemetry", {})
     if not isinstance(raw_provider_telemetry, dict):
         raise HubConfigError("provider_telemetry must be an object")
@@ -600,7 +671,13 @@ def load_hub_config(
             quota_cache=quota_cache,
             status_state=status_state,
         )
+    return provider_telemetry
 
+
+def _parse_hub_bot(
+    raw_hub_bot: object, agents: list[AgentDefinition], *, validate_secret: bool
+) -> HubTelegramBot | None:
+    usernames = {agent.telegram_username.casefold() for agent in agents}
     hub_bot = None
     if raw_hub_bot is not None:
         hub_data = _object(raw_hub_bot, "hub_bot")
@@ -618,21 +695,21 @@ def load_hub_config(
             token_file=_private_token_file(
                 hub_data.get("token_file"),
                 "hub_bot",
-                validate_secret=_validate_telegram_secrets and _provider_ingress_agent_id is None,
+                validate_secret=validate_secret,
             ),
         )
         if any(agent.token_file == hub_bot.token_file for agent in agents):
             raise HubConfigError("hub_bot.token_file duplicates an agent token_file")
-    if alerts_chat_id is not None and hub_bot is None:
-        raise HubConfigError("operational_alerts requires hub_bot")
+    return hub_bot
 
-    direct_message_project_id = root.get("direct_message_project_id")
-    if direct_message_project_id is not None and (
-        not isinstance(direct_message_project_id, str)
-        or direct_message_project_id not in project_ids
-    ):
-        raise HubConfigError("direct_message_project_id must reference a registered project")
 
+def _parse_runtime_topology(
+    root: dict[str, Any],
+    agents: list[AgentDefinition],
+    *,
+    hub_bot: HubTelegramBot | None,
+    manage_codex_server: bool,
+) -> _RuntimeTopology:
     dispatch_mode = root.get("dispatch_mode", "inline")
     if dispatch_mode not in {"inline", "queue"}:
         raise HubConfigError("dispatch_mode must be inline or queue")
@@ -762,7 +839,26 @@ def load_hub_config(
             raise HubConfigError(
                 f"hub_bot requires an isolated external worker for agent: {missing_workers[0]}"
             )
+    return _RuntimeTopology(
+        dispatch_mode=dispatch_mode,
+        queue_runtime=queue_runtime,
+        outbox_runtime=outbox_runtime,
+        external_worker_agent_ids=external_worker_agent_ids,
+        max_parallel_roots=max_parallel_roots,
+        codex_worker_count=codex_worker_count,
+        claude_worker_count=claude_worker_count,
+        message_batch_quiet_ms=message_batch_quiet_ms,
+        message_batch_max_ms=message_batch_max_ms,
+    )
 
+
+def _parse_project_provisioning(
+    root: dict[str, Any],
+    *,
+    hub_bot: HubTelegramBot | None,
+    raw_owners: list[int],
+    validate_secret: bool,
+) -> ProjectProvisioningSettings:
     provisioning_data = _object(root.get("project_provisioning", {}), "project_provisioning")
     provisioning_enabled = provisioning_data.get("enabled", False)
     if not isinstance(provisioning_enabled, bool):
@@ -803,9 +899,9 @@ def load_hub_config(
         provisioning_api_hash_file = _absolute_path(
             provisioning_data.get("api_hash_file"),
             "project_provisioning.api_hash_file",
-            must_exist=_validate_project_provisioning_secret,
+            must_exist=validate_secret,
         )
-        if _validate_project_provisioning_secret:
+        if validate_secret:
             if (
                 not provisioning_api_hash_file.is_file()
                 or provisioning_api_hash_file.stat().st_mode & 0o077
@@ -824,7 +920,7 @@ def load_hub_config(
         )
         if provisioning_session_path.suffix != ".session":
             raise HubConfigError("project_provisioning.session_path must end in .session")
-        if _validate_project_provisioning_secret:
+        if validate_secret:
             if not provisioning_session_path.parent.is_dir():
                 raise HubConfigError("project_provisioning.session_path parent must exist")
             if provisioning_session_path.parent.stat().st_mode & 0o077:
@@ -834,6 +930,91 @@ def load_hub_config(
                 or provisioning_session_path.stat().st_mode & 0o077
             ):
                 raise HubConfigError("project_provisioning.session_path must have mode 0600")
+    return ProjectProvisioningSettings(
+        provisioning_enabled,
+        provisioning_api_id,
+        provisioning_api_hash_file,
+        provisioning_session_path,
+        provisioning_expected_user_id,
+        provisioning_about.strip(),
+    )
+
+
+def load_hub_config(
+    path: Path,
+    *,
+    allow_unbound: bool = False,
+    _validate_telegram_secrets: bool = True,
+    _controller_ingress_only: bool = False,
+    _provider_ingress_agent_id: str | None = None,
+    _validate_project_provisioning_secret: bool = True,
+) -> HubConfig:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HubConfigError(f"cannot read hub config: {exc}") from exc
+    root = _object(document, "hub config")
+    if root.get("schema_version") != 1:
+        raise HubConfigError("schema_version must be 1")
+    retired = sorted(_RETIRED_KEYS.intersection(root))
+    if retired:
+        raise HubConfigError(
+            f"{', '.join(retired)}: Codex multi-auth support was removed (ADR 0047); "
+            "delete these keys and sign in with the official Codex login"
+        )
+
+    raw_owners = _parse_owners(root)
+    acceptance_actors = _parse_acceptance_actors(root, raw_owners)
+    registry_path = _absolute_path(root.get("registry_path"), "registry_path", must_exist=True)
+    state_path = _absolute_path(root.get("state_path"), "state_path", must_exist=False)
+    codex_socket_path = _absolute_path(
+        root.get(
+            "codex_socket_path",
+            str(Path.home() / ".codex/app-server-control/app-server-control.sock"),
+        ),
+        "codex_socket_path",
+        must_exist=False,
+    )
+    codex = _parse_codex_transport(root)
+    terminal = _parse_terminal(root)
+    recovery_plane = _parse_recovery_plane(root)
+    projects = _parse_projects(
+        root, allow_unbound=allow_unbound, acceptance_actors=acceptance_actors
+    )
+    operational_alerts = _parse_operational_alerts(root, projects)
+    agents = _parse_agents(
+        root,
+        validate_telegram_secrets=_validate_telegram_secrets,
+        controller_ingress_only=_controller_ingress_only,
+        provider_ingress_agent_id=_provider_ingress_agent_id,
+    )
+    provider_account_hints = _parse_provider_account_hints(root, agents)
+    provider_telemetry = _parse_provider_telemetry(root, agents)
+    hub_bot = _parse_hub_bot(
+        root.get("hub_bot"),
+        agents,
+        validate_secret=_validate_telegram_secrets and _provider_ingress_agent_id is None,
+    )
+    if operational_alerts.telegram_chat_id is not None and hub_bot is None:
+        raise HubConfigError("operational_alerts requires hub_bot")
+
+    project_ids = {project.project_id for project in projects}
+    direct_message_project_id = root.get("direct_message_project_id")
+    if direct_message_project_id is not None and (
+        not isinstance(direct_message_project_id, str)
+        or direct_message_project_id not in project_ids
+    ):
+        raise HubConfigError("direct_message_project_id must reference a registered project")
+
+    topology = _parse_runtime_topology(
+        root, agents, hub_bot=hub_bot, manage_codex_server=codex.manage_codex_server
+    )
+    project_provisioning = _parse_project_provisioning(
+        root,
+        hub_bot=hub_bot,
+        raw_owners=raw_owners,
+        validate_secret=_validate_project_provisioning_secret,
+    )
 
     config = HubConfig(
         schema_version=1,
@@ -841,48 +1022,30 @@ def load_hub_config(
         registry_path=registry_path,
         state_path=state_path,
         codex_socket_path=codex_socket_path,
-        manage_codex_server=manage_codex_server,
-        terminal=TerminalSettings(
-            backend=terminal_backend,
-            program=terminal_program.strip() if terminal_program else None,
-            wsl_distro=wsl_distro,
-        ),
-        recovery_plane=RecoveryPlaneSettings(
-            enabled=recovery_enabled,
-            hermes_service=hermes_service,
-            tlive_service=tlive_service,
-            hermes_config_path=hermes_config_path,
-            tlive_config_path=tlive_config_path,
-            hermes_notify_target=hermes_notify_target,
-        ),
-        operational_alerts=OperationalAlertSettings(alerts_chat_id, alerts_thread_id),
+        manage_codex_server=codex.manage_codex_server,
+        terminal=terminal,
+        recovery_plane=recovery_plane,
+        operational_alerts=operational_alerts,
         acceptance_actors=tuple(acceptance_actors),
         projects=tuple(projects),
         agents=tuple(agents),
         hub_bot=hub_bot,
-        dispatch_mode=dispatch_mode,
-        queue_runtime=queue_runtime,
-        outbox_runtime=outbox_runtime,
-        external_worker_agent_ids=external_worker_agent_ids,
-        max_parallel_roots=max_parallel_roots,
-        codex_worker_count=codex_worker_count,
-        claude_worker_count=claude_worker_count,
-        message_batch_quiet_ms=message_batch_quiet_ms,
-        message_batch_max_ms=message_batch_max_ms,
+        dispatch_mode=topology.dispatch_mode,
+        queue_runtime=topology.queue_runtime,
+        outbox_runtime=topology.outbox_runtime,
+        external_worker_agent_ids=topology.external_worker_agent_ids,
+        max_parallel_roots=topology.max_parallel_roots,
+        codex_worker_count=topology.codex_worker_count,
+        claude_worker_count=topology.claude_worker_count,
+        message_batch_quiet_ms=topology.message_batch_quiet_ms,
+        message_batch_max_ms=topology.message_batch_max_ms,
         direct_message_project_id=direct_message_project_id,
-        codex_sessions_dir=codex_sessions_dir,
-        codex_stdio_executable=codex_stdio_executable,
-        codex_model_provider=codex_model_provider,
+        codex_sessions_dir=codex.codex_sessions_dir,
+        codex_stdio_executable=codex.codex_stdio_executable,
+        codex_model_provider=codex.codex_model_provider,
         provider_account_hints=provider_account_hints,
         provider_telemetry=provider_telemetry,
-        project_provisioning=ProjectProvisioningSettings(
-            provisioning_enabled,
-            provisioning_api_id,
-            provisioning_api_hash_file,
-            provisioning_session_path,
-            provisioning_expected_user_id,
-            provisioning_about.strip(),
-        ),
+        project_provisioning=project_provisioning,
     )
     from .session_adoption_policy import validate_adoption_mode
 

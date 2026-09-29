@@ -42,14 +42,6 @@
       "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
     },
     {
-      "target": "src/hermes_codex_router/hub_config.py::load_hub_config",
-      "max_lines": 638,
-      "rationale": "Monolithic configuration validation. Stabilization stage 3 splits it into per-section parsers.",
-      "owner": "repository owner",
-      "next_review": "2026-12-31",
-      "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
-    },
-    {
       "target": "src/hermes_codex_router/migrations.py",
       "max_lines": 1572,
       "rationale": "Released migrations are append-only and must never be rewritten (refactoring non-goal).",
