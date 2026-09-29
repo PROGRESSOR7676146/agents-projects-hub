@@ -641,6 +641,27 @@ class CodexAppServerTests(unittest.TestCase):
         self._run_turn(client)
         self.assertEqual(client.read_rate_limits(), RateLimits(None, None))
 
+    def test_turn_start_without_a_turn_id_stops_collecting(self) -> None:
+        transport = FakeTransport(
+            [
+                {"id": 1, "result": {}},
+                # Arrives while a later request is outstanding, outside any turn.
+                {
+                    "method": "account/rateLimits/updated",
+                    "params": {"rateLimits": {"primary": {"usedPercent": 90}}},
+                },
+                {"id": 2, "result": {"rateLimits": {}}},
+                {"id": 3, "result": {"rateLimits": {}}},
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True)
+        with self.assertRaisesRegex(RpcError, "did not return a turn id"):
+            client.start_turn(
+                thread_id="thread-123", cwd=self.cwd, text="Example", model="gpt", effort="low"
+            )
+        self.assertEqual(client.read_rate_limits(), RateLimits(None, None))
+        self.assertEqual(client.read_rate_limits(), RateLimits(None, None))
+
     def test_update_during_turn_start_belongs_to_that_turn(self) -> None:
         transport = FakeTransport(
             [

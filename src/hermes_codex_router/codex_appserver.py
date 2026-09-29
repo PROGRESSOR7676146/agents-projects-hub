@@ -779,13 +779,14 @@ class CodexAppServerClient:
                     },
                 },
             )
+            turn = result.get("turn") if isinstance(result, dict) else None
+            turn_id = turn.get("id") if isinstance(turn, dict) else None
+            if not isinstance(turn_id, str) or not turn_id:
+                raise RpcError("turn/start did not return a turn id")
         except BaseException:
+            # No turn started, so nothing that follows may count as its telemetry.
             self._collecting_rate_limits = False
             raise
-        turn = result.get("turn") if isinstance(result, dict) else None
-        turn_id = turn.get("id") if isinstance(turn, dict) else None
-        if not isinstance(turn_id, str) or not turn_id:
-            raise RpcError("turn/start did not return a turn id")
         return turn_id
 
     def interrupt_turn(self, *, thread_id: str, turn_id: str) -> None:
