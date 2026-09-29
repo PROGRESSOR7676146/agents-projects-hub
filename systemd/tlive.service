@@ -12,6 +12,9 @@ RestartSec=5
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
+# The Codex daemon serves its app-server socket from /tmp/codex-daemon-UID;
+# PrivateTmp would hide it and silently force the stdio fallback.
+BindPaths=-/tmp/codex-daemon-%U
 
 [Install]
 WantedBy=default.target

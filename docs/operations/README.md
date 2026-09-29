@@ -93,6 +93,12 @@ Operational truth is split by purpose:
   provider sessions outside Git with restrictive permissions.
 - Repair only the failed component. Do not make Hub, Hermes, tlive, or a shared
   Codex app-server mandatory dependencies of each other.
+- The Codex daemon serves its shared app-server socket from
+  `/tmp/codex-daemon-UID`. Units with `PrivateTmp` see it only through the
+  `BindPaths` line in the shipped templates; without it the Hub silently runs
+  Codex on the stdio fallback and the monitor cannot refresh the model catalog.
+  Start the shared app-server before the Hub units, and restart the Hub units
+  after the daemon recreates that directory (for example after a reboot).
 - The Codex multi-auth integration is retired
   ([ADR 0047](../decisions/0047-retire-codex-multi-auth.md)). Delete its keys
   from the Hub configuration before upgrading; removing a leftover helper,

@@ -56,6 +56,21 @@ class SystemdTopologyTests(unittest.TestCase):
         self.assertEqual([item for item in units if "multi-auth" in item], [])
         self.assertNotIn("multi-auth", installer)
 
+    def test_codex_client_units_see_the_daemon_socket_through_private_tmp(self) -> None:
+        # A private /tmp hides the Codex daemon socket and forces the stdio fallback.
+        for name in (
+            "agents-projects-hub.service",
+            "agents-projects-hub-worker@.service",
+            "agents-projects-hub-codex-worker@.service",
+            "agents-projects-hub-monitor.service",
+            "agents-projects-hub@.service",
+            "tlive.service",
+        ):
+            with self.subTest(unit=name):
+                unit = self.unit(name)
+                self.assertIn("PrivateTmp=true", unit)
+                self.assertIn("BindPaths=-/tmp/codex-daemon-%U", unit)
+
     def test_monitor_timer_schedules_from_each_activation(self) -> None:
         timer = self.unit("agents-projects-hub-monitor.timer")
         self.assertIn("OnActiveSec=5min", timer)
