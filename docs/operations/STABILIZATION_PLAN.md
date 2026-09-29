@@ -41,8 +41,8 @@ accumulated without live acceptance, contrary to product principle 10.
 | 2a | `CLAUDE.md`; review/merge rules; risk register; ADR 0016 tombstone; this plan | In review: #84 | — |
 | 2b | Hotspot growth ratchet in every validation profile; rules 12 and 14 amended | In review: #85 | ADR 0044; 21 recorded hotspots |
 | 2c | Capability summary table in project status; closure sections for six completed plans | In review | Prose still to move into owning modules |
-| 3 | Extract `_handle_update`, `load_hub_config`, `cli.main`; remove dead code; tests for weak modules; injected clocks in timing tests | In progress: read-only `status` (#97); `cli.main` split into command handlers | Dispatcher coverage 316 → 359 of 421 (#89) |
-| 3b | Retire the multi-auth integration (reliability package B): migration contract, retired keys rejected before helper access, superseded ADRs | In review | ADR 0047; no schema change |
+| 3 | Extract `_handle_update`, `load_hub_config`, `cli.main`; remove dead code; tests for weak modules; injected clocks in timing tests | In progress: read-only `status`, `doctor` and monitor (#97); `cli.main` split into command handlers (#99); `run_monitor_once` and `evaluate_operational_alerts` below the hotspot line (#100); onboarding lease test on an injected clock (#101) | Dispatcher coverage 316 → 359 of 421 (#89) |
+| 3b | Retire the multi-auth integration (reliability package B): migration contract, retired keys rejected before helper access, superseded ADRs | Done: #100 | ADR 0047; no schema change; host leftovers are a separate authorized task |
 | 4 | Release 0.8.0; branch and worktree hygiene | Planned; each action needs owner approval | — |
 
 ## Live-acceptance backlog
@@ -150,12 +150,12 @@ acceptance.
   scaffold; resolved by withdrawing the gate (ADR 0045).
 - An analysis of the Claude integration path to Codex parity follows stage 3.
 - Response quota labels on a custom Codex model provider (found by
-  `p0_p1_live` at `adb8b37`): owner decision pending. Stage 3b does not close
-  it: the deployment does not use multi-auth, and the windows are missing
-  because the app-server on this route reports none. Options: read the windows
-  from another passive local source on this route, if one exists; or the P0/P1
-  check accepts a missing label on a route without provider rate-limit
-  telemetry.
+  `p0_p1_live` at `adb8b37`). Stage 3b did not close it: the deployment does
+  not use multi-auth. `account/rateLimits/read` has no windows on this route,
+  but the provider reports them in response headers, which the app-server
+  forwards during the turn as `account/rateLimits/updated`. #102 uses those
+  windows for the turn's response. Live confirmation: `p0_p1_live` after the
+  next authorized deployment; expect a weekly window only.
 - `configure-github.sh` required nonexistent check names (fixed in #82).
 
 ## Closure

@@ -61,7 +61,9 @@ This normative module is part of the
   value. A quota-window label MUST derive from the provider-reported duration.
   `primary` and `secondary` identify positions only: an unknown duration remains
   `Primary window` or `Secondary window` rather than being guessed as five-hour
-  or weekly.
+  or weekly. A Codex window missing from the account snapshot MAY come from the
+  rolling rate-limit update the provider sent during the same turn; it serves
+  only that turn's response and MUST NOT be shown later as current.
 - **REQ-CMD-002 (Implemented):** `/model` is the single cascaded selector for
   provider, model, and effort. It marks current values and validates callbacks
   against the exact cached catalog snapshot displayed to the user. The final
