@@ -124,6 +124,11 @@ acceptance.
 
 ## Follow-ups found during execution
 
+- The Codex daemon moved its shared socket into `/tmp/codex-daemon-UID`, which
+  the Hub units' `PrivateTmp` hid (found 2026-09-29). Since about 2026-09-27
+  the Codex worker ran on the stdio fallback, without companion approvals, and
+  the monitor could not refresh the Codex model catalog. Fixed in the unit
+  templates by binding that directory; the live units need the same drop-in.
 - Reliability plan packages B–E: owner decision 2026-09-27 — B, retiring
   multi-auth, moves into this plan as stage 3b; C, D and E are deferred and
   stay recorded in the reliability plan.
