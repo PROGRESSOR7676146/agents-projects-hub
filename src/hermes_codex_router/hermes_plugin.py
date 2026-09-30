@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import importlib
 import os
 from pathlib import Path
 from typing import Any
 
+from .diagnostic_log import survived
 from .external_admission import (
     acknowledge_visible_context_through,
     is_active_agent,
+    is_hub_chat,
     peek_unseen_forwarded_context,
     read_visible_context_snapshot,
     telegram_contract_required,
@@ -56,7 +59,6 @@ async def _dispatch_active_text(
         return
     if not adapter._is_user_authorized_from_message(message):
         return
-    await adapter._ensure_forum_commands(message)
     event = adapter._build_message_event(message, MessageType.TEXT, update_id=update.update_id)
     event.text = adapter._clean_bot_trigger_text(event.text)
     context_request = parse_context_request(event.text)
@@ -114,11 +116,60 @@ async def _dispatch_active_text(
         )
 
 
+class _HubMenuGuard:
+    """Keep Hermes' own command menu out of Hub project groups (REQ-CMD-005).
+
+    Hermes registers its full menu for every forum chat it handles, so Telegram
+    shows Hermes commands beside the Hub's. In a Hub chat the guard instead
+    deletes Hermes' chat-scoped menu once per process.
+    """
+
+    def __init__(self, adapter: Any) -> None:
+        self._adapter = adapter
+        self._register = adapter._ensure_forum_commands
+        self._cleared: set[int] = set()
+
+    async def ensure_forum_commands(self, message: Any) -> None:
+        identity = _topic_identity(message)
+        if identity is None or not is_hub_chat(_state_path(), identity[0]):
+            await self._register(message)
+            return
+        await self.clear(identity[0])
+
+    async def clear(self, chat_id: int) -> None:
+        if chat_id in self._cleared:
+            return
+        self._cleared.add(chat_id)
+        try:
+            # python-telegram-bot exists only inside Hermes, not in the Hub environment.
+            scope_chat = importlib.import_module("telegram").BotCommandScopeChat
+            await self._adapter._bot.delete_my_commands(scope=scope_chat(chat_id=chat_id))
+        except Exception as error:
+            # Retry on the next update from this chat.
+            self._cleared.discard(chat_id)
+            survived("hermes_plugin.menu_clear", error)
+
+
 def register(ctx: Any) -> None:
-    """Install a pre-core Telegram handler for active-agent admission."""
+    """Install pre-core Telegram handlers for active-agent admission."""
 
     def wire(application: Any, adapter: Any) -> None:
         from telegram.ext import ApplicationHandlerStop, MessageHandler, filters
+
+        menu = _HubMenuGuard(adapter)
+        adapter._ensure_forum_commands = menu.ensure_forum_commands
+
+        async def route_command(update: Any, context: Any) -> None:
+            # Bare commands in a Hub group belong to the Hub bot; Hermes keeps
+            # only commands explicitly addressed to its own bot username.
+            message = adapter._effective_update_message(update)
+            identity = _topic_identity(message)
+            if identity is None or not is_hub_chat(_state_path(), identity[0]):
+                return
+            await menu.clear(identity[0])
+            if adapter._message_mentions_bot(message):
+                return
+            raise ApplicationHandlerStop
 
         async def route(update: Any, context: Any) -> None:
             message = adapter._effective_update_message(update)
@@ -135,6 +186,8 @@ def register(ctx: Any) -> None:
                 return
 
             chat_id, thread_id = identity
+            if is_hub_chat(_state_path(), chat_id):
+                await menu.clear(chat_id)
             if is_active_agent(_state_path(), chat_id, thread_id, agent_id="hermes"):
                 await _dispatch_active_text(
                     adapter,
@@ -153,6 +206,10 @@ def register(ctx: Any) -> None:
                 filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
                 route,
             ),
+            group=-20,
+        )
+        application.add_handler(
+            MessageHandler(filters.COMMAND & filters.ChatType.GROUPS, route_command),
             group=-20,
         )
 
