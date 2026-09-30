@@ -30,6 +30,7 @@ subset; the plan's accepted role choices are not a claim of runtime parity.
 - [Operations](operations/README.md)
 - [Queue and process recovery](operations/QUEUE_RECOVERY.md)
 - [Live canary and rollback](operations/LIVE_CANARY.md)
+- [Stack update tool](operations/STACK_UPDATE.md)
 - [Release metadata synchronization](operations/RELEASE_METADATA.md)
 - [Recovery plane](RECOVERY_PLANE.ru.md)
 - [Reciprocal recovery capsules](operations/RECOVERY_CAPSULES.md)

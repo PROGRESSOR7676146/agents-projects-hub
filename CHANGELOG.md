@@ -5,6 +5,12 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Add `stack-update`, a standard-library tool that plans, stages, checks,
+  switches and rolls back external stack components from one exact plan
+  bound to published digests and current links, with automatic link
+  restoration on a failed gate (stage 1 of
+  [ADR 0048](docs/decisions/0048-out-of-band-update-and-incident-plane.md);
+  [runbook](docs/operations/STACK_UPDATE.md)).
 - Make the emergency stop topic-wide: it cancels queued work of every provider
   in the topic and interrupts the running turn even when that provider was
   invoked by mention ([ADR 0046](docs/decisions/0046-topic-wide-emergency-stop.md)).
