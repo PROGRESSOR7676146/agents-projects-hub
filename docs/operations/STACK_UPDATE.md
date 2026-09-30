@@ -17,8 +17,10 @@ The ADR owns the rationale; the requirement owns the contract.
   records:
   - the exact versions;
   - the sources;
-  - the published digest: the npm `integrity`, or the archive SHA-256 from the
-    configured checksums file;
+  - the digest the plan binds: the npm `integrity`, or the archive SHA-256
+    from the configured checksums file (GNU or BSD format). When a source
+    publishes no checksums, `plan` downloads the archive and records its
+    SHA-256, so `apply` installs exactly the approved bytes;
   - every current link;
   - the manifest digest.
 
@@ -32,7 +34,7 @@ The ADR owns the rationale; the requirement owns the contract.
   A successful switch re-pins the manifest, so a plan cannot be applied twice.
 - **Nothing changes before the gates pass.** `apply` does these steps in order:
   1. Stages each candidate into an immutable version directory. A download is
-     compared with the published digest, and npm lifecycle scripts stay
+     compared with the digest in the plan, and npm lifecycle scripts stay
      disabled unless the manifest allows them.
   2. Runs the staged gates: the version output, then the `staged` checks.
   3. Only then touches links. A staging or check failure leaves every link
@@ -59,8 +61,8 @@ Until then, run the tool only by hand.
 
 The manifest is private deployment configuration and never enters Git. Its
 default location is `${XDG_CONFIG_HOME:-~/.config}/agents-projects-hub/stack-manifest.json`.
-It drives command execution, so the tool refuses a file that is not owned by
-the current user, or that is group- or world-writable. The paths below are
+It drives command execution, so the tool refuses a symbolic link, a file that
+is not owned by the current user, or one that is group- or world-writable. The paths below are
 fictional:
 
 ```json
