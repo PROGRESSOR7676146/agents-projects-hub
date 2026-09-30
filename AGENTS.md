@@ -30,6 +30,18 @@ Before substantial work, read the optional private operator profile at
 It is local context, never repository content: do not quote, copy, summarize,
 stage, or commit it. Repository behavior must remain useful without it.
 
+Then read the optional private session handoff at
+`${XDG_CONFIG_HOME:-$HOME/.config}/agents-projects-hub/NEXT_AGENT_HANDOFF.md`
+when it exists. It carries what the repository must not: the deployed
+revision, rollback pointers, pending owner decisions and approvals, and the
+next step. It is a pointer, not evidence: recheck deployment claims against the
+live system before acting. You may discuss it with the owner, but never stage,
+commit, or copy its deployment facts into the repository. Before ending a
+session that changed deployment state, plan, or pending decisions, rewrite it
+to the current state. The public plan stays in
+`docs/operations/STABILIZATION_PLAN.md` and
+`docs/operations/NEXT_DEVELOPMENT_SESSION.md`.
+
 ## Collaboration stance
 
 - Treat the operator as a product partner and decision owner, not an infallible
