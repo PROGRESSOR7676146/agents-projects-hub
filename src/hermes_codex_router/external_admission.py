@@ -136,6 +136,34 @@ def is_active_agent(
             connection.close()
 
 
+def is_hub_chat(state_path: Path, chat_id: int) -> bool:
+    """Whether Hub routes this group chat; an unreadable state counts as Hub's.
+
+    Hermes uses this to keep out of bare commands and the command menu in Hub
+    project groups (REQ-CMD-005). A missing state means no Hub is installed.
+    """
+    if chat_id >= 0:
+        return False
+    connection: sqlite3.Connection | None = None
+    try:
+        # Every file-system step stays inside the guard: an inaccessible path
+        # must fail closed, and an exception here would let the update reach
+        # Hermes' own handlers.
+        path = state_path.expanduser().resolve()
+        if not path.exists():
+            return False
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.2)
+        row = connection.execute(
+            "SELECT 1 FROM topics WHERE chat_id = ? LIMIT 1", (chat_id,)
+        ).fetchone()
+        return row is not None
+    except (OSError, RuntimeError, sqlite3.Error, StateError):
+        return True
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 def peek_pending_handoff(
     state_path: Path,
     chat_id: int,
