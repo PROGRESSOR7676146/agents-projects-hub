@@ -1,10 +1,12 @@
 # Stabilization plan
 
-Status: active; stages 0–1 in review, stage 2 in progress
-Date: 2026-09-27
+Status: active; stages 0–2 and 3b done, stage 3 in progress
+Date: 2026-09-27; updated 2026-09-30
 Owner: repository owner (decisions and merges); Claude Code executes
-Last verified revision: `9948eac` (stage 1 head, canonical gate passed)
-Next trigger: owner review and merge of the stage 0–1 pull requests
+Last verified revision: `46d6e7a` (deployed; every required component and the
+Hermes plugin report it)
+Next trigger: `p0_p1_live` at `46d6e7a` once the provider quota resets; the
+out-of-band update and incident plane (ADR 0048)
 
 ## Why
 
@@ -33,15 +35,15 @@ accumulated without live acceptance, contrary to product principle 10.
 
 | Stage | Scope | State | Evidence |
 | --- | --- | --- | --- |
-| 0 | Fix the lifecycle test broken since `2d24e82`; review the Codex branch | In review: #80 | Canonical gate at `6ce927e`; review findings 1, 3, 4 fixed |
-| 1.1 | Parallel isolated test modules; working focused selectors; pre-commit gate | In review: #81 | ADR 0041, ADR 0042; suite ~45 s instead of ~340 s |
-| 1.2 | Bounded diagnostics for survived failures; Ruff S110/S112 | In review: #83 | ADR 0043 |
-| 1.3 | CI from `uv.lock`; non-required coverage report | In review: #82 | Hosted run on 3.11–3.13 and coverage job green |
-| 1.4 | README version checked by the release metadata audit | In review: #82 | Audit test |
-| 2a | `CLAUDE.md`; review/merge rules; risk register; ADR 0016 tombstone; this plan | In review: #84 | — |
-| 2b | Hotspot growth ratchet in every validation profile; rules 12 and 14 amended | In review: #85 | ADR 0044; 21 recorded hotspots |
-| 2c | Capability summary table in project status; closure sections for six completed plans | In review | Prose still to move into owning modules |
-| 3 | Extract `_handle_update`, `load_hub_config`, `cli.main`; remove dead code; tests for weak modules; injected clocks in timing tests | In progress: read-only `status`, `doctor` and monitor (#97); `cli.main` split into command handlers (#99); `run_monitor_once` and `evaluate_operational_alerts` below the hotspot line (#100); onboarding lease test on an injected clock (#101); `load_hub_config` split into section parsers | Dispatcher coverage 316 → 359 of 421 (#89) |
+| 0 | Fix the lifecycle test broken since `2d24e82`; review the Codex branch | Done: #80 | Canonical gate at `6ce927e`; review findings 1, 3, 4 fixed |
+| 1.1 | Parallel isolated test modules; working focused selectors; pre-commit gate | Done: #81 | ADR 0041, ADR 0042; suite ~45 s instead of ~340 s |
+| 1.2 | Bounded diagnostics for survived failures; Ruff S110/S112 | Done: #83 | ADR 0043 |
+| 1.3 | CI from `uv.lock`; non-required coverage report | Done: #82 | Hosted run on 3.11–3.13 and coverage job green |
+| 1.4 | README version checked by the release metadata audit | Done: #82 | Audit test |
+| 2a | `CLAUDE.md`; review/merge rules; risk register; ADR 0016 tombstone; this plan | Done: #84 | — |
+| 2b | Hotspot growth ratchet in every validation profile; rules 12 and 14 amended | Done: #85 | ADR 0044; 21 recorded hotspots |
+| 2c | Capability summary table in project status; closure sections for six completed plans | Done: #86 | Prose still to move into owning modules |
+| 3 | Extract `_handle_update`, `load_hub_config`, `cli.main`; remove dead code; tests for weak modules; injected clocks in timing tests | In progress: read-only `status`, `doctor` and monitor (#97); `cli.main` split into command handlers (#99); `run_monitor_once` and `evaluate_operational_alerts` below the hotspot line (#100); onboarding lease test on an injected clock (#101); `load_hub_config` split into section parsers (#103) | Dispatcher coverage 316 → 359 of 421 (#89) |
 | 3b | Retire the multi-auth integration (reliability package B): migration contract, retired keys rejected before helper access, superseded ADRs | Done: #100 | ADR 0047; no schema change; host leftovers are a separate authorized task |
 | 4 | Release 0.8.0; branch and worktree hygiene | Planned; each action needs owner approval | — |
 
@@ -88,6 +90,12 @@ acceptance.
   (controller, sender, provisioner, monitor and the three provider workers)
   reports the clean revision, and one monitor cycle through its unit reported
   no alerts.
+  2026-09-29, on the owner's authorization: `46d6e7a` (#96–#104, schema 35)
+  replaced `adb8b37`, with the same manifest, backup and rehearsal evidence.
+  The live units received the daemon-socket binding of #104. On 2026-09-30 the
+  Hermes Hub plugin moved to the same release; `doctor` passed every check,
+  including plugin compatibility, and all seven required components report
+  the clean revision. Evidence level: release identity; live E2E pending.
 - **Live E2E at `adb8b37` (2026-09-28, owner-authorized).** The actor
   baseline passed 15 of 15 checks, including the topic-wide `stop_route` that
   failed at `ea5af70`. `p0_p1_live` passed 5 of 6: caption-only document,
@@ -128,7 +136,8 @@ acceptance.
   the Hub units' `PrivateTmp` hid (found 2026-09-29). Since about 2026-09-27
   the Codex worker ran on the stdio fallback, without companion approvals, and
   the monitor could not refresh the Codex model catalog. Fixed in the unit
-  templates by binding that directory; the live units need the same drop-in.
+  templates by binding that directory (#104) and applied to the live units
+  with the `46d6e7a` deployment; the catalog refreshed the same day.
 - Reliability plan packages B–E: owner decision 2026-09-27 — B, retiring
   multi-auth, moves into this plan as stage 3b; C, D and E are deferred and
   stay recorded in the reliability plan.
@@ -159,8 +168,21 @@ acceptance.
   not use multi-auth. `account/rateLimits/read` has no windows on this route,
   but the provider reports them in response headers, which the app-server
   forwards during the turn as `account/rateLimits/updated`. #102 uses those
-  windows for the turn's response. Live confirmation: `p0_p1_live` after the
-  next authorized deployment; expect a weekly window only.
+  windows for the turn's response. Deployed in `46d6e7a`; live confirmation
+  by `p0_p1_live` waits for the provider quota to reset. Expect a weekly
+  window only.
+- Out-of-band update and incident plane, owner decision 2026-09-30. **Planned,
+  not implemented;** ADR 0048 will record it. Hub stays a passive observer: it
+  keeps a bounded incident journal of alert episodes and reports version drift
+  of the provider stack. Hermes reads that journal read-only and, without
+  model inference, sends the owner a card per new episode: the quoted trigger,
+  runbook options and their consequences from a per-alert catalogue. Model
+  analysis starts only when the owner presses the card's button, which keeps
+  maintenance rule 8. Stack updates go through a deterministic tool (stage,
+  check, switch, rollback) that Hermes runs only on the owner's explicit
+  command, as a separate unit, with a watchdog for Hermes' own updates. Stages:
+  the tool and a private stack manifest; the drift check; Hermes integration;
+  the watchdog.
 - `configure-github.sh` required nonexistent check names (fixed in #82).
 
 ## Closure
