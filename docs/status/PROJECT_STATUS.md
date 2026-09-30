@@ -36,6 +36,7 @@ owning modules.
 | Immutable releases and rollback rehearsal | Implemented offline | Deployment-owned | [REQ-OPS-010](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0012](../decisions/0012-verifiable-immutable-deployments.md) |
 | Codex multi-auth account pool and rotation | Retired | Not applicable | [ADR 0047](../decisions/0047-retire-codex-multi-auth.md) |
 | Off-machine recovery | Planned | Drill pending | [REQ-OPS-012](../product/PERSISTENCE_AND_RECOVERY.md) |
+| Out-of-band update and incident plane | Stage 1 `stack-update` tool implemented offline; drift, incident journal, Hermes cards and watchdog planned | Not deployed | [REQ-OPS-013..015](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0048](../decisions/0048-out-of-band-update-and-incident-plane.md) |
 
 ## Quality checkpoint
 
