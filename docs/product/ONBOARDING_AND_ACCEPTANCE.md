@@ -244,3 +244,4 @@ necessary but not sufficient for items marked live.
 | Message-by-message CLI transcript mirroring | Rejected | Provider sessions plus explicit bounded history retrieval are sufficient. |
 | Automatic approval or security relaxation | Rejected | Violates the trust model. |
 | Claude Code CLI worker | Repository scaffold; live acceptance pending | Text-only adapter behind a loopback CPA route with independent slots; approvals, advisor isolation and parity work continue (REQ-AUTH-009, ADR 0039, ADR 0045). |
+| Out-of-band update and incident plane | Planned | Hub keeps a passive incident journal and stack drift check; Hermes sends model-free incident cards and analyzes only on the owner's press; a deterministic tool switches the stack only from an owner-confirmed plan (REQ-OPS-013..015, ADR 0048). |
