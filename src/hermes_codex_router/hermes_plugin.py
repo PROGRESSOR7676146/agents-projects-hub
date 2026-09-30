@@ -121,7 +121,8 @@ class _HubMenuGuard:
 
     Hermes registers its full menu for every forum chat it handles, so Telegram
     shows Hermes commands beside the Hub's. In a Hub chat the guard instead
-    deletes Hermes' chat-scoped menu once per process.
+    publishes an explicitly empty chat-scoped menu once per process: deleting
+    the scope would let Telegram fall back to Hermes' group-wide menus.
     """
 
     def __init__(self, adapter: Any) -> None:
@@ -143,7 +144,7 @@ class _HubMenuGuard:
         try:
             # python-telegram-bot exists only inside Hermes, not in the Hub environment.
             scope_chat = importlib.import_module("telegram").BotCommandScopeChat
-            await self._adapter._bot.delete_my_commands(scope=scope_chat(chat_id=chat_id))
+            await self._adapter._bot.set_my_commands([], scope=scope_chat(chat_id=chat_id))
         except Exception as error:
             # Retry on the next update from this chat.
             self._cleared.discard(chat_id)

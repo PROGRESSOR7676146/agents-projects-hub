@@ -63,11 +63,17 @@ class _Bot:
         self.deleted: list[int] = []
         self.fail = False
 
-    async def delete_my_commands(self, *, scope: _ScopeChat) -> bool:
+    async def set_my_commands(self, commands: list[Any], *, scope: _ScopeChat) -> bool:
         if self.fail:
             raise OSError("network")
+        # An explicitly empty chat scope, never a deletion that would inherit
+        # Hermes' group-wide menu.
+        assert commands == []
         self.deleted.append(scope.chat_id)
         return True
+
+    async def delete_my_commands(self, *, scope: _ScopeChat) -> bool:
+        raise AssertionError("deleting the scope falls back to broader menus")
 
 
 class _Adapter:
@@ -166,6 +172,15 @@ class HermesPluginTests(unittest.TestCase):
         self.assertEqual(self.adapter.registered, [OTHER_CHAT])
         self.assertEqual(self.adapter._bot.deleted, [HUB_CHAT])
 
+    def test_an_inaccessible_state_still_stops_bare_commands(self) -> None:
+        locked = self.state.parent / "locked"
+        locked.mkdir()
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o700)
+        with mock.patch.dict("os.environ", {"HERMES_PROJECT_HUB_STATE": str(locked / "s.db")}):
+            with self.assertRaises(_Stop):
+                self.command(OTHER_CHAT)
+
     def test_a_failed_menu_clear_is_retried(self) -> None:
         self.adapter._bot.fail = True
         with self.assertRaises(_Stop):
@@ -192,6 +207,16 @@ class HubChatLookupTests(unittest.TestCase):
             self.assertTrue(is_hub_chat(state, HUB_CHAT))
             self.assertFalse(is_hub_chat(state, OTHER_CHAT))
             self.assertFalse(is_hub_chat(state, 12345))
+
+    def test_an_inaccessible_state_path_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            locked = Path(directory) / "locked"
+            locked.mkdir()
+            locked.chmod(0)
+            try:
+                self.assertTrue(is_hub_chat(locked / "state.db", HUB_CHAT))
+            finally:
+                locked.chmod(0o700)
 
 
 if __name__ == "__main__":

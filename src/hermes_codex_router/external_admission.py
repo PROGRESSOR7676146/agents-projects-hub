@@ -144,17 +144,20 @@ def is_hub_chat(state_path: Path, chat_id: int) -> bool:
     """
     if chat_id >= 0:
         return False
-    path = state_path.expanduser().resolve()
-    if not path.is_file():
-        return False
     connection: sqlite3.Connection | None = None
     try:
+        # Every file-system step stays inside the guard: an inaccessible path
+        # must fail closed, and an exception here would let the update reach
+        # Hermes' own handlers.
+        path = state_path.expanduser().resolve()
+        if not path.exists():
+            return False
         connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.2)
         row = connection.execute(
             "SELECT 1 FROM topics WHERE chat_id = ? LIMIT 1", (chat_id,)
         ).fetchone()
         return row is not None
-    except (OSError, sqlite3.Error, StateError):
+    except (OSError, RuntimeError, sqlite3.Error, StateError):
         return True
     finally:
         if connection is not None:
