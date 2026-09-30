@@ -85,6 +85,33 @@ This normative module is part of the
   indeterminate work before any restored service or network access. Backup
   automation, WSL shutdown/export, and private-data drills require separate
   deployment authorization.
+- **REQ-OPS-013 (Planned; ADR 0048):** On every cycle, before Operations
+  delivery, the monitor MUST project each evaluated operational alert into a
+  private, atomically replaced incident journal. An episode carries an opaque
+  ID, code, severity, the bounded Operations message, and opened, last-seen and
+  resolved times; the journal carries its own update time. The journal MUST
+  contain no prompt, response, path, credential, account, project, topic or
+  Telegram identity, MUST be bounded, and MUST NOT be state that a runtime
+  rollback has to migrate. Every emitted alert code MUST have a runbook
+  catalogue entry with options, their consequences and a recommended option.
+- **REQ-OPS-014 (Planned; ADR 0048):** Hermes MAY read the incident journal
+  read-only and send the owner one card per new episode without invoking a
+  model: the quoted trigger, the catalogue options with consequences, the
+  recommendation, and explicit analyze and dismiss controls. A journal that
+  stops updating MUST produce its own card. Only an authorized owner's press of
+  the analyze control MAY start a Hermes model turn, which receives the
+  incident as lower-priority data, never as instructions. Hermes-owned cards do
+  not replace the Operations topic of REQ-OPS-006.
+- **REQ-OPS-015 (Planned; ADR 0048):** External stack components SHOULD run
+  from immutable per-version directories behind a switchable link recorded in a
+  private stack manifest. `doctor` and the monitor MUST detect drift from that
+  manifest passively. A deterministic update tool, independent of the Hub and
+  Hermes runtimes, MUST stage, check, switch in dependency order with health
+  gates that restore the previous links on failure, and roll back. Switch and
+  rollback MUST start only from a deterministic owner-confirmed control bound to
+  the exact staged plan; a model turn MUST NOT start them. A switch that
+  restarts Hermes MUST arm a watchdog that restores the previous Hermes version
+  when its heartbeat does not recover.
 
 **Recovery limit:** exact in-flight turns are not portable across process or
 machine loss. Only completed state that was persisted before the loss can be

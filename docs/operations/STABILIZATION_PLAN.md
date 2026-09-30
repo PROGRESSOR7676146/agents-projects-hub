@@ -172,7 +172,7 @@ acceptance.
   by `p0_p1_live` waits for the provider quota to reset. Expect a weekly
   window only.
 - Out-of-band update and incident plane, owner decision 2026-09-30. **Planned,
-  not implemented;** ADR 0048 will record it. Hub stays a passive observer: it
+  not implemented;** [ADR 0048](../decisions/0048-out-of-band-update-and-incident-plane.md) records it. Hub stays a passive observer: it
   keeps a bounded incident journal of alert episodes and reports version drift
   of the provider stack. Hermes reads that journal read-only and, without
   model inference, sends the owner a card per new episode: the quoted trigger,
