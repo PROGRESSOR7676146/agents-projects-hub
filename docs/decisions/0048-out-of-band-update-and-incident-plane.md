@@ -41,8 +41,8 @@ owner decides.
 | Participant | Does | Never does |
 | --- | --- | --- |
 | Hub | Keeps the incident journal and reports stack drift, both passively; Operations delivery is unchanged | Changes the stack, or invokes a model to observe |
-| Hermes | Sends incident cards; analyzes when the owner asks; prepares update plans and offers approval controls | Approves, starts a switch or rollback from a model turn, or answers Codex/tlive approvals |
-| `stack-update` | Stages, checks, switches, and rolls back from an exact plan | Picks versions itself, or runs live inference without an explicit owner flag |
+| Hermes | Sends incident cards; analyzes when the owner asks; prepares update plans and offers approval controls | Approves, stages, switches, or rolls back from a model turn, or answers Codex/tlive approvals |
+| `stack-update` | Stages, checks, switches, and rolls back one exact plan | Picks versions itself, or runs live inference without an explicit owner flag |
 | Owner | Decides through deterministic controls | — |
 
 ### 1. Incident journal (Hub, passive)
@@ -82,16 +82,25 @@ episode it sends the owner one card in the Hermes chat, containing:
 It reports each resolution once.
 
 - **No model call.** Deterministic code composes and sends the card.
-- **Hermes-side cursor.** Hermes keeps its cursor (the episodes it has carded
-  and their message IDs) in its own private state. It never writes the journal.
+- **Hermes-side cursor.** The plugin keeps its cursor (the episodes it has
+  carded and their message IDs) in a private file in the Hermes state
+  directory, replaced atomically. It never writes the journal or Hub state for
+  this. On a cold start with a missing or unreadable cursor, it marks every
+  existing episode as seen and sends one summary card of the open episodes,
+  never a card per historical episode.
 - **Silent Hub.** A journal not updated for three monitor intervals produces a
   card of its own. This lets Hermes notice a failure that the Hub cannot report.
 - **Storm bound.** A per-window card limit collapses an alert storm into one
   summary card.
 - **Operations unchanged.** The Operations topic stays the Hub-owned channel of
-  REQ-OPS-006; cards do not replace it. After cards pass acceptance, the
-  monitor's direct `hermes send` recovery push is retired. The owner does not
-  get the same alert twice, and the Hub stops depending on the Hermes CLI.
+  REQ-OPS-006; cards do not replace it.
+- **Transition from `hermes send`.** Until stage 3, the monitor's existing
+  `hermes send` recovery push to the Hermes chat stays as it is, and no cards
+  exist. Stage 3 adds one explicit configuration switch. When it enables cards,
+  the same release stops the monitor's `hermes send` push, so the owner never
+  gets the same alert twice. When it is off, the old push works unchanged. After
+  cards pass acceptance, the push and its `hermes_notify_target` cooldown claims
+  are removed, and the Hub stops depending on the Hermes CLI.
 
 ### 3. Analysis only on explicit request
 
@@ -127,37 +136,60 @@ That press is the explicit interactive request that rule 8 requires.
 
 | Command | Effect |
 | --- | --- |
-| `plan` | Read-only comparison of current and candidate versions; prints a plan digest |
-| `stage` | Installs a candidate into a new version directory, only from the component's configured source; verifies a published digest where one exists; changes no link and no unit |
-| `check` | Offline interoperability gates on staged candidates: version, a protocol handshake without a turn (for example app-server `initialize`), and the proxy model list over loopback. A live inference smoke check runs only with an explicit owner flag |
-| `switch` | Flips links in dependency order (proxy → Codex and tlive → Claude Code, Antigravity, and OpenCode), restarts the affected units, and runs health gates. A failed gate restores the previous links automatically |
-| `rollback` | Restores the previous links and restarts the affected units |
+| `plan` | Read-only. Compares current and candidate versions from the manifest's configured sources and prints a plan: exact versions, sources, published digests where available, the dependency order, and a digest of the plan and the current links. It installs and executes nothing. |
+| `apply PLAN` | Stages, checks, and switches one plan, in that order. Staging installs each candidate into a new version directory, only from its configured source. It verifies a published digest where one exists, and disables package lifecycle scripts unless the manifest marks a component as needing them. Checks are offline interoperability gates: version, a protocol handshake without a turn (for example app-server `initialize`), and the proxy model list over loopback. A live inference smoke check runs only with an explicit owner flag. The switch flips links in dependency order and restarts the affected units, then runs health gates. A staging or check failure stops before any link changes. A failed health gate restores the previous links automatically. |
+| `rollback SWITCH` | Restores the links recorded before one completed switch and restarts the affected units |
 
-The tool uses only the Python standard library and is installed as its own
-pinned copy, so it works when a Hub or Hermes release is broken. `switch` and
-`rollback` run as a separate transient user unit, so they survive a restart of
-Hermes Gateway.
+**Scope and order.** The dependency order is: proxy → Codex and tlive → Claude
+Code, Antigravity, and OpenCode → Hermes. Hermes switches last and alone, under
+the watchdog of section 6. Project Hub is not a `stack-update` component. When a
+stack change needs a new Hub release, for example new unit settings, that
+release is deployed afterwards through its own immutable procedure
+(REQ-OPS-010, REQ-OPS-011), which keeps its own rollback.
 
-**Owner approval.** A Hermes model turn may call `plan`, `stage`, and `check`
-through a plugin tool. It may also request approval, which posts an approval
-card with the plan digest and the buttons «Применить» and «Отмена». Only the
-deterministic button handler starts `switch`, and only after it verifies:
+**Independence.** The tool uses only the Python standard library and is
+installed as its own pinned copy, so it works when a Hub or Hermes release is
+broken. `apply` and `rollback` run as a separate transient user unit, so they
+survive a restart of Hermes Gateway.
+
+**Serialization.** One exclusive lock serializes `apply` and `rollback`; a
+second request while one runs is refused, not queued. Each completed switch
+writes a private record of the links before and after.
+
+**Owner approval.** A Hermes model turn may call only `plan` and read-only
+status through a plugin tool. It may also request approval, which posts an
+approval card showing the plan and two buttons, «Применить» and «Отмена». The
+approval card:
+
+- carries a single-use opaque token, stored by the deterministic handler with
+  the plan digest and a state: pending, then started, cancelled, or expired;
+- expires after a bounded time (30 minutes by default);
+- expires when Hermes Gateway restarts, because a pending approval is never
+  restored as granted (REQ-SEC-003).
+
+Only the deterministic button handler starts `apply`, and only after it
+verifies:
 
 - the owner's identity;
-- that the digest still matches the staged plan.
+- that the token is pending and moves it to started atomically;
+- that the plan digest still matches the current links.
 
-A model turn has no path to `switch` or `rollback`. «Откатить» works the same
-way.
+A second press, a press from chat history, and a press after any link change
+are all refused.
 
-Hub releases keep their own immutable procedure (REQ-OPS-010, REQ-OPS-011) and
-update last; `stack-update` does not replace it.
+Every switch result card, successful or not, offers «Откатить», bound to that
+switch's record under the same single-use, expiring and restart rules. A later
+rollback goes through an approval card requested explicitly. A model turn has
+no path to `apply` or `rollback`.
 
 ### 6. Watchdog for Hermes' own update
 
-When a switch restarts Hermes Gateway, the transient unit arms a watchdog. If a
-fresh Hermes heartbeat does not appear within a bounded time, the watchdog:
+When a switch restarts Hermes Gateway, the transient unit arms a watchdog. The
+watchdog reads the Gateway heartbeat marker that `doctor` already checks
+(REQ-OPS-005), together with the unit state. If the unit is not active, or no
+heartbeat newer than the switch appears within a bounded time, the watchdog:
 
-1. restores the previous Hermes version;
+1. restores the previous Hermes links;
 2. restarts the gateway;
 3. records the outcome.
 
@@ -166,11 +198,12 @@ the owner is informed even while Hermes is down.
 
 ## Stages
 
-1. `stack-update` and the private manifest format; offline tests only.
+1. `stack-update` (`plan`, `apply`, `rollback`, lock, switch records) and the
+   private manifest format; offline tests only.
 2. Passive observation in Hub: the drift check in `doctor` and the monitor, the
    incident journal, and the runbook catalogue.
-3. Hermes integration: cards, «Разобрать», the plan/stage/check tool, and the
-   approval controls.
+3. Hermes integration: cards, «Разобрать», the `plan` tool, the approval and
+   rollback controls, and the switch away from `hermes send`.
 4. The Hermes self-update watchdog.
 
 Each stage is deployed only with the owner's authorization. Moving an

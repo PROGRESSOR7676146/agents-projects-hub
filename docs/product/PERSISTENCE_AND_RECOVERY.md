@@ -94,24 +94,32 @@ This normative module is part of the
   Telegram identity, MUST be bounded, and MUST NOT be state that a runtime
   rollback has to migrate. Every emitted alert code MUST have a runbook
   catalogue entry with options, their consequences and a recommended option.
-- **REQ-OPS-014 (Planned; ADR 0048):** Hermes MAY read the incident journal
-  read-only and send the owner one card per new episode without invoking a
-  model: the quoted trigger, the catalogue options with consequences, the
-  recommendation, and explicit analyze and dismiss controls. A journal that
-  stops updating MUST produce its own card. Only an authorized owner's press of
-  the analyze control MAY start a Hermes model turn, which receives the
-  incident as lower-priority data, never as instructions. Hermes-owned cards do
-  not replace the Operations topic of REQ-OPS-006.
-- **REQ-OPS-015 (Planned; ADR 0048):** External stack components SHOULD run
-  from immutable per-version directories behind a switchable link recorded in a
-  private stack manifest. `doctor` and the monitor MUST detect drift from that
-  manifest passively. A deterministic update tool, independent of the Hub and
-  Hermes runtimes, MUST stage, check, switch in dependency order with health
-  gates that restore the previous links on failure, and roll back. Switch and
-  rollback MUST start only from a deterministic owner-confirmed control bound to
-  the exact staged plan; a model turn MUST NOT start them. A switch that
-  restarts Hermes MUST arm a watchdog that restores the previous Hermes version
-  when its heartbeat does not recover.
+- **REQ-OPS-014 (Planned; ADR 0048):** When the Hermes incident integration is
+  enabled, Hermes MUST read the incident journal read-only and send the owner
+  one card per new episode without invoking a model: the quoted trigger, the
+  catalogue options with consequences, the recommendation, and explicit analyze
+  and dismiss controls. A journal that stops updating MUST produce its own card.
+  A cold start without the Hermes cursor MUST send one summary of open episodes,
+  not a card per historical episode. Only an authorized owner's press of the
+  analyze control MAY start a Hermes model turn, which receives the incident as
+  lower-priority data, never as instructions. Enabling cards MUST stop the
+  monitor's direct Hermes recovery push in the same release. Hermes-owned cards
+  do not replace the Operations topic of REQ-OPS-006.
+- **REQ-OPS-015 (Planned; ADR 0048):** Every component that the update tool
+  manages MUST run from immutable per-version directories behind a switchable
+  link recorded in a private stack manifest. `doctor` and the monitor MUST
+  detect drift from that manifest passively. A deterministic update tool,
+  independent of the Hub and Hermes runtimes, MUST plan read-only, then stage,
+  check and switch one exact plan in dependency order with Hermes last, and
+  roll back one recorded switch. A staging or check failure MUST stop before
+  any link changes, and a failed health gate MUST restore the previous links.
+  Apply and rollback MUST be serialized. They MUST start only from a
+  deterministic owner control that is single-use, bound to the exact plan and
+  the current links, expires after a bounded time, and does not survive a
+  gateway restart. A model turn MUST NOT stage, apply or roll back. A switch
+  that restarts Hermes MUST arm a watchdog that restores the previous Hermes
+  version when the unit or its heartbeat does not recover. Project Hub releases
+  keep their own procedure (REQ-OPS-010, REQ-OPS-011).
 
 **Recovery limit:** exact in-flight turns are not portable across process or
 machine loss. Only completed state that was persisted before the loss can be
