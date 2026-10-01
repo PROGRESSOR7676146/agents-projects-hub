@@ -51,7 +51,7 @@
     },
     {
       "target": "src/hermes_codex_router/p0_p1_acceptance.py::run_p0_p1_live_scenario",
-      "max_lines": 315,
+      "max_lines": 309,
       "rationale": "Fixed seven-result live scenario isolated in refactoring package 2; its order is the contract.",
       "owner": "repository owner",
       "next_review": "2026-12-31",

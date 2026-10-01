@@ -226,6 +226,24 @@ async def _send_input_document(
     )
 
 
+async def _verify_accounts_reply(
+    client: Any, config: AcceptanceActorConfig, *, after_id: int
+) -> None:
+    """Require a non-empty Hub /accounts reply without a Codex account section.
+
+    Which sections appear depends on the deployment's providers; a Codex
+    account section must never appear (REQ-CMD-003, ADR 0047).
+    """
+    response = await _wait_for_response(
+        client, config, after_id=after_id, username=config.hub_username
+    )
+    text = str(getattr(response, "raw_text", "")).strip()
+    if not text:
+        raise AcceptanceActorError("Hub returned an empty /accounts response")
+    if any(line.strip() == "Codex" for line in text.splitlines()):
+        raise AcceptanceActorError("/accounts shows a Codex account section")
+
+
 async def run_p0_p1_live_scenario(
     context: P0P1ScenarioContext,
     target: str,
@@ -505,13 +523,7 @@ async def run_p0_p1_live_scenario(
                 f"/accounts@{config.hub_username}",
                 reply_to=config.telegram_thread_id,
             )
-            await _wait_for_markers(
-                client,
-                config,
-                after_id=int(accounts_request.id),
-                username=config.hub_username,
-                markers=("Codex",),
-            )
+            await _verify_accounts_reply(client, config, after_id=int(accounts_request.id))
             passed(current_check, int(status_response.id), "read-only status and accounts verified")
     except (AcceptanceActorError, AcceptanceRuntimeError) as exc:
         failure = (current_check, str(exc))
