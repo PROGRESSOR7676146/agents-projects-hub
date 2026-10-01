@@ -40,7 +40,12 @@ from hermes_codex_router.acceptance_runtime import (
 )
 from hermes_codex_router.p0_p1_acceptance import (
     P0P1ScenarioContext,
+    _is_accounts_reply,
+    _verify_accounts_reply,
     run_p0_p1_live_scenario,
+)
+from hermes_codex_router.p0_p1_acceptance import (
+    _wait_for_response as _p0_wait_for_response,
 )
 
 
@@ -590,6 +595,60 @@ class AcceptanceActorConfigTests(unittest.TestCase):
 
         self.assertIs(received, response)
 
+    def test_wait_for_response_checks_traffic_after_the_match(self) -> None:
+        config = load_acceptance_actor_config(self.write_config())
+        client = FakeIterClient(
+            [
+                FakeIncomingMessage(2, "example_provider_bot"),
+                FakeIncomingMessage(3, "unrelated_user", sender_id=42),
+            ]
+        )
+        for wait in (_wait_for_response, _p0_wait_for_response):
+            with self.subTest(wait.__module__):
+                with self.assertRaisesRegex(AcceptanceActorError, "unrelated traffic"):
+                    asyncio.run(wait(client, config, after_id=1, username="example_provider_bot"))
+
+    def hub_message(self, message_id: int, text: str) -> FakeIncomingMessage:
+        message = FakeIncomingMessage(message_id, "example_hub_bot")
+        message.raw_text = text
+        return message
+
+    def test_accounts_reply_is_recognized_by_its_layout(self) -> None:
+        accepted = (
+            "No provider accounts are configured.",
+            "OpenCode Go\n🟢 plan: 5h $12\n\nAntigravity\n🟡 exa… · limits unknown",
+            "Antigravity\n🔴 Provider unavailable\n🟡 exa… · limits unknown",
+        )
+        rejected = (
+            "",
+            "codex · Gpt 6 Sol · Low\nContext 89.6%",
+            "codex · Gpt 6 Sol · Low\n🟡 Provider availability unknown",
+            "codex · Gpt 6 Sol · Low\n🟢 Week 42% ↻ 03.10 21:09",
+            "Unknown command",
+            "OpenCode Go",
+            "🟢 plan: 5h $12",
+        )
+        for text in accepted:
+            with self.subTest(text):
+                self.assertTrue(_is_accounts_reply(text))
+        for text in rejected:
+            with self.subTest(text):
+                self.assertFalse(_is_accounts_reply(text))
+
+    def test_accounts_check_skips_other_hub_replies_and_rejects_codex(self) -> None:
+        config = load_acceptance_actor_config(self.write_config())
+        status = self.hub_message(2, "codex · Gpt 6 Sol · Low\nContext 89.6%")
+        accounts = self.hub_message(3, "OpenCode Go\n🟢 plan: 5h $12")
+        asyncio.run(_verify_accounts_reply(FakeIterClient([status, accounts]), config, after_id=1))
+        codex = self.hub_message(3, "Codex\n🟡 exa… · limits unknown")
+        with self.assertRaisesRegex(AcceptanceActorError, "Codex account section"):
+            asyncio.run(_verify_accounts_reply(FakeIterClient([status, codex]), config, after_id=1))
+        stranger = FakeIncomingMessage(4, "unrelated_user", sender_id=42)
+        with self.assertRaisesRegex(AcceptanceActorError, "unrelated traffic"):
+            asyncio.run(
+                _verify_accounts_reply(FakeIterClient([accounts, stranger]), config, after_id=1)
+            )
+
     def test_configured_checks_stop_after_first_failure(self) -> None:
         config = load_acceptance_actor_config(
             self.write_config(checks=["provider_ping", "reply_route"])
@@ -953,8 +1012,8 @@ class AcceptanceActorConfigTests(unittest.TestCase):
             FakeMessage(206, "oversize"),
             FakeMessage(207, "Context remaining: 88.5%\nWeekly remaining: 42%"),
             FakeMessage(208, "Context remaining: 88.5%"),
-            FakeMessage(209, "Codex\nexample account"),
         )
+        accounts = FakeMessage(209, "OpenCode Go\n🟢 plan: 5h $12")
         context = P0P1ScenarioContext(client, config, probe, supervisor)
         with (
             patch("hermes_codex_router.p0_p1_acceptance._select_provider", new=AsyncMock()),
@@ -962,6 +1021,10 @@ class AcceptanceActorConfigTests(unittest.TestCase):
                 "hermes_codex_router.p0_p1_acceptance._wait_for_markers",
                 new=AsyncMock(side_effect=responses),
             ) as wait,
+            patch(
+                "hermes_codex_router.p0_p1_acceptance._wait_for_matching",
+                new=AsyncMock(return_value=accounts),
+            ) as accounts_wait,
         ):
             results = asyncio.run(run_p0_p1_live_scenario(context, "example_codex_bot"))
 
@@ -978,8 +1041,9 @@ class AcceptanceActorConfigTests(unittest.TestCase):
             ],
         )
         self.assertTrue(all(result.ok for result in results))
-        self.assertEqual(wait.await_args_list[-2].kwargs["username"], config.hub_username)
         self.assertEqual(wait.await_args_list[-1].kwargs["username"], config.hub_username)
+        self.assertEqual(wait.await_args_list[-1].kwargs["markers"], ("Context",))
+        self.assertEqual(accounts_wait.await_args_list[-1].kwargs["username"], config.hub_username)
         self.assertTrue(
             any(len(payload) == 20 * 1024 * 1024 + 1 for payload in client.uploaded_payloads)
         )
@@ -1007,6 +1071,41 @@ class AcceptanceActorConfigTests(unittest.TestCase):
             [call for call in probe.calls if call[0] == "materials"],
             [("materials", "album"), ("materials", "recovery")],
         )
+
+    def test_p0_p1_live_rejects_a_codex_account_section(self) -> None:
+        state_path = self.base / "state.db"
+        state_path.touch(mode=0o600)
+        config = self.p0_config(state_path)
+        responses = tuple(FakeMessage(201 + index, "x") for index in range(6)) + (
+            FakeMessage(207, "Context remaining: 88.5%\nWeekly remaining: 42%"),
+            FakeMessage(208, "Context remaining: 88.5%"),
+        )
+        for text, detail in (("Codex\n🟡 example… · limits unknown", "Codex account section"),):
+            with self.subTest(detail):
+                context = P0P1ScenarioContext(
+                    FakeP0P1Client(),
+                    config,
+                    StatefulAcceptanceProbe(),
+                    StatefulServiceSupervisor(),
+                )
+                with (
+                    patch(
+                        "hermes_codex_router.p0_p1_acceptance._select_provider",
+                        new=AsyncMock(),
+                    ),
+                    patch(
+                        "hermes_codex_router.p0_p1_acceptance._wait_for_markers",
+                        new=AsyncMock(side_effect=responses),
+                    ),
+                    patch(
+                        "hermes_codex_router.p0_p1_acceptance._wait_for_matching",
+                        new=AsyncMock(return_value=FakeMessage(209, text)),
+                    ),
+                ):
+                    results = asyncio.run(run_p0_p1_live_scenario(context, "example_codex_bot"))
+                self.assertFalse(results[-1].ok)
+                self.assertEqual(results[-1].check, "p1_status_context_and_accounts_read_only")
+                self.assertIn(detail, results[-1].detail)
 
     def test_p0_p1_live_does_not_start_a_preexisting_inactive_service(self) -> None:
         state_path = self.base / "state.db"
