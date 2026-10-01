@@ -266,13 +266,16 @@ def _is_accounts_reply(text: str) -> bool:
 
     Each section is a provider header followed by status lines that start
     with a health marker. Which providers appear depends on the deployment.
+    A provider header never contains " · ", while the /status headline always
+    does ("agent · model · effort"), so a /status reply is never taken for it.
     """
     if text.strip() == "No provider accounts are configured.":
         return True
     sections = [section for section in text.strip().split("\n\n") if section.strip()]
     for section in sections:
         lines = [line.strip() for line in section.splitlines() if line.strip()]
-        if len(lines) < 2 or lines[0].startswith(_ACCOUNT_STATUS_MARKERS):
+        header = lines[0] if lines else ""
+        if len(lines) < 2 or header.startswith(_ACCOUNT_STATUS_MARKERS) or "·" in header:
             return False
         if not all(line.startswith(_ACCOUNT_STATUS_MARKERS) for line in lines[1:]):
             return False

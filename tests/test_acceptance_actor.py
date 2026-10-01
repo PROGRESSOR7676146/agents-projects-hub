@@ -622,6 +622,8 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         rejected = (
             "",
             "codex · Gpt 6 Sol · Low\nContext 89.6%",
+            "codex · Gpt 6 Sol · Low\n🟡 Provider availability unknown",
+            "codex · Gpt 6 Sol · Low\n🟢 Week 42% ↻ 03.10 21:09",
             "Unknown command",
             "OpenCode Go",
             "🟢 plan: 5h $12",
