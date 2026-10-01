@@ -109,6 +109,13 @@ acceptance.
   quota exists to show. The runner stops at the first failure, so the
   read-only status and account check did not run. The queue, the outbox and
   pending stops were empty before and after both runs.
+- **Live E2E at `f764ab8` (2026-10-01, owner-authorized): `p0_p1_live` 7 of
+  7.** The quota label now passes (#102), and so does the read-only `/status`
+  and `/accounts` check (#109 replaced its stale expectation of a Codex
+  account section, impossible since ADR 0047). An earlier run at `a0b27ff`
+  passed 6 of 7 on that expectation; a rerun the same day timed out on a
+  queue wait behind unrelated work (see silent queue waits below). The queue,
+  outbox and pending stops were empty before and after.
 - **Actor coverage.** The actor automates status, accounts, model menu,
   provider ping, Reply/forward/burst/stop routing, artifact delivery, the
   context contract and the restart-authorized `p0_p1_live` scenario. `/local`
@@ -168,9 +175,8 @@ acceptance.
   not use multi-auth. `account/rateLimits/read` has no windows on this route,
   but the provider reports them in response headers, which the app-server
   forwards during the turn as `account/rateLimits/updated`. #102 uses those
-  windows for the turn's response. Deployed in `46d6e7a`; live confirmation
-  by `p0_p1_live` waits for the provider quota to reset. Expect a weekly
-  window only.
+  windows for the turn's response. Live-confirmed by `p0_p1_live` at
+  `a0b27ff` and `f764ab8`. Closed.
 - Out-of-band update and incident plane, owner decision 2026-09-30. **Planned,
   not implemented;** [ADR 0048](../decisions/0048-out-of-band-update-and-incident-plane.md) records it. Hub stays a passive observer: it
   keeps a bounded incident journal of alert episodes and reports version drift
@@ -184,6 +190,22 @@ acceptance.
   the tool and a private stack manifest; the drift check; Hermes integration;
   the watchdog.
 - `configure-github.sh` required nonexistent check names (fixed in #82).
+- Silent queue waits, owner decision 2026-10-01. **Deferred to the next
+  session; nothing is changed without a separate decision.**
+  1. The Hub bot should tell the topic when a job waits for a free worker
+     slot or capacity (`codex_worker_count`, `max_parallel_roots`) or for a
+     busy project root, instead of staying silent. Today REQ-OPS-004 alerts
+     only after a 15-minute wait without an active worker lease. This needs a
+     product contract and an ADR.
+  2. Check the deployed release configuration's `max_parallel_roots` and
+     `codex_worker_count` against the capacity the owner expects, and the
+     fate of an earlier private capacity configuration.
+  3. Check whether the acceptance canary topic shares a project root with an
+     active project; that serializes an acceptance run regardless of slots.
+
+  Found when a `p0_p1_live` check at `f764ab8` timed out: its job waited
+  behind an unrelated Codex job for longer than the check timeout, and
+  nothing in the topic said why.
 
 ## Closure
 
