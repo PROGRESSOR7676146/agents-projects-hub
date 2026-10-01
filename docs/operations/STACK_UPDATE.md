@@ -39,7 +39,11 @@ The ADR owns the rationale; the requirement owns the contract.
      compared with the digest in the plan. An npm component is installed with
      `npm ci --ignore-scripts` from the planned lockfile, and the installed
      tree is compared with it. Only then, and only when the manifest allows
-     them, `npm rebuild` runs the packages' lifecycle scripts.
+     them, `npm rebuild` runs the packages' lifecycle scripts. npm 12 and
+     newer skip install scripts that its `allowScripts` setting does not
+     cover while still exiting successfully, so a component that needs
+     lifecycle scripts is refused with npm 12 or newer. A version directory
+     staged with the other lifecycle-scripts setting is never reused.
   2. Runs the staged gates: the version output, then the `staged` checks.
   3. Only then touches links. A staging or check failure leaves every link
      unchanged.
@@ -55,17 +59,26 @@ The ADR owns the rationale; the requirement owns the contract.
   of the file and its directory, so after a host crash a switched link always
   has its recorded intent.
 - **One operation at a time.** `apply` and `rollback` take one exclusive lock.
-  A concurrent request is refused, not queued.
+  A concurrent request is refused, not queued. A counter kept under that lock
+  orders the switches; the wall clock is used only for display.
+- **No new switch over an unfinished one.** `apply` refuses while a rollback
+  is unfinished, or while a switch ended `restore_failed` or stopped after
+  changing a link, until `rollback` of that switch completes. An `apply` that
+  stopped before its first link changed blocks nothing.
 - **Rollback works from the record.** Each switch record keeps, per component,
   the link path, the targets before and after, the units, and the previous pin.
   `rollback SWITCH`:
   - undoes exactly those links;
   - refuses before changing anything if a link now points elsewhere, or if the
     manifest names another link path for the component;
+  - is refused while a later switch, by that counter, changed one of the same
+    components and was not itself rolled back, even if it set the same
+    targets: roll back the later switch first;
   - is idempotent: it restores links, restarts units and restores pins again,
     so a rollback interrupted halfway completes when repeated;
-  - marks the switch as rolled back once it completes, so it cannot be applied
-    a second time. A switch that `apply` already restored is refused.
+  - is marked on the switch record as started before any change and as
+    completed at the end; a completed rollback is never repeated. A switch
+    that `apply` already restored is refused.
 - **Guarded downloads.** Every redirect is checked before it is followed:
   HTTPS sources may not be redirected to plain HTTP, and loopback checks may
   not be redirected off the machine.
@@ -180,8 +193,13 @@ restart of Hermes Gateway. Run by hand, they run in the foreground.
 
 ## Stop conditions
 
-- **`restore_failed`:** a link or unit could not be put back. Inspect the switch
-  record in `state_dir/switches/`, fix the component by hand, and do not start
-  another apply until `status` shows the expected versions.
+- **`restore_failed`:** a link, unit or pin could not be put back. Inspect the
+  switch record in `state_dir/switches/`, fix the cause (for example a unit
+  that fails to start), then run `rollback SWITCH_ID` until it completes.
+  `apply` stays refused until then; fixing the component by hand is not
+  enough.
+- **`refused: the rollback ... did not finish`:** repeat that rollback.
+- **`refused: a later switch ... changed ...`:** roll back the later switch
+  first, newest first.
 - **`refused: links changed`:** someone changed a link after planning. Make a
   new plan.

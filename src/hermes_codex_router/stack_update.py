@@ -402,11 +402,17 @@ def link_state(component: Component) -> str | None:
 
 
 def _link_state_at(link: Path) -> str | None:
-    if os.path.islink(link):
-        return os.readlink(link)
-    if os.path.lexists(link):
-        return NOT_A_LINK
-    return None
+    """Read a link; only a missing path is None, any other failure is an error."""
+
+    try:
+        info = os.lstat(link)
+        if stat.S_ISLNK(info.st_mode):
+            return os.readlink(link)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise StackUpdateError(f"link {link.name} cannot be read") from exc
+    return NOT_A_LINK
 
 
 def installed_version(component: Component) -> str | None:
@@ -669,29 +675,37 @@ def build_plan(
 # Private files ----------------------------------------------------------------
 
 
-def _private_dir(path: Path) -> None:
-    _durable_mkdir(path, mode=0o700)
+def _private_dir(path: Path, *, root: Path) -> None:
+    _durable_mkdir(path, mode=0o700, root=root)
     path.chmod(0o700)
 
 
-def _durable_mkdir(path: Path, *, mode: int) -> None:
-    """Create missing directories and persist each new entry in its parent."""
+def _durable_mkdir(path: Path, *, mode: int, root: Path) -> None:
+    """Ensure ``root`` .. ``path`` exist and every entry is persisted in its parent.
 
-    missing: list[Path] = []
-    current = path
-    while not current.exists():
-        missing.append(current)
-        current = current.parent
-    for directory in reversed(missing):
-        with contextlib.suppress(FileExistsError):
-            directory.mkdir(mode=mode)
+    The parent entries are synced on every call, not only on creation, so a
+    retry after a failed sync completes it instead of trusting existence.
+    """
+
+    _require(path == root or root in path.parents, "directory outside its root")
+    # path and its ancestors down to and including root, deepest first
+    chain = [path, *[parent for parent in path.parents if parent == root or root in parent.parents]]
+    for directory in reversed(chain):
+        if directory == root:
+            directory.mkdir(mode=mode, parents=True, exist_ok=True)
+        else:
+            with contextlib.suppress(FileExistsError):
+                directory.mkdir(mode=mode)
         _fsync_dir(directory.parent)
 
 
 def _fsync_tree(root: Path) -> None:
     """Persist every file and directory of a staged tree before it is published."""
 
-    for directory, _subdirectories, files in os.walk(root, followlinks=False):
+    def fail(error: OSError) -> None:
+        raise error
+
+    for directory, _subdirectories, files in os.walk(root, onerror=fail, followlinks=False):
         for name in files:
             entry = Path(directory) / name
             if entry.is_symlink() or not entry.is_file():
@@ -725,7 +739,7 @@ def _write_private_json(path: Path, data: Mapping[str, Any]) -> None:
 
 @contextlib.contextmanager
 def _exclusive_lock(state_dir: Path) -> Iterator[None]:
-    _private_dir(state_dir)
+    _private_dir(state_dir, root=state_dir)
     fd = os.open(state_dir / "lock", os.O_RDWR | os.O_CREAT, 0o600)
     try:
         try:
@@ -737,6 +751,20 @@ def _exclusive_lock(state_dir: Path) -> Iterator[None]:
         os.close(fd)
 
 
+def _next_sequence(manifest: StackManifest) -> int:
+    """A counter under the stack lock orders switches; wall clocks can go back."""
+
+    path = manifest.state_dir / "sequence.json"
+    try:
+        current = int(json.loads(path.read_text(encoding="utf-8"))["sequence"])
+    except FileNotFoundError:
+        current = 0
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise StackUpdateError("the switch sequence cannot be read") from exc
+    _write_private_json(path, {"sequence": current + 1})
+    return current + 1
+
+
 def _new_record_id(env: Environment) -> str:
     return f"{env.now().strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(4)}"
 
@@ -744,7 +772,7 @@ def _new_record_id(env: Environment) -> str:
 def _record_path(manifest: StackManifest, record_id: str) -> Path:
     _require(bool(_RECORD_ID.match(record_id)), "invalid switch record id")
     records = manifest.state_dir / "switches"
-    _private_dir(records)
+    _private_dir(records, root=manifest.state_dir)
     return records / f"{record_id}.json"
 
 
@@ -781,6 +809,9 @@ def _require_reconciled(manifest: StackManifest) -> None:
     """Refuse a new switch while an earlier switch or rollback is unfinished."""
 
     for record in _switch_records(manifest):
+        if record.get("status") == "started" and not record.get("flipped"):
+            # An apply that stopped before its first link intent changed nothing.
+            continue
         rollback = _rollback_status(record)
         _require(
             rollback != "started",
@@ -1017,8 +1048,17 @@ def _stage(
             and all(existing.get("artifact", {}).get(k) == v for k, v in published.items()),
             f"component {component.component_id}: staged {version} does not match the plan",
         )
+        _require(
+            component.source.kind != "npm"
+            or existing.get("lifecycle_scripts", False) == component.source.lifecycle_scripts,
+            f"component {component.component_id}: staged {version} was prepared with another "
+            "lifecycle-scripts setting; remove that version directory to stage it again",
+        )
+        # A retry after a failed sync must finish it; existence proves nothing.
+        _fsync_tree(final)
+        _fsync_dir(component.versions_dir)
         return final
-    _durable_mkdir(component.versions_dir, mode=0o755)
+    _durable_mkdir(component.versions_dir, mode=0o755, root=component.versions_dir)
     staging = component.versions_dir / f".{version}.staging-{secrets.token_hex(4)}"
     staging.mkdir(mode=0o755)
     try:
@@ -1028,7 +1068,12 @@ def _stage(
             artifact = _stage_archive(component, version, staging, published, env)
         (staging / MARKER_NAME).write_text(
             json.dumps(
-                {"component": component.component_id, "version": version, "artifact": artifact},
+                {
+                    "component": component.component_id,
+                    "version": version,
+                    "artifact": artifact,
+                    "lifecycle_scripts": component.source.lifecycle_scripts,
+                },
                 sort_keys=True,
             )
             + "\n",
@@ -1295,8 +1340,13 @@ def _switch(
             _flip_link(flip.link, flip.after)
         except OSError:
             # The rename may have happened before the error (for example in the
-            # directory fsync); only a link still at "before" is left out.
-            if _link_state_at(flip.link) != flip.after:
+            # directory fsync); only a link confirmed at "before" is left out,
+            # an unreadable one is restored like a switched one.
+            try:
+                unchanged = _link_state_at(flip.link) == flip.before
+            except StackUpdateError:
+                unchanged = False
+            if unchanged:
                 flipped.pop()
             return f"component {component.component_id}: link switch failed"
         if not _restart_units(env, flip.units):
@@ -1374,6 +1424,7 @@ def apply_plan(
             "schema_version": RECORD_SCHEMA_VERSION,
             "id": record_id,
             "kind": "switch",
+            "sequence": _next_sequence(manifest),
             "plan_digest": digest,
             "started_at": env.now().isoformat(),
             "status": "started",
@@ -1426,7 +1477,7 @@ def rollback_switch(manifest: StackManifest, record_id: str, *, env: Environment
         # A later switch owns these links even when it set the same targets.
         mine = {flip.component_id for flip in flips}
         for later in _switch_records(manifest):
-            if str(later.get("started_at", "")) <= str(switch.get("started_at", "")):
+            if int(later.get("sequence", 0)) <= int(switch.get("sequence", 0)):
                 continue
             touched = mine & {str(cid) for cid in later.get("flipped", [])}
             _require(
@@ -1503,7 +1554,7 @@ def install_copy(destination: Path) -> Path:
     directory = destination / digest
     target = directory / "stack_update.py"
     if not target.exists():
-        _private_dir(directory)
+        _private_dir(directory, root=destination)
         fd, temporary = tempfile.mkstemp(prefix=".stack_update.", dir=directory)
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)

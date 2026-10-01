@@ -730,6 +730,70 @@ class ApplyTests(StackUpdateTestCase):
         self.assertEqual(installed_version(manifest.component("proxy")), "1.0.0")
         self.assertEqual([c.version for c in manifest.components], ["1.0.0", "0.1.0"])
 
+    def test_an_unreadable_link_after_a_flip_error_is_restored(self) -> None:
+        plan = self.plan(proxy="1.1.0")
+        real_fsync = stack_update._fsync_dir
+        real_state = stack_update._link_state_at
+        broken = {"fsync": False, "state": False}
+
+        def fsync(path: Path) -> None:
+            flipped = os.readlink(self.stack.proxy_link).endswith("1.1.0")
+            if path == self.stack.proxy_link.parent and flipped and not broken["fsync"]:
+                broken["fsync"] = True
+                raise OSError("fsync failed after the rename")
+            real_fsync(path)
+
+        def state(link: Path) -> str | None:
+            if broken["fsync"] and not broken["state"]:
+                broken["state"] = True
+                raise StackUpdateError("link cannot be read")
+            return real_state(link)
+
+        with (
+            mock.patch.object(stack_update, "_fsync_dir", fsync),
+            mock.patch.object(stack_update, "_link_state_at", state),
+        ):
+            record = self.apply(plan)
+        self.assertEqual(record["status"], "restored")
+        self.assertEqual(installed_version(self.stack.load().component("proxy")), "1.0.0")
+
+    def test_a_retry_finishes_the_sync_of_a_staged_version(self) -> None:
+        plan = self.plan(proxy="1.1.0")
+        stack_update._stage(
+            self.stack.load(),
+            self.stack.load().component("proxy"),
+            plan["steps"][0],
+            self.stack.env(),
+        )
+        with mock.patch.object(stack_update, "_fsync_tree", wraps=stack_update._fsync_tree) as tree:
+            self.assertEqual(self.apply(plan)["status"], "completed")
+        self.assertIn(
+            self.stack.proxy_versions / "1.1.0", [call.args[0] for call in tree.call_args_list]
+        )
+
+    def test_tree_sync_fails_on_an_unreadable_directory(self) -> None:
+        tree = self.stack.root / "tree"
+        (tree / "locked").mkdir(parents=True)
+        (tree / "locked").chmod(0)
+        try:
+            with self.assertRaises(OSError):
+                stack_update._fsync_tree(tree)
+        finally:
+            (tree / "locked").chmod(0o700)
+
+    def test_a_staged_version_is_not_reused_with_another_script_mode(self) -> None:
+        switch = self.plan_apply_codex()
+        rollback_switch(self.stack.load(), switch["id"], env=self.stack.env())
+        self.enable_lifecycle_scripts()
+        with self.assertRaisesRegex(StackUpdateError, "another lifecycle-scripts setting"):
+            self.apply(self.plan(codex="0.2.0"))
+        self.assertEqual(self.stack.rebuilt, [])
+
+    def plan_apply_codex(self) -> dict[str, Any]:
+        record = self.apply(self.plan(codex="0.2.0"))
+        self.assertEqual(record["status"], "completed")
+        return record
+
     def test_the_manifest_recheck_keeps_the_trust_checks(self) -> None:
         real_stage = stack_update._stage
 
@@ -884,6 +948,22 @@ class RollbackTests(StackUpdateTestCase):
         self.stack.inactive_units.clear()
         with self.assertRaisesRegex(StackUpdateError, "unreconciled"):
             self.plan_and_apply(codex="0.3.0")
+
+    def test_an_apply_that_changed_no_link_does_not_block(self) -> None:
+        manifest = self.stack.load()
+        path = stack_update._record_path(manifest, "20260930T120000Z-0123abcd")
+        stack_update._write_private_json(
+            path, {"id": "x", "kind": "switch", "status": "started", "flipped": [], "sequence": 1}
+        )
+        self.assertEqual(self.plan_and_apply(codex="0.3.0")["status"], "completed")
+
+    def test_switch_order_does_not_trust_the_wall_clock(self) -> None:
+        first = self.plan_and_apply(codex="0.2.0")
+        self.stack.clock -= dt.timedelta(days=1)
+        self.assertEqual(self.plan_and_apply(codex="0.3.0")["status"], "completed")
+        self.assertEqual(self.plan_and_apply(codex="0.2.0")["status"], "completed")
+        with self.assertRaisesRegex(StackUpdateError, "a later switch"):
+            rollback_switch(self.stack.load(), first["id"], env=self.stack.env())
 
     def test_rollback_refuses_while_a_later_switch_owns_the_link(self) -> None:
         first = self.switch()
