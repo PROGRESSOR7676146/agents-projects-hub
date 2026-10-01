@@ -371,6 +371,12 @@ def parse_manifest(raw: bytes, *, path: Path) -> StackManifest:
 def load_manifest(path: Path) -> StackManifest:
     """Load a private manifest; it drives command execution, so it must be private."""
 
+    return parse_manifest(_read_manifest_bytes(path), path=path)
+
+
+def _read_manifest_bytes(path: Path) -> bytes:
+    """Read the manifest through one no-follow descriptor after checking it."""
+
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     except FileNotFoundError as exc:
@@ -383,8 +389,7 @@ def load_manifest(path: Path) -> StackManifest:
         _require(stat.S_ISREG(info.st_mode), "manifest must be a regular file")
         _require(info.st_uid == os.getuid(), "manifest must be owned by the current user")
         _require(info.st_mode & 0o022 == 0, "manifest must not be group- or world-writable")
-        raw = handle.read()
-    return parse_manifest(raw, path=path)
+        return handle.read()
 
 
 # Link state -----------------------------------------------------------------
@@ -665,8 +670,38 @@ def build_plan(
 
 
 def _private_dir(path: Path) -> None:
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _durable_mkdir(path, mode=0o700)
     path.chmod(0o700)
+
+
+def _durable_mkdir(path: Path, *, mode: int) -> None:
+    """Create missing directories and persist each new entry in its parent."""
+
+    missing: list[Path] = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for directory in reversed(missing):
+        with contextlib.suppress(FileExistsError):
+            directory.mkdir(mode=mode)
+        _fsync_dir(directory.parent)
+
+
+def _fsync_tree(root: Path) -> None:
+    """Persist every file and directory of a staged tree before it is published."""
+
+    for directory, _subdirectories, files in os.walk(root, followlinks=False):
+        for name in files:
+            entry = Path(directory) / name
+            if entry.is_symlink() or not entry.is_file():
+                continue
+            fd = os.open(entry, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        _fsync_dir(Path(directory))
 
 
 def _write_private_json(path: Path, data: Mapping[str, Any]) -> None:
@@ -725,6 +760,38 @@ def read_record(manifest: StackManifest, record_id: str) -> dict[str, Any]:
     return data
 
 
+def _switch_records(manifest: StackManifest) -> list[dict[str, Any]]:
+    records = manifest.state_dir / "switches"
+    if not records.is_dir():
+        return []
+    found: list[dict[str, Any]] = []
+    for path in sorted(records.glob("*.json")):
+        record = read_record(manifest, path.stem)
+        if record.get("kind") == "switch":
+            found.append(record)
+    return found
+
+
+def _rollback_status(record: Mapping[str, Any]) -> str | None:
+    rollback = record.get("rollback")
+    return str(rollback.get("status")) if isinstance(rollback, dict) else None
+
+
+def _require_reconciled(manifest: StackManifest) -> None:
+    """Refuse a new switch while an earlier switch or rollback is unfinished."""
+
+    for record in _switch_records(manifest):
+        rollback = _rollback_status(record)
+        _require(
+            rollback != "started",
+            f"the rollback of switch {record.get('id')} did not finish; repeat it first",
+        )
+        _require(
+            record.get("status") not in {"started", "restore_failed"} or rollback == "completed",
+            f"switch {record.get('id')} left links unreconciled; roll it back first",
+        )
+
+
 # Staging --------------------------------------------------------------------
 
 
@@ -775,6 +842,14 @@ def _npm(
     _require(completed is not None and completed.returncode == 0, f"{what} failed")
 
 
+def _npm_major(manifest: StackManifest, env: Environment) -> int:
+    completed = _run(env, [str(manifest.npm), "--version"], timeout=30.0)
+    version = (completed.stdout or "").strip() if completed is not None else ""
+    major = version.split(".", 1)[0]
+    _require(completed is not None and major.isdigit(), "npm version cannot be determined")
+    return int(major)
+
+
 def _npm_lock(
     manifest: StackManifest, component: Component, version: str, env: Environment
 ) -> dict[str, Any]:
@@ -788,6 +863,12 @@ def _npm_lock(
     package = str(component.source.package)
     with tempfile.TemporaryDirectory(prefix="stack-update-plan-") as directory:
         root = Path(directory)
+        # npm names the lockfile after the project; a fixed name keeps two plans
+        # of the same tree byte-identical instead of naming the temporary dir.
+        (root / "package.json").write_text(
+            json.dumps({"name": f"stack-update-{component.component_id}", "private": True}) + "\n",
+            encoding="utf-8",
+        )
         _npm(
             manifest,
             env,
@@ -848,6 +929,12 @@ def _stage_npm(
         f"component {component.component_id}: installed packages do not match the plan",
     )
     if component.source.lifecycle_scripts:
+        # npm 12 skips install scripts not covered by allowScripts and still
+        # exits 0, which would mark an unbuilt version as staged.
+        _require(
+            _npm_major(manifest, env) < 12,
+            f"component {component.component_id}: lifecycle scripts need npm older than 12",
+        )
         what = f"component {component.component_id}: npm lifecycle scripts"
         _npm(manifest, env, ["rebuild"], staging, what)
     return {
@@ -931,7 +1018,7 @@ def _stage(
             f"component {component.component_id}: staged {version} does not match the plan",
         )
         return final
-    component.versions_dir.mkdir(parents=True, exist_ok=True)
+    _durable_mkdir(component.versions_dir, mode=0o755)
     staging = component.versions_dir / f".{version}.staging-{secrets.token_hex(4)}"
     staging.mkdir(mode=0o755)
     try:
@@ -947,7 +1034,10 @@ def _stage(
             + "\n",
             encoding="utf-8",
         )
+        # The staged tree must be on disk before its name can become a link target.
+        _fsync_tree(staging)
         os.rename(staging, final)
+        _fsync_dir(component.versions_dir)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
@@ -1127,10 +1217,8 @@ def _restore_pins(manifest: StackManifest, flips: Sequence[_Flip]) -> bool:
 def _require_unchanged(manifest: StackManifest, plan: Mapping[str, Any]) -> None:
     """The manifest file and every link must still be exactly what the plan saw."""
 
-    try:
-        raw = manifest.path.read_bytes()
-    except OSError as exc:
-        raise StackUpdateError("the manifest cannot be read again") from exc
+    # Same trust checks as the first load: no symlink, owner, no group/world write.
+    raw = _read_manifest_bytes(manifest.path)
     _require(
         plan.get("manifest_digest") == manifest.digest == hashlib.sha256(raw).hexdigest(),
         "the manifest changed since the plan was made",
@@ -1206,8 +1294,10 @@ def _switch(
         try:
             _flip_link(flip.link, flip.after)
         except OSError:
-            # The link did not change; rollback accepts it at its "before".
-            flipped.pop()
+            # The rename may have happened before the error (for example in the
+            # directory fsync); only a link still at "before" is left out.
+            if _link_state_at(flip.link) != flip.after:
+                flipped.pop()
             return f"component {component.component_id}: link switch failed"
         if not _restart_units(env, flip.units):
             return f"component {component.component_id}: unit restart failed"
@@ -1257,6 +1347,7 @@ def apply_plan(
     _require(expected_digest == digest, "plan digest does not match the approved digest")
     with _exclusive_lock(manifest.state_dir):
         _require_unchanged(manifest, plan)
+        _require_reconciled(manifest)
         steps = _plan_steps(manifest, plan)
         staged: list[tuple[Component, _Flip]] = []
         for component, step in steps:
@@ -1319,7 +1410,7 @@ def rollback_switch(manifest: StackManifest, record_id: str, *, env: Environment
         switch = read_record(manifest, record_id)
         _require(switch.get("kind") == "switch", "only a switch can be rolled back")
         _require(switch.get("status") != "restored", "apply already restored this switch")
-        _require("rolled_back_by" not in switch, "this switch was already rolled back")
+        _require(_rollback_status(switch) != "completed", "this switch was already rolled back")
         components = switch.get("components")
         flipped_ids = switch.get("flipped")
         _require(
@@ -1332,6 +1423,19 @@ def rollback_switch(manifest: StackManifest, record_id: str, *, env: Environment
             for component_id in cast(list[object], flipped_ids)
         ]
         _require(bool(flips), "this switch changed no link")
+        # A later switch owns these links even when it set the same targets.
+        mine = {flip.component_id for flip in flips}
+        for later in _switch_records(manifest):
+            if str(later.get("started_at", "")) <= str(switch.get("started_at", "")):
+                continue
+            touched = mine & {str(cid) for cid in later.get("flipped", [])}
+            _require(
+                not touched
+                or later.get("status") == "restored"
+                or _rollback_status(later) == "completed",
+                f"a later switch {later.get('id')} changed {', '.join(sorted(touched))}; "
+                "roll that back first",
+            )
         for flip in flips:
             # Undo exactly the recorded link; a manifest that now names another
             # link for this component is refused before anything changes.
@@ -1344,6 +1448,10 @@ def rollback_switch(manifest: StackManifest, record_id: str, *, env: Environment
                 f"component {flip.component_id}: its link changed after this switch",
             )
         rollback_id = _new_record_id(env)
+        # Mark the rollback on the switch itself before any change: a repeat can
+        # complete it, a new apply waits for it, and once completed it is final.
+        switch["rollback"] = {"id": rollback_id, "status": "started"}
+        _write_private_json(_record_path(manifest, record_id), switch)
         record: dict[str, Any] = {
             "schema_version": RECORD_SCHEMA_VERSION,
             "id": rollback_id,
@@ -1364,7 +1472,7 @@ def rollback_switch(manifest: StackManifest, record_id: str, *, env: Environment
         record["finished_at"] = env.now().isoformat()
         _write_private_json(path, record)
         if ok:
-            switch["rolled_back_by"] = rollback_id
+            switch["rollback"] = {"id": rollback_id, "status": "completed"}
             _write_private_json(_record_path(manifest, record_id), switch)
         return record
 

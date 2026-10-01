@@ -67,11 +67,12 @@ class FakeStack:
         self.urls: dict[str, bytes] = {}
         self.fetched: list[str] = []
         self.broken_urls: set[str] = set()
-        self.integrity = {"0.2.0": "sha512-new", "0.1.0": "sha512-old"}
+        self.integrity = {"0.3.0": "sha512-newer", "0.2.0": "sha512-new", "0.1.0": "sha512-old"}
         self.lock_integrity: dict[str, str] = {}
         self.plan_integrity: dict[str, str] = {}
         self.tampered_dependency = False
         self.rebuilt: list[Path] = []
+        self.npm_version = "10.9.0"
         self.clock = dt.datetime(2026, 9, 30, 12, 0, tzinfo=dt.UTC)
         self.ticks = 0.0
         self.proxy_versions = root / "proxy" / "releases"
@@ -190,6 +191,8 @@ class FakeStack:
 
     def _npm(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
         """Model npm: lock-only resolution, ci of an exact lockfile, and rebuild."""
+        if argv[1:] == ["--version"]:
+            return self._result(argv, 0, stdout=f"{self.npm_version}\n")
         prefix = Path(argv[argv.index("--prefix") + 1])
         root = f"node_modules/{CODEX_PACKAGE}"
         if "--package-lock-only" in argv:
@@ -197,13 +200,18 @@ class FakeStack:
             spec = next(arg for arg in argv if arg.startswith(f"{CODEX_PACKAGE}@"))
             version = spec.rsplit("@", 1)[1]
             integrity = self.plan_integrity.get(version, self.integrity.get(version, ""))
-            (prefix / "package.json").write_text(
-                json.dumps({"dependencies": {CODEX_PACKAGE: version}})
+            # Like npm: the lockfile takes its name from an existing package.json,
+            # otherwise from the directory name.
+            existing = prefix / "package.json"
+            name = json.loads(existing.read_text())["name"] if existing.exists() else prefix.name
+            existing.write_text(
+                json.dumps({"name": name, "dependencies": {CODEX_PACKAGE: version}})
             )
             lock = {
+                "name": name,
                 "lockfileVersion": 3,
                 "packages": {
-                    "": {"dependencies": {CODEX_PACKAGE: version}},
+                    "": {"name": name, "dependencies": {CODEX_PACKAGE: version}},
                     root: {"version": version, "integrity": integrity},
                     "node_modules/example-dep": {"version": "1.0.0", "integrity": "sha512-dep"},
                 },
@@ -603,7 +611,7 @@ class ApplyTests(StackUpdateTestCase):
         self.enable_lifecycle_scripts()
         self.assertEqual(self.apply(self.plan(codex="0.2.0"))["status"], "completed")
         npm = [call[1] for call in self.stack.calls if call[0].endswith("/npm")]
-        self.assertEqual(npm, ["install", "ci", "rebuild"])
+        self.assertEqual(npm, ["install", "ci", "--version", "rebuild"])
 
     def test_no_package_script_runs_for_a_mismatched_tree(self) -> None:
         self.enable_lifecycle_scripts()
@@ -687,6 +695,55 @@ class ApplyTests(StackUpdateTestCase):
                         )
                 self.assertEqual(installed_version(manifest.component("proxy")), "1.0.0")
                 self.assertEqual(self.stack.restarts(), [])
+
+    def test_lifecycle_scripts_are_refused_with_npm_12(self) -> None:
+        self.enable_lifecycle_scripts()
+        self.stack.npm_version = "12.0.2"
+        with self.assertRaisesRegex(StackUpdateError, "older than 12"):
+            self.apply(self.plan(codex="0.2.0"))
+        self.assertEqual(self.stack.rebuilt, [])
+        self.assertEqual(sorted(p.name for p in self.stack.codex_versions.iterdir()), ["0.1.0"])
+
+    def test_two_plans_of_the_same_tree_bind_the_same_lockfile(self) -> None:
+        first = self.plan(codex="0.2.0")["steps"][0]
+        second = self.plan(codex="0.2.0")["steps"][0]
+        self.assertEqual(first["published"], second["published"])
+        self.assertEqual(first["lock"]["package-lock.json"]["name"], "stack-update-codex")
+
+    def test_a_link_switched_before_a_flip_error_is_restored(self) -> None:
+        plan = self.plan(proxy="1.1.0")
+        real_fsync = stack_update._fsync_dir
+        failed = {"done": False}
+
+        def fsync(path: Path) -> None:
+            proxy_flipped = os.readlink(self.stack.proxy_link).endswith("1.1.0")
+            if path == self.stack.proxy_link.parent and proxy_flipped and not failed["done"]:
+                failed["done"] = True
+                raise OSError("fsync failed after the rename")
+            real_fsync(path)
+
+        with mock.patch.object(stack_update, "_fsync_dir", fsync):
+            record = self.apply(plan)
+        self.assertTrue(failed["done"])
+        self.assertEqual(record["status"], "restored")
+        manifest = self.stack.load()
+        self.assertEqual(installed_version(manifest.component("proxy")), "1.0.0")
+        self.assertEqual([c.version for c in manifest.components], ["1.0.0", "0.1.0"])
+
+    def test_the_manifest_recheck_keeps_the_trust_checks(self) -> None:
+        real_stage = stack_update._stage
+
+        def loosen(*args: Any) -> Path:
+            directory = real_stage(*args)
+            self.stack.manifest_path.chmod(0o666)
+            return directory
+
+        manifest = self.stack.load()
+        plan = build_plan(manifest, {"proxy": "1.1.0"}, self.stack.env())
+        with mock.patch.object(stack_update, "_stage", loosen):
+            with self.assertRaisesRegex(StackUpdateError, "group- or world-writable"):
+                apply_plan(manifest, plan, expected_digest=plan["digest"], env=self.stack.env())
+        self.assertEqual(installed_version(manifest.component("proxy")), "1.0.0")
 
     def test_records_and_links_are_made_durable(self) -> None:
         with mock.patch.object(stack_update.os, "fsync", wraps=os.fsync) as fsync:
@@ -792,6 +849,47 @@ class RollbackTests(StackUpdateTestCase):
         self.assertEqual(
             os.readlink(self.stack.codex_link), str(self.stack.codex_versions / "0.2.0")
         )
+
+    def plan_and_apply(self, **targets: str) -> dict[str, Any]:
+        manifest = self.stack.load()
+        plan = build_plan(manifest, targets, self.stack.env())
+        return apply_plan(manifest, plan, expected_digest=plan["digest"], env=self.stack.env())
+
+    def test_an_unfinished_rollback_blocks_new_switches_until_repeated(self) -> None:
+        switch = self.switch()
+        real_write = stack_update._write_private_json
+
+        def write(path: Path, data: Any) -> None:
+            rollback = data.get("rollback") if isinstance(data, dict) else None
+            if isinstance(rollback, dict) and rollback.get("status") == "completed":
+                raise OSError("disk full")
+            real_write(path, data)
+
+        with mock.patch.object(stack_update, "_write_private_json", write):
+            with self.assertRaises(OSError):
+                rollback_switch(self.stack.load(), switch["id"], env=self.stack.env())
+        with self.assertRaisesRegex(StackUpdateError, "did not finish"):
+            self.plan_and_apply(codex="0.3.0")
+        record = rollback_switch(self.stack.load(), switch["id"], env=self.stack.env())
+        self.assertEqual(record["status"], "completed")
+        with self.assertRaisesRegex(StackUpdateError, "already rolled back"):
+            rollback_switch(self.stack.load(), switch["id"], env=self.stack.env())
+        self.assertEqual(self.plan_and_apply(codex="0.3.0")["status"], "completed")
+
+    def test_an_unreconciled_switch_blocks_new_switches(self) -> None:
+        self.stack.inactive_units.add("codex-daemon.service")
+        with mock.patch.object(stack_update, "_restore_pins", return_value=False):
+            switch = self.switch()
+        self.assertEqual(switch["status"], "restore_failed")
+        self.stack.inactive_units.clear()
+        with self.assertRaisesRegex(StackUpdateError, "unreconciled"):
+            self.plan_and_apply(codex="0.3.0")
+
+    def test_rollback_refuses_while_a_later_switch_owns_the_link(self) -> None:
+        first = self.switch()
+        self.assertEqual(self.plan_and_apply(codex="0.3.0")["status"], "completed")
+        with self.assertRaisesRegex(StackUpdateError, "a later switch"):
+            rollback_switch(self.stack.load(), first["id"], env=self.stack.env())
 
     def test_refuses_when_a_link_changed_after_the_switch(self) -> None:
         switch = self.switch()

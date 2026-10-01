@@ -107,7 +107,7 @@
     },
     {
       "target": "src/hermes_codex_router/stack_update.py",
-      "max_lines": 1502,
+      "max_lines": 1610,
       "rationale": "Single-file standard-library stack-update tool: install-copy pins this one file so it runs when a Hub or Hermes release is broken (ADR 0048 stage 1); splitting it would break the pinned copy.",
       "owner": "repository owner",
       "next_review": "2026-12-31",
