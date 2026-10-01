@@ -771,6 +771,33 @@ class ApplyTests(StackUpdateTestCase):
             self.stack.proxy_versions / "1.1.0", [call.args[0] for call in tree.call_args_list]
         )
 
+    def test_new_ancestors_above_the_root_are_synced(self) -> None:
+        root = self.stack.root / "new" / "nested" / "state"
+        with mock.patch.object(stack_update, "_fsync_dir", wraps=stack_update._fsync_dir) as sync:
+            stack_update._private_dir(root / "switches", root=root)
+        synced = {call.args[0] for call in sync.call_args_list}
+        self.assertIn(self.stack.root / "new", synced)
+        self.assertIn(self.stack.root, synced)
+
+    def test_a_lost_counter_never_reuses_a_recorded_number(self) -> None:
+        first = self.apply(self.plan(codex="0.2.0"))
+        (self.stack.state_dir / "sequence.json").unlink()
+        manifest = self.stack.load()
+        plan = build_plan(manifest, {"codex": "0.3.0"}, self.stack.env())
+        second = apply_plan(manifest, plan, expected_digest=plan["digest"], env=self.stack.env())
+        self.assertGreater(second["sequence"], first["sequence"])
+
+    def test_removing_a_link_fails_when_its_directory_is_unreadable(self) -> None:
+        locked = self.stack.root / "locked"
+        locked.mkdir()
+        os.symlink("/usr/bin", locked / "current")
+        locked.chmod(0)
+        try:
+            with self.assertRaises(OSError):
+                stack_update._flip_link(locked / "current", None)
+        finally:
+            locked.chmod(0o700)
+
     def test_tree_sync_fails_on_an_unreadable_directory(self) -> None:
         tree = self.stack.root / "tree"
         (tree / "locked").mkdir(parents=True)

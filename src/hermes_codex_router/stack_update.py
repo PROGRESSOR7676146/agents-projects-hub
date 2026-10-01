@@ -431,10 +431,15 @@ def _flip_link(link: Path, target: str | None) -> None:
     """Atomically point ``link`` at ``target`` or remove it when ``target`` is None."""
 
     if target is None:
-        with contextlib.suppress(FileNotFoundError):
-            if os.path.islink(link):
-                link.unlink()
-                _fsync_dir(link.parent)
+        # Strict: an unreadable path must fail the restore, never pass as absent.
+        try:
+            info = os.lstat(link)
+        except FileNotFoundError:
+            return
+        if not stat.S_ISLNK(info.st_mode):
+            raise OSError(f"{link.name} is not a link")
+        link.unlink()
+        _fsync_dir(link.parent)
         return
     temporary = link.parent / f".{link.name}.stack-update-{secrets.token_hex(4)}"
     os.symlink(target, temporary)
@@ -696,7 +701,11 @@ def _durable_mkdir(path: Path, *, mode: int, root: Path) -> None:
         else:
             with contextlib.suppress(FileExistsError):
                 directory.mkdir(mode=mode)
-        _fsync_dir(directory.parent)
+    # Sync every entry up to the filesystem root: mkdir(parents=True) may have
+    # created ancestors above root, and a retry cannot tell which.
+    for directory in (path, *path.parents):
+        if directory.parent != directory:
+            _fsync_dir(directory.parent)
 
 
 def _fsync_tree(root: Path) -> None:
@@ -761,6 +770,9 @@ def _next_sequence(manifest: StackManifest) -> int:
         current = 0
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise StackUpdateError("the switch sequence cannot be read") from exc
+    # A lost or older counter file must never reuse a recorded number.
+    recorded = [int(record.get("sequence", 0)) for record in _switch_records(manifest)]
+    current = max([current, *recorded])
     _write_private_json(path, {"sequence": current + 1})
     return current + 1
 
