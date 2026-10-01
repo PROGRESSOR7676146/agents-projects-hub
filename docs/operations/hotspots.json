@@ -106,6 +106,14 @@
       "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
     },
     {
+      "target": "src/hermes_codex_router/stack_update.py",
+      "max_lines": 1502,
+      "rationale": "Single-file standard-library stack-update tool: install-copy pins this one file so it runs when a Hub or Hermes release is broken (ADR 0048 stage 1); splitting it would break the pinned copy.",
+      "owner": "repository owner",
+      "next_review": "2026-12-31",
+      "reopen_event": "Any growth, a new responsibility beyond plan/apply/rollback/status/install-copy, or a decision to ship the tool as a package instead of one file."
+    },
+    {
       "target": "src/hermes_codex_router/state.py",
       "max_lines": 3078,
       "rationale": "Single-connection HubState facade that keeps the public state API stable while domain facades own queries (refactoring package 4).",

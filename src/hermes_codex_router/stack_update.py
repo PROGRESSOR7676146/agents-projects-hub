@@ -393,9 +393,13 @@ def load_manifest(path: Path) -> StackManifest:
 def link_state(component: Component) -> str | None:
     """Return the raw link target, None when absent, or a marker for a non-link."""
 
-    if os.path.islink(component.link):
-        return os.readlink(component.link)
-    if os.path.lexists(component.link):
+    return _link_state_at(component.link)
+
+
+def _link_state_at(link: Path) -> str | None:
+    if os.path.islink(link):
+        return os.readlink(link)
+    if os.path.lexists(link):
         return NOT_A_LINK
     return None
 
@@ -419,6 +423,7 @@ def _flip_link(link: Path, target: str | None) -> None:
         with contextlib.suppress(FileNotFoundError):
             if os.path.islink(link):
                 link.unlink()
+                _fsync_dir(link.parent)
         return
     temporary = link.parent / f".{link.name}.stack-update-{secrets.token_hex(4)}"
     os.symlink(target, temporary)
@@ -428,15 +433,51 @@ def _flip_link(link: Path, target: str | None) -> None:
         with contextlib.suppress(FileNotFoundError):
             temporary.unlink()
         raise
+    _fsync_dir(link.parent)
+
+
+def _fsync_dir(path: Path) -> None:
+    """Persist a directory entry change (rename, link) across a host crash."""
+
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 # Network --------------------------------------------------------------------
 
 
+class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
+    """Check every redirect before it is followed, not only the final URL."""
+
+    def __init__(self, origin: str) -> None:
+        self._https = origin.startswith("https://")
+        self._loopback = urllib.parse.urlsplit(origin).hostname in _LOOPBACK_HOSTS
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        target = urllib.parse.urlsplit(newurl)
+        if self._https and target.scheme != "https":
+            raise StackUpdateError("an https request was redirected to plain http")
+        if self._loopback and target.hostname not in _LOOPBACK_HOSTS:
+            raise StackUpdateError("a loopback check was redirected off the machine")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _http_get(url: str, limit: int) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": "stack-update"})
+    opener = urllib.request.build_opener(_GuardedRedirect(url))
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
+        with opener.open(request, timeout=60) as response:
             final_url = str(response.geturl())
             data = response.read(limit + 1)
     except (OSError, ValueError, http.client.HTTPException) as exc:
@@ -589,15 +630,25 @@ def build_plan(
         )
         if current == version:
             continue
-        steps.append(
-            {
-                "component": component.component_id,
-                "from": current,
-                "to": version,
-                "source": _source_summary(component, version),
-                "published": _published_digest(component, version, env),
-            }
-        )
+        step: dict[str, Any] = {
+            "component": component.component_id,
+            "from": current,
+            "to": version,
+            "source": _source_summary(component, version),
+            "published": _published_digest(component, version, env),
+        }
+        if component.source.kind == "npm":
+            lock = _npm_lock(manifest, component, version, env)
+            root = _lock_packages(lock["package-lock.json"]).get(
+                f"node_modules/{component.source.package}"
+            )
+            _require(
+                isinstance(root, dict) and root.get("integrity") == step["published"]["integrity"],
+                f"component {component.component_id}: npm lockfile disagrees with the registry",
+            )
+            step["lock"] = lock
+            step["published"]["lock_sha256"] = hashlib.sha256(_canonical(lock)).hexdigest()
+        steps.append(step)
     _require(bool(steps), "every requested component already runs its target version")
     plan: dict[str, Any] = {
         "schema_version": PLAN_SCHEMA_VERSION,
@@ -626,12 +677,15 @@ def _write_private_json(path: Path, data: Mapping[str, Any]) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2, sort_keys=True)
             handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)
     except BaseException:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary)
         raise
+    _fsync_dir(path.parent)
 
 
 @contextlib.contextmanager
@@ -696,51 +750,110 @@ def _run(
         return None
 
 
-def _stage_npm(
+def _npm(
     manifest: StackManifest,
-    component: Component,
-    version: str,
-    staging: Path,
-    published: Mapping[str, str],
     env: Environment,
-) -> dict[str, str]:
+    arguments: Sequence[str],
+    directory: Path,
+    what: str,
+) -> None:
+    """Run npm on ``directory``; npm's own node must come first on PATH."""
+
     npm = manifest.npm
     _require(npm is not None, "manifest.npm is required for npm sources")
-    package = str(component.source.package)
     argv = [
         str(npm),
-        "install",
+        *arguments,
         "--prefix",
-        str(staging),
-        "--no-save",
+        str(directory),
         "--no-audit",
         "--no-fund",
         "--no-update-notifier",
     ]
-    if not component.source.lifecycle_scripts:
-        argv.append("--ignore-scripts")
-    argv.append(f"{package}@{version}")
     path = f"{Path(str(npm)).parent}{os.pathsep}{os.environ.get('PATH', '')}"
     completed = _run(env, argv, timeout=_STAGE_TIMEOUT_SECONDS, extra_env={"PATH": path})
-    _require(
-        completed is not None and completed.returncode == 0,
-        f"component {component.component_id}: npm install failed",
-    )
-    # With --no-save npm writes only its hidden lockfile, which records what it
-    # actually installed.
-    lock = staging / "node_modules" / ".package-lock.json"
+    _require(completed is not None and completed.returncode == 0, f"{what} failed")
+
+
+def _npm_lock(
+    manifest: StackManifest, component: Component, version: str, env: Environment
+) -> dict[str, Any]:
+    """Resolve the complete dependency tree without downloading or running packages.
+
+    The plan carries the resulting lockfile, so apply installs exactly the
+    approved tree (versions and integrity of every package), not whatever a
+    range resolves to later.
+    """
+
+    package = str(component.source.package)
+    with tempfile.TemporaryDirectory(prefix="stack-update-plan-") as directory:
+        root = Path(directory)
+        _npm(
+            manifest,
+            env,
+            ["install", "--package-lock-only", "--save-exact", "--ignore-scripts"]
+            + [f"{package}@{version}"],
+            root,
+            f"component {component.component_id}: npm dependency resolution",
+        )
+        try:
+            package_json = json.loads((root / "package.json").read_text(encoding="utf-8"))
+            lockfile = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise StackUpdateError(
+                f"component {component.component_id}: npm produced no lockfile"
+            ) from exc
+    return {"package.json": package_json, "package-lock.json": lockfile}
+
+
+def _lock_packages(lockfile: object) -> dict[str, Any]:
+    packages = lockfile.get("packages") if isinstance(lockfile, dict) else None
+    return cast(dict[str, Any], packages) if isinstance(packages, dict) else {}
+
+
+def _stage_npm(
+    manifest: StackManifest,
+    component: Component,
+    staging: Path,
+    step: Mapping[str, Any],
+    env: Environment,
+) -> dict[str, str]:
+    """Install exactly the planned tree; run package scripts only after verifying it."""
+
+    lock = step["lock"]
+    published = step["published"]
+    for name in ("package.json", "package-lock.json"):
+        (staging / name).write_text(json.dumps(lock[name], indent=2) + "\n", encoding="utf-8")
+    what = f"component {component.component_id}: npm ci"
+    _npm(manifest, env, ["ci", "--ignore-scripts"], staging, what)
+    # npm ci verified every tarball against the lockfile; confirm what it
+    # recorded as installed matches the plan before any package code runs.
     try:
-        lock_data = json.loads(lock.read_text(encoding="utf-8"))
+        installed = json.loads(
+            (staging / "node_modules" / ".package-lock.json").read_text(encoding="utf-8")
+        )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise StackUpdateError(f"component {component.component_id}: no npm lockfile") from exc
-    packages = lock_data.get("packages") if isinstance(lock_data, dict) else None
-    entry = packages.get(f"node_modules/{package}") if isinstance(packages, dict) else None
-    integrity = entry.get("integrity") if isinstance(entry, dict) else None
+    planned = _lock_packages(lock["package-lock.json"])
+    root_entry = _lock_packages(installed).get(f"node_modules/{component.source.package}")
     _require(
-        isinstance(integrity, str) and integrity == published.get("integrity"),
-        f"component {component.component_id}: installed package does not match the plan",
+        isinstance(root_entry, dict)
+        and root_entry.get("integrity") == published.get("integrity")
+        and all(
+            isinstance(entry, dict)
+            and isinstance(planned.get(name), dict)
+            and entry.get("integrity") == planned[name].get("integrity")
+            for name, entry in _lock_packages(installed).items()
+        ),
+        f"component {component.component_id}: installed packages do not match the plan",
     )
-    return {"integrity": str(integrity)}
+    if component.source.lifecycle_scripts:
+        what = f"component {component.component_id}: npm lifecycle scripts"
+        _npm(manifest, env, ["rebuild"], staging, what)
+    return {
+        "integrity": str(published["integrity"]),
+        "lock_sha256": str(published["lock_sha256"]),
+    }
 
 
 def _safe_zip_extract(archive: zipfile.ZipFile, destination: Path) -> None:
@@ -823,7 +936,7 @@ def _stage(
     staging.mkdir(mode=0o755)
     try:
         if component.source.kind == "npm":
-            artifact = _stage_npm(manifest, component, version, staging, published, env)
+            artifact = _stage_npm(manifest, component, staging, step, env)
         else:
             artifact = _stage_archive(component, version, staging, published, env)
         (staging / MARKER_NAME).write_text(
@@ -942,16 +1055,100 @@ def _pin_versions(manifest: StackManifest, versions: Mapping[str, str | None]) -
     _write_private_json(manifest.path, data)
 
 
-def _restore(env: Environment, flipped: Sequence[tuple[Component, str | None]]) -> bool:
+@dataclass(frozen=True, slots=True)
+class _Flip:
+    """One link a switch changes, recorded with everything needed to undo it."""
+
+    component_id: str
+    link: Path
+    before: str | None
+    after: str
+    units: tuple[str, ...]
+    pin_before: str
+
+    def record(self) -> dict[str, Any]:
+        return {
+            "link": str(self.link),
+            "before": self.before,
+            "after": self.after,
+            "units": list(self.units),
+            "pin_before": self.pin_before,
+        }
+
+    @classmethod
+    def from_record(cls, component_id: str, raw: object) -> _Flip:
+        _require(isinstance(raw, dict), "switch record is malformed")
+        data = cast(dict[str, Any], raw)
+        link, before, after = data.get("link"), data.get("before"), data.get("after")
+        units, pin = data.get("units"), data.get("pin_before")
+        _require(
+            isinstance(link, str)
+            and link.startswith("/")
+            and (before is None or isinstance(before, str))
+            and isinstance(after, str)
+            and isinstance(units, list)
+            and all(isinstance(unit, str) and _UNIT.match(unit) for unit in units)
+            and isinstance(pin, str)
+            and bool(_VERSION.match(pin)),
+            "switch record is malformed",
+        )
+        return cls(
+            component_id=component_id,
+            link=Path(str(link)),
+            before=cast(str | None, before),
+            after=str(after),
+            units=tuple(str(unit) for unit in cast(list[object], units)),
+            pin_before=str(pin),
+        )
+
+
+def _restore(env: Environment, flips: Sequence[_Flip]) -> bool:
+    """Point every link back at its "before" target and restart its units."""
+
     ok = True
-    for component, before in reversed(flipped):
+    for flip in reversed(flips):
         try:
-            _flip_link(component.link, before)
+            _flip_link(flip.link, flip.before)
         except OSError:
             ok = False
             continue
-        ok = _restart_units(env, component.units) and ok
+        ok = _restart_units(env, flip.units) and ok
     return ok
+
+
+def _restore_pins(manifest: StackManifest, flips: Sequence[_Flip]) -> bool:
+    try:
+        _pin_versions(manifest, {flip.component_id: flip.pin_before for flip in flips})
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    return True
+
+
+def _require_unchanged(manifest: StackManifest, plan: Mapping[str, Any]) -> None:
+    """The manifest file and every link must still be exactly what the plan saw."""
+
+    try:
+        raw = manifest.path.read_bytes()
+    except OSError as exc:
+        raise StackUpdateError("the manifest cannot be read again") from exc
+    _require(
+        plan.get("manifest_digest") == manifest.digest == hashlib.sha256(raw).hexdigest(),
+        "the manifest changed since the plan was made",
+    )
+    current = {c.component_id: link_state(c) for c in manifest.components}
+    _require(plan.get("links") == current, "stack links changed since the plan was made")
+
+
+def _valid_npm_step(step: Mapping[str, Any]) -> bool:
+    published = step.get("published", {})
+    lock = step.get("lock")
+    return (
+        str(published.get("integrity", "")).startswith("sha512-")
+        and isinstance(lock, dict)
+        and isinstance(lock.get("package.json"), dict)
+        and isinstance(lock.get("package-lock.json"), dict)
+        and published.get("lock_sha256") == hashlib.sha256(_canonical(lock)).hexdigest()
+    )
 
 
 def _plan_steps(
@@ -976,7 +1173,7 @@ def _plan_steps(
             isinstance(published, dict)
             and all(isinstance(k, str) and isinstance(v, str) for k, v in published.items())
             and (
-                str(published.get("integrity", "")).startswith("sha512-")
+                _valid_npm_step(step)
                 if component.source.kind == "npm"
                 else bool(_SHA256.match(str(published.get("sha256", ""))))
             ),
@@ -992,34 +1189,56 @@ def _plan_steps(
 
 def _switch(
     env: Environment,
-    staged: Sequence[tuple[Component, Mapping[str, Any], Path]],
-    current: Mapping[str, str | None],
+    staged: Sequence[tuple[Component, _Flip]],
     record: dict[str, Any],
     path: Path,
-    flipped: list[tuple[Component, str | None]],
+    flipped: list[_Flip],
     allow_inference: bool,
 ) -> str | None:
     """Switch staged components in order; return the first failure, or None."""
 
-    for component, _step, directory in staged:
-        # Record the intent before the flip: after a crash, rollback finds
-        # every link this switch may have changed.
-        flipped.append((component, current[component.component_id]))
-        record["flipped"].append(component.component_id)
+    for component, flip in staged:
+        # Record the intent durably before the flip: after a crash, rollback
+        # finds every link this switch may have changed.
+        flipped.append(flip)
+        record["flipped"].append(flip.component_id)
         _write_private_json(path, record)
         try:
-            _flip_link(component.link, str(directory))
+            _flip_link(flip.link, flip.after)
         except OSError:
-            # The link did not change; rollback skips it because it still
-            # equals its recorded "before".
+            # The link did not change; rollback accepts it at its "before".
             flipped.pop()
             return f"component {component.component_id}: link switch failed"
-        if not _restart_units(env, component.units):
+        if not _restart_units(env, flip.units):
             return f"component {component.component_id}: unit restart failed"
         gate = _live_gates(env, component, allow_inference)
         if gate is not None:
             return f"component {component.component_id}: {gate} failed"
     return None
+
+
+def _undo(
+    env: Environment,
+    manifest: StackManifest,
+    record: dict[str, Any],
+    path: Path,
+    flips: Sequence[_Flip],
+    flipped: Sequence[_Flip],
+    failure: str,
+) -> None:
+    """Put back every switched link and every pin, then record the outcome."""
+
+    ok = _restore(env, flipped)
+    ok = _restore_pins(manifest, flips) and ok
+    record["failure"] = failure
+    record["status"] = "restored" if ok else "restore_failed"
+    record["finished_at"] = env.now().isoformat()
+    try:
+        _write_private_json(path, record)
+    except OSError as exc:
+        raise StackUpdateError(
+            f"switch {record['status']}, but its record could not be written"
+        ) from exc
 
 
 def apply_plan(
@@ -1037,14 +1256,9 @@ def apply_plan(
     _require(plan.get("digest") == digest, "plan digest does not match its content")
     _require(expected_digest == digest, "plan digest does not match the approved digest")
     with _exclusive_lock(manifest.state_dir):
-        _require(
-            plan.get("manifest_digest") == manifest.digest,
-            "the manifest changed since the plan was made",
-        )
-        current = {c.component_id: link_state(c) for c in manifest.components}
-        _require(plan.get("links") == current, "stack links changed since the plan was made")
+        _require_unchanged(manifest, plan)
         steps = _plan_steps(manifest, plan)
-        staged: list[tuple[Component, Mapping[str, Any], Path]] = []
+        staged: list[tuple[Component, _Flip]] = []
         for component, step in steps:
             directory = _stage(manifest, component, step, env)
             failure = _staged_checks(env, component, directory, str(step["to"]), allow_inference)
@@ -1052,7 +1266,18 @@ def apply_plan(
                 failure is None,
                 f"component {component.component_id}: {failure} failed; no link was changed",
             )
-            staged.append((component, step, directory))
+            flip = _Flip(
+                component_id=component.component_id,
+                link=component.link,
+                before=plan["links"][component.component_id],
+                after=str(directory),
+                units=component.units,
+                pin_before=component.version,
+            )
+            staged.append((component, flip))
+        # Staging can take minutes: recheck right before the first link changes.
+        _require_unchanged(manifest, plan)
+        flips = [flip for _, flip in staged]
         record_id = _new_record_id(env)
         record: dict[str, Any] = {
             "schema_version": RECORD_SCHEMA_VERSION,
@@ -1061,69 +1286,63 @@ def apply_plan(
             "plan_digest": digest,
             "started_at": env.now().isoformat(),
             "status": "started",
-            "before": {c.component_id: current[c.component_id] for c, _, _ in staged},
-            "pins_before": {c.component_id: c.version for c, _, _ in staged},
-            "after": {c.component_id: str(d) for c, _, d in staged},
+            "components": {flip.component_id: flip.record() for flip in flips},
             "flipped": [],
         }
         path = _record_path(manifest, record_id)
         _write_private_json(path, record)
-        flipped: list[tuple[Component, str | None]] = []
+        flipped: list[_Flip] = []
         try:
-            failure = _switch(env, staged, current, record, path, flipped, allow_inference)
+            failure = _switch(env, staged, record, path, flipped, allow_inference)
             if failure is None:
-                # "completed" means links and pins agree, so pin before recording it.
-                _pin_versions(manifest, {c.component_id: str(s["to"]) for c, s, _ in staged})
+                # "completed" means links, pins and record agree; any failure up
+                # to and including the final write undoes links and pins.
+                _pin_versions(manifest, {c.component_id: str(s["to"]) for c, s in steps})
+                record["status"] = "completed"
+                record["finished_at"] = env.now().isoformat()
+                _write_private_json(path, record)
+                return record
         except Exception as exc:
-            # Whatever went wrong mid-switch, never leave a half-switched stack.
             failure = f"unexpected {type(exc).__name__} during the switch"
         except BaseException:
             # An interrupt still restores the stack before it propagates.
-            record["failure"] = "interrupted during the switch"
-            record["status"] = "restored" if _restore(env, flipped) else "restore_failed"
-            _write_private_json(path, record)
+            _undo(env, manifest, record, path, flips, flipped, "interrupted during the switch")
             raise
-        record["finished_at"] = env.now().isoformat()
-        if failure is None:
-            record["status"] = "completed"
-            _write_private_json(path, record)
-            return record
-        record["failure"] = failure
-        record["status"] = "restored" if _restore(env, flipped) else "restore_failed"
-        _write_private_json(path, record)
+        _undo(env, manifest, record, path, flips, flipped, failure)
         return record
 
 
 def rollback_switch(manifest: StackManifest, record_id: str, *, env: Environment) -> dict[str, Any]:
-    """Restore the links recorded before one switch, if nothing changed since."""
+    """Undo one switch from its own record; repeat it until it completes."""
 
     with _exclusive_lock(manifest.state_dir):
         switch = read_record(manifest, record_id)
         _require(switch.get("kind") == "switch", "only a switch can be rolled back")
+        _require(switch.get("status") != "restored", "apply already restored this switch")
+        _require("rolled_back_by" not in switch, "this switch was already rolled back")
+        components = switch.get("components")
+        flipped_ids = switch.get("flipped")
         _require(
-            switch.get("status") in {"completed", "started", "restore_failed"},
-            "this switch left no changed links to roll back",
-        )
-        before_raw, after_raw = switch.get("before"), switch.get("after")
-        _require(
-            isinstance(before_raw, dict) and isinstance(after_raw, dict),
+            isinstance(components, dict) and isinstance(flipped_ids, list),
             "switch record is malformed",
         )
-        before = cast(dict[str, Any], before_raw)
-        after = cast(dict[str, Any], after_raw)
-        pending: list[Component] = []
-        for component_id in switch.get("flipped", []):
-            component = manifest.component(str(component_id))
-            state = link_state(component)
-            if state == before.get(component.component_id):
-                # Recorded before a flip that never happened, or already restored.
-                continue
+        recorded = cast(dict[str, Any], components)
+        flips = [
+            _Flip.from_record(str(component_id), recorded.get(str(component_id)))
+            for component_id in cast(list[object], flipped_ids)
+        ]
+        _require(bool(flips), "this switch changed no link")
+        for flip in flips:
+            # Undo exactly the recorded link; a manifest that now names another
+            # link for this component is refused before anything changes.
             _require(
-                state == after.get(component.component_id),
-                f"component {component.component_id}: its link changed after this switch",
+                manifest.component(flip.component_id).link == flip.link,
+                f"component {flip.component_id}: its link path changed since this switch",
             )
-            pending.append(component)
-        _require(bool(pending), "this switch left no changed links to roll back")
+            _require(
+                _link_state_at(flip.link) in (flip.before, flip.after),
+                f"component {flip.component_id}: its link changed after this switch",
+            )
         rollback_id = _new_record_id(env)
         record: dict[str, Any] = {
             "schema_version": RECORD_SCHEMA_VERSION,
@@ -1132,28 +1351,21 @@ def rollback_switch(manifest: StackManifest, record_id: str, *, env: Environment
             "switch": record_id,
             "started_at": env.now().isoformat(),
             "status": "started",
-            "restoring": [c.component_id for c in pending],
+            "components": [flip.component_id for flip in flips],
         }
         path = _record_path(manifest, rollback_id)
         _write_private_json(path, record)
-        ok = _restore(env, [(c, before.get(c.component_id)) for c in pending])
-        ok = ok and all(_unit_active(env, unit) for c in pending for unit in c.units)
+        # Every step is idempotent, so a rollback interrupted after some links,
+        # restarts or pins completes when repeated.
+        ok = _restore(env, flips)
+        ok = all(_unit_active(env, unit) for flip in flips for unit in flip.units) and ok
+        ok = _restore_pins(manifest, flips) and ok
         record["status"] = "completed" if ok else "failed"
         record["finished_at"] = env.now().isoformat()
-        if ok:
-            # Pins go back to what the manifest said before the switch, for every
-            # component of the switch that is back, including any an interrupted
-            # earlier rollback already restored.
-            pins_raw = switch.get("pins_before")
-            pins = cast(dict[str, Any], pins_raw) if isinstance(pins_raw, dict) else {}
-            restored = {
-                str(component_id): pins[component_id]
-                for component_id in switch.get("flipped", [])
-                if isinstance(pins.get(component_id), str)
-                and link_state(manifest.component(str(component_id))) == before.get(component_id)
-            }
-            _pin_versions(manifest, restored)
         _write_private_json(path, record)
+        if ok:
+            switch["rolled_back_by"] = rollback_id
+            _write_private_json(_record_path(manifest, record_id), switch)
         return record
 
 

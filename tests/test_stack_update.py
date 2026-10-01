@@ -13,6 +13,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import urllib.request
 import zipfile
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -68,6 +69,9 @@ class FakeStack:
         self.broken_urls: set[str] = set()
         self.integrity = {"0.2.0": "sha512-new", "0.1.0": "sha512-old"}
         self.lock_integrity: dict[str, str] = {}
+        self.plan_integrity: dict[str, str] = {}
+        self.tampered_dependency = False
+        self.rebuilt: list[Path] = []
         self.clock = dt.datetime(2026, 9, 30, 12, 0, tzinfo=dt.UTC)
         self.ticks = 0.0
         self.proxy_versions = root / "proxy" / "releases"
@@ -179,21 +183,52 @@ class FakeStack:
         if argv[:3] == ["systemctl", "--user", "is-active"]:
             return self._result(argv, 3 if argv[-1] in self.inactive_units else 0)
         if argv[0].endswith("/npm"):
-            prefix = Path(argv[argv.index("--prefix") + 1])
-            version = argv[-1].rsplit("@", 1)[1]
-            (prefix / "node_modules" / ".bin").mkdir(parents=True)
-            (prefix / "node_modules" / ".bin" / "codex").write_text("#!/bin/sh\n")
-            integrity = self.lock_integrity.get(version, self.integrity.get(version, ""))
-            # Like npm with --no-save: only the hidden lockfile, no package-lock.json.
-            (prefix / "node_modules" / ".package-lock.json").write_text(
-                json.dumps(
-                    {"packages": {f"node_modules/{CODEX_PACKAGE}": {"integrity": integrity}}}
-                )
-            )
-            return self._result(argv, 0)
+            return self._npm(argv)
         if any(argv[0].endswith(name) for name in self.failing_argv):
             return self._result(argv, 1)
         return self._result(argv, 0, stdout=f"tool {self._version_of(Path(argv[0]))}\n")
+
+    def _npm(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        """Model npm: lock-only resolution, ci of an exact lockfile, and rebuild."""
+        prefix = Path(argv[argv.index("--prefix") + 1])
+        root = f"node_modules/{CODEX_PACKAGE}"
+        if "--package-lock-only" in argv:
+            assert "--ignore-scripts" in argv
+            spec = next(arg for arg in argv if arg.startswith(f"{CODEX_PACKAGE}@"))
+            version = spec.rsplit("@", 1)[1]
+            integrity = self.plan_integrity.get(version, self.integrity.get(version, ""))
+            (prefix / "package.json").write_text(
+                json.dumps({"dependencies": {CODEX_PACKAGE: version}})
+            )
+            lock = {
+                "lockfileVersion": 3,
+                "packages": {
+                    "": {"dependencies": {CODEX_PACKAGE: version}},
+                    root: {"version": version, "integrity": integrity},
+                    "node_modules/example-dep": {"version": "1.0.0", "integrity": "sha512-dep"},
+                },
+            }
+            (prefix / "package-lock.json").write_text(json.dumps(lock))
+            return self._result(argv, 0)
+        if "ci" in argv:
+            assert "--ignore-scripts" in argv
+            lock = json.loads((prefix / "package-lock.json").read_text())
+            packages = {name: dict(entry) for name, entry in lock["packages"].items() if name}
+            version = packages[root]["version"]
+            if version in self.lock_integrity:
+                packages[root]["integrity"] = self.lock_integrity[version]
+            if self.tampered_dependency:
+                packages["node_modules/example-dep"]["integrity"] = "sha512-evil"
+            (prefix / "node_modules" / ".bin").mkdir(parents=True)
+            (prefix / "node_modules" / ".bin" / "codex").write_text("#!/bin/sh\n")
+            (prefix / "node_modules" / ".package-lock.json").write_text(
+                json.dumps({"packages": packages})
+            )
+            return self._result(argv, 0)
+        if "rebuild" in argv:
+            self.rebuilt.append(prefix)
+            return self._result(argv, 0)
+        return self._result(argv, 1)
 
     @staticmethod
     def _version_of(path: Path) -> str:
@@ -291,7 +326,12 @@ class PlanTests(StackUpdateTestCase):
         self.assertEqual(
             proxy["published"], {"sha256": hashlib.sha256(self.stack.proxy_archive).hexdigest()}
         )
-        self.assertEqual(codex["published"], {"integrity": "sha512-new"})
+        self.assertEqual(codex["published"]["integrity"], "sha512-new")
+        self.assertEqual(
+            codex["published"]["lock_sha256"],
+            hashlib.sha256(stack_update._canonical(codex["lock"])).hexdigest(),
+        )
+        self.assertIn("node_modules/example-dep", codex["lock"]["package-lock.json"]["packages"])
         self.assertEqual(plan["links"]["codex"], str(self.stack.codex_versions / "0.1.0"))
         self.assertEqual(plan["digest"], plan_digest(plan))
 
@@ -374,10 +414,13 @@ class ApplyTests(StackUpdateTestCase):
         self.assertEqual(self.stack.restarts(), ["proxy.service", "codex-daemon.service"])
         self.assertTrue((self.stack.proxy_versions / "1.1.0" / "proxy").exists())
         staged = json.loads((self.stack.codex_versions / "0.2.0" / MARKER_NAME).read_text())
-        self.assertEqual(staged["artifact"], {"integrity": "sha512-new"})
-        npm = next(call for call in self.stack.calls if call[0].endswith("/npm"))
-        self.assertIn("--ignore-scripts", npm)
-        self.assertEqual(npm[-1], f"{CODEX_PACKAGE}@0.2.0")
+        self.assertEqual(staged["artifact"]["integrity"], "sha512-new")
+        self.assertEqual(len(staged["artifact"]["lock_sha256"]), 64)
+        npm = [call for call in self.stack.calls if call[0].endswith("/npm")]
+        self.assertEqual([call[1] for call in npm], ["install", "ci"])
+        self.assertIn("--package-lock-only", npm[0])
+        self.assertIn("--ignore-scripts", npm[1])
+        self.assertEqual(self.stack.rebuilt, [])
         leftovers = [p.name for p in self.stack.proxy_versions.iterdir() if p.name.startswith(".")]
         self.assertEqual(leftovers, [])
         saved = stack_update.read_record(manifest, record["id"])
@@ -392,6 +435,7 @@ class ApplyTests(StackUpdateTestCase):
 
     def test_refuses_mismatched_or_tampered_digests(self) -> None:
         plan = self.plan(proxy="1.1.0")
+        self.stack.calls.clear()
         with self.assertRaisesRegex(StackUpdateError, "approved digest"):
             apply_plan(self.stack.load(), plan, expected_digest="0" * 64, env=self.stack.env())
         tampered = {**plan, "steps": [{**plan["steps"][0], "to": "9.9.9"}]}
@@ -401,6 +445,7 @@ class ApplyTests(StackUpdateTestCase):
 
     def test_revalidates_plan_steps_whatever_their_digest(self) -> None:
         plan = self.plan(proxy="1.1.0", codex="0.2.0")
+        self.stack.calls.clear()
         cases = {
             "invalid version": lambda p: p["steps"][0].update(to="../../x"),
             "malformed published": lambda p: p["steps"][1].update(published={}),
@@ -467,7 +512,7 @@ class ApplyTests(StackUpdateTestCase):
     def test_refuses_an_npm_install_that_differs_from_the_plan(self) -> None:
         plan = self.plan(codex="0.2.0")
         self.stack.lock_integrity["0.2.0"] = "sha512-other"
-        with self.assertRaisesRegex(StackUpdateError, "does not match the plan"):
+        with self.assertRaisesRegex(StackUpdateError, "do not match the plan"):
             self.apply(plan)
         self.assertEqual(sorted(p.name for p in self.stack.codex_versions.iterdir()), ["0.1.0"])
 
@@ -541,11 +586,113 @@ class ApplyTests(StackUpdateTestCase):
 
     def test_a_failed_pin_restores_instead_of_completing(self) -> None:
         plan = self.plan(proxy="1.1.0")
-        with mock.patch.object(stack_update, "_pin_versions", side_effect=OSError("disk full")):
+        # The pin fails once; restoring the old pins afterwards succeeds.
+        failing_once = mock.Mock(side_effect=[OSError("disk full"), None])
+        with mock.patch.object(stack_update, "_pin_versions", failing_once):
             record = self.apply(plan)
         self.assertEqual(record["status"], "restored")
         self.assertIn("unexpected OSError", record["failure"])
         self.assertEqual(installed_version(self.stack.load().component("proxy")), "1.0.0")
+
+    def enable_lifecycle_scripts(self) -> None:
+        data = self.stack.manifest()
+        data["components"][0]["source"]["lifecycle_scripts"] = True
+        self.stack.write_manifest(data)
+
+    def test_lifecycle_scripts_run_only_after_the_tree_is_verified(self) -> None:
+        self.enable_lifecycle_scripts()
+        self.assertEqual(self.apply(self.plan(codex="0.2.0"))["status"], "completed")
+        npm = [call[1] for call in self.stack.calls if call[0].endswith("/npm")]
+        self.assertEqual(npm, ["install", "ci", "rebuild"])
+
+    def test_no_package_script_runs_for_a_mismatched_tree(self) -> None:
+        self.enable_lifecycle_scripts()
+        plan = self.plan(codex="0.2.0")
+        self.stack.tampered_dependency = True
+        with self.assertRaisesRegex(StackUpdateError, "do not match the plan"):
+            self.apply(plan)
+        self.assertEqual(self.stack.rebuilt, [])
+
+    def test_the_plan_pins_every_dependency(self) -> None:
+        plan = self.plan(codex="0.2.0")
+        self.stack.tampered_dependency = True
+        with self.assertRaisesRegex(StackUpdateError, "do not match the plan"):
+            self.apply(plan)
+        self.assertEqual(sorted(p.name for p in self.stack.codex_versions.iterdir()), ["0.1.0"])
+
+    def test_plan_refuses_a_lockfile_that_disagrees_with_the_registry(self) -> None:
+        self.stack.plan_integrity["0.2.0"] = "sha512-other"
+        with self.assertRaisesRegex(StackUpdateError, "disagrees with the registry"):
+            self.plan(codex="0.2.0")
+
+    def test_a_failed_final_record_write_restores_links_and_pins(self) -> None:
+        plan = self.plan(proxy="1.1.0")
+        real_write = stack_update._write_private_json
+
+        def write(path: Path, data: Any) -> None:
+            if data.get("status") == "completed":
+                raise OSError("disk full")
+            real_write(path, data)
+
+        with mock.patch.object(stack_update, "_write_private_json", write):
+            record = self.apply(plan)
+        self.assertEqual(record["status"], "restored")
+        manifest = self.stack.load()
+        self.assertEqual(installed_version(manifest.component("proxy")), "1.0.0")
+        self.assertEqual([c.version for c in manifest.components], ["1.0.0", "0.1.0"])
+
+    def test_an_interrupt_after_the_pins_restores_them_too(self) -> None:
+        plan = self.plan(proxy="1.1.0")
+        real_pin = stack_update._pin_versions
+        calls = {"n": 0}
+
+        def pin(manifest: Any, versions: Any) -> None:
+            real_pin(manifest, versions)
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise KeyboardInterrupt
+
+        with mock.patch.object(stack_update, "_pin_versions", pin):
+            with self.assertRaises(KeyboardInterrupt):
+                self.apply(plan)
+        manifest = self.stack.load()
+        self.assertEqual(installed_version(manifest.component("proxy")), "1.0.0")
+        self.assertEqual([c.version for c in manifest.components], ["1.0.0", "0.1.0"])
+
+    def test_changes_during_staging_are_refused_before_any_flip(self) -> None:
+        real_stage = stack_update._stage
+
+        def change_manifest(*args: Any) -> Path:
+            directory = real_stage(*args)
+            data = json.loads(self.stack.manifest_path.read_text())
+            data["components"][1]["units"] = ["other.service"]
+            self.stack.write_manifest(data)
+            return directory
+
+        def change_link(*args: Any) -> Path:
+            directory = real_stage(*args)
+            self.stack._installed(self.stack.codex_versions, "codex", "0.1.5")
+            self.stack.codex_link.unlink()
+            os.symlink(self.stack.codex_versions / "0.1.5", self.stack.codex_link)
+            return directory
+
+        for change, message in ((change_manifest, "manifest changed"), (change_link, "links")):
+            with self.subTest(message):
+                manifest = self.stack.load()
+                plan = build_plan(manifest, {"proxy": "1.1.0"}, self.stack.env())
+                with mock.patch.object(stack_update, "_stage", change):
+                    with self.assertRaisesRegex(StackUpdateError, message):
+                        apply_plan(
+                            manifest, plan, expected_digest=plan["digest"], env=self.stack.env()
+                        )
+                self.assertEqual(installed_version(manifest.component("proxy")), "1.0.0")
+                self.assertEqual(self.stack.restarts(), [])
+
+    def test_records_and_links_are_made_durable(self) -> None:
+        with mock.patch.object(stack_update.os, "fsync", wraps=os.fsync) as fsync:
+            self.apply(self.plan(proxy="1.1.0"))
+        # Record file and directory, each link flip's directory, manifest pins.
+        self.assertGreaterEqual(fsync.call_count, 6)
 
     def test_a_failed_http_gate_restores_the_link(self) -> None:
         del self.stack.urls[HEALTH_URL]
@@ -599,7 +746,8 @@ class RollbackTests(StackUpdateTestCase):
         data["components"][0]["version"] = "0.0.9"
         self.stack.write_manifest(data)
         switch = self.switch()
-        self.assertEqual(switch["pins_before"], {"proxy": "1.0.0", "codex": "0.0.9"})
+        pins = {cid: entry["pin_before"] for cid, entry in switch["components"].items()}
+        self.assertEqual(pins, {"proxy": "1.0.0", "codex": "0.0.9"})
         rollback_switch(self.stack.load(), switch["id"], env=self.stack.env())
         self.assertEqual([c.version for c in self.stack.load().components], ["1.0.0", "0.0.9"])
 
@@ -609,8 +757,41 @@ class RollbackTests(StackUpdateTestCase):
         self.stack.proxy_link.unlink()
         os.symlink(self.stack.proxy_versions / "1.0.0", self.stack.proxy_link)
         record = rollback_switch(self.stack.load(), switch["id"], env=self.stack.env())
-        self.assertEqual((record["status"], record["restoring"]), ("completed", ["codex"]))
+        self.assertEqual(
+            (record["status"], record["components"]), ("completed", ["proxy", "codex"])
+        )
         self.assertEqual([c.version for c in self.stack.load().components], ["1.0.0", "0.1.0"])
+
+    def test_a_rollback_interrupted_after_its_links_completes_on_repeat(self) -> None:
+        switch = self.switch()
+        # The first rollback put both links back, then stopped before units and pins.
+        for link, versions, version in (
+            (self.stack.proxy_link, self.stack.proxy_versions, "1.0.0"),
+            (self.stack.codex_link, self.stack.codex_versions, "0.1.0"),
+        ):
+            link.unlink()
+            os.symlink(versions / version, link)
+        self.assertEqual([c.version for c in self.stack.load().components], ["1.1.0", "0.2.0"])
+        self.stack.calls.clear()
+        record = rollback_switch(self.stack.load(), switch["id"], env=self.stack.env())
+        self.assertEqual(record["status"], "completed")
+        self.assertEqual([c.version for c in self.stack.load().components], ["1.0.0", "0.1.0"])
+        self.assertEqual(self.stack.restarts(), ["codex-daemon.service", "proxy.service"])
+        with self.assertRaisesRegex(StackUpdateError, "already rolled back"):
+            rollback_switch(self.stack.load(), switch["id"], env=self.stack.env())
+
+    def test_rollback_refuses_a_manifest_that_moved_the_link(self) -> None:
+        switch = self.switch()
+        moved = self.stack.root / "codex" / "moved-current"
+        os.symlink(self.stack.codex_versions / "0.1.0", moved)
+        data = json.loads(self.stack.manifest_path.read_text())
+        data["components"][0]["link"] = str(moved)
+        self.stack.write_manifest(data)
+        with self.assertRaisesRegex(StackUpdateError, "link path changed"):
+            rollback_switch(self.stack.load(), switch["id"], env=self.stack.env())
+        self.assertEqual(
+            os.readlink(self.stack.codex_link), str(self.stack.codex_versions / "0.2.0")
+        )
 
     def test_refuses_when_a_link_changed_after_the_switch(self) -> None:
         switch = self.switch()
@@ -629,14 +810,14 @@ class RollbackTests(StackUpdateTestCase):
         self.assertEqual(record["status"], "completed")
         manifest = self.stack.load()
         self.assertEqual(installed_version(manifest.component("proxy")), "1.0.0")
-        with self.assertRaisesRegex(StackUpdateError, "no changed links"):
+        with self.assertRaisesRegex(StackUpdateError, "already rolled back"):
             rollback_switch(manifest, switch["id"], env=self.stack.env())
 
     def test_refuses_restored_switches_and_invalid_ids(self) -> None:
         self.stack.inactive_units.add("proxy.service")
         switch = self.switch()
         self.assertEqual(switch["status"], "restored")
-        with self.assertRaisesRegex(StackUpdateError, "no changed links"):
+        with self.assertRaisesRegex(StackUpdateError, "apply already restored"):
             rollback_switch(self.stack.load(), switch["id"], env=self.stack.env())
         with self.assertRaisesRegex(StackUpdateError, "invalid switch record id"):
             rollback_switch(self.stack.load(), "../../etc/passwd", env=self.stack.env())
@@ -658,12 +839,37 @@ class ToolTests(StackUpdateTestCase):
         response.__enter__.return_value = response
         response.geturl.return_value = "http://example.com/file"
         response.read.return_value = b"data"
-        with mock.patch("urllib.request.urlopen", return_value=response):
+        opener = mock.MagicMock()
+        opener.open.return_value = response
+        with mock.patch("urllib.request.build_opener", return_value=opener):
             with self.assertRaisesRegex(StackUpdateError, "redirected to plain http"):
                 stack_update._http_get("https://example.com/file", 10)
-        with mock.patch("urllib.request.urlopen", side_effect=http.client.IncompleteRead(b"")):
+        opener.open.side_effect = http.client.IncompleteRead(b"")
+        with mock.patch("urllib.request.build_opener", return_value=opener):
             with self.assertRaisesRegex(StackUpdateError, "request to example.com failed"):
                 stack_update._http_get("https://example.com/file", 10)
+
+    def test_every_redirect_is_checked_before_it_is_followed(self) -> None:
+        cases = (
+            ("https://example.com/a", "http://example.com/b", "plain http"),
+            ("http://127.0.0.1:8317/a", "http://example.com/b", "off the machine"),
+        )
+        for origin, target, message in cases:
+            with self.subTest(target):
+                handler = stack_update._GuardedRedirect(origin)
+                request = urllib.request.Request(origin)
+                with self.assertRaisesRegex(StackUpdateError, message):
+                    handler.redirect_request(request, None, 302, "Found", {}, target)
+        handler = stack_update._GuardedRedirect("https://example.com/a")
+        followed = handler.redirect_request(
+            urllib.request.Request("https://example.com/a"),
+            None,
+            302,
+            "Found",
+            {},
+            "https://cdn.example.com/b",
+        )
+        self.assertEqual(followed.full_url if followed else None, "https://cdn.example.com/b")
 
     def test_zip_members_cannot_escape_or_link(self) -> None:
         destination = self.stack.root / "zip-out"
@@ -706,7 +912,9 @@ class ToolTests(StackUpdateTestCase):
         response.__enter__.return_value = response
         response.geturl.return_value = "http://169.254.169.254/latest"
         response.read.return_value = b"data"
-        with mock.patch("urllib.request.urlopen", return_value=response):
+        opener = mock.MagicMock()
+        opener.open.return_value = response
+        with mock.patch("urllib.request.build_opener", return_value=opener):
             with self.assertRaisesRegex(StackUpdateError, "off the machine"):
                 stack_update._http_get("http://127.0.0.1:8317/v1/models", 10)
 

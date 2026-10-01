@@ -12,44 +12,63 @@ The ADR owns the rationale; the requirement owns the contract.
 
 ## What it guarantees
 
-- **Plans are read-only.** `plan` installs and runs nothing. It reads version
-  metadata from each component's configured source and writes a plan. The plan
-  records:
-  - the exact versions;
-  - the sources;
-  - the digest the plan binds: the npm `integrity`, or the archive SHA-256
-    from the configured checksums file (GNU or BSD format). When a source
-    publishes no checksums, `plan` downloads the archive and records its
-    SHA-256, so `apply` installs exactly the approved bytes;
+- **Plans install and run nothing.** `plan` reads version metadata from each
+  component's configured source and writes a plan. For an npm component it also
+  resolves the complete dependency tree with `npm install --package-lock-only
+  --ignore-scripts`, which downloads no package and runs no package code. The
+  plan records:
+  - the exact versions and sources;
+  - the bytes it binds:
+    - for npm, the full lockfile, so every dependency's version and integrity
+      is pinned, and the registry `integrity` of the package;
+    - for an archive, the SHA-256 from the configured checksums file (GNU or
+      BSD format). When a source publishes no checksums, `plan` downloads the
+      archive and records its SHA-256;
   - every current link;
   - the manifest digest.
 
   It is sealed by its own digest.
 - **Apply works on one exact plan.** `apply` needs the plan digest the owner
-  approved. It refuses if any of these no longer holds:
-  - the plan content still matches its digest;
-  - the manifest is unchanged;
-  - every link is still the one in the plan.
-
-  A successful switch re-pins the manifest, so a plan cannot be applied twice.
+  approved. It refuses if the plan no longer matches its digest, or if the
+  manifest file or any link differs from what the plan saw. It checks this
+  again right after staging, which can take minutes, before the first link
+  changes. A successful switch re-pins the manifest, so a plan cannot be
+  applied twice.
 - **Nothing changes before the gates pass.** `apply` does these steps in order:
-  1. Stages each candidate into an immutable version directory. A download is
-     compared with the digest in the plan, and npm lifecycle scripts stay
-     disabled unless the manifest allows them.
+  1. Stages each candidate into an immutable version directory. An archive is
+     compared with the digest in the plan. An npm component is installed with
+     `npm ci --ignore-scripts` from the planned lockfile, and the installed
+     tree is compared with it. Only then, and only when the manifest allows
+     them, `npm rebuild` runs the packages' lifecycle scripts.
   2. Runs the staged gates: the version output, then the `staged` checks.
   3. Only then touches links. A staging or check failure leaves every link
      unchanged.
 - **Switches go in dependency order, with automatic restoration.** Components
-  switch in ascending `order`, one at a time. For each one, `apply` flips its
-  link atomically, restarts its units, and waits for them to be active and for
-  its `live` checks to pass. A failed gate puts back every link already
-  switched, in reverse order, and restarts those units; the record ends as
-  `restored`, or `restore_failed` if restoration failed too.
+  switch in ascending `order`, one at a time. For each one, `apply` records the
+  intent durably, flips the link atomically, restarts the component's units,
+  and waits for them to be active and for its `live` checks to pass. A failure
+  at any point up to the final record write (a failed gate, an unexpected
+  error, a failed pin or record write, or an interrupt) puts back every switched
+  link in reverse order, restarts those units, and restores the previous pins.
+  The record ends as `restored`, or `restore_failed` if restoration failed too.
+- **Durable records.** Records, pins and link flips are written with `fsync`
+  of the file and its directory, so after a host crash a switched link always
+  has its recorded intent.
 - **One operation at a time.** `apply` and `rollback` take one exclusive lock.
   A concurrent request is refused, not queued.
-- **Every switch leaves a record.** The private record keeps the links before
-  and after. `rollback SWITCH` restores exactly those links, and only if nothing
-  changed them since.
+- **Rollback works from the record.** Each switch record keeps, per component,
+  the link path, the targets before and after, the units, and the previous pin.
+  `rollback SWITCH`:
+  - undoes exactly those links;
+  - refuses before changing anything if a link now points elsewhere, or if the
+    manifest names another link path for the component;
+  - is idempotent: it restores links, restarts units and restores pins again,
+    so a rollback interrupted halfway completes when repeated;
+  - marks the switch as rolled back once it completes, so it cannot be applied
+    a second time. A switch that `apply` already restored is refused.
+- **Guarded downloads.** Every redirect is checked before it is followed:
+  HTTPS sources may not be redirected to plain HTTP, and loopback checks may
+  not be redirected off the machine.
 - **No live inference unless asked.** A check marked `"inference": true` runs
   only with `--allow-live-inference`, which is an explicit owner request
   (maintenance rule 8).
