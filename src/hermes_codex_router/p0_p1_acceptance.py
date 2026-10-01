@@ -4,6 +4,7 @@ import asyncio
 import re
 import tempfile
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -73,6 +74,7 @@ async def _wait_for_response(
 ) -> Any:
     deadline = asyncio.get_running_loop().time() + config.timeout_seconds
     while asyncio.get_running_loop().time() < deadline:
+        found = None
         async for message in client.iter_messages(
             config.telegram_chat_id, min_id=after_id, reverse=True
         ):
@@ -81,13 +83,16 @@ async def _wait_for_response(
             sender = await message.get_sender()
             sender_username = str(getattr(sender, "username", "")).casefold()
             if sender_username == username.casefold():
-                if require_buttons and not getattr(message, "buttons", None):
-                    continue
-                return message
+                if found is None and (not require_buttons or getattr(message, "buttons", None)):
+                    found = message
+                continue
             if not _allowed_canary_sender(sender, config):
                 raise AcceptanceActorError(
                     "canary topic received unrelated traffic during acceptance"
                 )
+        # The whole batch is checked for unrelated traffic before a match counts.
+        if found is not None:
+            return found
         await asyncio.sleep(0.5)
     raise AcceptanceActorError(f"timed out waiting for @{username}")
 
@@ -172,16 +177,29 @@ async def _wait_for_job(
     raise AcceptanceActorError(f"durable job did not reach {sorted(statuses)}; count={len(latest)}")
 
 
-async def _wait_for_markers(
+_PRE_EXECUTION_FAILURES = (
+    "Project root validation failed",
+    "did not start: the project binding is invalid",
+    "Incoming material integrity validation failed",
+)
+
+
+async def _wait_for_matching(
     client: Any,
     config: AcceptanceActorConfig,
     *,
     after_id: int,
     username: str,
-    markers: tuple[str, ...],
+    matches: Callable[[str], bool],
 ) -> Any:
+    """Wait for the first message from ``username`` whose text ``matches``.
+
+    Every message of a fetched batch is checked for unrelated traffic before a
+    match counts, so traffic after the match cannot slip through.
+    """
     deadline = asyncio.get_running_loop().time() + config.timeout_seconds
     while asyncio.get_running_loop().time() < deadline:
+        found = None
         async for message in client.iter_messages(
             config.telegram_chat_id, min_id=after_id, reverse=True
         ):
@@ -191,24 +209,38 @@ async def _wait_for_markers(
             sender_username = str(getattr(sender, "username", "")).casefold()
             if sender_username == username.casefold():
                 text = str(getattr(message, "raw_text", ""))
-                if all(marker in text for marker in markers):
-                    return message
-                if any(
-                    phrase in text
-                    for phrase in (
-                        "Project root validation failed",
-                        "did not start: the project binding is invalid",
-                        "Incoming material integrity validation failed",
-                    )
-                ):
+                if found is not None:
+                    continue
+                if matches(text):
+                    found = message
+                elif any(phrase in text for phrase in _PRE_EXECUTION_FAILURES):
                     raise AcceptanceActorError("provider returned a pre-execution failure")
                 continue
             if not _allowed_canary_sender(sender, config):
                 raise AcceptanceActorError(
                     "canary topic received unrelated traffic during acceptance"
                 )
+        if found is not None:
+            return found
         await asyncio.sleep(0.5)
     raise AcceptanceActorError(f"timed out waiting for verified response from @{username}")
+
+
+async def _wait_for_markers(
+    client: Any,
+    config: AcceptanceActorConfig,
+    *,
+    after_id: int,
+    username: str,
+    markers: tuple[str, ...],
+) -> Any:
+    return await _wait_for_matching(
+        client,
+        config,
+        after_id=after_id,
+        username=username,
+        matches=lambda text: all(marker in text for marker in markers),
+    )
 
 
 async def _send_input_document(
@@ -226,20 +258,42 @@ async def _send_input_document(
     )
 
 
+_ACCOUNT_STATUS_MARKERS = ("🟢", "🟡", "🔴")
+
+
+def _is_accounts_reply(text: str) -> bool:
+    """Recognize the /accounts layout: the empty notice, or provider sections.
+
+    Each section is a provider header followed by status lines that start
+    with a health marker. Which providers appear depends on the deployment.
+    """
+    if text.strip() == "No provider accounts are configured.":
+        return True
+    sections = [section for section in text.strip().split("\n\n") if section.strip()]
+    for section in sections:
+        lines = [line.strip() for line in section.splitlines() if line.strip()]
+        if len(lines) < 2 or lines[0].startswith(_ACCOUNT_STATUS_MARKERS):
+            return False
+        if not all(line.startswith(_ACCOUNT_STATUS_MARKERS) for line in lines[1:]):
+            return False
+    return bool(sections)
+
+
 async def _verify_accounts_reply(
     client: Any, config: AcceptanceActorConfig, *, after_id: int
 ) -> None:
-    """Require a non-empty Hub /accounts reply without a Codex account section.
+    """Require the Hub's /accounts reply, without a Codex account section.
 
-    Which sections appear depends on the deployment's providers; a Codex
-    account section must never appear (REQ-CMD-003, ADR 0047).
+    A Codex account section must never appear (REQ-CMD-003, ADR 0047).
     """
-    response = await _wait_for_response(
-        client, config, after_id=after_id, username=config.hub_username
+    response = await _wait_for_matching(
+        client,
+        config,
+        after_id=after_id,
+        username=config.hub_username,
+        matches=_is_accounts_reply,
     )
-    text = str(getattr(response, "raw_text", "")).strip()
-    if not text:
-        raise AcceptanceActorError("Hub returned an empty /accounts response")
+    text = str(getattr(response, "raw_text", ""))
     if any(line.strip() == "Codex" for line in text.splitlines()):
         raise AcceptanceActorError("/accounts shows a Codex account section")
 

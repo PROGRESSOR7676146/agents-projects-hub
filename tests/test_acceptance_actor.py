@@ -40,7 +40,12 @@ from hermes_codex_router.acceptance_runtime import (
 )
 from hermes_codex_router.p0_p1_acceptance import (
     P0P1ScenarioContext,
+    _is_accounts_reply,
+    _verify_accounts_reply,
     run_p0_p1_live_scenario,
+)
+from hermes_codex_router.p0_p1_acceptance import (
+    _wait_for_response as _p0_wait_for_response,
 )
 
 
@@ -590,6 +595,58 @@ class AcceptanceActorConfigTests(unittest.TestCase):
 
         self.assertIs(received, response)
 
+    def test_wait_for_response_checks_traffic_after_the_match(self) -> None:
+        config = load_acceptance_actor_config(self.write_config())
+        client = FakeIterClient(
+            [
+                FakeIncomingMessage(2, "example_provider_bot"),
+                FakeIncomingMessage(3, "unrelated_user", sender_id=42),
+            ]
+        )
+        for wait in (_wait_for_response, _p0_wait_for_response):
+            with self.subTest(wait.__module__):
+                with self.assertRaisesRegex(AcceptanceActorError, "unrelated traffic"):
+                    asyncio.run(wait(client, config, after_id=1, username="example_provider_bot"))
+
+    def hub_message(self, message_id: int, text: str) -> FakeIncomingMessage:
+        message = FakeIncomingMessage(message_id, "example_hub_bot")
+        message.raw_text = text
+        return message
+
+    def test_accounts_reply_is_recognized_by_its_layout(self) -> None:
+        accepted = (
+            "No provider accounts are configured.",
+            "OpenCode Go\n🟢 plan: 5h $12\n\nAntigravity\n🟡 exa… · limits unknown",
+            "Antigravity\n🔴 Provider unavailable\n🟡 exa… · limits unknown",
+        )
+        rejected = (
+            "",
+            "codex · Gpt 6 Sol · Low\nContext 89.6%",
+            "Unknown command",
+            "OpenCode Go",
+            "🟢 plan: 5h $12",
+        )
+        for text in accepted:
+            with self.subTest(text):
+                self.assertTrue(_is_accounts_reply(text))
+        for text in rejected:
+            with self.subTest(text):
+                self.assertFalse(_is_accounts_reply(text))
+
+    def test_accounts_check_skips_other_hub_replies_and_rejects_codex(self) -> None:
+        config = load_acceptance_actor_config(self.write_config())
+        status = self.hub_message(2, "codex · Gpt 6 Sol · Low\nContext 89.6%")
+        accounts = self.hub_message(3, "OpenCode Go\n🟢 plan: 5h $12")
+        asyncio.run(_verify_accounts_reply(FakeIterClient([status, accounts]), config, after_id=1))
+        codex = self.hub_message(3, "Codex\n🟡 exa… · limits unknown")
+        with self.assertRaisesRegex(AcceptanceActorError, "Codex account section"):
+            asyncio.run(_verify_accounts_reply(FakeIterClient([status, codex]), config, after_id=1))
+        stranger = FakeIncomingMessage(4, "unrelated_user", sender_id=42)
+        with self.assertRaisesRegex(AcceptanceActorError, "unrelated traffic"):
+            asyncio.run(
+                _verify_accounts_reply(FakeIterClient([accounts, stranger]), config, after_id=1)
+            )
+
     def test_configured_checks_stop_after_first_failure(self) -> None:
         config = load_acceptance_actor_config(
             self.write_config(checks=["provider_ping", "reply_route"])
@@ -963,7 +1020,7 @@ class AcceptanceActorConfigTests(unittest.TestCase):
                 new=AsyncMock(side_effect=responses),
             ) as wait,
             patch(
-                "hermes_codex_router.p0_p1_acceptance._wait_for_response",
+                "hermes_codex_router.p0_p1_acceptance._wait_for_matching",
                 new=AsyncMock(return_value=accounts),
             ) as accounts_wait,
         ):
@@ -1021,10 +1078,7 @@ class AcceptanceActorConfigTests(unittest.TestCase):
             FakeMessage(207, "Context remaining: 88.5%\nWeekly remaining: 42%"),
             FakeMessage(208, "Context remaining: 88.5%"),
         )
-        for text, detail in (
-            ("Codex\n🟡 example… · limits unknown", "Codex account section"),
-            ("", "empty /accounts response"),
-        ):
+        for text, detail in (("Codex\n🟡 example… · limits unknown", "Codex account section"),):
             with self.subTest(detail):
                 context = P0P1ScenarioContext(
                     FakeP0P1Client(),
@@ -1042,7 +1096,7 @@ class AcceptanceActorConfigTests(unittest.TestCase):
                         new=AsyncMock(side_effect=responses),
                     ),
                     patch(
-                        "hermes_codex_router.p0_p1_acceptance._wait_for_response",
+                        "hermes_codex_router.p0_p1_acceptance._wait_for_matching",
                         new=AsyncMock(return_value=FakeMessage(209, text)),
                     ),
                 ):

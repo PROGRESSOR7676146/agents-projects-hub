@@ -267,6 +267,7 @@ async def _wait_for_response(
         config.timeout_seconds if timeout_seconds is None else timeout_seconds
     )
     while asyncio.get_running_loop().time() < deadline:
+        found = None
         async for message in client.iter_messages(
             config.telegram_chat_id, min_id=after_id, reverse=True
         ):
@@ -275,15 +276,20 @@ async def _wait_for_response(
             sender = await message.get_sender()
             sender_username = str(getattr(sender, "username", "")).casefold()
             if sender_username == username.casefold():
-                if require_buttons and not getattr(message, "buttons", None):
-                    continue
-                if require_document and getattr(message, "document", None) is None:
-                    continue
-                return message
+                if (
+                    found is None
+                    and (not require_buttons or getattr(message, "buttons", None))
+                    and (not require_document or getattr(message, "document", None) is not None)
+                ):
+                    found = message
+                continue
             if not _allowed_canary_sender(sender, config):
                 raise AcceptanceActorError(
                     "canary topic received unrelated traffic during acceptance"
                 )
+        # The whole batch is checked for unrelated traffic before a match counts.
+        if found is not None:
+            return found
         await asyncio.sleep(0.5)
     raise AcceptanceActorError(f"timed out waiting for @{username}")
 
