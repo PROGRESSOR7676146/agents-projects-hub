@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+from schema_fixtures import remove_task_lifecycle_schema
+
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.external_service import ExternalAgentService
 from hermes_codex_router.external_worker import ExternalQueueWorker
@@ -267,6 +269,7 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
             if schema == 30:
                 connection = sqlite3.connect(harness.config.state_path)
                 with connection:
+                    remove_task_lifecycle_schema(connection)
                     connection.execute("DROP INDEX topics_execution_scope")
                     connection.execute("ALTER TABLE topics DROP COLUMN execution_scope")
                     connection.execute("DROP INDEX worktree_lanes_one_active_topic")

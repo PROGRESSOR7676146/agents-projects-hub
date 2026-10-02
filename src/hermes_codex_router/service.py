@@ -2823,6 +2823,9 @@ class ProjectHubService:
                 chat_id=message.chat_id,
                 message_id=message.message_id,
                 target_agent_id=target_agent_id,
+                prepare_notice=(
+                    self.config.hub_bot is not None and self.config.outbox_runtime == "external"
+                ),
             )
             discarded_materials = self._discard_pending_materials(topic, keep_session=None)
             discarded_materials += self._discard_terminal_materials(topic)
@@ -2837,7 +2840,7 @@ class ProjectHubService:
             durable = (
                 self.config.hub_bot is not None
                 and self.config.outbox_runtime == "external"
-                and self.state.enqueue_emergency_stop_notice(request_id, html.escape(detail))
+                and bool(self.state.task_notices.notices_for_stop(request_id))
             )
             if not durable:
                 self._send_text(message, detail)

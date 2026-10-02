@@ -21,6 +21,7 @@ from hermes_codex_router.hub_config import (
     TerminalSettings,
 )
 from hermes_codex_router.models import Project, ProjectRegistry
+from hermes_codex_router.root_blockers import persistent_root_blocker
 from hermes_codex_router.service import ProjectHubService, QueueAcceptanceError
 from hermes_codex_router.state import HubState
 from hermes_codex_router.worktrees import create_worktree
@@ -452,9 +453,22 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         topic = service.state.find_topic(-1001234567890, 77)
         assert topic is not None
         job = service.state.provider_jobs_for_topic(topic.topic_id)[0]
-        notice = service.state.get_telegram_outbox_for_job(job.job_id)
-        self.assertEqual((job.status, notice.sender_agent_id), ("cancelled", "hub"))
-        self.assertIn("отменено задач в очереди: 1", notice.telegram_html)
+        notice = service.state._connection.execute(
+            """SELECT notice.* FROM task_lifecycle_notices notice
+            JOIN provider_stop_requests stop ON stop.request_id=notice.stop_request_id
+            WHERE stop.topic_id=?""",
+            (topic.topic_id,),
+        ).fetchone()
+        self.assertEqual(
+            (job.status, notice["kind"], notice["status"]),
+            ("cancelled", "stop_requested", "pending"),
+        )
+        self.assertIn("Отменено в очереди: 1", notice["telegram_html"])
+        self.assertIsNone(
+            service.state._connection.execute(
+                "SELECT outbox_id FROM telegram_outbox WHERE job_id=?", (job.job_id,)
+            ).fetchone()
+        )
         self.assertEqual(telegram.sent, [])
         service.close()
 
@@ -760,8 +774,9 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         self.assertNotIn("queued_provider_error", codes)
         service.close()
 
-    def test_a_stop_that_wins_the_failure_commit_is_not_a_provider_error(self) -> None:
-        service, telegram = self.service(QueueClient())
+    def test_stop_during_unconfirmed_embedded_failure_retains_root_exclusion(self) -> None:
+        client = QueueClient()
+        service, telegram = self.service(client)
         self.assertTrue(service.handle_update(update(1, "long task")))
         topic = service.state.find_topic(-1001234567890, 77)
         assert topic is not None
@@ -788,15 +803,35 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
             self.assertTrue(service.run_embedded_queue_cycle())
 
         job = service.state.provider_jobs_for_topic(topic.topic_id)[0]
-        self.assertEqual((job.status, job.error_code), ("cancelled", "emergency_stop"))
-        self.assertNotIn("Visible answer", "".join(telegram.sent))
+        self.assertEqual((job.status, job.error_code), ("indeterminate", "OSError"))
+        self.assertIn("Partial response (incomplete)", "".join(telegram.sent))
+        self.assertIsNone(
+            service.state._connection.execute(
+                "SELECT result_id FROM provider_job_results WHERE job_id=?", (job.job_id,)
+            ).fetchone()
+        )
         codes = [
             str(row[0])
             for row in service.state._connection.execute(
                 "SELECT code FROM runtime_events WHERE component = 'codex'"
             )
         ]
-        self.assertNotIn("queued_provider_error", codes)
+        self.assertIn("queued_provider_error", codes)
+        self.assertIsNotNone(
+            persistent_root_blocker(service.state._connection, topic_id=topic.topic_id)
+        )
+        self.assertIsNone(
+            service.state._connection.execute(
+                "SELECT job_id FROM provider_turn_terminal_evidence WHERE job_id=?", (job.job_id,)
+            ).fetchone()
+        )
+        invocations = len(client.turn_threads)
+        service.run_embedded_queue_cycle()
+        self.assertEqual(len(client.turn_threads), invocations)
+        self.assertEqual(service.state.get_provider_job(job.job_id).status, "indeterminate")
+        self.assertIsNotNone(
+            persistent_root_blocker(service.state._connection, topic_id=topic.topic_id)
+        )
         service.close()
 
     def test_failed_enqueue_is_replayed_without_a_preclaim(self) -> None:

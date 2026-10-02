@@ -33,7 +33,8 @@ class TurnContinuationState:
             self.connection.execute(
                 """SELECT COUNT(*) FROM provider_turn_terminal_evidence evidence
                    JOIN provider_jobs jobs ON jobs.job_id = evidence.job_id
-                   WHERE jobs.session_id = ? AND jobs.status = 'indeterminate'""",
+                   WHERE jobs.session_id = ? AND jobs.status = 'indeterminate'
+                     AND evidence.terminal_status IN ('failed','interrupted')""",
                 (session_id,),
             ).fetchone()[0]
         )
@@ -61,6 +62,7 @@ class TurnContinuationState:
                WHERE outbox.status = 'delivered' AND parts.telegram_message_id = ?
                  AND outbox.chat_id = ? AND topics.thread_id = ?
                  AND outbox.sender_agent_id = 'codex' AND jobs.status = 'indeterminate'
+                 AND evidence.terminal_status IN ('failed','interrupted')
                LIMIT 1""",
             (notice_message_id, chat_id, thread_id),
         ).fetchone()

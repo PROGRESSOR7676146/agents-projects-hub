@@ -508,6 +508,7 @@ class ExecutionJournalTests(unittest.TestCase):
             )
 
     def test_rollout_rejects_old_rollback_and_rehearses_current_schema_artifacts(self) -> None:
+        from hermes_codex_router import migrations as migrations_module
         from hermes_codex_router.deployment_manifest import DeploymentManifestError
         from hermes_codex_router.migrations import LATEST_SCHEMA_VERSION
         from hermes_codex_router.release_dry_run import run_release_dry_run
@@ -516,7 +517,7 @@ class ExecutionJournalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             artifacts = []
-            package = Path(__file__).resolve().parents[1] / "src/hermes_codex_router"
+            package = Path(migrations_module.__file__).resolve().parent
             for version, sha in (("0.7.0", "a" * 40), ("0.6.0", "b" * 40)):
                 wheel = _wheel(
                     base / f"agents_projects_hub-{version}-py3-none-any.whl",
@@ -525,7 +526,13 @@ class ExecutionJournalTests(unittest.TestCase):
                     schema_max=LATEST_SCHEMA_VERSION,
                 )
                 with zipfile.ZipFile(wheel, "a") as archive:
-                    for name in ("__init__.py", "migrations.py", "models.py", "registry.py"):
+                    for name in (
+                        "__init__.py",
+                        "migrations.py",
+                        "models.py",
+                        "registry.py",
+                        "schema_task_lifecycle.py",
+                    ):
                         archive.writestr(
                             f"hermes_codex_router/{name}", (package / name).read_text()
                         )

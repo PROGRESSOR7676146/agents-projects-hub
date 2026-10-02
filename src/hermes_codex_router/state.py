@@ -41,6 +41,8 @@ from .state_sessions import (
     TelegramContractProvenance,
     WriterTransferSnapshot,
 )
+from .state_stop import StopState
+from .task_lifecycle import TaskLifecycleState
 
 MAX_PROVIDER_RESPONSE_LENGTH = 200_000
 RECOVERED_RESULT_METADATA_JSON = '{"hub_recovered":true}'
@@ -153,6 +155,16 @@ class HubState:
             write_transaction=self._connection_transaction,
             state_error=StateError,
             job_has_materials=self._incoming_material_state.job_has_materials,
+        )
+        self.task_notices = TaskLifecycleState(
+            connection, transaction=self._immediate_transaction, state_error=StateError
+        )
+        self._stop_state = StopState(
+            connection,
+            transaction=self._immediate_transaction,
+            jobs=self._provider_job_state,
+            notices=self.task_notices,
+            state_error=StateError,
         )
         self._sessions_state = SessionsStateFacade(
             connection,
@@ -1354,105 +1366,18 @@ class HubState:
         chat_id: int,
         message_id: int,
         target_agent_id: str,
+        prepare_notice: bool = False,
     ) -> tuple[str, int, bool]:
-        """Stop the topic: cancel unstarted jobs; target the running turn's provider."""
-        target = _bounded(target_agent_id, name="agent id", maximum=64)
-        with self._immediate_transaction():
-            timestamp = _now()  # under the write lock: covers exactly the work committed before
-            duplicate = self._connection.execute(
-                """SELECT request_id, cancelled_queued_count, status
-                   FROM provider_stop_requests WHERE chat_id = ? AND message_id = ?""",
-                (chat_id, message_id),
-            ).fetchone()
-            if duplicate is not None:
-                return (
-                    str(duplicate["request_id"]),
-                    int(duplicate["cancelled_queued_count"]),
-                    str(duplicate["status"]) == "pending",
-                )
-            self._connection.execute(
-                """INSERT OR IGNORE INTO observed_messages
-                   (chat_id, message_id, observer_agent_id, observed_at)
-                   VALUES (?, ?, 'hub', ?)""",
-                (chat_id, message_id, timestamp),
-            )
-            cancelled = self._provider_job_state.cancel_unstarted_for_stop(topic_id, timestamp)
-            active = self._connection.execute(
-                """SELECT agent_id FROM provider_jobs WHERE topic_id = ?
-                     AND status IN ('leased', 'executing') ORDER BY created_at LIMIT 1""",
-                (topic_id,),
-            ).fetchone()
-            pending = active is not None
-            target = str(active["agent_id"]) if pending else target
-            request_id = str(uuid.uuid4())
-            self._connection.execute(
-                """INSERT INTO provider_stop_requests (
-                       request_id, topic_id, chat_id, message_id, target_agent_id,
-                       status, cancelled_queued_count, created_at, completed_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    request_id,
-                    topic_id,
-                    chat_id,
-                    message_id,
-                    target,
-                    "pending" if pending else "completed",
-                    cancelled,
-                    timestamp,
-                    None if pending else timestamp,
-                ),
-            )
-            # Work this stop cancelled may have been all that an earlier stop
-            # still waited for.
-            self._provider_job_state.complete_finished_stops(topic_id, timestamp)
-            return request_id, cancelled, pending
+        return self._stop_state.request(
+            topic_id=topic_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            target_agent_id=target_agent_id,
+            prepare_notice=prepare_notice,
+        )
 
     def enqueue_emergency_stop_notice(self, request_id: str, telegram_html: str) -> bool:
-        """Durably queue a Hub-owned stop acknowledgement when work was affected."""
-        identifier = _bounded(request_id, name="stop request id", maximum=128)
-        body = _bounded(
-            telegram_html,
-            name="Telegram outbox text",
-            maximum=MAX_PROVIDER_RESPONSE_LENGTH,
-        )
-        timestamp = _now()
-        with self._immediate_transaction():
-            request = self._connection.execute(
-                "SELECT chat_id FROM provider_stop_requests WHERE request_id = ?",
-                (identifier,),
-            ).fetchone()
-            if request is None:
-                raise StateError("emergency stop request does not exist")
-            candidate = self._provider_job_state.stop_notice_job(identifier)
-            if candidate is None:
-                return False
-            existing = self._connection.execute(
-                "SELECT sender_agent_id FROM telegram_outbox WHERE job_id = ?",
-                (candidate["job_id"],),
-            ).fetchone()
-            if existing is not None:
-                if str(existing["sender_agent_id"]) != "hub":
-                    raise StateError("stopped provider job already has a non-Hub outbox row")
-                return True
-            outbox_id = str(uuid.uuid4())
-            self._connection.execute(
-                """INSERT INTO telegram_outbox (
-                     outbox_id, job_id, sender_agent_id, chat_id, thread_id,
-                     telegram_html, status, available_at, created_at, updated_at
-                   ) VALUES (?, ?, 'hub', ?, ?, ?, 'pending', ?, ?, ?)""",
-                (
-                    outbox_id,
-                    candidate["job_id"],
-                    request["chat_id"],
-                    candidate["thread_id"],
-                    body,
-                    timestamp,
-                    timestamp,
-                    timestamp,
-                ),
-            )
-            self._insert_telegram_outbox_parts(outbox_id, body)
-        return True
+        return self._stop_state.enqueue_notice(request_id, telegram_html)
 
     def pending_emergency_stop_for_job(self, job_id: str) -> str | None:
         """The pending stop that covers this job; later work is never covered."""
@@ -1659,7 +1584,9 @@ class HubState:
         detail = error_detail.strip()[:1000] if error_detail else None
         timestamp = _timestamp(now)
         with self._immediate_transaction():
-            if self._provider_job_state.honor_stop(job_id, lease_token, expected_status):
+            if status == "failed" and self._provider_job_state.honor_stop(
+                job_id, lease_token, expected_status
+            ):
                 return self.get_provider_job(job_id)
             row = self._connection.execute(
                 """SELECT jobs.*, topics.thread_id FROM provider_jobs jobs
@@ -1768,6 +1695,7 @@ class HubState:
             )
             if cursor.rowcount != 1:
                 raise StateError("provider job lease changed during failure commit")
+            self._provider_job_state.complete_finished_stops(int(row["topic_id"]), timestamp)
             if status == "indeterminate" and terminal_turn_status is None and sender == "codex":
                 accepted_turn = self._connection.execute(
                     "SELECT provider_turn_id FROM provider_execution_checkpoints WHERE job_id = ?",

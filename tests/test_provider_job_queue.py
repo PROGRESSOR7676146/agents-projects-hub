@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import TypedDict
 from unittest.mock import patch
 
-from hermes_codex_router import state as state_module
+from hermes_codex_router import migrations as migrations_module
+from hermes_codex_router import state_stop as state_stop_module
+from hermes_codex_router.root_blockers import persistent_root_blocker
 from hermes_codex_router.state import HubState, StateError
+from hermes_codex_router.task_lifecycle import TaskLifecycleNotice
 from tests.stop_fixtures import pending_stop
 
 
@@ -304,15 +307,44 @@ class ProviderJobQueueTests(unittest.TestCase):
         self.assertTrue(
             self.state.enqueue_emergency_stop_notice(request_id, "Останавливаю активную работу.")
         )
-        notice = self.state.get_telegram_outbox_for_job(running.job_id)
-        self.assertEqual(notice.sender_agent_id, "hub")
+        self.assert_stop_notice(request_id, 645)
+        for job in (running, queued):
+            with self.assertRaises(StateError):
+                self.state.get_telegram_outbox_for_job(job.job_id)
 
-    def stop(self, message_id: int) -> tuple[str, int, bool]:
+    def stop(self, message_id: int, *, prepare_notice: bool = False) -> tuple[str, int, bool]:
         return self.state.request_emergency_stop(
             topic_id=self.topic.topic_id,
             chat_id=self.topic.chat_id,
             message_id=message_id,
             target_agent_id="codex",
+            prepare_notice=prepare_notice,
+        )
+
+    def assert_stop_notice(self, request_id: str, message_id: int) -> TaskLifecycleNotice:
+        notices = self.state.task_notices.notices_for_stop(request_id)
+        self.assertEqual(len(notices), 1)
+        notice = notices[0]
+        self.assertEqual(notice.stop_request_id, request_id)
+        self.assertIsNone(notice.job_id)
+        self.assertEqual(
+            (notice.chat_id, notice.thread_id, notice.reply_to_message_id),
+            (self.topic.chat_id, self.topic.thread_id, message_id),
+        )
+        return notice
+
+    def deliver_stop_notice(self, request_id: str, message_id: int) -> TaskLifecycleNotice:
+        notice = self.state.task_notices.lease_notice("sender", now=datetime.now(timezone.utc))
+        assert notice is not None and notice.lease_token is not None
+        self.assertEqual(notice.stop_request_id, request_id)
+        self.state.task_notices.begin_send(
+            notice.notice_id, notice.lease_token, now=datetime.now(timezone.utc)
+        )
+        return self.state.task_notices.complete_send(
+            notice.notice_id,
+            notice.lease_token,
+            telegram_message_id=message_id,
+            now=datetime.now(timezone.utc),
         )
 
     def test_emergency_stop_leaves_held_work_for_the_owner_decision(self) -> None:
@@ -332,24 +364,22 @@ class ProviderJobQueueTests(unittest.TestCase):
                     (job.job_id, cause.job_id),
                 )
 
-        _, cancelled, _ = self.stop(654)
+        request_id, cancelled, _ = self.stop(654, prepare_notice=True)
 
         self.assertEqual(cancelled, 2)
         self.assertEqual(self.state.get_provider_job(held_queued.job_id).status, "queued")
         self.assertEqual(self.state.get_provider_job(held_retry.job_id).status, "retry_wait")
         for job in (cause, free):
             self.assertEqual(self.state.get_provider_job(job.job_id).status, "cancelled")
+        notice = self.assert_stop_notice(request_id, 654)
+        self.assertIn("Ожидают решения владельца: 2", notice.telegram_html)
 
     def test_duplicate_stop_never_attaches_its_notice_to_later_work(self) -> None:
         satellite, _ = self.satellite_job(655)
         request_id, cancelled, pending = self.stop(656)
         self.assertEqual((cancelled, pending), (1, False))
         self.assertTrue(self.state.enqueue_emergency_stop_notice(request_id, "Stopped."))
-        notice = self.state.lease_telegram_outbox("hub", "sender")
-        assert notice is not None and notice.lease_token is not None
-        self.state.mark_telegram_outbox_delivered(
-            notice.outbox_id, notice.lease_token, telegram_message_id=657
-        )
+        notice = self.deliver_stop_notice(request_id, 657)
         later, _ = self.enqueue(658)
         leased = self.state.lease_provider_job("codex", "worker")
         assert leased is not None and leased.lease_token is not None
@@ -359,11 +389,172 @@ class ProviderJobQueueTests(unittest.TestCase):
         self.assertEqual(duplicate_id, request_id)
         self.assertTrue(self.state.enqueue_emergency_stop_notice(duplicate_id, "Stopped."))
 
-        with self.assertRaises(StateError):
-            self.state.get_telegram_outbox_for_job(later.job_id)
+        retained = self.assert_stop_notice(request_id, 656)
+        self.assertEqual((retained.notice_id, retained.status), (notice.notice_id, "delivered"))
+        for job in (later, satellite):
+            with self.assertRaises(StateError):
+                self.state.get_telegram_outbox_for_job(job.job_id)
+        self.assertEqual(self.state.get_provider_job(later.job_id).status, "executing")
+
+    def test_duplicate_stop_prepares_missing_notice_without_cancelling_later_work(self) -> None:
+        earlier, _ = self.enqueue(760)
+        request_id, cancelled, pending = self.stop(761)
+        self.assertEqual((cancelled, pending), (1, False))
+        self.assertEqual(self.state.task_notices.notices_for_stop(request_id), ())
+        later, _ = self.enqueue(762)
+
+        duplicate_id, duplicate_count, duplicate_pending = self.stop(761, prepare_notice=True)
+
+        self.assertEqual((duplicate_id, duplicate_count, duplicate_pending), (request_id, 1, False))
+        notice = self.assert_stop_notice(request_id, 761)
+        self.assertEqual(self.state.get_provider_job(earlier.job_id).status, "cancelled")
+        self.assertEqual(self.state.get_provider_job(later.job_id).status, "queued")
+        self.stop(761, prepare_notice=True)
+        self.assertEqual(self.assert_stop_notice(request_id, 761).notice_id, notice.notice_id)
+
+    def test_stop_notice_preparation_failure_rolls_back_receipt_and_queue_cancellation(
+        self,
+    ) -> None:
+        job, _ = self.enqueue(763)
+        with (
+            patch.object(
+                self.state.task_notices,
+                "prepare_notice_in_transaction",
+                side_effect=RuntimeError("fictional notice preparation failure"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "notice preparation"),
+        ):
+            self.stop(764, prepare_notice=True)
+
+        self.assertEqual(self.state.get_provider_job(job.job_id).status, "queued")
+        self.assertFalse(self.state.message_already_observed(self.topic.chat_id, 764))
         self.assertEqual(
-            self.state.get_telegram_outbox_for_job(satellite.job_id).sender_agent_id, "hub"
+            self.state._connection.execute(
+                "SELECT COUNT(*) FROM provider_stop_requests"
+            ).fetchone()[0],
+            0,
         )
+        self.assertEqual(
+            self.state._connection.execute(
+                "SELECT COUNT(*) FROM task_lifecycle_notices"
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_migrated_shared_notice_alias_prevents_new_notice_on_duplicate_ingress(self) -> None:
+        for delivery_status in ("pending", "delivered", "sending"):
+            with self.subTest(delivery_status=delivery_status):
+                path = self.path.with_name(f"legacy-{delivery_status}.db")
+                with patch.object(migrations_module, "LATEST_SCHEMA_VERSION", 35):
+                    legacy = HubState.open(path)
+                    try:
+                        topic = legacy.observe_topic(
+                            project_id="example-project",
+                            chat_id=self.topic.chat_id,
+                            thread_id=78,
+                            title="Fictional legacy topic",
+                        )
+                        session = legacy.activate_agent(
+                            topic.topic_id, "codex", "example-model", "high"
+                        )
+                        job, _ = legacy.enqueue_provider_job(
+                            idempotency_key="fictional:legacy-stop",
+                            chat_id=topic.chat_id,
+                            message_id=770,
+                            topic_id=topic.topic_id,
+                            agent_id="codex",
+                            session_id=session.session_id,
+                            session_generation=session.generation,
+                            model=session.model,
+                            effort=session.effort,
+                            payload_text="Fictional work",
+                        )
+                        leased = legacy.lease_provider_job("codex", "fictional-worker")
+                        assert leased is not None and leased.lease_token is not None
+                        legacy.mark_provider_job_executing(job.job_id, leased.lease_token)
+                        original, _, _ = legacy.request_emergency_stop(
+                            topic_id=topic.topic_id,
+                            chat_id=topic.chat_id,
+                            message_id=771,
+                            target_agent_id="codex",
+                        )
+                        timestamp = datetime.now(timezone.utc).isoformat()
+                        receipt = 774 if delivery_status == "delivered" else None
+                        attempt_count = 0 if delivery_status == "pending" else 1
+                        lease_owner = "fictional-sender" if delivery_status == "sending" else None
+                        lease_token = "fictional-token" if delivery_status == "sending" else None
+                        lease_expires = timestamp if delivery_status == "sending" else None
+                        with legacy._connection:
+                            legacy._connection.execute(
+                                """INSERT INTO telegram_outbox
+                                   (outbox_id,job_id,sender_agent_id,chat_id,thread_id,
+                                    telegram_html,status,attempt_count,available_at,
+                                    telegram_message_id,created_at,updated_at,
+                                    lease_owner,lease_token,lease_expires_at)
+                                   VALUES ('fictional-outbox',?,'hub',?,?,'Legacy stop.',?,?,?,?,?,?,?,?,?)""",
+                                (
+                                    job.job_id,
+                                    topic.chat_id,
+                                    topic.thread_id,
+                                    delivery_status,
+                                    attempt_count,
+                                    timestamp,
+                                    receipt,
+                                    timestamp,
+                                    timestamp,
+                                    lease_owner,
+                                    lease_token,
+                                    lease_expires,
+                                ),
+                            )
+                            legacy._insert_telegram_outbox_parts("fictional-outbox", "Legacy stop.")
+                            if receipt is not None:
+                                legacy._connection.execute(
+                                    "UPDATE telegram_outbox_parts SET telegram_message_id=? WHERE outbox_id=?",
+                                    (receipt, "fictional-outbox"),
+                                )
+                        alias, _, _ = legacy.request_emergency_stop(
+                            topic_id=topic.topic_id,
+                            chat_id=topic.chat_id,
+                            message_id=772,
+                            target_agent_id="codex",
+                        )
+                    finally:
+                        legacy.close()
+
+                migrated = HubState.open(path)
+                try:
+                    canonical_notices = migrated.task_notices.notices_for_stop(original)
+                    alias_notices = migrated.task_notices.notices_for_stop(alias)
+                    self.assertEqual(len(canonical_notices), 1)
+                    self.assertEqual(alias_notices, canonical_notices)
+                    retained = alias_notices[0]
+                    expected_status = "unknown" if delivery_status == "sending" else delivery_status
+                    self.assertEqual(retained.status, expected_status)
+                    self.assertEqual(retained.telegram_message_id, receipt)
+                    duplicate, _, _ = migrated.request_emergency_stop(
+                        topic_id=topic.topic_id,
+                        chat_id=topic.chat_id,
+                        message_id=772,
+                        target_agent_id="codex",
+                        prepare_notice=True,
+                    )
+                    self.assertEqual(duplicate, alias)
+                    self.assertTrue(
+                        migrated.enqueue_emergency_stop_notice(alias, "Changed duplicate text.")
+                    )
+                    self.assertEqual(migrated.task_notices.notices_for_stop(alias), alias_notices)
+                    self.assertEqual(
+                        migrated._connection.execute(
+                            "SELECT COUNT(*) FROM task_lifecycle_notices"
+                        ).fetchone()[0],
+                        1,
+                    )
+                    self.assertEqual(migrated.get_provider_job(job.job_id).status, "executing")
+                    with self.assertRaises(StateError):
+                        migrated.get_telegram_outbox_for_job(job.job_id)
+                finally:
+                    migrated.close()
 
     def test_stop_recorded_after_lease_cancels_the_job_before_it_starts(self) -> None:
         job, _ = self.satellite_job(659)
@@ -492,17 +683,17 @@ class ProviderJobQueueTests(unittest.TestCase):
         writer = threading.Thread(target=start_job_elsewhere)
         stop_thread = threading.get_ident()
         committed_first: list[bool] = []
-        real_now = state_module._now
 
-        def clock_read_during_stop() -> str:
+        def clock_read_during_stop(_timezone: object = None) -> datetime:
             # Another writer tries to start work right after the stop's clock read.
-            value = real_now()
+            value = datetime.now(timezone.utc)
             if threading.get_ident() == stop_thread and not committed_first:
                 writer.start()
                 committed_first.append(done.wait(0.5))
             return value
 
-        with patch.object(state_module, "_now", side_effect=clock_read_during_stop):
+        with patch.object(state_stop_module, "datetime", wraps=datetime) as clock:
+            clock.now.side_effect = clock_read_during_stop
             request_id, _, pending = self.stop(672)
         writer.join(10)
 
@@ -700,17 +891,16 @@ class ProviderJobQueueTests(unittest.TestCase):
         self.assertTrue(
             self.state.enqueue_emergency_stop_notice(request_id, "Останавливаю активную работу.")
         )
-        notice = self.state.get_telegram_outbox_for_job(active.job_id)
-        self.assertEqual((notice.sender_agent_id, notice.status), ("hub", "pending"))
+        notice = self.assert_stop_notice(request_id, 614)
+        self.assertEqual(notice.status, "pending")
+        with self.assertRaises(StateError):
+            self.state.get_telegram_outbox_for_job(active.job_id)
 
         self.state.cancel_active_provider_job(
             active.job_id, leased.lease_token, complete_stops=True
         )
-        sending = self.state.lease_telegram_outbox("hub", "sender")
-        assert sending is not None and sending.lease_token is not None
-        self.state.mark_telegram_outbox_delivered(
-            sending.outbox_id, sending.lease_token, telegram_message_id=615
-        )
+        delivered = self.deliver_stop_notice(request_id, 615)
+        self.assertEqual((delivered.notice_id, delivered.status), (notice.notice_id, "delivered"))
         self.assertEqual(self.state.get_provider_job(active.job_id).status, "cancelled")
 
     def executing(self, message_id: int) -> tuple[str, str]:
@@ -723,7 +913,7 @@ class ProviderJobQueueTests(unittest.TestCase):
         return job.job_id, leased.lease_token
 
     def stop_with_notice(self, message_id: int) -> str:
-        """A stop of the running turn whose Hub notice takes that job's outbox row."""
+        """A stop of the running turn with a separate durable Hub acknowledgement."""
         request_id, _, pending = self.stop(message_id)
         self.assertTrue(pending)
         self.assertTrue(
@@ -740,7 +930,7 @@ class ProviderJobQueueTests(unittest.TestCase):
 
     def test_result_commit_is_the_last_stop_check(self) -> None:
         # R-021: the stop lands after the worker's final check, while the worker
-        # prepares artifacts, so its notice already holds the job's outbox row.
+        # prepares artifacts, while its independent acknowledgement remains durable.
         job_id, token = self.executing(730)
         request_id = self.stop_with_notice(731)
 
@@ -762,19 +952,20 @@ class ProviderJobQueueTests(unittest.TestCase):
             "SELECT COUNT(*) FROM provider_job_results WHERE job_id = ?", (job_id,)
         ).fetchone()[0]
         self.assertEqual(stored_results, 0)
-        notice = self.state.get_telegram_outbox_for_job(job_id)
-        self.assertEqual((notice.sender_agent_id, notice.status), ("hub", "pending"))
+        self.assertEqual(self.assert_stop_notice(request_id, 731).status, "pending")
+        with self.assertRaises(StateError):
+            self.state.get_telegram_outbox_for_job(job_id)
         self.assertEqual(self.stop_status(request_id), "completed")
 
-    def test_failure_commit_under_a_covering_stop_cancels_instead(self) -> None:
+    def test_definite_failure_commit_under_a_covering_stop_cancels_instead(self) -> None:
         job_id, token = self.executing(732)
         request_id = self.stop_with_notice(733)
 
         record = self.state.terminate_provider_job_with_notice(
             job_id,
             token,
-            status="indeterminate",
-            error_class="ambiguous_execution",
+            status="failed",
+            error_class="provider",
             error_code="late_failure",
             sender_agent_id="codex",
             telegram_html="late failure",
@@ -784,16 +975,45 @@ class ProviderJobQueueTests(unittest.TestCase):
             (record.status, record.error_class, record.error_code),
             ("cancelled", "user_stop", "emergency_stop"),
         )
-        self.assertEqual(self.state.get_telegram_outbox_for_job(job_id).sender_agent_id, "hub")
+        self.assert_stop_notice(request_id, 733)
+        with self.assertRaises(StateError):
+            self.state.get_telegram_outbox_for_job(job_id)
         self.assertEqual(self.stop_status(request_id), "completed")
         holds = self.state._connection.execute(
             "SELECT COUNT(*) FROM provider_job_holds WHERE cause_job_id = ?", (job_id,)
         ).fetchone()[0]
         self.assertEqual(holds, 0)
 
+    def test_uncertain_failure_under_stop_retains_root_exclusion_and_both_notices(self) -> None:
+        job_id, token = self.executing(765)
+        request_id = self.stop_with_notice(766)
+        record = self.state.terminate_provider_job_with_notice(
+            job_id,
+            token,
+            status="indeterminate",
+            error_class="ambiguous_execution",
+            error_code="late_failure",
+            sender_agent_id="codex",
+            telegram_html="Outcome unknown.",
+        )
+
+        self.assertEqual(
+            (record.status, record.error_class, record.error_code),
+            ("indeterminate", "ambiguous_execution", "late_failure"),
+        )
+        self.assertEqual(self.stop_status(request_id), "pending")
+        self.assertEqual(self.assert_stop_notice(request_id, 766).status, "pending")
+        self.assertEqual(self.state.get_telegram_outbox_for_job(job_id).sender_agent_id, "codex")
+        self.assertIsNotNone(
+            persistent_root_blocker(self.state._connection, topic_id=self.topic.topic_id)
+        )
+        with self.assertRaisesRegex(StateError, "persistent local writer or uncertainty"):
+            self.enqueue(1000)
+        self.assertIsNone(self.state.lease_provider_job("codex", "later-worker"))
+
     def test_a_job_its_commit_stopped_needs_no_further_cancellation(self) -> None:
         job_id, token = self.executing(734)
-        self.stop_with_notice(735)
+        request_id = self.stop_with_notice(735)
         self.assertIsNone(
             self.state.commit_provider_result(
                 job_id,
@@ -818,7 +1038,9 @@ class ProviderJobQueueTests(unittest.TestCase):
         )
 
         self.assertEqual(record.status, "cancelled")
-        self.assertEqual(self.state.get_telegram_outbox_for_job(job_id).sender_agent_id, "hub")
+        self.assert_stop_notice(request_id, 735)
+        with self.assertRaises(StateError):
+            self.state.get_telegram_outbox_for_job(job_id)
 
     def test_only_work_a_stop_ended_is_exempt_from_active_cancellation(self) -> None:
         job_id, token = self.executing(736)
@@ -835,7 +1057,7 @@ class ProviderJobQueueTests(unittest.TestCase):
 
     def test_a_stop_just_before_the_commit_lock_keeps_its_durable_notice(self) -> None:
         # A commit takes its own timestamp before the write lock; a stop that
-        # lands in between must still be able to attach its notice to the job.
+        # lands in between must still retain its independent acknowledgement.
         for index, ending in enumerate(("result", "failure")):
             with self.subTest(ending=ending):
                 job_id, token = self.executing(750 + 2 * index)
@@ -871,10 +1093,11 @@ class ProviderJobQueueTests(unittest.TestCase):
                         request_id, "Останавливаю активную работу."
                     )
                 )
-                notice = self.state.get_telegram_outbox_for_job(job_id)
-                self.assertEqual(notice.sender_agent_id, "hub")
+                self.assert_stop_notice(request_id, 751 + 2 * index)
+                with self.assertRaises(StateError):
+                    self.state.get_telegram_outbox_for_job(job_id)
 
-    def test_stale_recovery_completes_a_stop_left_without_work(self) -> None:
+    def test_stale_recovery_keeps_stop_pending_for_unknown_execution(self) -> None:
         # The worker died while its stopped turn was running.
         job_id, _ = self.executing(737)
         request_id, _, pending = self.stop(738)
@@ -885,9 +1108,14 @@ class ProviderJobQueueTests(unittest.TestCase):
         )
 
         self.assertEqual(recovery.indeterminate_job_ids, (job_id,))
-        self.assertEqual(self.stop_status(request_id), "completed")
+        self.assertEqual(self.stop_status(request_id), "pending")
+        self.assertIsNotNone(
+            persistent_root_blocker(self.state._connection, topic_id=self.topic.topic_id)
+        )
 
-    def test_stop_completes_when_its_covered_work_fails_or_becomes_indeterminate(self) -> None:
+    def test_stop_completes_only_after_covered_work_is_definitely_terminal_or_resolved(
+        self,
+    ) -> None:
         for index, ending in enumerate(("failed", "indeterminate")):
             with self.subTest(ending=ending):
                 job_id, token = self.executing(740 + 2 * index)
@@ -902,7 +1130,13 @@ class ProviderJobQueueTests(unittest.TestCase):
                     self.state.mark_provider_job_indeterminate(job_id, token, error_code="example")
 
                 self.assertEqual(self.state.get_provider_job(job_id).status, ending)
-                self.assertEqual(self.stop_status(request_id), "completed")
+                self.assertEqual(
+                    self.stop_status(request_id), "completed" if ending == "failed" else "pending"
+                )
+                if ending == "indeterminate":
+                    self.assertTrue(self.state.resolve_indeterminate_job(job_id, "acknowledged"))
+                    self.assertEqual(self.state.get_provider_job(job_id).status, "indeterminate")
+                    self.assertEqual(self.stop_status(request_id), "completed")
 
     def test_exhausted_retry_of_leased_work_completes_the_stop(self) -> None:
         job, _ = self.enqueue(744)

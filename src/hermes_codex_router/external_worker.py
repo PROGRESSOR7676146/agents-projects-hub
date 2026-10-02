@@ -28,7 +28,6 @@ from .execution_journal import ExecutionJournal
 from .external_runtime import (
     ExternalCliAdapter,
     ExternalRuntimeError,
-    ExternalTurnInterrupted,
     ProviderLimitError,
     ProviderUnavailableError,
 )
@@ -753,7 +752,11 @@ class ExternalQueueWorker:
                                     )
                                 finally:
                                     interrupt_client.close()
-                        finally:
+                        except Exception as exc:
+                            self._record_event(
+                                "warning", "provider_interrupt_unconfirmed", type(exc).__name__
+                            )
+                        else:
                             interrupted_request.append(request_id)
                         return
                     assert self.supervisor is not None
@@ -774,13 +777,6 @@ class ExternalQueueWorker:
         try:
             result = wait_for_codex_provider_turn(client, turn_id)
             journal.record_completion(job.job_id, token, result.text)
-        except Exception:
-            pending_request = self.state.pending_emergency_stop_for_job(job.job_id)
-            if interrupted_request or pending_request is not None:
-                request_id = interrupted_request[0] if interrupted_request else pending_request
-                assert request_id is not None
-                raise ProviderTurnStopped(request_id) from None
-            raise
         finally:
             client.on_visible_item = None
             client.on_completed = None
@@ -917,8 +913,14 @@ class ExternalQueueWorker:
                     request_id = monitor_state.pending_emergency_stop_for_job(job.job_id)
                     if request_id is None:
                         continue
-                    interrupted_request.append(request_id)
-                    adapter.interrupt()
+                    try:
+                        adapter.interrupt()
+                    except Exception as exc:
+                        self._record_event(
+                            "warning", "provider_interrupt_unconfirmed", type(exc).__name__
+                        )
+                    else:
+                        interrupted_request.append(request_id)
                     return
             finally:
                 monitor_state.close()
@@ -944,10 +946,6 @@ class ExternalQueueWorker:
                 interrupt_prepared=interrupt_prepared,
                 staging_dir=staging_dir,
             )
-        except ExternalTurnInterrupted:
-            if interrupted_request:
-                raise ProviderTurnStopped(interrupted_request[0]) from None
-            raise
         finally:
             monitor_stop.set()
             monitor.join(timeout=2)

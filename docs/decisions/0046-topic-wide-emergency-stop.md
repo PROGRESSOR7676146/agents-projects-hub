@@ -1,6 +1,6 @@
 # ADR 0046: Topic-wide emergency stop
 
-Status: accepted
+Status: accepted; uncertainty cancellation superseded by [ADR 0049](0049-task-visibility-and-stop-certainty.md)
 Date: 2026-09-27
 
 ## Context
