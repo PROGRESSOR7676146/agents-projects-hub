@@ -18,10 +18,10 @@ owning modules.
 | Capability | Repository state | Live acceptance | Contract |
 | --- | --- | --- | --- |
 | Multiple Codex worker slots | Implemented | Pending (three projects) | [REQ-QUEUE-002](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md) |
-| Claude Code CPA worker | Text-only scaffold | Pending; approvals and advisor isolation not implemented | [REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0039](../decisions/0039-claude-cpa-worker-scaffold.md) |
+| Claude Code CPA worker | Text-only native identity, bounded streaming and saved-result recovery implemented offline | Pending; approvals and advisor isolation not implemented | [REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md) |
 | Claude/Codex lead and advisor | Accepted plan; not implemented | — | [REQ-COLLAB-001](../product/IDENTITY_AND_INTERACTION.md), [ADR 0040](../decisions/0040-bounded-claude-codex-lead-advisor.md) |
 | Participant evaluation and allocation | Accepted foundation; not implemented | — | [Requirements](../product/EVALUATION_AND_ALLOCATION.md), [ADR 0037](../decisions/0037-evidence-based-task-allocation.md) |
-| Stop certainty and independent notices (schema 36) | Implemented; focused offline evidence, publication review pending | Pending | [REQ-QUEUE-005/013](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md) |
+| Stop certainty and independent notices (schema 36) | Implemented; canonical checks and independent review at `d3be874` | Pending | [REQ-QUEUE-005/013](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md) |
 | Durable local-root blockers (schema 35) | Implemented | Pending | [REQ-WRITER-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0036](../decisions/0036-durable-local-root-blockers.md) |
 | Exact Codex turn recovery (schema 34) | Implemented | Pending | [REQ-QUEUE-004](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0035](../decisions/0035-exact-terminal-turn-reconciliation.md) |
 | Inbound Telegram materials (schema 33) | Implemented | Pending | [REQ-UX-009](../product/IDENTITY_AND_INTERACTION.md), [ADR 0032](../decisions/0032-durable-inbound-telegram-materials.md) |
@@ -46,13 +46,13 @@ Deployment and live three-project acceptance remain pending. See
 [REQ-QUEUE-002](../product/PERSISTENCE_AND_RECOVERY.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
 and [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md).
 
-Claude Code now has a repository-only, text-only external worker scaffold with
-separate three-slot configuration, exact result/session checks and a local CPA
-route preflight. Offline tests cover these boundaries and shared queue admission;
-no Claude service or private configuration was deployed. Human approvals,
+Claude Code has a text-only external worker with native identity preparation,
+bounded visible streaming and saved-result recovery. Offline tests cover the
+invocation, failure and restart boundaries in
+[ADR 0050](../decisions/0050-claude-native-invocation-evidence.md). Human approvals,
 write-capable lead, isolated advisor, native local transfer, session connect and
-live CPA/account acceptance remain pending. See [REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md)
-and [ADR 0039](../decisions/0039-claude-cpa-worker-scaffold.md).
+live CPA/account acceptance remain pending under
+[REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
 
 Participant evaluation and resource-aware task allocation are an accepted
 product foundation; implementation and acceptance remain pending. See

@@ -276,6 +276,19 @@ recreate unsaved provider context or a partially executed turn.
   in the same provider session; duplicate updates or choices MUST create at
   most one job. Existing queued work on that root MUST remain visible and
   paused until an owner decision. No accepted turn may be retried automatically.
+  A Claude worker MUST persist its caller-chosen native session UUID and
+  canonical root before invocation, validate the current generation and writer,
+  and resume only that exact identity. Native message UUIDs MAY deduplicate
+  bounded provisional visible text; neither session nor message identity is
+  native turn-acceptance or terminality evidence. Only a validated complete
+  stream with a matching session and terminal success MAY create a completion
+  checkpoint. Recovery MAY deliver that saved completion without invocation;
+  partial-only, missing or conflicting evidence MUST remain uncertain and
+  retain root exclusion. A local failure after completion persistence MUST
+  preserve recovery of that result, including when its delivery preparation
+  fails again. Verified terminal provider failures and quota rejections MUST
+  remain distinct from unknown outcomes, without invented quota/reset values
+  or automatic replay. A covering stop retains the existing precedence.
 - **REQ-QUEUE-005 (Implemented for embedded compatibility and the external sender):** Provider result persistence and Telegram delivery
   MUST use a durable outbox. Telegram delivery retry MUST NOT create another
   provider turn, and visible-context acknowledgement MUST occur only after a

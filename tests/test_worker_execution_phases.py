@@ -24,6 +24,7 @@ from hermes_codex_router.provider_limits import ProviderLimit
 from hermes_codex_router.registry import ExecutionRootError
 from hermes_codex_router.state import ProviderJobRecord, TopicRecord
 from hermes_codex_router.worker_execution import (
+    ProviderSessionPreparationError,
     ProviderTurnStopped,
     WorkerExecutionTarget,
     classify_worker_failure,
@@ -89,6 +90,18 @@ class WorkerExecutionPhaseTests(unittest.TestCase):
                 effort="high",
             ),
         )
+
+    def test_claude_invocation_without_durable_binding_is_refused(self) -> None:
+        adapter = SimpleNamespace(runtime="claude", run_turn=Mock())
+        with self.assertRaises(ProviderSessionPreparationError):
+            invoke_external_provider_turn(
+                cast(Any, adapter),
+                self.job(),
+                self.project,
+                prompt="Fictional task",
+                staging_dir=self.project.root / ".hub/artifacts",
+            )
+        adapter.run_turn.assert_not_called()
 
     def test_lease_validation_returns_capability_and_uses_caller_error(self) -> None:
         self.assertEqual(

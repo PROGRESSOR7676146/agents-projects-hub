@@ -1,12 +1,14 @@
 # Next session: Claude parity and visible task states
 
-Status: implementation in progress; stop-certainty and durable-notice slice under validation.
+Status: implementation in progress; stop-certainty slice validated; native Claude recovery under validation.
 Date: 2026-10-02.
 Decision owner: repository owner. Integration owner: lead development agent.
 Repository baseline inspected: `8070414744899602111920bc7f45233e29e8e4a4`.
 This is source inspection evidence, not a tested candidate or deployment claim.
-Next trigger: complete exact-revision validation and independent review of the
-stop/notice slice, then continue queue/progress visibility and native Claude work.
+Next trigger: complete publication validation and independent review of native
+Claude invocation/recovery, then continue queue/progress visibility and human
+approval hosting. The stop/notice slice passed canonical checks and independent
+review at `d3be8747dd402823e8807babfffff7245daa6364`; live acceptance remains open.
 The requested GPT-6.1 Sol helpers use reasoning effort `high`.
 
 ## Objective and authority
@@ -194,16 +196,18 @@ Update private handoff whenever plan, pending decisions or deployment state chan
 
 ## Current evidence and source pointers
 
-The first implementation slice adds schema-36 control notices and retains root
-exclusion after an uncertain stop. Focused fake-provider, migration, sender and
-queue tests cover this slice; full publication validation and independent review
-remain pending. No deployment or live acceptance has occurred. Queue reasons,
-progress/approval notices, active retry and Claude native parity remain open.
-See [ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md).
+The schema-36 stop/control-delivery slice passed canonical checks and independent
+review at the revision above; see
+[ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md). The next native
+Claude slice adds identity preparation, bounded streaming and saved-result
+recovery with focused offline evidence; its publication gates remain pending.
+See [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md). Queue reasons,
+progress/approval notices, active retry and full Claude parity remain open.
+No deployment or live acceptance follows from these repository checks.
 
 First-pass pointers to recheck, not final design:
 
-- `external_runtime.py`: text-only Claude argv/environment/result parser;
+- `external_runtime.py` / `claude_stream.py`: bounded text-only native stream;
   `catalog_refresh.py`: Claude catalog is just the configured default;
   `local_transfer.py`: no Claude resume branch.
 - `codex_appserver.py`: shared approvals wait for the companion; fallback declines.

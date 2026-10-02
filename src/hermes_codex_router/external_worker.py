@@ -5,8 +5,16 @@ import subprocess
 import threading
 import uuid
 from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 
+from .claude_recovery import recover_claude_completion, recover_claude_job
+from .claude_stream import (
+    ClaudeStreamError,
+    ClaudeTerminalFailure,
+    ClaudeVisibleAssistant,
+    VisibleAssistantCallback,
+)
 from .codex_appserver import (
     CodexAppServerClient,
     RateLimits,
@@ -41,7 +49,7 @@ from .registry import ExecutionRootError, ProjectRegistry, load_registry
 from .session_adoption_policy import validate_adoption_mode
 from .session_adoption_state import CodexSessionOrigins
 from .session_connect import ConnectCandidate, SessionConnectStore
-from .state import HubState, ProviderJobRecord
+from .state import HubState, ProviderJobRecord, StateError
 from .supervisor import CodexAppServerSupervisor
 from .telegram_interaction import (
     telegram_contract_version,
@@ -49,7 +57,9 @@ from .telegram_interaction import (
 )
 from .turn_observation import TurnObservation
 from .worker_execution import (
+    ProviderSessionPreparationError,
     ProviderTurnStopped,
+    WorkerFailureClassification,
     classify_worker_failure,
     codex_provider_prompt,
     codex_turn_text,
@@ -289,6 +299,10 @@ class ExternalQueueWorker:
                 return True
             if TurnObservation(self.state, self.config).run_once(self.supervisor.client):
                 return True
+        if self.agent.runtime == "claude" and recover_claude_job(
+            self.state, self.config, self.registry, self.agent.agent_id, self.worker_id
+        ):
+            return True
         self.state.recover_stale_provider_jobs(agent_id=self.agent.agent_id)
         if self._stop.is_set():
             return False
@@ -468,7 +482,26 @@ class ExternalQueueWorker:
         """
         failure = classify_worker_failure(exc, runtime=self.agent.runtime)
         try:
-            if failure.notice == "execution_root":
+            if self.agent.runtime == "claude" and recover_claude_completion(
+                self.state,
+                self.config,
+                self.registry,
+                self.agent.agent_id,
+                executing.job_id,
+                token,
+            ):
+                outcome = self.state.get_provider_job(executing.job_id)
+                self._last_error_code = (
+                    "claude_result_recovery_pending" if outcome.status == "executing" else None
+                )
+                self._provider_state = (
+                    "ready" if outcome.status in {"result_ready", "cancelled"} else "unavailable"
+                )
+                return
+            if failure.notice in {"provider_session_preparation", "claude_terminal"}:
+                assert isinstance(exc, (ProviderSessionPreparationError, ClaudeTerminalFailure))
+                self._record_known_claude_failure(executing, token, project_root, exc, failure)
+            elif failure.notice == "execution_root":
                 assert isinstance(exc, ExecutionRootError)
                 self._last_error_code = failure.error_code
                 self._provider_state = "unavailable"
@@ -582,7 +615,12 @@ class ExternalQueueWorker:
                                 self.state, executing.job_id, exc, turn_status=turn_status
                             )
                             if failure.notice == "checkpoint"
-                            else uncertain_provider_notice(self.agent.display_name)
+                            else self._claude_partial_notice(
+                                executing,
+                                token,
+                                project_root,
+                                uncertain_provider_notice(self.agent.display_name),
+                            )
                         ),
                     )
                     if record.status == "cancelled":  # a covering stop won the commit
@@ -599,6 +637,60 @@ class ExternalQueueWorker:
             survived("external_worker.failure_notice_record", survived_error)
         if self.agent.runtime == "codex":
             self._discard_client()
+
+    def _record_known_claude_failure(
+        self,
+        job: ProviderJobRecord,
+        token: str,
+        project_root: Path,
+        error: ProviderSessionPreparationError | ClaudeTerminalFailure,
+        failure: WorkerFailureClassification,
+    ) -> None:
+        """Publish a verified failure once; a covering stop owns cancellation."""
+        record = self.state.terminate_provider_job_with_notice(
+            job.job_id,
+            token,
+            status=failure.status,
+            error_class=failure.error_class,
+            error_code=failure.error_code,
+            sender_agent_id=self.agent.agent_id,
+            telegram_html=(
+                self._claude_partial_notice(job, token, project_root, error.public_message)
+                if isinstance(error, ClaudeTerminalFailure)
+                else error.public_message
+            ),
+        )
+        self._quota_remaining_percent = None
+        self._quota_reset_at = None
+        if record.status == "cancelled":
+            self._last_error_code = None
+            self._provider_state = "ready"
+            self._record_event("info", "provider_turn_stopped", self.agent.agent_id)
+            return
+        self._last_error_code = failure.error_code
+        self._provider_state = "limited" if failure.error_class == "quota" else "unavailable"
+        self._record_event("warning", "claude_provider_failure", failure.error_code)
+
+    def _claude_partial_notice(
+        self, job: ProviderJobRecord, token: str, project_root: Path, notice: str
+    ) -> str:
+        """Expose provisional text only while its invocation binding is still valid."""
+        if self.agent.runtime != "claude":
+            return notice
+        try:
+            journal = ExecutionJournal(self.state)
+            checkpoint = journal.read(job.job_id)
+            if checkpoint is None or checkpoint["provider_thread_id"] is None:
+                return notice
+            partial = journal.validated_claude_partial(
+                job.job_id, token, checkpoint["provider_thread_id"], cwd=project_root
+            )
+        except Exception as exc:
+            survived("external_worker.claude_partial_binding", exc)
+            return notice
+        if not partial:
+            return notice
+        return notice + "\n\nPartial response (incomplete):\n" + escape(partial)
 
     def _cleanup_incoming_material_staging(self, project_root: Path, job_id: str) -> None:
         directory = project_root / ".hub" / "incoming" / job_id
@@ -899,6 +991,36 @@ class ExternalQueueWorker:
             runtime=self.agent.runtime,
         )
         staging_dir = prepare_worker_staging_directory(Path(project.root), job.job_id)
+        claude_session_binding = None
+        claude_journal = None
+        on_visible_assistant: VisibleAssistantCallback | None = None
+        if self.agent.runtime == "claude":
+            try:
+                claude_journal = ExecutionJournal(self.state)
+                claude_session_binding = claude_journal.prepare_claude_session(
+                    job.job_id, token, Path(project.root)
+                )
+            except (StateError, OSError) as exc:
+                raise ProviderSessionPreparationError() from exc
+
+            def record_visible_assistant(item: ClaudeVisibleAssistant) -> None:
+                assert claude_journal is not None
+                assert claude_session_binding is not None
+                if item.session_id != claude_session_binding.session_id:
+                    raise ClaudeStreamError("claude visible message has a different session")
+                try:
+                    claude_journal.record_claude_item(
+                        job.job_id,
+                        token,
+                        claude_session_binding.session_id,
+                        item.message_id,
+                        item.text,
+                        cwd=Path(project.root),
+                    )
+                except Exception as exc:
+                    raise ClaudeStreamError("claude visible message could not be saved") from exc
+
+            on_visible_assistant = record_visible_assistant
         prepare_interrupt = getattr(adapter, "prepare_interruptible_turn", None)
         interrupt_prepared = callable(prepare_interrupt)
         if interrupt_prepared:
@@ -945,7 +1067,20 @@ class ExternalQueueWorker:
                 ),
                 interrupt_prepared=interrupt_prepared,
                 staging_dir=staging_dir,
+                claude_session_binding=claude_session_binding,
+                on_visible_assistant=on_visible_assistant,
             )
+            if claude_journal is not None and claude_session_binding is not None:
+                try:
+                    claude_journal.record_claude_completion(
+                        job.job_id,
+                        token,
+                        claude_session_binding.session_id,
+                        result.text,
+                        cwd=Path(project.root),
+                    )
+                except Exception as exc:
+                    raise ClaudeStreamError("claude completion could not be saved") from exc
         finally:
             monitor_stop.set()
             monitor.join(timeout=2)
