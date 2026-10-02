@@ -289,7 +289,9 @@ class ExternalRuntimeTests(unittest.TestCase):
                 status = Path(f"/proc/{pid}/stat")
                 try:
                     process_state = status.read_text().split()[2]
-                except FileNotFoundError:
+                except (FileNotFoundError, ProcessLookupError):
+                    # Linux can reap the descendant after opening /proc/stat
+                    # but before read(), which reports ESRCH rather than ENOENT.
                     break
                 if process_state == "Z":
                     break
