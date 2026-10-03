@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -8,17 +10,375 @@ import time
 import unittest
 import uuid
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import patch
 
+from hermes_codex_router.claude_stream import (
+    ClaudeStreamError,
+    ClaudeTerminalFailure,
+    ClaudeVisibleAssistant,
+)
 from hermes_codex_router.external_runtime import (
     ExternalCliAdapter,
     ExternalTurnInterrupted,
+    ExternalTurnResult,
     ProviderLimitError,
     ProviderUnavailableError,
 )
 
 
 class ExternalRuntimeTests(unittest.TestCase):
+    def _claude_process(
+        self, source: str, *, timeout: float = 1, **kwargs: Any
+    ) -> ExternalTurnResult:
+        """Run a fictional child and verify that every failure reaps its pipes."""
+        spawned: list[subprocess.Popen[str]] = []
+        original_popen = subprocess.Popen
+
+        def spawn(*args: object, **kwargs: object) -> subprocess.Popen[str]:
+            process = original_popen(*args, **kwargs)  # type: ignore[arg-type]
+            spawned.append(process)
+            return process
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(
+                "os.environ",
+                {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+                clear=True,
+            ),
+        ):
+            root = Path(directory)
+            child = root / "provider"
+            child.write_text(f"#!{sys.executable}\n" + source, encoding="utf-8")
+            child.chmod(0o700)
+            adapter = ExternalCliAdapter("claude", executable=str(child))
+            try:
+                with patch("subprocess.Popen", side_effect=spawn):
+                    return adapter.run_turn(cwd=root, prompt="work", timeout=timeout, **kwargs)
+            finally:
+                self.assertEqual(len(spawned), 1)
+                self.assertIsNotNone(spawned[0].poll())
+                self.assertTrue(spawned[0].stdout and spawned[0].stdout.closed)
+                self.assertTrue(spawned[0].stderr and spawned[0].stderr.closed)
+                self.assertIsNone(adapter._active_process)
+
+    def test_claude_stdout_overflow_is_rejected_before_eof(self) -> None:
+        with self.assertRaisesRegex(ClaudeStreamError, "output.*limit"):
+            self._claude_process(
+                "import os, time\nfor _ in range(600): os.write(1, b'x' * 4096)\ntime.sleep(30)\n"
+            )
+
+    def test_claude_stderr_flood_is_rejected_before_eof_without_disclosure(self) -> None:
+        with self.assertRaises(ClaudeStreamError) as raised:
+            self._claude_process(
+                "import os, time\n"
+                "for _ in range(600): os.write(2, b'private diagnosis' * 256)\n"
+                "time.sleep(30)\n"
+            )
+        self.assertNotIn("private diagnosis", str(raised.exception))
+
+    def test_claude_malformed_event_is_rejected_before_eof(self) -> None:
+        with self.assertRaisesRegex(ClaudeStreamError, "malformed"):
+            self._claude_process("import os, time\nos.write(1, b'{broken}\\n')\ntime.sleep(30)\n")
+
+    def test_claude_timeout_reaps_process_and_closes_pipes(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "timed out"):
+            self._claude_process("import time\ntime.sleep(30)\n", timeout=0.05)
+
+    def test_claude_drains_both_pipes_and_preserves_exact_terminal_result(self) -> None:
+        session = str(uuid.uuid4())
+        message = {
+            "type": "assistant",
+            "session_id": session,
+            "uuid": str(uuid.uuid4()),
+            "parent_tool_use_id": None,
+            "message": {
+                "content": [
+                    {"type": "text", "text": "Visible partial é"},
+                    {"type": "thinking", "thinking": "private thought"},
+                    {"type": "tool_use", "input": {"secret": "private input"}},
+                ]
+            },
+        }
+        terminal = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "session_id": session,
+            "result": "Accepted final",
+        }
+        chunk = (json.dumps(message, ensure_ascii=False) + "\n" + json.dumps(terminal)).encode()
+        visible: list[ClaudeVisibleAssistant] = []
+        with patch.object(subprocess.Popen, "communicate", side_effect=AssertionError("unbounded")):
+            result = self._claude_process(
+                "import os\n"
+                "for _ in range(8): os.write(2, b'private diagnostic' * 256)\n"
+                f"os.write(1, {chunk!r})\n",
+                new_session_id=session,
+                on_visible_assistant=visible.append,
+            )
+        self.assertEqual(result.text, "Accepted final")
+        self.assertEqual(result.provider_session_id, session)
+        self.assertEqual([item.text for item in visible], ["Visible partial é"])
+        self.assertNotIn("private", repr(visible))
+
+    def test_claude_callback_failure_kills_child_without_private_diagnostics(self) -> None:
+        session = str(uuid.uuid4())
+        event = (
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "uuid": str(uuid.uuid4()),
+                    "session_id": session,
+                    "parent_tool_use_id": None,
+                    "message": {"content": [{"type": "text", "text": "Visible"}]},
+                }
+            )
+            + "\n"
+        ).encode()
+
+        def fail(_: ClaudeVisibleAssistant) -> None:
+            raise RuntimeError("private persistence diagnosis")
+
+        with self.assertRaisesRegex(ClaudeStreamError, "persistence failed") as raised:
+            self._claude_process(
+                f"import os, time\nos.write(1, {event!r})\ntime.sleep(30)\n",
+                new_session_id=session,
+                on_visible_assistant=fail,
+            )
+        self.assertNotIn("private persistence diagnosis", str(raised.exception))
+
+    def test_claude_callback_cannot_accept_result_after_deadline(self) -> None:
+        session = str(uuid.uuid4())
+        events = [
+            {
+                "type": "assistant",
+                "uuid": str(uuid.uuid4()),
+                "session_id": session,
+                "parent_tool_use_id": None,
+                "message": {"content": [{"type": "text", "text": "Saved partial"}]},
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "session_id": session,
+                "result": "Never accepted",
+            },
+        ]
+        chunk = ("\n".join(json.dumps(event) for event in events) + "\n").encode()
+
+        def delay(_: ClaudeVisibleAssistant) -> None:
+            time.sleep(0.15)
+
+        with self.assertRaisesRegex(RuntimeError, "timed out"):
+            self._claude_process(
+                f"import os\nos.write(1, {chunk!r})\n",
+                timeout=0.1,
+                new_session_id=session,
+                on_visible_assistant=delay,
+            )
+
+    def test_claude_preexisting_interrupt_prevents_process_launch(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(
+                "os.environ",
+                {
+                    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                    "ANTHROPIC_AUTH_TOKEN": "example",
+                },
+                clear=True,
+            ),
+            patch("subprocess.Popen") as spawn,
+        ):
+            adapter = ExternalCliAdapter("claude")
+            adapter.prepare_interruptible_turn()
+            adapter.interrupt()
+            with self.assertRaises(ExternalTurnInterrupted):
+                adapter.run_turn(cwd=Path(directory), prompt="work", interrupt_prepared=True)
+            spawn.assert_not_called()
+
+    def test_claude_drifting_and_duplicate_terminal_fail_closed(self) -> None:
+        session = str(uuid.uuid4())
+        terminal = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "session_id": session,
+            "result": "Never accepted",
+        }
+        for events in (
+            [terminal, terminal],
+            [{"type": "system", "session_id": str(uuid.uuid4())}, terminal],
+            [terminal, {"type": "assistant", "session_id": session}],
+        ):
+            chunk = ("\n".join(json.dumps(event) for event in events) + "\n").encode()
+            with self.subTest(events=events), self.assertRaises(ClaudeStreamError):
+                self._claude_process(
+                    f"import os, time\nos.write(1, {chunk!r})\ntime.sleep(30)\n",
+                    new_session_id=session,
+                )
+
+    def test_claude_interrupt_during_callback_preserves_partial_and_reaps_child(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(
+                "os.environ",
+                {
+                    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                    "ANTHROPIC_AUTH_TOKEN": "example",
+                },
+                clear=True,
+            ),
+        ):
+            root = Path(directory)
+            child = root / "provider"
+            event = (
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "uuid": str(uuid.uuid4()),
+                        "session_id": str(uuid.uuid4()),
+                        "parent_tool_use_id": None,
+                        "message": {"content": [{"type": "text", "text": "Saved partial"}]},
+                    }
+                )
+                + "\n"
+            ).encode()
+            child.write_text(
+                f"#!{sys.executable}\nimport os, signal, time\n"
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                f"os.write(1, {event!r})\ntime.sleep(30)\n",
+                encoding="utf-8",
+            )
+            child.chmod(0o700)
+            adapter = ExternalCliAdapter("claude", executable=str(child))
+            processes: list[subprocess.Popen[str]] = []
+            visible: list[ClaudeVisibleAssistant] = []
+
+            def stop(item: ClaudeVisibleAssistant) -> None:
+                visible.append(item)
+                assert adapter._active_process is not None
+                processes.append(adapter._active_process)
+                self.assertTrue(adapter.interrupt())
+
+            with self.assertRaises(ExternalTurnInterrupted):
+                adapter.run_turn(cwd=root, prompt="work", timeout=2, on_visible_assistant=stop)
+            self.assertEqual([item.text for item in visible], ["Saved partial"])
+            self.assertIsNotNone(processes[0].poll())
+            self.assertIsNone(adapter._active_process)
+            self.assertTrue(processes[0].stdout and processes[0].stdout.closed)
+            self.assertTrue(processes[0].stderr and processes[0].stderr.closed)
+
+    def test_claude_timeout_kills_descendant_retaining_pipe_after_leader_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            child_pid = Path(directory) / "descendant-pid"
+            source = (
+                "import pathlib, subprocess, sys\n"
+                "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+                f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid))\n"
+            )
+            with self.assertRaisesRegex(RuntimeError, "timed out"):
+                self._claude_process(source, timeout=0.2)
+            self.assertTrue(child_pid.exists())
+            pid = int(child_pid.read_text())
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline:
+                status = Path(f"/proc/{pid}/stat")
+                try:
+                    process_state = status.read_text().split()[2]
+                except (FileNotFoundError, ProcessLookupError):
+                    # Linux can reap the descendant after opening /proc/stat
+                    # but before read(), which reports ESRCH rather than ENOENT.
+                    break
+                if process_state == "Z":
+                    break
+                time.sleep(0.01)
+            else:
+                os.kill(pid, 9)
+                self.fail("Claude descendant survived timeout cleanup")
+
+    def test_new_identity_is_rejected_for_every_non_claude_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for runtime in ("gemini", "antigravity", "opencode"):
+                with self.subTest(runtime=runtime), self.assertRaises(ProviderUnavailableError):
+                    ExternalCliAdapter(runtime).build_argv(
+                        cwd=Path(directory), prompt="start", new_session_id=str(uuid.uuid4())
+                    )
+
+    def test_invalid_claude_identity_fails_before_provider_invocation(self) -> None:
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = ExternalCliAdapter("claude", run=fake_run)
+            for invalid in ("", "not a uuid", 7, [], {}):
+                for field in ("resume", "new"):
+                    with (
+                        self.subTest(field=field, invalid=invalid),
+                        self.assertRaises(ProviderUnavailableError),
+                    ):
+                        adapter.run_turn(
+                            cwd=Path(directory),
+                            prompt="start",
+                            session_id=cast(str, invalid) if field == "resume" else None,
+                            new_session_id=cast(str, invalid) if field == "new" else None,
+                        )
+        self.assertEqual(calls, [])
+
+    def test_claude_caller_chosen_new_identity_is_distinct_from_resume(self) -> None:
+        session = str(uuid.uuid4())
+        adapter = ExternalCliAdapter("claude")
+        with tempfile.TemporaryDirectory() as directory:
+            argv = adapter.build_argv(cwd=Path(directory), prompt="start", new_session_id=session)
+            self.assertEqual(argv[argv.index("--session-id") + 1], session)
+            self.assertNotIn("--resume", argv)
+            for kwargs in (
+                {"new_session_id": "invalid"},
+                {"new_session_id": session, "session_id": session},
+            ):
+                with self.subTest(kwargs=kwargs), self.assertRaises(ProviderUnavailableError):
+                    adapter.build_argv(cwd=Path(directory), prompt="start", **kwargs)
+
+    def test_claude_adapter_verifies_new_identity_and_preserves_terminal_error(self) -> None:
+        session = str(uuid.uuid4())
+        streams = (
+            (
+                f'{{"type":"result","subtype":"success","is_error":false,"session_id":"{uuid.uuid4()}","result":"answer"}}',
+                0,
+                RuntimeError,
+            ),
+            (
+                f'{{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"{session}","api_error_status":429,"errors":["private"]}}',
+                1,
+                ClaudeTerminalFailure,
+            ),
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(
+                "os.environ",
+                {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+                clear=True,
+            ),
+        ):
+            for stdout, returncode, error_type in streams:
+
+                def fake_run(
+                    argv: tuple[str, ...], **_: object
+                ) -> subprocess.CompletedProcess[str]:
+                    return subprocess.CompletedProcess(argv, returncode, stdout, "private stderr")
+
+                with self.subTest(returncode=returncode), self.assertRaises(error_type):
+                    ExternalCliAdapter("claude", run=fake_run).run_turn(
+                        cwd=Path(directory), prompt="start", new_session_id=session
+                    )
+
     def test_claude_requires_explicit_local_cpa_route_before_provider_start(self) -> None:
         calls: list[tuple[str, ...]] = []
 

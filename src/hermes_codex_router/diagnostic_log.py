@@ -35,10 +35,12 @@ SITES = frozenset(
     {
         "alerts.session_meta_read",
         "alerts.thread_metadata_read",
+        "claude_recovery.artifact_cleanup",
         "codex_recovery.artifact_cleanup",
         "codex_recovery.client_close",
         "controller_result_publication.artifact_cleanup",
         "controller_result_publication.cleanup_report",
+        "external_worker.claude_partial_binding",
         "external_worker.client_close",
         "external_worker.context_telemetry",
         "external_worker.failure_notice_record",

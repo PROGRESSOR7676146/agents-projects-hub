@@ -1,7 +1,7 @@
 # Decision map
 
 Status: active  
-Last updated: 2026-09-30
+Last updated: 2026-10-02
 
 This directory is the durable entry point for consequential product and
 architecture decisions. New records should be named `NNNN-short-title.md`.
@@ -68,8 +68,8 @@ with a new record.
 | Topic-wide emergency stop | `stop` cancels every unstarted job in the topic and interrupts the running turn of whichever provider owns it, not only the active agent. | [ADR 0046](0046-topic-wide-emergency-stop.md) |
 | Codex multi-auth retirement | Account pool, rotation, pool alerts and helper calls removed; retired keys fail at load before any path or helper access; no schema change. | [ADR 0047](0047-retire-codex-multi-auth.md) |
 | Out-of-band update and incident plane | Hub observes (incident journal, stack drift); Hermes sends model-free incident cards and analyzes only on the owner's press; a deterministic tool, independent of both runtimes, switches the stack only from an owner-confirmed plan. Planned in four stages. | [ADR 0048](0048-out-of-band-update-and-incident-plane.md) |
-
 | Task visibility and stop certainty | Unknown interruption retains the root; durable control notices are independent of provider results and preserve ambiguous delivery. | [ADR 0049](0049-task-visibility-and-stop-certainty.md) |
+| Claude native invocation evidence | Persist the exact session/root before invocation and validate bounded structured output without inventing native turn IDs. | [ADR 0050](0050-claude-native-invocation-evidence.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

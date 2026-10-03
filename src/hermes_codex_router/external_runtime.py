@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import selectors
 import signal
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +15,13 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from .antigravity_model import model_arguments
+from .claude_stream import (
+    MAX_CLAUDE_STDERR_BYTES,
+    ClaudeStreamError,
+    ClaudeStreamReader,
+    VisibleAssistantCallback,
+    parse_claude_stream,
+)
 from .provider_limits import ProviderLimit, parse_antigravity_limit, parse_opencode_limit
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
@@ -108,64 +117,6 @@ def _claude_cpa_environment(environment: dict[str, str]) -> None:
         )
 
 
-def _claude_result(
-    values: list[dict[str, object]], session_id: str | None, model: str | None
-) -> ExternalTurnResult:
-    results = [value for value in values if value.get("type") == "result"]
-    if len(results) != 1:
-        raise ExternalRuntimeError("claude returned no unique terminal result")
-    terminal = results[0]
-    actual_session = terminal.get("session_id")
-    if not isinstance(actual_session, str):
-        raise ExternalRuntimeError("claude returned no session id")
-    try:
-        uuid.UUID(actual_session)
-    except ValueError as exc:
-        raise ExternalRuntimeError("claude returned an invalid session id") from exc
-    if session_id is not None and actual_session != session_id:
-        raise ExternalRuntimeError("claude resumed a different session")
-    if terminal.get("is_error") is not False or terminal.get("subtype") != "success":
-        raise ExternalRuntimeError("claude did not complete successfully")
-    visible = terminal.get("result")
-    if not isinstance(visible, str) or not visible.strip():
-        raise ExternalRuntimeError("claude completed without visible text")
-    return ExternalTurnResult(
-        "claude", visible.strip(), actual_session, _claude_model(values, model)
-    )
-
-
-def _claude_model(values: list[dict[str, object]], requested: str | None) -> str | None:
-    """Prefer the model that answered, then the session model, over the request."""
-    initialized: str | None = None
-    answered: str | None = None
-    for value in values:
-        if value.get("type") == "system" and value.get("subtype") == "init":
-            reported = value.get("model")
-            if isinstance(reported, str) and reported.strip():
-                initialized = reported.strip()[:200]
-        message = value.get("message")
-        if value.get("type") == "assistant" and isinstance(message, dict):
-            reported = message.get("model")
-            if isinstance(reported, str) and reported.strip():
-                answered = reported.strip()[:200]
-    return answered or initialized or requested
-
-
-def _claude_json_events(output: str) -> list[dict[str, object]]:
-    values: list[dict[str, object]] = []
-    for line in output.splitlines():
-        if not line.strip():
-            continue
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ExternalRuntimeError("claude returned malformed structured output") from exc
-        if not isinstance(value, dict):
-            raise ExternalRuntimeError("claude returned a non-object event")
-        values.append(value)
-    return values
-
-
 class ExternalCliAdapter:
     def __init__(
         self,
@@ -230,10 +181,16 @@ class ExternalCliAdapter:
         session_id: str | None = None,
         model: str | None = None,
         effort: str | None = None,
+        new_session_id: str | None = None,
     ) -> tuple[str, ...]:
         canonical_cwd = cwd.expanduser().resolve(strict=True)
         if not prompt.strip():
             raise ExternalRuntimeError("prompt is empty")
+        if new_session_id is not None and self.runtime != "claude":
+            raise ProviderUnavailableError(
+                "external_session_identity_unsupported",
+                "Caller-chosen session identity is unsupported for this runtime.",
+            )
         if self.runtime == "gemini":
             argv = [
                 self.executable,
@@ -267,9 +224,18 @@ class ExternalCliAdapter:
             argv.extend(model_arguments(model, effort))
             return tuple(argv)
         if self.runtime == "claude":
-            if session_id:
+            if new_session_id is not None and session_id is not None:
+                raise ProviderUnavailableError(
+                    "claude_identity_ambiguous", "Claude cannot start and resume simultaneously."
+                )
+            if session_id is not None or new_session_id is not None:
+                identity = session_id if session_id is not None else new_session_id
+                if not isinstance(identity, str):
+                    raise ProviderUnavailableError(
+                        "claude_resume_invalid", "Claude session identity is invalid."
+                    )
                 try:
-                    uuid.UUID(session_id)
+                    uuid.UUID(identity)
                 except ValueError as exc:
                     raise ProviderUnavailableError(
                         "claude_resume_invalid", "Claude session identity is invalid."
@@ -293,6 +259,8 @@ class ExternalCliAdapter:
             ]
             if session_id:
                 argv.extend(("--resume", session_id))
+            if new_session_id is not None:
+                argv.extend(("--session-id", new_session_id))
             if model and model != "unknown":
                 argv.extend(("--model", model))
             if effort and effort not in {"none", "minimal"}:
@@ -332,6 +300,8 @@ class ExternalCliAdapter:
         timeout: float = 900,
         interrupt_prepared: bool = False,
         staging_dir: Path | None = None,
+        new_session_id: str | None = None,
+        on_visible_assistant: VisibleAssistantCallback | None = None,
     ) -> ExternalTurnResult:
         argv = self.build_argv(
             cwd=cwd,
@@ -339,6 +309,7 @@ class ExternalCliAdapter:
             session_id=session_id,
             model=model,
             effort=effort,
+            new_session_id=new_session_id,
         )
         environment = os.environ.copy()
         if self.runtime == "claude":
@@ -354,7 +325,16 @@ class ExternalCliAdapter:
         antigravity_log = ""
         owned_antigravity_log = False
         active_antigravity_log_path: Path | None = None
-        if self._uses_default_runner:
+        if self._uses_default_runner and self.runtime == "claude":
+            result = self._run_claude_process(
+                argv,
+                cwd=cwd,
+                environment=environment,
+                timeout=timeout,
+                expected_session_id=session_id if session_id is not None else new_session_id,
+                on_visible_assistant=on_visible_assistant,
+            )
+        elif self._uses_default_runner:
             if self.runtime == "antigravity":
                 if self.antigravity_log_path is None:
                     descriptor, temporary_log = tempfile.mkstemp(prefix="hub-agy-", suffix=".log")
@@ -471,15 +451,156 @@ class ExternalCliAdapter:
                 text=True,
                 timeout=timeout,
             )
+            if self.runtime == "claude":
+                if len(result.stderr.encode("utf-8")) > MAX_CLAUDE_STDERR_BYTES:
+                    raise ClaudeStreamError("claude diagnostic output exceeded its limit")
+                reader = ClaudeStreamReader(
+                    expected_session_id=session_id if session_id is not None else new_session_id,
+                    on_visible_assistant=on_visible_assistant,
+                )
+                reader.feed(result.stdout.encode("utf-8"))
+                reader.finish()
         if self._interrupt_requested.is_set():
             raise ExternalTurnInterrupted(f"{self.runtime} turn interrupted by user")
         if detected_limit:
             raise ProviderLimitError(detected_limit[0])
+        return self._parse_result(
+            result,
+            session_id=session_id,
+            new_session_id=new_session_id,
+            model=model,
+            antigravity_log=antigravity_log,
+        )
+
+    def _run_claude_process(
+        self,
+        argv: tuple[str, ...],
+        *,
+        cwd: Path,
+        environment: dict[str, str],
+        timeout: float,
+        expected_session_id: str | None,
+        on_visible_assistant: VisibleAssistantCallback | None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Drain both pipes without communicate() or an unbounded reader queue."""
+        if self._interrupt_requested.is_set():
+            raise ExternalTurnInterrupted("claude turn interrupted by user")
+        try:
+            process = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise ProviderUnavailableError(
+                "claude_cli_unavailable", "Claude CLI could not be started."
+            ) from exc
+        with self._process_lock:
+            self._active_process = process
+        reader = ClaudeStreamReader(
+            expected_session_id=expected_session_id, on_visible_assistant=on_visible_assistant
+        )
+        deadline = time.monotonic() + timeout
+        diagnostic_bytes = 0
+        try:
+            assert process.stdout is not None and process.stderr is not None
+            with selectors.DefaultSelector() as selector:
+                for pipe in (process.stdout, process.stderr):
+                    os.set_blocking(pipe.fileno(), False)
+                    selector.register(pipe, selectors.EVENT_READ)
+                while selector.get_map():
+                    if self._interrupt_requested.is_set():
+                        raise ExternalTurnInterrupted("claude turn interrupted by user")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(argv, timeout)
+                    for key, _ in selector.select(min(0.1, remaining)):
+                        try:
+                            chunk = os.read(key.fd, 65536)
+                        except BlockingIOError:
+                            continue
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                        elif key.fileobj is process.stdout:
+                            reader.feed(chunk)
+                        else:
+                            diagnostic_bytes += len(chunk)
+                            if diagnostic_bytes > MAX_CLAUDE_STDERR_BYTES:
+                                raise ClaudeStreamError(
+                                    "claude diagnostic output exceeded its limit"
+                                )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                process.wait(timeout=remaining)
+            stdout = reader.finish()
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            return subprocess.CompletedProcess(argv, process.returncode, stdout, "")
+        except subprocess.TimeoutExpired:
+            self._terminate_claude_process(process, graceful=True)
+            if self._interrupt_requested.is_set():
+                raise ExternalTurnInterrupted("claude turn interrupted by user") from None
+            raise ExternalRuntimeError("claude timed out safely") from None
+        except Exception:
+            if self._interrupt_requested.is_set():
+                raise ExternalTurnInterrupted("claude turn interrupted by user") from None
+            raise
+        finally:
+            # Kill the owned group even if its leader exited while a descendant
+            # retained a pipe. Never leave children after protocol/callback errors.
+            try:
+                self._terminate_claude_process(process, graceful=False)
+                for pipe in (process.stdout, process.stderr):
+                    if pipe is not None:
+                        pipe.close()
+            finally:
+                with self._process_lock:
+                    if self._active_process is process:
+                        self._active_process = None
+
+    @staticmethod
+    def _terminate_claude_process(process: subprocess.Popen[str], *, graceful: bool) -> None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM if graceful else signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if graceful:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        process.wait(timeout=5)
+
+    def _parse_result(
+        self,
+        result: subprocess.CompletedProcess[str],
+        *,
+        session_id: str | None,
+        new_session_id: str | None,
+        model: str | None,
+        antigravity_log: str,
+    ) -> ExternalTurnResult:
+        """Interpret an exited process separately from its lifecycle and stop."""
+        if self.runtime == "claude":
+            parsed = parse_claude_stream(
+                result.stdout,
+                expected_session_id=session_id if session_id is not None else new_session_id,
+                requested_model=model,
+                returncode=result.returncode,
+            )
+            return ExternalTurnResult("claude", parsed.text, parsed.session_id, parsed.model)
         if result.returncode != 0:
-            if self.runtime == "claude":
-                raise ExternalRuntimeError(
-                    "claude failed safely; inspect private provider diagnostics"
-                )
             detail = (result.stderr or result.stdout).strip()[:1000]
             if self.runtime == "opencode" and (limit := parse_opencode_limit(detail)):
                 raise ProviderLimitError(limit)
@@ -494,15 +615,9 @@ class ExternalCliAdapter:
                         "Antigravity is unavailable from the computer's current network location.",
                     )
             raise ExternalRuntimeError(f"{self.runtime} failed safely: {detail}")
-        values = (
-            _claude_json_events(result.stdout)
-            if self.runtime == "claude"
-            else _json_values(result.stdout)
-        )
+        values = _json_values(result.stdout)
         if not values:
             raise ExternalRuntimeError(f"{self.runtime} returned no structured output")
-        if self.runtime == "claude":
-            return _claude_result(values, session_id, model)
         provider_session_id: str | None = session_id
         detected_model: str | None = model
         text_parts: list[str] = []

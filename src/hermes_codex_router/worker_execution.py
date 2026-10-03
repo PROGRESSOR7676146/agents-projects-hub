@@ -11,8 +11,10 @@ from .artifacts import (
     artifact_spool_root,
     spool_staged_artifacts,
 )
+from .claude_stream import ClaudeStreamError, ClaudeTerminalFailure, VisibleAssistantCallback
 from .codex_appserver import CodexAppServerClient, CodexThread, RateLimits, TurnResult
 from .codex_failure import CodexPreparationError
+from .execution_journal import CLAUDE_PRE_INVOCATION_ERROR_CODES, ClaudeSessionBinding
 from .external_runtime import (
     ExternalCliAdapter,
     ExternalTurnResult,
@@ -76,6 +78,19 @@ class ProviderTurnStopped(RuntimeError):
         self.request_id = request_id
 
 
+class ProviderSessionPreparationError(RuntimeError):
+    """The native session binding failed before any provider invocation."""
+
+    code = "claude_session_preparation_failed"
+    public_message = (
+        "Claude session preparation failed. The provider was not started. "
+        "Verify the saved session binding locally before continuing."
+    )
+
+    def __init__(self) -> None:
+        super().__init__(self.public_message)
+
+
 @dataclass(frozen=True, slots=True)
 class WorkerFailureClassification:
     """Conservative durable outcome for one failed worker execution phase."""
@@ -92,6 +107,8 @@ class WorkerFailureClassification:
         "incoming_material",
         "checkpoint",
         "uncertain",
+        "provider_session_preparation",
+        "claude_terminal",
     ]
 
 
@@ -120,9 +137,29 @@ def classify_worker_failure(
         return WorkerFailureClassification(
             "cancelled", "cancelled", "emergency_stop", False, "emergency_stop"
         )
+    if isinstance(error, ProviderSessionPreparationError):
+        return WorkerFailureClassification(
+            "failed", "pre_execution", error.code, False, "provider_session_preparation"
+        )
+    if isinstance(error, ClaudeTerminalFailure):
+        return WorkerFailureClassification(
+            "failed",
+            "quota" if error.code == "claude_quota_exhausted" else "provider_terminal",
+            error.code,
+            False,
+            "claude_terminal",
+        )
     if isinstance(error, ProviderLimitError):
         return WorkerFailureClassification(
             "failed", "quota", type(error).__name__, False, "provider_limit"
+        )
+    if (
+        isinstance(error, ProviderUnavailableError)
+        and runtime == "claude"
+        and error.code in CLAUDE_PRE_INVOCATION_ERROR_CODES
+    ):
+        return WorkerFailureClassification(
+            "failed", "pre_execution", error.code, False, "provider_unavailable"
         )
     if isinstance(error, ProviderUnavailableError):
         return WorkerFailureClassification(
@@ -323,8 +360,41 @@ def invoke_external_provider_turn(
     prompt: str,
     interrupt_prepared: bool = False,
     staging_dir: Path,
+    claude_session_binding: ClaudeSessionBinding | None = None,
+    on_visible_assistant: VisibleAssistantCallback | None = None,
 ) -> ExternalTurnResult:
     """Invoke one external CLI turn from an immutable job snapshot."""
+    if getattr(adapter, "runtime", None) == "claude" and claude_session_binding is None:
+        raise ProviderSessionPreparationError()
+    if claude_session_binding is not None:
+        if adapter.runtime != "claude":
+            raise ProviderSessionPreparationError()
+        try:
+            result = adapter.run_turn(
+                cwd=project.root,
+                prompt=prompt,
+                session_id=(
+                    None if claude_session_binding.is_new else claude_session_binding.session_id
+                ),
+                new_session_id=(
+                    claude_session_binding.session_id if claude_session_binding.is_new else None
+                ),
+                model=job.model if job.model != "provider-selected" else None,
+                effort=job.effort,
+                interrupt_prepared=interrupt_prepared,
+                staging_dir=staging_dir,
+                on_visible_assistant=on_visible_assistant,
+            )
+        except ClaudeTerminalFailure as exc:
+            if exc.session_id != claude_session_binding.session_id:
+                raise ClaudeStreamError("claude returned a different failed session") from exc
+            raise
+        if (
+            result.provider_session_id != claude_session_binding.session_id
+            or result.runtime != "claude"
+        ):
+            raise ClaudeStreamError("claude returned a different session or runtime")
+        return result
     return adapter.run_turn(
         cwd=project.root,
         prompt=prompt,
@@ -438,6 +508,7 @@ __all__ = [
     "PreparedWorkerArtifacts",
     "PreparedWorkerResult",
     "ProviderTurnStopped",
+    "ProviderSessionPreparationError",
     "WorkerFailureClassification",
     "WorkerExecutionTarget",
     "classify_worker_failure",

@@ -54,6 +54,7 @@ class Adapter:
         self.calls = 0
         self.last_prompt = ""
         self.last_cwd: Path | None = None
+        self.last_session_id: str | None = None
 
     def run_turn(self, **kwargs: object) -> ExternalTurnResult:
         self.calls += 1
@@ -69,10 +70,16 @@ class Adapter:
         if self.generate_artifact and kwargs.get("staging_dir"):
             staging = Path(str(kwargs["staging_dir"]))
             (staging / "diagram.png").write_bytes(b"\x89PNG\r\n\x1a\nfake-data")
+        if self.runtime == "claude" and self.session_id:
+            native_id = kwargs.get("new_session_id") or kwargs.get("session_id")
+            assert isinstance(native_id, str)
+            self.last_session_id = native_id
         return ExternalTurnResult(
             self.runtime,
             f"{self.runtime} answer",
-            f"{self.runtime}-1" if self.session_id else None,
+            (self.last_session_id if self.runtime == "claude" else f"{self.runtime}-1")
+            if self.session_id
+            else None,
             "model-1",
         )
 
@@ -390,7 +397,8 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             completed = worker.state.get_provider_job(job.job_id)
             self.assertEqual(completed.status, "result_ready")
             self.assertEqual(
-                worker.state.get_session(session.session_id).provider_session_id, "claude-1"
+                worker.state.get_session(session.session_id).provider_session_id,
+                adapter.last_session_id,
             )
             self.assertEqual(adapter.calls, 1)
         finally:
