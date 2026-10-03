@@ -206,12 +206,15 @@ class ClaudeCliCapabilities:
             raise ClaudeCliCapabilityError()
         try:
             search_path = os.pathsep.join(
-                entry if os.path.isabs(entry) else str(cwd / entry)
+                entry
                 for entry in environment.get("PATH", os.defpath).split(os.pathsep)
+                if os.path.isabs(entry)
             )
             selected = executable
             if os.path.dirname(selected) and not os.path.isabs(selected):
-                selected = str(cwd / selected)
+                raise ClaudeCliCapabilityError()
+            if not os.path.isabs(selected) and not search_path:
+                raise ClaudeCliUnavailableError()
             path = shutil.which(selected, path=search_path)
             if path is None:
                 raise ClaudeCliUnavailableError()

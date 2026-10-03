@@ -19,6 +19,10 @@ from .state import HubState, StateError
 FILE_TOOLS = frozenset({"Read", "Glob", "Grep", "Write", "Edit"})
 
 
+class ClaudeSessionModeError(StateError):
+    """A native session's mode/store changed; unrelated lease failures are distinct."""
+
+
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -95,13 +99,13 @@ class ClaudePermissionJournal:
             ).fetchone()
             if row is None:
                 if not is_new and mode != "text_only":
-                    raise StateError("legacy Claude session cannot change mode")
+                    raise ClaudeSessionModeError("legacy Claude session cannot change mode")
                 self.connection.execute(
                     "INSERT INTO claude_permission_session_modes VALUES (?,?,?)",
                     (native, mode, home_digest),
                 )
             elif tuple(row) != (mode, home_digest):
-                raise StateError("Claude session mode or home changed")
+                raise ClaudeSessionModeError("Claude session mode or home changed")
 
     def _current(self, launch: PermissionLaunch) -> None:
         digest, generation = self._binding(

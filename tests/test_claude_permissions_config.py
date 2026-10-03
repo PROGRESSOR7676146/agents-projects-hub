@@ -9,6 +9,7 @@ class ClaudePermissionsConfigTests(unittest.TestCase):
     def settings(self) -> dict[str, object]:
         return {
             "tlive_config": "/home/example/private/tlive.json",
+            "tlive_home": "/home/example/private/tlive",
             "provider_home": "/home/example/provider",
             "runtime_roots": ["/usr/bin", "/opt/example-runtime"],
             "python_executable": "/opt/example-runtime/bin/python",

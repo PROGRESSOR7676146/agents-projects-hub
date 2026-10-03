@@ -81,7 +81,11 @@ def _absolute_path(raw: Path | str, label: str, *, exists: bool = True) -> Path:
 def _not_broad(path: Path, label: str) -> None:
     # A source mounted at / or a generic operator directory can expose much
     # more than the requested file-tool surface even when bound read-only.
-    if len(path.parts) < 3 or path in (Path("/home"), Path("/tmp"), Path("/run")):
+    if (
+        len(path.parts) < 3
+        or path in (Path("/home"), Path("/tmp"), Path("/run"), Path("/root"))
+        or path.parent == Path("/home")
+    ):
         raise FileToolSandboxError(f"{label} is too broad")
 
 
@@ -178,15 +182,26 @@ def _reject_nested_mounts(*roots: Path) -> None:
         mountinfo = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
     except OSError as exc:
         raise FileToolSandboxError("cannot inspect host mount table") from exc
+    filesystems: list[tuple[Path, str]] = []
     for line in mountinfo.splitlines():
-        before, _, _ = line.partition(" - ")
+        before, separator, after = line.partition(" - ")
         fields = before.split()
-        if len(fields) < 5:
+        if len(fields) < 5 or not separator or not after.split():
             raise FileToolSandboxError("host mount table is malformed")
         mountpoint = Path(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), fields[4]))
+        filesystems.append((mountpoint, after.split()[0]))
         for root in roots:
             if mountpoint != root and _within(mountpoint, root):
                 raise FileToolSandboxError("writable tree contains a nested mount")
+    for root in roots:
+        selected = [item for item in filesystems if _within(root, item[0])]
+        if not selected or max(selected, key=lambda item: len(item[0].parts))[1] not in {
+            "ext4",
+            "xfs",
+            "btrfs",
+            "tmpfs",
+        }:
+            raise FileToolSandboxError("writable roots require a supported native Linux filesystem")
 
 
 @dataclass(frozen=True)

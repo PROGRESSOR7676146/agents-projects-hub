@@ -10,6 +10,7 @@ from typing import Any
 @dataclass(frozen=True, slots=True)
 class ClaudeFilePermissionsConfig:
     tlive_config: Path
+    tlive_home: Path
     provider_home: Path
     runtime_roots: tuple[Path, ...]
     python_executable: Path
@@ -23,6 +24,7 @@ def parse_claude_file_permissions(raw: Any) -> ClaudeFilePermissionsConfig | Non
         return None
     keys = {
         "tlive_config",
+        "tlive_home",
         "provider_home",
         "runtime_roots",
         "python_executable",
@@ -54,6 +56,7 @@ def parse_claude_file_permissions(raw: Any) -> ClaudeFilePermissionsConfig | Non
 
     return ClaudeFilePermissionsConfig(
         path(raw["tlive_config"]),
+        path(raw["tlive_home"]),
         path(raw["provider_home"]),
         paths("runtime_roots"),
         path(raw["python_executable"]),

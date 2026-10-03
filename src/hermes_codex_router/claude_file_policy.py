@@ -12,6 +12,17 @@ from .claude_file_sandbox import FileToolSandboxConfig
 from .claude_stream import ClaudeStreamError
 
 FILE_TOOL_NAMES = frozenset({"Read", "Glob", "Grep", "Write", "Edit"})
+# Default_Ignorable_Code_Point ranges that are not already covered by the
+# category refusals below. Keep invisible letters/marks out of a rendered grant.
+_INVISIBLE_RANGES = (
+    (0x034F, 0x034F),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x2800, 0x2800),
+    (0x3164, 0x3164),
+    (0xFFA0, 0xFFA0),
+)
 PROVIDER_ENVIRONMENT = frozenset(
     {
         "ANTHROPIC_BASE_URL",
@@ -123,6 +134,9 @@ def validate_faithful_input(tool_input: Any) -> None:
                     unicodedata.category(char) in {"Cf", "Co", "Cn", "Cs", "Zl", "Zp"}
                     or unicodedata.category(char) == "Cc"
                     and char not in "\t\n"
+                    or unicodedata.category(char) == "Zs"
+                    and char != " "
+                    or any(low <= code <= high for low, high in _INVISIBLE_RANGES)
                     or 0xFE00 <= code <= 0xFE0F
                     or 0xE0100 <= code <= 0xE01EF
                 ):

@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import hashlib
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
+from unittest.mock import patch
 from uuid import uuid4
 
 from hermes_codex_router.claude_permission_binding import permission_notice_is_current
+from hermes_codex_router.claude_permission_host import hosted_claude_launch
 from hermes_codex_router.claude_permission_protocol import ProtectedPayload
 from hermes_codex_router.claude_permissions_journal import ClaudePermissionJournal
 from hermes_codex_router.execution_journal import ExecutionJournal
+from hermes_codex_router.external_runtime import ProviderUnavailableError
+from hermes_codex_router.hub_config import AgentDefinition, HubConfig
 from hermes_codex_router.state import HubState, StateError
 
 
@@ -202,3 +209,36 @@ class ClaudePermissionJournalTests(unittest.TestCase):
             "SELECT * FROM claude_permission_session_modes"
         ).fetchone()
         self.assertNotIn(str(self.root), str(tuple(row)))
+
+    def test_effective_text_store_is_pinned_and_lease_failure_does_not_suggest_reset(self) -> None:
+        config = cast(HubConfig, SimpleNamespace(claude_file_permissions=None))
+        agent = cast(AgentDefinition, SimpleNamespace(runtime="claude"))
+
+        def launch():
+            return hosted_claude_launch(
+                config,
+                self.state,
+                agent,
+                self.job,
+                self.token,
+                self.launch.session_id,
+                self.root,
+                is_new=True,
+            )
+
+        with patch.dict("os.environ", {"CLAUDE_CONFIG_DIR": "example-config"}):
+            with launch() as hosted:
+                self.assertIsNone(hosted)
+            row = self.state._connection.execute(
+                "SELECT home_digest FROM claude_permission_session_modes"
+            ).fetchone()
+            self.assertEqual(
+                row[0], hashlib.sha256(str(self.root / "example-config").encode()).hexdigest()
+            )
+            with self.state._connection:
+                self.state._connection.execute("UPDATE agent_sessions SET writer_mode='local'")
+            with self.assertRaises(ProviderUnavailableError) as failure:
+                with launch():
+                    self.fail("changed binding started productive execution")
+            self.assertEqual(failure.exception.code, "claude_permission_host_unverified")
+            self.assertNotIn("/new", str(failure.exception))

@@ -145,6 +145,18 @@ class ClaudeFileSandboxTests(unittest.TestCase):
             with self.assertRaisesRegex(FileToolSandboxError, "nested mount"):
                 _reject_nested_mounts(self.project)
 
+    def test_non_native_filesystems_and_broad_home_roots_are_refused(self) -> None:
+        for filesystem in ("9p", "drvfs", "fuse", "ntfs", "vfat", "unknown"):
+            mountinfo = f"1 2 0:1 / / rw - {filesystem} example rw\n"
+            with patch.object(Path, "read_text", return_value=mountinfo):
+                with self.subTest(filesystem=filesystem), self.assertRaises(FileToolSandboxError):
+                    _reject_nested_mounts(self.project)
+        mountinfo = "1 2 0:1 / / rw - ext4 example rw\n"
+        with patch.object(Path, "read_text", return_value=mountinfo):
+            _reject_nested_mounts(self.project)
+        with self.assertRaises(FileToolSandboxError):
+            sandbox_module._not_broad(Path("/home/example"), "project root")
+
     def test_namespace_denies_private_symlink_git_write_and_host_paths(self) -> None:
         if shutil.which("bwrap") is None:
             self.skipTest("bubblewrap runtime fixture unavailable")

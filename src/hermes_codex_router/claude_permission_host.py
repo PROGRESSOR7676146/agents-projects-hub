@@ -21,7 +21,12 @@ from .claude_permission_protocol import (
     event_digest,
     parse_json_strict,
 )
-from .claude_permissions_journal import FILE_TOOLS, ClaudePermissionJournal, PermissionLaunch
+from .claude_permissions_journal import (
+    FILE_TOOLS,
+    ClaudePermissionJournal,
+    ClaudeSessionModeError,
+    PermissionLaunch,
+)
 from .external_runtime import ProviderUnavailableError
 from .hub_config import AgentDefinition, HubConfig
 from .state import HubState, ProviderJobRecord, StateError
@@ -238,6 +243,11 @@ class PermissionServer:
             raise StateError("Claude permission host cleanup is unconfirmed")
 
 
+def _text_session_store(root: Path) -> Path:
+    store = Path(os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude"))
+    return store if store.is_absolute() else root / store
+
+
 @contextmanager
 def hosted_claude_launch(
     config: HubConfig,
@@ -266,13 +276,20 @@ def hosted_claude_launch(
             session_id,
             root,
             mode="text_only" if settings is None else "file_tools",
-            home=Path.home() if settings is None else settings.provider_home / session_id,
+            home=_text_session_store(root)
+            if settings is None
+            else settings.provider_home / session_id,
             is_new=is_new,
         )
-    except StateError:
+    except ClaudeSessionModeError:
         raise ProviderUnavailableError(
             "claude_session_mode_changed",
             "Claude session mode or session storage changed. The productive turn was not started; use /new before changing mode.",
+        ) from None
+    except StateError:
+        raise ProviderUnavailableError(
+            "claude_permission_host_unverified",
+            "Claude execution binding changed before invocation. The productive turn was not started.",
         ) from None
     if settings is None:
         yield None
@@ -334,6 +351,7 @@ def hosted_claude_launch(
                         *settings.private_paths,
                         config.state_path.parent,
                         settings.tlive_config,
+                        settings.tlive_home,
                         Path(transport.socket_path),
                         config.registry_path,
                         *(

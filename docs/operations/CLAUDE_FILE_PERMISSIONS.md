@@ -51,8 +51,9 @@ An optional Hub configuration object has this reusable shape:
 {
   "claude_file_permissions": {
     "tlive_config": "/home/example/.config/example-hub/protected-transport.json",
+    "tlive_home": "/home/example/.local/share/example-tlive",
     "provider_home": "/home/example/provider-sessions",
-    "runtime_roots": ["/usr/bin", "/usr/lib", "/opt/example-runtime"],
+    "runtime_roots": ["/opt/example-runtime"],
     "python_executable": "/opt/example-runtime/bin/python",
     "hook_code_root": "/opt/example-runtime/lib/python3.11/site-packages",
     "bwrap_executable": "/usr/bin/bwrap",
@@ -62,12 +63,15 @@ An optional Hub configuration object has this reusable shape:
 ```
 
 Paths are fictional and must be explicit canonical sources. The worker also
-excludes Hub state, registry, bot token files, the transport key file and tlive
+excludes Hub state, registry, bot token files, the transport key file, tlive home and tlive
 socket. Review all additional private endpoints/authority roots. Namespace
 validation refuses symlinks, overlapping private mounts, writable trusted code,
 hardlinks/special files in writable trees and nested mounts. Worktree roots
 whose `.git` is a file are outside this initial slice. Missing isolation or
 protected capability prevents productive invocation; it never selects a plain CLI.
+Project and provider-session roots must use ext4, xfs, btrfs or tmpfs. DrvFs/9p,
+NTFS, FUSE, vfat and unknown filesystem types are refused before invocation;
+their aliasing and ownership semantics do not establish this boundary.
 
 ## Offline checks
 

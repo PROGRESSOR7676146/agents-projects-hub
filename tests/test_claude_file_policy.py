@@ -108,6 +108,20 @@ class FilePolicyTests(unittest.TestCase):
                 "\x85",
                 2**53,
                 1.5,
+                "\u3164",
+                "\u115f",
+                "\u1160",
+                "\uffa0",
+                "\u034f",
+                "\u17b4",
+                "\u17b5",
+                "\u180b",
+                "\u180c",
+                "\u180d",
+                "\u180f",
+                "\u2800",
+                "\u00a0",
+                "\u2000",
             ):
                 with self.subTest(content=repr(content)), self.assertRaises(ValueError):
                     validate_file_tool_input(
