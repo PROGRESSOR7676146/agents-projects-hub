@@ -289,9 +289,11 @@ recreate unsaved provider context or a partially executed turn.
   valid `retry_after`, combined with bounded exponential backoff. Restart MUST
   retain the deadline; waiting for it MUST NOT consume delivery attempts or
   repeat provider work. In Hub mode, acknowledgement of a stop that affected an
-  active or queued provider job MUST use the same durable outbox under the Hub
-  identity. Duplicate stop updates MUST NOT create another acknowledgement,
-  and delivering it MUST leave the affected job terminally cancelled. A stop
+  active or queued provider job MUST use durable control delivery under the Hub
+  identity, independently of the provider result/failure outbox. Recording the
+  stop and preparing its acknowledgement MUST be atomic. Duplicate stop updates
+  MUST NOT create another acknowledgement. Delivery MUST NOT change execution
+  certainty: an unconfirmed interruption retains its root exclusion. A stop
   that finds no work may reply directly because it records no state change.
   With external outbox ownership, a completed visible Codex commentary item MAY
   create a separate durable progress delivery under the provider identity. The
@@ -349,6 +351,31 @@ recreate unsaved provider context or a partially executed turn.
   pending material from migrating to a different productive binding. Migration
   33 is additive; rollout and runtime rollback both require artifacts that
   declare schema-33 compatibility.
+- **REQ-QUEUE-012 (Accepted; implementation in progress):** Source-topic control
+  notices MUST distinguish accepted, queued, executing, approval-waiting and
+  unknown-outcome work. Queue notices MUST explain provider slots, global
+  capacity, topic FIFO or canonical-root blockers and give a safe next action;
+  owner-topic links MUST use numeric identity. Meaningful provider activity MUST
+  be separate from heartbeat and typing. Configurable no-progress notices default
+  to 300 seconds for an ordinary turn and 1,200 seconds for active tools/builds.
+  Notices are edge-triggered and re-arm on meaningful progress; they never
+  approve, stop, unlock or replay. A retry addressed to active work MUST join or
+  report that exact work without another invocation; unsupported retry controls
+  MUST fail visibly. Stop notices MUST describe numeric-topic scope, cancelled
+  queued work, pending versus confirmed interruption, held work and unaffected
+  work in other topics. An interrupt acknowledgement, transport loss or timeout
+  MUST NOT prove terminality. The exact accepted turn must be proven terminal
+  before uncertainty releases a root. These rules also apply to embedded queue
+  consumers; unsupported modes MUST be refused explicitly.
+- **REQ-QUEUE-013 (Accepted; implementation in progress):** Control delivery
+  MUST persist episode identity, immutable numeric destination, retry deadlines
+  and positive Telegram receipts separately from provider execution. A sender
+  MUST durably mark the beginning of a send before contacting Telegram. An
+  expired unattempted lease MAY retry delivery; an attempted send without a
+  positive persisted receipt MUST become unknown and MUST NOT be blindly resent.
+  Only an explicit Telegram API rejection proves a delivery attempt retryable.
+  A control-delivery failure MUST NOT change job, session or root ownership.
+  Database deduplication MUST NOT be described as exactly-once Telegram delivery.
 - **REQ-QUEUE-011 (Accepted; implementation pending):** An explicitly enabled
   Claude Code/Codex review workflow MUST durably bind its request, permitted
   materials, exact artifact/revision reference, advisor result, lead decision,

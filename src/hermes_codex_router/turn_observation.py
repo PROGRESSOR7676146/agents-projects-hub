@@ -45,6 +45,15 @@ def owning_read_client(config: HubConfig) -> CodexAppServerClient:
     return client
 
 
+def _completed_visible_text(outcome: StoredTurnOutcome, artifacts_rejected: bool) -> str:
+    if outcome.result is None:
+        raise StateError("completed turn has no stored result")
+    visible = outcome.result.text or "Codex completed the turn without visible text."
+    if artifacts_rejected:
+        visible += "\n\nSome staged artifacts could not be recovered; inspect the task staging."
+    return visible
+
+
 class TurnObservation:
     """Keep all state changes on the HubState connection; provider reads stay outside SQL."""
 
@@ -204,7 +213,12 @@ class TurnObservation:
             except BaseException:
                 self._remove_unused_artifacts(artifacts)
                 raise
-            if not applied:
+            stopped_completion = self.db.execute(
+                "SELECT 1 FROM provider_turn_terminal_evidence "
+                "WHERE job_id=? AND terminal_status='completed'",
+                (job_id,),
+            ).fetchone()
+            if not applied or stopped_completion is not None:
                 self._remove_unused_artifacts(artifacts)
 
     def _remove_unused_artifacts(self, artifacts: tuple[ValidatedArtifact, ...]) -> None:
@@ -308,12 +322,18 @@ class TurnObservation:
                     "SELECT COUNT(*) FROM provider_job_holds WHERE cause_job_id = ?", (job_id,)
                 ).fetchone()[0]
             )
-            if outcome.status == "completed":
-                if outcome.result is None:
-                    raise StateError("completed turn has no stored result")
-                visible = outcome.result.text or "Codex completed the turn without visible text."
-                if artifacts_rejected:
-                    visible += "\n\nSome staged artifacts could not be recovered; inspect the task staging."
+            stopped_completion = (
+                outcome.status == "completed"
+                and self.state.pending_emergency_stop_for_job(job_id) is not None
+            )
+            if stopped_completion:
+                notice = (
+                    "Stop confirmed: the exact provider turn completed before interruption. "
+                    "Its result is withheld because you requested stop. "
+                    "Changes already made were not undone; inspect the project before new work."
+                )
+            elif outcome.status == "completed":
+                visible = _completed_visible_text(outcome, artifacts_rejected)
                 notice = "Recovered completed Codex result:\n\n" + html.escape(visible)
             else:
                 partial = ExecutionJournal(self.state).partial_text(job_id)
@@ -348,12 +368,11 @@ class TurnObservation:
                    VALUES (?, ?, 'codex', ?, ?, ?, 'pending', ?, ?, ?)""",
                 (new_outbox_id, job_id, row["chat_id"], row["thread_id"], notice, now, now, now),
             )
-            self.state._insert_telegram_outbox_parts(new_outbox_id, notice, artifacts=artifacts)
-            if outcome.status == "completed":
-                assert outcome.result is not None
-                visible = outcome.result.text or "Codex completed the turn without visible text."
-                if artifacts_rejected:
-                    visible += "\n\nSome staged artifacts could not be recovered; inspect the task staging."
+            self.state._insert_telegram_outbox_parts(
+                new_outbox_id, notice, artifacts=() if stopped_completion else artifacts
+            )
+            if outcome.status == "completed" and not stopped_completion:
+                visible = _completed_visible_text(outcome, artifacts_rejected)
                 self.db.execute(
                     """INSERT INTO provider_job_results
                        (result_id, job_id, visible_response, provider_session_id,
@@ -411,5 +430,6 @@ class TurnObservation:
                         project_root, observed_at) VALUES (?, ?, ?, ?, ?, ?)""",
                     (job_id, outcome.status, thread_id, turn_id, str(root), now),
                 )
+            self.state._provider_job_state.complete_finished_stops(int(row["topic_id"]), now)
             self.db.execute("DELETE FROM provider_turn_observations WHERE job_id = ?", (job_id,))
             return True

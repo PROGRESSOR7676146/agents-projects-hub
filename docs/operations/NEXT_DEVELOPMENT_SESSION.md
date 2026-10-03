@@ -1,92 +1,221 @@
-# Следующая сессия: права Claude Code и приёмка CPA
+# Next session: Claude parity and visible task states
 
-Статус: ограниченный текстовый Claude worker scaffold в репозитории;
-пакет A и полная реализация остаются открытыми.
-Дата: 2026-09-27
-Владелец: сопровождающий Hub; продуктовые решения принимает владелец репозитория.
-Исходная исследовательская ревизия:
-`ea5af70b9332d8463b83d19f95ccda7c09e71faf` — первоначальное чтение кода.
-Последняя проверенная ревизия ограниченной реализации:
-`0a7e744d9a3ccdc16b32ff4841cd47fea9fd13ed` — текстовый Claude worker в
-репозитории, не подтверждение работающей установки.
-Следующий trigger: завершение пакета A и проверка границ human approvals
-[плана Claude/Codex](CLAUDE_LEAD_REVIEW_PLAN.ru.md).
+Status: implementation in progress; stop-certainty and durable-notice slice under validation.
+Date: 2026-10-02.
+Decision owner: repository owner. Integration owner: lead development agent.
+Repository baseline inspected: `8070414744899602111920bc7f45233e29e8e4a4`.
+This is source inspection evidence, not a tested candidate or deployment claim.
+Next trigger: complete exact-revision validation and independent review of the
+stop/notice slice, then continue queue/progress visibility and native Claude work.
+The requested GPT-6.1 Sol helpers use reasoning effort `high`.
 
-## Задача следующей сессии
+## Objective and authority
 
-Установить, каким поддерживаемым способом Hub сможет передавать человеку
-разрешения Claude Code и обеспечивать системную границу советника. CPA
-маршрутизирует запросы модели, но не является каналом разрешений.
-Текстовый adapter и три слота являются только репозиторной основой. Итог —
-проверенная матрица возможностей, ограничения и уточнённая оценка работ.
+Continue development until native Claude Code meets the Hub capabilities in the
+[accepted parity matrix](CLAUDE_LEAD_REVIEW_PLAN.ru.md#что-означает-сопоставимая-поддержка-с-codex),
+and eliminate silent queue, approval and execution waits. The text-only Claude
+scaffold does not meet that objective. Track remaining maintenance and live debt
+in the [stabilization plan](STABILIZATION_PLAN.md); do not repeat completed stages.
 
-1. Прочитать AGENTS.md, optional private operator profile, нормативные модули,
-   [план принятого варианта](CLAUDE_LEAD_REVIEW_PLAN.ru.md), этот документ и
-   [ADR 0040](../decisions/0040-bounded-claude-codex-lead-advisor.md) в
-   установленном порядке. Проверить рабочее дерево,
-   текущую ветку, HEAD и актуальность основной линии; сохранить чужие правки.
-   Реализацию вести в отдельной ветке/worktree.
-2. Сверить текущее состояние с
-   [project status](../status/PROJECT_STATUS.md). Проверить актуальные
-   зависимости, существующие seams и незавершённую приёмку базовых сценариев.
-   Не повторять завершённый refactoring или P0/P1 как новую разработку.
-3. По официальной документации и пассивным сведениям о версии CLI проверить
-   выбранный подписочный путь, происхождение авторизации и отсутствие
-   неявного перехода на API/платное продолжение. Не извлекать и не переносить
-   OAuth credentials; возможность SDK не выводить из наличия подписки CLI.
-4. Заполнить матрицу пакета A: точные start/resume, сохранение идентичности,
-   остановка, человеческие approvals, local/return, восстановление результата
-   и запрет записи советнику. Для каждого пункта указать источник/версию,
-   уровень evidence и статус: проверено, ограничено, неизвестно, неподдерживаемо.
-   Проверить, может ли tlive обслуживать `PermissionRequest` фонового Claude
-   без prompt/completion mirroring и reply-to-continue; Codex approval-only
-   marker сам по себе не задаёт такой режим для Claude.
-5. Подготовить минимальные offline fixtures и отрицательные проверки:
-   advisor write/tool/child denial, session/root mismatch, обрыв и неизвестный
-   результат, quota failure без смены оплаты. Правила permissions и Plan mode
-   проверять как механизмы, а не принимать обещание модели за изоляцию.
-6. Отделить оставшиеся вопросы, которые требуют конкретного ручного
-   provider-сценария. Продуктивные вызовы по подписке, изменение credentials,
-   сервисов и live deployment не следуют автоматически из этой точки
-   продолжения; действуют существующие границы авторизации.
+The owner authorized repository implementation, offline tests and delegated
+work. Live-state changes, credentials, service restarts, deployment, tags, branch
+deletion and merging into `main` are not authorized by this task. Prepare concrete
+checks/artifacts before requesting separately scoped live actions. Private handoff
+claims are pointers to recheck, never facts to copy into Git.
 
-Матрицу и выводы обновлять в плане Claude/Codex, а не заводить параллельный
-источник истины. Изменения наблюдаемых контрактов оформлять в owning product
-modules до реализации; подробные deployment evidence остаются вне Git.
+The owner accepted initial no-progress thresholds of **300 seconds** for an
+ordinary active turn and **1,200 seconds** for an active tool/build. Both must be
+configurable. They trigger notices only; they never approve, stop, unlock or replay.
 
-## Решение по результату
+## Start safely
 
-Пакет A завершён, когда для каждого критического пункта есть проверяемый вывод
-либо явно названный блокер, установлен следующий ограниченный шаг и уточнена
-оценка сроков. Продуктивный эксперимент, если он ещё не разрешён или не проведён,
-остаётся незакрытым evidence gap, а не считается успешным.
+1. Follow the complete read order in [AGENTS.md](../../AGENTS.md), including
+   the private profile and handoff. Read all normative modules before contract or
+   trust-boundary changes, then the [Claude plan](CLAUDE_LEAD_REVIEW_PLAN.ru.md),
+   [status](../status/PROJECT_STATUS.md), relevant ADRs and owning code/tests.
+2. Inspect HEAD, dirty files, worktrees, hooks, dependencies, hotspots and open
+   work. Preserve other agents' checkouts and the pending update-tool branch.
+   Locate the continuation worktree through the private handoff; verify its
+   existence, branch and diff. Never switch a shared checkout. Long-lived
+   worktrees belong outside temporary directories and record their owner,
+   purpose, base revision and post-merge review point privately.
+3. Resume the owner's goal explicitly in the new session. Do not mark it complete
+   after a plan, a prototype or offline tests alone. Report unsupported capabilities
+   honestly; ask only decisions that change the result. Roles, subscription mode
+   and scoring scope are already recorded.
+4. Complete package A against current official Claude documentation and passive
+   installed-CLI version/capabilities. Verify human approval hosting, exact resume,
+   stop, local transfer, saved-session discovery and enforceable advisor isolation.
+   Separate documented capability, adapter tests and authorized live evidence.
+5. Reconcile deferred capacity and canary-root questions with bounded read-only
+   inspection if needed. Use a schema-compatible read-only path; never initialize
+   or migrate production state from a newer development checkout. Report necessary
+   values privately; do not change capacity, bindings or another project's work.
 
-Ориентир 6–10 инженерных недель из общего плана предварительный. После пакета A
-пересчитать его по найденным ограничениям; после первого подтверждённого
-start/resume в B сверить ещё раз. Неподдерживаемая ключевая возможность требует
-решения об объёме или способе интеграции, а не скрытого объявления паритета.
+## Development team
 
-## Что остаётся вне ближайшей работы
+Primary: `gpt-6-astra`, effort `high`. It owns architecture, normative contracts,
+security decisions, integration, exact-revision evidence and owner communication.
+Helpers: explicitly `gpt-6.1-sol`, effort `high`, not inherited model defaults.
+With the collaboration tool use those values and `fork_turns: "none"`, supplying
+self-contained bounded tasks and required sources. Verify model availability;
+never silently substitute. Official reference:
+[Codex subagents](https://developers.openai.com/codex/subagents).
 
-Предел первого выпуска задан в
-[плане](CLAUDE_LEAD_REVIEW_PLAN.ru.md#предел-усложнения-первого-выпуска):
-один ведущий, один советник, ручной выбор ролей, минимальный журнал и существующая
-инфраструктура Hub. Параллельные writers и автоматический скоринг не активируются.
+Use at most three concurrent helpers with four total session slots. The owner's
+Sol request takes precedence over the ordinary Gemini-helper preference here.
+Each helper gets an owner, allowed files, base revision, tests and exit criteria.
+Never delegate private profiles, credentials or deployment inventories.
 
-Предыдущие repository-исправления P0/P1, восстановления и root admission не
-являются доказательством deployment. Их точное состояние и оставшаяся live
-приёмка сохраняются в [project status](../status/PROJECT_STATUS.md),
-[плане надёжности](RELIABILITY_PLAN.md) и [live canary](LIVE_CANARY.md).
-Не возобновлять прежние пользовательские поручения автоматически.
-Ограничение «приёмка существующей основы до расширения провайдеров» отменено
-([ADR 0045](../decisions/0045-withdraw-provider-expansion-gate.md)); незакрытая
-живая приёмка ведётся как долг в [плане стабилизации](STABILIZATION_PLAN.md).
+| Helper lane | Initial read-only task | Implementation after lead design |
+| --- | --- | --- |
+| Claude runtime | Official capability matrix; adapter/session/model seams; failure taxonomy | Native stream adapter, models/effort, exact identities, partial/result checkpoints, provider fixtures |
+| Task visibility | Admission, FIFO/root capacity, approvals, progress, retry, stop, sender ownership | Durable transitions/notices and passive no-progress detection behind the agreed state API |
+| Acceptance | Existing fault tests, migrations, replay/stop certainty, regressions | Adversarial fixtures, restart/ambiguity tests and integration checks |
 
-## Закрытие
+Start all three with investigation only. The lead defines state API, transaction
+ownership and invocation boundaries before writing starts. Each writing helper
+uses a distinct worktree/lane and disjoint modules, never the primary checkout.
+Schema, migrations, worker wiring and normative documents have one named author
+at a time. Integrate sequentially and test the integrated revision. No recursive
+delegation or additional writer authority. Sol checks supplement, but do not
+replace, independent review of Codex-authored lifecycle/security changes. The
+owner explicitly selected **Claude Opus 5.5, effort high** as the reviewer. If
+that reviewer becomes unavailable, use **Gemini** as the owner-authorized
+fallback. Determine availability from supported passive metadata or an actual
+review failure, never synthetic inference/quota probes. Do not silently substitute
+another Opus version; resolve the exact supported model ID before invoking it.
+Record the actual reviewer/model, fallback reason, candidate revision, findings
+and fixes in the PR. An unavailable reviewer does not waive review. If both
+review paths fail, keep the candidate review-ready and ask the owner for review;
+never invent approval. Review is read-only in a separate clean candidate checkout,
+and does not grant permission to run unrelated live tests or deployment.
 
-Текстовый Claude worker и независимые слоты реализованы только на уровне
-репозитория; пакет A, права ведущего/советника и live-приёмка ещё не завершены.
-При завершении обновить состояние, точную ревизию, проверенную матрицу,
-ограничения и следующий
-trigger в основном плане. Этот документ затем должен указывать на реально
-следующую задачу, не сохранять завершённую работу как действующее поручение.
+## Ordered packages
+
+### 1. Contracts and failing behavioral tests
+
+Define visibility in the owning [persistence module](../product/PERSISTENCE_AND_RECOVERY.md),
+approval boundaries in [control/security](../product/ACCOUNTS_CONTROL_AND_SECURITY.md),
+and any changed [interaction](../product/IDENTITY_AND_INTERACTION.md). Update only
+reviewed affected section digests and record consequential durable choices in an
+ADR. This plan is not another normative contract.
+
+Write failure tests before router changes. Document hotspot architecture review
+and extraction decisions. Preserve one owner per SQLite transaction and import
+direction. Reuse Controller, workers, SQLite queue/outbox and admission seams;
+no separate broker, database or general orchestrator.
+
+### 2. Visible and safe task lifecycle
+
+Implement all six owner requirements through durable state:
+
+- Approval immediately prepares a source-topic notice naming what stopped, the
+  required permission and how the human allows, denies or stops. Hub/Hermes
+  cannot approve; retain Codex/tlive or an accepted native human host. Unsupported
+  approval modes explicitly deny instead of waiting forever.
+- Meaningful provider events are separate from worker heartbeat and Telegram
+  typing. Active tools/builds use the longer configured threshold. Notify once
+  on transition; recovery re-arms the detector. No monitor inference.
+- Distinguish accepted, queued, executing, approval-waiting and unknown outcome.
+  Explain slot/global capacity/FIFO/root blockers, identify the owner topic by
+  numeric identity and provide next actions. Acceptance is not invocation.
+- A retry attached to an active turn says it joins existing work and neither
+  restarts it nor removes the root lock. Distinguish the existing reply-bound
+  inspection-first continuation after proven terminal failure. Unsupported
+  retries fail visibly.
+- `/stop` states numeric-topic scope, queued cancellations, pending/confirmed
+  interruption, held work and remaining tasks in other topics. A stop request
+  or successful interrupt RPC is not terminality proof.
+- Persist transitions, episode identity, notices, retry deadlines and receipts.
+  Never duplicate execution. Bot API has no general exactly-once send key:
+  ambiguous acceptance must be handled explicitly, without blind resend or a
+  false guarantee that database deduplication prevents duplicate messages.
+
+A timeout never releases the root. Confirm the exact turn terminal before
+release; unknown stop/outcome retains exclusion and explains reconciliation.
+Never automatically repeat old user work. Cover applicable compatibility paths
+or reject unsupported configurations visibly.
+
+### 3. Claude runtime and human authority
+
+Complete packages B/D of the accepted Claude plan: native identity, supported
+passive model/effort discovery/configuration, exact start/resume and root binding,
+structured visible streaming, inputs/artifacts, progress, human approvals, stop,
+durable recovery, passive telemetry, same-session `/local`/`/return`, and saved
+session connection. Record every capability's evidence in the existing matrix.
+
+CLI documents `--permission-prompt-tool` and `--permission-prompts host|none`;
+these are candidates, not a validated Hub approval host. Investigate tlive's
+Claude `PermissionRequest` support and writer isolation before enabling tools.
+Codex's approval-only marker does not establish the Claude equivalent. Restrict
+tools/MCP/hooks/plugins/skills/children technically; missing host, restart,
+timeout and ambiguity deny safely.
+
+Keep CPA route preflight; separately prove the subscription/no-paid-fallback
+route. Never extract OAuth credentials or infer SDK subscription authorization
+from CLI login. Quota/provider terminal rejection and unknown outcome receive
+different classifications; neither permits automatic replay. Persist native
+identity before invocation wherever supported.
+
+### 4. Bounded collaboration and supporting maintenance
+
+Complete packages C/E: either provider can lead, advisor is technically read-only,
+role transfer requires a proven safe boundary, one bounded review and continuation
+are durable/idempotent, and minimal outcome/usage records preserve unknowns.
+The lead releases its FIFO slot before the advisor runs. Keep scoring, judges,
+parallel writers and recursive/write-capable helpers deferred.
+
+Address directly supporting debt: Claude failure classification, duplicated slot
+identity and lifecycle/dispatcher seams. Continue remaining stabilization and
+update-plane items in their existing plans after checking ownership/priority;
+do not mix the pending update-tool PR or host migration into this feature branch.
+
+### 5. Verification, independent review and separate live acceptance
+
+Offline scenarios: unhandled/unreachable approval, hung tool, long productive
+build, retry active work, another-topic queue/root owner, `/stop`, restart while
+blocked, unknown interruption, role/session/root mismatch, partial/completed
+Claude output, quota rejection, delivery ambiguity, stale callbacks, duplicate
+inputs and zero inference from passive monitoring. Use injected clocks and fake
+structured providers. Test both lead/advisor orders, Codex/other-provider
+regressions and additive migration backup/rollback.
+
+Follow the [testing guide](../testing/README.md): focused iteration, history/privacy
+before every commit, pre-commit hook, canonical gate on the publication revision,
+required hosted checks and independent exact-revision review. Never bypass hooks
+or publish a red suite. Open focused PRs; merging remains the owner's action.
+Offline tests do not establish deployed Telegram behavior or a subscription route.
+
+Prepare bounded live scenarios with exact candidate/rollback revisions, commands,
+temporary root/topic, provider calls, expected effects and cleanup before asking
+permission. Request provider acceptance, any restart and deployment separately.
+Update private handoff whenever plan, pending decisions or deployment state changes.
+
+## Current evidence and source pointers
+
+The first implementation slice adds schema-36 control notices and retains root
+exclusion after an uncertain stop. Focused fake-provider, migration, sender and
+queue tests cover this slice; full publication validation and independent review
+remain pending. No deployment or live acceptance has occurred. Queue reasons,
+progress/approval notices, active retry and Claude native parity remain open.
+See [ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md).
+
+First-pass pointers to recheck, not final design:
+
+- `external_runtime.py`: text-only Claude argv/environment/result parser;
+  `catalog_refresh.py`: Claude catalog is just the configured default;
+  `local_transfer.py`: no Claude resume branch.
+- `codex_appserver.py`: shared approvals wait for the companion; fallback declines.
+  Add source-topic visibility while preserving human approval ownership.
+- `external_worker.py`: the reproduced uncertainty-release gap is addressed by
+  the stop-certainty slice; exact terminal proof remains mandatory.
+- `state_provider_jobs.py`, `root_blockers.py`, `execution_journal.py`,
+  `outbox_sender.py`, `controller_admission.py`: root/FIFO/lease/notice seams.
+
+## Closure
+
+Open. Close only when parity and task-visibility contracts have exact-revision
+evidence, independent review and separately authorized required live acceptance.
+Unsupported required capabilities remain owner decisions, not silently removed
+criteria. Update the accepted Claude matrix and next trigger as evidence changes.

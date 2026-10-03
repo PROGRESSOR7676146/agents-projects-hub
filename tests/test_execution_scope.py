@@ -397,11 +397,23 @@ class ExecutionScopeTests(unittest.TestCase):
             return request_id
 
         request_id = stop()
-        stop_notice = self.state.lease_telegram_outbox("hub", "fictional-sender")
+        now = datetime.now(timezone.utc)
+        stop_notice = self.state.task_notices.lease_notice("fictional-sender", now=now)
         assert stop_notice is not None and stop_notice.lease_token is not None
-        self.assertEqual(stop_notice.job_id, free.job_id)
-        self.state.mark_telegram_outbox_delivered(
-            stop_notice.outbox_id, stop_notice.lease_token, telegram_message_id=1807
+        self.assertIsNone(stop_notice.job_id)
+        self.assertEqual(stop_notice.stop_request_id, request_id)
+        self.assertEqual(
+            (stop_notice.chat_id, stop_notice.thread_id, stop_notice.reply_to_message_id),
+            (destination.chat_id, destination.thread_id, 1706),
+        )
+        with self.assertRaises(StateError):
+            self.state.get_telegram_outbox_for_job(free.job_id)
+        self.state.task_notices.begin_send(stop_notice.notice_id, stop_notice.lease_token, now=now)
+        self.state.task_notices.complete_send(
+            stop_notice.notice_id,
+            stop_notice.lease_token,
+            telegram_message_id=1807,
+            now=now,
         )
         self.assertEqual(
             self.state.decide_held_provider_job(
@@ -421,6 +433,11 @@ class ExecutionScopeTests(unittest.TestCase):
         self.assertEqual((started.job_id, started.status), (waiting.job_id, "executing"))
 
         self.assertEqual(stop(), request_id)
+        notices = self.state.task_notices.notices_for_stop(request_id)
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(
+            (notices[0].notice_id, notices[0].status), (stop_notice.notice_id, "delivered")
+        )
 
         self.assertIsNone(self.state.pending_emergency_stop_for_job(waiting.job_id))
         with self.assertRaises(StateError):

@@ -190,8 +190,8 @@ acceptance.
   the tool and a private stack manifest; the drift check; Hermes integration;
   the watchdog.
 - `configure-github.sh` required nonexistent check names (fixed in #82).
-- Silent queue waits, owner decision 2026-10-01. **Deferred to the next
-  session; nothing is changed without a separate decision.**
+- Silent queue waits, owner decision 2026-10-01. **Implementation authorized in the current continuation plan; work in progress.**
+  See [ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md).
   1. The Hub bot should tell the topic when a job waits for a free worker
      slot or capacity (`codex_worker_count`, `max_parallel_roots`) or for a
      busy project root, instead of staying silent. Today REQ-OPS-004 alerts

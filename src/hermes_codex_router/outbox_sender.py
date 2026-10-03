@@ -25,6 +25,7 @@ from .project_onboarding import ProjectOnboardingStore
 from .project_resolution import resolve_project_context
 from .session_connect import SessionConnectStore
 from .state import HubState
+from .task_notice_sender import deliver_task_notice
 from .telegram import TELEGRAM_HEALTH_FAILURE_THRESHOLD, TelegramBotApi, TelegramError
 
 
@@ -329,6 +330,8 @@ class TelegramOutboxSender:
         self.progress.supersede_terminal(self.provider_agent_ids, now=now)
         self.state.materialize_held_provider_jobs()
         self.state.materialize_released_uncertainty_notices()
+        if self.config.hub_bot is not None and self._deliver_task_notice_one(now=now):
+            return True
         if self.config.hub_bot is not None and self._deliver_root_blocker_one(now=now):
             return True
         if (
@@ -362,6 +365,17 @@ class TelegramOutboxSender:
         # Final results and durable progress have priority over advisory chat actions.
         self._refresh_chat_actions()
         return False
+
+    def _deliver_task_notice_one(self, *, now: datetime | None = None) -> bool:
+        result = deliver_task_notice(
+            self.state.task_notices, self.telegram_bots["hub"], self.sender_id, now=now
+        )
+        if result.worked:
+            if result.error is None:
+                self._record_transport_success()
+            elif isinstance(result.error, TelegramError):
+                self._record_transport_failure(result.error)
+        return result.worked
 
     def _deliver_root_blocker_one(self, *, now: datetime | None = None) -> bool:
         result = deliver_root_blocker_notice(

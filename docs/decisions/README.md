@@ -69,6 +69,8 @@ with a new record.
 | Codex multi-auth retirement | Account pool, rotation, pool alerts and helper calls removed; retired keys fail at load before any path or helper access; no schema change. | [ADR 0047](0047-retire-codex-multi-auth.md) |
 | Out-of-band update and incident plane | Hub observes (incident journal, stack drift); Hermes sends model-free incident cards and analyzes only on the owner's press; a deterministic tool, independent of both runtimes, switches the stack only from an owner-confirmed plan. Planned in four stages. | [ADR 0048](0048-out-of-band-update-and-incident-plane.md) |
 
+| Task visibility and stop certainty | Unknown interruption retains the root; durable control notices are independent of provider results and preserve ambiguous delivery. | [ADR 0049](0049-task-visibility-and-stop-certainty.md) |
+
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or
 introduces a durable trade-off whose rationale must outlive its implementation.

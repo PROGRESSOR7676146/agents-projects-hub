@@ -122,7 +122,7 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
                 ).fetchall()
             finally:
                 state.close()
-            package = Path(__file__).resolve().parents[1] / "src/hermes_codex_router"
+            package = Path(migrations.__file__).resolve().parent
             descriptors = []
             for index, maximum in enumerate(
                 (
@@ -143,6 +143,7 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
                         "migrations.py",
                         "models.py",
                         "registry.py",
+                        "schema_task_lifecycle.py",
                         "session_adoption_policy.py",
                     ):
                         archive.writestr(

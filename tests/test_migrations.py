@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from schema_fixtures import remove_adoption_schema
+from schema_fixtures import remove_adoption_schema, remove_task_lifecycle_schema
 
 from hermes_codex_router import migrations as migrations_module
 from hermes_codex_router.migrations import (
@@ -67,7 +67,9 @@ class MigrationTests(unittest.TestCase):
                 finally:
                     state.close()
             result = migrate_database(path, create_backup=False)
-            self.assertEqual((result.previous_version, result.current_version), (34, 35))
+            self.assertEqual(
+                (result.previous_version, result.current_version), (34, LATEST_SCHEMA_VERSION)
+            )
             with sqlite3.connect(path) as connection:
                 hold = connection.execute(
                     """SELECT cause_job_id,held_at,hold_reason,decision,decided_at
@@ -565,6 +567,7 @@ class MigrationTests(unittest.TestCase):
             migrate_database(path, create_backup=False)
             connection = sqlite3.connect(path)
             try:
+                remove_task_lifecycle_schema(connection)
                 connection.execute("DROP INDEX topics_execution_scope")
                 connection.execute("ALTER TABLE topics DROP COLUMN execution_scope")
                 connection.execute(
@@ -604,6 +607,7 @@ class MigrationTests(unittest.TestCase):
             migrate_database(path, create_backup=False)
             connection = sqlite3.connect(path)
             try:
+                remove_task_lifecycle_schema(connection)
                 connection.execute("DROP INDEX topics_execution_scope")
                 connection.execute("ALTER TABLE topics DROP COLUMN execution_scope")
                 connection.execute("PRAGMA user_version = 30")
@@ -632,6 +636,7 @@ class MigrationTests(unittest.TestCase):
             path = Path(directory) / "state.db"
             migrate_database(path, create_backup=False)
             with sqlite3.connect(path) as connection:
+                remove_task_lifecycle_schema(connection)
                 connection.execute("DROP INDEX worktree_lanes_one_active_topic")
                 connection.execute("DROP TABLE execution_scheduler_grants")
                 connection.execute("DROP TABLE execution_scheduler_workers")
@@ -686,6 +691,7 @@ class MigrationTests(unittest.TestCase):
             path = Path(directory) / "state.db"
             migrate_database(path, create_backup=False)
             with sqlite3.connect(path) as connection:
+                remove_task_lifecycle_schema(connection)
                 connection.execute("DROP INDEX worktree_lanes_one_active_topic")
                 connection.execute("DROP TABLE execution_scheduler_grants")
                 connection.execute("DROP TABLE execution_scheduler_workers")

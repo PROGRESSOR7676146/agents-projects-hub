@@ -225,7 +225,7 @@ def _claim_exact_local(
             """SELECT sessions.session_id, sessions.status, sessions.agent_id,
                       sessions.generation, sessions.writer_mode,
                       sessions.provider_session_id, sessions.model, sessions.effort,
-                      topics.execution_scope,
+                      topics.execution_scope, topics.topic_id,
                       topics.project_id
                FROM agent_sessions sessions
                JOIN topics ON topics.topic_id = sessions.topic_id
@@ -323,6 +323,7 @@ def _claim_exact_local(
                     project_root, observed_at) VALUES (?, ?, ?, ?, ?, ?)""",
                 (old_job_id, terminal_status, provider_thread_id, turn_id, str(root), now),
             )
+        state._provider_job_state.complete_finished_stops(int(row["topic_id"]), now)
         if row["writer_mode"] == "local":
             return False
         changed = state._connection.execute(

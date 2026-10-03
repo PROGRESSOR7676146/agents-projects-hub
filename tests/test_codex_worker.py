@@ -28,6 +28,7 @@ from hermes_codex_router.hub_config import (
     TerminalSettings,
 )
 from hermes_codex_router.models import Project, ProjectRegistry
+from hermes_codex_router.root_blockers import persistent_root_blocker
 from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.state import HubState
 from tests.git_fixtures import init_git_root
@@ -555,7 +556,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             sender.join(1)
             worker.close()
 
-    def test_emergency_stop_interrupts_running_codex_turn_without_model_analysis(self) -> None:
+    def test_emergency_stop_acknowledgement_cannot_confirm_terminal_turn(self) -> None:
         job_id = self.enqueue()
         entered = threading.Event()
         release = threading.Event()
@@ -625,14 +626,13 @@ class CodexQueueWorkerTests(unittest.TestCase):
             topic = worker.state.find_topic(-1001234567890, 77)
             assert topic is not None
             self.assertTrue(interrupted.wait(2))
-            self.assertEqual(worker.state.get_provider_job(job_id).status, "cancelled")
-            self.assertIsNone(pending_stop(worker.state, topic.topic_id, "codex"))
+            self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
         finally:
             release.set()
             sender.join(1)
             worker.close()
 
-    def test_stdio_stop_wins_race_with_transport_eof(self) -> None:
+    def test_stdio_stop_transport_eof_retains_unknown_turn_exclusion(self) -> None:
         job_id = self.enqueue()
         entered = threading.Event()
         closed = threading.Event()
@@ -694,15 +694,12 @@ class CodexQueueWorkerTests(unittest.TestCase):
             sender.join(1)
             topic = worker.state.find_topic(-1001234567890, 77)
             assert topic is not None
-            self.assertEqual(worker.state.get_provider_job(job_id).status, "cancelled")
-            self.assertIsNone(pending_stop(worker.state, topic.topic_id, "codex"))
-            next_job_id = self.enqueue(message_id=101, payload="after stop")
-            self.assertTrue(worker.run_cycle())
-            self.assertEqual(
-                worker.state.get_provider_job(next_job_id).status,
-                "result_ready",
+            self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
+            self.assertTrue(worker.run_cycle())  # bounded read-only observation, no new turn
+            self.assertIsNotNone(
+                persistent_root_blocker(worker.state._connection, topic_id=topic.topic_id)
             )
-            self.assertEqual(len(clients), 2)
+            self.assertEqual(sum(client.turns for client in clients), 1)
         finally:
             closed.set()
             sender.join(1)

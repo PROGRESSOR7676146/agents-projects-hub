@@ -49,7 +49,12 @@ COMPLETE_FINISHED_STOPS_SQL = f"""UPDATE provider_stop_requests
      WHERE stop.status = 'pending' AND stop.topic_id = ?
        AND NOT EXISTS (
          SELECT 1 FROM provider_jobs other
-         WHERE other.status IN ('queued', 'retry_wait', 'leased', 'executing')
+         WHERE (other.status IN ('queued', 'retry_wait', 'leased', 'executing')
+           OR (other.status = 'indeterminate'
+             AND NOT EXISTS (SELECT 1 FROM provider_turn_terminal_evidence e
+                             WHERE e.job_id = other.job_id)
+             AND NOT EXISTS (SELECT 1 FROM provider_job_resolutions r
+                             WHERE r.job_id = other.job_id)))
            AND {_stop_covers("stop", "other")}
        )
    )"""
@@ -484,6 +489,7 @@ class ProviderJobsStateFacade:
             ).fetchone()
             if existing is not None:
                 if str(existing["resolution"]) == classification:
+                    self._complete_stops_after(identifier, self._now())
                     return False
                 raise self._state_error(
                     "indeterminate provider job already has a different resolution"
@@ -493,6 +499,7 @@ class ProviderJobsStateFacade:
                    VALUES (?, ?, ?)""",
                 (identifier, classification, self._now()),
             )
+            self._complete_stops_after(identifier, self._now())
         return True
 
     def cancel_active(

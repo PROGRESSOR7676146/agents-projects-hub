@@ -64,8 +64,9 @@ class PreparedWorkerResult:
 
 
 class ProviderTurnStopped(RuntimeError):
-    """An accepted provider turn was explicitly stopped by its owning user.
+    """A covering stop won after the provider turn was proven terminal.
 
+    A stop request or interrupt acknowledgement alone cannot raise this outcome.
     ``request_id`` is None when the result commit found the stop itself and
     has already cancelled the job (R-021).
     """

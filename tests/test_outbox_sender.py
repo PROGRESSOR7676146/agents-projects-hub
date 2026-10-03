@@ -20,8 +20,9 @@ from hermes_codex_router.hub_config import (
 )
 from hermes_codex_router.outbox_sender import TelegramOutboxSender
 from hermes_codex_router.project_onboarding import ProjectOnboardingStore
+from hermes_codex_router.root_blockers import persistent_root_blocker
 from hermes_codex_router.service import ProjectHubService
-from hermes_codex_router.state import HubState
+from hermes_codex_router.state import HubState, StateError
 from hermes_codex_router.telegram import TelegramError
 
 
@@ -31,10 +32,13 @@ class Bot:
         *,
         fail: bool = False,
         command_errors: dict[str, BaseException] | None = None,
+        send_error: Exception | None = None,
     ) -> None:
         self.fail = fail
         self.command_errors = command_errors or {}
+        self.send_error = send_error
         self.sent: list[tuple[int, int, str]] = []
+        self.reply_targets: list[int | None] = []
         self.documents: list[tuple[int, int, Path, str | None]] = []
         self.actions: list[tuple[int, int, str]] = []
         self.drafts: list[tuple[int, int, int, str]] = []
@@ -67,6 +71,9 @@ class Bot:
     ) -> int:
         del disable_notification
         self.sent.append((chat_id, thread_id, html))
+        self.reply_targets.append(reply_to_message_id)
+        if self.send_error is not None:
+            raise self.send_error
         if self.fail:
             raise RuntimeError("transport unavailable")
         return len(self.sent) + len(self.documents)
@@ -915,7 +922,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
         finally:
             sender.close()
 
-    def test_sender_delivers_durable_stop_notice_through_hub_identity(self) -> None:
+    def stop_notice_fixture(self, *, executing: bool = False) -> tuple[HubConfig, str, str]:
         token = Path(self.tempdir.name) / "hub.token"
         token.write_text("fictional-token", encoding="utf-8")
         token.chmod(0o600)
@@ -944,17 +951,60 @@ class TelegramOutboxSenderTests(unittest.TestCase):
                 effort=session.effort,
                 payload_text="queued task",
             )
+            if executing:
+                leased = state.lease_provider_job("opencode", "fictional-worker")
+                assert leased is not None and leased.lease_token is not None
+                state.mark_provider_job_executing(leased.job_id, leased.lease_token)
             request_id, _, _ = state.request_emergency_stop(
                 topic_id=topic.topic_id,
                 chat_id=-1001234567890,
                 message_id=171,
                 target_agent_id="opencode",
+                prepare_notice=True,
             )
-            self.assertTrue(
-                state.enqueue_emergency_stop_notice(
-                    request_id, "Активной работы нет; отменено задач в очереди: 1."
-                )
+            return config, job.job_id, request_id
+        finally:
+            state.close()
+
+    def test_sender_delivers_durable_stop_notice_through_hub_identity(self) -> None:
+        config, job_id, request_id = self.stop_notice_fixture()
+        bots = {"hub": Bot(), "opencode": Bot(), "antigravity": Bot()}
+        sender = TelegramOutboxSender(config, telegram_bots=bots)
+        try:
+            self.assertTrue(sender.run_cycle())
+            self.assertEqual(len(bots["hub"].sent), 1)
+            self.assertEqual(bots["opencode"].sent, [])
+            self.assertEqual(bots["antigravity"].sent, [])
+            self.assertEqual(bots["hub"].reply_targets, [171])
+            self.assertEqual(sender.state.get_provider_job(job_id).status, "cancelled")
+            notices = sender.state.task_notices.notices_for_stop(request_id)
+            self.assertEqual(len(notices), 1)
+            self.assertEqual((notices[0].status, notices[0].telegram_message_id), ("delivered", 1))
+            self.assertEqual((notices[0].chat_id, notices[0].thread_id), (-1001234567890, 170))
+            with self.assertRaises(StateError):
+                sender.state.get_telegram_outbox_for_job(job_id)
+        finally:
+            sender.close()
+
+    def test_stop_and_uncertain_provider_failure_deliver_independently_without_releasing_root(
+        self,
+    ) -> None:
+        config, job_id, request_id = self.stop_notice_fixture(executing=True)
+        state = HubState.open(config.state_path)
+        try:
+            job = state.get_provider_job(job_id)
+            assert job.lease_token is not None
+            state.terminate_provider_job_with_notice(
+                job_id,
+                job.lease_token,
+                status="indeterminate",
+                error_class="ambiguous_execution",
+                error_code="fictional_disconnect",
+                sender_agent_id="opencode",
+                telegram_html="Provider outcome is unknown.",
             )
+            self.assertEqual(state.get_telegram_outbox_for_job(job_id).sender_agent_id, "opencode")
+            self.assertEqual(len(state.task_notices.notices_for_stop(request_id)), 1)
         finally:
             state.close()
 
@@ -962,11 +1012,104 @@ class TelegramOutboxSenderTests(unittest.TestCase):
         sender = TelegramOutboxSender(config, telegram_bots=bots)
         try:
             self.assertTrue(sender.run_cycle())
+            self.assertTrue(sender.run_cycle())
             self.assertEqual(len(bots["hub"].sent), 1)
-            self.assertEqual(bots["opencode"].sent, [])
-            self.assertEqual(sender.state.get_provider_job(job.job_id).status, "cancelled")
+            self.assertEqual(
+                bots["opencode"].sent, [(-1001234567890, 170, "Provider outcome is unknown.")]
+            )
+            self.assertEqual(bots["antigravity"].sent, [])
+            self.assertEqual(
+                sender.state.task_notices.notices_for_stop(request_id)[0].status, "delivered"
+            )
+            self.assertEqual(sender.state.get_telegram_outbox_for_job(job_id).status, "delivered")
+            job = sender.state.get_provider_job(job_id)
+            self.assertEqual(job.status, "indeterminate")
+            self.assertEqual(sender.state.pending_emergency_stop_for_job(job_id), request_id)
+            self.assertIsNotNone(
+                persistent_root_blocker(sender.state._connection, topic_id=job.topic_id)
+            )
         finally:
             sender.close()
+
+    def test_task_notice_native_http_429_retry_deadline_survives_sender_restart(self) -> None:
+        config, job_id, request_id = self.stop_notice_fixture()
+        now = datetime.now(timezone.utc) + timedelta(seconds=1)
+        rejection = TelegramError(
+            "fictional Telegram rate limit",
+            operation="send_message",
+            failure_class="api_http",
+            status_code=429,
+            retry_after=60,
+        )
+        hub = Bot(send_error=rejection)
+        sender = TelegramOutboxSender(
+            config,
+            telegram_bots={"hub": hub, "opencode": Bot(), "antigravity": Bot()},
+        )
+        try:
+            self.assertTrue(sender.run_cycle(now=now))
+            notice = sender.state.task_notices.notices_for_stop(request_id)[0]
+            self.assertEqual((notice.status, notice.attempt_count), ("pending", 1))
+            due = datetime.fromisoformat(notice.available_at)
+            self.assertGreaterEqual(due, now + timedelta(seconds=60))
+            self.assertEqual(sender.state.get_provider_job(job_id).status, "cancelled")
+        finally:
+            sender.close()
+
+        accepted_hub = Bot()
+        restarted = TelegramOutboxSender(
+            config,
+            telegram_bots={"hub": accepted_hub, "opencode": Bot(), "antigravity": Bot()},
+        )
+        try:
+            restarted.run_cycle(now=due - timedelta(seconds=1))
+            self.assertEqual(accepted_hub.sent, [])
+            self.assertTrue(restarted.run_cycle(now=due))
+            self.assertEqual(len(accepted_hub.sent), 1)
+            retained = restarted.state.task_notices.notices_for_stop(request_id)[0]
+            self.assertEqual(
+                (retained.notice_id, retained.status, retained.attempt_count),
+                (notice.notice_id, "delivered", 2),
+            )
+        finally:
+            restarted.close()
+
+    def test_task_notice_ambiguous_send_stays_unknown_after_sender_restart(self) -> None:
+        config, job_id, request_id = self.stop_notice_fixture()
+        error = TelegramError(
+            "fictional response lost",
+            operation="send_message",
+            failure_class="network_timeout",
+        )
+        hub = Bot(send_error=error)
+        sender = TelegramOutboxSender(
+            config,
+            telegram_bots={"hub": hub, "opencode": Bot(), "antigravity": Bot()},
+        )
+        try:
+            self.assertTrue(sender.run_cycle())
+            notice = sender.state.task_notices.notices_for_stop(request_id)[0]
+            self.assertEqual((notice.status, notice.attempt_count), ("unknown", 1))
+            self.assertEqual(len(hub.sent), 1)
+        finally:
+            sender.close()
+
+        accepted_hub = Bot()
+        restarted = TelegramOutboxSender(
+            config,
+            telegram_bots={"hub": accepted_hub, "opencode": Bot(), "antigravity": Bot()},
+        )
+        try:
+            restarted.run_cycle(now=datetime.now(timezone.utc) + timedelta(hours=1))
+            self.assertEqual(accepted_hub.sent, [])
+            retained = restarted.state.task_notices.notices_for_stop(request_id)[0]
+            self.assertEqual(
+                (retained.notice_id, retained.status, retained.attempt_count),
+                (notice.notice_id, "unknown", 1),
+            )
+            self.assertEqual(restarted.state.get_provider_job(job_id).status, "cancelled")
+        finally:
+            restarted.close()
 
     def test_mixed_embedded_execution_commits_without_controller_telegram_send(self) -> None:
         mixed = replace(self.config, external_worker_agent_ids=("opencode",))
