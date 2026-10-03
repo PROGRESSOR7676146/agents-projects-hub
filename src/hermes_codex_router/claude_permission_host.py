@@ -320,7 +320,7 @@ def hosted_claude_launch(
                 home_base.is_symlink()
                 or not home_base.is_dir()
                 or home_base.resolve() != home_base
-                or home_base.stat().st_uid != os.getuid()
+                or home_base.stat().st_uid != os.geteuid()
                 or home_base.stat().st_mode & 0o077
             ):
                 raise FileToolSandboxError("provider session home is unsafe")

@@ -23,7 +23,11 @@ from hermes_codex_router.claude_file_sandbox import (
     FileToolSandboxError,
     _reject_nested_mounts,
 )
-from tests.namespace_fixture import namespace_unavailable
+from tests.namespace_fixture import (
+    namespace_permission_refused,
+    namespace_unavailable,
+    require_namespace_runtime,
+)
 
 
 class ClaudeFileSandboxTests(unittest.TestCase):
@@ -75,10 +79,6 @@ class ClaudeFileSandboxTests(unittest.TestCase):
         cls.temp.cleanup()
 
     def setUp(self) -> None:
-        if shutil.which("bwrap") is None:
-            self.capability_patch = patch.object(sandbox_module, "_require_fd_bind_support")
-            self.capability_patch.start()
-            self.addCleanup(self.capability_patch.stop)
         if self.socket_emulated:
             self.socket_patch = patch.object(sandbox_module.stat, "S_ISSOCK", return_value=True)
             self.socket_patch.start()
@@ -88,9 +88,12 @@ class ClaudeFileSandboxTests(unittest.TestCase):
             self.socket_patch.stop()
 
     def _wrap(self, code: str = "pass") -> tuple[list[str], dict[str, str]]:
-        with self.config.wrap(
-            [str(self.executable), "-c", code], {"LANG": "C.UTF-8"}, self.project
-        ) as launch:
+        with (
+            patch.object(sandbox_module, "_require_fd_bind_support"),
+            self.config.wrap(
+                [str(self.executable), "-c", code], {"LANG": "C.UTF-8"}, self.project
+            ) as launch,
+        ):
             return list(launch.argv), launch.environment
 
     def test_exact_mounts_and_sanitized_environment(self) -> None:
@@ -254,6 +257,30 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                         sandbox_module._scan_writable_tree(root, descriptor)
                 self.assertEqual(len(os.listdir("/proc/self/fd")), count)
 
+    def test_scan_io_failures_are_bounded_and_close_ancestor_handles(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="example-scan-errors-") as directory:
+            root = Path(directory)
+            (root / "entry").mkdir()
+            actual_open = os.open
+            with sandbox_module.MountPins() as pins:
+                descriptor = pins.open(root, directory=True)
+                for error, message in (
+                    (errno.EACCES, "cannot inspect writable tree"),
+                    (errno.ENOENT, "writable tree changed"),
+                    (errno.EMFILE, "writable tree descriptor limit"),
+                ):
+                    count = len(os.listdir("/proc/self/fd"))
+
+                    def fail_entry(path: str, flags: int, **kwargs: object) -> int:
+                        if path == "entry":
+                            raise OSError(error, "example")
+                        return actual_open(path, flags, **kwargs)  # type: ignore[arg-type]
+
+                    with patch.object(os, "open", side_effect=fail_entry):
+                        with self.assertRaisesRegex(FileToolSandboxError, message):
+                            sandbox_module._scan_writable_tree(root, descriptor)
+                    self.assertEqual(len(os.listdir("/proc/self/fd")), count)
+
     def test_preexisting_private_hardlink_is_rejected(self) -> None:
         link = self.project / "linked-authority"
         os.link(self.private / "key", link)
@@ -293,7 +320,7 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
         scan = sandbox_module._scan_writable_tree
         opened: list[int] = []
         pin_open = sandbox_module.MountPins.open
-        original = self.project.parent / "example-original-project"
+        original = self.home.parent / "example-original-home"
 
         def track(pins: sandbox_module.MountPins, *args: object, **kwargs: object) -> int:
             fd = pin_open(pins, *args, **kwargs)  # type: ignore[arg-type]
@@ -302,25 +329,27 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
 
         def replace(root: Path, source_fd: int) -> None:
             scan(root, source_fd)
-            if root == self.project:
-                self.project.rename(original)
-                self.project.symlink_to(self.private, target_is_directory=True)
+            if root == self.home:
+                self.home.rename(original)
+                self.home.mkdir(mode=0o700)
 
         try:
             with (
                 patch.object(sandbox_module.MountPins, "open", track),
                 patch.object(sandbox_module, "_scan_writable_tree", side_effect=replace),
-                self.assertRaises(FileToolSandboxError),
+                self.assertRaises(FileToolSandboxError) as failure,
             ):
                 self._wrap()
+            self.assertIsInstance(failure.exception.__cause__, sandbox_module.MountPinError)
+            self.assertIn("identity changed", str(failure.exception.__cause__))
             self.assertTrue(opened)
             for descriptor in set(opened):
                 with self.assertRaises(OSError):
                     os.fstat(descriptor)
         finally:
             if original.exists():
-                self.project.unlink()
-                original.rename(self.project)
+                self.home.rmdir()
+                original.rename(self.home)
 
     def test_non_native_filesystems_and_broad_home_roots_are_refused(self) -> None:
         for filesystem in ("9p", "drvfs", "fuse", "ntfs", "vfat", "unknown"):
@@ -337,6 +366,7 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
     def test_namespace_denies_private_symlink_git_write_and_host_paths(self) -> None:
         if shutil.which("bwrap") is None:
             namespace_unavailable(self, "bubblewrap runtime fixture unavailable")
+        require_namespace_runtime(self, self.config.bwrap_executable)
         python_executable = Path("/usr/bin/python3.12")
         runtime = (
             python_executable,
@@ -373,17 +403,18 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                 "result['socket']=pathlib.Path('" + str(host_socket) + "').exists(); "
                 "result['hook_write']=os.access('/usr/bin/python3.12',os.W_OK); "
                 "result['git_write']=os.access('.git',os.W_OK); "
+                "result['pid1_visible']=pathlib.Path('/proc/1').is_dir(); "
                 "host=pathlib.Path('/proc/" + str(os.getpid()) + "/cmdline'); "
                 "result['host_pid_visible']=host.exists() and host.read_bytes()=="
                 + repr(Path("/proc/self/cmdline").read_bytes())
                 + "\n"
                 "\n"
                 "result['inherited_pins']=[]\n"
-                "for descriptor in os.listdir('/proc/self/fd'):\n"
+                "for descriptor in pathlib.Path('/proc').glob('[0-9]*/fd/*'):\n"
                 " try:\n"
-                "  info=os.fstat(int(descriptor))\n"
+                "  info=descriptor.stat()\n"
                 "  if (info.st_dev,info.st_ino) in EXPECTED_PINS:\n"
-                "   result['inherited_pins'].append(descriptor)\n"
+                "   result['inherited_pins'].append(str(descriptor))\n"
                 " except OSError: pass\n"
                 "print(json.dumps(result))"
             )
@@ -412,7 +443,7 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                 finally:
                     self.project.unlink()
                     original.rename(self.project)
-            if run.returncode and "Creating new namespace failed" in run.stderr:
+            if run.returncode and namespace_permission_refused(run.stderr):
                 namespace_unavailable(self, "kernel disallows user namespaces")
             self.assertEqual(run.returncode, 0, run.stderr)
             result = json.loads(run.stdout)
@@ -423,6 +454,7 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
             self.assertFalse(result["hook_write"])
             self.assertFalse(result["git_write"])
             self.assertFalse(result["host_pid_visible"])
+            self.assertTrue(result["pid1_visible"])
             self.assertEqual(result["inherited_pins"], [])
         finally:
             host.close()

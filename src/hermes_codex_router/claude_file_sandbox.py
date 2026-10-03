@@ -168,6 +168,20 @@ def _immutable_tree(path: Path) -> None:
 
 def _scan_writable_tree(root: Path, source_fd: int) -> None:
     """Scan the pinned source, never a replacement bearing the same path name."""
+    try:
+        _scan_pinned_tree(source_fd)
+    except OSError as exc:
+        if exc.errno in {errno.ENOENT, errno.ESTALE}:
+            message = "writable tree changed during validation"
+        elif exc.errno in {errno.EMFILE, errno.ENFILE}:
+            message = "writable tree descriptor limit exceeded"
+        else:
+            message = "cannot inspect writable tree"
+        raise FileToolSandboxError(message) from exc
+
+
+def _scan_pinned_tree(source_fd: int) -> None:
+    """Own only the current ancestor chain while examining each pinned entry."""
     count = 0
     expected_mount = mount_id(source_fd)
     first = os.open(".", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC, dir_fd=source_fd)

@@ -32,7 +32,11 @@ from hermes_codex_router.hub_config import (
 )
 from hermes_codex_router.state import HubState
 from hermes_codex_router.tlive_permissions import ProtectedTliveClient, TlivePermissionConfig
-from tests.namespace_fixture import namespace_unavailable
+from tests.namespace_fixture import (
+    namespace_permission_refused,
+    namespace_unavailable,
+    require_namespace_runtime,
+)
 
 
 def _mac(key: bytes, fields: list[object]) -> str:
@@ -380,6 +384,7 @@ class PermissionHostRoundtripTests(unittest.TestCase):
         )
         if bwrap is None or not all(path.exists() for path in runtime):
             namespace_unavailable(self, "system bubblewrap/Python namespace fixture unavailable")
+        require_namespace_runtime(self, Path(bwrap))
         home = self.config.state_path.parent / "example-session-home"
         home.mkdir(mode=0o700)
         try:
@@ -437,7 +442,7 @@ class PermissionHostRoundtripTests(unittest.TestCase):
                     timeout=10,
                     check=False,
                 )
-            if result.returncode and "Creating new namespace failed" in result.stderr:
+            if result.returncode and namespace_permission_refused(result.stderr):
                 namespace_unavailable(self, "kernel disallows user namespaces")
             self.assertEqual(result.returncode, 0, result.stderr)
             response = json.loads(result.stdout)

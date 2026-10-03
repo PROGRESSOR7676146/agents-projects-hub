@@ -80,7 +80,10 @@ Paths are fictional and must be explicit canonical sources. The worker also
 excludes Hub state, registry, bot token files, the transport key file, tlive home and tlive
 socket. Review all additional private endpoints/authority roots. Namespace
 validation refuses symlinks, overlapping private mounts, writable trusted code,
-hardlinks/special files in writable trees and nested mounts. Worktree roots
+hardlinks/special files in writable trees and nested mounts. Runtime and hook
+roots must also be free of submounts; choose narrower sources when a system
+runtime tree contains them. Nested btrfs subvolumes are refused by the inode
+consistency check. Worktree roots
 whose `.git` is a file are outside this initial slice. Local clones with
 hardlinked Git objects are refused too. Missing isolation or
 protected capability prevents productive invocation; it never selects a plain CLI.
@@ -133,6 +136,10 @@ Verify native start/resume with the same session, Allow once and Deny, unreachab
 host, timeout, duplicate/stale callbacks, stop while waiting, daemon/worker restart,
 unknown card delivery and wrong root/generation/lease. Attempt private symlink,
 Git-metadata/runtime modification and host-process access inside the namespace.
+On the exact installed bubblewrap build, inspect accessible descriptors of every
+process visible in the namespace, including PID 1; no pinned host-source inode
+may remain accessible there. The executable's version or help flags alone do
+not establish this descriptor-closure property.
 Confirm no Stop hook, continuation or second writer, and no real model calls
 from monitoring. The worker process and the hook must have different visible
 authority: keys/state are available only to the worker and tlive.
