@@ -115,17 +115,29 @@ class ClaudeFileSandboxTests(unittest.TestCase):
         self.assertEqual(argv[-3:], [str(self.executable), "-c", "pass"])
 
     def test_refuses_environment_and_path_authority_expansion(self) -> None:
-        with self.assertRaises(FileToolSandboxError):
+        with (
+            patch.object(sandbox_module, "_require_fd_bind_support"),
+            self.assertRaisesRegex(FileToolSandboxError, "unapproved names"),
+        ):
             self.config.wrap(
                 [str(self.executable)],
                 {"NODE_OPTIONS": "--require=/tmp/x"},
                 self.project,
             )
-        with self.assertRaises(FileToolSandboxError):
+        with (
+            patch.object(sandbox_module, "_require_fd_bind_support"),
+            self.assertRaisesRegex(FileToolSandboxError, "outside project"),
+        ):
             self.config.wrap([str(self.executable)], {}, self.private)
-        with self.assertRaises(FileToolSandboxError):
-            self.config.wrap(["/usr/bin/bwrap"], {}, self.project)
-        with self.assertRaises(FileToolSandboxError):
+        with (
+            patch.object(sandbox_module, "_require_fd_bind_support"),
+            self.assertRaisesRegex(FileToolSandboxError, "differs from pinned"),
+        ):
+            self.config.wrap(["/usr/bin/false"], {}, self.project)
+        with (
+            patch.object(sandbox_module, "_require_fd_bind_support"),
+            self.assertRaisesRegex(FileToolSandboxError, "absolute canonical"),
+        ):
             self.config.wrap([str(self.executable)], {}, self.project / ".." / "project")
 
     def test_rejects_private_overlap_symlink_and_writable_hook(self) -> None:
@@ -281,6 +293,56 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                             sandbox_module._scan_writable_tree(root, descriptor)
                     self.assertEqual(len(os.listdir("/proc/self/fd")), count)
 
+    def test_fdinfo_descriptor_exhaustion_has_scan_diagnostic_and_no_leak(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="example-fdinfo-errors-") as directory:
+            root = Path(directory)
+            (root / "entry").mkdir()
+            actual_read = Path.read_text
+            reads = 0
+
+            def fail_entry(path: Path, **kwargs: object) -> str:
+                nonlocal reads
+                if path.parent == Path("/proc/self/fdinfo"):
+                    reads += 1
+                    if reads > 1:
+                        raise OSError(errno.EMFILE, "example")
+                return actual_read(path, **kwargs)  # type: ignore[arg-type]
+
+            with sandbox_module.MountPins() as pins:
+                descriptor = pins.open(root, directory=True)
+                count = len(os.listdir("/proc/self/fd"))
+                with patch.object(Path, "read_text", fail_entry):
+                    with self.assertRaisesRegex(
+                        FileToolSandboxError, "writable tree descriptor limit"
+                    ):
+                        sandbox_module._scan_writable_tree(root, descriptor)
+                self.assertEqual(len(os.listdir("/proc/self/fd")), count)
+
+    def test_same_mount_with_different_device_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="example-subvolume-") as directory:
+            root = Path(directory)
+            (root / "entry").mkdir()
+            actual_stat = os.fstat
+            with sandbox_module.MountPins() as pins:
+                descriptor = pins.open(root, directory=True)
+                count = len(os.listdir("/proc/self/fd"))
+
+                def subvolume(fd: int) -> object:
+                    info = actual_stat(fd)
+                    if fd == descriptor:
+                        return info
+                    return SimpleNamespace(
+                        st_dev=info.st_dev + 1,
+                        st_ino=info.st_ino,
+                        st_mode=info.st_mode,
+                        st_nlink=info.st_nlink,
+                    )
+
+                with patch.object(os, "fstat", side_effect=subvolume):
+                    with self.assertRaisesRegex(FileToolSandboxError, "nested filesystem"):
+                        sandbox_module._scan_writable_tree(root, descriptor)
+                self.assertEqual(len(os.listdir("/proc/self/fd")), count)
+
     def test_preexisting_private_hardlink_is_rejected(self) -> None:
         link = self.project / "linked-authority"
         os.link(self.private / "key", link)
@@ -410,12 +472,23 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                 + "\n"
                 "\n"
                 "result['inherited_pins']=[]\n"
-                "for descriptor in pathlib.Path('/proc').glob('[0-9]*/fd/*'):\n"
+                "result['fd_tables']={}\n"
+                "for process in pathlib.Path('/proc').iterdir():\n"
+                " if not process.name.isdigit(): continue\n"
                 " try:\n"
-                "  info=descriptor.stat()\n"
-                "  if (info.st_dev,info.st_ino) in EXPECTED_PINS:\n"
-                "   result['inherited_pins'].append(str(descriptor))\n"
-                " except OSError: pass\n"
+                "  descriptors=list(process.joinpath('fd').iterdir())\n"
+                " except PermissionError:\n"
+                "  result['fd_tables'][process.name]='inaccessible'\n"
+                "  continue\n"
+                " except FileNotFoundError: continue\n"
+                " result['fd_tables'][process.name]='readable'\n"
+                " for descriptor in descriptors:\n"
+                "  try:\n"
+                "   info=descriptor.stat()\n"
+                "   if (info.st_dev,info.st_ino) in EXPECTED_PINS:\n"
+                "    result['inherited_pins'].append(str(descriptor))\n"
+                "  except (PermissionError,FileNotFoundError): pass\n"
+                "result['self_pid']=str(os.getpid())\n"
                 "print(json.dumps(result))"
             )
             (self.project / "visible").write_text("visible", encoding="utf-8")
@@ -455,6 +528,8 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
             self.assertFalse(result["git_write"])
             self.assertFalse(result["host_pid_visible"])
             self.assertTrue(result["pid1_visible"])
+            self.assertIn(result["fd_tables"]["1"], ("readable", "inaccessible"))
+            self.assertEqual(result["fd_tables"][result["self_pid"]], "readable")
             self.assertEqual(result["inherited_pins"], [])
         finally:
             host.close()

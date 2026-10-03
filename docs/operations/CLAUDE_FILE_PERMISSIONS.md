@@ -39,6 +39,9 @@ and acceptance before broadening this trust claim.
    the worker is not a member of that group. User-owned pyenv/uv environments
    also cannot supply this trusted runtime. Install a dedicated root-owned
    runtime, remove group/other write and POSIX ACLs before separately accepting it.
+   Interpreters and dynamic dependencies of the resolved Claude executable
+   must also lie within the readonly runtime roots; prefer a self-contained
+   root-owned build.
 4. Create a distinct private mode-0700 provider-session base outside project
    roots and Hub/tlive authority directories. Each native session gets its own
    subdirectory. Existing user configuration, hooks, plugins and credentials
@@ -82,7 +85,7 @@ socket. Review all additional private endpoints/authority roots. Namespace
 validation refuses symlinks, overlapping private mounts, writable trusted code,
 hardlinks/special files in writable trees and nested mounts. Runtime and hook
 roots must also be free of submounts; choose narrower sources when a system
-runtime tree contains them. Nested btrfs subvolumes are refused by the inode
+runtime tree contains them. Nested btrfs subvolumes are refused by the device
 consistency check. Worktree roots
 whose `.git` is a file are outside this initial slice. Local clones with
 hardlinked Git objects are refused too. Missing isolation or
@@ -138,7 +141,8 @@ unknown card delivery and wrong root/generation/lease. Attempt private symlink,
 Git-metadata/runtime modification and host-process access inside the namespace.
 On the exact installed bubblewrap build, inspect accessible descriptors of every
 process visible in the namespace, including PID 1; no pinned host-source inode
-may remain accessible there. The executable's version or help flags alone do
+may remain accessible there. Record explicitly whether each process's fd table
+was readable or inaccessible. The executable's version or help flags alone do
 not establish this descriptor-closure property.
 Confirm no Stop hook, continuation or second writer, and no real model calls
 from monitoring. The worker process and the hook must have different visible

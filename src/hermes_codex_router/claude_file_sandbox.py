@@ -170,10 +170,13 @@ def _scan_writable_tree(root: Path, source_fd: int) -> None:
     """Scan the pinned source, never a replacement bearing the same path name."""
     try:
         _scan_pinned_tree(source_fd)
-    except OSError as exc:
-        if exc.errno in {errno.ENOENT, errno.ESTALE}:
+    except (OSError, MountPinError) as exc:
+        error = exc if isinstance(exc, OSError) else exc.__cause__
+        if not isinstance(error, OSError):
+            raise
+        if error.errno in {errno.ENOENT, errno.ESTALE}:
             message = "writable tree changed during validation"
-        elif exc.errno in {errno.EMFILE, errno.ENFILE}:
+        elif error.errno in {errno.EMFILE, errno.ENFILE}:
             message = "writable tree descriptor limit exceeded"
         else:
             message = "cannot inspect writable tree"
@@ -184,6 +187,7 @@ def _scan_pinned_tree(source_fd: int) -> None:
     """Own only the current ancestor chain while examining each pinned entry."""
     count = 0
     expected_mount = mount_id(source_fd)
+    expected_device = os.fstat(source_fd).st_dev
     first = os.open(".", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC, dir_fd=source_fd)
     try:
         entries = os.scandir(first)
@@ -208,6 +212,8 @@ def _scan_pinned_tree(source_fd: int) -> None:
                 info = os.fstat(fd)
                 if mount_id(fd) != expected_mount:
                     raise FileToolSandboxError("writable tree contains a nested mount")
+                if info.st_dev != expected_device:
+                    raise FileToolSandboxError("writable tree contains a nested filesystem")
                 if info.st_ino != entry.inode():
                     raise FileToolSandboxError("writable tree changed during validation")
                 if stat.S_ISLNK(info.st_mode):
