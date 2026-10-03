@@ -17,6 +17,8 @@ import threading
 import time
 from pathlib import Path
 
+from .owned_process_exit import peek_exit_code
+
 _PROBE_TIMEOUT_SECONDS = 5.0
 _MAX_STDOUT_BYTES = 128 * 1024
 _MAX_STDERR_BYTES = 64 * 1024
@@ -163,11 +165,11 @@ def _read_help(
                         diagnostic_bytes += len(chunk)
                         if diagnostic_bytes > _MAX_STDERR_BYTES:
                             raise ClaudeCliCapabilityError()
-            while process.poll() is None:
+            while (exit_code := peek_exit_code(process)) is None:
                 if interrupted.is_set() or time.monotonic() >= deadline:
                     raise ClaudeCliCapabilityError()
                 interrupted.wait(min(0.05, deadline - time.monotonic()))
-        if interrupted.is_set() or time.monotonic() >= deadline or process.returncode != 0:
+        if interrupted.is_set() or time.monotonic() >= deadline or exit_code != 0:
             raise ClaudeCliCapabilityError()
         return bytes(output)
     finally:

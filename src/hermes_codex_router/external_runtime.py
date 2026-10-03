@@ -27,6 +27,7 @@ from .claude_stream import (
     VisibleAssistantCallback,
     parse_claude_stream,
 )
+from .owned_process_exit import peek_exit_code
 from .provider_limits import ProviderLimit, parse_antigravity_limit, parse_opencode_limit
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
@@ -161,7 +162,10 @@ class ExternalCliAdapter:
         self._interrupt_requested.set()
         with self._process_lock:
             process = self._active_process
-        if process is None or process.poll() is not None:
+        if process is None:
+            return False
+        exit_code = peek_exit_code(process) if self.runtime == "claude" else process.poll()
+        if exit_code is not None:
             return False
         try:
             # This path is reserved for the user's emergency stop.  A provider
@@ -175,8 +179,11 @@ class ExternalCliAdapter:
     def prepare_interruptible_turn(self) -> None:
         """Clear a prior interrupt before a worker starts its monitor."""
         with self._process_lock:
-            if self._active_process is not None and self._active_process.poll() is None:
-                raise ExternalRuntimeError("provider process is already active")
+            if self._active_process is not None:
+                process = self._active_process
+                exit_code = peek_exit_code(process) if self.runtime == "claude" else process.poll()
+                if exit_code is None:
+                    raise ExternalRuntimeError("provider process is already active")
             self._interrupt_requested.clear()
 
     def build_argv(
@@ -572,11 +579,17 @@ class ExternalCliAdapter:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(argv, timeout)
-                process.wait(timeout=remaining)
+                while (exit_code := peek_exit_code(process)) is None:
+                    if self._interrupt_requested.is_set():
+                        raise ExternalTurnInterrupted("claude turn interrupted by user")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(argv, timeout)
+                    self._interrupt_requested.wait(min(0.05, remaining))
             stdout = reader.finish()
             if time.monotonic() >= deadline:
                 raise subprocess.TimeoutExpired(argv, timeout)
-            return subprocess.CompletedProcess(argv, process.returncode, stdout, "")
+            return subprocess.CompletedProcess(argv, exit_code, stdout, "")
         except subprocess.TimeoutExpired:
             self._terminate_claude_process(process, graceful=True)
             if self._interrupt_requested.is_set():
@@ -601,16 +614,18 @@ class ExternalCliAdapter:
 
     @staticmethod
     def _terminate_claude_process(process: subprocess.Popen[str], *, graceful: bool) -> None:
+        if process.returncode is not None:
+            return
         try:
             os.killpg(process.pid, signal.SIGTERM if graceful else signal.SIGKILL)
         except ProcessLookupError:
             pass
         if graceful:
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
-        if process.poll() is None:
+            # Observe exit without reaping: descendants can retain the group
+            # after the leader exits, so reserve its PID until the last signal.
+            deadline = time.monotonic() + 5
+            while peek_exit_code(process) is None and time.monotonic() < deadline:
+                time.sleep(0.01)
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:

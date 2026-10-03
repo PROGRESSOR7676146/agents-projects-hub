@@ -115,6 +115,35 @@ class ExternalRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "timed out"):
             self._claude_process("import time\ntime.sleep(30)\n", timeout=0.05)
 
+    def test_claude_help_and_turn_reserve_leader_pid_until_last_group_signal(self) -> None:
+        session = str(uuid.uuid4())
+        terminal = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "session_id": session,
+            "result": "Visible answer",
+        }
+        outcomes: list[int] = []
+        real_killpg = os.killpg
+
+        def signal_reserved_group(pid: int, requested_signal: int) -> None:
+            # A reaped leader raises ChildProcessError here, before any signal
+            # could reach a recycled group. WNOWAIT preserves the reservation.
+            outcome = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            outcomes.append(outcome.si_code)
+            real_killpg(pid, requested_signal)
+
+        with patch("os.killpg", side_effect=signal_reserved_group):
+            result = self._claude_process(
+                f"import json\nprint(json.dumps({terminal!r}))\n",
+                new_session_id=session,
+            )
+        self.assertEqual(result.text, "Visible answer")
+        self.assertEqual(outcomes, [os.CLD_EXITED, os.CLD_EXITED])
+
     def test_claude_drains_both_pipes_and_preserves_exact_terminal_result(self) -> None:
         session = str(uuid.uuid4())
         message = {
