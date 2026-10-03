@@ -144,6 +144,40 @@ class DurableAdmissionTests(unittest.TestCase):
     def material_count(self, job_id: str) -> int:
         return len(self.state.incoming_materials_for_job(job_id))
 
+    def test_notice_opt_in_covers_plain_and_batched_admission(self) -> None:
+        self.admission = DurableProviderAdmission(
+            state=self.state,
+            telegram=self.transport,
+            state_path=self.state_path,
+            observer_agent_id="hub",
+            message_batch_quiet_ms=1500,
+            message_batch_max_ms=8000,
+            prepare_task_notices=True,
+        )
+        for message_id, batch in ((91, None), (92, "first"), (93, "second")):
+            result = self.admission.admit(
+                self.request(
+                    self.message(message_id),
+                    batchable_user_text=batch,
+                )
+            )
+            self.assertIsInstance(result, CommittedAdmission)
+        rows = self.state._connection.execute(
+            "SELECT job_id,kind FROM task_lifecycle_notices"
+        ).fetchall()
+        self.assertEqual(len(self.jobs()), 2)
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(sum(row["kind"] == "accepted" for row in rows), 2)
+
+    def test_default_admission_does_not_prepare_undeliverable_notices(self) -> None:
+        self.admission.admit(self.request(self.message(91)))
+        self.assertEqual(
+            self.state._connection.execute(
+                "SELECT count(*) FROM task_lifecycle_notices"
+            ).fetchone()[0],
+            0,
+        )
+
     def test_simple_commit_returns_typed_result_and_immutable_job_snapshot(self) -> None:
         result = self.admission.admit(self.request(self.message(101)))
 

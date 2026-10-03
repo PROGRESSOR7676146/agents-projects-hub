@@ -24,7 +24,8 @@ from .progress_delivery import ProgressDeliveryQueue
 from .project_onboarding import ProjectOnboardingStore
 from .project_resolution import resolve_project_context
 from .session_connect import SessionConnectStore
-from .state import HubState
+from .state import HubState, StateError
+from .task_activity import TaskActivityState
 from .task_notice_sender import deliver_task_notice
 from .telegram import TELEGRAM_HEALTH_FAILURE_THRESHOLD, TelegramBotApi, TelegramError
 
@@ -130,7 +131,15 @@ class TelegramOutboxSender:
         self.sender_id = sender_id
         self.state = HubState.open(config.state_path)
         self.progress = ProgressDeliveryQueue(self.state)
+        self.task_activity = TaskActivityState(
+            self.state._connection,
+            transaction=self.state._immediate_transaction,
+            state_error=StateError,
+            notices=self.state.task_notices,
+            notices_enabled=config.hub_bot is not None,
+        )
         self._cursor = 0
+        self._delivery_class_cursor = 0
         self._progress_cursor = 0
         self._stop = threading.Event()
         self._started_at = datetime.now(timezone.utc)
@@ -330,24 +339,29 @@ class TelegramOutboxSender:
         self.progress.supersede_terminal(self.provider_agent_ids, now=now)
         self.state.materialize_held_provider_jobs()
         self.state.materialize_released_uncertainty_notices()
-        if self.config.hub_bot is not None and self._deliver_task_notice_one(now=now):
-            return True
-        if self.config.hub_bot is not None and self._deliver_root_blocker_one(now=now):
-            return True
+        self.task_activity.evaluate(
+            now=now if now is not None else datetime.now(timezone.utc),
+            ordinary_seconds=self.config.task_no_progress_seconds,
+            tool_seconds=self.config.task_tool_no_progress_seconds,
+        )
         if (
             self._final_deliveries_since_command_scope >= 10
             and self._sync_onboarded_project_commands()
         ):
             return True
-        start = self._cursor % len(self.agent_ids)
-        for offset in range(len(self.agent_ids)):
+        # A busy notice stream must not prevent already-completed work reaching
+        # Telegram. Each durable class gets a turn within three active cycles.
+        deliveries = (
+            (self._deliver_task_notice_one, self._deliver_root_blocker_one, self._deliver_final_one)
+            if self.config.hub_bot is not None
+            else (self._deliver_final_one,)
+        )
+        for offset in range(len(deliveries)):
             if self._stop.is_set():
                 return False
-            position = (start + offset) % len(self.agent_ids)
-            agent_id = self.agent_ids[position]
-            if self._deliver_one(agent_id, now=now):
-                self._cursor = (position + 1) % len(self.agent_ids)
-                self._final_deliveries_since_command_scope += 1
+            position = (self._delivery_class_cursor + offset) % len(deliveries)
+            if deliveries[position](now=now):
+                self._delivery_class_cursor = (position + 1) % len(deliveries)
                 return True
         if self._sync_onboarded_project_commands():
             return True
@@ -366,12 +380,24 @@ class TelegramOutboxSender:
         self._refresh_chat_actions()
         return False
 
+    def _deliver_final_one(self, *, now: datetime | None = None) -> bool:
+        start = self._cursor % len(self.agent_ids)
+        for offset in range(len(self.agent_ids)):
+            if self._stop.is_set():
+                return False
+            position = (start + offset) % len(self.agent_ids)
+            if self._deliver_one(self.agent_ids[position], now=now):
+                self._cursor = (position + 1) % len(self.agent_ids)
+                self._final_deliveries_since_command_scope += 1
+                return True
+        return False
+
     def _deliver_task_notice_one(self, *, now: datetime | None = None) -> bool:
         result = deliver_task_notice(
             self.state.task_notices, self.telegram_bots["hub"], self.sender_id, now=now
         )
         if result.worked:
-            if result.error is None:
+            if result.delivered:
                 self._record_transport_success()
             elif isinstance(result.error, TelegramError):
                 self._record_transport_failure(result.error)

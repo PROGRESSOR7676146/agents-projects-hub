@@ -170,6 +170,48 @@ class TelegramOutboxSenderTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
+    def test_superseded_notice_does_not_claim_transport_recovery(self) -> None:
+        from hermes_codex_router.task_notice_sender import TaskNoticeDeliveryResult
+
+        config = replace(
+            self.config, hub_bot=HubTelegramBot("example_hub_bot", self.base / "unused-token")
+        )
+        sender = TelegramOutboxSender(
+            config, telegram_bots={"hub": Bot(), "opencode": Bot(), "antigravity": Bot()}
+        )
+        try:
+            with (
+                patch(
+                    "hermes_codex_router.outbox_sender.deliver_task_notice",
+                    return_value=TaskNoticeDeliveryResult(True),
+                ),
+                patch.object(sender, "_record_transport_success") as success,
+            ):
+                self.assertTrue(sender._deliver_task_notice_one())
+                success.assert_not_called()
+        finally:
+            sender.close()
+
+    def test_continuous_task_and_root_notices_cannot_starve_final_results(self) -> None:
+        self.ready_outbox("opencode", 501)
+        config = replace(
+            self.config, hub_bot=HubTelegramBot("example_hub_bot", self.base / "unused-token")
+        )
+        bots = {"hub": Bot(), "opencode": Bot(), "antigravity": Bot()}
+        sender = TelegramOutboxSender(config, telegram_bots=bots)
+        try:
+            with (
+                patch.object(sender, "_deliver_task_notice_one", return_value=True) as tasks,
+                patch.object(sender, "_deliver_root_blocker_one", return_value=True) as roots,
+            ):
+                for _ in range(3):
+                    self.assertTrue(sender.run_cycle())
+                self.assertEqual(len(bots["opencode"].sent), 1)
+                self.assertEqual(tasks.call_count, 1)
+                self.assertEqual(roots.call_count, 1)
+        finally:
+            sender.close()
+
     def test_claude_is_an_external_result_delivery_identity(self) -> None:
         claude = AgentDefinition(
             "claude",

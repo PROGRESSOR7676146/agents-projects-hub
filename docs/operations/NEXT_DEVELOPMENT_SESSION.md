@@ -1,15 +1,19 @@
 # Next session: Claude parity and visible task states
 
-Status: implementation in progress; stop-certainty slice validated; native Claude recovery under validation.
-Date: 2026-10-02.
+Status: implementation in progress; native Claude publication and schema-37 visibility review pending.
+Date: 2026-10-03.
 Decision owner: repository owner. Integration owner: lead development agent.
-Repository baseline inspected: `8070414744899602111920bc7f45233e29e8e4a4`.
-This is source inspection evidence, not a tested candidate or deployment claim.
-Next trigger: complete publication validation and independent review of native
-Claude invocation/recovery, then continue queue/progress visibility and human
-approval hosting. The stop/notice slice passed canonical checks and independent
-review at `d3be8747dd402823e8807babfffff7245daa6364`; live acceptance remains open.
-The requested GPT-6.1 Sol helpers use reasoning effort `high`.
+Last verified stop/notice revision: `d3be8747dd402823e8807babfffff7245daa6364`
+(canonical checks and independent review; live acceptance remains open).
+Native Claude publication candidate: `c5e130ccc86291d5833592d50eb47c4542ef4ecc`;
+canonical publication checks passed (1,375 tests, 128 modules, no typing errors);
+Hosted checks passed at that exact revision; required Claude or owner review remains pending.
+Astra review is supplementary.
+Schema-37 visibility is a separate working candidate under focused validation,
+without an exact-revision canonical or deployment acceptance claim.
+Next trigger: complete exact-revision checks and independent review for each
+candidate, then continue human approval hosting and remaining visibility work.
+The current owner instruction caps helpers at GPT-6 Sol with reasoning `high`, using standard service without priority.
 
 ## Objective and authority
 
@@ -58,14 +62,14 @@ configurable. They trigger notices only; they never approve, stop, unlock or rep
 
 Primary: `gpt-6-astra`, effort `high`. It owns architecture, normative contracts,
 security decisions, integration, exact-revision evidence and owner communication.
-Helpers: explicitly `gpt-6.1-sol`, effort `high`, not inherited model defaults.
-With the collaboration tool use those values and `fork_turns: "none"`, supplying
-self-contained bounded tasks and required sources. Verify model availability;
-never silently substitute. Official reference:
+Helpers: at most `gpt-6-sol`, effort `high`, with standard service and no priority, under the current owner instruction.
+Supply self-contained bounded tasks and required sources. Use an interface that
+can enforce the service tier; the CLI supports explicit `service_tier=default`
+and disabled fast mode. Verify model availability; never silently substitute. Official reference:
 [Codex subagents](https://developers.openai.com/codex/subagents).
 
 Use at most three concurrent helpers with four total session slots. The owner's
-Sol request takes precedence over the ordinary Gemini-helper preference here.
+Sol/service-tier restriction takes precedence over the ordinary Gemini-helper preference here.
 Each helper gets an owner, allowed files, base revision, tests and exit criteria.
 Never delegate private profiles, credentials or deployment inventories.
 
@@ -139,6 +143,13 @@ release; unknown stop/outcome retains exclusion and explains reconciliation.
 Never automatically repeat old user work. Cover applicable compatibility paths
 or reject unsupported configurations visibly.
 
+The schema-37 slice now has queue admission/handoff snapshots and accepted Codex
+activity wired to the existing sender; see
+[ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md). Do not
+restart that implementation as a new task. Finish its exact-revision validation
+and required review, then address active-work retries, approval before native
+turn acceptance and explicitly scoped visibility for other execution paths.
+
 ### 3. Claude runtime and human authority
 
 Complete packages B/D of the accepted Claude plan: native identity, supported
@@ -198,11 +209,12 @@ Update private handoff whenever plan, pending decisions or deployment state chan
 
 The schema-36 stop/control-delivery slice passed canonical checks and independent
 review at the revision above; see
-[ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md). The next native
-Claude slice adds identity preparation, bounded streaming and saved-result
-recovery with focused offline evidence; its publication gates remain pending.
-See [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md). Queue reasons,
-progress/approval notices, active retry and full Claude parity remain open.
+[ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md). The native Claude slice adds identity preparation, bounded streaming and
+saved-result recovery; canonical and hosted gates passed at `c5e130c`, while
+required Claude or owner review remains pending.
+See [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md). Queue snapshots and accepted Codex activity are present in the schema-37
+candidate. Its final gates/review, active retry, approval before acceptance and
+full Claude parity remain open.
 No deployment or live acceptance follows from these repository checks.
 
 First-pass pointers to recheck, not final design:

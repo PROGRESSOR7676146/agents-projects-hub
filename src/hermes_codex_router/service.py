@@ -550,6 +550,8 @@ class ProjectHubService:
             raise QueueAcceptanceError(
                 "managed-external provider admission belongs to its native gateway"
             )
+        from .provider_queue_capacity import QueueCapacityConfig
+
         admission = DurableProviderAdmission(
             state=self.state,
             telegram=self.telegram,
@@ -557,6 +559,21 @@ class ProjectHubService:
             observer_agent_id=self.agent.agent_id,
             message_batch_quiet_ms=self.config.message_batch_quiet_ms,
             message_batch_max_ms=self.config.message_batch_max_ms,
+            queue_capacity=QueueCapacityConfig(
+                self.config.max_parallel_roots,
+                self.config.external_worker_agent_ids
+                if session.agent_id in self.config.external_worker_agent_ids
+                else (),
+                {"codex": self.config.codex_worker_count, "claude": self.config.claude_worker_count}
+                if session.agent_id in self.config.external_worker_agent_ids
+                else {},
+            ),
+            prepare_task_notices=(
+                self.config.hub_bot is not None
+                and self.config.dispatch_mode == "queue"
+                and self.config.queue_runtime == "external"
+                and self.config.outbox_runtime == "external"
+            ),
         )
 
         def writer_transfer_preflight():

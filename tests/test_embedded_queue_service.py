@@ -184,6 +184,37 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         value._queue_thread = None
         return value, telegram
 
+    def test_queue_notices_require_hub_external_queue_and_external_sender(self) -> None:
+        base = self.config
+        for index, (hub, queue, outbox, expected) in enumerate(
+            (
+                (True, "external", "external", 2),
+                (False, "external", "external", 0),
+                (True, "embedded", "controller", 0),
+                (True, "external", "controller", 0),
+            )
+        ):
+            with self.subTest(hub=hub, queue=queue, outbox=outbox):
+                self.config = replace(
+                    base,
+                    state_path=base.state_path.with_name(f"state-{index}.db"),
+                    hub_bot=HubTelegramBot("example_hub_bot", base.state_path.parent / "token")
+                    if hub
+                    else None,
+                    queue_runtime=queue,
+                    outbox_runtime=outbox,
+                    external_worker_agent_ids=("codex",) if queue == "external" else (),
+                )
+                service, _ = self.service(QueueClient())
+                try:
+                    self.assertTrue(service.handle_update(update(1, "fictional task")))
+                    count = service.state._connection.execute(
+                        "SELECT count(*) FROM task_lifecycle_notices"
+                    ).fetchone()[0]
+                    self.assertEqual(count, expected)
+                finally:
+                    service.close()
+
     def test_slow_provider_does_not_block_menu_and_runs_off_polling_thread(self) -> None:
         client = QueueClient(block=True)
         service, telegram = self.service(client)

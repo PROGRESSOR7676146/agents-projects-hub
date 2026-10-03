@@ -63,6 +63,62 @@ class TaskLifecycleFixture(unittest.TestCase):
         with self.transaction():
             return self.state.prepare_notice_in_transaction(**values)
 
+    def test_transient_notice_guard_covers_terminal_states_and_activity_kinds(self) -> None:
+        for status in ("completed", "failed", "cancelled", "indeterminate", "result_ready"):
+            for kind in ("accepted", "queued", "executing", "approval_wait", "no_progress"):
+                with self.subTest(status=status, kind=kind):
+                    notice, _ = self.prepare(
+                        event_key=f"job:job-a:{status}:{kind}",
+                        kind=kind,
+                        job_id="job-a",
+                        stop_request_id=None,
+                    )
+                    leased = self.state.lease_notice("sender-a", now=self.now)
+                    assert leased is not None and leased.lease_token is not None
+                    with self.transaction():
+                        self.db.execute("UPDATE provider_jobs SET status=?", (status,))
+                    result = self.state.begin_send(
+                        notice.notice_id, leased.lease_token, now=self.now
+                    )
+                    self.assertEqual((result.status, result.attempt_count), ("superseded", 0))
+                    self.assertIsNone(result.send_started_at)
+                    self.assertIsNone(result.lease_token)
+
+    def test_stop_notice_is_prioritized_over_older_queue_notices(self) -> None:
+        self.prepare(
+            event_key="job:job-a:queued",
+            kind="queued",
+            job_id="job-a",
+            stop_request_id=None,
+            now=self.now - timedelta(seconds=10),
+        )
+        stop, _ = self.prepare()
+        leased = self.state.lease_notice("sender-a", now=self.now)
+        assert leased is not None
+        self.assertEqual(leased.notice_id, stop.notice_id)
+
+    def test_terminal_guard_preserves_attempted_rejection_history(self) -> None:
+        notice, _ = self.prepare(
+            event_key="job:job-a:executing", kind="executing", job_id="job-a", stop_request_id=None
+        )
+        leased = self.state.lease_notice("sender-a", now=self.now)
+        assert leased is not None and leased.lease_token is not None
+        self.state.begin_send(notice.notice_id, leased.lease_token, now=self.now)
+        self.state.retry_rejected(
+            notice.notice_id,
+            leased.lease_token,
+            error_code="fictional_rejection",
+            available_at=self.now,
+            now=self.now,
+        )
+        with self.transaction():
+            self.db.execute("UPDATE provider_jobs SET status='completed'")
+        retry = self.state.lease_notice("sender-b", now=self.now)
+        assert retry is not None and retry.lease_token is not None
+        result = self.state.begin_send(notice.notice_id, retry.lease_token, now=self.now)
+        self.assertEqual((result.status, result.attempt_count), ("leased", 2))
+        self.assertEqual(result.error_code, "fictional_rejection")
+
     def started(self):
         notice, _ = self.prepare()
         leased = self.state.lease_notice("sender-a", now=self.now)

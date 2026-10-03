@@ -1,12 +1,14 @@
 # Stabilization plan
 
 Status: active; stages 0–2 and 3b done, stage 3 in progress
-Date: 2026-09-27; updated 2026-09-30
-Owner: repository owner (decisions and merges); Claude Code executes
-Last verified revision: `46d6e7a` (deployed; every required component and the
-Hermes plugin report it)
-Next trigger: `p0_p1_live` at `46d6e7a` once the provider quota resets; the
-out-of-band update and incident plane (ADR 0048)
+Date: 2026-09-27; updated 2026-10-02
+Owner: repository owner (decisions and merges); lead development agent integrates
+Last verified repository revision: `d3be874` for the stop/notice slice
+(canonical checks and independent review). Native Claude candidate `c5e130c`
+and the schema-37 visibility work remain separate publication/review tracks.
+Next trigger: finish their exact-revision validation and required independent
+review; continue the separately authorized live backlog and ADR 0048 work.
+Deployment identity and private acceptance records remain outside this plan.
 
 ## Why
 
@@ -129,6 +131,7 @@ acceptance.
 | Restart continuity and exactly-once processing | AC-F-005, AC-F-010 | Controlled restart during queued and active work |
 | Summary-free Codex `/local` → `/return` | REQ-WRITER-006, REQ-WRITER-007 | Telegram → native CLI → Telegram on the same thread |
 | Saved-session `/connect` | REQ-CMD-008, REQ-WRITER-012, AC-F-013 | Topic, Hub-private and local-code entry paths |
+| Accepted-turn activity and queue snapshots (schema 37) | REQ-QUEUE-012, REQ-QUEUE-013 | Queue blocker, long tool, approval resolution, restart and ambiguous delivery at the exact deployed revision |
 | Durable root blockers (schema 35) | REQ-WRITER-008 | Blocked input, held job, owner decision |
 | Exact Codex turn recovery (schema 34) | REQ-QUEUE-004 | Uncertain turn, read-only proof, continuation |
 | Root concurrency, worktree lanes, Codex slots | REQ-QUEUE-002, REQ-QUEUE-003 | Three projects on independent roots |
@@ -148,14 +151,14 @@ acceptance.
 - Reliability plan packages B–E: owner decision 2026-09-27 — B, retiring
   multi-auth, moves into this plan as stage 3b; C, D and E are deferred and
   stay recorded in the reliability plan.
-- Claude failure classification (PR #80 review, item 2), owner decision
-  2026-09-27. **Planned, not implemented;** it is to be implemented with the
-  Claude parity work. Decided target: an unknown outcome keeps the root hold
-  and never replays; a confirmed, structured terminal quota or provider
-  rejection gets its own classification, also without replay. Current
-  scaffold behavior: any unsuccessful terminal result becomes a generic
-  runtime error and the job is recorded as `indeterminate`
-  (`ambiguous_execution`), holding the root until the owner resolves it.
+- Claude failure classification and native invocation evidence (PR #112):
+  repository implementation is present under
+  [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md), with candidate
+  `c5e130c` passing canonical publication checks (1,375 tests, 128 modules).
+  Hosted checks passed at that exact candidate; required Claude or owner
+  review remains open. Astra review is supplementary.
+  Human approval hosting, tools, advisor isolation, native local transfer and
+  CPA/account live acceptance remain separate parity work.
 - `codex-worker@1` / `claude-worker@1` duplicate slot 1 of `worker@codex` /
   `worker@claude` (PR #80 review, item 5).
 - Slot identity format and bounds are duplicated in four modules (PR #80 review, items 7–8).
@@ -190,22 +193,15 @@ acceptance.
   the tool and a private stack manifest; the drift check; Hermes integration;
   the watchdog.
 - `configure-github.sh` required nonexistent check names (fixed in #82).
-- Silent queue waits, owner decision 2026-10-01. **Implementation authorized in the current continuation plan; work in progress.**
-  See [ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md).
-  1. The Hub bot should tell the topic when a job waits for a free worker
-     slot or capacity (`codex_worker_count`, `max_parallel_roots`) or for a
-     busy project root, instead of staying silent. Today REQ-OPS-004 alerts
-     only after a 15-minute wait without an active worker lease. This needs a
-     product contract and an ADR.
-  2. Check the deployed release configuration's `max_parallel_roots` and
-     `codex_worker_count` against the capacity the owner expects, and the
-     fate of an earlier private capacity configuration.
-  3. Check whether the acceptance canary topic shares a project root with an
-     active project; that serializes an acceptance run regardless of slots.
-
-  Found when a `p0_p1_live` check at `f764ab8` timed out: its job waited
-  behind an unrelated Codex job for longer than the check timeout, and
-  nothing in the topic said why.
+- Silent queue and execution waits: schema-37 repository implementation is
+  under validation; [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md)
+  records its scope and limits. Admission/handoff snapshots, accepted Codex
+  activity, exact approval resolution and passive deadlines are implemented.
+  Canonical validation and required independent review must bind the final
+  candidate; source inspection and focused tests do not close live acceptance.
+  Remaining work: active-work retry controls, approval before turn acceptance,
+  broader provider/compatibility coverage, and separately authorized capacity
+  and canary-root checks. No background inference or automatic replay is added.
 
 ## Closure
 

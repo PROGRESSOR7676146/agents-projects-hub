@@ -213,7 +213,9 @@ class TaskNoticeMigrationTests(unittest.TestCase):
 
     def test_legacy_receipts_are_archived_and_never_restarted_blindly(self) -> None:
         result = self._upgrade()
-        self.assertEqual((result.previous_version, result.current_version), (35, 36))
+        self.assertEqual(
+            (result.previous_version, result.current_version), (35, migration.LATEST_SCHEMA_VERSION)
+        )
         self.assertIsNotNone(result.backup_path)
         assert result.backup_path is not None
         self.assertEqual(result.backup_path.stat().st_mode & 0o777, 0o600)
@@ -277,7 +279,7 @@ class TaskNoticeMigrationTests(unittest.TestCase):
             after["telegram_outbox_parts"],
             [row for row in self.before["telegram_outbox_parts"] if row[0] == "provider"],
         )
-        self.assertEqual(self._upgrade().previous_version, 36)
+        self.assertEqual(self._upgrade().previous_version, migration.LATEST_SCHEMA_VERSION)
 
     def test_fault_after_archive_and_removal_rolls_back_in_place(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "migration-36 fault"):

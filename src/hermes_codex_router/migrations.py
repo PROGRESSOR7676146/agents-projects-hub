@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Iterator
 
 from .schema_compatibility import TARGET_SCHEMA_VERSION
+from .schema_task_activity import TASK_ACTIVITY_SCHEMA as MIGRATION_37
 from .schema_task_lifecycle import MIGRATION_36
 
 LATEST_SCHEMA_VERSION = TARGET_SCHEMA_VERSION
@@ -1498,6 +1499,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_34,
         MIGRATION_35,
         MIGRATION_36,
+        MIGRATION_37,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:

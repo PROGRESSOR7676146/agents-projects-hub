@@ -144,6 +144,7 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
                         "models.py",
                         "registry.py",
                         "schema_task_lifecycle.py",
+                        "schema_task_activity.py",
                         "session_adoption_policy.py",
                     ):
                         archive.writestr(

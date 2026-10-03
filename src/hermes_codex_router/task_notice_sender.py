@@ -21,6 +21,7 @@ class TaskNoticeTelegram(Protocol):
 class TaskNoticeDeliveryResult:
     worked: bool
     error: Exception | None = None
+    delivered: bool = False
 
 
 def _utc_now() -> datetime:
@@ -58,6 +59,8 @@ def deliver_task_notice(
     token = notice.lease_token
     try:
         attempt = state.begin_send(notice.notice_id, token, now=current_time())
+        if attempt.status == "superseded":
+            return TaskNoticeDeliveryResult(True)
     except Exception as exc:
         # No transport call was made; lease recovery remains safely unattempted.
         return TaskNoticeDeliveryResult(True, exc)
@@ -101,4 +104,4 @@ def deliver_task_notice(
             notice.notice_id, token, error_code="receipt_commit_unknown", now=current_time()
         )
         return TaskNoticeDeliveryResult(True, exc)
-    return TaskNoticeDeliveryResult(True)
+    return TaskNoticeDeliveryResult(True, delivered=True)

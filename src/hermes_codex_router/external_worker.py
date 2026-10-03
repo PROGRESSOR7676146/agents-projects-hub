@@ -56,6 +56,7 @@ from .telegram_interaction import (
     telegram_developer_instructions,
 )
 from .turn_observation import TurnObservation
+from .worker_activity import codex_activity_for_turn
 from .worker_execution import (
     ProviderSessionPreparationError,
     ProviderTurnStopped,
@@ -808,72 +809,76 @@ class ExternalQueueWorker:
             ):
                 raise ExternalQueueWorkerError("adopted Codex resume identity mismatch")
             journal.record_thread(job.job_id, token, thread.thread_id, project.root)
-        turn_id = start_codex_provider_turn(
-            client,
-            job,
-            thread,
-            project,
-            prompt=codex_provider_prompt(turn_text, staging_dir=staging_dir),
-            local_image_paths=prepared.local_image_paths,
-        )
-        journal.record_turn(job.job_id, token, turn_id)
-        client.on_visible_item = lambda item_id, text, phase: journal.record_item(
-            job.job_id, token, item_id, text, phase
-        )
-        client.on_completed = lambda result: journal.record_completion(
-            job.job_id, token, result.text
-        )
-        monitor_stop = threading.Event()
-        interrupted_request: list[str] = []
+        with codex_activity_for_turn(
+            client, self.state, self.config, job.job_id, token, project.root
+        ) as accepted_activity:
+            turn_id = start_codex_provider_turn(
+                client,
+                job,
+                thread,
+                project,
+                prompt=codex_provider_prompt(turn_text, staging_dir=staging_dir),
+                local_image_paths=prepared.local_image_paths,
+            )
+            journal.record_turn(job.job_id, token, turn_id)
+            accepted_activity(thread.thread_id, turn_id)
+            client.on_visible_item = lambda item_id, text, phase: journal.record_item(
+                job.job_id, token, item_id, text, phase
+            )
+            client.on_completed = lambda result: journal.record_completion(
+                job.job_id, token, result.text
+            )
+            monitor_stop = threading.Event()
+            interrupted_request: list[str] = []
 
-        def monitor_control() -> None:
-            monitor_state = HubState.open(self.config.state_path)
-            try:
-                while not monitor_stop.wait(0.2):
-                    request_id = monitor_state.pending_emergency_stop_for_job(job.job_id)
-                    if request_id is not None:
-                        try:
-                            assert self.supervisor is not None
-                            if self.supervisor.transport_mode == "stdio-fallback":
-                                client.close()
+            def monitor_control() -> None:
+                monitor_state = HubState.open(self.config.state_path)
+                try:
+                    while not monitor_stop.wait(0.2):
+                        request_id = monitor_state.pending_emergency_stop_for_job(job.job_id)
+                        if request_id is not None:
+                            try:
+                                assert self.supervisor is not None
+                                if self.supervisor.transport_mode == "stdio-fallback":
+                                    client.close()
+                                else:
+                                    interrupt_client = self.supervisor.client()
+                                    try:
+                                        interrupt_client.interrupt_turn(
+                                            thread_id=thread.thread_id, turn_id=turn_id
+                                        )
+                                    finally:
+                                        interrupt_client.close()
+                            except Exception as exc:
+                                self._record_event(
+                                    "warning", "provider_interrupt_unconfirmed", type(exc).__name__
+                                )
                             else:
-                                interrupt_client = self.supervisor.client()
-                                try:
-                                    interrupt_client.interrupt_turn(
-                                        thread_id=thread.thread_id, turn_id=turn_id
-                                    )
-                                finally:
-                                    interrupt_client.close()
-                        except Exception as exc:
-                            self._record_event(
-                                "warning", "provider_interrupt_unconfirmed", type(exc).__name__
-                            )
-                        else:
-                            interrupted_request.append(request_id)
-                        return
-                    assert self.supervisor is not None
-                    if self.supervisor.transport_mode == "stdio-fallback":
-                        # A fallback client owns a private app-server process;
-                        # a second client cannot address its active turn.
-                        continue
-                    self._steer_ready_followup(monitor_state, job, thread.thread_id, turn_id)
-            finally:
-                monitor_state.close()
+                                interrupted_request.append(request_id)
+                            return
+                        assert self.supervisor is not None
+                        if self.supervisor.transport_mode == "stdio-fallback":
+                            # A fallback client owns a private app-server process;
+                            # a second client cannot address its active turn.
+                            continue
+                        self._steer_ready_followup(monitor_state, job, thread.thread_id, turn_id)
+                finally:
+                    monitor_state.close()
 
-        monitor = threading.Thread(
-            target=monitor_control,
-            name="codex-live-control",
-            daemon=True,
-        )
-        monitor.start()
-        try:
-            result = wait_for_codex_provider_turn(client, turn_id)
-            journal.record_completion(job.job_id, token, result.text)
-        finally:
-            client.on_visible_item = None
-            client.on_completed = None
-            monitor_stop.set()
-            monitor.join(timeout=2)
+            monitor = threading.Thread(
+                target=monitor_control,
+                name="codex-live-control",
+                daemon=True,
+            )
+            monitor.start()
+            try:
+                result = wait_for_codex_provider_turn(client, turn_id)
+                journal.record_completion(job.job_id, token, result.text)
+            finally:
+                client.on_visible_item = None
+                client.on_completed = None
+                monitor_stop.set()
+                monitor.join(timeout=2)
         late_request = self.state.pending_emergency_stop_for_job(job.job_id)
         if interrupted_request:
             raise ProviderTurnStopped(interrupted_request[0])

@@ -130,6 +130,8 @@ class HubConfig:
     # into one provider turn.  Zero keeps legacy one-message/one-turn behavior.
     message_batch_quiet_ms: int = 0
     message_batch_max_ms: int = 8000
+    task_no_progress_seconds: int = 300
+    task_tool_no_progress_seconds: int = 1200
     direct_message_project_id: str | None = None
     recovery_plane: RecoveryPlaneSettings = field(
         default_factory=lambda: RecoveryPlaneSettings(
@@ -272,6 +274,13 @@ class _RuntimeTopology:
     claude_worker_count: int
     message_batch_quiet_ms: int
     message_batch_max_ms: int
+
+
+def _task_progress_seconds(root: dict[str, Any], key: str, default: int) -> int:
+    value = root.get(key, default)
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 86400:
+        raise HubConfigError(f"{key} must be an integer from 1 to 86400")
+    return value
 
 
 def _parse_owners(root: dict[str, Any]) -> list[int]:
@@ -1039,6 +1048,10 @@ def load_hub_config(
         claude_worker_count=topology.claude_worker_count,
         message_batch_quiet_ms=topology.message_batch_quiet_ms,
         message_batch_max_ms=topology.message_batch_max_ms,
+        task_no_progress_seconds=_task_progress_seconds(root, "task_no_progress_seconds", 300),
+        task_tool_no_progress_seconds=_task_progress_seconds(
+            root, "task_tool_no_progress_seconds", 1200
+        ),
         direct_message_project_id=direct_message_project_id,
         codex_sessions_dir=codex.codex_sessions_dir,
         codex_stdio_executable=codex.codex_stdio_executable,
