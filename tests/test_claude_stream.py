@@ -48,7 +48,6 @@ class ClaudeStreamTests(unittest.TestCase):
                 "content": [
                     {"type": "thinking", "thinking": "private thought"},
                     {"type": "text", "text": "Visible é"},
-                    {"type": "tool_use", "input": {"secret": "private input"}},
                 ]
             },
         }
@@ -103,7 +102,7 @@ class ClaudeStreamTests(unittest.TestCase):
                 ).encode()
             )
 
-    def test_incremental_callback_skips_errors_aborts_subagents_and_partial_events(self) -> None:
+    def test_incremental_callback_skips_errors_aborts_and_partial_events(self) -> None:
         items: list[ClaudeVisibleAssistant] = []
         reader = ClaudeStreamReader(expected_session_id=SESSION, on_visible_assistant=items.append)
         base = {
@@ -116,11 +115,96 @@ class ClaudeStreamTests(unittest.TestCase):
         for change in (
             {"error": "rate_limit"},
             {"aborted": True},
-            {"parent_tool_use_id": "subagent-tool"},
             {"type": "stream_event"},
         ):
             reader.feed((output({**base, **change}) + "\n").encode())
         self.assertEqual(items, [])
+
+    def test_text_only_policy_rejects_capabilities_and_actions_before_visible_publication(
+        self,
+    ) -> None:
+        unsafe = (
+            {"type": "system", "subtype": "init", "tools": ["Bash"]},
+            {"type": "system", "subtype": "init", "tools": ""},
+            {"type": "system", "subtype": "init", "mcp_servers": [{"name": "private"}]},
+            {"type": "system", "subtype": "init", "plugins": [{"name": "private"}]},
+            {"type": "system", "subtype": "init", "skills": ["private"]},
+            {"type": "system", "subtype": "init", "permissionMode": "manual"},
+            {"type": "control_request", "request": {"subtype": "can_use_tool", "input": "private"}},
+            {"type": "system", "subtype": "hook_started", "hook_name": "private"},
+            {"type": "system", "subtype": "task_started", "description": "private"},
+            {"type": "tool_progress", "tool_name": "private"},
+            {"type": "tool_use_summary", "summary": "private"},
+            {
+                "type": "assistant",
+                "uuid": OTHER_SESSION,
+                "parent_tool_use_id": None,
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Must not be published"},
+                        {"type": "tool_use", "name": "Bash", "input": {"command": "private"}},
+                    ]
+                },
+            },
+            {"type": "assistant", "parent_tool_use_id": "private", "message": {"content": []}},
+            {
+                "type": "user",
+                "message": {"content": [{"type": "tool_result", "content": "private"}]},
+            },
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_start",
+                    "content_block": {"type": "server_tool_use", "input": "private"},
+                },
+            },
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "delta": {"type": "input_json_delta", "partial_json": "private"},
+                },
+            },
+        )
+        for event in unsafe:
+            event = {"session_id": SESSION, **event}
+            with self.subTest(event=event):
+                visible: list[ClaudeVisibleAssistant] = []
+                for callback in (None, visible.append):
+                    reader = ClaudeStreamReader(
+                        expected_session_id=SESSION, on_visible_assistant=callback
+                    )
+                    with self.assertRaisesRegex(ClaudeStreamError, "text-only") as raised:
+                        reader.feed((output(event) + "\n").encode())
+                    self.assertNotIn("private", str(raised.exception))
+                self.assertEqual(visible, [])
+                with self.assertRaisesRegex(ClaudeStreamError, "text-only"):
+                    parse_claude_stream(output(event, result()), expected_session_id=SESSION)
+
+    def test_text_only_initialization_and_partial_text_preserve_terminal_result(self) -> None:
+        stream = output(
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": SESSION,
+                "tools": [],
+                "mcp_servers": [],
+                "plugins": [],
+                "skills": [],
+                "permissionMode": "dontAsk",
+            },
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": "provisional"},
+                },
+            },
+            result(),
+        )
+        reader = ClaudeStreamReader(expected_session_id=SESSION)
+        reader.feed(stream.encode())
+        self.assertEqual(parse_claude_stream(reader.finish()).text, "Visible answer")
 
     def test_incremental_callback_failure_is_uncertain_without_exception_detail(self) -> None:
         def fail(_: object) -> None:

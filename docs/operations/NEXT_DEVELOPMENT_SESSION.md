@@ -1,18 +1,17 @@
 # Next session: Claude parity and visible task states
 
-Status: implementation in progress; native Claude publication and schema-37 visibility review pending.
+Status: native Claude and schema-37 visibility merged; human approval boundary in progress.
 Date: 2026-10-03.
 Decision owner: repository owner. Integration owner: lead development agent.
-Last verified stop/notice revision: `d3be8747dd402823e8807babfffff7245daa6364`
-(canonical checks and independent review; live acceptance remains open).
-Native Claude publication candidate: `c5e130ccc86291d5833592d50eb47c4542ef4ecc`;
-canonical publication checks passed (1,375 tests, 128 modules, no typing errors);
-Hosted checks passed at that exact revision; required Claude or owner review remains pending.
-Astra review is supplementary.
-Schema-37 visibility is a separate working candidate under focused validation,
-without an exact-revision canonical or deployment acceptance claim.
-Next trigger: complete exact-revision checks and independent review for each
-candidate, then continue human approval hosting and remaining visibility work.
+Last verified integrated revision: `3750ccfb0f8eb98333f9219f3a697d6328890d04`.
+The stop/native/visibility stack passed exact-candidate independent reviews;
+the merged revision passed canonical validation (1,488 tests in 135 modules,
+no typing errors), hosted Python 3.11/3.12/3.13 validation and CodeQL.
+This is repository evidence; deployment and live acceptance remain separate.
+Next trigger: verify the native human approval boundary described in the
+[Claude plan](CLAUDE_LEAD_REVIEW_PLAN.ru.md#следующая-граница-разрешений), then
+continue advisor isolation and remaining visibility work. Do not enable tools
+from a CLI flag or an unqualified tlive `allow` alone.
 The current owner instruction caps helpers at GPT-6 Sol with reasoning `high`, using standard service without priority.
 
 ## Objective and authority
@@ -146,9 +145,10 @@ or reject unsupported configurations visibly.
 The schema-37 slice now has queue admission/handoff snapshots and accepted Codex
 activity wired to the existing sender; see
 [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md). Do not
-restart that implementation as a new task. Finish its exact-revision validation
-and required review, then address active-work retries, approval before native
-turn acceptance and explicitly scoped visibility for other execution paths.
+restart that implementation as a new task. Its exact-revision publication
+validation and independent reviews are complete. Address active-work retries,
+approval before native turn acceptance and explicitly scoped visibility for
+other execution paths next.
 
 ### 3. Claude runtime and human authority
 
@@ -211,10 +211,10 @@ The schema-36 stop/control-delivery slice passed canonical checks and independen
 review at the revision above; see
 [ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md). The native Claude slice adds identity preparation, bounded streaming and
 saved-result recovery; canonical and hosted gates passed at `c5e130c`, while
-required Claude or owner review remains pending.
+exact-candidate independent review and merged-revision validation are complete.
 See [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md). Queue snapshots and accepted Codex activity are present in the schema-37
-candidate. Its final gates/review, active retry, approval before acceptance and
-full Claude parity remain open.
+baseline. Its publication gates and independent review are complete; active retry,
+approval before acceptance, deployment acceptance and full Claude parity remain open.
 No deployment or live acceptance follows from these repository checks.
 
 First-pass pointers to recheck, not final design:

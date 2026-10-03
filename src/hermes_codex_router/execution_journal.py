@@ -11,7 +11,12 @@ from .progress_delivery import ProgressDeliveryQueue
 from .state import HubState, ProviderJobRecord, SessionRecord, StateError
 
 CLAUDE_PRE_INVOCATION_ERROR_CODES = frozenset(
-    {"claude_cpa_route_unverified", "claude_cpa_credential_ambiguous", "claude_cli_unavailable"}
+    {
+        "claude_cpa_route_unverified",
+        "claude_cpa_credential_ambiguous",
+        "claude_cli_unavailable",
+        "claude_cli_capabilities_unverified",
+    }
 )
 
 
