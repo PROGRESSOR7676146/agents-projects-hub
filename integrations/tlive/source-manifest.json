@@ -151,9 +151,9 @@
     "src/types/qrcode-terminal.d.ts": "1970491e4ebeed1b9949eacaf292d79ed81c5e7a0b62af1d7980971e6de12559"
   },
   "package": "tlive",
-  "patch_sha256": "b6605af0bb5a9cd6fc640dba109d35a187c3c4207be078a11d813cfacd3dc759",
+  "patch_sha256": "523be3a3933c7a6b56c2f98e622aa2e7a5aca99afcfafe4a476bfe5c3f82b198",
   "patched_files": {
-    "src/adapters/im/telegram.ts": "ecc2569932b948da8e60751cf6cf171d7c1400af4a8dda97ca552ecd33046e46",
+    "src/adapters/im/telegram.ts": "ef08ae311aec593bc5bcb157a736c60b30f2c0ea3ce408f7dcd0c322b363fd60",
     "src/kernel/contracts/protected-permission.ts": "7943c0120a9f56a3385f018bdcc166269ddfd78b9254c795529a3adb24f4020a",
     "src/kernel/daemon/bootstrap.ts": "bd9672a5cee7e18ac622f120d3304849f95e870e5d2a1ecda399a742de841cdf",
     "src/kernel/daemon/protected-permissions.ts": "0a24fd4709c8a9033403dc24940ba82cb427bbd5b0a37915b5cc9c6b872687fe",

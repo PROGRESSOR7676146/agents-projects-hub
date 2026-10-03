@@ -44,7 +44,7 @@
      ]).catch(() => undefined);
      // Use grammy's polling but tie to our abort controller via custom client.
 -    void this.bot.start({ drop_pending_updates: true });
-+    void this.bot.start({ drop_pending_updates: true }).catch(() => {
++    void Promise.resolve(this.bot.start({ drop_pending_updates: true })).catch(() => {
 +      this.connected = 'failed';
 +      this.protectedDisconnect?.();
 +    });
