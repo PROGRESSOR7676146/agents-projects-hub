@@ -3,6 +3,7 @@ import os
 import socket
 import struct
 import unittest
+from typing import cast
 from unittest.mock import patch
 
 from hermes_codex_router import unix_peer
@@ -29,14 +30,14 @@ class UnixPeerTests(unittest.TestCase):
             with self.subTest(credentials=credentials):
                 with patch.object(unix_peer, "_peer_credentials", return_value=credentials):
                     with self.assertRaises(unix_peer.PeerCredentialError):
-                        unix_peer.require_same_uid_peer(object())
+                        unix_peer.require_same_uid_peer(cast(socket.socket, object()))
         with patch.object(unix_peer, "_peer_credentials", return_value=(1, os.geteuid(), 12345)):
-            unix_peer.require_same_uid_peer(object())
+            unix_peer.require_same_uid_peer(cast(socket.socket, object()))
         with patch.object(unix_peer, "_peer_credentials", side_effect=OSError("secret path")):
             with self.assertRaisesRegex(
                 unix_peer.PeerCredentialError, "untrusted Unix peer"
             ) as error:
-                unix_peer.require_same_uid_peer(object())
+                unix_peer.require_same_uid_peer(cast(socket.socket, object()))
         self.assertNotIn("secret path", str(error.exception))
 
     def test_kernel_payload_must_be_exact_size(self):
@@ -53,12 +54,12 @@ class UnixPeerTests(unittest.TestCase):
         for payload in (b"", b"\0" * 11, b"\0" * 13):
             with self.subTest(size=len(payload)):
                 with self.assertRaises(unix_peer.PeerCredentialError):
-                    unix_peer.require_same_uid_peer(FakeSocket(payload))
+                    unix_peer.require_same_uid_peer(cast(socket.socket, FakeSocket(payload)))
 
     def test_non_linux_platform_fails_closed(self):
         with patch.object(unix_peer.sys, "platform", "darwin"):
             with self.assertRaises(unix_peer.PeerCredentialError):
-                unix_peer.require_same_uid_peer(object())
+                unix_peer.require_same_uid_peer(cast(socket.socket, object()))
 
 
 if __name__ == "__main__":

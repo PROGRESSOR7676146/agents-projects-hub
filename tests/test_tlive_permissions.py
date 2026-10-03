@@ -182,15 +182,17 @@ class TliveTests(unittest.TestCase):
 
         for result in ((1, os.geteuid() + 1, 0), OSError("unavailable")):
             with self.subTest(result=result):
-                options = (
-                    {"return_value": result}
+                credential_patch = (
+                    patch("hermes_codex_router.unix_peer._peer_credentials", return_value=result)
                     if isinstance(result, tuple)
-                    else {"side_effect": result}
+                    else patch(
+                        "hermes_codex_router.unix_peer._peer_credentials", side_effect=result
+                    )
                 )
                 with (
                     patch.object(tlive_permissions, "_safe_socket_path"),
                     patch.object(tlive_permissions.socket, "socket", FakeSocket),
-                    patch("hermes_codex_router.unix_peer._peer_credentials", **options),
+                    credential_patch,
                 ):
                     with self.assertRaisesRegex(TlivePermissionError, "protected peer unavailable"):
                         ProtectedTliveClient(load_tlive_permission_config(self.path)).hello()

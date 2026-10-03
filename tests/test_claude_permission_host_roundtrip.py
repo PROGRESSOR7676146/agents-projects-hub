@@ -15,6 +15,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -189,14 +190,14 @@ class PermissionHostPeerGateTests(unittest.TestCase):
                 server = PermissionServer.__new__(PermissionServer)
                 server.stop = threading.Event()
                 server.inflight = None
-                server.listener = FakeListener(connection)
-                options = (
-                    {"return_value": result}
+                server.listener = cast(socket.socket, FakeListener(connection))
+                credential_patch = (
+                    patch.object(unix_peer, "_peer_credentials", return_value=result)
                     if isinstance(result, tuple)
-                    else {"side_effect": result}
+                    else patch.object(unix_peer, "_peer_credentials", side_effect=result)
                 )
                 with (
-                    patch.object(unix_peer, "_peer_credentials", **options),
+                    credential_patch,
                     patch.object(PermissionServer, "_serve_connection") as serve_connection,
                     patch.object(HubState, "open") as db_open,
                 ):
@@ -706,13 +707,13 @@ class PermissionHostRoundtripTests(unittest.TestCase):
 
         for peer_result in ((1, os.geteuid() + 1, 0), OSError("unavailable")):
             with self.subTest(peer_result=peer_result):
-                options = (
-                    {"return_value": peer_result}
+                credential_patch = (
+                    patch.object(unix_peer, "_peer_credentials", return_value=peer_result)
                     if isinstance(peer_result, tuple)
-                    else {"side_effect": peer_result}
+                    else patch.object(unix_peer, "_peer_credentials", side_effect=peer_result)
                 )
                 with (
-                    patch.object(unix_peer, "_peer_credentials", **options),
+                    credential_patch,
                     patch.object(
                         HubState, "open", side_effect=AssertionError("opened database")
                     ) as db_open,

@@ -15,6 +15,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import patch
 
 import hermes_codex_router.claude_file_sandbox as sandbox_module
@@ -202,10 +203,14 @@ class ClaudeFileSandboxTests(unittest.TestCase):
         with patch.object(os, "access", return_value=False):
             for error in (errno.ENOTSUP, errno.EOPNOTSUPP):
                 with patch.object(os, "listxattr", side_effect=OSError(error, "example")):
-                    sandbox_module._immutable_entry(self.executable, "runtime", info)
+                    sandbox_module._immutable_entry(
+                        self.executable, "runtime", cast(os.stat_result, info)
+                    )
             with patch.object(os, "listxattr", side_effect=OSError(errno.EACCES, "example")):
                 with self.assertRaisesRegex(FileToolSandboxError, "cannot inspect runtime ACLs"):
-                    sandbox_module._immutable_entry(self.executable, "runtime", info)
+                    sandbox_module._immutable_entry(
+                        self.executable, "runtime", cast(os.stat_result, info)
+                    )
 
     def test_wide_scan_under_low_fd_limit_and_failure_leave_no_handles(self) -> None:
         source = """
