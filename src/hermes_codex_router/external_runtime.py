@@ -350,25 +350,14 @@ class ExternalCliAdapter:
         owned_antigravity_log = False
         active_antigravity_log_path: Path | None = None
         if self._uses_default_runner and self.runtime == "claude":
-            argv = self._verified_claude_argv(
-                argv, cwd=cwd, environment=environment, file_tools=claude_sandbox is not None
-            )
-            if claude_sandbox is not None:
-                try:
-                    argv, environment = wrap_file_tool_argv(argv, environment, cwd, claude_sandbox)
-                except FileToolSandboxError:
-                    raise ProviderUnavailableError(
-                        "claude_permission_host_unverified",
-                        "Claude file-tool isolation could not be verified. The productive turn was not started.",
-                    ) from None
-            result = self._run_claude_process(
+            result = self._run_owned_claude_turn(
                 argv,
                 cwd=cwd,
                 environment=environment,
                 timeout=timeout,
                 expected_session_id=session_id if session_id is not None else new_session_id,
                 on_visible_assistant=on_visible_assistant,
-                event_policy=require_file_tool_event if claude_sandbox is not None else None,
+                sandbox=claude_sandbox,
             )
         elif self._uses_default_runner:
             if self.runtime == "antigravity":
@@ -509,6 +498,56 @@ class ExternalCliAdapter:
             event_policy=require_file_tool_event if claude_sandbox is not None else None,
         )
 
+    def _run_owned_claude_turn(
+        self,
+        argv: tuple[str, ...],
+        *,
+        cwd: Path,
+        environment: dict[str, str],
+        timeout: float,
+        expected_session_id: str | None,
+        on_visible_assistant: VisibleAssistantCallback | None,
+        sandbox: FileToolSandboxConfig | None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Own mount descriptors across every productive invocation exit path."""
+        if sandbox is None:
+            argv = self._verified_claude_argv(argv, cwd=cwd, environment=environment)
+            return self._run_claude_process(
+                argv,
+                cwd=cwd,
+                environment=environment,
+                timeout=timeout,
+                expected_session_id=expected_session_id,
+                on_visible_assistant=on_visible_assistant,
+            )
+        try:
+            argv = (str(sandbox.claude_executable), *argv[1:])
+            launch = wrap_file_tool_argv(argv, environment, cwd, sandbox)
+        except FileToolSandboxError:
+            raise ProviderUnavailableError(
+                "claude_permission_host_unverified",
+                "Claude file-tool isolation could not be verified. The productive turn was not started.",
+            ) from None
+        with launch:
+            verified = self._verified_claude_argv(
+                argv, cwd=cwd, environment=environment, file_tools=True
+            )
+            if verified[0] != argv[0]:
+                raise ProviderUnavailableError(
+                    "claude_permission_host_unverified",
+                    "Claude executable differs from the validated runtime.",
+                )
+            return self._run_claude_process(
+                launch.argv,
+                cwd=Path("/"),
+                environment=launch.environment,
+                timeout=timeout,
+                expected_session_id=expected_session_id,
+                on_visible_assistant=on_visible_assistant,
+                event_policy=require_file_tool_event,
+                pass_fds=launch.pass_fds,
+            )
+
     def _verified_claude_argv(
         self,
         argv: tuple[str, ...],
@@ -522,7 +561,7 @@ class ExternalCliAdapter:
             raise ExternalTurnInterrupted("claude turn interrupted by user")
         try:
             executable = self._claude_capabilities.require(
-                self.executable,
+                argv[0] if file_tools else self.executable,
                 cwd=cwd,
                 environment=environment,
                 interrupted=self._interrupt_requested,
@@ -551,6 +590,7 @@ class ExternalCliAdapter:
         expected_session_id: str | None,
         on_visible_assistant: VisibleAssistantCallback | None,
         event_policy: Callable[[dict[str, object]], None] | None = None,
+        pass_fds: tuple[int, ...] = (),
     ) -> subprocess.CompletedProcess[str]:
         """Drain both pipes without communicate() or an unbounded reader queue."""
         if self._interrupt_requested.is_set():
@@ -565,6 +605,8 @@ class ExternalCliAdapter:
                 stderr=subprocess.PIPE,
                 text=True,
                 start_new_session=True,
+                close_fds=True,
+                pass_fds=pass_fds,
             )
         except OSError as exc:
             raise ProviderUnavailableError(

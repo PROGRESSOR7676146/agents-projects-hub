@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -136,6 +137,10 @@ class TliveTests(unittest.TestCase):
         with (
             patch.object(tlive_permissions, "_safe_socket_path"),
             patch.object(tlive_permissions.socket, "socket", FakeSocket),
+            patch(
+                "hermes_codex_router.unix_peer._peer_credentials",
+                return_value=(os.getpid(), os.geteuid(), os.getegid()),
+            ),
         ):
             client = ProtectedTliveClient(load_tlive_permission_config(self.path))
             capability = client.hello()
@@ -144,6 +149,56 @@ class TliveTests(unittest.TestCase):
             FakeSocket.tamper = True
             with self.assertRaises(TlivePermissionError):
                 client.request(payload, capability)
+
+    def test_untrusted_peer_closes_without_sending_hello(self):
+        from hermes_codex_router import tlive_permissions
+
+        instances = []
+
+        class FakeSocket:
+            sent = False
+            closed = False
+
+            def __init__(self, *_args):
+                instances.append(self)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.close()
+
+            def settimeout(self, _value):
+                pass
+
+            def connect(self, _path):
+                pass
+
+            def sendall(self, _wire):
+                self.sent = True
+
+            def close(self):
+                self.closed = True
+
+        for result in ((1, os.geteuid() + 1, 0), OSError("unavailable")):
+            with self.subTest(result=result):
+                credential_patch = (
+                    patch("hermes_codex_router.unix_peer._peer_credentials", return_value=result)
+                    if isinstance(result, tuple)
+                    else patch(
+                        "hermes_codex_router.unix_peer._peer_credentials", side_effect=result
+                    )
+                )
+                with (
+                    patch.object(tlive_permissions, "_safe_socket_path"),
+                    patch.object(tlive_permissions.socket, "socket", FakeSocket),
+                    credential_patch,
+                ):
+                    with self.assertRaisesRegex(TlivePermissionError, "protected peer unavailable"):
+                        ProtectedTliveClient(load_tlive_permission_config(self.path)).hello()
+                self.assertFalse(instances[-1].sent)
+                self.assertTrue(instances[-1].closed)
+        self.assertEqual(len(instances), 2)
 
 
 if __name__ == "__main__":

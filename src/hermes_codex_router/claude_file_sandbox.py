@@ -2,19 +2,24 @@
 
 This module builds an OS boundary, not a Claude permission decision. The caller
 must supply an already validated registry root, exact Claude tool/permission
-policy, and an approval host. Launch the returned argv/env with close_fds=True,
-pass_fds=(), and never retry a failed bwrap launch without the sandbox.
+policy, and an approval host. Own the returned launch as a context manager;
+inherit only its pass_fds into bubblewrap with close_fds=True. Never retry a
+failed bwrap launch without the sandbox.
 """
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import stat
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Sequence
+
+from .claude_mount_pins import MountPinError, MountPins, SandboxLaunch, mount_id
 
 
 class FileToolSandboxError(ValueError):
@@ -42,6 +47,7 @@ _SANDBOX_SOCKET = "/run/hub-permission.sock"
 _SYSTEM_ALIASES = {"/bin": "/usr/bin", "/lib": "/usr/lib", "/lib64": "/usr/lib64"}
 _MAX_RUNTIME_ENTRIES = 100_000
 _MAX_WRITABLE_ENTRIES = 100_000
+_MAX_SCAN_DEPTH = 128
 _RUNTIME_PREFIXES = (
     Path("/usr/bin"),
     Path("/usr/lib"),
@@ -103,14 +109,20 @@ def _immutable_source(path: Path, label: str, *, directory: bool | None = None) 
     if directory is False and not path.is_file():
         raise FileToolSandboxError(f"{label} must be a regular file")
     for parent in (path, *path.parents):
-        info = parent.stat()
-        if (
-            info.st_uid == os.getuid()
-            or info.st_mode & 0o002
-            or (info.st_gid in {*os.getgroups(), os.getegid()} and info.st_mode & 0o020)
-            or os.access(parent, os.W_OK, effective_ids=True)
+        _immutable_entry(parent, label, parent.stat())
+
+
+def _immutable_entry(path: Path, label: str, info: os.stat_result) -> None:
+    if info.st_uid != 0 or info.st_mode & 0o022 or os.access(path, os.W_OK, effective_ids=True):
+        raise FileToolSandboxError(f"{label} must be immutable root-owned code")
+    try:
+        if {"system.posix_acl_access", "system.posix_acl_default"}.intersection(
+            os.listxattr(path, follow_symlinks=False)
         ):
-            raise FileToolSandboxError(f"{label} is writable by the provider UID")
+            raise FileToolSandboxError(f"{label} has unsupported ACL permissions")
+    except OSError as exc:
+        if exc.errno not in {errno.ENOTSUP, errno.EOPNOTSUPP}:
+            raise FileToolSandboxError("cannot inspect runtime ACLs") from exc
 
 
 def _immutable_tree(path: Path) -> None:
@@ -121,6 +133,7 @@ def _immutable_tree(path: Path) -> None:
     """
     if not path.is_dir():
         return
+    _immutable_source(path, "runtime root", directory=True)
     count = 0
     pending = [path]
     visited: set[tuple[int, int]] = set()
@@ -131,7 +144,7 @@ def _immutable_tree(path: Path) -> None:
         if identity in visited:
             continue
         visited.add(identity)
-        _immutable_source(directory, "runtime directory", directory=True)
+        _immutable_entry(directory, "runtime directory", info)
         for entry in directory.iterdir():
             count += 1
             if count > _MAX_RUNTIME_ENTRIES:
@@ -148,59 +161,120 @@ def _immutable_tree(path: Path) -> None:
             elif stat.S_ISDIR(info.st_mode):
                 pending.append(entry)
             elif stat.S_ISREG(info.st_mode):
-                if (
-                    info.st_uid == os.getuid()
-                    or info.st_mode & 0o002
-                    or (info.st_gid in {*os.getgroups(), os.getegid()} and info.st_mode & 0o020)
-                    or os.access(entry, os.W_OK, effective_ids=True)
-                ):
-                    raise FileToolSandboxError("runtime tree contains a provider-writable entry")
+                _immutable_entry(entry, "runtime entry", info)
             else:
                 raise FileToolSandboxError("runtime tree contains a special entry")
 
 
-def _scan_writable_tree(root: Path) -> None:
-    """Refuse hardlinks, special files, and mounted subtrees in writable binds."""
+def _scan_writable_tree(root: Path, source_fd: int) -> None:
+    """Scan the pinned source, never a replacement bearing the same path name."""
+    try:
+        _scan_pinned_tree(source_fd)
+    except (OSError, MountPinError) as exc:
+        error = exc if isinstance(exc, OSError) else exc.__cause__
+        if not isinstance(error, OSError):
+            raise
+        if error.errno in {errno.ENOENT, errno.ESTALE}:
+            message = "writable tree changed during validation"
+        elif error.errno in {errno.EMFILE, errno.ENFILE}:
+            message = "writable tree descriptor limit exceeded"
+        else:
+            message = "cannot inspect writable tree"
+        raise FileToolSandboxError(message) from exc
+
+
+def _scan_pinned_tree(source_fd: int) -> None:
+    """Own only the current ancestor chain while examining each pinned entry."""
     count = 0
-    for base, dirs, files in os.walk(root, followlinks=False):
-        for name in (*dirs, *files):
+    expected_mount = mount_id(source_fd)
+    expected_device = os.fstat(source_fd).st_dev
+    first = os.open(".", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC, dir_fd=source_fd)
+    try:
+        entries = os.scandir(first)
+    except BaseException:
+        os.close(first)
+        raise
+    frames = [(first, entries)]
+    try:
+        while frames:
+            current, entries = frames[-1]
+            entry = next(entries, None)
+            if entry is None:
+                frames.pop()
+                entries.close()
+                os.close(current)
+                continue
             count += 1
             if count > _MAX_WRITABLE_ENTRIES:
                 raise FileToolSandboxError("writable tree exceeds trust scan limit")
-            info = (Path(base) / name).lstat()
-            if stat.S_ISLNK(info.st_mode):
-                continue  # Outside targets remain absent in the new namespace.
-            if stat.S_ISREG(info.st_mode):
-                if info.st_nlink != 1:
-                    raise FileToolSandboxError("writable tree contains a hardlink")
-            elif not stat.S_ISDIR(info.st_mode):
-                raise FileToolSandboxError("writable tree contains a special file")
+            fd = os.open(entry.name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=current)
+            try:
+                info = os.fstat(fd)
+                if mount_id(fd) != expected_mount:
+                    raise FileToolSandboxError("writable tree contains a nested mount")
+                if info.st_dev != expected_device:
+                    raise FileToolSandboxError("writable tree contains a nested filesystem")
+                if info.st_ino != entry.inode():
+                    raise FileToolSandboxError("writable tree changed during validation")
+                if stat.S_ISLNK(info.st_mode):
+                    continue  # Outside targets stay absent in the new namespace.
+                if stat.S_ISREG(info.st_mode):
+                    if info.st_nlink != 1:
+                        raise FileToolSandboxError("writable tree contains a hardlink")
+                elif stat.S_ISDIR(info.st_mode):
+                    if len(frames) >= _MAX_SCAN_DEPTH:
+                        raise FileToolSandboxError("writable tree exceeds scan depth limit")
+                    child = os.open(".", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC, dir_fd=fd)
+                    try:
+                        child_entries = os.scandir(child)
+                    except BaseException:
+                        os.close(child)
+                        raise
+                    frames.append((child, child_entries))
+                else:
+                    raise FileToolSandboxError("writable tree contains a special file")
+            finally:
+                os.close(fd)
+    finally:
+        for descriptor, entries in reversed(frames):
+            entries.close()
+            os.close(descriptor)
 
 
-def _reject_nested_mounts(*roots: Path) -> None:
+def _reject_nested_mounts(*roots: Path, mount_ids: Mapping[Path, int] | None = None) -> None:
     try:
         mountinfo = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
     except OSError as exc:
         raise FileToolSandboxError("cannot inspect host mount table") from exc
-    filesystems: list[tuple[Path, str]] = []
+    filesystems: list[tuple[int, Path, str]] = []
     for line in mountinfo.splitlines():
         before, separator, after = line.partition(" - ")
         fields = before.split()
-        if len(fields) < 5 or not separator or not after.split():
+        if len(fields) < 5 or not fields[0].isdigit() or not separator or not after.split():
             raise FileToolSandboxError("host mount table is malformed")
         mountpoint = Path(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), fields[4]))
-        filesystems.append((mountpoint, after.split()[0]))
+        filesystems.append((int(fields[0]), mountpoint, after.split()[0]))
         for root in roots:
             if mountpoint != root and _within(mountpoint, root):
                 raise FileToolSandboxError("writable tree contains a nested mount")
     for root in roots:
-        selected = [item for item in filesystems if _within(root, item[0])]
-        if not selected or max(selected, key=lambda item: len(item[0].parts))[1] not in {
-            "ext4",
-            "xfs",
-            "btrfs",
-            "tmpfs",
-        }:
+        if mount_ids is not None:
+            selected = [item for item in filesystems if item[0] == mount_ids[root]]
+        else:
+            candidates = [item for item in filesystems if _within(root, item[1])]
+            depth = max((len(item[1].parts) for item in candidates), default=0)
+            selected = [item for item in candidates if len(item[1].parts) == depth]
+        if (
+            len(selected) != 1
+            or not _within(root, selected[0][1])
+            or selected[0][2]
+            not in {
+                "ext4",
+                "xfs",
+                "btrfs",
+                "tmpfs",
+            }
+        ):
             raise FileToolSandboxError("writable roots require a supported native Linux filesystem")
 
 
@@ -208,8 +282,9 @@ def _reject_nested_mounts(*roots: Path) -> None:
 class FileToolSandboxConfig:
     """Explicit sources for one provider turn; no implicit host mounts.
 
-    Runtime roots and hook code must be installed by a different UID and not
-    writable by the provider UID or its groups. ``provider_home`` is the one
+    Runtime roots and hook code, their ancestors and descendants must be
+    root-owned and not writable by the provider UID or other principals.
+    ``provider_home`` is the one
     dedicated 0700 session store and must contain no Hub/tlive authority.
     ``private_paths`` must enumerate those authority roots/files; the sole
     exposed socket is an explicit per-turn exception, mounted as one inode.
@@ -250,7 +325,9 @@ class FileToolSandboxConfig:
             raise FileToolSandboxError("trusted runtime source is unavailable") from exc
         return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
 
-    def _validate(self) -> tuple[Path, Path, Path, tuple[Path, ...], Path]:
+    def _validate(
+        self, mount_ids: Mapping[Path, int], source_fds: Mapping[Path, int]
+    ) -> tuple[Path, Path, Path, tuple[Path, ...], Path]:
         if sys.platform != "linux":
             raise FileToolSandboxError("Linux namespaces are required")
         bwrap = _absolute_path(self.bwrap_executable, "bwrap executable")
@@ -262,24 +339,25 @@ class FileToolSandboxConfig:
         _not_broad(home, "provider home")
         _not_broad(hook, "hook code root")
         _runtime_location(hook)
-        if not project.is_dir() or not home.is_dir():
+        if not all(stat.S_ISDIR(os.fstat(source_fds[path]).st_mode) for path in (project, home)):
             raise FileToolSandboxError("project and provider home must be directories")
         git = project / ".git"
-        if git.is_symlink() or not git.is_dir():
+        if not stat.S_ISDIR(os.fstat(source_fds[git]).st_mode):
             raise FileToolSandboxError("project must have an ordinary .git directory")
-        if home.stat().st_uid != os.getuid() or stat.S_IMODE(home.stat().st_mode) != 0o700:
+        home_stat = os.fstat(source_fds[home])
+        if home_stat.st_uid != os.geteuid() or stat.S_IMODE(home_stat.st_mode) != 0o700:
             raise FileToolSandboxError("provider home must be owned by worker UID and mode 0700")
-        _reject_nested_mounts(project, home)
-        _scan_writable_tree(project)
-        _scan_writable_tree(home)
-        if not stat.S_ISSOCK(sock.stat().st_mode):
+        _reject_nested_mounts(*source_fds, mount_ids=mount_ids)
+        _scan_writable_tree(project, source_fds[project])
+        _scan_writable_tree(home, source_fds[home])
+        socket_stat = os.fstat(source_fds[sock])
+        if not stat.S_ISSOCK(socket_stat.st_mode):
             raise FileToolSandboxError("permission endpoint must be a Unix socket")
-        socket_stat = sock.stat()
         parent_stat = sock.parent.stat()
         if (
-            socket_stat.st_uid != os.getuid()
+            socket_stat.st_uid != os.geteuid()
             or stat.S_IMODE(socket_stat.st_mode) != 0o600
-            or parent_stat.st_uid != os.getuid()
+            or parent_stat.st_uid != os.geteuid()
             or stat.S_IMODE(parent_stat.st_mode) != 0o700
         ):
             raise FileToolSandboxError(
@@ -328,15 +406,50 @@ class FileToolSandboxConfig:
             raise FileToolSandboxError("permission socket overlaps a broad mount")
         return bwrap, project, home, roots, sock
 
-    def wrap(
-        self, argv: Sequence[str], env: Mapping[str, str], cwd: Path | str
+    def wrap(self, argv: Sequence[str], env: Mapping[str, str], cwd: Path | str) -> SandboxLaunch:
+        """Pin every mount before validation and transfer ownership to the caller."""
+        pins = MountPins()
+        try:
+            command, child = self._build(argv, env, cwd, pins)
+            pins.recheck()
+            return SandboxLaunch(tuple(command), child, pins)
+        except BaseException as exc:
+            pins.close()
+            if isinstance(exc, (MountPinError, OSError)):
+                raise FileToolSandboxError("mount sources could not be pinned") from exc
+            raise
+
+    def _build(
+        self, argv: Sequence[str], env: Mapping[str, str], cwd: Path | str, pins: MountPins
     ) -> tuple[list[str], dict[str, str]]:
-        """Build an argv-only bwrap launch and sanitized child environment.
+        """Build an argv-only launch using the exact descriptors being checked.
 
         A bwrap startup/namespace failure is a failed turn. The caller must
         never invoke ``argv`` alone or retry outside this wrapper.
         """
-        bwrap, project, home, roots, sock = self._validate()
+        project_fd = pins.open(Path(self.project_root), directory=True)
+        git_fd = pins.open_relative(project_fd, ".git", directory=True)
+        home_fd = pins.open(Path(self.provider_home), directory=True)
+        sock_fd = pins.open(Path(self.permission_socket))
+        runtime_fds = {Path(root): pins.open(Path(root)) for root in self.runtime_roots}
+        hook = Path(self.hook_code_root)
+        hook_fd = None
+        if not any(_within(hook, root) for root in runtime_fds):
+            hook_fd = pins.open(hook, directory=True)
+        source_fds = {
+            Path(self.project_root): project_fd,
+            Path(self.project_root) / ".git": git_fd,
+            Path(self.provider_home): home_fd,
+            Path(self.permission_socket): sock_fd,
+            **runtime_fds,
+        }
+        if hook_fd is not None:
+            source_fds[hook] = hook_fd
+        bwrap, project, home, roots, sock = self._validate(
+            {path: pins.mount_id(fd) for path, fd in source_fds.items()},
+            source_fds,
+        )
+        _require_fd_bind_support(bwrap)
         workdir = _absolute_path(cwd, "working directory")
         if not _within(workdir, project) or not workdir.is_dir():
             raise FileToolSandboxError("working directory is outside project")
@@ -390,7 +503,7 @@ class FileToolSandboxConfig:
             "/home",
         ]
         for root in roots:
-            command.extend(("--ro-bind", str(root), str(root)))
+            command.extend(("--ro-bind-fd", str(runtime_fds[root]), str(root)))
         for alias, target in _SYSTEM_ALIASES.items():
             alias_path = Path(alias)
             if (
@@ -399,22 +512,21 @@ class FileToolSandboxConfig:
                 and any(_within(root, Path(target)) for root in roots)
             ):
                 command.extend(("--symlink", target.lstrip("/"), alias))
-        hook = Path(self.hook_code_root)
-        if not any(_within(hook, root) for root in roots):
-            command.extend(("--ro-bind", str(hook), str(hook)))
+        if hook_fd is not None:
+            command.extend(("--ro-bind-fd", str(hook_fd), str(hook)))
         command.extend(
             (
-                "--bind",
+                "--bind-fd",
+                str(project_fd),
                 str(project),
-                str(project),
-                "--ro-bind",
+                "--ro-bind-fd",
+                str(git_fd),
                 str(project / ".git"),
-                str(project / ".git"),
-                "--bind",
-                str(home),
+                "--bind-fd",
+                str(home_fd),
                 _SANDBOX_HOME,
-                "--ro-bind",
-                str(sock),
+                "--ro-bind-fd",
+                str(sock_fd),
                 _SANDBOX_SOCKET,
                 "--chdir",
                 str(workdir),
@@ -423,3 +535,29 @@ class FileToolSandboxConfig:
             )
         )
         return command, child_env
+
+
+def _require_fd_bind_support(bwrap: Path) -> None:
+    """Passive immutable-runtime check; no provider or namespace is started."""
+    try:
+        result = subprocess.run(
+            [str(bwrap), "--help"],
+            cwd="/",
+            env={"LC_ALL": "C"},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=3,
+            close_fds=True,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise FileToolSandboxError("bubblewrap descriptor binds could not be verified") from exc
+    if (
+        result.returncode
+        or len(result.stdout) > 131072
+        or any(
+            not re.search(rb"(?m)^\s*" + flag + rb"\s+FD\s+DEST\b", result.stdout)
+            for flag in (b"--bind-fd", b"--ro-bind-fd")
+        )
+    ):
+        raise FileToolSandboxError("bubblewrap descriptor binds are required")

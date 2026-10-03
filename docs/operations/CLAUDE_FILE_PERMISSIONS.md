@@ -25,11 +25,23 @@ and acceptance before broadening this trust claim.
    [pinned patch procedure](../../integrations/tlive/README.md). Verify source
    hashes after patching and building; do not modify the running installation.
 3. Install Python, Claude and the hook in trusted readonly runtime locations
-   owned by another UID and unwritable by the provider UID/groups. The selected
+   owned by root, including their ancestors and descendants, without group/other
+   write or POSIX ACLs. Another non-root UID is not a trusted installer by itself.
+   The selected
    Python must resolve `hermes_codex_router.claude_permission_hook` with `-I -m`;
    an editable checkout or PYTHONPATH is not an installation. Configure only
    explicit runtime roots under `/usr` or a dedicated `/opt` prefix. Do not mount
-   operator homes or generic configuration/data directories.
+   operator homes or generic configuration/data directories. Bubblewrap must
+   advertise `--bind-fd` and `--ro-bind-fd`; missing support refuses invocation.
+   These options are present in upstream 0.10.0 and Ubuntu's 0.9.0 security
+   backport; an unpatched upstream 0.9.0 lacks them. Check capabilities rather
+   than the displayed version. Group-writable prefixes are refused even when
+   the worker is not a member of that group. User-owned pyenv/uv environments
+   also cannot supply this trusted runtime. Install a dedicated root-owned
+   runtime, remove group/other write and POSIX ACLs before separately accepting it.
+   Interpreters and dynamic dependencies of the resolved Claude executable
+   must also lie within the readonly runtime roots; prefer a self-contained
+   root-owned build.
 4. Create a distinct private mode-0700 provider-session base outside project
    roots and Hub/tlive authority directories. Each native session gets its own
    subdirectory. Existing user configuration, hooks, plugins and credentials
@@ -40,7 +52,12 @@ and acceptance before broadening this trust claim.
    Never place their values in shell arguments, examples, logs, Git or Telegram.
    tlive's `protected-permissions.json` uses `version`, `ownerId`, `chatId`,
    `requestKey`, `resultKey`; its configured sole Telegram chat and allowlisted
-   sender must match. The explicitly named Hub transport file uses `version`,
+   sender must match. Hub checks Linux kernel credentials of incoming hook
+   clients and the outgoing tlive connection against the effective worker UID,
+   before request bytes or state access. The tlive listener itself relies on
+   private socket permissions and signed transport messages.
+   This rejects another UID, not a compromised process sharing the trusted UID.
+   The explicitly named Hub transport file uses `version`,
    `socket_path`, `owner_id`, `chat_id`, `request_key`, `result_key`. Match both
    keys and pin one positive owner private-chat identity. Do not install the
    standard tlive Claude plugin or its Stop/continuation hooks.
@@ -66,12 +83,24 @@ Paths are fictional and must be explicit canonical sources. The worker also
 excludes Hub state, registry, bot token files, the transport key file, tlive home and tlive
 socket. Review all additional private endpoints/authority roots. Namespace
 validation refuses symlinks, overlapping private mounts, writable trusted code,
-hardlinks/special files in writable trees and nested mounts. Worktree roots
-whose `.git` is a file are outside this initial slice. Missing isolation or
+hardlinks/special files in writable trees and nested mounts. Runtime and hook
+roots must also be free of submounts; choose narrower sources when a system
+runtime tree contains them. Nested btrfs subvolumes are refused by the device
+consistency check. Worktree roots
+whose `.git` is a file are outside this initial slice. Local clones with
+hardlinked Git objects are refused too. Missing isolation or
 protected capability prevents productive invocation; it never selects a plain CLI.
-Project and provider-session roots must use ext4, xfs, btrfs or tmpfs. DrvFs/9p,
+All mounted sources must use ext4, xfs, btrfs or tmpfs. DrvFs/9p,
 NTFS, FUSE, vfat and unknown filesystem types are refused before invocation;
 their aliasing and ownership semantics do not establish this boundary.
+The worker pins mount sources with no-follow descriptor walks before checking
+them and scanning writable trees, identifies their mounts by kernel mount ID,
+and passes only those descriptors into bubblewrap. Name/ancestor replacement
+cannot substitute another source after pinning. The owned runner closes its
+copies on every exit; bubblewrap consumes them before the native child starts.
+This does not freeze directory contents or attest to custody against an
+unconfined same-UID process, hostile administrator or concurrent host mount
+changes. The separate live isolation gate remains mandatory.
 
 ## Offline checks
 
@@ -84,7 +113,7 @@ python scripts/validate.py --profile focused \
   tests.test_claude_permission_host_roundtrip tests.test_claude_file_sandbox \
   tests.test_claude_permissions_config tests.test_claude_permissions_migration \
   tests.test_claude_file_policy tests.test_external_runtime \
-  tests.test_tlive_extension
+  tests.test_tlive_extension tests.test_claude_mount_pins tests.test_unix_peer
 ```
 
 The roundtrip tests require a local environment that permits Unix-socket bind.
@@ -110,6 +139,11 @@ Verify native start/resume with the same session, Allow once and Deny, unreachab
 host, timeout, duplicate/stale callbacks, stop while waiting, daemon/worker restart,
 unknown card delivery and wrong root/generation/lease. Attempt private symlink,
 Git-metadata/runtime modification and host-process access inside the namespace.
+On the exact installed bubblewrap build, inspect accessible descriptors of every
+process visible in the namespace, including PID 1; no pinned host-source inode
+may remain accessible there. Record explicitly whether each process's fd table
+was readable or inaccessible. The executable's version or help flags alone do
+not establish this descriptor-closure property.
 Confirm no Stop hook, continuation or second writer, and no real model calls
 from monitoring. The worker process and the hook must have different visible
 authority: keys/state are available only to the worker and tlive.

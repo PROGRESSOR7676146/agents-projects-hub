@@ -125,6 +125,16 @@ the mock is not evidence that a fixture was cryptographically signed.
 
 ## Live acceptance boundary
 
+The reusable validation workflow also runs a required Ubuntu 24.04 namespace
+job with system bubblewrap and Python 3.12. `HUB_REQUIRE_NAMESPACE_TESTS=1`
+turns missing fixtures or unavailable user namespaces into failures. It runs
+real fd-bind isolation and a fictional socket/receipt-journal Allow/Deny
+roundtrip, with no model or Telegram calls. An executable-specific AppArmor
+profile permits bubblewrap user namespaces only on that disposable CI runner.
+Developer environments may skip unavailable namespace fixtures; those skips
+are not namespace evidence. The source ruleset setup includes this check;
+applying a changed remote ruleset remains a separate authorized operation.
+
 Live Telegram acceptance is a separate owner-coordinated operation because it
 changes external state and uses real identities/accounts. Store its transcript,
 IDs, account hints, screenshots, and service logs outside Git. Public status may

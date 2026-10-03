@@ -31,6 +31,7 @@ from .external_runtime import ProviderUnavailableError
 from .hub_config import AgentDefinition, HubConfig
 from .state import HubState, ProviderJobRecord, StateError
 from .tlive_permissions import ProtectedTliveClient, TliveCapability, load_tlive_permission_config
+from .unix_peer import PeerCredentialError, require_same_uid_peer
 from .worker_execution import resolve_external_worker_target, revalidate_worker_execution_root
 
 
@@ -173,6 +174,11 @@ class PermissionServer:
                 continue
             except OSError:
                 return
+            try:
+                require_same_uid_peer(connection)
+            except PeerCredentialError:
+                connection.close()  # Reject before request bytes or SQLite are touched.
+                continue
             if self.stop.is_set() or self.inflight is not None and self.inflight.is_alive():
                 connection.close()  # No queue: another hook gets native Deny immediately.
                 continue
@@ -314,7 +320,7 @@ def hosted_claude_launch(
                 home_base.is_symlink()
                 or not home_base.is_dir()
                 or home_base.resolve() != home_base
-                or home_base.stat().st_uid != os.getuid()
+                or home_base.stat().st_uid != os.geteuid()
                 or home_base.stat().st_mode & 0o077
             ):
                 raise FileToolSandboxError("provider session home is unsafe")
@@ -363,7 +369,8 @@ def hosted_claude_launch(
                     }
                 ),
             )
-            sandbox.wrap((str(Path(executable).resolve()), "--help"), {}, root)
+            with sandbox.wrap((str(Path(executable).resolve()), "--help"), {}, root):
+                pass  # Validate and release source pins; invocation acquires its own set.
         except Exception:
             if server is not None:
                 server.close()

@@ -34,7 +34,7 @@ Concurrent hook requests are denied without queuing; an abandoned native hook
 revokes its human wait. Tool-result events are validated and discarded, with
 separate bounded raw/event budgets and the existing visible-text limit retained.
 
-Linux bubblewrap provides explicit readonly runtime/code mounts, an exact
+Linux bubblewrap provides explicit readonly root-owned runtime/code mounts, an exact
 writable project with readonly Git metadata, a dedicated provider session home,
 disposable temporary directories and the single per-turn socket. Its own
 readonly procfs belongs to the separate PID namespace; host processes and
@@ -57,8 +57,8 @@ Integration owner: Hub maintainer. Worker owns invocation/process cleanup;
 the socket thread owns its separate SQLite connection. Journaling never chooses
 Allow: it validates a signed human decision. Released DDL remains append-only;
 the existing migration/backup transaction owns schema 37 to 38 upgrades.
-Runtime settings and mounts are extracted into focused modules. Retaining the
-adapter's bounded invocation wiring is recorded in the hotspot exception.
+Runtime settings, mount ownership and guarded invocation are extracted into
+focused modules; the adapter's turn entry point no longer needs a hotspot exception.
 
 The optional mode requires a separately installed immutable runtime and hook,
 ordinary Git metadata directory, explicit private mount exclusions and compatible
