@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .claude_file_sandbox import FileToolSandboxConfig
+from .claude_mount_pins import SandboxLaunch
 from .claude_stream import ClaudeStreamError
 
 FILE_TOOL_NAMES = frozenset({"Read", "Glob", "Grep", "Write", "Edit"})
@@ -75,12 +76,12 @@ def file_tool_argv(argv: tuple[str, ...], sandbox: FileToolSandboxConfig) -> tup
 
 def wrap_file_tool_argv(
     argv: tuple[str, ...], environment: dict[str, str], cwd: Path, sandbox: FileToolSandboxConfig
-) -> tuple[tuple[str, ...], dict[str, str]]:
+) -> SandboxLaunch:
     isolated = {key: value for key, value in environment.items() if key in PROVIDER_ENVIRONMENT}
     isolated.update(CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_AUTOUPDATER="1")
-    wrapped, child = sandbox.wrap(argv, isolated, cwd)
-    child["HUB_CLAUDE_PERMISSION_SOCKET"] = "/run/hub-permission.sock"
-    return tuple(wrapped), child
+    launch = sandbox.wrap(argv, isolated, cwd)
+    launch.environment["HUB_CLAUDE_PERMISSION_SOCKET"] = "/run/hub-permission.sock"
+    return launch
 
 
 def validate_file_tool_input(tool: str, tool_input: dict[str, Any], root: Path) -> None:

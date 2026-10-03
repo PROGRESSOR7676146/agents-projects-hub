@@ -22,6 +22,7 @@ from .claude_permission_protocol import (
     canonical_uuid,
     parse_json_strict,
 )
+from .unix_peer import PeerCredentialError, require_same_uid_peer
 
 
 class TlivePermissionError(RuntimeError):
@@ -60,14 +61,14 @@ def _safe_socket_path(path: str) -> None:
         for part in Path(path).parts[1:-1]:
             current /= part
             info = current.lstat()
-            if not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, os.getuid()):
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, os.geteuid()):
                 raise TlivePermissionError("unsafe socket parent")
             if info.st_mode & 0o022 and not (
-                info.st_mode & stat.S_ISVTX and info.st_uid in (0, os.getuid())
+                info.st_mode & stat.S_ISVTX and info.st_uid in (0, os.geteuid())
             ):
                 raise TlivePermissionError("unsafe socket parent")
         info = Path(path).lstat()
-        if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
+        if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.geteuid():
             raise TlivePermissionError("unsafe socket")
     except OSError as exc:
         raise TlivePermissionError("socket unavailable") from exc
@@ -82,7 +83,7 @@ def load_tlive_permission_config(path: str | os.PathLike[str]) -> TlivePermissio
             if (
                 not stat.S_ISREG(info.st_mode)
                 or info.st_nlink != 1
-                or info.st_uid != os.getuid()
+                or info.st_uid != os.geteuid()
                 or stat.S_IMODE(info.st_mode) != 0o600
                 or not 0 < info.st_size <= 4096
             ):
@@ -152,6 +153,10 @@ class ProtectedTliveClient:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                 sock.settimeout(min(0.25, max(0.01, deadline - time.monotonic())))
                 sock.connect(self.config.socket_path)
+                try:
+                    require_same_uid_peer(sock)
+                except PeerCredentialError:
+                    raise TlivePermissionError("protected peer unavailable") from None
                 wire = (
                     json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
                     + b"\n"

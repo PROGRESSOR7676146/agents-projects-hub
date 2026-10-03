@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from hermes_codex_router.claude_file_policy import require_file_tool_event
 from hermes_codex_router.claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
+from hermes_codex_router.claude_mount_pins import MountPins, SandboxLaunch
 from hermes_codex_router.claude_stream import (
     ClaudeStreamError,
     ClaudeTerminalFailure,
@@ -45,7 +46,10 @@ class ExternalRuntimeTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
         sandbox = cast(
-            FileToolSandboxConfig, SimpleNamespace(python_executable=Path("/usr/bin/python3"))
+            FileToolSandboxConfig,
+            SimpleNamespace(
+                python_executable=Path("/usr/bin/python3"), claude_executable=Path("/usr/bin/true")
+            ),
         )
         with patch.dict(
             os.environ,
@@ -91,9 +95,15 @@ class ExternalRuntimeTests(unittest.TestCase):
             + "\n"
         )
         sandbox = cast(
-            FileToolSandboxConfig, SimpleNamespace(python_executable=Path("/usr/bin/python3"))
+            FileToolSandboxConfig,
+            SimpleNamespace(
+                python_executable=Path("/usr/bin/python3"), claude_executable=Path("/usr/bin/true")
+            ),
         )
         adapter = ExternalCliAdapter("claude")
+        pins = MountPins()
+        descriptor = pins.open(root, directory=True)
+        launch = SandboxLaunch(("example-boundary",), {"EXAMPLE": "isolated"}, pins)
         with (
             patch.dict(
                 os.environ,
@@ -105,7 +115,7 @@ class ExternalRuntimeTests(unittest.TestCase):
             ) as verify,
             patch(
                 "hermes_codex_router.external_runtime.wrap_file_tool_argv",
-                return_value=(("example-boundary",), {"EXAMPLE": "isolated"}),
+                return_value=launch,
             ) as wrap,
             patch.object(
                 adapter,
@@ -123,6 +133,156 @@ class ExternalRuntimeTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--setting-sources") + 1], "")
         self.assertEqual(native.call_args.args[0], ("example-boundary",))
         self.assertIs(native.call_args.kwargs["event_policy"], require_file_tool_event)
+        self.assertEqual(native.call_args.kwargs["pass_fds"], (descriptor,))
+        self.assertEqual(native.call_args.kwargs["cwd"], Path("/"))
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+
+    def test_hosted_mount_descriptors_close_on_every_owned_runner_failure(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="example-native-pins-") as directory:
+            root = Path(directory)
+            sandbox = cast(
+                FileToolSandboxConfig,
+                SimpleNamespace(
+                    python_executable=Path("/usr/bin/python3"),
+                    claude_executable=Path("/usr/bin/true"),
+                ),
+            )
+            for failure in (
+                ExternalTurnInterrupted("example stop"),
+                ProviderUnavailableError("example", "example unavailable"),
+                subprocess.TimeoutExpired("example", 1),
+                ClaudeStreamError("example malformed output"),
+            ):
+                with self.subTest(failure=type(failure).__name__):
+                    pins = MountPins()
+                    descriptor = pins.open(root, directory=True)
+                    launch = SandboxLaunch(("example-boundary",), {}, pins)
+                    adapter = ExternalCliAdapter("claude")
+                    with (
+                        patch.dict(
+                            os.environ,
+                            {
+                                "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                                "ANTHROPIC_AUTH_TOKEN": "example",
+                            },
+                            clear=True,
+                        ),
+                        patch.object(
+                            adapter,
+                            "_verified_claude_argv",
+                            side_effect=lambda argv, **kwargs: argv,
+                        ),
+                        patch(
+                            "hermes_codex_router.external_runtime.wrap_file_tool_argv",
+                            return_value=launch,
+                        ),
+                        patch.object(adapter, "_run_claude_process", side_effect=failure),
+                        self.assertRaises(type(failure)),
+                    ):
+                        adapter.run_turn(cwd=root, prompt="Example", claude_sandbox=sandbox)
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+
+    def test_hosted_popen_failure_closes_pins_and_has_no_plain_retry(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="example-spawn-pins-") as directory:
+            root = Path(directory)
+            sandbox = cast(
+                FileToolSandboxConfig,
+                SimpleNamespace(
+                    python_executable=Path("/usr/bin/python3"),
+                    claude_executable=Path("/usr/bin/true"),
+                ),
+            )
+            pins = MountPins()
+            descriptor = pins.open(root, directory=True)
+            launch = SandboxLaunch(("example-boundary",), {}, pins)
+            adapter = ExternalCliAdapter("claude")
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                        "ANTHROPIC_AUTH_TOKEN": "example",
+                    },
+                    clear=True,
+                ),
+                patch.object(
+                    adapter, "_verified_claude_argv", side_effect=lambda argv, **kwargs: argv
+                ),
+                patch(
+                    "hermes_codex_router.external_runtime.wrap_file_tool_argv", return_value=launch
+                ),
+                patch("subprocess.Popen", side_effect=OSError("example spawn failure")) as spawn,
+                self.assertRaises(ProviderUnavailableError),
+            ):
+                adapter.run_turn(cwd=root, prompt="Example", claude_sandbox=sandbox)
+            spawn.assert_called_once()
+            self.assertTrue(spawn.call_args.kwargs["close_fds"])
+            self.assertEqual(spawn.call_args.kwargs["pass_fds"], (descriptor,))
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def test_hosted_capability_probe_uses_validated_executable_after_mount_preflight(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="example-probe-pins-") as directory:
+            root = Path(directory)
+            executable = Path("/usr/bin/true")
+            sandbox = cast(
+                FileToolSandboxConfig,
+                SimpleNamespace(
+                    python_executable=Path("/usr/bin/python3"),
+                    claude_executable=executable,
+                ),
+            )
+            pins = MountPins()
+            descriptor = pins.open(root, directory=True)
+            launch = SandboxLaunch(("example-boundary",), {}, pins)
+            adapter = ExternalCliAdapter("claude", executable="example-untrusted-path-entry")
+            native_id = str(uuid.uuid4())
+            terminal = (
+                json.dumps(
+                    {
+                        "type": "result",
+                        "subtype": "success",
+                        "is_error": False,
+                        "session_id": native_id,
+                        "result": "Example",
+                    }
+                )
+                + "\n"
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                        "ANTHROPIC_AUTH_TOKEN": "example",
+                    },
+                    clear=True,
+                ),
+                patch.object(
+                    adapter._claude_capabilities, "require", return_value=str(executable)
+                ) as probe,
+                patch("hermes_codex_router.external_runtime.wrap_file_tool_argv") as wrap,
+                patch.object(
+                    adapter,
+                    "_run_claude_process",
+                    return_value=subprocess.CompletedProcess([], 0, terminal, ""),
+                ),
+            ):
+
+                def validated(argv: tuple[str, ...], *_args: object) -> SandboxLaunch:
+                    probe.assert_not_called()
+                    self.assertEqual(argv[0], str(executable))
+                    return launch
+
+                wrap.side_effect = validated
+                adapter.run_turn(
+                    cwd=root, prompt="Example", claude_sandbox=sandbox, new_session_id=native_id
+                )
+            self.assertEqual(probe.call_args.args[0], str(executable))
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
 
     def _claude_process(
         self, source: str, *, timeout: float = 1, **kwargs: Any

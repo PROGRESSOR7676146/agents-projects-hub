@@ -6,6 +6,8 @@ import hashlib
 import hmac
 import io
 import json
+import os
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -16,6 +18,7 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
+from hermes_codex_router.claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
 from hermes_codex_router.claude_permission_hook import run_hook
 from hermes_codex_router.claude_permission_host import PermissionServer
 from hermes_codex_router.claude_permission_protocol import ProtectedPayload, event_digest
@@ -29,6 +32,7 @@ from hermes_codex_router.hub_config import (
 )
 from hermes_codex_router.state import HubState
 from hermes_codex_router.tlive_permissions import ProtectedTliveClient, TlivePermissionConfig
+from tests.namespace_fixture import namespace_unavailable
 
 
 def _mac(key: bytes, fields: list[object]) -> str:
@@ -152,6 +156,50 @@ class FakeTlive:
         self.thread.join(4)
         if self.thread.is_alive():
             raise AssertionError("fake tlive did not stop")
+
+
+class PermissionHostPeerGateTests(unittest.TestCase):
+    def test_untrusted_accepted_connections_close_before_worker_thread(self) -> None:
+        from hermes_codex_router import unix_peer
+
+        class FakeConnection:
+            closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        class FakeListener:
+            def __init__(self, connection: FakeConnection) -> None:
+                self.connection = connection
+                self.calls = 0
+
+            def accept(self):
+                self.calls += 1
+                if self.calls == 1:
+                    return self.connection, None
+                raise OSError("listener stopped")
+
+        for result in ((1, os.geteuid() + 1, 0), OSError("unavailable")):
+            with self.subTest(result=result):
+                connection = FakeConnection()
+                server = PermissionServer.__new__(PermissionServer)
+                server.stop = threading.Event()
+                server.inflight = None
+                server.listener = FakeListener(connection)
+                options = (
+                    {"return_value": result}
+                    if isinstance(result, tuple)
+                    else {"side_effect": result}
+                )
+                with (
+                    patch.object(unix_peer, "_peer_credentials", **options),
+                    patch.object(PermissionServer, "_serve_connection") as serve_connection,
+                    patch.object(HubState, "open") as db_open,
+                ):
+                    server._serve()
+                    serve_connection.assert_not_called()
+                    db_open.assert_not_called()
+                self.assertTrue(connection.closed)
 
 
 class PermissionHostRoundtripTests(unittest.TestCase):
@@ -320,6 +368,84 @@ class PermissionHostRoundtripTests(unittest.TestCase):
         self.assertEqual(payload.launch_epoch, self.launch.epoch)
         self.assertEqual(payload.session_id, self.native_id)
         self.assertEqual(payload.lease_id, self.token)
+
+    def test_namespace_client_preserves_peer_gate_and_atomic_allow_deny(self) -> None:
+        bwrap = shutil.which("bwrap")
+        python = Path("/usr/bin/python3.12")
+        runtime = (
+            python,
+            Path("/usr/lib/python3.12"),
+            Path("/usr/lib/x86_64-linux-gnu"),
+            Path("/usr/lib64"),
+        )
+        if bwrap is None or not all(path.exists() for path in runtime):
+            namespace_unavailable(self, "system bubblewrap/Python namespace fixture unavailable")
+        home = self.config.state_path.parent / "example-session-home"
+        home.mkdir(mode=0o700)
+        try:
+            sandbox = FileToolSandboxConfig(
+                bwrap_executable=Path(bwrap),
+                project_root=self.root,
+                provider_home=home,
+                runtime_roots=runtime,
+                claude_executable=python,
+                python_executable=python,
+                hook_code_root=Path("/usr/lib/python3.12"),
+                permission_socket=self.server.path,
+                private_paths=(self.config.state_path, self.config.registry_path, self.peer.path),
+            )
+        except FileToolSandboxError:
+            namespace_unavailable(self, "system Python runtime is not immutable root-owned code")
+        self.peer.release.set()  # Deterministic fictional human transport, no Telegram/model.
+        for decision in ("allow", "deny"):
+            self.peer.decision = decision
+            event = self._event()
+            request = (
+                json.dumps(
+                    {
+                        "kind": "claude.permission.request",
+                        "version": 1,
+                        "nonce": str(uuid4()),
+                        "event": event,
+                        "eventDigest": event_digest(event),
+                    }
+                ).encode()
+                + b"\n"
+            )
+            code = (
+                "import os,socket,json\n"
+                "with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as connection:\n"
+                " connection.settimeout(4)\n"
+                " connection.connect('/run/hub-permission.sock')\n"
+                f" connection.sendall({request!r})\n"
+                " data=bytearray()\n"
+                " while True:\n"
+                "  chunk=connection.recv(4096)\n"
+                "  if not chunk: break\n"
+                "  data.extend(chunk)\n"
+                "print(json.dumps({'uid':os.getuid(),'reply':json.loads(data)}))\n"
+            )
+            with sandbox.wrap((str(python), "-c", code), {}, self.root) as launch:
+                result = subprocess.run(
+                    launch.argv,
+                    env=launch.environment,
+                    cwd="/",
+                    close_fds=True,
+                    pass_fds=launch.pass_fds,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+            if result.returncode and "Creating new namespace failed" in result.stderr:
+                namespace_unavailable(self, "kernel disallows user namespaces")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            response = json.loads(result.stdout)
+            self.assertEqual(response["uid"], os.getuid())
+            self.assertEqual(response["reply"]["decision"], decision)
+            self.assertEqual(self._statuses()[-1], decision)
+        self.assertEqual(self._statuses(), ["allow", "deny"])
+        self.assertEqual(len(self.peer.requests), 2)
 
     def test_human_deny_is_consumed(self) -> None:
         self.peer.decision = "deny"
@@ -569,6 +695,36 @@ class PermissionHostRoundtripTests(unittest.TestCase):
         while self._statuses() == ["pending"] and time.monotonic() < deadline:
             time.sleep(0.01)
         self.assertEqual(self._statuses(), ["revoked"])
+
+    def test_untrusted_native_peers_close_before_read_or_database_open(self) -> None:
+        from hermes_codex_router import unix_peer
+
+        for peer_result in ((1, os.geteuid() + 1, 0), OSError("unavailable")):
+            with self.subTest(peer_result=peer_result):
+                options = (
+                    {"return_value": peer_result}
+                    if isinstance(peer_result, tuple)
+                    else {"side_effect": peer_result}
+                )
+                with (
+                    patch.object(unix_peer, "_peer_credentials", **options),
+                    patch.object(
+                        HubState, "open", side_effect=AssertionError("opened database")
+                    ) as db_open,
+                    patch.object(
+                        PermissionServer, "_read", side_effect=AssertionError("read request")
+                    ) as read,
+                ):
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as native:
+                        native.settimeout(3)
+                        native.connect(str(self.server.path))
+                        self.assertEqual(native.recv(1), b"")
+                    db_open.assert_not_called()
+                    read.assert_not_called()
+                self.assertEqual(self.peer.requests, [])
+                self.assertEqual(self._statuses(), [])
+        self.server.close()
+        self.assertFalse(self.server.thread.is_alive())
 
 
 if __name__ == "__main__":
