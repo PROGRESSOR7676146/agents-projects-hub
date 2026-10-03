@@ -48,14 +48,18 @@ class ClaudeFileSandboxTests(unittest.TestCase):
             cls.socket_path.touch()
             cls.socket_path.chmod(0o600)
         cls.executable = Path("/usr/bin/true")
+        # Builder tests need one immutable executable and a small readonly
+        # directory, not every executable installed on the host. CI may have
+        # /usr/bin symlinks into its provider-writable tool cache. The separate
+        # namespace test below still validates its complete real runtime.
         cls.config = FileToolSandboxConfig(
             bwrap_executable=Path(shutil.which("bwrap") or "/usr/bin/true"),
             project_root=cls.project,
             provider_home=cls.home,
-            runtime_roots=(Path("/usr/bin"),),
+            runtime_roots=(cls.executable,),
             claude_executable=cls.executable,
             python_executable=cls.executable,
-            hook_code_root=Path("/usr/bin"),
+            hook_code_root=Path("/usr/lib/locale"),
             permission_socket=cls.socket_path,
             private_paths=(cls.private,),
         )
