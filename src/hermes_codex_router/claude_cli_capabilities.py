@@ -13,6 +13,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -97,12 +98,20 @@ def _advertised_options(help_text: str) -> dict[str, list[str]]:
     return entries
 
 
-def _has_required_advertisement(output: bytes) -> bool:
+def _has_required_advertisement(output: bytes, *, file_tools: bool = False) -> bool:
     entries = _advertised_options(output.decode("utf-8", errors="replace"))
     return (
         _REQUIRED_OPTIONS.issubset(entries)
         and any(_NONE.search(stanza) for stanza in entries["permission-prompts"])
         and any(_DONT_ASK.search(stanza) for stanza in entries["permission-mode"])
+        and (
+            not file_tools
+            or "setting-sources" in entries
+            and any(
+                re.search(r"(?<![\w-])manual(?![\w-])", stanza)
+                for stanza in entries["permission-mode"]
+            )
+        )
     )
 
 
@@ -180,7 +189,7 @@ class ClaudeCliCapabilities:
     """Cache only successful help inspections for an unchanged executable."""
 
     def __init__(self) -> None:
-        self._success: dict[str, tuple[int, int, int, int, int]] = {}
+        self._success: dict[tuple[str, bool], tuple[int, int, int, int, int]] = {}
         self._lock = threading.Lock()
 
     def require(
@@ -190,36 +199,54 @@ class ClaudeCliCapabilities:
         cwd: Path,
         environment: dict[str, str],
         interrupted: threading.Event,
+        file_tools: bool = False,
     ) -> str:
         """Return the resolved CLI path if its current help advertises all controls."""
         if interrupted.is_set():
             raise ClaudeCliCapabilityError()
         try:
             search_path = os.pathsep.join(
-                entry if os.path.isabs(entry) else str(cwd / entry)
+                entry
                 for entry in environment.get("PATH", os.defpath).split(os.pathsep)
+                if os.path.isabs(entry)
             )
             selected = executable
             if os.path.dirname(selected) and not os.path.isabs(selected):
-                selected = str(cwd / selected)
+                raise ClaudeCliCapabilityError()
+            if not os.path.isabs(selected) and not search_path:
+                raise ClaudeCliUnavailableError()
             path = shutil.which(selected, path=search_path)
             if path is None:
                 raise ClaudeCliUnavailableError()
             path = os.path.realpath(path)
             before = _fingerprint(path)
             with self._lock:
-                if self._success.get(path) == before:
+                if self._success.get((path, file_tools)) == before:
                     if interrupted.is_set():
                         raise ClaudeCliCapabilityError()
                     return path
-            output = _read_help(path, cwd=cwd, environment=environment, interrupted=interrupted)
-            if not _has_required_advertisement(output):
+            with tempfile.TemporaryDirectory(prefix="hub-claude-capability-") as directory:
+                isolated = {
+                    key: value
+                    for key, value in environment.items()
+                    if key in {"PATH", "LANG", "LC_ALL", "TZ"}
+                }
+                isolated.update(
+                    HOME=directory,
+                    CLAUDE_CONFIG_DIR=str(Path(directory) / ".claude"),
+                    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",
+                    DISABLE_AUTOUPDATER="1",
+                )
+                output = _read_help(
+                    path, cwd=Path(directory), environment=isolated, interrupted=interrupted
+                )
+            if not _has_required_advertisement(output, file_tools=file_tools):
                 raise ClaudeCliCapabilityError()
             after = _fingerprint(path)
             if interrupted.is_set() or after != before:
                 raise ClaudeCliCapabilityError()
             with self._lock:
-                self._success[path] = after
+                self._success[(path, file_tools)] = after
             return path
         except ClaudeCliCapabilityError:
             raise

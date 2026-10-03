@@ -97,12 +97,17 @@ class ClaudeCliCapabilitiesTests(unittest.TestCase):
         self.help_cli()
         self.assertEqual(self.require(self.cli.name), str(self.cli))
 
-    def test_relative_executable_and_path_are_bound_to_provider_cwd(self) -> None:
+    def test_relative_executable_and_path_never_run_project_code_for_help(self) -> None:
         self.help_cli()
         for executable in ("./fictional-claude", "fictional-claude"):
             with self.subTest(executable=executable):
                 self.environment["PATH"] = "."
-                self.assertEqual(self.require(executable), str(self.cli))
+                with (
+                    patch("subprocess.Popen") as child,
+                    self.assertRaises(ClaudeCliCapabilityError),
+                ):
+                    self.require(executable)
+                child.assert_not_called()
 
     def test_missing_option_and_prose_mention_fail(self) -> None:
         for option in OPTIONS:

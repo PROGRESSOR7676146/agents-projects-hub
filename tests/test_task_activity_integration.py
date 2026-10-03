@@ -125,7 +125,8 @@ class TaskActivityDatabaseIntegrationTests(unittest.TestCase):
         with sqlite3.connect(self.path) as connection:
             before = self.snapshot(connection)
             self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 36)
-        result = migrations.migrate_database(self.path)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 37):
+            result = migrations.migrate_database(self.path)
         self.assertEqual((result.previous_version, result.current_version), (36, 37))
         assert result.backup_path is not None
         self.assertEqual(result.backup_path.stat().st_mode & 0o777, 0o600)

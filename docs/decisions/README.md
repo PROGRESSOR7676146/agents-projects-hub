@@ -71,6 +71,7 @@ with a new record.
 | Task visibility and stop certainty | Unknown interruption retains the root; durable control notices are independent of provider results and preserve ambiguous delivery. | [ADR 0049](0049-task-visibility-and-stop-certainty.md) |
 | Claude native invocation evidence | Persist the exact session/root before invocation and validate bounded structured output without inventing native turn IDs. | [ADR 0050](0050-claude-native-invocation-evidence.md) |
 | Accepted-turn activity and queue notices | Schema 37 binds passive Codex progress to exact execution identity and delivers admission snapshots through the existing Hub sender. | [ADR 0051](0051-accepted-turn-activity-and-queue-notices.md) |
+| Protected Claude file permissions | An opt-in native hook uses a bounded pinned tlive extension; the existing worker/SQLite own binding, one-use receipt consumption and cleanup. | [ADR 0052](0052-protected-claude-file-permissions.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

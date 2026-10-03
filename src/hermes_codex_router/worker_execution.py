@@ -11,6 +11,7 @@ from .artifacts import (
     artifact_spool_root,
     spool_staged_artifacts,
 )
+from .claude_file_sandbox import FileToolSandboxConfig
 from .claude_stream import ClaudeStreamError, ClaudeTerminalFailure, VisibleAssistantCallback
 from .codex_appserver import CodexAppServerClient, CodexThread, RateLimits, TurnResult
 from .codex_failure import CodexPreparationError
@@ -362,6 +363,7 @@ def invoke_external_provider_turn(
     staging_dir: Path,
     claude_session_binding: ClaudeSessionBinding | None = None,
     on_visible_assistant: VisibleAssistantCallback | None = None,
+    claude_sandbox: FileToolSandboxConfig | None = None,
 ) -> ExternalTurnResult:
     """Invoke one external CLI turn from an immutable job snapshot."""
     if getattr(adapter, "runtime", None) == "claude" and claude_session_binding is None:
@@ -384,6 +386,7 @@ def invoke_external_provider_turn(
                 interrupt_prepared=interrupt_prepared,
                 staging_dir=staging_dir,
                 on_visible_assistant=on_visible_assistant,
+                claude_sandbox=claude_sandbox,
             )
         except ClaudeTerminalFailure as exc:
             if exc.session_id != claude_session_binding.session_id:

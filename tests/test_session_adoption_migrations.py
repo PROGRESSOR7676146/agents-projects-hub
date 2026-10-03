@@ -145,6 +145,7 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
                         "registry.py",
                         "schema_task_lifecycle.py",
                         "schema_task_activity.py",
+                        "schema_claude_permissions.py",
                         "session_adoption_policy.py",
                     ):
                         archive.writestr(

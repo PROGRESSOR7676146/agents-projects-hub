@@ -8,7 +8,12 @@ The stop/native/visibility stack passed exact-candidate independent reviews;
 the merged revision passed canonical validation (1,488 tests in 135 modules,
 no typing errors), hosted Python 3.11/3.12/3.13 validation and CodeQL.
 This is repository evidence; deployment and live acceptance remain separate.
-Next trigger: verify the native human approval boundary described in the
+The protected file-tool candidate now has a pinned tlive extension, native hook,
+schema-38 receipt journal and worker-owned socket/namespace wiring; see
+[ADR 0052](../decisions/0052-protected-claude-file-permissions.md) and the
+[candidate runbook](CLAUDE_FILE_PERMISSIONS.md). Text-only remains the default.
+Next trigger: finish exact-candidate publication/review gates, then separately
+authorize and verify the native/Telegram human approval boundary described in the
 [Claude plan](CLAUDE_LEAD_REVIEW_PLAN.ru.md#следующая-граница-разрешений), then
 continue advisor isolation and remaining visibility work. Do not enable tools
 from a CLI flag or an unqualified tlive `allow` alone.

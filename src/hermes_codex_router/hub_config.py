@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .claude_permissions_config import ClaudeFilePermissionsConfig, parse_claude_file_permissions
+
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
 SERVICE_UNIT = re.compile(r"^[A-Za-z0-9_.@-]+\.service$")
@@ -126,6 +128,7 @@ class HubConfig:
     # Independent Codex queue processes, each with its own client and state connection.
     codex_worker_count: int = 1
     claude_worker_count: int = 1
+    claude_file_permissions: ClaudeFilePermissionsConfig | None = None
     # Consecutive productive messages with identical routing are collected
     # into one provider turn.  Zero keeps legacy one-message/one-turn behavior.
     message_batch_quiet_ms: int = 0
@@ -1018,6 +1021,15 @@ def load_hub_config(
     topology = _parse_runtime_topology(
         root, agents, hub_bot=hub_bot, manage_codex_server=codex.manage_codex_server
     )
+    try:
+        claude_file_permissions = parse_claude_file_permissions(root.get("claude_file_permissions"))
+    except ValueError as exc:
+        raise HubConfigError(str(exc)) from None
+    if claude_file_permissions is not None and not any(
+        agent.runtime == "claude" and agent.agent_id in topology.external_worker_agent_ids
+        for agent in agents
+    ):
+        raise HubConfigError("claude_file_permissions requires an external Claude worker")
     project_provisioning = _parse_project_provisioning(
         root,
         hub_bot=hub_bot,
@@ -1046,6 +1058,7 @@ def load_hub_config(
         max_parallel_roots=topology.max_parallel_roots,
         codex_worker_count=topology.codex_worker_count,
         claude_worker_count=topology.claude_worker_count,
+        claude_file_permissions=claude_file_permissions,
         message_batch_quiet_ms=topology.message_batch_quiet_ms,
         message_batch_max_ms=topology.message_batch_max_ms,
         task_no_progress_seconds=_task_progress_seconds(root, "task_no_progress_seconds", 300),

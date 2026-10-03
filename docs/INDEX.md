@@ -26,6 +26,7 @@ subset; the plan's accepted role choices are not a claim of runtime parity.
 - [Roadmap](ROADMAP.ru.md)
 - [Next development session](operations/NEXT_DEVELOPMENT_SESSION.md)
 - [Claude Code and Codex: bounded lead/advisor plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
+- [Claude protected file-tool candidate](operations/CLAUDE_FILE_PERMISSIONS.md)
 - [Inbound materials implementation plan](operations/INBOUND_MATERIALS_PLAN.md)
 - [Operations](operations/README.md)
 - [Queue and process recovery](operations/QUEUE_RECOVERY.md)

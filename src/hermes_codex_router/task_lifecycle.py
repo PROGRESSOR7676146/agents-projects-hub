@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
+from .claude_permission_binding import permission_notice_is_current
 from .task_activity_binding import activity_notice_is_current
 
 MAX_NOTICE_ATTEMPTS = 5
@@ -232,9 +233,19 @@ class TaskLifecycleState:
                 "executing": {"executing"},
                 "approval_wait": {"executing"},
                 "no_progress": {"executing"},
+                "claude_permission_wait": {"executing"},
             }.get(notice.kind)
             obsolete = False
             if notice.attempt_count == 0 and notice.stop_request_id is None:
+                if notice.kind == "claude_permission_wait":
+                    obsolete = not permission_notice_is_current(
+                        self.db,
+                        job_id=notice.job_id,
+                        event_key=notice.event_key,
+                        chat_id=notice.chat_id,
+                        thread_id=notice.thread_id,
+                        timestamp=timestamp,
+                    )
                 if notice.kind in {"approval_wait", "no_progress"}:
                     obsolete = not activity_notice_is_current(
                         self.db,

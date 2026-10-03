@@ -45,10 +45,12 @@ This normative module is part of the
   token and API key MUST fail before a provider process starts. The private CPA
   configuration MUST exclude paid/API and extra-usage fallback before deployment;
   a local URL check alone does not prove its upstream account or billing route.
-  Until a human approval host is integrated and accepted, the worker MUST expose
-  no Claude built-in tools, customizations, skills, or MCP servers, and MUST deny
-  permission prompts. It MUST NOT claim write-capable lead or read-only advisor
-  parity on the strength of prompt instructions alone.
+  The default worker MUST expose no Claude built-in tools, customizations,
+  skills, or MCP servers and MUST deny permission prompts. An explicit local
+  file-tool opt-in MAY use the protected human boundary of REQ-SEC-008;
+  deployment and native/Telegram acceptance remain separate gates. It MUST NOT
+  claim write-capable lead or read-only advisor parity on the strength of prompt
+  instructions or this limited tool slice alone.
 
 ### Compact control surface
 
@@ -295,6 +297,28 @@ single-writer checks remain mandatory. See
   topic, and agent allowlists MUST be enforced before provider invocation.
 - **REQ-SEC-007 (Accepted):** A provider failure MUST be visible, reversible,
   and isolated. Recovery MUST NOT weaken security policy to regain availability.
+- **REQ-SEC-008 (Implemented offline; live acceptance pending):** An explicitly
+  configured Claude file-tool turn MAY expose only Read, Glob, Grep, Write and
+  Edit inside a fail-closed Linux filesystem/PID boundary. Private Hub state,
+  bot/web credentials and permission signing keys MUST be absent from its
+  mounts; trusted runtime and hook code MUST remain immutable to the provider.
+  Only a fresh allowlisted human callback in the protected tlive namespace MAY
+  authorize a prompted operation. The receipt MUST authenticate the exact
+  payload, daemon epoch, nonce and original Telegram actor. Hub MUST recheck
+  the live job, lease, writer, native session, generation, project/root and stop
+  state, then atomically consume the receipt once before native Allow. Inputs
+  requiring masking or an incomplete preview MUST be denied. Native permission
+  suggestions MUST NOT become persistent grants or input changes. Restart,
+  timeout, unavailable isolation/host and ambiguity MUST deny without replay.
+  The per-turn hook MUST have no signing keys or Hub state access, and no Stop,
+  continuation, mirroring or second conversation writer. Shell, MCP, skills,
+  external plugins and children remain unavailable. This slice does not establish
+  advisor isolation, collaboration, subscription routing or local-transfer parity.
+  The trusted worker and tlive host remain the receipt trust base; this slice
+  MUST NOT claim isolation from an unconfined hostile process sharing their UID.
+  Live activation MUST exclude such principals from signing keys, Hub state and
+  transport endpoints through independently verified OS isolation. A same-UID
+  read-only advisor MUST NOT be enabled on the strength of this boundary.
 
 The detailed threat model in `docs/SECURITY.ru.md` remains normative where it is
 more specific and consistent with this baseline.

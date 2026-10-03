@@ -1059,22 +1059,35 @@ class ExternalQueueWorker:
         )
         monitor.start()
         try:
-            result = invoke_external_provider_turn(
-                adapter,
+            from .claude_permission_host import hosted_claude_launch
+
+            with hosted_claude_launch(
+                self.config,
+                self.state,
+                self.agent,
                 job,
-                project,
-                prompt=external_provider_prompt(
+                token,
+                claude_session_binding.session_id if claude_session_binding else None,
+                Path(project.root),
+                is_new=bool(claude_session_binding and claude_session_binding.is_new),
+            ) as hosted:
+                result = invoke_external_provider_turn(
+                    adapter,
                     job,
-                    prepared,
-                    runtime=self.agent.runtime,
-                    full_contract=self._needs_full_telegram_contract(job),
+                    project,
+                    prompt=external_provider_prompt(
+                        job,
+                        prepared,
+                        runtime=self.agent.runtime,
+                        full_contract=self._needs_full_telegram_contract(job),
+                        staging_dir=staging_dir,
+                    ),
+                    interrupt_prepared=interrupt_prepared,
                     staging_dir=staging_dir,
-                ),
-                interrupt_prepared=interrupt_prepared,
-                staging_dir=staging_dir,
-                claude_session_binding=claude_session_binding,
-                on_visible_assistant=on_visible_assistant,
-            )
+                    claude_session_binding=claude_session_binding,
+                    on_visible_assistant=on_visible_assistant,
+                    claude_sandbox=hosted.sandbox if hosted else None,
+                )
             if claude_journal is not None and claude_session_binding is not None:
                 try:
                     claude_journal.record_claude_completion(
