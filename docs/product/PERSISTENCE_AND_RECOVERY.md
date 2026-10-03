@@ -364,7 +364,7 @@ recreate unsaved provider context or a partially executed turn.
   pending material from migrating to a different productive binding. Migration
   33 is additive; rollout and runtime rollback both require artifacts that
   declare schema-33 compatibility.
-- **REQ-QUEUE-012 (Accepted; implementation in progress):** Source-topic control
+- **REQ-QUEUE-012 (Partially implemented in schema 37; remaining scope accepted):** Source-topic control
   notices MUST distinguish accepted, queued, executing, approval-waiting and
   unknown-outcome work. Queue notices MUST explain provider slots, global
   capacity, topic FIFO or canonical-root blockers and give a safe next action;
@@ -380,6 +380,22 @@ recreate unsaved provider context or a partially executed turn.
   MUST NOT prove terminality. The exact accepted turn must be proven terminal
   before uncertainty releases a root. These rules also apply to embedded queue
   consumers; unsupported modes MUST be refused explicitly.
+  The current implemented subset is Hub-owned external queue/external outbox
+  admission and execution notices, with accepted-turn activity for Codex only.
+  Queue reasons are bounded admission/handoff snapshots, not continuous capacity
+  claims. `task_no_progress_seconds` and `task_tool_no_progress_seconds` configure
+  the ordinary/tool thresholds; each MUST be an integer from 1 to 86,400, with
+  defaults 300 and 1,200 respectively. Activity and first delivery of an activity notice MUST
+  revalidate the exact live execution lease, unchanged project/scope, numeric
+  topic, session agent/generation, Telegram writer and accepted native checkpoint.
+  Completed checkpoints MUST NOT generate active-turn warnings. Meaningful
+  activity MUST supersede never-attempted warnings for the recovered episode;
+  exact approval resolution MUST supersede its never-attempted approval notice.
+  Approval notices MUST remain generic and direct the owner to the native
+  Codex/tlive request; no raw permission payload is stored or forwarded. An
+  approval preceding native turn acceptance remains outside this observer.
+  Payload-free event/tool/approval metadata MUST total at most 512 entries per
+  job; an exhausted bound MUST NOT authorize execution, replay or approval.
 - **REQ-QUEUE-013 (Accepted; implementation in progress):** Control delivery
   MUST persist episode identity, immutable numeric destination, retry deadlines
   and positive Telegram receipts separately from provider execution. A sender

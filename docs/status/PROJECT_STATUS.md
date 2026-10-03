@@ -22,6 +22,7 @@ owning modules.
 | Claude/Codex lead and advisor | Accepted plan; not implemented | — | [REQ-COLLAB-001](../product/IDENTITY_AND_INTERACTION.md), [ADR 0040](../decisions/0040-bounded-claude-codex-lead-advisor.md) |
 | Participant evaluation and allocation | Accepted foundation; not implemented | — | [Requirements](../product/EVALUATION_AND_ALLOCATION.md), [ADR 0037](../decisions/0037-evidence-based-task-allocation.md) |
 | Stop certainty and independent notices (schema 36) | Implemented; canonical checks and independent review at `d3be874` | Pending | [REQ-QUEUE-005/013](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md) |
+| Queue snapshots and accepted Codex activity (schema 37) | Implemented slice; focused offline validation, final canonical evidence and required review pending | Pending | [REQ-QUEUE-012](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md) |
 | Durable local-root blockers (schema 35) | Implemented | Pending | [REQ-WRITER-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0036](../decisions/0036-durable-local-root-blockers.md) |
 | Exact Codex turn recovery (schema 34) | Implemented | Pending | [REQ-QUEUE-004](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0035](../decisions/0035-exact-terminal-turn-reconciliation.md) |
 | Inbound Telegram materials (schema 33) | Implemented | Pending | [REQ-UX-009](../product/IDENTITY_AND_INTERACTION.md), [ADR 0032](../decisions/0032-durable-inbound-telegram-materials.md) |
@@ -53,6 +54,14 @@ invocation, failure and restart boundaries in
 write-capable lead, isolated advisor, native local transfer, session connect and
 live CPA/account acceptance remain pending under
 [REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
+
+Queue admission snapshots and accepted Codex turn activity are implemented in
+schema 37 under [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md).
+Focused offline evidence covers durable deduplication, binding changes, approval
+resolution, passive deadlines and delivery certainty. Final candidate validation
+and independent review remain pending; active-work retry controls, approval
+before native acceptance and wider provider visibility remain open. This does
+not change the text-only Claude capability boundary.
 
 Participant evaluation and resource-aware task allocation are an accepted
 product foundation; implementation and acceptance remain pending. See

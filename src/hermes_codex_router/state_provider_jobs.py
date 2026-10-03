@@ -7,13 +7,15 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Mapping, Sequence
 
-PROVIDER_WORKER_FAIRNESS_FRESHNESS = timedelta(minutes=2)
-
-
-def _parallel_worker_declarations(agent_id: str) -> tuple[str, ...]:
-    if agent_id not in {"codex", "claude"}:
-        return ()
-    return (f"{agent_id}-worker",) + tuple(f"{agent_id}-worker-{slot}" for slot in range(2, 17))
+from .provider_queue_capacity import (
+    PROVIDER_WORKER_FAIRNESS_FRESHNESS,
+    QueueCapacityConfig,
+    read_queue_capacity,
+)
+from .provider_queue_capacity import (
+    parallel_worker_declarations as _parallel_worker_declarations,
+)
+from .queue_visibility import QueueVisibilityState
 
 
 # An emergency stop covers the work that existed when it was recorded, except
@@ -198,12 +200,14 @@ class ProviderJobsStateFacade:
         write_transaction: TransactionFactory,
         state_error: StateErrorFactory,
         job_has_materials: JobHasMaterials,
+        queue_visibility: QueueVisibilityState | None = None,
     ) -> None:
         self._connection = connection
         self._transaction = transaction
         self._write_transaction = write_transaction
         self._state_error = state_error
         self._job_has_materials = job_has_materials
+        self._queue_visibility = queue_visibility
 
     def _bounded(self, value: str, *, name: str, maximum: int) -> str:
         normalized = value.strip()
@@ -617,6 +621,7 @@ class ProviderJobsStateFacade:
         )
         if cursor.rowcount != 1:
             return False
+        self._sync_visibility(job_id, timestamp)
         if complete_stops:
             self._complete_stops_after(job_id, timestamp)
         return True
@@ -641,6 +646,13 @@ class ProviderJobsStateFacade:
         ).fetchone()
         if topic is not None:
             self.complete_finished_stops(int(topic["topic_id"]), timestamp)
+            self._sync_visibility(job_id, timestamp)
+
+    def _sync_visibility(self, job_id: str, timestamp: str) -> None:
+        if self._queue_visibility is not None:
+            self._queue_visibility.sync_job_in_transaction(
+                job_id, now=datetime.fromisoformat(timestamp)
+            )
 
     def cancel_unstarted_for_stop(self, topic_id: int, timestamp: str) -> int:
         """Cancel the topic's queued and retry-waiting jobs that are not held.
@@ -658,6 +670,16 @@ class ProviderJobsStateFacade:
                    held.job_id = provider_jobs.job_id AND held.decision = 'pending')""",
             (timestamp, topic_id),
         )
+        if self._queue_visibility is not None and self._queue_visibility.available:
+            for row in self._connection.execute(
+                "SELECT DISTINCT job.job_id FROM provider_jobs job "
+                "JOIN task_lifecycle_notices notice ON notice.job_id=job.job_id "
+                "WHERE job.topic_id=? AND job.status='cancelled' "
+                "AND notice.kind IN ('accepted','queued','executing') "
+                "AND notice.status IN ('pending','leased') AND notice.attempt_count=0",
+                (topic_id,),
+            ).fetchall():
+                self._sync_visibility(str(row["job_id"]), timestamp)
         return cursor.rowcount
 
     def lease(
@@ -698,7 +720,6 @@ class ProviderJobsStateFacade:
         timestamp = self._timestamp(current)
         expires_at = self._timestamp(current + timedelta(seconds=lease_seconds))
         with self._transaction():
-            effective_capacity = max_parallel_roots
             freshness = self._timestamp(current - PROVIDER_WORKER_FAIRNESS_FRESHNESS)
             placeholders = ", ".join("?" for _ in scheduled_agents)
             if scheduled_agents:
@@ -708,19 +729,6 @@ class ProviderJobsStateFacade:
                 # read set until it ages out after an upgrade.
                 slot_declarations = _parallel_worker_declarations(target_agent)
                 declaration_key = worker if worker in slot_declarations else target_agent
-                declaration_keys = tuple(
-                    dict.fromkeys(
-                        (
-                            *scheduled_agents,
-                            *(
-                                slot
-                                for agent in scheduled_agents
-                                for slot in _parallel_worker_declarations(agent)
-                            ),
-                        )
-                    )
-                )
-                capacity_placeholders = ", ".join("?" for _ in declaration_keys)
                 self._connection.execute(
                     """INSERT INTO execution_scheduler_workers
                        (agent_id, declared_capacity, observed_at) VALUES (?, ?, ?)
@@ -729,44 +737,15 @@ class ProviderJobsStateFacade:
                          observed_at = excluded.observed_at""",
                     (declaration_key, max_parallel_roots, timestamp),
                 )
-                advertised = self._connection.execute(
-                    f"""SELECT MIN(declared_capacity) FROM execution_scheduler_workers
-                         WHERE agent_id IN ({capacity_placeholders}) AND observed_at >= ?""",
-                    (*declaration_keys, freshness),
-                ).fetchone()[0]
-                if advertised is not None:
-                    effective_capacity = min(effective_capacity, int(advertised))
-            occupied = int(
-                self._connection.execute(
-                    """SELECT COUNT(DISTINCT COALESCE(
-                         topics.execution_scope, 'project:' || topics.project_id))
-                       FROM provider_jobs jobs
-                       JOIN topics ON topics.topic_id = jobs.topic_id
-                       WHERE jobs.status IN ('leased', 'executing')
-                         AND jobs.lease_expires_at > ?""",
-                    (timestamp,),
-                ).fetchone()[0]
+            capacity = read_queue_capacity(
+                self._connection,
+                QueueCapacityConfig(max_parallel_roots, scheduled_agents, capacities),
+                now=current,
             )
-            if occupied >= effective_capacity:
+            if capacity.occupied_roots >= capacity.effective_capacity:
                 return None
-            busy_agents = {
-                str(item["agent_id"]): int(item["active_count"])
-                for item in self._connection.execute(
-                    """SELECT agent_id, COUNT(*) AS active_count FROM provider_jobs
-                       WHERE status IN ('leased', 'executing')
-                         AND lease_expires_at > ? GROUP BY agent_id""",
-                    (timestamp,),
-                ).fetchall()
-            }
-            busy_workers = {
-                str(item["lease_owner"])
-                for item in self._connection.execute(
-                    """SELECT DISTINCT lease_owner FROM provider_jobs
-                       WHERE status IN ('leased', 'executing')
-                         AND lease_expires_at > ?""",
-                    (timestamp,),
-                ).fetchall()
-            }
+            busy_agents = capacity.busy_agents
+            busy_workers = capacity.busy_workers
             if worker in busy_workers or busy_agents.get(target_agent, 0) >= capacities.get(
                 target_agent, 1
             ):
@@ -1092,6 +1071,10 @@ class ProviderJobsStateFacade:
                  AND lease_expires_at > ? AND attempt_count < max_attempts""",
             (timestamp, timestamp, job_id, lease_token, timestamp),
         )
+        if cursor.rowcount == 1 and self._queue_visibility is not None:
+            self._queue_visibility.executing_in_transaction(
+                job_id, now=datetime.fromisoformat(timestamp)
+            )
         return cursor.rowcount == 1
 
     def release_lease(self, job_id: str, lease_token: str) -> None:
@@ -1285,6 +1268,8 @@ class ProviderJobsStateFacade:
             )
             for topic_id in sorted({int(row["topic_id"]) for row in executing}):
                 self.complete_finished_stops(topic_id, timestamp)
+            for row in executing:
+                self._sync_visibility(str(row["job_id"]), timestamp)
         return ProviderJobRecovery(
             requeued_job_ids=tuple(str(row["job_id"]) for row in leased),
             indeterminate_job_ids=tuple(str(row["job_id"]) for row in executing),

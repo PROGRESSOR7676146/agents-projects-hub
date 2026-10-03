@@ -16,7 +16,14 @@ from typing import Any, Callable, Literal, Protocol, Sequence, cast
 
 import aiohttp
 
+from .codex_activity import (
+    CodexActivityEvent,
+    normalize_codex_activity,
+    normalize_codex_approval_resolution,
+)
 from .codex_failure import MAX_PARTIAL_TEXT, codex_failure_reason
+
+MAX_PENDING_ACTIVITY = 128
 
 
 class RpcError(RuntimeError):
@@ -403,9 +410,76 @@ class CodexAppServerClient:
         self._collecting_rate_limits = False
         self.on_visible_item: Callable[[str, str, str], None] | None = None
         self.on_completed: Callable[[TurnResult], None] | None = None
+        # Install before start_turn; callbacks begin only at accepted-turn wait.
+        self.on_activity: Callable[[CodexActivityEvent], None] | None = None
+        self._activity_thread_id: str | None = None
+        self._activity_turn_id: str | None = None
+        self._activity_ready = False
+        self._pending_activity: deque[CodexActivityEvent] = deque()
+        self._activity_requests: dict[tuple[type, str | int], CodexActivityEvent] = {}
+        self._resolved_activity_requests: set[tuple[type, str | int]] = set()
+        self._activity_observed_notifications: set[int] = set()
 
     def close(self) -> None:
+        self._clear_activity()
         self._transport.close()
+
+    def _clear_activity(self) -> None:
+        self._activity_thread_id = self._activity_turn_id = None
+        self._activity_ready = False
+        self._pending_activity.clear()
+        self._activity_requests.clear()
+        self._resolved_activity_requests.clear()
+        self._activity_observed_notifications.clear()
+
+    def _observe_activity(self, message: dict[str, Any]) -> None:
+        if self.on_activity is None or self._activity_thread_id is None:
+            return
+        params = message.get("params")
+        if not isinstance(params, dict):
+            return
+        event: CodexActivityEvent | None
+        if message.get("method") == "serverRequest/resolved":
+            request_id = params.get("requestId")
+            if not isinstance(request_id, (str, int)) or isinstance(request_id, bool):
+                return
+            key = (type(request_id), request_id)
+            requested = self._activity_requests.get(key)
+            if requested is None or key in self._resolved_activity_requests:
+                return
+            event = normalize_codex_approval_resolution(message, requested=requested)
+            if event is None:
+                return
+            self._resolved_activity_requests.add(key)
+        else:
+            turn_id = self._activity_turn_id or params.get("turnId")
+            if not isinstance(turn_id, str):
+                return
+            event = normalize_codex_activity(
+                message, expected_thread_id=self._activity_thread_id, expected_turn_id=turn_id
+            )
+            if event is None:
+                return
+            if event.kind == "approval_requested" and self._approval_policy == "never":
+                # The request was already declined locally by _handle_server_request.
+                # An unreachable human host must not be advertised as waiting.
+                return
+            if event.kind == "approval_requested" and event.request_id is not None:
+                key = (type(event.request_id), event.request_id)
+                prior = self._activity_requests.get(key)
+                if prior is not None:
+                    if prior != event:
+                        raise RpcError("Codex activity request identity changed")
+                    return
+                if len(self._activity_requests) >= MAX_PENDING_ACTIVITY:
+                    raise RpcError("Codex activity request buffer exceeded its bound")
+                self._activity_requests[key] = event
+        if not self._activity_ready:
+            if len(self._pending_activity) >= MAX_PENDING_ACTIVITY:
+                raise RpcError("Codex pending activity buffer exceeded its bound")
+            self._pending_activity.append(event)
+        elif event.turn_id == self._activity_turn_id:
+            self.on_activity(event)
 
     def _approval_params(self) -> dict[str, str]:
         params = {"approvalPolicy": self._approval_policy}
@@ -464,6 +538,7 @@ class CodexAppServerClient:
                 # not answer from this headless bridge and never auto-allow.
                 # If nobody answers, Codex remains blocked (fail-closed).
                 self._handle_server_request(message)
+                self._observe_activity(message)
                 continue
             if message.get("id") == request_id:
                 if "error" in message:
@@ -476,6 +551,9 @@ class CodexAppServerClient:
             # only bounded protocol objects; hidden reasoning is never emitted
             # to Telegram by this client.
             if "method" in message and "id" not in message:
+                if message.get("method") == "serverRequest/resolved":
+                    self._observe_activity(message)
+                    continue
                 if message.get("method") == "account/rateLimits/updated":
                     update = message.get("params")
                     if isinstance(update, dict):
@@ -483,6 +561,11 @@ class CodexAppServerClient:
                     continue
                 if len(self.notifications) >= 1024:
                     raise RpcError("Codex notification buffer exceeded its bound")
+                if self.on_activity is not None and self._activity_thread_id is not None:
+                    self._observe_activity(message)
+                    # The raw notification still serves visible output and telemetry.
+                    # Its activity has already been buffered in receive order.
+                    self._activity_observed_notifications.add(id(message))
                 self.notifications.append(message)
                 continue
 
@@ -640,6 +723,7 @@ class CodexAppServerClient:
         project_id: str,
         developer_instructions: str | None = None,
     ) -> CodexThread:
+        self._clear_activity()
         if not self._initialized:
             raise RpcError("Codex client is not initialized")
         canonical_cwd = cwd.expanduser().resolve(strict=True)
@@ -693,6 +777,7 @@ class CodexAppServerClient:
         model: str,
         developer_instructions: str | None = None,
     ) -> CodexThread:
+        self._clear_activity()
         if not self._initialized:
             raise RpcError("Codex client is not initialized")
         canonical_cwd = cwd.expanduser().resolve(strict=True)
@@ -750,6 +835,7 @@ class CodexAppServerClient:
         effort: str,
         local_image_paths: Sequence[Path] = (),
     ) -> str:
+        self._clear_activity()
         canonical_cwd = cwd.expanduser().resolve(strict=True)
         turn_input: list[dict[str, str]] = [{"type": "text", "text": text}]
         for image_path in local_image_paths:
@@ -762,6 +848,7 @@ class CodexAppServerClient:
         # Updates arriving during turn/start belong to this turn; older ones do not.
         self._turn_rate_limits = {}
         self._collecting_rate_limits = True
+        self._activity_thread_id = thread_id
         try:
             result = self._request(
                 "turn/start",
@@ -786,7 +873,9 @@ class CodexAppServerClient:
         except BaseException:
             # No turn started, so nothing that follows may count as its telemetry.
             self._collecting_rate_limits = False
+            self._clear_activity()
             raise
+        self._activity_turn_id = turn_id
         return turn_id
 
     def interrupt_turn(self, *, thread_id: str, turn_id: str) -> None:
@@ -825,6 +914,7 @@ class CodexAppServerClient:
             return self._wait_for_turn(turn_id)
         finally:
             self._collecting_rate_limits = False
+            self._clear_activity()
 
     def _wait_for_turn(self, turn_id: str) -> TurnResult:
         answers: list[str] = []
@@ -832,6 +922,20 @@ class CodexAppServerClient:
         seen_items: set[str] = set()
         context_window: int | None = None
         context_tokens_used: int | None = None
+        # The worker enters this method only after persisting native acceptance.
+        # An early request supplies IDs to validate, never authority to bind a job.
+        self._activity_ready = self._activity_turn_id == turn_id
+        try:
+            while self._pending_activity:
+                event = self._pending_activity.popleft()
+                if (
+                    self._activity_ready
+                    and event.turn_id == turn_id
+                    and self.on_activity is not None
+                ):
+                    self.on_activity(event)
+        except Exception as exc:
+            raise CodexTurnError(exc, "") from exc
         while True:
             # Model turns routinely exceed the short RPC handshake timeout.
             # Keep a finite ceiling so a lost app-server cannot strand a worker
@@ -849,7 +953,18 @@ class CodexAppServerClient:
                 # tlive answers approvals on its companion connection.
                 # This client deliberately neither allows nor denies.
                 self._handle_server_request(message)
+                try:
+                    self._observe_activity(message)
+                except Exception as exc:
+                    raise CodexTurnError(exc, "\n\n".join(answers)) from exc
                 continue
+            try:
+                if id(message) in self._activity_observed_notifications:
+                    self._activity_observed_notifications.remove(id(message))
+                else:
+                    self._observe_activity(message)
+            except Exception as exc:
+                raise CodexTurnError(exc, "\n\n".join(answers)) from exc
             params = message.get("params")
             if not isinstance(params, dict):
                 continue

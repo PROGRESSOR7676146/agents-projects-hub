@@ -70,6 +70,7 @@ with a new record.
 | Out-of-band update and incident plane | Hub observes (incident journal, stack drift); Hermes sends model-free incident cards and analyzes only on the owner's press; a deterministic tool, independent of both runtimes, switches the stack only from an owner-confirmed plan. Planned in four stages. | [ADR 0048](0048-out-of-band-update-and-incident-plane.md) |
 | Task visibility and stop certainty | Unknown interruption retains the root; durable control notices are independent of provider results and preserve ambiguous delivery. | [ADR 0049](0049-task-visibility-and-stop-certainty.md) |
 | Claude native invocation evidence | Persist the exact session/root before invocation and validate bounded structured output without inventing native turn IDs. | [ADR 0050](0050-claude-native-invocation-evidence.md) |
+| Accepted-turn activity and queue notices | Schema 37 binds passive Codex progress to exact execution identity and delivers admission snapshots through the existing Hub sender. | [ADR 0051](0051-accepted-turn-activity-and-queue-notices.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

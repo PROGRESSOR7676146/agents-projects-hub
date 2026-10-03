@@ -13,6 +13,7 @@ from .incoming_materials import (
     IncomingMaterialDraft,
     receive_incoming_materials,
 )
+from .provider_queue_capacity import QueueCapacityConfig
 from .state import (
     HubState,
     ProviderJobRecord,
@@ -82,6 +83,8 @@ class DurableProviderAdmission:
         observer_agent_id: str,
         message_batch_quiet_ms: int,
         message_batch_max_ms: int,
+        prepare_task_notices: bool = False,
+        queue_capacity: QueueCapacityConfig | None = None,
     ) -> None:
         self.state = state
         self.telegram = telegram
@@ -89,6 +92,8 @@ class DurableProviderAdmission:
         self.observer_agent_id = observer_agent_id
         self.message_batch_quiet_ms = message_batch_quiet_ms
         self.message_batch_max_ms = message_batch_max_ms
+        self.prepare_task_notices = prepare_task_notices
+        self.queue_capacity = queue_capacity
 
     def admit(
         self,
@@ -183,6 +188,8 @@ class DurableProviderAdmission:
                     appended_user_text=appended_text,
                     materials=materials,
                     input_group_key=group_key,
+                    prepare_task_notices=self.prepare_task_notices,
+                    queue_capacity=self.queue_capacity,
                     quiet_ms=(
                         ALBUM_QUIET_MILLISECONDS
                         if group_key is not None
@@ -213,6 +220,8 @@ class DurableProviderAdmission:
                     input_group_key=group_key,
                     take_local_writer=request.take_local_writer,
                     expected_transfer=expected_transfer,
+                    prepare_task_notices=self.prepare_task_notices,
+                    queue_capacity=self.queue_capacity,
                 )
         except StateError as exc:
             if str(exc) == "execution root has a persistent local writer or uncertainty":

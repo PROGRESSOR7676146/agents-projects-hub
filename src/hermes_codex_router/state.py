@@ -15,6 +15,8 @@ from .incoming_materials import (
     IncomingMaterialRecord,
 )
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
+from .provider_queue_capacity import QueueCapacityConfig
+from .queue_visibility import QueueVisibilityState
 from .release_identity import CURRENT_RELEASE, ReleaseIdentity
 from .root_blockers import RootBlockerNotice, RootBlockerState, persistent_root_blocker
 from .state_connection import connect_existing
@@ -149,15 +151,19 @@ class HubState:
             write_transaction=self._connection_transaction,
             state_error=StateError,
         )
+        self.task_notices = TaskLifecycleState(
+            connection, transaction=self._immediate_transaction, state_error=StateError
+        )
+        self.queue_visibility = QueueVisibilityState(
+            connection, self.task_notices, state_error=StateError
+        )
         self._provider_job_state = ProviderJobsStateFacade(
             connection,
             transaction=self._immediate_transaction,
             write_transaction=self._connection_transaction,
             state_error=StateError,
             job_has_materials=self._incoming_material_state.job_has_materials,
-        )
-        self.task_notices = TaskLifecycleState(
-            connection, transaction=self._immediate_transaction, state_error=StateError
+            queue_visibility=self.queue_visibility,
         )
         self._stop_state = StopState(
             connection,
@@ -811,6 +817,8 @@ class HubState:
         take_local_writer: bool = False,
         available_at: datetime | None = None,
         expected_transfer: WriterTransferSnapshot | None = None,
+        prepare_task_notices: bool = False,
+        queue_capacity: QueueCapacityConfig | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
         """Atomically accept one bounded provider request.
 
@@ -1039,6 +1047,10 @@ class HubState:
             if row is None:
                 raise StateError("failed to persist provider job")
             job = self._provider_job(row)
+            if prepare_task_notices:
+                self.queue_visibility.admitted_in_transaction(
+                    job_id, now=datetime.fromisoformat(now), capacity=queue_capacity
+                )
         return job, created
 
     def enqueue_or_append_provider_job(
@@ -1062,6 +1074,8 @@ class HubState:
         input_group_key: str | None = None,
         quiet_ms: int,
         max_ms: int,
+        prepare_task_notices: bool = False,
+        queue_capacity: QueueCapacityConfig | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
         """Durably collect one compatible Telegram burst into one queued turn.
 
@@ -1089,6 +1103,8 @@ class HubState:
                 handoff_id=handoff_id,
                 materials=materials,
                 input_group_key=input_group_key,
+                prepare_task_notices=prepare_task_notices,
+                queue_capacity=queue_capacity,
             )
         user_text = _bounded(appended_user_text, name="batch input", maximum=20000)
         group_key = _optional_bounded(input_group_key, name="input group key", maximum=256)
@@ -1224,6 +1240,8 @@ class HubState:
             materials=materials,
             input_group_key=group_key,
             available_at=quiet_until,
+            prepare_task_notices=prepare_task_notices,
+            queue_capacity=queue_capacity,
         )
 
     def hold_queued_input_group(
@@ -1695,6 +1713,9 @@ class HubState:
             )
             if cursor.rowcount != 1:
                 raise StateError("provider job lease changed during failure commit")
+            self.queue_visibility.sync_job_in_transaction(
+                job_id, now=datetime.fromisoformat(timestamp)
+            )
             self._provider_job_state.complete_finished_stops(int(row["topic_id"]), timestamp)
             if status == "indeterminate" and terminal_turn_status is None and sender == "codex":
                 accepted_turn = self._connection.execute(
@@ -1909,6 +1930,9 @@ class HubState:
                        lease_token = NULL, lease_expires_at = NULL, updated_at = ?
                    WHERE job_id = ? AND status = 'executing' AND lease_token = ?""",
                 (timestamp, job_id, lease_token),
+            )
+            self.queue_visibility.sync_job_in_transaction(
+                job_id, now=datetime.fromisoformat(timestamp)
             )
             if cursor.rowcount != 1:
                 raise StateError("provider job lease changed during result commit")

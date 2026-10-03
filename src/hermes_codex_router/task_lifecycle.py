@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
+from .task_activity_binding import activity_notice_is_current
+
 MAX_NOTICE_ATTEMPTS = 5
 TransactionFactory = Callable[[], AbstractContextManager[None]]
 
@@ -188,7 +190,9 @@ class TaskLifecycleState:
         with self.transaction():
             row = self.db.execute(
                 "SELECT notice_id FROM task_lifecycle_notices WHERE status='pending' "
-                "AND available_at<=? ORDER BY created_at,notice_id LIMIT 1",
+                "AND available_at<=? ORDER BY "
+                "CASE WHEN stop_request_id IS NOT NULL THEN 0 ELSE 1 END,"
+                "created_at,CASE kind WHEN 'accepted' THEN 0 ELSE 1 END,notice_id LIMIT 1",
                 (timestamp,),
             ).fetchone()
             if row is None:
@@ -218,7 +222,45 @@ class TaskLifecycleState:
     def begin_send(self, notice_id: str, lease_token: str, *, now: datetime) -> TaskLifecycleNotice:
         timestamp = self._time(now)
         with self.transaction():
-            self._attempt(notice_id, lease_token, timestamp, started=False)
+            notice = self.get_notice(notice_id)
+            if notice.status == "superseded" and notice.attempt_count == 0:
+                return notice
+            notice = self._attempt(notice_id, lease_token, timestamp, started=False)
+            valid_states = {
+                "accepted": {"queued", "retry_wait", "leased"},
+                "queued": {"queued", "retry_wait", "leased"},
+                "executing": {"executing"},
+                "approval_wait": {"executing"},
+                "no_progress": {"executing"},
+            }.get(notice.kind)
+            obsolete = False
+            if notice.attempt_count == 0 and notice.stop_request_id is None:
+                if notice.kind in {"approval_wait", "no_progress"}:
+                    obsolete = not activity_notice_is_current(
+                        self.db,
+                        job_id=notice.job_id,
+                        kind=notice.kind,
+                        event_key=notice.event_key,
+                        chat_id=notice.chat_id,
+                        thread_id=notice.thread_id,
+                        created_at=notice.created_at,
+                        timestamp=timestamp,
+                    )
+                if valid_states is not None and notice.job_id is not None:
+                    job = self.db.execute(
+                        "SELECT status FROM provider_jobs WHERE job_id=?", (notice.job_id,)
+                    ).fetchone()
+                    obsolete = obsolete or job is None or job["status"] not in valid_states
+            if obsolete:
+                # Preserve attempted/unknown transport evidence; only a first,
+                # still-unattempted stale snapshot can be superseded here.
+                self.db.execute(
+                    "UPDATE task_lifecycle_notices SET status='superseded',"
+                    "lease_token=NULL,lease_owner=NULL,lease_expires_at=NULL,updated_at=? "
+                    "WHERE notice_id=?",
+                    (timestamp, notice_id),
+                )
+                return self.get_notice(notice_id)
             self.db.execute(
                 "UPDATE task_lifecycle_notices SET send_started_at=?,"
                 "attempt_count=attempt_count+1,updated_at=? WHERE notice_id=?",

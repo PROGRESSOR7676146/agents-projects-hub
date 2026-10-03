@@ -532,6 +532,7 @@ class ExecutionJournalTests(unittest.TestCase):
                         "models.py",
                         "registry.py",
                         "schema_task_lifecycle.py",
+                        "schema_task_activity.py",
                     ):
                         archive.writestr(
                             f"hermes_codex_router/{name}", (package / name).read_text()

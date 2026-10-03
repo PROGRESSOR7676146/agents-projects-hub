@@ -246,7 +246,8 @@ class InboundMaterialTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             harness = FaultMatrixHarness(Path(directory))
             controller = harness.controller()
-            telegram = InboundRecordingBot({"late-file": b"late-material-marker\n"})
+            late_content = b"late-material-marker\n"
+            telegram = InboundRecordingBot({"late-file": late_content})
             controller.telegram = cast(Any, telegram)
             first = harness.update(
                 521,
@@ -275,6 +276,12 @@ class InboundMaterialTests(unittest.TestCase):
 
                 self.assertTrue(controller.handle_update(late))
                 controller.state.flush_message_batch(topic.topic_id)
+                jobs = controller.state.provider_jobs_for_topic(topic.topic_id)
+                self.assertEqual(len(jobs), 2)
+                child = next(job for job in jobs if job.job_id != parent.job_id)
+                material = controller.state.incoming_materials_for_job(child.job_id)[0]
+                assert material.storage_path is not None
+                self.assertEqual(Path(material.storage_path).read_bytes(), late_content)
                 self.assertIsNone(
                     controller.state.lease_steer_followup(parent.job_id, "steer-worker")
                 )
@@ -288,19 +295,37 @@ class InboundMaterialTests(unittest.TestCase):
             finally:
                 controller.close()
 
-            sender = harness.sender()
-            try:
-                self.assertTrue(sender.run_cycle())
-            finally:
-                sender.close()
-
             adapter = RecordingAdapter("opencode")
             worker = harness.worker("opencode", adapter)
+            sender = harness.sender()
             try:
+                self.assertNotEqual(
+                    sender.state.get_telegram_outbox_for_job(parent.job_id).status,
+                    "delivered",
+                )
+                self.assertFalse(worker.run_cycle())
+                self.assertEqual(adapter.calls, [])
+
+                for _ in range(3):
+                    if (
+                        sender.state.get_telegram_outbox_for_job(parent.job_id).status
+                        == "delivered"
+                    ):
+                        break
+                    self.assertFalse(worker.run_cycle())
+                    self.assertEqual(adapter.calls, [])
+                    self.assertTrue(sender.run_cycle())
+
+                self.assertEqual(
+                    sender.state.get_telegram_outbox_for_job(parent.job_id).status,
+                    "delivered",
+                )
                 self.assertTrue(worker.run_cycle())
                 self.assertEqual(len(adapter.calls), 1)
                 self.assertIn("late-material-marker", adapter.calls[0])
+                self.assertEqual(telegram.downloads, ["late-file"])
             finally:
+                sender.close()
                 worker.close()
 
     def test_oversized_document_is_not_downloaded_and_is_reported(self) -> None:
