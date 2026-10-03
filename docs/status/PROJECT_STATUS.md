@@ -57,9 +57,10 @@ live CPA/account acceptance remain pending under
 
 Queue admission snapshots and accepted Codex turn activity are implemented in
 schema 37 under [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md).
-Focused offline evidence covers durable deduplication, binding changes, approval
-resolution, passive deadlines and delivery certainty. Final candidate validation
-and independent review remain pending; active-work retry controls, approval
+Offline evidence covers durable deduplication, binding changes, approval
+resolution, passive deadlines and delivery certainty. The integrated revision
+`3750ccfb0f8eb98333f9219f3a697d6328890d04` passed canonical and hosted validation
+after exact-candidate independent reviews; active-work retry controls, approval
 before native acceptance and wider provider visibility remain open. This does
 not change the text-only Claude capability boundary.
 

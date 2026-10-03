@@ -15,6 +15,11 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from .antigravity_model import model_arguments
+from .claude_cli_capabilities import (
+    ClaudeCliCapabilities,
+    ClaudeCliCapabilityError,
+    ClaudeCliUnavailableError,
+)
 from .claude_stream import (
     MAX_CLAUDE_STDERR_BYTES,
     ClaudeStreamError,
@@ -22,6 +27,7 @@ from .claude_stream import (
     VisibleAssistantCallback,
     parse_claude_stream,
 )
+from .owned_process_exit import peek_exit_code
 from .provider_limits import ProviderLimit, parse_antigravity_limit, parse_opencode_limit
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
@@ -149,28 +155,34 @@ class ExternalCliAdapter:
         self._process_lock = threading.Lock()
         self._active_process: subprocess.Popen[str] | None = None
         self._interrupt_requested = threading.Event()
+        self._claude_capabilities = ClaudeCliCapabilities()
 
     def interrupt(self) -> bool:
         """Terminate only this adapter's active provider process group."""
         self._interrupt_requested.set()
         with self._process_lock:
             process = self._active_process
-        if process is None or process.poll() is not None:
-            return False
-        try:
-            # This path is reserved for the user's emergency stop.  A provider
-            # may ignore SIGTERM while it is inside its own model/runtime loop,
-            # so terminate the isolated process group deterministically.
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            return False
-        return True
+            if process is None:
+                return False
+            exit_code = peek_exit_code(process) if self.runtime == "claude" else process.poll()
+            if exit_code is not None:
+                return False
+            try:
+                # Serialize observation and signal with cleanup/reaping so
+                # an emergency stop cannot target a recycled process group.
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return False
+            return True
 
     def prepare_interruptible_turn(self) -> None:
         """Clear a prior interrupt before a worker starts its monitor."""
         with self._process_lock:
-            if self._active_process is not None and self._active_process.poll() is None:
-                raise ExternalRuntimeError("provider process is already active")
+            if self._active_process is not None:
+                process = self._active_process
+                exit_code = peek_exit_code(process) if self.runtime == "claude" else process.poll()
+                if exit_code is None:
+                    raise ExternalRuntimeError("provider process is already active")
             self._interrupt_requested.clear()
 
     def build_argv(
@@ -248,6 +260,8 @@ class ExternalCliAdapter:
                 "--verbose",
                 "--restricted",
                 "--safe-mode",
+                "--settings",
+                '{"disableAllHooks":true}',
                 "--strict-mcp-config",
                 "--disable-slash-commands",
                 "--permission-mode",
@@ -326,6 +340,7 @@ class ExternalCliAdapter:
         owned_antigravity_log = False
         active_antigravity_log_path: Path | None = None
         if self._uses_default_runner and self.runtime == "claude":
+            argv = self._verified_claude_argv(argv, cwd=cwd, environment=environment)
             result = self._run_claude_process(
                 argv,
                 cwd=cwd,
@@ -472,6 +487,32 @@ class ExternalCliAdapter:
             antigravity_log=antigravity_log,
         )
 
+    def _verified_claude_argv(
+        self, argv: tuple[str, ...], *, cwd: Path, environment: dict[str, str]
+    ) -> tuple[str, ...]:
+        """Bind advertised isolation controls to the executable before invocation."""
+        if self._interrupt_requested.is_set():
+            raise ExternalTurnInterrupted("claude turn interrupted by user")
+        try:
+            executable = self._claude_capabilities.require(
+                self.executable,
+                cwd=cwd,
+                environment=environment,
+                interrupted=self._interrupt_requested,
+            )
+        except ClaudeCliUnavailableError:
+            raise ProviderUnavailableError(
+                "claude_cli_unavailable", "Claude CLI could not be started."
+            ) from None
+        except ClaudeCliCapabilityError:
+            if self._interrupt_requested.is_set():
+                raise ExternalTurnInterrupted("claude turn interrupted by user") from None
+            raise ProviderUnavailableError(
+                "claude_cli_capabilities_unverified",
+                "Claude CLI isolation controls could not be verified. The productive turn was not started.",
+            ) from None
+        return (executable, *argv[1:])
+
     def _run_claude_process(
         self,
         argv: tuple[str, ...],
@@ -537,11 +578,17 @@ class ExternalCliAdapter:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(argv, timeout)
-                process.wait(timeout=remaining)
+                while (exit_code := peek_exit_code(process)) is None:
+                    if self._interrupt_requested.is_set():
+                        raise ExternalTurnInterrupted("claude turn interrupted by user")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(argv, timeout)
+                    self._interrupt_requested.wait(min(0.05, remaining))
             stdout = reader.finish()
             if time.monotonic() >= deadline:
                 raise subprocess.TimeoutExpired(argv, timeout)
-            return subprocess.CompletedProcess(argv, process.returncode, stdout, "")
+            return subprocess.CompletedProcess(argv, exit_code, stdout, "")
         except subprocess.TimeoutExpired:
             self._terminate_claude_process(process, graceful=True)
             if self._interrupt_requested.is_set():
@@ -564,23 +611,29 @@ class ExternalCliAdapter:
                     if self._active_process is process:
                         self._active_process = None
 
-    @staticmethod
-    def _terminate_claude_process(process: subprocess.Popen[str], *, graceful: bool) -> None:
-        try:
-            os.killpg(process.pid, signal.SIGTERM if graceful else signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        if graceful:
+    def _terminate_claude_process(self, process: subprocess.Popen[str], *, graceful: bool) -> None:
+        with self._process_lock:
+            if process.returncode is not None:
+                return
             try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
-        if process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
+                os.killpg(process.pid, signal.SIGTERM if graceful else signal.SIGKILL)
             except ProcessLookupError:
                 pass
-        process.wait(timeout=5)
+            if graceful:
+                # Reserve the leader PID until the last group signal. The
+                # stop event can shorten this wait without acquiring the lock.
+                deadline = time.monotonic() + 5
+                while (
+                    peek_exit_code(process) is None
+                    and time.monotonic() < deadline
+                    and not self._interrupt_requested.is_set()
+                ):
+                    time.sleep(0.01)
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            process.wait(timeout=5)
 
     def _parse_result(
         self,

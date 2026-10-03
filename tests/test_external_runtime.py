@@ -10,6 +10,7 @@ import time
 import unittest
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -25,6 +26,15 @@ from hermes_codex_router.external_runtime import (
     ProviderLimitError,
     ProviderUnavailableError,
 )
+from hermes_codex_router.owned_process_exit import peek_exit_code
+from tests.test_claude_cli_capabilities import HELP, LeaderExitClock
+
+
+def fictional_claude_source(source: str) -> str:
+    return (
+        f"#!{sys.executable}\nimport sys\n"
+        f"if sys.argv[1:] == ['--help']:\n    print({HELP!r})\n    sys.exit(0)\n" + source
+    )
 
 
 class ExternalRuntimeTests(unittest.TestCase):
@@ -50,17 +60,18 @@ class ExternalRuntimeTests(unittest.TestCase):
         ):
             root = Path(directory)
             child = root / "provider"
-            child.write_text(f"#!{sys.executable}\n" + source, encoding="utf-8")
+            child.write_text(fictional_claude_source(source), encoding="utf-8")
             child.chmod(0o700)
             adapter = ExternalCliAdapter("claude", executable=str(child))
             try:
                 with patch("subprocess.Popen", side_effect=spawn):
                     return adapter.run_turn(cwd=root, prompt="work", timeout=timeout, **kwargs)
             finally:
-                self.assertEqual(len(spawned), 1)
-                self.assertIsNotNone(spawned[0].poll())
-                self.assertTrue(spawned[0].stdout and spawned[0].stdout.closed)
-                self.assertTrue(spawned[0].stderr and spawned[0].stderr.closed)
+                self.assertEqual(len(spawned), 2)
+                for process in spawned:
+                    self.assertIsNotNone(process.poll())
+                    self.assertTrue(process.stdout and process.stdout.closed)
+                    self.assertTrue(process.stderr and process.stderr.closed)
                 self.assertIsNone(adapter._active_process)
 
     def test_claude_stdout_overflow_is_rejected_before_eof(self) -> None:
@@ -82,9 +93,135 @@ class ExternalRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ClaudeStreamError, "malformed"):
             self._claude_process("import os, time\nos.write(1, b'{broken}\\n')\ntime.sleep(30)\n")
 
+    def test_claude_unexpected_permission_request_is_refused_before_eof(self) -> None:
+        visible: list[ClaudeVisibleAssistant] = []
+        request = (
+            json.dumps(
+                {
+                    "type": "control_request",
+                    "request": {"subtype": "can_use_tool", "input": "private command"},
+                }
+            )
+            + "\n"
+        )
+        with self.assertRaisesRegex(ClaudeStreamError, "text-only") as raised:
+            self._claude_process(
+                f"import os, time\nos.write(1, {request.encode()!r})\ntime.sleep(30)\n",
+                on_visible_assistant=visible.append,
+            )
+        self.assertEqual(visible, [])
+        self.assertNotIn("private command", str(raised.exception))
+
     def test_claude_timeout_reaps_process_and_closes_pipes(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "timed out"):
             self._claude_process("import time\ntime.sleep(30)\n", timeout=0.05)
+
+    def test_claude_help_and_turn_reserve_leader_pid_until_last_group_signal(self) -> None:
+        session = str(uuid.uuid4())
+        terminal = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "session_id": session,
+            "result": "Visible answer",
+        }
+        outcomes: list[int] = []
+        real_killpg = os.killpg
+
+        def signal_reserved_group(pid: int, requested_signal: int) -> None:
+            # A reaped leader raises ChildProcessError here, before any signal
+            # could reach a recycled group. WNOWAIT preserves the reservation.
+            outcome = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            outcomes.append(outcome.si_code)
+            real_killpg(pid, requested_signal)
+
+        with patch("os.killpg", side_effect=signal_reserved_group):
+            result = self._claude_process(
+                f"import json\nprint(json.dumps({terminal!r}))\n",
+                new_session_id=session,
+            )
+        self.assertEqual(result.text, "Visible answer")
+        self.assertEqual(outcomes, [os.CLD_EXITED, os.CLD_EXITED])
+
+    def test_claude_stop_observation_and_signal_cannot_race_cleanup_reaping(self) -> None:
+        adapter = ExternalCliAdapter("claude")
+        process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True, text=True
+        )
+        adapter._active_process = process
+        peeked = threading.Event()
+        release_peek = threading.Event()
+        cleanup_attempted = threading.Event()
+        mutex = threading.Lock()
+        errors: list[BaseException] = []
+        stopped: list[bool] = []
+        signals: list[int] = []
+        real_killpg = os.killpg
+
+        class ObservedLock:
+            def __enter__(self) -> None:
+                if threading.current_thread().name == "cleanup":
+                    cleanup_attempted.set()
+                mutex.acquire()
+
+            def __exit__(self, *_: object) -> None:
+                mutex.release()
+
+        adapter._process_lock = cast(Any, ObservedLock())
+
+        def pause_stop_observation(child: subprocess.Popen[str]) -> int | None:
+            code = peek_exit_code(child)
+            if threading.current_thread().name == "stopper":
+                self.assertIsNone(code)
+                peeked.set()
+                self.assertTrue(release_peek.wait(10))
+            return code
+
+        def signal_waitable_group(pid: int, requested_signal: int) -> None:
+            # No signal may follow waitpid, including a concurrent /stop.
+            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            signals.append(requested_signal)
+            real_killpg(pid, requested_signal)
+
+        def stop() -> None:
+            try:
+                stopped.append(adapter.interrupt())
+            except BaseException as error:
+                errors.append(error)
+
+        def cleanup() -> None:
+            try:
+                adapter._terminate_claude_process(process, graceful=False)
+            except BaseException as error:
+                errors.append(error)
+
+        stopper = threading.Thread(target=stop, name="stopper")
+        cleaner = threading.Thread(target=cleanup, name="cleanup")
+        with (
+            patch("hermes_codex_router.external_runtime.peek_exit_code", pause_stop_observation),
+            patch("os.killpg", signal_waitable_group),
+        ):
+            try:
+                stopper.start()
+                self.assertTrue(peeked.wait(10))
+                cleaner.start()
+                self.assertTrue(cleanup_attempted.wait(10))
+                self.assertEqual(signals, [])
+            finally:
+                release_peek.set()
+                stopper.join(10)
+                if cleaner.ident is not None:
+                    cleaner.join(10)
+                if process.returncode is None:
+                    real_killpg(process.pid, 9)
+                    process.wait(timeout=5)
+        self.assertFalse(stopper.is_alive())
+        self.assertFalse(cleaner.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(stopped, [True])
+        self.assertEqual(signals, [9, 9])
 
     def test_claude_drains_both_pipes_and_preserves_exact_terminal_result(self) -> None:
         session = str(uuid.uuid4())
@@ -97,7 +234,6 @@ class ExternalRuntimeTests(unittest.TestCase):
                 "content": [
                     {"type": "text", "text": "Visible partial é"},
                     {"type": "thinking", "thinking": "private thought"},
-                    {"type": "tool_use", "input": {"secret": "private input"}},
                 ]
             },
         }
@@ -248,9 +384,11 @@ class ExternalRuntimeTests(unittest.TestCase):
                 + "\n"
             ).encode()
             child.write_text(
-                f"#!{sys.executable}\nimport os, signal, time\n"
-                "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-                f"os.write(1, {event!r})\ntime.sleep(30)\n",
+                fictional_claude_source(
+                    "import os, signal, time\n"
+                    "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                    f"os.write(1, {event!r})\ntime.sleep(30)\n"
+                ),
                 encoding="utf-8",
             )
             child.chmod(0o700)
@@ -276,14 +414,25 @@ class ExternalRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             child_pid = Path(directory) / "descendant-pid"
             source = (
-                "import pathlib, subprocess, sys\n"
+                "import os, pathlib, subprocess, sys\n"
                 "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
-                f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid))\n"
+                f"marker = pathlib.Path({str(child_pid)!r})\n"
+                "ready = marker.with_suffix('.ready')\n"
+                "ready.write_text(f'{child.pid} {os.getpid()}')\n"
+                "ready.replace(marker)\n"
             )
-            with self.assertRaisesRegex(RuntimeError, "timed out"):
+            clock = LeaderExitClock(child_pid)
+            with (
+                patch(
+                    "hermes_codex_router.external_runtime.time",
+                    SimpleNamespace(monotonic=clock.monotonic),
+                ),
+                self.assertRaisesRegex(RuntimeError, "timed out"),
+            ):
                 self._claude_process(source, timeout=0.2)
             self.assertTrue(child_pid.exists())
-            pid = int(child_pid.read_text())
+            self.assertTrue(clock.observed_leader_exit)
+            pid = int(child_pid.read_text().split()[0])
             deadline = time.monotonic() + 1
             while time.monotonic() < deadline:
                 status = Path(f"/proc/{pid}/stat")
@@ -440,6 +589,9 @@ class ExternalRuntimeTests(unittest.TestCase):
         self.assertNotIn("private", started.text)
         self.assertIn("--strict-mcp-config", calls[0])
         self.assertIn("--safe-mode", calls[0])
+        self.assertEqual(
+            json.loads(calls[0][calls[0].index("--settings") + 1]), {"disableAllHooks": True}
+        )
         self.assertEqual(calls[0][calls[0].index("--tools") + 1], "")
         self.assertEqual(calls[1][calls[1].index("--resume") + 1], session)
         for call, prompt in zip(calls, ("hello", "again")):

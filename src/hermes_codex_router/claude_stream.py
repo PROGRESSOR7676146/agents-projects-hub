@@ -54,7 +54,65 @@ def _event(line: str) -> dict[str, object]:
         raise ClaudeStreamError("claude returned malformed structured output") from exc
     if not isinstance(event, dict):
         raise ClaudeStreamError("claude returned a non-object event")
+    _require_text_only_event(event)
     return event
+
+
+def _require_text_only_event(event: dict[str, object]) -> None:
+    """Refuse observed capability drift before provisional text or completion.
+
+    CLI flags remain the preventive boundary. Stream observations are only a
+    fail-closed backstop, never proof that an unexpected action did not run.
+    Missing optional metadata is not an attestation of tool or hook isolation.
+    """
+    kind = event.get("type")
+    subtype = event.get("subtype")
+    violated = isinstance(kind, str) and kind in {
+        "control_request",
+        "control_response",
+        "tool_progress",
+        "tool_use_summary",
+        "hook_started",
+        "hook_progress",
+        "hook_response",
+        "task_started",
+        "task_progress",
+        "task_notification",
+    }
+    if kind == "system" and isinstance(subtype, str):
+        violated |= subtype.startswith("hook_") or subtype in {
+            "task_started",
+            "task_progress",
+            "task_notification",
+        }
+        if subtype == "init":
+            for field in ("tools", "mcp_servers", "plugins", "skills"):
+                if field in event:
+                    value = event[field]
+                    violated |= not isinstance(value, list) or bool(value)
+            if "permissionMode" in event:
+                violated |= event["permissionMode"] != "dontAsk"
+    if event.get("parent_tool_use_id") is not None:
+        violated = True
+    message = event.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, list):
+        violated |= any(_tool_block(block) for block in content)
+    streamed = event.get("event")
+    if kind == "stream_event" and isinstance(streamed, dict):
+        violated |= _tool_block(streamed.get("content_block"))
+        delta = streamed.get("delta")
+        violated |= isinstance(delta, dict) and delta.get("type") == "input_json_delta"
+    if violated:
+        # Never include a tool name, hook text, command, request ID or payload.
+        raise ClaudeStreamError("claude text-only runtime policy was violated")
+
+
+def _tool_block(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    kind = value.get("type")
+    return isinstance(kind, str) and (kind.endswith("tool_use") or kind.endswith("tool_result"))
 
 
 class ClaudeStreamReader:

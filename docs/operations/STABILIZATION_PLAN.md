@@ -1,13 +1,14 @@
 # Stabilization plan
 
 Status: active; stages 0–2 and 3b done, stage 3 in progress
-Date: 2026-09-27; updated 2026-10-02
+Date: 2026-09-27; updated 2026-10-03
 Owner: repository owner (decisions and merges); lead development agent integrates
-Last verified repository revision: `d3be874` for the stop/notice slice
-(canonical checks and independent review). Native Claude candidate `c5e130c`
-and the schema-37 visibility work remain separate publication/review tracks.
-Next trigger: finish their exact-revision validation and required independent
-review; continue the separately authorized live backlog and ADR 0048 work.
+Last verified integrated repository revision:
+`3750ccfb0f8eb98333f9219f3a697d6328890d04` for stop, native Claude and schema-37
+visibility (canonical and hosted checks, after independent candidate reviews).
+Next trigger: the native human approval boundary in the
+[continuation plan](NEXT_DEVELOPMENT_SESSION.md); continue the separately
+authorized live backlog and ADR 0048 work.
 Deployment identity and private acceptance records remain outside this plan.
 
 ## Why
@@ -155,8 +156,9 @@ acceptance.
   repository implementation is present under
   [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md), with candidate
   `c5e130c` passing canonical publication checks (1,375 tests, 128 modules).
-  Hosted checks passed at that exact candidate; required Claude or owner
-  review remains open. Astra review is supplementary.
+  Hosted checks and independent review passed at that exact candidate; it is
+  merged in the integrated revision above, whose canonical checks cover
+  1,488 tests in 135 modules. This is source evidence, not live acceptance.
   Human approval hosting, tools, advisor isolation, native local transfer and
   CPA/account live acceptance remain separate parity work.
 - `codex-worker@1` / `claude-worker@1` duplicate slot 1 of `worker@codex` /
