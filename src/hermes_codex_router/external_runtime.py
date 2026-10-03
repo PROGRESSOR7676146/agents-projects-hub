@@ -162,19 +162,18 @@ class ExternalCliAdapter:
         self._interrupt_requested.set()
         with self._process_lock:
             process = self._active_process
-        if process is None:
-            return False
-        exit_code = peek_exit_code(process) if self.runtime == "claude" else process.poll()
-        if exit_code is not None:
-            return False
-        try:
-            # This path is reserved for the user's emergency stop.  A provider
-            # may ignore SIGTERM while it is inside its own model/runtime loop,
-            # so terminate the isolated process group deterministically.
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            return False
-        return True
+            if process is None:
+                return False
+            exit_code = peek_exit_code(process) if self.runtime == "claude" else process.poll()
+            if exit_code is not None:
+                return False
+            try:
+                # Serialize observation and signal with cleanup/reaping so
+                # an emergency stop cannot target a recycled process group.
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return False
+            return True
 
     def prepare_interruptible_turn(self) -> None:
         """Clear a prior interrupt before a worker starts its monitor."""
@@ -612,25 +611,29 @@ class ExternalCliAdapter:
                     if self._active_process is process:
                         self._active_process = None
 
-    @staticmethod
-    def _terminate_claude_process(process: subprocess.Popen[str], *, graceful: bool) -> None:
-        if process.returncode is not None:
-            return
-        try:
-            os.killpg(process.pid, signal.SIGTERM if graceful else signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        if graceful:
-            # Observe exit without reaping: descendants can retain the group
-            # after the leader exits, so reserve its PID until the last signal.
-            deadline = time.monotonic() + 5
-            while peek_exit_code(process) is None and time.monotonic() < deadline:
-                time.sleep(0.01)
+    def _terminate_claude_process(self, process: subprocess.Popen[str], *, graceful: bool) -> None:
+        with self._process_lock:
+            if process.returncode is not None:
+                return
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                os.killpg(process.pid, signal.SIGTERM if graceful else signal.SIGKILL)
             except ProcessLookupError:
                 pass
-        process.wait(timeout=5)
+            if graceful:
+                # Reserve the leader PID until the last group signal. The
+                # stop event can shorten this wait without acquiring the lock.
+                deadline = time.monotonic() + 5
+                while (
+                    peek_exit_code(process) is None
+                    and time.monotonic() < deadline
+                    and not self._interrupt_requested.is_set()
+                ):
+                    time.sleep(0.01)
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            process.wait(timeout=5)
 
     def _parse_result(
         self,

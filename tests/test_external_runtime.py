@@ -26,6 +26,7 @@ from hermes_codex_router.external_runtime import (
     ProviderLimitError,
     ProviderUnavailableError,
 )
+from hermes_codex_router.owned_process_exit import peek_exit_code
 from tests.test_claude_cli_capabilities import HELP, LeaderExitClock
 
 
@@ -143,6 +144,84 @@ class ExternalRuntimeTests(unittest.TestCase):
             )
         self.assertEqual(result.text, "Visible answer")
         self.assertEqual(outcomes, [os.CLD_EXITED, os.CLD_EXITED])
+
+    def test_claude_stop_observation_and_signal_cannot_race_cleanup_reaping(self) -> None:
+        adapter = ExternalCliAdapter("claude")
+        process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True, text=True
+        )
+        adapter._active_process = process
+        peeked = threading.Event()
+        release_peek = threading.Event()
+        cleanup_attempted = threading.Event()
+        mutex = threading.Lock()
+        errors: list[BaseException] = []
+        stopped: list[bool] = []
+        signals: list[int] = []
+        real_killpg = os.killpg
+
+        class ObservedLock:
+            def __enter__(self) -> None:
+                if threading.current_thread().name == "cleanup":
+                    cleanup_attempted.set()
+                mutex.acquire()
+
+            def __exit__(self, *_: object) -> None:
+                mutex.release()
+
+        adapter._process_lock = cast(Any, ObservedLock())
+
+        def pause_stop_observation(child: subprocess.Popen[str]) -> int | None:
+            code = peek_exit_code(child)
+            if threading.current_thread().name == "stopper":
+                self.assertIsNone(code)
+                peeked.set()
+                self.assertTrue(release_peek.wait(10))
+            return code
+
+        def signal_waitable_group(pid: int, requested_signal: int) -> None:
+            # No signal may follow waitpid, including a concurrent /stop.
+            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            signals.append(requested_signal)
+            real_killpg(pid, requested_signal)
+
+        def stop() -> None:
+            try:
+                stopped.append(adapter.interrupt())
+            except BaseException as error:
+                errors.append(error)
+
+        def cleanup() -> None:
+            try:
+                adapter._terminate_claude_process(process, graceful=False)
+            except BaseException as error:
+                errors.append(error)
+
+        stopper = threading.Thread(target=stop, name="stopper")
+        cleaner = threading.Thread(target=cleanup, name="cleanup")
+        with (
+            patch("hermes_codex_router.external_runtime.peek_exit_code", pause_stop_observation),
+            patch("os.killpg", signal_waitable_group),
+        ):
+            try:
+                stopper.start()
+                self.assertTrue(peeked.wait(10))
+                cleaner.start()
+                self.assertTrue(cleanup_attempted.wait(10))
+                self.assertEqual(signals, [])
+            finally:
+                release_peek.set()
+                stopper.join(10)
+                if cleaner.ident is not None:
+                    cleaner.join(10)
+                if process.returncode is None:
+                    real_killpg(process.pid, 9)
+                    process.wait(timeout=5)
+        self.assertFalse(stopper.is_alive())
+        self.assertFalse(cleaner.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(stopped, [True])
+        self.assertEqual(signals, [9, 9])
 
     def test_claude_drains_both_pipes_and_preserves_exact_terminal_result(self) -> None:
         session = str(uuid.uuid4())
