@@ -14,6 +14,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
+from hermes_codex_router.claude_file_policy import require_file_tool_event
+from hermes_codex_router.claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
 from hermes_codex_router.claude_stream import (
     ClaudeStreamError,
     ClaudeTerminalFailure,
@@ -38,6 +40,90 @@ def fictional_claude_source(source: str) -> str:
 
 
 class ExternalRuntimeTests(unittest.TestCase):
+    def test_hosted_file_tools_require_owned_runner_and_never_fall_back(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        sandbox = cast(
+            FileToolSandboxConfig, SimpleNamespace(python_executable=Path("/usr/bin/python3"))
+        )
+        with patch.dict(
+            os.environ,
+            {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+            clear=True,
+        ):
+            adapter = ExternalCliAdapter(
+                "claude", run=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", "")
+            )
+            with self.assertRaises(ProviderUnavailableError) as failure:
+                adapter.run_turn(cwd=root, prompt="Example", claude_sandbox=sandbox)
+            self.assertEqual(failure.exception.code, "claude_permission_host_unverified")
+            adapter = ExternalCliAdapter("claude")
+            with (
+                patch.object(
+                    adapter, "_verified_claude_argv", side_effect=lambda argv, **kwargs: argv
+                ),
+                patch(
+                    "hermes_codex_router.external_runtime.wrap_file_tool_argv",
+                    side_effect=FileToolSandboxError("example"),
+                ),
+                patch.object(adapter, "_run_claude_process") as native,
+                self.assertRaises(ProviderUnavailableError),
+            ):
+                adapter.run_turn(cwd=root, prompt="Example", claude_sandbox=sandbox)
+            native.assert_not_called()
+
+    def test_hosted_file_tools_wire_fixed_policy_to_owned_process(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        native_id = str(uuid.uuid4())
+        terminal = (
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "session_id": native_id,
+                    "result": "Example",
+                }
+            )
+            + "\n"
+        )
+        sandbox = cast(
+            FileToolSandboxConfig, SimpleNamespace(python_executable=Path("/usr/bin/python3"))
+        )
+        adapter = ExternalCliAdapter("claude")
+        with (
+            patch.dict(
+                os.environ,
+                {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+                clear=True,
+            ),
+            patch.object(
+                adapter, "_verified_claude_argv", side_effect=lambda argv, **kwargs: argv
+            ) as verify,
+            patch(
+                "hermes_codex_router.external_runtime.wrap_file_tool_argv",
+                return_value=(("example-boundary",), {"EXAMPLE": "isolated"}),
+            ) as wrap,
+            patch.object(
+                adapter,
+                "_run_claude_process",
+                return_value=subprocess.CompletedProcess([], 0, terminal, ""),
+            ) as native,
+        ):
+            adapter.run_turn(
+                cwd=root, prompt="Example", claude_sandbox=sandbox, new_session_id=native_id
+            )
+        self.assertTrue(verify.call_args.kwargs["file_tools"])
+        argv = wrap.call_args.args[0]
+        self.assertNotIn("--safe-mode", argv)
+        self.assertEqual(argv[argv.index("--tools") + 1], "Read,Glob,Grep,Write,Edit")
+        self.assertEqual(argv[argv.index("--setting-sources") + 1], "")
+        self.assertEqual(native.call_args.args[0], ("example-boundary",))
+        self.assertIs(native.call_args.kwargs["event_policy"], require_file_tool_event)
+
     def _claude_process(
         self, source: str, *, timeout: float = 1, **kwargs: Any
     ) -> ExternalTurnResult:

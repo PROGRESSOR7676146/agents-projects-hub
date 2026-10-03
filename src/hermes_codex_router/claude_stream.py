@@ -9,6 +9,9 @@ MAX_CLAUDE_OUTPUT_BYTES = 2 * 1024 * 1024
 MAX_CLAUDE_VISIBLE_CHARACTERS = 200_000
 MAX_CLAUDE_EVENTS = 512
 MAX_CLAUDE_STDERR_BYTES = 64 * 1024
+MAX_CLAUDE_FILE_OUTPUT_BYTES = 64 * 1024 * 1024
+MAX_CLAUDE_FILE_EVENT_BYTES = 4 * 1024 * 1024
+MAX_CLAUDE_FILE_EVENTS = 4096
 
 
 class ClaudeStreamError(RuntimeError):
@@ -47,14 +50,16 @@ class ClaudeVisibleAssistant:
 VisibleAssistantCallback = Callable[[ClaudeVisibleAssistant], None]
 
 
-def _event(line: str) -> dict[str, object]:
+def _event(
+    line: str, policy: Callable[[dict[str, object]], None] | None = None
+) -> dict[str, object]:
     try:
         event = json.loads(line)
     except (ValueError, RecursionError) as exc:
         raise ClaudeStreamError("claude returned malformed structured output") from exc
     if not isinstance(event, dict):
         raise ClaudeStreamError("claude returned a non-object event")
-    _require_text_only_event(event)
+    (policy or _require_text_only_event)(event)
     return event
 
 
@@ -123,25 +128,33 @@ class ClaudeStreamReader:
         *,
         expected_session_id: str | None = None,
         on_visible_assistant: VisibleAssistantCallback | None = None,
+        event_policy: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         self.session_id = expected_session_id
         self.on_visible_assistant = on_visible_assistant
+        self.event_policy = event_policy
         self._output = bytearray()
         self._pending = bytearray()
         self._events = 0
         self._terminal_seen = False
         self._visible: dict[str, str] = {}
         self._visible_characters = 0
+        self._received_bytes = 0
 
     def feed(self, chunk: bytes) -> None:
-        if len(self._output) + len(chunk) > MAX_CLAUDE_OUTPUT_BYTES:
+        self._received_bytes += len(chunk)
+        byte_limit = MAX_CLAUDE_FILE_OUTPUT_BYTES if self.event_policy else MAX_CLAUDE_OUTPUT_BYTES
+        if self._received_bytes > byte_limit:
             raise ClaudeStreamError("claude structured output exceeded its limit")
-        self._output.extend(chunk)
+        if self.event_policy is None:
+            self._output.extend(chunk)
         self._pending.extend(chunk)
         while (end := self._pending.find(b"\n")) >= 0:
             line = bytes(self._pending[:end])
             del self._pending[: end + 1]
             self._line(line)
+        if self.event_policy and len(self._pending) > MAX_CLAUDE_FILE_EVENT_BYTES:
+            raise ClaudeStreamError("claude structured event exceeded its limit")
 
     def finish(self) -> str:
         if self._pending:
@@ -153,15 +166,17 @@ class ClaudeStreamReader:
             raise ClaudeStreamError("claude returned invalid structured encoding") from exc
 
     def _line(self, raw: bytes) -> None:
+        if self.event_policy and len(raw) > MAX_CLAUDE_FILE_EVENT_BYTES:
+            raise ClaudeStreamError("claude structured event exceeded its limit")
         try:
             line = raw.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ClaudeStreamError("claude returned invalid structured encoding") from exc
         if not line.strip():
             return
-        event = _event(line)
+        event = _event(line, self.event_policy)
         self._events += 1
-        if self._events > MAX_CLAUDE_EVENTS:
+        if self._events > (MAX_CLAUDE_FILE_EVENTS if self.event_policy else MAX_CLAUDE_EVENTS):
             raise ClaudeStreamError("claude structured output exceeded its event limit")
         if "session_id" in event:
             identity = _session_id(event["session_id"])
@@ -174,6 +189,13 @@ class ClaudeStreamReader:
             self._terminal_seen = True
         if self.on_visible_assistant is not None:
             self._visible_assistant(event)
+        if self.event_policy is not None:
+            retained = _file_result_evidence(event)
+            if retained is not None:
+                encoded = (json.dumps(retained, ensure_ascii=False) + "\n").encode("utf-8")
+                if len(self._output) + len(encoded) > MAX_CLAUDE_OUTPUT_BYTES:
+                    raise ClaudeStreamError("claude retained visible output exceeded its limit")
+                self._output.extend(encoded)
 
     def _visible_assistant(self, event: dict[str, object]) -> None:
         # Native assistant messages are complete; stream_event deltas are not.
@@ -222,6 +244,46 @@ class ClaudeStreamReader:
         self._visible_characters += len(text)
 
 
+def _file_result_evidence(event: dict[str, object]) -> dict[str, object] | None:
+    """Retain terminal/model/text evidence after validating every raw event."""
+    if event.get("type") not in {"assistant", "result", "prompt_suggestion"} and not (
+        event.get("type") == "system" and event.get("subtype") == "init"
+    ):
+        return None
+    retained = {
+        key: event[key]
+        for key in (
+            "type",
+            "subtype",
+            "session_id",
+            "uuid",
+            "parent_tool_use_id",
+            "error",
+            "aborted",
+            "model",
+            "result",
+            "is_error",
+            "api_error_status",
+        )
+        if key in event
+    }
+    message = event.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        retained["message"] = {
+            "model": message.get("model"),
+            "content": [
+                {"type": "text", "text": block.get("text")}
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            ]
+            if isinstance(content, list)
+            else [],
+        }
+
+    return retained
+
+
 def _session_id(value: object) -> str:
     if not isinstance(value, str):
         raise ClaudeStreamError("claude returned no session id")
@@ -262,23 +324,22 @@ def parse_claude_stream(
     expected_session_id: str | None = None,
     requested_model: str | None = None,
     returncode: int = 0,
+    event_policy: Callable[[dict[str, object]], None] | None = None,
 ) -> ClaudeParsedResult:
     """Validate the entire bounded NDJSON stream before accepting its result.
 
     Earlier errors cannot override a successful terminal result. A conflicting
     later event invalidates even an otherwise well-formed terminal outcome.
     """
-    if (
-        len(output) > MAX_CLAUDE_OUTPUT_BYTES
-        or len(output.encode("utf-8")) > MAX_CLAUDE_OUTPUT_BYTES
-    ):
+    byte_limit = MAX_CLAUDE_FILE_OUTPUT_BYTES if event_policy else MAX_CLAUDE_OUTPUT_BYTES
+    if len(output) > byte_limit or len(output.encode("utf-8")) > byte_limit:
         raise ClaudeStreamError("claude structured output exceeded its limit")
     events: list[dict[str, object]] = []
     for line in output.splitlines():
         if not line.strip():
             continue
-        events.append(_event(line))
-        if len(events) > MAX_CLAUDE_EVENTS:
+        events.append(_event(line, event_policy))
+        if len(events) > (MAX_CLAUDE_FILE_EVENTS if event_policy else MAX_CLAUDE_EVENTS):
             raise ClaudeStreamError("claude structured output exceeded its event limit")
     terminals = [event for event in events if event.get("type") == "result"]
     if len(terminals) != 1:

@@ -35,10 +35,10 @@
     },
     {
       "target": "src/hermes_codex_router/migrations.py",
-      "max_lines": 1576,
-      "rationale": "Released migrations remain append-only. Bounded 2026-10-02 scope is the two-line schema-37 import/registration; schema_task_activity.py owns the new DDL and existing migration transactions/backup own recovery. Extracting released SQL is outside this feature and would add upgrade risk without reducing the new responsibility.",
+      "max_lines": 1578,
+      "rationale": "Released migrations remain append-only. Bounded 2026-10-03 scope is the schema-38 import/registration; schema_claude_permissions.py owns payload-free DDL and the existing migration transaction/backup owns upgrade recovery. Extracting released SQL adds upgrade risk without reducing this responsibility.",
       "owner": "repository owner",
-      "next_review": "2026-11-02",
+      "next_review": "2026-11-03",
       "reopen_event": "Any growth beyond migration registration, a new migration transaction/backup policy, or a proposal to rewrite released migration SQL."
     },
     {
@@ -120,6 +120,14 @@
       "owner": "repository owner",
       "next_review": "2026-12-31",
       "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
+    },
+    {
+      "target": "src/hermes_codex_router/external_runtime.py::ExternalCliAdapter.run_turn",
+      "max_lines": 203,
+      "rationale": "Bounded 2026-10-03 scope: opt-in Claude file-tool invocation wiring and guarded stream policy. claude_file_policy.py owns immutable argv/settings/environment preparation, claude_file_sandbox.py owns filesystem validation/wrapping, claude_permission_host.py owns socket lifecycle, and the existing adapter retains one process/interrupt/reap boundary. Extracting the whole legacy provider lifecycle is deferred to stabilization; moving the remaining calls would split cleanup ownership rather than reduce permission responsibility.",
+      "owner": "Hub maintainer",
+      "next_review": "2026-11-03",
+      "reopen_event": "Any growth, new tool/approval policy in this method, another invocation or cleanup owner, or stabilization extraction of legacy provider lifecycles."
     }
   ]
 }

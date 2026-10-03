@@ -16,6 +16,8 @@ CLAUDE_PRE_INVOCATION_ERROR_CODES = frozenset(
         "claude_cpa_credential_ambiguous",
         "claude_cli_unavailable",
         "claude_cli_capabilities_unverified",
+        "claude_permission_host_unverified",
+        "claude_session_mode_changed",
     }
 )
 

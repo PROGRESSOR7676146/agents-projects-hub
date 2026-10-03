@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
+from .schema_claude_permissions import CLAUDE_PERMISSIONS_SCHEMA as MIGRATION_38
 from .schema_compatibility import TARGET_SCHEMA_VERSION
 from .schema_task_activity import TASK_ACTIVITY_SCHEMA as MIGRATION_37
 from .schema_task_lifecycle import MIGRATION_36
@@ -1500,6 +1501,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_35,
         MIGRATION_36,
         MIGRATION_37,
+        MIGRATION_38,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:

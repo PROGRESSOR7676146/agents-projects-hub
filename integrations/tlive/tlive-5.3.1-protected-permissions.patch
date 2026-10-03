@@ -1,0 +1,435 @@
+--- a/src/adapters/im/telegram.ts
++++ b/src/adapters/im/telegram.ts
+@@ -13,6 +13,7 @@
+   IMAdapter, IncomingEnvelope, OutgoingMessage,
+ } from '../../kernel/contracts/im-adapter.js';
+ import { mdToTelegramHtml, escapeHtml } from './telegram-html.js';
++import type { ProtectedCallback } from '../../kernel/contracts/protected-permission.js';
+ 
+ interface TelegramAdapterOpts {
+   token: string;
+@@ -42,6 +43,8 @@
+   readonly channel = 'telegram' as const;
+   private bot: Bot | null = null;
+   private inboundHandler?: (env: IncomingEnvelope) => void;
++  private protectedCallback?: (event: ProtectedCallback) => void;
++  private protectedDisconnect?: () => void;
+   private connected: 'connected' | 'idle' | 'failed' = 'idle';
+   private abortCtrl: AbortController | null = null;
+   /** test hook: tracks live timers so test can assert leak-free. */
+@@ -129,6 +132,21 @@
+ 
+     // Inline-keyboard button callbacks (approve:<id> / deny:<id>)
+     this.bot.on('callback_query:data', (ctx) => {
++      // Reserved protected callbacks NEVER flatten into the legacy text path.
++      if (ctx.callbackQuery.data.startsWith('hp:')) {
++        const message = ctx.callbackQuery.message;
++        this.protectedCallback?.({
++          callbackId: ctx.callbackQuery.id,
++          userId: String(ctx.callbackQuery.from.id),
++          isBot: ctx.callbackQuery.from.is_bot,
++          chatId: String(message?.chat.id ?? ''),
++          chatType: message?.chat.type ?? '',
++          messageId: String(message?.message_id ?? ''),
++          data: ctx.callbackQuery.data,
++        });
++        void ctx.answerCallbackQuery().catch(() => undefined);
++        return;
++      }
+       if (!this.inboundHandler) return;
+       const chatId = String(ctx.callbackQuery.message?.chat.id ?? '');
+       // Fail-closed: only forward callbacks from a configured chat.
+@@ -160,11 +178,15 @@
+       { command: 'help', description: 'help and command list' },
+     ]).catch(() => undefined);
+     // Use grammy's polling but tie to our abort controller via custom client.
+-    void this.bot.start({ drop_pending_updates: true });
++    void this.bot.start({ drop_pending_updates: true }).catch(() => {
++      this.connected = 'failed';
++      this.protectedDisconnect?.();
++    });
+     this.connected = 'connected';
+   }
+ 
+   async stop(): Promise<void> {
++    this.protectedDisconnect?.();
+     if (!this.bot) { this.connected = 'idle'; return; }
+     this.abortCtrl?.abort();
+     await this.bot.stop();
+@@ -229,5 +251,29 @@
+     this.inboundHandler = handler;
+   }
+ 
++  onProtectedCallback(handler: ((event: ProtectedCallback) => void) | null): void {
++    this.protectedCallback = handler ?? undefined;
++  }
++
++  onProtectedDisconnect(handler: (() => void) | null): void {
++    this.protectedDisconnect = handler ?? undefined;
++  }
++
++  async sendProtectedCard(out: Extract<OutgoingMessage, { kind: 'card' }>, chatId: string): Promise<{ messageId: string }> {
++    if (!this.bot || this.connected !== 'connected' || this.opts.allowedChatIds?.length !== 1 || this.opts.allowedChatIds[0] !== chatId) {
++      throw new Error('protected Telegram unavailable');
++    }
++    // ProtectedPermissions supplies already escaped HTML. No ordinary card
++    // renderer, parse fallback, or retry can alter the preview or duplicate it.
++    const text = `<b>${escapeHtml(out.title ?? '')}</b>\n${out.body}`;
++    const keyboard: Keyboard = [(out.buttons ?? []).map(button => ({
++      text: button.label, callback_data: button.id,
++    }))];
++    const sent = await this.bot.api.sendMessage(chatId, text, {
++      parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
++    });
++    return { messageId: String(sent.message_id) };
++  }
++
+   isConnected(): 'connected' | 'idle' | 'failed' { return this.connected; }
+ }
+--- a/src/kernel/contracts/protected-permission.ts
++++ b/src/kernel/contracts/protected-permission.ts
+@@ -0,0 +1,42 @@
++// Additive, private Hub permission channel. The public IMAdapter is unchanged.
++import type { IMAdapter, OutgoingMessage } from './im-adapter.js';
++
++export interface ProtectedCallback {
++  callbackId: string;
++  userId: string;
++  isBot: boolean;
++  chatId: string;
++  chatType: string;
++  messageId: string;
++  data: string;
++}
++
++export interface ProtectedTelegram extends IMAdapter {
++  onProtectedCallback(handler: ((event: ProtectedCallback) => void) | null): void;
++  onProtectedDisconnect(handler: (() => void) | null): void;
++  sendProtectedCard(out: Extract<OutgoingMessage, { kind: 'card' }>, chatId: string): Promise<{ messageId: string }>;
++}
++
++export interface ProtectedBinding {
++  version: 1;
++  requestNonce: string;
++  jobId: string;
++  sessionId: string;
++  generation: number;
++  rootDigest: string;
++  leaseId: string;
++  launchEpoch: string;
++  writer: 'telegram';
++  toolName: 'Read' | 'Glob' | 'Grep' | 'Write' | 'Edit';
++  input: Record<string, unknown>;
++  expiresAt: number;
++}
++
++export type ProtectedRequest =
++  | { kind: 'hub.permission.hello'; version: number; challenge: string }
++  | { kind: 'hub.permission.request'; epoch: string; payload: string; tag: string };
++
++export type ProtectedResponse =
++  | { kind: 'hub.permission.capability'; version: 1; epoch: string; tag: string }
++  | { kind: 'hub.permission.result'; decision: 'allow' | 'deny'; epoch?: string;
++      payload?: string; actor?: ProtectedCallback | null; tag?: string };
+--- a/src/kernel/daemon/bootstrap.ts
++++ b/src/kernel/daemon/bootstrap.ts
+@@ -5,6 +5,8 @@
+ import { startIpcServer, type IpcServer } from '../ipc/server.js';
+ import { daemonSocketPath } from '../ipc/client.js';
+ import { PermissionRouter, type PermChat } from './permission-router.js';
++import { ProtectedPermissions, protectedConfig } from './protected-permissions.js';
++import type { ProtectedTelegram } from '../contracts/protected-permission.js';
+ import { decide as policyDecide, type PolicyState } from '../permission/policy-engine.js';
+ import { renderApprovalCard, summarizeToolCall } from '../permission/approval-renderer.js';
+ import { parseAskBatch, renderAskBody, askButtons, extractAskAnswer, type AskBatch } from '../permission/ask-renderer.js';
+@@ -244,6 +246,16 @@
+ export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle> {
+   mkdirSync(opts.home, { recursive: true });
+   const cfg = loadConfig(opts.home);
++  const protectedCfg = protectedConfig(opts.home, cfg);
++  const protectedAdapter = (opts.imAdapters ?? []).find(a => a.channel === 'telegram') as ProtectedTelegram | undefined;
++  if (protectedCfg && (!protectedAdapter
++    || typeof protectedAdapter.onProtectedCallback !== 'function'
++    || typeof protectedAdapter.onProtectedDisconnect !== 'function'
++    || typeof protectedAdapter.sendProtectedCard !== 'function')) {
++    throw new Error('protected Telegram capability missing');
++  }
++  const protectedPermissions = protectedCfg
++    ? new ProtectedPermissions(protectedCfg, protectedAdapter!) : null;
+   // Read once, here, for the toast alone — see detectLang's doc for why this
+   // is a startup snapshot rather than a live read.
+   const lang = detectLang(process.env);
+@@ -1306,6 +1318,11 @@
+       };
+       logJson('ipc.request', { kind: req.kind, callerPid: ctx.callerPid ?? null, ...idOf(req) });
+       switch (req.kind) {
++        case 'hub.permission.hello':
++        case 'hub.permission.request':
++          reply(protectedPermissions ? await protectedPermissions.handle(req,ctx.onDisconnect)
++            : {kind:'error',message:'protected permission host unavailable'});
++          return;
+         case 'daemon.status':
+           reply({ kind: 'daemon.status', uptimeMs: Date.now() - startedAt, pid: process.pid, codex: codexState });
+           return;
+@@ -1757,6 +1774,7 @@
+       // an in-flight request and it rejects (IpcConnectionClosedError). Flush a
+       // tick so the replies write out before we start closing.
+       permissionRouter.settleAllPending();
++      protectedPermissions?.close();
+       continueBroker.settleAllPending();
+       await new Promise((r) => setImmediate(r));
+       codexCompanion?.stop();
+--- a/src/kernel/daemon/protected-permissions.ts
++++ b/src/kernel/daemon/protected-permissions.ts
+@@ -0,0 +1,225 @@
++// Protected decisions never enter the ordinary permission router or IM inbound path.
++import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
++import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs';
++import { join } from 'node:path';
++import type { KernelConfig } from '../config/loader.js';
++import type {
++  ProtectedBinding, ProtectedCallback, ProtectedRequest, ProtectedResponse, ProtectedTelegram,
++} from '../contracts/protected-permission.js';
++import { maskSecrets } from '../permission/approval-renderer.js';
++import { escapeHtml } from '../../adapters/im/telegram-html.js';
++
++interface Config {
++  version: 1;
++  chatId: string;
++  ownerId: string;
++  requestKey: string;
++  resultKey: string;
++}
++
++const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
++const DIGEST = /^[0-9a-f]{64}$/;
++const DECIMAL = /^[1-9][0-9]*$/;
++const TOOLS = new Set(['Read', 'Glob', 'Grep', 'Write', 'Edit']);
++const MAX_PENDING = 128;
++const MAX_REPLAY = 4096;
++const MAX_TTL_MS = 600_000;
++
++/** The optional file alone enables this path. Read its bytes from one owned,
++ * non-symlink descriptor; absence is the sole disabled state. */
++export function protectedConfig(home: string, cfg: KernelConfig): Config | null {
++  let fd: number;
++  try {
++    fd = openSync(join(home, 'protected-permissions.json'),
++      constants.O_RDONLY | constants.O_NOFOLLOW);
++  } catch (error) {
++    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
++    throw error;
++  }
++  let parsed: unknown;
++  try {
++    const stat = fstatSync(fd);
++    if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600
++      || stat.size < 2 || stat.size > 4096
++      || typeof process.getuid !== 'function' || stat.uid !== process.getuid()) {
++      throw new Error('unsafe protected configuration');
++    }
++    parsed = JSON.parse(readFileSync(fd, 'utf8')) as unknown;
++  } finally {
++    closeSync(fd);
++  }
++  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
++    throw new Error('invalid protected configuration');
++  }
++  const value = parsed as Record<string, unknown>;
++  const allowed = ['version', 'chatId', 'ownerId', 'requestKey', 'resultKey'];
++  if (Object.keys(value).length !== allowed.length || Object.keys(value).some(k => !allowed.includes(k))
++    || value.version !== 1 || typeof value.chatId !== 'string' || !DECIMAL.test(value.chatId)
++    || typeof value.ownerId !== 'string' || !DECIMAL.test(value.ownerId)
++    || typeof value.requestKey !== 'string' || !DIGEST.test(value.requestKey)
++    || typeof value.resultKey !== 'string' || !DIGEST.test(value.resultKey)
++    || value.requestKey === value.resultKey
++    || cfg.adapters.telegram?.chatIdAllowList?.length !== 1
++    || cfg.adapters.telegram.chatIdAllowList[0] !== value.chatId
++    || !cfg.allowedSenders.some(s => s.channel === 'telegram' && s.userId === value.ownerId)) {
++    throw new Error('invalid protected configuration');
++  }
++  return value as unknown as Config;
++}
++
++interface Pending {
++  payload: string;
++  binding: ProtectedBinding;
++  messageId?: string;
++  resolve: (result: ProtectedResponse) => void;
++  timer: ReturnType<typeof setTimeout>;
++}
++
++function safePreview(input: Record<string, unknown>): string | null {
++  // Inspect parsed keys rather than matching serialized text: escaped quotes
++  // in a key must not bypass the refusal to hide sensitive values.
++  const remaining: unknown[] = [input];
++  let visited = 0;
++  while (remaining.length > 0) {
++    const value = remaining.pop();
++    if (++visited > 1024) return null;
++    if (!value || typeof value !== 'object') continue;
++    for (const [key, child] of Object.entries(value)) {
++      if (/(?:token|key|secret|password|passwd|auth)/i.test(key)) return null;
++      remaining.push(child);
++    }
++  }
++  // A masked or hidden value cannot be the basis of an informed grant.
++  const raw = JSON.stringify(input, null, 2);
++  if (!raw || raw.length > 2500 || maskSecrets(raw) !== raw) return null;
++  // JSON.stringify leaves Unicode format controls literal. Render them as JSON
++  // escapes so RTL/zero-width content cannot rearrange the card around buttons.
++  return raw.replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g,
++    char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
++}
++
++export class ProtectedPermissions {
++  readonly epoch = randomUUID();
++  readonly #pending = new Map<string, Pending>();
++  readonly #seen = new Map<string, number>();
++  #closed = false;
++
++  constructor(private readonly cfg: Config, private readonly telegram: ProtectedTelegram) {
++    telegram.onProtectedCallback(event => this.onCallback(event));
++    telegram.onProtectedDisconnect(() => this.close());
++  }
++
++  private mac(key: string, domain: string, ...values: unknown[]): string {
++    return createHmac('sha256', Buffer.from(key, 'hex'))
++      .update(JSON.stringify([domain, ...values]), 'utf8').digest('hex');
++  }
++
++  private deny(): ProtectedResponse {
++    return { kind: 'hub.permission.result', decision: 'deny' };
++  }
++
++  async handle(req: ProtectedRequest, onDisconnect?: (fn: () => void) => void): Promise<ProtectedResponse> {
++    if (this.#closed || !req || typeof req !== 'object') return this.deny();
++    if (req.kind === 'hub.permission.hello') {
++      if (req.version !== 1 || typeof req.challenge !== 'string'
++        || req.challenge.length < 16 || req.challenge.length > 128) return this.deny();
++      return { kind: 'hub.permission.capability', version: 1, epoch: this.epoch,
++        tag: this.mac(this.cfg.resultKey, 'capability', req.challenge, this.epoch, 1) };
++    }
++    if (req.kind !== 'hub.permission.request' || req.epoch !== this.epoch
++      || typeof req.payload !== 'string' || Buffer.byteLength(req.payload, 'utf8') > 65_536
++      || typeof req.tag !== 'string' || !DIGEST.test(req.tag)) return this.deny();
++    const expected = this.mac(this.cfg.requestKey, 'request', req.epoch, req.payload);
++    if (!timingSafeEqual(Buffer.from(req.tag, 'hex'), Buffer.from(expected, 'hex'))) return this.deny();
++
++    let binding: ProtectedBinding;
++    try { binding = JSON.parse(req.payload) as ProtectedBinding; }
++    catch { return this.deny(); }
++    const now = Date.now();
++    if (!binding || typeof binding !== 'object' || Array.isArray(binding)
++      || binding.version !== 1 || typeof binding.requestNonce !== 'string'
++      || !UUID.test(binding.requestNonce) || binding.requestNonce.length > 48
++      || typeof binding.jobId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(binding.jobId)
++      || typeof binding.sessionId !== 'string' || !UUID.test(binding.sessionId)
++      || !Number.isSafeInteger(binding.generation) || binding.generation < 1
++      || typeof binding.rootDigest !== 'string' || !DIGEST.test(binding.rootDigest)
++      || typeof binding.leaseId !== 'string' || !UUID.test(binding.leaseId)
++      || typeof binding.launchEpoch !== 'string' || !UUID.test(binding.launchEpoch)
++      || binding.writer !== 'telegram' || !TOOLS.has(binding.toolName)
++      || !binding.input || typeof binding.input !== 'object' || Array.isArray(binding.input)
++      || !Number.isSafeInteger(binding.expiresAt) || binding.expiresAt <= now
++      || binding.expiresAt > now + MAX_TTL_MS || Object.hasOwn(binding, 'agentId')) return this.deny();
++
++    // Never evict a still-valid nonce. An exhausted ledger denies new requests.
++    for (const [nonce, expiry] of this.#seen) {
++      if (expiry <= now) this.#seen.delete(nonce);
++    }
++    if (this.#seen.has(binding.requestNonce) || this.#seen.size >= MAX_REPLAY
++      || this.#pending.size >= MAX_PENDING) return this.deny();
++
++    const preview = safePreview(binding.input);
++    if (preview === null) return this.deny();
++    const title = `Hub permission · ${binding.toolName}`;
++    const body = [
++      `Job: ${binding.jobId}`,
++      `Session: ${binding.sessionId} · generation ${binding.generation}`,
++      `Project root SHA-256: ${binding.rootDigest}`,
++      'Complete tool input:',
++      `<pre>${escapeHtml(preview)}</pre>`,
++    ].join('\n');
++    // Telegram allows 4096 rendered characters. Limit source HTML too so
++    // entity expansion cannot provoke a fallback or ambiguous second send.
++    if (escapeHtml(title).length + body.length > 4000) return this.deny();
++    this.#seen.set(binding.requestNonce, binding.expiresAt);
++
++    return new Promise<ProtectedResponse>(resolve => {
++      const timer = setTimeout(() => this.settle(binding.requestNonce, 'deny', null),
++        Math.max(0, binding.expiresAt - Date.now()));
++      timer.unref();
++      const entry: Pending = { payload: req.payload, binding, resolve, timer };
++      this.#pending.set(binding.requestNonce, entry);
++      onDisconnect?.(() => this.settle(binding.requestNonce, 'deny', null));
++      void this.telegram.sendProtectedCard({ kind: 'card', title, body,
++        buttons: [
++          { id: `hp:${binding.requestNonce}:a`, label: 'Allow once' },
++          { id: `hp:${binding.requestNonce}:d`, label: 'Deny' },
++        ] }, this.cfg.chatId).then(receipt => {
++        if (this.#pending.get(binding.requestNonce) !== entry) return;
++        if (!receipt || typeof receipt.messageId !== 'string'
++          || !DECIMAL.test(receipt.messageId)) this.settle(binding.requestNonce, 'deny', null);
++        else entry.messageId = receipt.messageId;
++      }).catch(() => this.settle(binding.requestNonce, 'deny', null));
++    });
++  }
++
++  private onCallback(event: ProtectedCallback): void {
++    if (this.#closed || !event || typeof event.data !== 'string') return;
++    const match = /^hp:([0-9a-f-]{36}):([ad])$/.exec(event.data);
++    if (!match || !UUID.test(match[1])) return;
++    const entry = this.#pending.get(match[1]);
++    if (!entry || entry.binding.expiresAt <= Date.now() || !entry.messageId
++      || event.isBot !== false || event.userId !== this.cfg.ownerId
++      || event.chatId !== this.cfg.chatId || event.chatType !== 'private'
++      || event.messageId !== entry.messageId || typeof event.callbackId !== 'string'
++      || event.callbackId.length < 1 || event.callbackId.length > 200) return;
++    this.settle(match[1], match[2] === 'a' ? 'allow' : 'deny', event);
++  }
++
++  private settle(nonce: string, decision: 'allow' | 'deny', actor: ProtectedCallback | null): void {
++    const entry = this.#pending.get(nonce);
++    if (!entry) return;
++    this.#pending.delete(nonce);
++    clearTimeout(entry.timer);
++    entry.resolve({ kind: 'hub.permission.result', decision, epoch: this.epoch,
++      payload: entry.payload, actor,
++      tag: this.mac(this.cfg.resultKey, 'result', this.epoch, entry.payload, decision, actor) });
++  }
++
++  close(): void {
++    if (this.#closed) return;
++    this.#closed = true;
++    this.telegram.onProtectedCallback(null);
++    this.telegram.onProtectedDisconnect(null);
++    for (const nonce of this.#pending.keys()) this.settle(nonce, 'deny', null);
++  }
++}
+--- a/src/kernel/ipc/protocol.ts
++++ b/src/kernel/ipc/protocol.ts
+@@ -1,6 +1,7 @@
+ // src/kernel/ipc/protocol.ts
+ 
+ import type { SessionView } from '../web/session-registry.js';
++import type { ProtectedRequest, ProtectedResponse } from '../contracts/protected-permission.js';
+ import type { MonitorEvent, SessionError, LocalWaiting } from '../hook/normalizer.js';
+ 
+ export interface SessionMeta {
+@@ -14,6 +15,7 @@
+ }
+ 
+ export type IpcRequest =
++  | ProtectedRequest
+   | { kind: 'daemon.status' }
+   | { kind: 'daemon.stop' }
+   // Runtime toggle. `enabled` = "this switch is ON" (for `mute`, on = muted).
+@@ -67,6 +69,7 @@
+   | { kind: 'session.list' };
+ 
+ export type IpcResponse =
++  | ProtectedResponse
+   | { kind: 'daemon.status'; uptimeMs: number; pid: number; codex?: 'running' | 'degraded' | 'off' }
+   | { kind: 'daemon.stopped' }
+   | { kind: 'ack' }

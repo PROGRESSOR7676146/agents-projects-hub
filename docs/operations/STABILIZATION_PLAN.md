@@ -6,6 +6,10 @@ Owner: repository owner (decisions and merges); lead development agent integrate
 Last verified integrated repository revision:
 `3750ccfb0f8eb98333f9219f3a697d6328890d04` for stop, native Claude and schema-37
 visibility (canonical and hosted checks, after independent candidate reviews).
+The schema-38 protected file-tool candidate is implemented offline; follow
+[ADR 0052](../decisions/0052-protected-claude-file-permissions.md) and the
+[candidate runbook](CLAUDE_FILE_PERMISSIONS.md). Publication/review gates and
+separately authorized native/Telegram acceptance remain open.
 Next trigger: the native human approval boundary in the
 [continuation plan](NEXT_DEVELOPMENT_SESSION.md); continue the separately
 authorized live backlog and ADR 0048 work.
@@ -210,3 +214,8 @@ acceptance.
 The plan closes when stages 0–3 are merged into `main`, the hotspot ratchet
 runs in the canonical gate, and the owner has either completed or explicitly
 re-scoped every backlog item. Record the closing revision here.
+
+Protected Claude file tools: live activation also requires independently proven
+OS separation of untrusted principals from receipt keys/state/endpoints; the
+current symmetric transport does not protect against an unconfined same-UID
+actor. See [ADR 0052](../decisions/0052-protected-claude-file-permissions.md).

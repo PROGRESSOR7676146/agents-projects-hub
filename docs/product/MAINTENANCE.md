@@ -20,8 +20,9 @@ This normative module is part of the
   an in-flight provider turn remains impossible.
 - OpenCode and Antigravity have one worker slot each. Codex and Claude default
   to one each; extra processes require an explicit external-worker rollout.
-  Claude currently has text-only queue execution; approvals, write access,
-  advisor isolation and live CPA route acceptance remain pending.
+  Claude defaults to text-only queue execution. The opt-in protected file-tool
+  boundary has offline coverage; native/Telegram acceptance, advisor isolation
+  and live CPA route acceptance remain pending.
 - Topic creation depends on the deployment bot's Telegram Manage Topics
   permission.
 
