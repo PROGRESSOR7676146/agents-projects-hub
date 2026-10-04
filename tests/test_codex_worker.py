@@ -14,6 +14,7 @@ from hermes_codex_router import codex_recovery as codex_recovery_module
 from hermes_codex_router import external_worker as external_worker_module
 from hermes_codex_router.cli import main
 from hermes_codex_router.codex_appserver import (
+    CodexAppServerClient,
     CodexThread,
     RateLimits,
     RpcRejectedError,
@@ -33,6 +34,7 @@ from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.state import HubState
 from tests.git_fixtures import init_git_root
 from tests.stop_fixtures import pending_stop
+from tests.test_codex_appserver import FakeTransport
 
 
 class WorkerClient:
@@ -168,6 +170,56 @@ class CodexQueueWorkerTests(unittest.TestCase):
             return job.job_id
         finally:
             state.close()
+
+    def test_custom_profile_refusal_is_durable_pre_execution_failure_without_replay(self) -> None:
+        job_id = self.enqueue(provider_session_id="example-existing-thread")
+        transport = FakeTransport(
+            [
+                {
+                    "id": 1,
+                    "result": {
+                        "thread": {"id": "example-existing-thread"},
+                        "cwd": str(self.registry.require_project("example-project").root),
+                        "approvalPolicy": "on-request",
+                        "sandbox": {"type": "workspaceWrite", "networkAccess": False},
+                        "activePermissionProfile": {
+                            "id": "example-private-profile",
+                            "extends": ":workspace",
+                        },
+                    },
+                },
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True)
+
+        class Supervisor(WorkerSupervisor):
+            transport_mode = "socket"
+
+        worker = CodexQueueWorker(
+            self.config,
+            registry=self.registry,
+            supervisor=cast(Any, Supervisor(cast(Any, client))),
+            worker_id="test-codex-profile",
+        )
+        try:
+            self.assertTrue(worker.run_cycle())
+            failed = worker.state.get_provider_job(job_id)
+            self.assertEqual((failed.status, failed.error_class), ("failed", "pre_execution"))
+            self.assertEqual(
+                failed.error_code, "UnsupportedCodexPermissionProfileError", failed.error_detail
+            )
+            self.assertEqual(failed.provider_session_id, "example-existing-thread")
+            outbox = worker.state.get_telegram_outbox_for_job(job_id)
+            assert outbox is not None
+            self.assertIn("unsupported permission profile", outbox.telegram_html)
+            self.assertIn("No productive provider turn was sent", outbox.telegram_html)
+            self.assertNotIn("example-private-profile", outbox.telegram_html)
+            self.assertNotIn("root paused", outbox.telegram_html)
+            self.assertFalse(worker.run_cycle())
+            self.assertEqual([message["method"] for message in transport.sent], ["thread/resume"])
+            self.assertEqual(worker.state.get_provider_job(job_id).status, "failed")
+        finally:
+            worker.close()
 
     def test_stdio_fallback_starts_a_new_thread_with_bounded_visible_context(self) -> None:
         state = HubState.open(self.config.state_path)
