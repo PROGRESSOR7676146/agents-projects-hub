@@ -375,11 +375,7 @@ class SessionConnectStore:
                     chat_id,
                     thread_id,
                     None if current is None else current.session_id,
-                    (
-                        current.session_id
-                        if current is not None and current.provider_session_id is not None
-                        else None
-                    ),
+                    None if current is None else current.session_id,
                     model,
                     effort,
                     stage,
@@ -587,12 +583,7 @@ class SessionConnectStore:
                                     chat_id,
                                     thread_id,
                                     None if current is None else current.session_id,
-                                    (
-                                        current.session_id
-                                        if current is not None
-                                        and current.provider_session_id is not None
-                                        else None
-                                    ),
+                                    None if current is None else current.session_id,
                                     row["model"],
                                     row["effort"],
                                     "confirming"
@@ -861,11 +852,7 @@ class SessionConnectStore:
                 chat_id,
                 thread_id,
                 None if current is None else current.session_id,
-                (
-                    current.session_id
-                    if current is not None and current.provider_session_id is not None
-                    else None
-                ),
+                None if current is None else current.session_id,
                 _now(),
                 workflow_id,
             ),
