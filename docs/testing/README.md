@@ -123,6 +123,42 @@ real temporary Git objects and a mocked successful signature result to test
 policy wiring only. Pinned-key cryptographic verification has separate tests;
 the mock is not evidence that a fixture was cryptographically signed.
 
+## Optional offline native Codex profile rehearsal
+
+`tests.test_codex_native_profiles` exercises an explicitly supplied native Codex
+binary against a deterministic local Responses fixture. It requires Linux,
+system bubblewrap and usable network/PID namespaces. Supply the native executable,
+not a shell wrapper or the ordinary logged-in CLI configuration:
+
+```bash
+HUB_NATIVE_CODEX_FIXTURE_EXECUTABLE=/home/example/tools/codex-native \
+  HUB_REQUIRE_NATIVE_CODEX_PROFILE_TESTS=1 \
+  PYTHONPATH=src python -m unittest tests.test_codex_native_profiles -v
+```
+
+The binary is copied into a disposable namespace. Real Codex authentication and
+configuration are hidden, provider credential variables are excluded, and external
+network access is unavailable. A temporary managed requirements file and fictional
+project/key/symlink controls establish the policy under test. The fixture permits
+at most four local Responses requests per case and declines approval requests.
+It controls only its owned disposable processes, never installed services.
+
+The native cases cover explicit profile selection, exact stored-thread resume
+after restarting the disposable app-server, actual tool access denials, legacy
+turn policy replacement, separate standalone command overrides, and the limits
+of profile metadata. A native final message alone is insufficient: denial evidence
+requires one completed successful command from the exact current thread and turn,
+project read/write controls, and the complete boolean probe payload. Old resumed
+output, duplicate commands, failed execution and partial payloads are rejected.
+
+The corpus was rehearsed with native Codex 0.159.2. No binary is downloaded by
+the tests or bundled with the repository. With no executable supplied, the four
+native cases explicitly skip; requiring them makes that absence fail. Once opted
+in, fixture/protocol/namespace failures fail the run. The ordinary canonical suite
+still exercises the evidence parser without starting Codex. Skips and parser
+tests are not native evidence, and this offline corpus neither implements managed
+profile support in Hub nor establishes deployed custody or Telegram acceptance.
+
 ## Live acceptance boundary
 
 The reusable validation workflow also runs a required Ubuntu 24.04 namespace
