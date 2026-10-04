@@ -10,6 +10,9 @@ outside the Claude namespace can read mode-0600 keys and forge symmetric
 receipts. Do not treat this slice as advisor isolation. Dedicated key custody,
 separate OS identities and asymmetric result signing require a follow-up design
 and acceptance before broadening this trust claim.
+The selected reference deployment and its pending launch/service inventory are
+in [ADR 0053](../decisions/0053-claude-custody-reference-deployment.md) and the
+[custody preparation runbook](CLAUDE_CUSTODY.md). This is preparation, not installed custody.
 
 ## Prepare an isolated candidate
 

@@ -12,8 +12,14 @@ The protected file-tool candidate now has a pinned tlive extension, native hook,
 schema-38 receipt journal and worker-owned socket/namespace wiring; see
 [ADR 0052](../decisions/0052-protected-claude-file-permissions.md) and the
 [candidate runbook](CLAUDE_FILE_PERMISSIONS.md). Text-only remains the default.
-Next trigger: finish exact-candidate publication/review gates, then separately
-authorize and verify the native/Telegram human approval boundary described in the
+The authority-isolation source candidate at
+`6a848c7a326b35e4c3ea552339e8c5c3d7beba53` passed canonical validation
+(1,613 tests in 149 modules), independent review and hosted checks, including
+both required real namespace scenarios; it remains unmerged and undeployed.
+Next trigger: complete the provider launch/service custody preparation in
+[ADR 0053](../decisions/0053-claude-custody-reference-deployment.md) and its
+[runbook](CLAUDE_CUSTODY.md), then separately authorize and verify the
+native/Telegram human approval boundary described in the
 [Claude plan](CLAUDE_LEAD_REVIEW_PLAN.ru.md#следующая-граница-разрешений), then
 continue advisor isolation and remaining visibility work. Do not enable tools
 from a CLI flag or an unqualified tlive `allow` alone.

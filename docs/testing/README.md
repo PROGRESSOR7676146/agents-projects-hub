@@ -129,7 +129,11 @@ The reusable validation workflow also runs a required Ubuntu 24.04 namespace
 job with system bubblewrap and Python 3.12. `HUB_REQUIRE_NAMESPACE_TESTS=1`
 turns missing fixtures or unavailable user namespaces into failures. It runs
 real fd-bind isolation and a fictional socket/receipt-journal Allow/Deny
-roundtrip, with no model or Telegram calls. An executable-specific AppArmor
+roundtrip, plus an authority-alias/privilege/shared-network rehearsal with
+fictional sentinels, with no model or Telegram calls. The third scenario
+deliberately demonstrates loopback and abstract-socket descriptor exposure;
+see the [custody runbook](../operations/CLAUDE_CUSTODY.md#automated-offline-rehearsal).
+An executable-specific AppArmor
 profile permits bubblewrap user namespaces only on that disposable CI runner.
 Developer environments may skip unavailable namespace fixtures; those skips
 are not namespace evidence. The source ruleset setup includes this check;

@@ -9,7 +9,13 @@ visibility (canonical and hosted checks, after independent candidate reviews).
 The schema-38 protected file-tool candidate is implemented offline; follow
 [ADR 0052](../decisions/0052-protected-claude-file-permissions.md) and the
 [candidate runbook](CLAUDE_FILE_PERMISSIONS.md). Publication/review gates and
-separately authorized native/Telegram acceptance remain open.
+separately authorized native/Telegram acceptance remain open. Authority-isolation
+candidate `6a848c7a326b35e4c3ea552339e8c5c3d7beba53` has passed canonical,
+independent review and hosted checks but remains unmerged and undeployed.
+Actual authority custody is still open; the selected reference VM and pending
+provider launch/service inventory are in
+[ADR 0053](../decisions/0053-claude-custody-reference-deployment.md) and the
+[custody preparation runbook](CLAUDE_CUSTODY.md).
 Next trigger: the native human approval boundary in the
 [continuation plan](NEXT_DEVELOPMENT_SESSION.md); continue the separately
 authorized live backlog and ADR 0048 work.
