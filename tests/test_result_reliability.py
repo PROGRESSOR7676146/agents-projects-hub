@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -444,15 +446,24 @@ class ResultReliabilityTests(unittest.TestCase):
     def test_completion_buffered_during_rpc_is_consumed_before_transport(self) -> None:
         transport = FakeTransport(
             [
+                {"id": 1, "result": {"turn": {"id": "turn-1"}}},
                 item("Already finished"),
                 completion(),
-                {"id": 1, "result": {"data": []}},
+                {"id": 2, "result": {"data": []}},
             ]
         )
         client = CodexAppServerClient(transport, initialized=True)
+        with tempfile.TemporaryDirectory() as root:
+            client.start_turn(
+                thread_id="thread-1",
+                cwd=Path(root),
+                text="Example request",
+                model="example-model",
+                effort="high",
+            )
         client.list_models()
         self.assertEqual(client.wait_for_turn("turn-1").text, "Already finished")
-        self.assertEqual(len(transport.receive_timeouts), 3)
+        self.assertEqual(len(transport.receive_timeouts), 4)
 
     def test_duplicate_visible_item_is_not_published_twice(self) -> None:
         client = CodexAppServerClient(
