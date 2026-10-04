@@ -1,6 +1,6 @@
-# ADR 0053: Reference deployment for Claude authority custody
+# ADR 0053: Evidence before selecting Claude authority custody infrastructure
 
-Status: selected preparation design; deployment and acceptance pending.
+Status: revised preparation decision; infrastructure selection and acceptance pending.
 Date: 2026-10-04.
 Owner: Hub maintainer; deployment authorization remains with the repository owner.
 
@@ -14,48 +14,63 @@ An unconfined process sharing that UID can read those keys. Another Linux UID
 inside WSL does not establish separation from a process that controls the owning
 Windows account and can launch the distribution as root.
 
-The owner delegated the infrastructure recommendation. This record selects a
-concrete preparation path; it does not create principals, install services,
-migrate projects or authorize a deployment. It does not change the product's
-supported-host policy or claim that all WSL deployments are unsafe.
+The initial preparation selected a dedicated VM before proving that the existing
+host needed that migration. This revision supersedes that selection: assess the
+smallest enforceable boundary first. It does not accept weaker protection, a new
+threat-model exception, a particular UID layout or a deployment. The product's
+supported-host policy remains unchanged.
 
 ## Decision
 
-Prepare a dedicated native Linux VM on a native Linux filesystem, with its
-hypervisor administration, guest root and recovery material controlled by an
-administrative identity that never runs productive agents. Every agent domain,
-including development/recovery assistants outside the VM, must be excluded from
-that management identity. A VM owned by the same agent-capable Windows account
-does not meet this design. Guest root isolation alone is insufficient if an
-agent can read virtual disks, restore snapshots or operate the hypervisor.
+Begin with the implemented narrow Claude filesystem/PID boundary and an
+inventory of actual agent launch paths, authority files and reachable services.
+Determine whether those paths can be excluded from Hub/tlive keys, state and
+control endpoints on the existing host. Keep a dedicated Linux VM as a reserve
+option only when a concrete unresolved exposure or enforcement cost justifies
+it. Neither a VM nor a separate Linux UID is a prerequisite selected by this ADR.
 
 Keep Hub's existing Controller, workers, SQLite, sender and approval transport;
-add no queue, database, broker or permission daemon. Inside the guest, trusted
-non-root Hub/tlive processes may retain their current UID and peer protocol.
-All model-controlled execution under that UID must be confined before execution,
-with no unconfined alternative launch. The current Claude file-tool namespace is
-the implemented candidate for that particular path. It is not a general wrapper
-for Codex, Hermes, other providers, local transfer or advisors.
+add no queue, database, broker or permission daemon. The native Hub permission
+host remains execution/binding owner; the thin pinned tlive extension carries
+the human Allow/Deny decision. Reuse the implemented mount pins, immutable
+runtime, peer checks and signed receipts. They do not prove host-wide custody.
+The current Claude file-tool namespace is the candidate for that particular
+path, not a general wrapper for Codex, Hermes, local transfer or advisors.
 
-Other agent processes must use independently enforced nonprivileged domains
-that cannot read or change authority files, ptrace trusted processes, invoke
-guest/host management, or obtain descriptors from trusted services. Trusted Hub
-workers are not themselves model turns. A separate provider UID can host a
-Codex app-server only after its socket, project/session access, approvals and
-launch paths have been designed and accepted; this is not implemented by this
-record. Until every required provider path has such a boundary, a complete Hub
-cutover is blocked. Do not silently remove providers to make it pass.
+Assess every model-controlled path that can reach the authority domain,
+including development/recovery assistants and helpers outside Hub. Before live
+file-tool activation, all such paths must be technically excluded from reading
+or changing authority files, controlling trusted processes, invoking host
+management or obtaining authority-bearing descriptors from services. Trusted
+Hub workers are not themselves model turns. Inventory missing or unsupported
+paths as blockers; do not silently remove providers to make the gate pass.
 
-Use immutable root-owned runtime artifacts. Exclude host shares, Windows/WSL
-interop, guest-control sockets, desktop/agent forwarding, administrative keys,
-sudo/polkit grants and recovery mounts from all productive domains. Backup and
-recovery custody have the same separation as live keys.
+Compare these concrete options without changing the installed topology:
+
+| Option | Evidence required before selection |
+| --- | --- |
+| Existing host with confined agent launches | Every relevant start/resume, helper, native transfer and recovery path is enforced, with no unconfined alternate path into the authority domain. Host management and exposed services cannot restore that access. |
+| Separate Linux execution identities on a trusted host | Actual file, process, endpoint and administrative denial from each agent identity, plus compatible IPC and session/writer handling. Same-account Windows management access must not bypass Linux separation. |
+| Dedicated native Linux VM | A demonstrated reason the smaller options cannot meet the gate, and independent control of hypervisor, disks, snapshots, guest root and recovery material. A VM administered by an agent-capable account does not establish that separation. |
+
+Changing the native hook or tlive to a different UID is not a configuration-only
+fix: current kernel peer checks require the worker's effective UID. Any changed
+IPC boundary needs its own design, tests and review. A separate UID for other
+agent paths may preserve that protocol, but still needs installed enforcement
+evidence. Flags, mode 0600, signed attestations and cgroup metadata alone prove
+none of these options. Do not infer acceptance of an option from this comparison.
+
+Retain immutable root-owned runtime artifacts on supported native Linux
+filesystems. Verify that host shares, Windows/WSL interop, control sockets,
+forwarding, administrative keys, sudo/polkit grants and recovery access do not
+let a model-controlled process regain authority. Backup and recovery custody
+have the same separation as live keys.
 
 Networking remains shared in the current Claude namespace for loopback CPA.
 Loopback TCP and abstract Unix sockets are therefore reachable. A cooperating
 abstract-socket service can transfer a hidden file descriptor with `SCM_RIGHTS`,
-making its inode readable despite mount exclusion. Deploy only an inventoried
-minimal service set: no authority-revealing or privileged service may admit an
+making its inode readable despite mount exclusion. Accept only inventoried
+service exposure: no authority-revealing or privileged service may admit an
 agent, even when it reports the trusted UID. Filesystem mode 0600 and same-UID
 peer credentials cannot authenticate that distinction. CPA inference credentials
 exposed to Claude must grant no CPA management or host-control capability.
@@ -64,15 +79,16 @@ project data from being transmitted by a compromised provider.
 
 ## Consequences and alternatives
 
-The owner keeps Telegram approvals; routine work does not require manual test
-clicks. Installation, immutable updates, project placement, administrative
-access, backup and restore gain an explicit OS boundary and corresponding
-maintenance. Existing native sessions and roots cannot be moved or rebound
-silently. Same-session local transfer and read-only advisor parity remain open.
+The owner keeps Telegram approvals. Use automated fixtures and actors for
+repetitive verification; real permission decisions remain human-owned. Avoid a
+platform migration until its security benefit and maintenance cost are concrete.
+Existing native sessions and roots cannot be moved or rebound silently.
+Same-session Claude local transfer and read-only advisor parity remain open.
 
-Separate UIDs on a trusted native Linux host remain a possible alternative.
 A separate WSL distribution alone leaves the Windows-root bypass unresolved.
-Using a VM under an agent-controlled administrator also leaves custody unresolved.
+If an agent can control the owning Windows account's WSL administration, a Linux
+UID change alone cannot protect the distribution from that path. Evaluate actual
+granted access rather than assuming this holds for every WSL host.
 Asymmetric receipt signing can reduce future worker key authority; it cannot
 protect a signing host that an agent can control and is not implemented here.
 No configuration flag, signed file or cgroup membership read by the same
@@ -88,9 +104,10 @@ exposures. It does not inspect or accept a VM, Windows ACLs, deployed credential
 or subscription routing. Hostile administrators, kernel compromise and
 hypervisor vulnerabilities remain outside the stated threat claim.
 
-Next: implement and verify the missing provider-domain launch boundaries,
-prepare exact private deployment artifacts, and request separately scoped
-deployment authorization only when those artifacts are reviewable. Live tools
+Next: assess the existing boundary and actual launch/service exposure, identify
+the smallest candidate that meets the unchanged gate, and implement only the
+missing bounded controls. Prepare exact private deployment artifacts and request
+separately scoped authorization when those artifacts are reviewable. Live tools
 remain blocked by the existing contract until installed custody and native/human
 approval acceptance pass. Recheck this design after launch, service, credential,
 runtime, kernel, hypervisor or recovery changes.

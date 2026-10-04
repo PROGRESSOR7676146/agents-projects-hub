@@ -72,7 +72,7 @@ with a new record.
 | Claude native invocation evidence | Persist the exact session/root before invocation and validate bounded structured output without inventing native turn IDs. | [ADR 0050](0050-claude-native-invocation-evidence.md) |
 | Accepted-turn activity and queue notices | Schema 37 binds passive Codex progress to exact execution identity and delivers admission snapshots through the existing Hub sender. | [ADR 0051](0051-accepted-turn-activity-and-queue-notices.md) |
 | Protected Claude file permissions | An opt-in native hook uses a bounded pinned tlive extension; the existing worker/SQLite own binding, one-use receipt consumption and cleanup. | [ADR 0052](0052-protected-claude-file-permissions.md) |
-| Claude authority custody | Selected reference VM design excludes agent-controlled administration and reachable authority services; preparation and installed acceptance remain pending. | [ADR 0053](0053-claude-custody-reference-deployment.md) |
+| Claude authority custody | Assess existing-host launch/service exposure before choosing infrastructure; VM remains conditional, with the unchanged installed custody gate. | [ADR 0053](0053-claude-custody-reference-deployment.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

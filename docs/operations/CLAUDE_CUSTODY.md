@@ -1,6 +1,6 @@
 # Claude authority custody preparation
 
-Status: preparation only; no infrastructure or live acceptance performed.
+Status: existing-host assessment first; infrastructure and live acceptance pending.
 Source baseline: `6a848c7a326b35e4c3ea552339e8c5c3d7beba53`.
 Integration owner: Hub maintainer. Last verified baseline is source evidence;
 candidate changes require their own publication checks.
@@ -9,6 +9,37 @@ Design: [ADR 0053](../decisions/0053-claude-custody-reference-deployment.md).
 Keep the existing [file-tool runbook](CLAUDE_FILE_PERMISSIONS.md) for its
 runtime, mount, key, tlive and native permission procedures.
 
+## Assess the existing boundary first
+
+The revised ADR keeps a VM as a reserve option. Start with the narrow implemented
+boundary, then inspect actual launch and service exposure. Do not select a UID
+layout, relax the live gate or migrate platforms merely to finish this plan.
+This is a source assessment, not an inventory of any installed host:
+
+| Launch path | Current source evidence | Remaining custody question |
+| --- | --- | --- |
+| Claude file-tool turn | `claude_file_sandbox.py` pins explicit mounts, hides host files/PIDs, drops capabilities and preserves only the per-turn permission socket. | Shared network exposure remains; installed descriptor closure and authority-service exclusion need evidence. Writable project/session mounts do not make this an advisor boundary. |
+| Text-only Claude | `external_runtime.py` disables tools/customizations and runs the CLI without the file-tool namespace. | Trusted CLI/dependency and host execution authority need separate assessment; text-only flags do not prove OS custody. |
+| Codex shared/stdio app-server | `codex_appserver.py` preserves native sandbox and approval policy; stdio launches the official app-server. | Neither route uses the Claude wrapper. Verify effective access to authority files, processes, endpoints and host management without weakening Codex policy. |
+| Hermes native Gateway | `hermes_plugin.py` adds Hub admission and visible-context integration; Gateway owns native execution. | The plugin does not establish an OS boundary. Inspect the Gateway's actual tools, children, MCP and recovery paths independently. |
+| OpenCode/Antigravity | `external_runtime.py` owns their CLI invocation and safe argument construction. | Provider sandbox flags are not evidence of Hub/tlive authority exclusion. Inspect actual execution identities and access. |
+| Native/local transfer | `local_transfer.py` builds Codex remote attach and OpenCode/Antigravity resume commands; Claude transfer is unsupported. | Writer leases prevent competing Hub writers, not credential access. Local tools/hooks/children must retain the chosen custody boundary. |
+| Helpers and outside assistants | No host-wide model-process launcher is implemented by this custody slice. | Inventory every actual helper, development and recovery launch; a read-only role or Plan mode does not prevent key reads. |
+| Passive capability checks | `claude_cli_capabilities.py` runs CLI metadata without inference. | Verify executable provenance and launch authority; distinguish trusted metadata execution from model-controlled code. |
+
+For each actual path, record the effective identity, enforced filesystem/PID
+boundary, accessible local services and management capability. Use fictional
+sentinels to test denied authority reads/writes and permitted project/session
+access. Keep absent, unsupported and untested paths explicit. A process snapshot
+or declared setting cannot prove future starts and resumes stay confined.
+
+Choose the smallest candidate that can meet REQ-SEC-008 with those facts. Assess
+separate Linux identities only under an independently trusted management boundary;
+current hook/tlive peer checks are not compatible with arbitrary UID changes.
+If smaller options cannot close a named exposure, document the reason and cost
+before recommending the reserve VM. The architecture and remaining live gate
+are owned by ADR 0053 and the product contract, not this source matrix.
+
 ## Prepare a reviewable deployment bundle
 
 Prepare the following privately before requesting any live action. Do not put
@@ -16,9 +47,9 @@ inventory, credentials, receipts or administrative identities in the checkout.
 
 | Artifact | Required content and stop condition |
 | --- | --- |
-| Management map | Every host/guest admin, hypervisor/disk/snapshot/backup access path, and agent execution identity. Stop if any agent can use a management path. |
+| Management map | Every relevant host admin, backup/recovery access path and agent execution identity; include hypervisor/disk/snapshot/guest access only for a VM candidate. Stop if a model-controlled path can regain authority. |
 | Launch map | Productive start/resume, text-only CLI, shared/stdio app-server, local transfer, direct-message, helper, hook, MCP, recovery and capability-probe paths. Mark each trusted-only, technically confined, or blocked; a missing path blocks cutover. |
-| Service map | Guest TCP listeners, pathname and abstract Unix sockets, system/user buses, forwarding and descriptor-passing services. Record intended agent exposure and authentication; unknown or authority-bearing exposure blocks activation. |
+| Service map | Reachable TCP listeners, pathname and abstract Unix sockets, system/user buses, forwarding and descriptor-passing services. Record intended agent exposure and authentication; unknown or unintended authority-bearing exposure blocks activation. |
 | Release bundle | Exact clean candidate, root-owned runtime/hook artifacts and hashes, dependency provenance, pinned tlive build, schema-compatible rollback wheel, private release manifest and consistent backup. |
 | Data/identity map | Exact canonical roots, allowed roots, native session identities/modes/homes, leases and unresolved jobs. Any changed binding requires its existing explicit workflow; copying state is not a root migration. |
 | Acceptance plan | Disposable project/topic, fictional OS sentinels, exact expected effects, bounded waits, cleanup ownership, success/failure evidence and no-inference checks. |
@@ -63,11 +94,12 @@ developer-mode skips are not namespace evidence.
    unresolved outcomes using the installed schema-compatible read-only tools.
    Preserve unknown work; do not replay, release roots or move sessions to
    obtain a clean canary. Prepare a consistent backup and rollback artifact.
-2. An administrator outside every productive domain prepares the VM, immutable
-   artifacts and identities from the reviewed bundle. No privileged bootstrap
-   credential is handed to a model process. Review actual hypervisor ACLs,
-   virtual disk/snapshot permissions and guest privilege/forwarding policies
-   from that independent management context.
+2. An administrator outside every model-controlled domain prepares only the
+   separately authorized topology, immutable artifacts and identities from the
+   reviewed bundle. No privileged bootstrap credential is handed to a model
+   process. Verify host administration, privilege, forwarding and recovery
+   access independently; for a VM candidate also verify hypervisor ACLs and
+   virtual disk/snapshot permissions. Preparing this bundle does not select a VM.
 3. From each real agent identity and its actual launch boundary, run bounded
    automated OS checks against fictional sentinels at the intended authority
    locations. Attempt reads, writes, proc aliases, ptrace, inherited/described
@@ -110,8 +142,9 @@ authorized credential task.
 
 ## Closure
 
-Open. The launch/service inventory, provider-domain implementations, VM staging,
-custody acceptance and native/Telegram checks remain pending. Next trigger is a
-reviewed complete deployment bundle; this document does not request or grant
-deployment authorization. A successful offline corpus closes only its named
-synthetic tests.
+Open. The installed launch/service assessment, selection of the smallest
+enforceable custody boundary, missing controls and native/Telegram acceptance
+remain pending. Next trigger is a reviewed assessment of the existing host's
+actual exposure, followed by bounded controls and a complete deployment bundle.
+VM staging is conditional on a justified, separately authorized selection.
+A successful offline corpus closes only its named synthetic tests.

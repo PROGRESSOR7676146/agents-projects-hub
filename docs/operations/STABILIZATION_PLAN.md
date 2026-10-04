@@ -1,7 +1,7 @@
 # Stabilization plan
 
 Status: active; stages 0–2 and 3b done, stage 3 in progress
-Date: 2026-09-27; updated 2026-10-03
+Date: 2026-09-27; updated 2026-10-04
 Owner: repository owner (decisions and merges); lead development agent integrates
 Last verified integrated repository revision:
 `3750ccfb0f8eb98333f9219f3a697d6328890d04` for stop, native Claude and schema-37
@@ -12,8 +12,9 @@ The schema-38 protected file-tool candidate is implemented offline; follow
 separately authorized native/Telegram acceptance remain open. Authority-isolation
 candidate `6a848c7a326b35e4c3ea552339e8c5c3d7beba53` has passed canonical,
 independent review and hosted checks but remains unmerged and undeployed.
-Actual authority custody is still open; the selected reference VM and pending
-provider launch/service inventory are in
+Actual authority custody is still open. Assess the existing narrow boundary and
+actual launch/service exposure first; a dedicated VM remains a reserve option,
+not a selected prerequisite. The revised preparation decision is in
 [ADR 0053](../decisions/0053-claude-custody-reference-deployment.md) and the
 [custody preparation runbook](CLAUDE_CUSTODY.md).
 Next trigger: the native human approval boundary in the

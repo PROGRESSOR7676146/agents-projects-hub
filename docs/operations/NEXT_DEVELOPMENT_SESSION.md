@@ -1,7 +1,7 @@
 # Next session: Claude parity and visible task states
 
 Status: native Claude and schema-37 visibility merged; human approval boundary in progress.
-Date: 2026-10-03.
+Date: 2026-10-04.
 Decision owner: repository owner. Integration owner: lead development agent.
 Last verified integrated revision: `3750ccfb0f8eb98333f9219f3a697d6328890d04`.
 The stop/native/visibility stack passed exact-candidate independent reviews;
@@ -16,9 +16,13 @@ The authority-isolation source candidate at
 `6a848c7a326b35e4c3ea552339e8c5c3d7beba53` passed canonical validation
 (1,613 tests in 149 modules), independent review and hosted checks, including
 both required real namespace scenarios; it remains unmerged and undeployed.
-Next trigger: complete the provider launch/service custody preparation in
+Next trigger: assess the existing narrow Claude boundary and actual agent
+launch/service exposure, then choose the smallest enforceable custody candidate in
 [ADR 0053](../decisions/0053-claude-custody-reference-deployment.md) and its
-[runbook](CLAUDE_CUSTODY.md), then separately authorize and verify the
+[runbook](CLAUDE_CUSTODY.md). A dedicated VM is a reserve option requiring a
+demonstrated need; a separate UID is not yet accepted or proven. Preserve the
+adversarial corpus and mandatory CI checks, and reuse completed mount, peer,
+runtime and receipt controls. Then separately authorize and verify the
 native/Telegram human approval boundary described in the
 [Claude plan](CLAUDE_LEAD_REVIEW_PLAN.ru.md#следующая-граница-разрешений), then
 continue advisor isolation and remaining visibility work. Do not enable tools
