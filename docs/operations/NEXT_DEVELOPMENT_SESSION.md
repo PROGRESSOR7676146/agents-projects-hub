@@ -29,6 +29,15 @@ continue advisor isolation and remaining visibility work. Do not enable tools
 from a CLI flag or an unqualified tlive `allow` alone.
 The current owner instruction caps helpers at GPT-6 Sol with reasoning `high`, using standard service without priority.
 
+The Codex compatibility candidate now refuses unsupported active permission
+profiles reported by `thread/start` or `thread/resume` before productive
+`turn/start`, with a bounded durable queue notice. Absent/null profiles remain
+compatible; this guard cannot detect a profile already lost during resume or
+later control-plane changes.
+Next implement narrowly explicit managed-profile support; profile ID and
+`extends` alone cannot establish equivalent or stricter permissions. Keep
+custody and native/Telegram acceptance open; this refusal is not profile support.
+
 ## Objective and authority
 
 Continue development until native Claude Code meets the Hub capabilities in the

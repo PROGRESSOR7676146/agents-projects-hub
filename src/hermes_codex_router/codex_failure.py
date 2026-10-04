@@ -12,10 +12,19 @@ class CodexPreparationError(RuntimeError):
     """Caught setup failure before the productive turn/start call was made."""
 
 
+class UnsupportedCodexPermissionProfileError(CodexPreparationError):
+    """The legacy turn policy cannot safely retain a selected custom profile."""
+
+    def __init__(self) -> None:
+        super().__init__("Codex selected an unsupported permission profile")
+
+
 @contextmanager
 def codex_preparation() -> Iterator[None]:
     try:
         yield
+    except CodexPreparationError:
+        raise
     except Exception as exc:
         raise CodexPreparationError(str(exc)) from exc
 
@@ -40,6 +49,14 @@ def codex_failure_notice(
     error: BaseException, *, turn_status: str = "unknown", held_count: int = 0
 ) -> str:
     """Only fixed causes and explicitly visible assistant text reach Telegram."""
+    if isinstance(error, UnsupportedCodexPermissionProfileError):
+        return (
+            "What happened: Codex selected an unsupported permission profile. "
+            "Hub refused to send a productive turn with this profile.\n\n"
+            "Saved: No productive provider turn was sent. The task was not replayed.\n\n"
+            "Next: Add reviewed Hub support for the selected profile before sending "
+            "a new request. Keep the existing security restrictions."
+        )
     if isinstance(error, CodexPreparationError):
         return (
             "What happened: Codex could not prepare the task before starting it.\n\n"

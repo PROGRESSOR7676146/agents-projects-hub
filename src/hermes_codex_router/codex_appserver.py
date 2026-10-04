@@ -21,9 +21,29 @@ from .codex_activity import (
     normalize_codex_activity,
     normalize_codex_approval_resolution,
 )
-from .codex_failure import MAX_PARTIAL_TEXT, codex_failure_reason
+from .codex_failure import (
+    MAX_PARTIAL_TEXT,
+    UnsupportedCodexPermissionProfileError,
+    codex_failure_reason,
+)
 
 MAX_PENDING_ACTIVITY = 128
+
+
+def _validate_legacy_permission_profile(result: dict[str, Any]) -> None:
+    profile = result.get("activePermissionProfile")
+    if profile is None:
+        return  # Older servers and explicitly selected legacy policies.
+    if (
+        isinstance(profile, dict)
+        and profile.get("id") == ":workspace"
+        and "extends" in profile
+        and profile.get("extends") is None
+    ):
+        return
+    # ID/extends and the legacy sandbox projection cannot prove a custom
+    # profile is equivalent or stricter. Do not replace it at turn/start.
+    raise UnsupportedCodexPermissionProfileError()
 
 
 class RpcError(RuntimeError):
@@ -753,6 +773,7 @@ class CodexAppServerClient:
             raise RpcError("thread/start returned a different cwd")
         if result.get("approvalPolicy") != self._approval_policy:
             raise RpcError("thread/start returned an unsafe approval policy")
+        _validate_legacy_permission_profile(result)
         sandbox = result.get("sandbox")
         sandbox_is_safe = sandbox == "workspace-write" or (
             isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite"
@@ -812,6 +833,7 @@ class CodexAppServerClient:
             raise RpcError("thread/resume returned a different cwd")
         if result.get("approvalPolicy") != self._approval_policy:
             raise RpcError("thread/resume returned an unsafe approval policy")
+        _validate_legacy_permission_profile(result)
         sandbox = result.get("sandbox")
         if not (
             sandbox == "workspace-write"
