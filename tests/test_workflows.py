@@ -108,9 +108,11 @@ def _assert_namespace_job(job: dict[str, Any]) -> None:
         "tests.test_claude_file_sandbox.ClaudeFileSandboxTests."
         "test_namespace_denies_private_symlink_git_write_and_host_paths "
         "tests.test_claude_permission_host_roundtrip.PermissionHostRoundtripTests."
-        "test_namespace_client_preserves_peer_gate_and_atomic_allow_deny"
+        "test_namespace_client_preserves_peer_gate_and_atomic_allow_deny "
+        "tests.test_claude_custody_rehearsal.ClaudeCustodyRehearsalTests."
+        "test_namespace_blocks_authority_aliases_and_privilege_but_shares_network"
     ):
-        raise AssertionError("namespace job must run both real namespace scenarios")
+        raise AssertionError("namespace job must run all three real namespace scenarios")
 
 
 def _assert_ruleset_required_checks(script: str, workflows: Path) -> None:
@@ -304,7 +306,7 @@ class WorkflowContractTests(unittest.TestCase):
             _assert_ruleset_required_checks(script, WORKFLOWS)
 
     def test_contract_rejects_missing_or_bypassed_namespace_invocation(self) -> None:
-        for mutation in ("missing", "wrong_command", "tolerate_failure"):
+        for mutation in ("missing", "missing_custody", "wrong_command", "tolerate_failure"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
                 workflows = Path(directory) / "workflows"
                 shutil.copytree(WORKFLOWS, workflows)
@@ -313,6 +315,8 @@ class WorkflowContractTests(unittest.TestCase):
                 invocation = validation["jobs"]["namespace"]["steps"][-1]
                 if mutation == "missing":
                     invocation["run"] = ""
+                elif mutation == "missing_custody":
+                    invocation["run"] = invocation["run"].rstrip().rsplit(" ", 1)[0]
                 elif mutation == "wrong_command":
                     invocation["run"] = "echo skipped"
                 else:

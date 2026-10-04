@@ -558,13 +558,14 @@ class CodexQueueWorkerTests(unittest.TestCase):
 
     def test_emergency_stop_acknowledgement_cannot_confirm_terminal_turn(self) -> None:
         job_id = self.enqueue()
-        entered = threading.Event()
         release = threading.Event()
         interrupted = threading.Event()
 
         class MainClient(WorkerClient):
             def wait_for_turn(self, _turn_id: str) -> TurnResult:
-                entered.set()
+                # Submit only after native acceptance, without racing worker
+                # preparation against a one-second sender-thread deadline.
+                request_stop()
                 release.wait(3)
                 raise RuntimeError("interrupted transport")
 
@@ -602,8 +603,6 @@ class CodexQueueWorkerTests(unittest.TestCase):
         requested = threading.Event()
 
         def request_stop() -> None:
-            if not entered.wait(1):
-                return
             state = HubState.open(self.config.state_path)
             try:
                 topic = state.find_topic(-1001234567890, 77)
@@ -618,18 +617,15 @@ class CodexQueueWorkerTests(unittest.TestCase):
             finally:
                 state.close()
 
-        sender = threading.Thread(target=request_stop)
         try:
-            sender.start()
             self.assertTrue(worker.run_cycle())
-            self.assertTrue(requested.wait(1))
+            self.assertTrue(requested.is_set())
             topic = worker.state.find_topic(-1001234567890, 77)
             assert topic is not None
             self.assertTrue(interrupted.wait(2))
             self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
         finally:
             release.set()
-            sender.join(1)
             worker.close()
 
     def test_stdio_stop_transport_eof_retains_unknown_turn_exclusion(self) -> None:
