@@ -542,6 +542,11 @@ class PermissionHostRoundtripTests(unittest.TestCase):
         thread.join(4)
         self.assertFalse(thread.is_alive())
         self.assertEqual(outcome["first"], "allow")
+        first_handler = self.server.inflight
+        if first_handler is None:
+            self.fail("first native request had no server handler")
+        first_handler.join(4)
+        self.assertFalse(first_handler.is_alive())
         self.assertEqual(native_request(), "deny")
         self.assertEqual(self._statuses(), ["allow"])
         self.assertEqual(len(self.peer.requests), 1)
