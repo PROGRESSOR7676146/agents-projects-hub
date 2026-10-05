@@ -63,15 +63,18 @@ class WorkerClient:
 
 
 class WorkerSupervisor:
+    transport_mode = "socket"
+
     def __init__(self, client: WorkerClient) -> None:
         self.client_value = client
         self.stopped = False
         self.started = False
+        self.transport_mode = type(self).transport_mode
 
     def start(self) -> None:
         self.started = True
 
-    def client(self) -> WorkerClient:
+    def client(self, *, allow_fallback: bool = True) -> WorkerClient:
         return self.client_value
 
     def stop(self) -> None:
@@ -338,7 +341,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-            def client(self) -> object:
+            def client(self, *, allow_fallback: bool = True) -> object:
                 self.calls += 1
                 return self.main if self.calls == 1 else ControlClient()
 
@@ -408,7 +411,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-            def client(self) -> object:
+            def client(self, *, allow_fallback: bool = True) -> object:
                 self.calls += 1
                 return self.main if self.calls == 1 else ControlClient()
 
@@ -518,7 +521,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-            def client(self) -> object:
+            def client(self, *, allow_fallback: bool = True) -> object:
                 self.calls += 1
                 return self.main if self.calls == 1 else ControlClient()
 
@@ -586,7 +589,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-            def client(self) -> object:
+            def client(self, *, allow_fallback: bool = True) -> object:
                 self.calls += 1
                 return self.main if self.calls == 1 else ControlClient()
 
@@ -656,7 +659,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-            def client(self) -> WorkerClient:
+            def client(self, *, allow_fallback: bool = True) -> WorkerClient:
                 client: WorkerClient = Client() if not clients else WorkerClient()
                 clients.append(client)
                 return client
@@ -973,7 +976,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
                 self.telegram = Telegram()
 
         class ForbiddenSupervisor:
-            def client(self) -> object:
+            def client(self, *, allow_fallback: bool = True) -> object:
                 raise AssertionError("controller called Codex RPC")
 
         external = External()
@@ -996,7 +999,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 raise AssertionError("controller started Codex supervisor")
 
-            def client(self) -> object:
+            def client(self, *, allow_fallback: bool = True) -> object:
                 raise AssertionError("controller called Codex RPC")
 
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
@@ -1020,7 +1023,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
                 return 1
 
         class ForbiddenSupervisor:
-            def client(self) -> object:
+            def client(self, *, allow_fallback: bool = True) -> object:
                 raise AssertionError("controller called Codex RPC")
 
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))

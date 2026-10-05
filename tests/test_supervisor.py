@@ -38,6 +38,21 @@ class SupervisorFallbackTests(unittest.TestCase):
         supervisor.start()
         self.assertEqual(supervisor.transport_mode, "stdio-fallback")
 
+    def test_unmanaged_socket_keeps_logical_symlink_across_daemon_replacement(self) -> None:
+        first = self.base / "old.sock"
+        second = self.base / "new.sock"
+        link = self.base / "shared.sock"
+        first.touch()
+        second.touch()
+        link.symlink_to(first)
+        supervisor = CodexAppServerSupervisor(
+            link, manage_process=False, stdio_executable=self.fallback
+        )
+        link.unlink()
+        link.symlink_to(second)
+        self.assertEqual(supervisor.socket_path, link)
+        self.assertEqual(supervisor.socket_path.resolve(), second)
+
     def test_missing_socket_still_fails_without_fallback(self) -> None:
         supervisor = CodexAppServerSupervisor(self.base / "missing.sock", manage_process=False)
         with self.assertRaisesRegex(AppServerError, "unavailable"):
@@ -76,6 +91,74 @@ class SupervisorFallbackTests(unittest.TestCase):
         self.assertEqual(supervisor.transport_mode, "stdio-fallback")
         calls = client_factory.call_args_list
         self.assertEqual(calls[-1].kwargs["approval_policy"], "never")
+
+    def test_background_socket_failure_does_not_change_active_transport(self) -> None:
+        supervisor = CodexAppServerSupervisor(
+            self.base / "codex.sock", manage_process=False, stdio_executable=self.fallback
+        )
+        supervisor.transport_mode = "socket"
+        with (
+            patch.object(Path, "is_socket", return_value=True),
+            patch(
+                "hermes_codex_router.supervisor.UnixWebSocketTransport",
+                side_effect=OSError("socket disappeared"),
+            ),
+        ):
+            with self.assertRaises(OSError):
+                supervisor.client(allow_fallback=False)
+        self.assertEqual(supervisor.transport_mode, "socket")
+
+    def test_idle_fallback_recovers_only_after_shared_socket_initialize(self) -> None:
+        socket_path = self.base / "codex.sock"
+        supervisor = CodexAppServerSupervisor(
+            socket_path, manage_process=False, stdio_executable=self.fallback
+        )
+        supervisor.start()
+        self.assertEqual(supervisor.transport_mode, "stdio-fallback")
+
+        class FakeClient:
+            def __init__(self, transport: object, **kwargs: object) -> None:
+                self.transport = transport
+                self.approval_policy = kwargs.get("approval_policy", "on-request")
+
+            def initialize(self, *, deadline: float | None = None) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        with (
+            patch.object(Path, "is_socket", return_value=True),
+            patch(
+                "hermes_codex_router.supervisor.UnixWebSocketTransport", return_value=object()
+            ) as unix,
+            patch(
+                "hermes_codex_router.supervisor.StdioJsonLineTransport.start", return_value=object()
+            ),
+            patch("hermes_codex_router.supervisor.CodexAppServerClient", side_effect=FakeClient),
+        ):
+            # Ordinary client acquisition must not change an active fallback turn.
+            self.assertEqual(getattr(supervisor.client(), "approval_policy"), "never")
+            self.assertEqual(unix.call_count, 0)
+            self.assertTrue(supervisor.restore_socket_at_idle())
+            self.assertEqual(supervisor.transport_mode, "socket")
+            self.assertEqual(getattr(supervisor.client(), "approval_policy"), "on-request")
+            self.assertEqual(unix.call_count, 2)
+
+    def test_idle_fallback_keeps_never_if_shared_socket_refuses_connection(self) -> None:
+        supervisor = CodexAppServerSupervisor(
+            self.base / "codex.sock", manage_process=False, stdio_executable=self.fallback
+        )
+        supervisor.start()
+        with (
+            patch.object(Path, "is_socket", return_value=True),
+            patch(
+                "hermes_codex_router.supervisor.UnixWebSocketTransport",
+                side_effect=OSError("refused"),
+            ),
+        ):
+            self.assertFalse(supervisor.restore_socket_at_idle())
+        self.assertEqual(supervisor.transport_mode, "stdio-fallback")
 
     def test_managed_server_never_unlinks_an_unowned_existing_socket_path(self) -> None:
         socket_path = self.base / "codex.sock"

@@ -38,6 +38,7 @@ dev = [
 hcr = "hermes_codex_router.cli:main"
 agents-projects-hub = "hermes_codex_router.cli:main"
 agents-projects-hub-wait-socket = "hermes_codex_router.socket_ready:main"
+agents-projects-hub-prepare-codex-socket-dir = "hermes_codex_router.socket_directory:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
