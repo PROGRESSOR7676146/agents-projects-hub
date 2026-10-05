@@ -236,7 +236,7 @@ class ExternalQueueWorker:
                     or (
                         "codex_approvals_unavailable"
                         if self.supervisor is not None
-                        and self.supervisor.transport_mode == "stdio-fallback"
+                        and not self.supervisor.human_approvals_available()
                         else None
                     )
                 ),

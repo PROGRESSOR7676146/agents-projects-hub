@@ -172,6 +172,16 @@ class CodexAppServerSupervisor:
             fallback.initialize()
             return fallback
 
+    def human_approvals_available(self) -> bool:
+        """Whether the next turn can reach the shared human approval companion.
+
+        A worker namespace built before the daemon directory existed never sees
+        the socket, so report loss before any turn has fallen back to ``never``.
+        """
+        if self.manage_process:
+            return True
+        return self.transport_mode != "stdio-fallback" and self.socket_path.is_socket()
+
     def restore_socket_at_idle(self) -> bool:
         """Reconsider a headless fallback only between productive turns.
 
