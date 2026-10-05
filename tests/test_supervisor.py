@@ -160,6 +160,27 @@ class SupervisorFallbackTests(unittest.TestCase):
             self.assertFalse(supervisor.restore_socket_at_idle())
         self.assertEqual(supervisor.transport_mode, "stdio-fallback")
 
+    def test_invisible_shared_socket_reports_unavailable_approvals_before_first_turn(
+        self,
+    ) -> None:
+        # A worker whose namespace was built before the daemon directory existed
+        # never sees the socket; it must not look healthy until a turn falls back.
+        supervisor = CodexAppServerSupervisor(
+            self.base / "codex.sock", manage_process=False, stdio_executable=self.fallback
+        )
+        self.assertIsNone(supervisor.transport_mode)
+        self.assertFalse(supervisor.human_approvals_available())
+        with patch.object(Path, "is_socket", return_value=True):
+            self.assertTrue(supervisor.human_approvals_available())
+            supervisor.transport_mode = "socket"
+            self.assertTrue(supervisor.human_approvals_available())
+            supervisor.transport_mode = "stdio-fallback"
+            self.assertFalse(supervisor.human_approvals_available())
+
+    def test_managed_server_does_not_claim_shared_approval_loss(self) -> None:
+        supervisor = CodexAppServerSupervisor(self.base / "codex.sock", manage_process=True)
+        self.assertTrue(supervisor.human_approvals_available())
+
     def test_managed_server_never_unlinks_an_unowned_existing_socket_path(self) -> None:
         socket_path = self.base / "codex.sock"
         socket_path.write_text("owned elsewhere", encoding="utf-8")

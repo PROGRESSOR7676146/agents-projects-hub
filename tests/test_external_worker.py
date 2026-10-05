@@ -152,10 +152,19 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         self.assertEqual(health.error_code, "codex_approvals_unavailable")
 
         worker.supervisor.transport_mode = "socket"
-        worker._publish_health()
+        with patch.object(Path, "is_socket", return_value=True):
+            worker._publish_health()
         health = worker.state.get_runtime_health("provider_worker", worker.worker_id)
         assert health is not None
         self.assertIsNone(health.error_code)
+
+        # Before any turn: an invisible shared socket is already approval loss.
+        worker.supervisor.transport_mode = None
+        with patch.object(Path, "is_socket", return_value=False):
+            worker._publish_health()
+        health = worker.state.get_runtime_health("provider_worker", worker.worker_id)
+        assert health is not None
+        self.assertEqual(health.error_code, "codex_approvals_unavailable")
 
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
