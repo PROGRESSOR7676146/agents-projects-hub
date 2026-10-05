@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -797,8 +798,8 @@ class MigrationTests(unittest.TestCase):
                 connection.execute(
                     """INSERT INTO runtime_events
                        (component, level, code, detail, created_at)
-                       VALUES ('controller', 'warning', 'legacy', 'kept',
-                               '2026-09-05T12:00:00+00:00')"""
+                       VALUES ('controller', 'warning', 'legacy', 'kept', ?)""",
+                    (datetime.now(timezone.utc).isoformat(),),
                 )
                 connection.execute(
                     """INSERT INTO runtime_events

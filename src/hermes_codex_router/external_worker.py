@@ -194,6 +194,13 @@ class ExternalQueueWorker:
             except Exception as survived_error:
                 survived("external_worker.client_close", survived_error)
 
+    def _restore_codex_socket_at_idle(self) -> None:
+        # The productive worker calls this only between run_cycle invocations.
+        # Its cached stdio client may retain a different native writer, so close
+        # it only after the shared socket has answered a metadata handshake.
+        if self.supervisor is not None and self.supervisor.restore_socket_at_idle():
+            self._discard_client()
+
     def _record_event(self, level: str, code: str, detail: str) -> None:
         try:
             event_state = HubState.open(self.config.state_path)
@@ -224,7 +231,15 @@ class ExternalQueueWorker:
                 started_at=self._started_at,
                 heartbeat_at=datetime.now(timezone.utc),
                 success_at=self._last_success_at,
-                error_code=self._last_error_code,
+                error_code=(
+                    self._last_error_code
+                    or (
+                        "codex_approvals_unavailable"
+                        if self.supervisor is not None
+                        and self.supervisor.transport_mode == "stdio-fallback"
+                        else None
+                    )
+                ),
                 activity_state=activity_state,
                 active_job_id=None if active_job is None else active_job.job_id,
                 active_lease_expires_at=(
@@ -286,6 +301,8 @@ class ExternalQueueWorker:
         """Lease and execute at most one job for this worker's sole agent."""
         if self._stop.is_set():
             return False
+        if isinstance(self.supervisor, CodexAppServerSupervisor):
+            self._restore_codex_socket_at_idle()
         self._publish_health()
         if self.agent.runtime == "codex":
             assert self.supervisor is not None
@@ -364,7 +381,7 @@ class ExternalQueueWorker:
                     expected_root=workflow.canonical_root,
                 )
             assert self.supervisor is not None
-            client = self.supervisor.client()
+            client = self.supervisor.client(allow_fallback=False)
             client.initialize()
             if workflow.stage == "discovering":
                 discovered = client.list_connectable_threads(root=workflow.canonical_root)
@@ -828,7 +845,7 @@ class ExternalQueueWorker:
             client.on_completed = lambda result: journal.record_completion(
                 job.job_id, token, result.text
             )
-            monitor_stop = threading.Event()
+            monitor_stop, turn_transport_mode = threading.Event(), self.supervisor.transport_mode
             interrupted_request: list[str] = []
 
             def monitor_control() -> None:
@@ -839,10 +856,10 @@ class ExternalQueueWorker:
                         if request_id is not None:
                             try:
                                 assert self.supervisor is not None
-                                if self.supervisor.transport_mode == "stdio-fallback":
+                                if turn_transport_mode == "stdio-fallback":
                                     client.close()
                                 else:
-                                    interrupt_client = self.supervisor.client()
+                                    interrupt_client = self.supervisor.client(allow_fallback=False)
                                     try:
                                         interrupt_client.interrupt_turn(
                                             thread_id=thread.thread_id, turn_id=turn_id
@@ -857,7 +874,7 @@ class ExternalQueueWorker:
                                 interrupted_request.append(request_id)
                             return
                         assert self.supervisor is not None
-                        if self.supervisor.transport_mode == "stdio-fallback":
+                        if turn_transport_mode == "stdio-fallback":
                             # A fallback client owns a private app-server process;
                             # a second client cannot address its active turn.
                             continue
@@ -949,7 +966,7 @@ class ExternalQueueWorker:
         assert self.supervisor is not None
         steer_client = None
         try:
-            steer_client = self.supervisor.client()
+            steer_client = self.supervisor.client(allow_fallback=False)
             returned_turn = steer_client.steer_turn(
                 thread_id=thread_id,
                 turn_id=turn_id,

@@ -61,7 +61,7 @@ class StopCertaintyTests(unittest.TestCase):
                         def start(self) -> None:
                             pass
 
-                        def client(self) -> object:
+                        def client(self, *, allow_fallback: bool = True) -> object:
                             self.calls += 1
                             if self.calls == 1:
                                 return self.main

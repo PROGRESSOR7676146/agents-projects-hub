@@ -36,7 +36,12 @@ class CodexAppServerSupervisor:
         stdio_executable: Path | None = None,
         model_provider: str | None = None,
     ) -> None:
-        self.socket_path = socket_path.expanduser().resolve()
+        expanded_socket = socket_path.expanduser()
+        # A companion may replace its logical symlink when the daemon restarts.
+        # Resolve managed ownership targets, but keep the unmanaged link live.
+        self.socket_path = (
+            expanded_socket.resolve() if manage_process else expanded_socket.absolute()
+        )
         self.manage_process = manage_process
         self.stdio_executable = (
             stdio_executable.expanduser().resolve(strict=True) if stdio_executable else None
@@ -45,6 +50,7 @@ class CodexAppServerSupervisor:
         self.process: subprocess.Popen[bytes] | None = None
         self.transport_mode: str | None = None
         self._ownership_file: BinaryIO | None = None
+        self._next_idle_socket_probe = 0.0
 
     def _acquire_socket_ownership(self) -> None:
         if self._ownership_file is not None:
@@ -126,7 +132,7 @@ class CodexAppServerSupervisor:
         self.stop()
         raise AppServerError("Codex app-server socket did not appear")
 
-    def client(self) -> CodexAppServerClient:
+    def client(self, *, allow_fallback: bool = True) -> CodexAppServerClient:
         if self.transport_mode is None:
             self.start()
         if self.transport_mode == "stdio-fallback":
@@ -151,7 +157,11 @@ class CodexAppServerSupervisor:
             client.initialize()
             return client
         except Exception:
-            if self.stdio_executable is None or self.transport_mode == "managed-socket":
+            if (
+                not allow_fallback
+                or self.stdio_executable is None
+                or self.transport_mode == "managed-socket"
+            ):
                 raise
             self.transport_mode = "stdio-fallback"
             fallback = CodexAppServerClient(
@@ -161,6 +171,36 @@ class CodexAppServerSupervisor:
             )
             fallback.initialize()
             return fallback
+
+    def restore_socket_at_idle(self) -> bool:
+        """Reconsider a headless fallback only between productive turns.
+
+        The caller owns the idle boundary. In particular, a background control
+        client must not change the mode used by an active turn's stop handler.
+        A socket inode alone is not readiness: initialize before switching.
+        """
+        if self.manage_process or self.transport_mode != "stdio-fallback":
+            return False
+        if not self.socket_path.is_socket():
+            return False
+        now = time.monotonic()
+        if now < self._next_idle_socket_probe:
+            return False
+        self._next_idle_socket_probe = now + 5.0
+        probe: CodexAppServerClient | None = None
+        try:
+            probe = CodexAppServerClient(
+                UnixWebSocketTransport(self.socket_path, timeout=2.0),
+                model_provider=self.model_provider,
+            )
+            probe.initialize(deadline=time.monotonic() + 2.0)
+        except Exception:
+            return False
+        finally:
+            if probe is not None:
+                probe.close()
+        self.transport_mode = "socket"
+        return True
 
     def stop(self) -> None:
         if self.transport_mode == "stdio-fallback":
