@@ -57,7 +57,7 @@ class ObservingClaudeAdapter:
             self.observed.append((current, tuple(checkpoint) if checkpoint is not None else None))
         expected = session_id or new_session_id or NATIVE_UUID
         if self.stop:
-            state = HubState.open(self.state_path)
+            state = HubState.open(self.state_path, codex_permission_profile=None)
             try:
                 state.request_emergency_stop(
                     topic_id=job["topic_id"],
@@ -291,7 +291,7 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
 
     def test_missing_native_root_provenance_refuses_before_adapter_invocation(self) -> None:
         job_id = self.enqueue(1)
-        state = HubState.open(self.path)
+        state = HubState.open(self.path, codex_permission_profile=None)
         job = state.get_provider_job(job_id)
         with state._connection:
             state._connection.execute(
@@ -319,7 +319,7 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
 
     def test_conflicting_native_root_provenance_refuses_before_adapter_invocation(self) -> None:
         prior_id = self.enqueue(1)
-        state = HubState.open(self.path)
+        state = HubState.open(self.path, codex_permission_profile=None)
         prior = state.lease_provider_job("claude", "fictional-prior-worker")
         assert prior is not None and prior.lease_token is not None
         state.mark_provider_job_executing(prior_id, prior.lease_token)

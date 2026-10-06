@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .claude_permissions_config import ClaudeFilePermissionsConfig, parse_claude_file_permissions
+from .codex_permissions import validate_permission_profile_id
 
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
@@ -153,6 +154,7 @@ class HubConfig:
     codex_sessions_dir: Path | None = None
     codex_stdio_executable: Path | None = None
     codex_model_provider: str | None = None
+    codex_permission_profile: str | None = None
     provider_account_hints: dict[str, tuple[str, ...]] = field(default_factory=dict)
     provider_telemetry: dict[str, ProviderTelemetrySettings] = field(default_factory=dict)
     project_provisioning: ProjectProvisioningSettings = field(
@@ -273,6 +275,7 @@ _RETIRED_KEYS = frozenset(
 class _CodexTransport:
     manage_codex_server: bool
     codex_model_provider: str | None
+    codex_permission_profile: str | None
     codex_stdio_executable: Path | None
     codex_sessions_dir: Path | None
 
@@ -335,6 +338,10 @@ def _parse_acceptance_actors(root: dict[str, Any], raw_owners: list[int]) -> lis
 
 
 def _parse_codex_transport(root: dict[str, Any]) -> _CodexTransport:
+    try:
+        permission_profile = validate_permission_profile_id(root.get("codex_permission_profile"))
+    except ValueError as error:
+        raise HubConfigError(str(error)) from None
     manage_codex_server = root.get("manage_codex_server", False)
     if not isinstance(manage_codex_server, bool):
         raise HubConfigError("manage_codex_server must be boolean")
@@ -369,6 +376,7 @@ def _parse_codex_transport(root: dict[str, Any]) -> _CodexTransport:
     return _CodexTransport(
         manage_codex_server=manage_codex_server,
         codex_model_provider=codex_model_provider,
+        codex_permission_profile=permission_profile,
         codex_stdio_executable=codex_stdio_executable,
         codex_sessions_dir=codex_sessions_dir,
     )
@@ -1078,13 +1086,16 @@ def load_hub_config(
         codex_sessions_dir=codex.codex_sessions_dir,
         codex_stdio_executable=codex.codex_stdio_executable,
         codex_model_provider=codex.codex_model_provider,
+        codex_permission_profile=codex.codex_permission_profile,
         provider_account_hints=provider_account_hints,
         provider_telemetry=provider_telemetry,
         project_provisioning=project_provisioning,
     )
+    from .codex_permissions import validate_managed_execution_mode
     from .session_adoption_policy import validate_adoption_mode
 
     try:
+        validate_managed_execution_mode(config)
         validate_adoption_mode(config)
     except ValueError as exc:
         raise HubConfigError(str(exc)) from None

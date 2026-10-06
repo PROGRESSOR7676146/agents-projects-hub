@@ -13,6 +13,7 @@ from .codex_appserver import (
     StdioJsonLineTransport,
     UnixWebSocketTransport,
 )
+from .codex_permissions import validate_permission_profile_id
 from .diagnostic_log import survived
 
 
@@ -37,6 +38,7 @@ class CodexAppServerSupervisor:
         manage_process: bool = True,
         stdio_executable: Path | None = None,
         model_provider: str | None = None,
+        permission_profile: str | None = None,
     ) -> None:
         expanded_socket = socket_path.expanduser()
         # A companion may replace its logical symlink when the daemon restarts.
@@ -49,6 +51,7 @@ class CodexAppServerSupervisor:
             stdio_executable.expanduser().resolve(strict=True) if stdio_executable else None
         )
         self.model_provider = model_provider
+        self.permission_profile = validate_permission_profile_id(permission_profile)
         self.process: subprocess.Popen[bytes] | None = None
         self.transport_mode: str | None = None
         self._ownership_file: BinaryIO | None = None
@@ -145,7 +148,10 @@ class CodexAppServerSupervisor:
         client: CodexAppServerClient | None = None
         try:
             client = CodexAppServerClient(
-                transport, approval_policy=approval_policy, model_provider=self.model_provider
+                transport,
+                approval_policy=approval_policy,
+                model_provider=self.model_provider,
+                permission_profile=self.permission_profile,
             )
             if deadline is None:
                 client.initialize()

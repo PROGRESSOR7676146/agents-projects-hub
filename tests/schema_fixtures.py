@@ -1,6 +1,38 @@
 """Remove post-v24 structures when constructing fictional older test databases."""
 
 import sqlite3
+from contextlib import contextmanager
+from pathlib import Path
+
+from hermes_codex_router import migrations
+from hermes_codex_router.schema_codex_permissions import (
+    PROFILE_TABLES,
+    ensure_codex_permission_columns,
+)
+
+
+@contextmanager
+def legacy_selection_columns(path: Path):
+    """Temporarily support current fixture builders, then restore historical DDL.
+
+    Current state facades require schema-39 columns. Only fictional all-null
+    fixture rows may use this bridge; real upgrades and backups see old DDL.
+    """
+    migrations.migrate_database(path, create_backup=False)
+    with sqlite3.connect(path) as connection:
+        ensure_codex_permission_columns(connection)
+    try:
+        yield
+    finally:
+        with sqlite3.connect(path) as connection:
+            for table in PROFILE_TABLES:
+                assert (
+                    connection.execute(
+                        f"SELECT count(*) FROM {table} WHERE codex_permission_profile IS NOT NULL"
+                    ).fetchone()[0]
+                    == 0
+                )
+                connection.execute(f"ALTER TABLE {table} DROP COLUMN codex_permission_profile")
 
 
 def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
@@ -24,6 +56,14 @@ def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
 
 
 def remove_adoption_schema(connection: sqlite3.Connection) -> None:
+    # A historical fixture must not keep new cross-table snapshot guards when
+    # its provider_jobs table is reconstructed with historical columns.
+    for table in PROFILE_TABLES:
+        connection.execute(f"DROP TRIGGER IF EXISTS {table}_codex_profile_immutable")
+    connection.execute("DROP TRIGGER IF EXISTS provider_jobs_codex_profile_snapshot")
+    connection.execute(
+        "DROP TRIGGER IF EXISTS provider_execution_checkpoints_codex_profile_snapshot"
+    )
     remove_task_lifecycle_schema(connection)
     # This is not a downgrade mechanism: retained origins must never be deleted.
     assert connection.execute("SELECT COUNT(*) FROM codex_session_origins").fetchone()[0] == 0

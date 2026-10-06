@@ -225,7 +225,7 @@ class ServiceIntegrationTests(unittest.TestCase):
                 1, (base,), (Project("project", "Project", "Project", project_root),)
             )
             persist_registry(config.registry_path, value.registry)
-            value.state = HubState.open(config.state_path)
+            value.state = HubState.open(config.state_path, codex_permission_profile=None)
             value.agent = config.agents[0]
             telegram = FakeTelegram()
             value.telegram = cast(Any, telegram)
@@ -347,7 +347,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             value = ProjectHubService.__new__(ProjectHubService)
             value.config = config
             value.registry = registry
-            value.state = HubState.open(state_path)
+            value.state = HubState.open(state_path, codex_permission_profile=None)
             value.agent = config.agents[0]
             value.telegram = cast(Any, FakeTelegram())
             value.supervisor = cast(Any, FakeSupervisor(client))
@@ -413,7 +413,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             value = ProjectHubService.__new__(ProjectHubService)
             value.config = config
             value.registry = registry
-            value.state = HubState.open(state_path)
+            value.state = HubState.open(state_path, codex_permission_profile=None)
             value.agent = config.agents[0]
             value.telegram = cast(Any, telegram)
             value.supervisor = cast(Any, FakeSupervisor(client))
@@ -491,7 +491,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             value = ProjectHubService.__new__(ProjectHubService)
             value.config = config
             value.registry = registry
-            value.state = HubState.open(state_path)
+            value.state = HubState.open(state_path, codex_permission_profile=None)
             value.agent = config.agents[0]
             value.telegram = cast(Any, FakeTelegram())
             value.supervisor = cast(Any, FakeSupervisor(client))
@@ -547,7 +547,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             value = ProjectHubService.__new__(ProjectHubService)
             value.config = config
             persist_registry(config.registry_path, ProjectRegistry(1, (base,), ()))
-            value.state = HubState.open(config.state_path)
+            value.state = HubState.open(config.state_path, codex_permission_profile=None)
             value.agent = config.agents[0]
             value.telegram = cast(Any, FakeTelegram())
             value.usernames = {"codex": "project_codex_bot"}
@@ -613,7 +613,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             value = ProjectHubService.__new__(ProjectHubService)
             value.config = config
             value.registry = registry
-            value.state = HubState.open(state_path)
+            value.state = HubState.open(state_path, codex_permission_profile=None)
             value.agent = config.agents[0]
             value.telegram = cast(Any, FakeTelegram())
             value.supervisor = cast(Any, FakeSupervisor(client))
@@ -682,7 +682,7 @@ class ServiceIntegrationTests(unittest.TestCase):
                 value = ProjectHubService.__new__(ProjectHubService)
                 value.config = config
                 value.registry = registry
-                value.state = HubState.open(state_path)
+                value.state = HubState.open(state_path, codex_permission_profile=None)
                 value.agent = config.agents[0]
                 value.telegram = cast(Any, telegram)
                 supervisor = FakeSupervisor(client)
@@ -747,7 +747,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             value = ProjectHubService.__new__(ProjectHubService)
             value.config = config
             value.registry = registry
-            value.state = HubState.open(config.state_path)
+            value.state = HubState.open(config.state_path, codex_permission_profile=None)
             value.agent = config.agents[0]
             value.telegram = cast(Any, telegram)
             value.supervisor = cast(Any, FakeSupervisor(client))

@@ -15,6 +15,7 @@ from .claude_file_sandbox import FileToolSandboxConfig
 from .claude_stream import ClaudeStreamError, ClaudeTerminalFailure, VisibleAssistantCallback
 from .codex_appserver import CodexAppServerClient, CodexThread, RateLimits, TurnResult
 from .codex_failure import CodexPreparationError
+from .codex_permissions import CodexPermissionProfileError
 from .execution_journal import CLAUDE_PRE_INVOCATION_ERROR_CODES, ClaudeSessionBinding
 from .external_runtime import (
     ExternalCliAdapter,
@@ -301,6 +302,37 @@ def external_provider_prompt(
     )
 
 
+def validate_codex_job_selection(
+    state: HubState, job: ProviderJobRecord, selected_profile: str | None
+) -> None:
+    """Refuse a stale snapshot before materials, staging or provider preparation."""
+    session = state.get_session(job.session_id)
+    if not (
+        job.codex_permission_profile
+        == selected_profile
+        == state.codex_permission_profile
+        == session.codex_permission_profile
+    ):
+        raise CodexPermissionProfileError()
+
+
+def should_transfer_legacy_fallback(
+    job: ProviderJobRecord,
+    *,
+    has_origin: bool,
+    model_provider: str | None,
+    transport_mode: str | None,
+) -> bool:
+    """Only unpinned legacy conversations may use a substitute stdio thread."""
+    return bool(
+        not has_origin
+        and model_provider is None
+        and job.codex_permission_profile is None
+        and job.provider_session_id
+        and transport_mode == "stdio-fallback"
+    )
+
+
 def open_codex_provider_thread(
     client: CodexAppServerClient,
     job: ProviderJobRecord,
@@ -310,6 +342,10 @@ def open_codex_provider_thread(
     force_new_thread: bool = False,
 ) -> CodexThread:
     """Start or resume the exact Codex thread selected by the job snapshot."""
+    if getattr(client, "permission_profile", None) != job.codex_permission_profile:
+        raise CodexPermissionProfileError()
+    if force_new_thread and job.codex_permission_profile is not None:
+        raise CodexPermissionProfileError()
     if job.provider_session_id and not force_new_thread:
         return client.resume_thread(
             thread_id=job.provider_session_id,
@@ -335,6 +371,8 @@ def start_codex_provider_turn(
     local_image_paths: Sequence[Path] = (),
 ) -> str:
     """Cross the Codex invocation-accepted boundary."""
+    if thread.permission_profile != job.codex_permission_profile:
+        raise CodexPermissionProfileError()
     return client.start_turn(
         thread_id=thread.thread_id,
         cwd=project.root,

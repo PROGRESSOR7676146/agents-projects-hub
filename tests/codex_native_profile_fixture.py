@@ -31,6 +31,23 @@ class NativeProfileFixtureError(RuntimeError):
     """Fixed fixture diagnostics never include native payloads or credentials."""
 
 
+class NativeProfileTransport:
+    """Use the actual Hub adapter with the same isolated offline native actor."""
+
+    def __init__(self, fixture: NativeProfileFixture) -> None:
+        self.fixture = fixture
+
+    def send(self, message: dict[str, Any]) -> None:
+        self.fixture._send(message)
+
+    def receive(self, timeout: float | None = None) -> dict[str, Any]:
+        return self.fixture._take(time.monotonic() + (30 if timeout is None else timeout))
+
+    def close(self) -> None:
+        # The fixture owns process cleanup and optional app-server restart.
+        pass
+
+
 def parse_probe(output: str) -> dict[str, bool]:
     matches = re.findall(r"EXAMPLE_PROBE:(\{[^\n]*\})", output)
     if output.count("EXAMPLE_PROBE:") != 1 or len(matches) != 1:
@@ -316,7 +333,7 @@ enabled = false
             },
         )
 
-    def turn(self, thread_id: str, *, legacy: bool = False) -> dict[str, Any]:
+    def prepare_turn_case(self) -> int:
         self.case_id += 1
         case = f"example-case-{self.case_id}"
         (self.project / ".git" / "HEAD").write_text("ref: refs/heads/example\n")
@@ -324,7 +341,11 @@ enabled = false
         deadline = time.monotonic() + 30
         while self._take(deadline).get("case") != case:
             pass
-        offset = len(self.events)
+        return len(self.events)
+
+    def turn(self, thread_id: str, *, legacy: bool = False) -> dict[str, Any]:
+        offset = self.prepare_turn_case()
+        deadline = time.monotonic() + 30
         policy = (
             {
                 "sandboxPolicy": {
@@ -362,6 +383,9 @@ enabled = false
             for message in self.events[offset:]
         ):
             self._take(deadline)
+        return self.turn_evidence(thread_id, turn_id, offset)
+
+    def turn_evidence(self, thread_id: str, turn_id: str, offset: int) -> dict[str, Any]:
         messages = self.events[offset:]
         terminal = next(
             message["params"]["turn"]

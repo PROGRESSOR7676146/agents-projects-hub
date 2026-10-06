@@ -4,6 +4,7 @@ import re
 import unicodedata
 from pathlib import Path
 
+from .codex_permissions import MANAGED_LOCAL_REFUSAL
 from .registry import RegistryError
 
 SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -24,7 +25,10 @@ def build_codex_remote_argv(
     socket_path: Path,
     thread_id: str,
     cwd: Path,
+    permission_profile: str | None = None,
 ) -> tuple[str, ...]:
+    if permission_profile is not None:
+        raise RegistryError(MANAGED_LOCAL_REFUSAL)
     socket_path = socket_path.expanduser().resolve()
     cwd = cwd.expanduser().resolve(strict=True)
     if not socket_path.is_absolute():
@@ -46,7 +50,11 @@ def build_codex_remote_argv(
     )
 
 
-def build_codex_resume_argv(*, thread_id: str, cwd: Path) -> tuple[str, ...]:
+def build_codex_resume_argv(
+    *, thread_id: str, cwd: Path, permission_profile: str | None = None
+) -> tuple[str, ...]:
+    if permission_profile is not None:
+        raise RegistryError(MANAGED_LOCAL_REFUSAL)
     cwd = cwd.expanduser().resolve(strict=True)
     if not SESSION_ID.fullmatch(thread_id):
         raise RegistryError("invalid Codex session id")

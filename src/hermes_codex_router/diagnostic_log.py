@@ -38,6 +38,7 @@ SITES = frozenset(
         "claude_recovery.artifact_cleanup",
         "codex_recovery.artifact_cleanup",
         "codex_recovery.client_close",
+        "codex_permissions.interrupt",
         "controller_result_publication.artifact_cleanup",
         "controller_result_publication.cleanup_report",
         "external_worker.claude_partial_binding",
@@ -110,7 +111,7 @@ NAMED_ERRORS = frozenset(
         ("hermes_codex_router.external_runtime", "ProviderLimitError"),
         ("hermes_codex_router.external_runtime", "ProviderUnavailableError"),
         ("hermes_codex_router.outbox_sender", "TelegramOutboxSenderError"),
-        ("hermes_codex_router.state", "StateError"),
+        ("hermes_codex_router.state_errors", "StateError"),
         ("hermes_codex_router.supervisor", "AppServerError"),
         ("hermes_codex_router.telegram", "TelegramError"),
     }

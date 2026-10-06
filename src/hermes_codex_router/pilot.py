@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from .codex_permissions import validate_managed_execution_mode
 from .hub_config import HubConfig
 from .metadata import format_telegram_response
 from .registry import load_registry, validate_execution_root
@@ -35,6 +36,7 @@ def run_codex_pilot(
     topic_title: str,
 ) -> PilotResult:
     # Pilot is an inline thread/start path, even with a queue-shaped config.
+    validate_managed_execution_mode(replace(config, dispatch_mode="inline"))
     validate_adoption_mode(replace(config, dispatch_mode="inline"))
     binding = config.project_for_chat(chat_id)
     if binding.project_id != project_id:
@@ -46,11 +48,14 @@ def run_codex_pilot(
     if agent.runtime != "codex" or agent.token_file is None:
         raise ValueError("managed Codex bot is not configured")
 
-    state = HubState.open(config.state_path)
+    state = HubState.open(
+        config.state_path, codex_permission_profile=config.codex_permission_profile
+    )
     supervisor = CodexAppServerSupervisor(
         config.state_path.parent / "codex-stdio-placeholder.sock",
         stdio_executable=config.codex_stdio_executable,
         model_provider=config.codex_model_provider,
+        permission_profile=config.codex_permission_profile,
     )
     try:
         state.reconcile_legacy_execution_scopes(

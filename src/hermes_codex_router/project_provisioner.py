@@ -677,7 +677,9 @@ class ProjectProvisioner:
             raise ProjectProvisioningError("project provisioning is disabled")
         self.config = config
         self.registry = load_registry(config.registry_path)
-        self.state = HubState.open(config.state_path)
+        self.state = HubState.open(
+            config.state_path, codex_permission_profile=config.codex_permission_profile
+        )
         self.store = ProjectOnboardingStore(self.state)
         self._session_lock: ProvisioningSessionLock | None = None
         if client is None:

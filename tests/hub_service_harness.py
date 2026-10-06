@@ -166,7 +166,7 @@ class HubHarness:
         service = ProjectHubService.__new__(ProjectHubService)
         service.config = self.config
         service.registry = self.registry
-        service.state = HubState.open(self.config.state_path)
+        service.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         service.agent = agents[0]
         service.telegram = cast(Any, self.telegram)
         service.supervisor = cast(Any, StaticSupervisor(self.client))

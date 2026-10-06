@@ -192,7 +192,10 @@ class PermissionServer:
 
     def _serve_connection(self, connection: socket.socket) -> None:
         try:
-            state = HubState.open(self.config.state_path)
+            state = HubState.open(
+                self.config.state_path,
+                codex_permission_profile=self.config.codex_permission_profile,
+            )
         except Exception:
             connection.close()  # Hook emits fixed Deny on EOF; no raw DB diagnostic escapes.
             return

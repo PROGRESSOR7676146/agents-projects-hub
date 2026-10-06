@@ -7,10 +7,12 @@ import os
 import unittest
 from pathlib import Path
 
+from hermes_codex_router.codex_appserver import CodexAppServerClient
 from tests.codex_native_profile_fixture import (
     PROFILE_ID,
     NativeProfileFixture,
     NativeProfileFixtureError,
+    NativeProfileTransport,
     proven_probe,
 )
 
@@ -187,3 +189,46 @@ class NativeCodexProfileTests(unittest.TestCase):
         for layer in config["layers"]:
             self.assertIsNone(layer["config"].get("permissions"))
         self.assertNotIn("permissions", requirements)
+
+    def test_hub_adapter_preserves_profile_through_turn_and_exact_never_resume(self) -> None:
+        client = CodexAppServerClient(
+            NativeProfileTransport(self.fixture),
+            initialized=True,
+            permission_profile=PROFILE_ID,
+            model_provider="example-offline",
+        )
+        thread = client.start_thread(
+            cwd=self.fixture.project, model="example-offline", project_id="example-project"
+        )
+        self.assertEqual(thread.permission_profile, PROFILE_ID)
+        for restarting in (False, True):
+            if restarting:
+                self.fixture.restart_native()
+                client = CodexAppServerClient(
+                    NativeProfileTransport(self.fixture),
+                    initialized=True,
+                    permission_profile=PROFILE_ID,
+                    model_provider="example-offline",
+                    approval_policy="never",
+                )
+                resumed = client.resume_thread(
+                    thread_id=thread.thread_id, cwd=self.fixture.project, model="example-offline"
+                )
+                self.assertEqual(resumed.thread_id, thread.thread_id)
+                self.assertEqual(resumed.permission_profile, PROFILE_ID)
+            offset = self.fixture.prepare_turn_case()
+            turn_id = client.start_turn(
+                thread_id=thread.thread_id,
+                cwd=self.fixture.project,
+                text="Example offline diagnostic tool request.",
+                model="example-offline",
+                effort="low",
+            )
+            client.wait_for_turn(turn_id)
+            self.assertConfinedProbe(self.fixture.turn_evidence(thread.thread_id, turn_id, offset))
+            self.assertFalse(
+                any(
+                    event.get("method", "").endswith("requestApproval")
+                    for event in self.fixture.events[offset:]
+                )
+            )

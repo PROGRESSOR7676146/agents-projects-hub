@@ -79,6 +79,7 @@ class TurnContinuationState:
         canonical_root: Path,
     ) -> tuple[ProviderJobRecord, bool, int]:
         from .state import StateError
+        from .state_errors import CodexPermissionSelectionChanged
 
         root = canonical_root.resolve(strict=True)
         now = datetime.now(timezone.utc).isoformat()
@@ -135,6 +136,13 @@ class TurnContinuationState:
             ).fetchone()
             if prior is not None:
                 return self.state.get_provider_job(str(prior["continuation_job_id"])), False, 0
+            session = self.state.get_session(str(old["session_id"]))
+            if not (
+                old["codex_permission_profile"]
+                == session.codex_permission_profile
+                == self.state.codex_permission_profile
+            ):
+                raise CodexPermissionSelectionChanged()
             conflict = self.connection.execute(
                 """SELECT 1 FROM provider_jobs jobs
                    JOIN topics topics ON topics.topic_id = jobs.topic_id
@@ -197,9 +205,9 @@ class TurnContinuationState:
                 """INSERT INTO provider_jobs (
                      job_id, idempotency_key, chat_id, message_id, topic_id, topic_sequence,
                      agent_id, session_id, session_generation, provider_session_id,
-                     model, effort, payload_text, status, attempt_count, max_attempts,
+                     model, effort, payload_text, codex_permission_profile, status, attempt_count, max_attempts,
                      created_at, updated_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, 'codex', ?, ?, ?, ?, ?, ?, 'queued', 0, 1, ?, ?)""",
+                   ) VALUES (?, ?, ?, ?, ?, ?, 'codex', ?, ?, ?, ?, ?, ?, ?, 'queued', 0, 1, ?, ?)""",
                 (
                     job_id,
                     "continuation:" + source_job_id,
@@ -213,6 +221,7 @@ class TurnContinuationState:
                     old["model"],
                     old["effort"],
                     CONTINUATION_PROMPT,
+                    old["codex_permission_profile"],
                     now,
                     now,
                 ),

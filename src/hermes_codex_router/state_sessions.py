@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable, Mapping, TypedDict
 
+from .state_errors import CodexPermissionSelectionChanged
+
 if TYPE_CHECKING:
     from .state import TopicRecord
 
@@ -24,6 +26,7 @@ class SessionRecord:
     terminal_name: str | None
     writer_mode: str
     context_remaining_percent: float | None
+    codex_permission_profile: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +73,7 @@ class SessionsStateFacade:
         activate_origin: OriginActivate,
         hold_scope_before_return: Callable[[int], None],
         notice_released_scope: Callable[..., None],
+        selected_codex_profile: Callable[[], str | None],
     ) -> None:
         self._connection = connection
         self._transaction = transaction
@@ -84,6 +88,7 @@ class SessionsStateFacade:
         self._activate_origin = activate_origin
         self._hold_scope_before_return = hold_scope_before_return
         self._notice_released_scope = notice_released_scope
+        self._selected_codex_profile = selected_codex_profile
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
@@ -108,6 +113,7 @@ class SessionsStateFacade:
             terminal_name=row["terminal_name"],
             writer_mode=row["writer_mode"],
             context_remaining_percent=row["context_remaining_percent"],
+            codex_permission_profile=row["codex_permission_profile"],
         )
 
     def active_session(self, topic_id: int) -> SessionRecord | None:
@@ -420,12 +426,13 @@ class SessionsStateFacade:
         session_id = str(uuid.uuid4())
         generation = self._next_generation(topic_id, agent_id)
         now = self._now()
+        profile = self._selected_codex_profile() if agent_id == "codex" else None
         self._connection.execute(
             """INSERT INTO agent_sessions
                (session_id, topic_id, agent_id, generation, status, model, effort,
-                created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (session_id, topic_id, agent_id, generation, status, model, effort, now, now),
+                created_at, updated_at, codex_permission_profile)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (session_id, topic_id, agent_id, generation, status, model, effort, now, now, profile),
         )
         return self.get_session(session_id)
 
@@ -451,10 +458,15 @@ class SessionsStateFacade:
         effort: str,
         *,
         expected_session_id: str | None = None,
+        control_only: bool = False,
     ) -> SessionRecord:
         self._get_topic(topic_id)
         now = self._now()
         with self._transaction():
+            if control_only and expected_session_id is None:
+                raise self._state_error("control activation requires an explicit session snapshot")
+            if agent_id == "codex":
+                self._selected_codex_profile()  # Missing context cannot enable control recovery.
             self._require_control_snapshot(topic_id, expected_session_id)
             current = self._connection.execute(
                 "SELECT * FROM agent_sessions WHERE topic_id = ? AND status = 'active'",
@@ -466,6 +478,8 @@ class SessionsStateFacade:
                 (topic_id, agent_id),
             ).fetchone()
             if current is not None and current["agent_id"] == agent_id:
+                if not control_only:
+                    self.require_codex_selection(self.record(current))
                 session_id = str(current["session_id"])
             else:
                 if current is not None:
@@ -475,6 +489,12 @@ class SessionsStateFacade:
                         (now, current["session_id"]),
                     )
                 if target is not None:
+                    if target["writer_mode"] != "telegram" and not control_only:
+                        raise self._state_error(
+                            "return the local writer before changing session settings"
+                        )
+                    if not control_only:
+                        self.require_codex_selection(self.record(target))
                     session_id = str(target["session_id"])
                     self._connection.execute(
                         "UPDATE agent_sessions SET status = 'active', updated_at = ? "
@@ -501,12 +521,14 @@ class SessionsStateFacade:
             ).fetchone()
             if row is None:
                 raise self._state_error("topic has active agent but no active session")
+            self.require_codex_selection(self.record(row))
             return self.record(row)
         row = self._connection.execute(
             "SELECT * FROM agent_sessions WHERE topic_id = ? AND agent_id = ? AND status = 'satellite'",
             (topic_id, agent_id),
         ).fetchone()
         if row is not None:
+            self.require_codex_selection(self.record(row))
             return self.record(row)
         with self._write_transaction():
             session = self._insert_session(topic_id, agent_id, model, effort, "satellite")
@@ -520,6 +542,8 @@ class SessionsStateFacade:
             previous = self.active_session(topic_id)
             if previous is None:
                 raise self._state_error("topic has no active session")
+            if previous.writer_mode != "telegram":
+                raise self._state_error("return the local writer before changing session settings")
             self._connection.execute(
                 "UPDATE agent_sessions SET status = 'archived', updated_at = ? WHERE session_id = ?",
                 (self._now(), previous.session_id),
@@ -542,6 +566,9 @@ class SessionsStateFacade:
             previous = self.active_session(topic_id)
             if previous is None:
                 raise self._state_error("topic has no active session")
+            if previous.writer_mode != "telegram":
+                raise self._state_error("return the local writer before changing session settings")
+            self.require_codex_selection(previous)
             if self._origin_exists(previous.session_id):
                 if previous.writer_mode != "telegram":
                     raise self._state_error(
@@ -564,6 +591,13 @@ class SessionsStateFacade:
             )
             replacement = self._insert_session(topic_id, previous.agent_id, model, effort, "active")
         return self.get_session(replacement.session_id)
+
+    def require_codex_selection(self, session: SessionRecord) -> None:
+        if (
+            session.agent_id == "codex"
+            and session.codex_permission_profile != self._selected_codex_profile()
+        ):
+            raise CodexPermissionSelectionChanged()
 
 
 __all__ = [

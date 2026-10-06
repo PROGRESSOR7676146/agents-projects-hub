@@ -42,7 +42,7 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
                     state_path = state_path.with_name(
                         f"{state_path.stem}-opencode-dm{state_path.suffix}"
                     )
-                state = HubState.open(state_path)
+                state = HubState.open(state_path, codex_permission_profile=None)
                 topic = state.observe_topic(
                     project_id="example-project",
                     chat_id=harness.chat_id,
@@ -92,7 +92,7 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
     def test_null_and_empty_legacy_scope_are_normalized(self) -> None:
         for stored in (None, ""):
             with self.subTest(stored=stored), tempfile.TemporaryDirectory() as directory:
-                state = HubState.open(Path(directory) / "state.db")
+                state = HubState.open(Path(directory) / "state.db", codex_permission_profile=None)
                 try:
                     topic = state.observe_topic(
                         project_id="example-project",
@@ -127,7 +127,7 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
         for kind in ("controller", "worker", "external"):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
                 harness = FaultMatrixHarness(Path(directory))
-                state = HubState.open(harness.config.state_path)
+                state = HubState.open(harness.config.state_path, codex_permission_profile=None)
                 try:
                     with (
                         patch.object(HubState, "open", return_value=state),
@@ -194,7 +194,7 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             harness = FaultMatrixHarness(Path(directory))
             harness.config = replace(harness.config, max_parallel_roots=2)
-            state = HubState.open(harness.config.state_path)
+            state = HubState.open(harness.config.state_path, codex_permission_profile=None)
             project = harness.registry.projects[0]
             root = project.root
             old = state.observe_topic(
@@ -277,7 +277,7 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
                     connection.execute("DROP TABLE execution_scheduler_workers")
                     connection.execute("PRAGMA user_version=30")
                 connection.close()
-            state = HubState.open(harness.config.state_path)
+            state = HubState.open(harness.config.state_path, codex_permission_profile=None)
             replacement = Path(directory) / "fictional-replacement"
             init_git_root(replacement)
             harness.registry = ProjectRegistry(
@@ -354,8 +354,8 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
 
     def test_conflicting_saved_evidence_rolls_back_all_scope_updates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            state = HubState.open(Path(directory) / "state.db")
-            peer = HubState.open(Path(directory) / "state.db")
+            state = HubState.open(Path(directory) / "state.db", codex_permission_profile=None)
+            peer = HubState.open(Path(directory) / "state.db", codex_permission_profile=None)
             try:
                 for number in (1, 2):
                     topic = state.observe_topic(

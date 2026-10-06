@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Iterator, Literal, Mapping, Sequence
 
 from .artifacts import ValidatedArtifact
+from .codex_permission_refusals import CodexPermissionInputState, PermissionInputDisposition
+from .codex_permissions import (
+    MISSING_PERMISSION_CONTEXT,
+    MissingPermissionContext,
+    validate_permission_profile_id,
+)
 from .incoming_materials import (
     IncomingMaterialDraft,
     IncomingMaterialRecord,
@@ -25,6 +31,7 @@ from .state_delivery import (
     TelegramOutboxPartRecord,
     TelegramOutboxRecord,
 )
+from .state_errors import StateError
 from .state_incoming_materials import IncomingMaterialsStateFacade
 from .state_provider_jobs import (
     ProviderChatActivity,
@@ -50,10 +57,6 @@ MAX_PROVIDER_RESPONSE_LENGTH = 200_000
 RECOVERED_RESULT_METADATA_JSON = '{"hub_recovered":true}'
 RUNTIME_EVENT_MAX_AGE = timedelta(days=30)
 RUNTIME_EVENT_MAX_COUNT = 10_000
-
-
-class StateError(RuntimeError):
-    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +135,20 @@ def _parse_timestamp(value: str, *, name: str) -> datetime:
 
 
 class HubState:
-    def __init__(self, connection: sqlite3.Connection, state_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        state_path: Path | None = None,
+        *,
+        codex_permission_profile: str
+        | None
+        | MissingPermissionContext = MISSING_PERMISSION_CONTEXT,
+    ) -> None:
+        self._codex_permission_profile_context = (
+            codex_permission_profile
+            if codex_permission_profile is MISSING_PERMISSION_CONTEXT
+            else validate_permission_profile_id(codex_permission_profile)
+        )
         self._connection = connection
         self._connection.row_factory = sqlite3.Row
         self._state_path = state_path
@@ -164,6 +180,7 @@ class HubState:
             state_error=StateError,
             job_has_materials=self._incoming_material_state.job_has_materials,
             queue_visibility=self.queue_visibility,
+            selected_codex_profile=lambda: self.codex_permission_profile,
         )
         self._stop_state = StopState(
             connection,
@@ -186,6 +203,7 @@ class HubState:
             activate_origin=self._activate_session_origin,
             hold_scope_before_return=self._root_blocker_state.hold_scope_before_return,
             notice_released_scope=self._root_blocker_state.notice_released_scope,
+            selected_codex_profile=lambda: self.codex_permission_profile,
         )
         self._runtime_health_state = RuntimeHealthStateFacade(
             connection,
@@ -194,7 +212,14 @@ class HubState:
         )
 
     @classmethod
-    def open(cls, path: Path) -> "HubState":
+    def open(
+        cls,
+        path: Path,
+        *,
+        codex_permission_profile: str
+        | None
+        | MissingPermissionContext = MISSING_PERMISSION_CONTEXT,
+    ) -> "HubState":
         path = path.expanduser().resolve()
         parent_existed = path.parent.exists()
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -213,7 +238,7 @@ class HubState:
         try:
             os.chmod(path, 0o600)
             migrate_connection(connection)
-            return cls(connection, path)
+            return cls(connection, path, codex_permission_profile=codex_permission_profile)
         except BaseException:
             try:
                 connection.close()
@@ -227,9 +252,25 @@ class HubState:
         return cls(*connect_existing(path, writable=False, state_error=StateError))
 
     @classmethod
-    def open_existing(cls, path: Path) -> "HubState":
+    def open_existing(
+        cls,
+        path: Path,
+        *,
+        codex_permission_profile: str
+        | None
+        | MissingPermissionContext = MISSING_PERMISSION_CONTEXT,
+    ) -> "HubState":
         """Open an existing current-schema database for writing; never create or migrate it."""
-        return cls(*connect_existing(path, writable=True, state_error=StateError))
+        return cls(
+            *connect_existing(path, writable=True, state_error=StateError),
+            codex_permission_profile=codex_permission_profile,
+        )
+
+    @property
+    def codex_permission_profile(self) -> str | None:
+        if isinstance(self._codex_permission_profile_context, MissingPermissionContext):
+            raise StateError("Codex permission configuration is unavailable")
+        return self._codex_permission_profile_context
 
     @property
     def schema_version(self) -> int:
@@ -736,6 +777,29 @@ class HubState:
         """Return each topic whose head job should display provider activity."""
         return self._provider_job_state.chat_activities(agent_ids)
 
+    def reject_changed_codex_input(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        thread_id: int,
+        topic_id: int,
+        session_id: str | None = None,
+        session_generation: int | None = None,
+    ) -> PermissionInputDisposition:
+        return CodexPermissionInputState(
+            self._connection,
+            self._immediate_transaction,
+            lambda: self.codex_permission_profile,
+        ).reject_changed_input(
+            chat_id=chat_id,
+            message_id=message_id,
+            thread_id=thread_id,
+            topic_id=topic_id,
+            session_id=session_id,
+            session_generation=session_generation,
+        )
+
     def reject_blocked_provider_input(
         self,
         *,
@@ -869,9 +933,7 @@ class HubState:
             if int(topic["chat_id"]) != chat_id:
                 raise StateError("provider job chat does not match topic")
             session = self._connection.execute(
-                """SELECT topic_id, agent_id, generation, status, writer_mode, model, effort,
-                          provider_session_id
-                   FROM agent_sessions
+                """SELECT * FROM agent_sessions
                    WHERE session_id = ?""",
                 (target_session,),
             ).fetchone()
@@ -884,6 +946,7 @@ class HubState:
                 raise StateError("provider job session snapshot does not match persisted session")
             if str(session["status"]) not in {"active", "satellite"}:
                 raise StateError("provider job session is not routable")
+            self._sessions_state.require_codex_selection(SessionsStateFacade.record(session))
             CodexSessionOrigins(self).require_admission(target_session, message_id)
             expected_writer = "local" if take_local_writer else "telegram"
             if str(session["writer_mode"]) != expected_writer:
@@ -977,10 +1040,10 @@ class HubState:
                     """INSERT INTO provider_jobs (
                          job_id, idempotency_key, chat_id, message_id, topic_id,
                          topic_sequence, agent_id, session_id, session_generation,
-                         provider_session_id, model, effort, payload_text,
+                         provider_session_id, model, effort, payload_text, codex_permission_profile,
                          context_watermark, handoff_id, input_group_key, status, attempt_count,
                          max_attempts, next_attempt_at, created_at, updated_at
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                                  'queued', 0, ?, ?, ?, ?)""",
                     (
                         job_id,
@@ -996,6 +1059,7 @@ class HubState:
                         selected_model,
                         selected_effort,
                         payload,
+                        session["codex_permission_profile"],
                         context_watermark,
                         handoff,
                         group_key,
@@ -1139,6 +1203,7 @@ class HubState:
                 or self.get_topic(topic_id).chat_id != chat_id
             ):
                 raise StateError("provider batch session snapshot changed")
+            self._sessions_state.require_codex_selection(session)
             if persistent_root_blocker(self._connection, topic_id=topic_id) is not None:
                 raise StateError("execution root has a persistent local writer or uncertainty")
             candidate = self._connection.execute(
@@ -1146,6 +1211,7 @@ class HubState:
                    WHERE topic_id = ? AND agent_id = ? AND session_id = ?
                      AND session_generation = ? AND model = ? AND effort = ?
                      AND input_group_key IS ?
+                     AND codex_permission_profile IS ?
                      AND status = 'queued' AND next_attempt_at > ?
                      AND created_at >= ?
                      AND topic_sequence = (
@@ -1161,6 +1227,7 @@ class HubState:
                     model,
                     effort,
                     group_key,
+                    session.codex_permission_profile,
                     timestamp,
                     absolute_floor,
                 ),
@@ -1244,6 +1311,9 @@ class HubState:
             queue_capacity=queue_capacity,
         )
 
+    def queued_input_group(self, topic_id: int, input_group_key: str) -> ProviderJobRecord | None:
+        return self._provider_job_state.queued_input_group(topic_id, input_group_key)
+
     def hold_queued_input_group(
         self,
         *,
@@ -1254,6 +1324,7 @@ class HubState:
         agent_id: str | None = None,
         session_id: str | None = None,
         session_generation: int | None = None,
+        expected_job_id: str | None = None,
     ) -> ProviderJobRecord | None:
         """Keep an exact queued tail group unavailable during part download."""
         target_agent = (
@@ -1278,47 +1349,41 @@ class HubState:
         current = datetime.now(timezone.utc)
         timestamp = _timestamp(current)
         with self._immediate_transaction():
-            candidate = self._connection.execute(
-                """SELECT * FROM provider_jobs
-                   WHERE topic_id = ? AND input_group_key = ?
-                     AND status = 'queued'
-                     AND topic_sequence = (
-                         SELECT MAX(tail.topic_sequence) FROM provider_jobs tail
-                         WHERE tail.topic_id = provider_jobs.topic_id
-                     )
-                   ORDER BY topic_sequence DESC LIMIT 1""",
-                (
-                    topic_id,
-                    group_key,
-                ),
-            ).fetchone()
-            if candidate is None:
-                return None
-            if target_agent is not None and (
-                str(candidate["agent_id"]) != target_agent
-                or str(candidate["session_id"]) != target_session
-                or int(candidate["session_generation"]) != session_generation
+            candidate = self._provider_job_state.queued_input_group(topic_id, group_key)
+            if candidate is None or (
+                expected_job_id is not None and candidate.job_id != expected_job_id
             ):
                 return None
-            hard_deadline = datetime.fromisoformat(str(candidate["created_at"])) + timedelta(
+            if target_agent is not None and (
+                str(candidate.agent_id) != target_agent
+                or str(candidate.session_id) != target_session
+                or int(candidate.session_generation) != session_generation
+            ):
+                return None
+            if (
+                candidate.agent_id == "codex"
+                and candidate.codex_permission_profile != self.codex_permission_profile
+            ):
+                return None  # Preserve stale work; do not extend its queue hold.
+            hard_deadline = datetime.fromisoformat(str(candidate.created_at)) + timedelta(
                 milliseconds=max_ms
             )
             held_until = min(current + timedelta(milliseconds=hold_ms), hard_deadline)
             if held_until <= current:
                 return None
-            existing = candidate["next_attempt_at"]
+            existing = candidate.next_attempt_at
             if existing is not None and datetime.fromisoformat(str(existing)) >= held_until:
-                return self._provider_job(candidate)
+                return candidate
             cursor = self._connection.execute(
                 """UPDATE provider_jobs
                    SET next_attempt_at = ?, updated_at = ?
                    WHERE job_id = ? AND status = 'queued'""",
-                (_timestamp(held_until), timestamp, candidate["job_id"]),
+                (_timestamp(held_until), timestamp, candidate.job_id),
             )
             if cursor.rowcount != 1:
                 return None
             held = self._connection.execute(
-                "SELECT * FROM provider_jobs WHERE job_id = ?", (candidate["job_id"],)
+                "SELECT * FROM provider_jobs WHERE job_id = ?", (candidate.job_id,)
             ).fetchone()
             return self._provider_job(held) if held is not None else None
 
@@ -2262,6 +2327,7 @@ class HubState:
         effort: str,
         *,
         expected_session_id: str | None = None,
+        control_only: bool = False,
     ) -> SessionRecord:
         return self._sessions_state.activate_agent(
             topic_id,
@@ -2269,6 +2335,7 @@ class HubState:
             model,
             effort,
             expected_session_id=expected_session_id,
+            control_only=control_only,
         )
 
     def ensure_satellite(

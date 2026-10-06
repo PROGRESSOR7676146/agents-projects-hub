@@ -117,6 +117,29 @@ class HubConfigTests(unittest.TestCase):
         )
         self.assertEqual(config.provider_account_hints, {"hermes": ("abc", "xyz")})
 
+    def test_named_codex_permission_profile_is_private_explicit_configuration(self) -> None:
+        self.assertIsNone(load_hub_config(self.write_config()).codex_permission_profile)
+        config = load_hub_config(
+            self.write_config(
+                codex_permission_profile="example-project-policy",
+                dispatch_mode="queue",
+                queue_runtime="external",
+                external_worker_agent_ids=["codex"],
+            )
+        )
+        self.assertEqual(config.codex_permission_profile, "example-project-policy")
+        for topology in ({}, {"dispatch_mode": "queue"}):
+            with (
+                self.subTest(topology=topology),
+                self.assertRaisesRegex(HubConfigError, "external Codex queue worker"),
+            ):
+                load_hub_config(
+                    self.write_config(codex_permission_profile="example-project-policy", **topology)
+                )
+        for value in ("", ":full-access", ":workspace", "../example", True, ["example-policy"]):
+            with self.subTest(value=value), self.assertRaises(HubConfigError):
+                load_hub_config(self.write_config(codex_permission_profile=value))
+
     def test_rejects_unmasked_or_unknown_provider_account_hints(self) -> None:
         for value in (
             {"missing": ["abc"]},

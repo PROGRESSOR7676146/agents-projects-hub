@@ -50,6 +50,7 @@ from .session_adoption_policy import validate_adoption_mode
 from .session_adoption_state import CodexSessionOrigins
 from .session_connect import ConnectCandidate, SessionConnectStore
 from .state import HubState, ProviderJobRecord, StateError
+from .state_errors import ConnectPermissionSelectionChanged
 from .supervisor import CodexAppServerSupervisor
 from .telegram_interaction import (
     telegram_contract_version,
@@ -75,7 +76,9 @@ from .worker_execution import (
     require_provider_job_lease,
     resolve_external_worker_target,
     revalidate_worker_execution_root,
+    should_transfer_legacy_fallback,
     start_codex_provider_turn,
+    validate_codex_job_selection,
     wait_for_codex_provider_turn,
     worker_needs_full_telegram_contract,
 )
@@ -129,7 +132,9 @@ class ExternalQueueWorker:
             raise ExternalQueueWorkerError("worker slot is not configured for this agent")
         validate_adoption_mode(config)
         self.registry = registry or load_registry(config.registry_path)
-        self.state = HubState.open(config.state_path)
+        self.state = HubState.open(
+            config.state_path, codex_permission_profile=config.codex_permission_profile
+        )
         try:
             self.state.reconcile_legacy_execution_scopes(
                 {project.project_id: project.root for project in self.registry.projects}
@@ -158,6 +163,7 @@ class ExternalQueueWorker:
                 manage_process=config.manage_codex_server,
                 stdio_executable=config.codex_stdio_executable,
                 model_provider=config.codex_model_provider,
+                permission_profile=config.codex_permission_profile,
             )
         else:
             self.adapter = adapter or ExternalCliAdapter(
@@ -203,7 +209,10 @@ class ExternalQueueWorker:
 
     def _record_event(self, level: str, code: str, detail: str) -> None:
         try:
-            event_state = HubState.open(self.config.state_path)
+            event_state = HubState.open(
+                self.config.state_path,
+                codex_permission_profile=self.config.codex_permission_profile,
+            )
             try:
                 event_state.record_runtime_event(self.agent.agent_id, level, code, detail)
             finally:
@@ -286,7 +295,10 @@ class ExternalQueueWorker:
         """Serve metadata requests while the productive worker waits on a turn."""
         while not self._stop.is_set():
             try:
-                state = HubState.open(self.config.state_path)
+                state = HubState.open(
+                    self.config.state_path,
+                    codex_permission_profile=self.config.codex_permission_profile,
+                )
                 try:
                     while not self._stop.is_set():
                         worked = self._run_connect_cycle(state=state)
@@ -361,6 +373,7 @@ class ExternalQueueWorker:
             return False
         client: CodexAppServerClient | None = None
         try:
+            store.require_permission_selection(workflow)
             if workflow.canonical_root is None:
                 raise ExternalQueueWorkerError("connect project is missing")
             if workflow.project_id is None:
@@ -409,7 +422,11 @@ class ExternalQueueWorker:
                 raise ExternalQueueWorkerError("connect workflow stage is not executable")
         except Exception as exc:
             safe_code = (
-                str(exc) if type(exc).__name__ == "CodexMetadataError" else "metadata_unavailable"
+                exc.code
+                if isinstance(exc, ConnectPermissionSelectionChanged)
+                else str(exc)
+                if type(exc).__name__ == "CodexMetadataError"
+                else "metadata_unavailable"
             )
             store.fail_worker(workflow.workflow_id, workflow.lease_token, safe_code)
         finally:
@@ -450,7 +467,10 @@ class ExternalQueueWorker:
         heartbeat_stop = threading.Event()
 
         def maintain_lease() -> None:
-            heartbeat_state = HubState.open(self.config.state_path)
+            heartbeat_state = HubState.open(
+                self.config.state_path,
+                codex_permission_profile=self.config.codex_permission_profile,
+            )
             try:
                 while not heartbeat_stop.is_set():
                     try:
@@ -737,6 +757,8 @@ class ExternalQueueWorker:
         assert isinstance(project, Project)
         assert isinstance(topic, TopicRecord)
         assert self.supervisor is not None
+        with codex_preparation():
+            validate_codex_job_selection(self.state, job, self.config.codex_permission_profile)
         prepared = prepare_worker_materials(
             self.state,
             state_path=self.config.state_path,
@@ -786,11 +808,11 @@ class ExternalQueueWorker:
                     not in {origin.model_provider, self.config.codex_model_provider}
                 ):
                     raise ExternalQueueWorkerError("adopted Codex source mismatch")
-            fallback_transfer = bool(
-                origin is None
-                and self.config.codex_model_provider is None
-                and job.provider_session_id
-                and self.supervisor.transport_mode == "stdio-fallback"
+            fallback_transfer = should_transfer_legacy_fallback(
+                job,
+                has_origin=origin is not None,
+                model_provider=self.config.codex_model_provider,
+                transport_mode=self.supervisor.transport_mode,
             )
             if fallback_transfer and job.idempotency_key.startswith("continuation:"):
                 raise ExternalQueueWorkerError(
@@ -825,7 +847,13 @@ class ExternalQueueWorker:
                 != (self.config.codex_model_provider or origin.model_provider)
             ):
                 raise ExternalQueueWorkerError("adopted Codex resume identity mismatch")
-            journal.record_thread(job.job_id, token, thread.thread_id, project.root)
+            journal.record_thread(
+                job.job_id,
+                token,
+                thread.thread_id,
+                project.root,
+                codex_permission_profile=thread.permission_profile,
+            )
         with codex_activity_for_turn(
             client, self.state, self.config, job.job_id, token, project.root
         ) as accepted_activity:
@@ -849,7 +877,10 @@ class ExternalQueueWorker:
             interrupted_request: list[str] = []
 
             def monitor_control() -> None:
-                monitor_state = HubState.open(self.config.state_path)
+                monitor_state = HubState.open(
+                    self.config.state_path,
+                    codex_permission_profile=self.config.codex_permission_profile,
+                )
                 try:
                     while not monitor_stop.wait(0.2):
                         request_id = monitor_state.pending_emergency_stop_for_job(job.job_id)
@@ -1051,7 +1082,10 @@ class ExternalQueueWorker:
         interrupted_request: list[str] = []
 
         def monitor_interrupt() -> None:
-            monitor_state = HubState.open(self.config.state_path)
+            monitor_state = HubState.open(
+                self.config.state_path,
+                codex_permission_profile=self.config.codex_permission_profile,
+            )
             try:
                 while not monitor_stop.wait(0.2):
                     request_id = monitor_state.pending_emergency_stop_for_job(job.job_id)

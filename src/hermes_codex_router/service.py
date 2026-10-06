@@ -112,6 +112,7 @@ from .runtime_health import CONTROLLER_INSTANCE_ID
 from .session_connect import SessionConnectStore
 from .session_controls import bind_controls, validate_control
 from .state import HubState, SessionRecord, StateError, TopicRecord
+from .state_errors import CodexPermissionSelectionChanged
 from .supervisor import CodexAppServerSupervisor
 from .telegram import (
     TELEGRAM_HEALTH_FAILURE_THRESHOLD,
@@ -151,6 +152,7 @@ from .worker_execution import (
     resolve_embedded_worker_target,
     revalidate_worker_execution_root,
     start_codex_provider_turn,
+    validate_codex_job_selection,
     wait_for_codex_provider_turn,
 )
 
@@ -180,11 +182,15 @@ class ProjectHubService:
         direct_messages_only: bool = False,
     ) -> None:
         self.config = config
+        from .codex_permissions import validate_managed_execution_mode
         from .session_adoption_policy import validate_adoption_mode
 
+        validate_managed_execution_mode(config)
         validate_adoption_mode(config)
         self.registry = load_registry(config.registry_path)
-        self.state = HubState.open(config.state_path)
+        self.state = HubState.open(
+            config.state_path, codex_permission_profile=config.codex_permission_profile
+        )
         # A process crash can occur after the atomic registry replacement but
         # before the matching SQLite binding commit. Complete that durable,
         # fail-closed boundary before accepting any new Telegram work.
@@ -250,6 +256,7 @@ class ProjectHubService:
                 manage_process=self.config.manage_codex_server,
                 stdio_executable=self.config.codex_stdio_executable,
                 model_provider=self.config.codex_model_provider,
+                permission_profile=self.config.codex_permission_profile,
             )
         self._codex_client: CodexAppServerClient | None = None
         self.terminal = TerminalRuntime(
@@ -257,6 +264,7 @@ class ProjectHubService:
             backend=self.config.terminal.backend,
             program=self.config.terminal.program,
             distro=self.config.terminal.wsl_distro,
+            permission_profile=self.config.codex_permission_profile,
         )
         self.usernames = {
             candidate.agent_id: candidate.telegram_username for candidate in config.agents
@@ -612,7 +620,7 @@ class ProjectHubService:
         if isinstance(result, DuplicateAdmission):
             return False
         if isinstance(result, RejectedAdmission):
-            if result.reason == "persistent_root_blocker":
+            if result.reason in {"persistent_root_blocker", "codex_permission_selection_changed"}:
                 if not self._uses_external_outbox_sender():
                     self._deliver_embedded_blocker_notice(self.state)
                 return True
@@ -668,6 +676,23 @@ class ProjectHubService:
                     error.safe_detail(consecutive_failures=1, last_success=None),
                 )
         return True
+
+    def _reject_permission_changed_input(
+        self,
+        message: TopicMessage,
+        topic: TopicRecord,
+    ) -> bool | None:
+        disposition = self.state.reject_changed_codex_input(
+            chat_id=message.chat_id,
+            message_id=message.message_id,
+            thread_id=message.thread_id,
+            topic_id=topic.topic_id,
+        )
+        if disposition is None:
+            return None
+        if disposition == "rejected" and not self._uses_external_outbox_sender():
+            self._deliver_embedded_blocker_notice(self.state)
+        return disposition == "rejected"
 
     def _reject_persistent_root_input(
         self, message: TopicMessage, topic: TopicRecord, session: SessionRecord
@@ -729,7 +754,10 @@ class ProjectHubService:
                 worked = self.run_controller_outbox_cycle()
             except Exception as exc:
                 try:
-                    error_state = HubState.open(self.config.state_path)
+                    error_state = HubState.open(
+                        self.config.state_path,
+                        codex_permission_profile=self.config.codex_permission_profile,
+                    )
                     try:
                         error_state.record_runtime_event(
                             "outbox", "error", "controller_outbox_error", type(exc).__name__
@@ -755,7 +783,9 @@ class ProjectHubService:
         ]
         if not external_agents:
             return False
-        outbox_state = HubState.open(self.config.state_path)
+        outbox_state = HubState.open(
+            self.config.state_path, codex_permission_profile=self.config.codex_permission_profile
+        )
         try:
             outbox_state.recover_stale_telegram_outbox(sender_agent_ids=tuple(external_agents))
             start = getattr(self, "_outbox_agent_cursor", 0) % len(external_agents)
@@ -779,7 +809,10 @@ class ProjectHubService:
             except Exception as exc:
                 # The consumer is deliberately independent of Telegram polling.
                 try:
-                    error_state = HubState.open(self.config.state_path)
+                    error_state = HubState.open(
+                        self.config.state_path,
+                        codex_permission_profile=self.config.codex_permission_profile,
+                    )
                     try:
                         error_state.record_runtime_event(
                             "queue", "error", "consumer_error", type(exc).__name__
@@ -810,7 +843,9 @@ class ProjectHubService:
         )
         if not embedded_agent_ids:
             return False
-        queue_state = HubState.open(self.config.state_path)
+        queue_state = HubState.open(
+            self.config.state_path, codex_permission_profile=self.config.codex_permission_profile
+        )
         try:
             if not self._uses_external_outbox_sender():
                 queue_state.materialize_held_provider_jobs()
@@ -886,7 +921,10 @@ class ProjectHubService:
         heartbeat_stop = threading.Event()
 
         def maintain_lease() -> None:
-            heartbeat_state = HubState.open(self.config.state_path)
+            heartbeat_state = HubState.open(
+                self.config.state_path,
+                codex_permission_profile=self.config.codex_permission_profile,
+            )
             try:
                 while not heartbeat_stop.is_set():
                     try:
@@ -909,6 +947,11 @@ class ProjectHubService:
         try:
             target = revalidate_worker_execution_root(queue_state, target)
             project = target.project
+            if agent.runtime == "codex":
+                with codex_preparation():
+                    validate_codex_job_selection(
+                        queue_state, executing, self.config.codex_permission_profile
+                    )
             prepared = prepare_worker_materials(
                 queue_state,
                 state_path=self.config.state_path,
@@ -937,7 +980,13 @@ class ProjectHubService:
                             runtime="codex", new_session=full_contract
                         ),
                     )
-                    journal.record_thread(executing.job_id, token, thread.thread_id, project.root)
+                    journal.record_thread(
+                        executing.job_id,
+                        token,
+                        thread.thread_id,
+                        project.root,
+                        codex_permission_profile=thread.permission_profile,
+                    )
                 turn_id = start_codex_provider_turn(
                     client,
                     executing,
@@ -1301,11 +1350,13 @@ class ProjectHubService:
     def _ensure_provider_thread(
         self, *, project: Project, topic: TopicRecord, session: SessionRecord
     ) -> SessionRecord:
+        self._require_legacy_codex_execution(self.state)
+        if session.codex_permission_profile is not None:
+            raise ServiceError("managed Codex session requires the external queue worker")
         require_inline_topic(self.state, topic)
         validate_execution_root(self.registry, project)
         if session.provider_session_id:
             return session
-        self._require_legacy_codex_execution(self.state)
         client = self._client()
         thread = client.start_thread(
             cwd=project.root,
@@ -1323,8 +1374,10 @@ class ProjectHubService:
     def _require_legacy_codex_execution(self, state: HubState) -> None:
         from dataclasses import replace
 
+        from .codex_permissions import validate_managed_execution_mode
         from .session_adoption_policy import validate_adoption_mode
 
+        validate_managed_execution_mode(replace(self.config, dispatch_mode="inline"))
         validate_adoption_mode(replace(self.config, dispatch_mode="inline"), state._connection)
 
     def _run_codex_turn(
@@ -1337,6 +1390,8 @@ class ProjectHubService:
         message: TopicMessage,
     ) -> str:
         self._require_legacy_codex_execution(self.state)
+        if session.codex_permission_profile is not None:
+            raise ServiceError("managed Codex session requires the external queue worker")
         require_inline_topic(self.state, topic)
         validate_execution_root(self.registry, project)
         client = self._client()
@@ -1634,7 +1689,31 @@ class ProjectHubService:
             selected_model,
             selected_effort,
             expected_session_id=previous.session_id,
+            control_only=True,
         )
+        if replacement.writer_mode != "telegram":
+            command = "/release" if replacement.writer_mode == "terminal" else "/return"
+            self._send_text(
+                message,
+                f"{target.display_name} is now active with its saved local writer. "
+                f"Close the local CLI and use {command} before changing settings or sending a task."
+                + (
+                    " The configured permissions changed; then use /new."
+                    if replacement.agent_id == "codex"
+                    and replacement.codex_permission_profile != self.config.codex_permission_profile
+                    else ""
+                ),
+            )
+            return
+        if replacement.agent_id == "codex" and (
+            replacement.codex_permission_profile != self.config.codex_permission_profile
+        ):
+            self._send_text(
+                message,
+                "Codex is now active with its saved permissions. "
+                "The configured selection changed; use /new before sending a task.",
+            )
+            return
         if (replacement.model, replacement.effort) != (selected_model, selected_effort):
             replacement = self.state.replace_active_session(
                 topic.topic_id,
@@ -2676,6 +2755,12 @@ class ProjectHubService:
             return self._handle_update(update)
         except QueueAcceptanceError:
             raise
+        except CodexPermissionSelectionChanged as exc:
+            if self._queue_ingress_can_retry_without_productive_replay(update):
+                raise QueueAcceptanceError(
+                    "permission input snapshot changed before durable admission"
+                ) from exc
+            raise
         except sqlite3.Error as exc:
             if self._queue_ingress_can_retry_without_productive_replay(update):
                 raise QueueAcceptanceError(
@@ -2739,6 +2824,12 @@ class ProjectHubService:
             self.config, self.state, self.registry, ingress_identity
         ).handle(message, topic)
         if retry is not None:
+            if retry.error is not None:
+                raise QueueAcceptanceError(
+                    "retry refusal has no durable disposition"
+                ) from retry.error
+            if retry.durable_notice and not self._uses_external_outbox_sender():
+                self._deliver_embedded_blocker_notice(self.state)
             if retry.text is not None:
                 self._send_text(message, retry.text)
             return retry.created
@@ -2986,6 +3077,14 @@ class ProjectHubService:
             )
             return True
         if command and command.name == "terminal":
+            active = self.state.active_session(topic.topic_id)
+            if self.config.codex_permission_profile is not None or (
+                active is not None and active.codex_permission_profile is not None
+            ):
+                from .codex_permissions import MANAGED_LOCAL_REFUSAL
+
+                self._send_text(message, MANAGED_LOCAL_REFUSAL)
+                return True
             session = self._ensure_codex_session(topic)
             if session.writer_mode == "local":
                 self._send_text(message, "Use /return before starting a managed terminal.")
@@ -3057,6 +3156,14 @@ class ProjectHubService:
             if session is None:
                 self._send_text(message, "No active provider session exists yet.")
                 return True
+            if session.agent_id == "codex" and (
+                self.config.codex_permission_profile is not None
+                or session.codex_permission_profile is not None
+            ):
+                from .codex_permissions import MANAGED_LOCAL_REFUSAL
+
+                self._send_text(message, MANAGED_LOCAL_REFUSAL)
+                return True
             if session.writer_mode == "terminal":
                 self._send_text(message, "Use /release before taking the session local.")
                 return True
@@ -3107,6 +3214,7 @@ class ProjectHubService:
                     session.provider_session_id,
                     execution_root,
                     model_provider=self.config.codex_model_provider,
+                    permission_profile=session.codex_permission_profile,
                     model=session.model,
                     codex_socket_path=self.config.codex_socket_path,
                     effort=session.effort,
@@ -3173,13 +3281,18 @@ class ProjectHubService:
                 )
                 self._send_text(
                     message,
-                    "Ownership returned to Telegram. The next Telegram turn will continue "
-                    "the same provider session."
+                    "Ownership returned to Telegram. "
+                    + (
+                        "The configured permissions changed; use /new before sending a task."
+                        if session.codex_permission_profile != self.config.codex_permission_profile
+                        else "The next Telegram turn will continue the same provider session."
+                    )
                     + (
                         " An earlier Codex turn stopped with an error and remains in history. "
                         "Reply exactly retry to its failure notice for a new inspection-first "
                         "turn; the old task will not be replayed."
                         if interrupted
+                        and session.codex_permission_profile == self.config.codex_permission_profile
                         else ""
                     )
                     + (
@@ -3282,6 +3395,8 @@ class ProjectHubService:
 
         if not isinstance(decision, (IgnoreDecision, ProductiveRouteDecision)):
             raise ServiceError("unexpected ingress decision")
+        album_group = None
+        album_group_key = None
         if decision.pending_batch_eligible:
             pending_batch_agent = None
             if message.media_group_id is not None and not self.state.message_already_observed(
@@ -3290,14 +3405,10 @@ class ProjectHubService:
                 raw_group = (
                     f"{message.chat_id}:{message.thread_id}:{message.media_group_id}"
                 ).encode("utf-8")
-                held_group = self.state.hold_queued_input_group(
-                    topic_id=topic.topic_id,
-                    input_group_key=("telegram-album:" + hashlib.sha256(raw_group).hexdigest()),
-                    hold_ms=ALBUM_DOWNLOAD_HOLD_MILLISECONDS,
-                    max_ms=ALBUM_MAX_MILLISECONDS,
-                )
-                if held_group is not None:
-                    pending_batch_agent = held_group.agent_id
+                album_group_key = "telegram-album:" + hashlib.sha256(raw_group).hexdigest()
+                album_group = self.state.queued_input_group(topic.topic_id, album_group_key)
+                if album_group is not None:
+                    pending_batch_agent = album_group.agent_id
             if pending_batch_agent is None:
                 pending_batch_agent = self.state.pending_message_batch_agent(topic.topic_id)
             if pending_batch_agent is not None and self._queue_enabled(pending_batch_agent):
@@ -3312,6 +3423,22 @@ class ProjectHubService:
         if not isinstance(decision, ProductiveRouteDecision):
             raise ServiceError("unexpected productive ingress decision")
         local_targets = decision.local_targets
+        if "codex" in local_targets:
+            refused = self._reject_permission_changed_input(message, topic)
+            if refused is not None:
+                return refused
+        if album_group is not None and album_group.agent_id in local_targets:
+            assert album_group_key is not None
+            self.state.hold_queued_input_group(
+                topic_id=topic.topic_id,
+                input_group_key=album_group_key,
+                agent_id=album_group.agent_id,
+                session_id=album_group.session_id,
+                session_generation=album_group.session_generation,
+                expected_job_id=album_group.job_id,
+                hold_ms=ALBUM_DOWNLOAD_HOLD_MILLISECONDS,
+                max_ms=ALBUM_MAX_MILLISECONDS,
+            )
         # Native gateways see the Telegram update independently. The Hub may
         # retain shared topic metadata, but it must neither claim nor answer a
         # message whose productive targets are all externally managed.

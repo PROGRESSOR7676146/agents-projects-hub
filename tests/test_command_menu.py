@@ -144,7 +144,7 @@ class CommandMenuTests(unittest.TestCase):
                 agents=(),
                 hub_bot=HubTelegramBot("example_hub_bot", token),
             )
-            state = HubState.open(config.state_path)
+            state = HubState.open(config.state_path, codex_permission_profile=None)
             try:
                 now = datetime.now(timezone.utc)
                 state._connection.execute(

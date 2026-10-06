@@ -34,7 +34,7 @@ class BoundedConcurrencyTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         self.base = Path(self.tempdir.name)
         self.harness = FaultMatrixHarness(self.base)
-        self.state = HubState.open(self.harness.config.state_path)
+        self.state = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         self.root = self.harness.registry.require_project("example-project").root
 
     def tearDown(self) -> None:
@@ -325,7 +325,7 @@ class BoundedConcurrencyTests(unittest.TestCase):
         leased_ids: list[str] = []
 
         def compete(slot: int) -> None:
-            contender = HubState.open(self.harness.config.state_path)
+            contender = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
             try:
                 barrier.wait()
                 lease = contender.lease_provider_job(
@@ -666,7 +666,7 @@ class BoundedConcurrencyTests(unittest.TestCase):
         results: list[str] = []
 
         def compete(agent_id: str) -> None:
-            contender = HubState.open(self.harness.config.state_path)
+            contender = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
             try:
                 barrier.wait()
                 leased = contender.lease_provider_job(

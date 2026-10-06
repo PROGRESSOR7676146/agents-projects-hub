@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from .hub_config import HubConfig
 from .models import ProjectRegistry
 from .state import HubState, StateError, TopicRecord
+from .state_errors import CodexPermissionSelectionChanged
 from .telegram import TopicMessage
 from .topic_execution import ExecutionRootError, resolve_topic_execution_root
 from .turn_continuation_state import TurnContinuationState
@@ -18,6 +20,8 @@ from .work_retry_state import WorkRetryState
 class RetryControlDecision:
     created: bool
     text: str | None = None
+    durable_notice: bool = False
+    error: Exception | None = None
 
 
 class ControllerRetryOrchestrator:
@@ -85,6 +89,26 @@ class ControllerRetryOrchestrator:
                 reply_message_id=message.message_id,
                 canonical_root=root,
                 now=datetime.now(timezone.utc),
+            )
+        except CodexPermissionSelectionChanged:
+            try:
+                assert source is not None
+                job = self.state.get_provider_job(source)
+                disposition = self.state.reject_changed_codex_input(
+                    chat_id=message.chat_id,
+                    message_id=message.message_id,
+                    thread_id=message.thread_id,
+                    topic_id=topic.topic_id,
+                    session_id=job.session_id,
+                    session_generation=job.session_generation,
+                )
+            except (StateError, sqlite3.Error) as exc:
+                return RetryControlDecision(False, error=exc)
+            if disposition is not None:
+                return RetryControlDecision(disposition == "rejected", durable_notice=True)
+            return self._reject(
+                message,
+                "Retry is paused: saved permissions changed. Use /new before sending a task.",
             )
         except (ExecutionRootError, StateError):
             return self._reject(

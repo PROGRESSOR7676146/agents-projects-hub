@@ -78,9 +78,14 @@ class TaskActivityDatabaseIntegrationTests(unittest.TestCase):
         return job
 
     def seed_v36(self):
-        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 36):
+        from tests.schema_fixtures import legacy_selection_columns
+
+        with (
+            patch.object(migrations, "LATEST_SCHEMA_VERSION", 36),
+            legacy_selection_columns(self.path),
+        ):
             self.fixture.ready_outbox("antigravity", 501)
-            state = HubState.open(self.path)
+            state = HubState.open(self.path, codex_permission_profile=None)
             try:
                 job = self.enqueue(state, 502)
                 leased = state.lease_provider_job("opencode", "example-worker")
@@ -180,7 +185,7 @@ class TaskActivityDatabaseIntegrationTests(unittest.TestCase):
             task_tool_no_progress_seconds=71,
         )
         now = datetime.now(timezone.utc)
-        state = HubState.open(self.path)
+        state = HubState.open(self.path, codex_permission_profile=None)
         try:
             job = self.enqueue(state, 601)
             lease = state.lease_provider_job("opencode", "example-worker", lease_seconds=3600)

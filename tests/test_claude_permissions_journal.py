@@ -26,7 +26,7 @@ class ClaudePermissionJournalTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name) / "example-project"
         self.root.mkdir()
-        self.state = HubState.open(Path(directory.name) / "state.db")
+        self.state = HubState.open(Path(directory.name) / "state.db", codex_permission_profile=None)
         self.addCleanup(self.state.close)
         topic = self.state.observe_topic(
             project_id="example-project",

@@ -27,7 +27,7 @@ class PreparedResultPublisherTests(unittest.TestCase):
         self.project_root = base / "project"
         self.project_root.mkdir()
         self.state_path = base / "private" / "hub.db"
-        self.state = HubState.open(self.state_path)
+        self.state = HubState.open(self.state_path, codex_permission_profile=None)
         self.topic = self.state.observe_topic(
             project_id="example-project",
             chat_id=-1001234567890,

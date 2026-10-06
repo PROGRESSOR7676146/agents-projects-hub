@@ -42,6 +42,7 @@ from hermes_codex_router.worker_execution import (
     resolve_embedded_worker_target,
     resolve_external_worker_target,
     revalidate_worker_execution_root,
+    should_transfer_legacy_fallback,
     start_codex_provider_turn,
     wait_for_codex_provider_turn,
     worker_needs_full_telegram_contract,
@@ -76,11 +77,13 @@ class WorkerExecutionPhaseTests(unittest.TestCase):
         lease_token: str | None = "fictional-lease",
         *,
         provider_session_id: str | None = "fictional-provider-session",
+        codex_permission_profile: str | None = None,
     ) -> ProviderJobRecord:
         return cast(
             ProviderJobRecord,
             SimpleNamespace(
                 job_id="fictional-job",
+                codex_permission_profile=codex_permission_profile,
                 topic_id=self.topic.topic_id,
                 lease_token=lease_token,
                 provider_session_id=provider_session_id,
@@ -259,7 +262,7 @@ class WorkerExecutionPhaseTests(unittest.TestCase):
         )
 
     def test_codex_thread_open_preserves_resume_and_forced_new_boundaries(self) -> None:
-        client = Mock()
+        client = Mock(permission_profile=None)
         resumed = CodexThread(
             "fictional-provider-session",
             self.project.root,
@@ -341,6 +344,30 @@ class WorkerExecutionPhaseTests(unittest.TestCase):
         )
         self.assertIs(wait_for_codex_provider_turn(client, turn_id), result)
         client.wait_for_turn.assert_called_once_with("fictional-turn")
+
+    def test_managed_fallback_cannot_substitute_a_thread(self) -> None:
+        job = self.job(codex_permission_profile="example-project-policy")
+        client = Mock(permission_profile="example-project-policy")
+        self.assertFalse(
+            should_transfer_legacy_fallback(
+                job, has_origin=False, model_provider=None, transport_mode="stdio-fallback"
+            )
+        )
+        self.assertTrue(
+            should_transfer_legacy_fallback(
+                self.job(), has_origin=False, model_provider=None, transport_mode="stdio-fallback"
+            )
+        )
+        with self.assertRaises(Exception):
+            open_codex_provider_thread(
+                client,
+                job,
+                self.project,
+                developer_instructions="Example contract",
+                force_new_thread=True,
+            )
+        client.start_thread.assert_not_called()
+        client.resume_thread.assert_not_called()
 
     def test_external_invocation_uses_immutable_job_snapshot(self) -> None:
         adapter = Mock()

@@ -168,6 +168,7 @@ class ProviderJobRecord:
     error_detail: str | None
     created_at: str
     updated_at: str
+    codex_permission_profile: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +202,7 @@ class ProviderJobsStateFacade:
         state_error: StateErrorFactory,
         job_has_materials: JobHasMaterials,
         queue_visibility: QueueVisibilityState | None = None,
+        selected_codex_profile: Callable[[], str | None] | None = None,
     ) -> None:
         self._connection = connection
         self._transaction = transaction
@@ -208,6 +210,21 @@ class ProviderJobsStateFacade:
         self._state_error = state_error
         self._job_has_materials = job_has_materials
         self._queue_visibility = queue_visibility
+        self._selected_codex_profile = selected_codex_profile
+
+    def queued_input_group(self, topic_id: int, input_group_key: str) -> ProviderJobRecord | None:
+        """Read an album routing candidate without extending its queue hold."""
+        key = self._bounded(input_group_key, name="input group key", maximum=256)
+        row = self._connection.execute(
+            """SELECT * FROM provider_jobs
+               WHERE topic_id=? AND input_group_key=? AND status='queued'
+                 AND topic_sequence=(
+                   SELECT MAX(tail.topic_sequence) FROM provider_jobs tail
+                   WHERE tail.topic_id=provider_jobs.topic_id)
+               ORDER BY topic_sequence DESC LIMIT 1""",
+            (topic_id, key),
+        ).fetchone()
+        return self.record(row) if row is not None else None
 
     def _bounded(self, value: str, *, name: str, maximum: int) -> str:
         normalized = value.strip()
@@ -243,6 +260,7 @@ class ProviderJobsStateFacade:
             context_watermark=row["context_watermark"],
             handoff_id=row["handoff_id"],
             input_group_key=row["input_group_key"],
+            codex_permission_profile=row["codex_permission_profile"],
             status=str(row["status"]),
             attempt_count=int(row["attempt_count"]),
             max_attempts=int(row["max_attempts"]),
@@ -862,6 +880,14 @@ class ProviderJobsStateFacade:
             # Nothing joins a turn that a pending emergency stop is ending.
             if parent is None or self.pending_stop_for_job(parent_job_id) is not None:
                 return None
+            # Managed steering lacks an independently verified active-policy read.
+            # Keep the follow-up queued for normal exact-profile preparation.
+            if parent["agent_id"] == "codex" and (
+                self._selected_codex_profile is None
+                or parent["codex_permission_profile"] != self._selected_codex_profile()
+                or parent["codex_permission_profile"] is not None
+            ):
+                return None
             candidate = self._connection.execute(
                 """SELECT * FROM provider_jobs
                    WHERE topic_id = ? AND topic_sequence = (
@@ -873,7 +899,14 @@ class ProviderJobsStateFacade:
             ).fetchone()
             if candidate is None or any(
                 candidate[field] != parent[field]
-                for field in ("agent_id", "session_id", "session_generation", "model", "effort")
+                for field in (
+                    "agent_id",
+                    "session_id",
+                    "session_generation",
+                    "model",
+                    "effort",
+                    "codex_permission_profile",
+                )
             ):
                 return None
             if str(candidate["status"]) != "queued":

@@ -241,7 +241,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         provider_session_id: str | None = None,
         thread_id: int | None = None,
     ) -> str:
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",
@@ -285,7 +285,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             }
         )
         self.config.registry_path.write_text(json.dumps(document))
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             with state._immediate_transaction():
                 state._connection.execute(
@@ -308,7 +308,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             state.close()
 
     def test_running_worker_resolves_relocated_root_before_new_execution(self) -> None:
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             edit = ProjectEditStore(state, self.config.registry_path)
             workflow = edit.start(owner_user_id=42, project_ids=("example-project",))
@@ -432,7 +432,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             agents=(*self.config.agents, claude),
             external_worker_agent_ids=(*self.config.external_worker_agent_ids, "claude"),
         )
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",
@@ -480,7 +480,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         dynamic_root.mkdir()
         subprocess.run(("git", "init", "-q", str(dynamic_root)), check=True)
         self.bind_dynamic_project("dynamic", dynamic_root, -1002222222222)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="dynamic", chat_id=-1002222222222, thread_id=7, title="Dynamic"
@@ -510,7 +510,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
 
     def test_owner_direct_message_job_reaches_provider_with_exact_project(self) -> None:
         config = replace(self.config, direct_message_project_id="example-project")
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project", chat_id=42, thread_id=1, title="Direct"
@@ -549,7 +549,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         self.bind_dynamic_project("dynamic", dynamic_root, -1002222222222)
         adapter = Adapter("opencode")
         worker = ExternalQueueWorker(self.config, "opencode", adapter=cast(Any, adapter))
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="dynamic", chat_id=-1002222222222, thread_id=7, title="Dynamic"
@@ -856,7 +856,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         def request_stop() -> None:
             if not entered.wait(2):
                 return
-            state = HubState.open(self.config.state_path)
+            state = HubState.open(self.config.state_path, codex_permission_profile=None)
             try:
                 job = state.get_provider_job(job_id)
                 state.request_emergency_stop(
@@ -895,7 +895,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
 
     def test_an_unfinished_older_stop_never_interrupts_or_cancels_later_work(self) -> None:
         old_id = self.enqueue("opencode", 32, thread_id=132)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             leased = state.lease_provider_job("opencode", "crashed-worker")
             assert leased is not None and leased.lease_token is not None
@@ -993,7 +993,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             self.config,
             agents=self.config.agents + (nonisolated,),
         )
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",
@@ -1046,7 +1046,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         self.assertTrue(controller.run_embedded_queue_cycle())
         self.assertEqual(isolated_adapter.calls, 0)
         self.assertEqual(embedded_adapter.calls, 1)
-        verification = HubState.open(config.state_path)
+        verification = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             self.assertEqual(verification.get_provider_job(isolated_job).status, "queued")
         finally:
@@ -1078,7 +1078,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
         controller.config = config
         controller.registry = self.registry
-        controller.state = HubState.open(config.state_path)
+        controller.state = HubState.open(config.state_path, codex_permission_profile=None)
         controller.agent = codex
         controller.telegram = Sender()
         controller.usernames = {agent.agent_id: agent.telegram_username for agent in config.agents}
@@ -1143,7 +1143,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
         controller.config = config
         controller.registry = self.registry
-        controller.state = HubState.open(config.state_path)
+        controller.state = HubState.open(config.state_path, codex_permission_profile=None)
         controller.agent = codex
         controller.telegram = Sender()
         controller.usernames = {agent.agent_id: agent.telegram_username for agent in config.agents}
@@ -1244,7 +1244,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
         controller.config = config
         controller.registry = self.registry
-        controller.state = HubState.open(config.state_path)
+        controller.state = HubState.open(config.state_path, codex_permission_profile=None)
         controller.agent = codex
         controller.telegram = Sender()
         controller.usernames = {agent.agent_id: agent.telegram_username for agent in config.agents}
@@ -1491,7 +1491,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             "high",
         )
         config = replace(self.config, agents=(codex, hermes))
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",

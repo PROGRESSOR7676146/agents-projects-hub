@@ -20,6 +20,7 @@ class AdoptionRequest:
     effort: str
     replaces_session_id: str | None = None
     model_provider: str = "openai"
+    codex_permission_profile: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +157,7 @@ class CodexSessionOrigins:
                 or origin.replaces_session_id != request.replaces_session_id
                 or current.model != request.model
                 or current.effort != request.effort
+                or current.codex_permission_profile != request.codex_permission_profile
             ):
                 raise StateError("binding_conflict")
             return AdoptionTarget(topic, current, True)
@@ -234,6 +236,8 @@ class CodexSessionOrigins:
         """
         if not self.connection.in_transaction:
             raise StateError("Codex attachment requires an immediate transaction")
+        if request.codex_permission_profile != self.state.codex_permission_profile:
+            raise StateError("binding_policy_changed")
         # Compare the active binding first, so a stale preview cannot adopt
         # a freshly reset placeholder. Exact receipt repeats are exempt.
         topic = self.state.find_topic(request.chat_id, request.thread_id)

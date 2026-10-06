@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+from .codex_permissions import MANAGED_LOCAL_REFUSAL
 from .terminal import build_codex_remote_argv
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
@@ -25,7 +26,9 @@ class TerminalRuntime:
         program: str | None = None,
         distro: str = "Ubuntu",
         run: Run = subprocess.run,
+        permission_profile: str | None = None,
     ) -> None:
+        self.permission_profile = permission_profile
         self.socket_path = socket_path.expanduser().resolve()
         self.backend = self._resolve_backend(backend)
         self.program = program
@@ -113,6 +116,8 @@ class TerminalRuntime:
         return result.returncode == 0
 
     def start(self, *, name: str, title: str, thread_id: str, cwd: Path) -> None:
+        if self.permission_profile is not None:
+            raise TerminalRuntimeError(MANAGED_LOCAL_REFUSAL)
         if self.is_running(name):
             raise TerminalRuntimeError("terminal takeover is already running")
         codex = build_codex_remote_argv(

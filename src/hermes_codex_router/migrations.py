@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Iterator
 
 from .schema_claude_permissions import CLAUDE_PERMISSIONS_SCHEMA as MIGRATION_38
+from .schema_codex_permissions import (
+    CODEX_PERMISSIONS_SCHEMA as MIGRATION_39,
+)
+from .schema_codex_permissions import (
+    ensure_codex_permission_columns,
+)
 from .schema_compatibility import TARGET_SCHEMA_VERSION
 from .schema_task_activity import TASK_ACTIVITY_SCHEMA as MIGRATION_37
 from .schema_task_lifecycle import MIGRATION_36
@@ -1502,6 +1508,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_36,
         MIGRATION_37,
         MIGRATION_38,
+        MIGRATION_39,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:
@@ -1515,6 +1522,8 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
                     _ensure_input_group_key_column(connection)
                 if version == 35:
                     _ensure_hold_decision_columns(connection)
+                if version == 39:
+                    ensure_codex_permission_columns(connection)
                 _execute_migration_script(connection, script)
                 if version == 1:
                     _ensure_legacy_columns(connection)

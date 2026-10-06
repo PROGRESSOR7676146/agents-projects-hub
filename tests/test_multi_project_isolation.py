@@ -10,7 +10,7 @@ from hermes_codex_router.state import HubState, StateError
 class MultiProjectIsolationTests(unittest.TestCase):
     def test_two_projects_never_share_topic_or_provider_session(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            state = HubState.open(Path(directory) / "state.db")
+            state = HubState.open(Path(directory) / "state.db", codex_permission_profile=None)
             try:
                 first_topic = state.observe_topic(
                     project_id="alpha",

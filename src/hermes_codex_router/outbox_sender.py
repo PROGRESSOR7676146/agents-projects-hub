@@ -129,7 +129,9 @@ class TelegramOutboxSender:
         self.config = config
         self.telegram_bots = dict(telegram_bots)
         self.sender_id = sender_id
-        self.state = HubState.open(config.state_path)
+        self.state = HubState.open(
+            config.state_path, codex_permission_profile=config.codex_permission_profile
+        )
         self.progress = ProgressDeliveryQueue(self.state)
         self.task_activity = TaskActivityState(
             self.state._connection,
@@ -421,6 +423,8 @@ class TelegramOutboxSender:
         outbox = store.lease_outbox(self.sender_id)
         if outbox is None:
             return False
+        if store.refuse_changed_marker_selection(outbox):
+            return True
         try:
             message_id = cast(Any, self.telegram_bots["hub"]).send_html(
                 outbox.chat_id,

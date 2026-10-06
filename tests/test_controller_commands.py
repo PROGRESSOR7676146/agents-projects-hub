@@ -62,7 +62,7 @@ class ControllerCommandTests(unittest.TestCase):
                 ),
             ),
         )
-        self.state = HubState.open(self.config.state_path)
+        self.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         self.addCleanup(self.state.close)
         self.addCleanup(self.tempdir.cleanup)
         self.topic = self.state.observe_topic(

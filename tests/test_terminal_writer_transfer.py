@@ -32,7 +32,7 @@ class TerminalWriterTransferTests(unittest.TestCase):
         self.session = self.service.state.activate_agent(
             self.topic.topic_id, "codex", "fictional", "high"
         )
-        self.peer = HubState.open(self.service.config.state_path)
+        self.peer = HubState.open(self.service.config.state_path, codex_permission_profile=None)
 
     def tearDown(self) -> None:
         self.peer.close()

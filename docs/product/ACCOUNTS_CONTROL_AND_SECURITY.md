@@ -183,6 +183,9 @@ This normative module is part of the
   Antigravity MUST use the configured executable and the same model/effort
   argument builder as productive turns. An explicit effort replaces a known
   existing effort suffix; default effort preserves the selected model ID.
+  Named managed Codex profiles remain excluded from local/tmux transfer until
+  its execution boundary is independently verified; refusal MUST precede
+  provider preparation, process launch and lease mutation (REQ-SEC-001).
 - **REQ-WRITER-007 (Implemented for Codex with explicit owner assertion):**
   after the owner closes the CLI and Hub work is terminal, `/return` changes
   only the lease; it invokes no model and copies no summary or transcript. The
@@ -284,6 +287,31 @@ single-writer checks remain mandatory. See
   requested. Any unexpected server approval request on that fallback MUST be
   explicitly declined. `danger-full-access`, dangerous provider bypass flags,
   and automatic approval MUST be rejected.
+  An explicit local `codex_permission_profile` MAY select a bounded named
+  managed profile through external Codex queue workers. Hub MUST verify, through
+  bounded passive metadata on the preparing connection, that the configured
+  selection is the managed default and the sole allowed profile. Start/resume
+  and turn submission MUST select that exact profile without legacy sandbox
+  overrides, retaining the transport's approval policy and human reviewer.
+  The session generation, accepted job, confirmed execution checkpoint and
+  connect authorization MUST retain immutable selection snapshots. Missing
+  configuration context MUST refuse Codex creation/admission/activation;
+  explicit legacy `null` remains distinct. Existing legacy rows MUST stay
+  legacy after migration. A configuration change MUST NOT retarget old work;
+  an explicit `/new` MAY create a generation with the current selection.
+  Confirmation MUST match the profile, canonical root, provider, approval
+  policy and reviewer and reject visible network access, writable roots outside
+  the project and implicit temporary writable roots. Managed parent metadata
+  MAY explicitly be `null`; it is not proof of inheritance. Matching settings
+  changes during preparation MUST be checked before turn submission. A later
+  policy change MUST trigger a bounded interrupt and retain uncertain execution
+  status until exact native terminality is separately proven.
+  Managed exact resume MUST NOT substitute another thread. Managed steering,
+  inline/pilot execution and local/tmux transfer MUST refuse before their effects
+  until separately supported. Metadata proves selection continuity only; it
+  does not expose the full managed definition or establish read isolation,
+  authority-data custody, helper isolation or an advisor boundary. Those claims
+  require independent OS-boundary and negative access evidence.
 - **REQ-SEC-002 (Implemented):** Hermes and Hub are not approval authorities.
   Codex/tlive retains approval ownership and first-valid-answer-wins behavior.
 - **REQ-SEC-003 (Accepted):** Timeout, restart, ambiguity, missing state, and

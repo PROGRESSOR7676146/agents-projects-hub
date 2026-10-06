@@ -30,7 +30,7 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
         for fail in (False, True):
             with self.subTest(fail=fail), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "state.db"
-                state = HubState.open(path)
+                state = HubState.open(path, codex_permission_profile=None)
                 try:
                     topic = state.observe_topic(
                         project_id="example", chat_id=-1001, thread_id=7, title="Example"
@@ -100,7 +100,7 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             state_path = root / "state.db"
-            state = HubState.open(state_path)
+            state = HubState.open(state_path, codex_permission_profile=None)
             try:
                 topic = state.observe_topic(
                     project_id="example", chat_id=-1001, thread_id=7, title="Example"
@@ -146,6 +146,7 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
                         "schema_task_lifecycle.py",
                         "schema_task_activity.py",
                         "schema_claude_permissions.py",
+                        "schema_codex_permissions.py",
                         "session_adoption_policy.py",
                     ):
                         archive.writestr(
@@ -191,7 +192,7 @@ else:
                 )
                 self.assertEqual(result.stdout.strip(), "policy-refused")
             self.assertNotEqual(descriptors[0].sha256, descriptors[1].sha256)
-            state = HubState.open(state_path)
+            state = HubState.open(state_path, codex_permission_profile=None)
             try:
                 self.assertEqual(
                     state._connection.execute("SELECT * FROM codex_session_origins").fetchall(),

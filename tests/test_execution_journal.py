@@ -72,7 +72,7 @@ class ExecutionJournalTests(unittest.TestCase):
         assert migrated.backup_path is not None
         with closing(sqlite3.connect(migrated.backup_path)) as con, con:
             self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0], 21)
-        state = HubState.open(path)
+        state = HubState.open(path, codex_permission_profile=None)
         try:
             self.assertEqual(state.get_provider_job(job_id).status, "queued")
         finally:
@@ -94,7 +94,7 @@ class ExecutionJournalTests(unittest.TestCase):
                         process.kill()
                         process.join(3)
                     self.assertEqual(process.exitcode, 17)
-                    state = HubState.open(fixture.config.state_path)
+                    state = HubState.open(fixture.config.state_path, codex_permission_profile=None)
                     job = state.get_provider_job(job_id)
                     self.assertIsNotNone(state.get_session(job.session_id).provider_session_id)
                     assert job.lease_token is not None
@@ -255,7 +255,7 @@ class ExecutionJournalTests(unittest.TestCase):
         from hermes_codex_router.execution_journal import ExecutionJournal
 
         job_id = self.fixture.enqueue()
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         lease = state.lease_provider_job("codex", "old-worker")
         assert lease and lease.lease_token
         state.mark_provider_job_executing(job_id, lease.lease_token)
@@ -296,7 +296,7 @@ class ExecutionJournalTests(unittest.TestCase):
             self.fixture.config, direct_message_project_id="example-project"
         )
         job_id = self.fixture.enqueue()
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         job = state.get_provider_job(job_id)
         state._connection.execute("UPDATE topics SET chat_id=42 WHERE topic_id=?", (job.topic_id,))
         state._connection.execute("UPDATE provider_jobs SET chat_id=42 WHERE job_id=?", (job_id,))
@@ -335,7 +335,7 @@ class ExecutionJournalTests(unittest.TestCase):
         from hermes_codex_router.execution_journal import ExecutionJournal
         from hermes_codex_router.worktrees import create_worktree
 
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         project = self.fixture.registry.projects[0]
         lane_root, branch = create_worktree(project, "recovery")
         try:
@@ -399,7 +399,7 @@ class ExecutionJournalTests(unittest.TestCase):
         from hermes_codex_router.execution_journal import ExecutionJournal
 
         job_id = self.fixture.enqueue()
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         try:
             lease = state.lease_provider_job("codex", "lost-worker")
             assert lease is not None and lease.lease_token is not None
@@ -534,6 +534,7 @@ class ExecutionJournalTests(unittest.TestCase):
                         "schema_task_lifecycle.py",
                         "schema_task_activity.py",
                         "schema_claude_permissions.py",
+                        "schema_codex_permissions.py",
                     ):
                         archive.writestr(
                             f"hermes_codex_router/{name}", (package / name).read_text()
@@ -556,7 +557,7 @@ class ExecutionJournalTests(unittest.TestCase):
         from hermes_codex_router.execution_journal import ExecutionJournal
 
         job_id = self.fixture.enqueue()
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         try:
             lease = state.lease_provider_job("codex", "worker")
             assert lease and lease.lease_token

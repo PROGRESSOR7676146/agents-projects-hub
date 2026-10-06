@@ -172,7 +172,7 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         value = ProjectHubService.__new__(ProjectHubService)
         value.config = self.config
         value.registry = self.registry
-        value.state = HubState.open(self.config.state_path)
+        value.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         value.agent = self.config.agents[0]
         telegram = FakeTelegram()
         value.telegram = cast(Any, telegram)

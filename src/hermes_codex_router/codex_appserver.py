@@ -9,10 +9,11 @@ import subprocess
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal, Protocol, Sequence, cast
+from typing import Any, Callable, Iterator, Literal, Protocol, Sequence, cast
 
 import aiohttp
 
@@ -27,6 +28,14 @@ from .codex_failure import (
     codex_failure_reason,
 )
 from .codex_notifications import retain_turn_notification
+from .codex_permissions import (
+    CodexPermissionBinding,
+    CodexPermissionPolicyDriftError,
+    CodexPermissionProfileError,
+    validate_permission_profile_id,
+    verify_managed_selection,
+)
+from .diagnostic_log import survived
 
 MAX_PENDING_ACTIVITY = 128
 
@@ -341,6 +350,7 @@ class CodexThread:
     cwd: Path
     model: str
     model_provider: str
+    permission_profile: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -413,6 +423,7 @@ class CodexAppServerClient:
         initialized: bool = False,
         approval_policy: str = "on-request",
         model_provider: str | None = None,
+        permission_profile: str | None = None,
     ) -> None:
         if approval_policy not in {"on-request", "never"}:
             raise ValueError("unsupported Codex approval policy")
@@ -420,6 +431,12 @@ class CodexAppServerClient:
         self._initialized = initialized
         self._approval_policy = approval_policy
         self._model_provider = model_provider
+        self._permission_profile = validate_permission_profile_id(permission_profile)
+        self._permission_binding: CodexPermissionBinding | None = None
+        self._permission_drifted = False
+        self._permission_preparing = False
+        self._preparation_thread_id: str | None = None
+        self._preparation_settings: list[dict[str, Any]] = []
         self._session_providers = tuple(dict.fromkeys(("openai", model_provider or "openai")))
         self._next_request_id = 1
         self.notifications: deque[dict[str, Any]] = deque()
@@ -504,9 +521,96 @@ class CodexAppServerClient:
 
     def _approval_params(self) -> dict[str, str]:
         params = {"approvalPolicy": self._approval_policy}
-        if self._approval_policy == "on-request":
+        if self._approval_policy == "on-request" or self._permission_profile is not None:
             params["approvalsReviewer"] = "user"
         return params
+
+    @property
+    def permission_profile(self) -> str | None:
+        return self._permission_profile
+
+    def _prepare_permission_selection(self, cwd: Path) -> dict[str, str]:
+        self._permission_binding = None
+        self._permission_drifted = False
+        self._permission_preparing = False
+        self._preparation_settings.clear()
+        if self._permission_profile is None:
+            return {"sandbox": "workspace-write"}
+        verify_managed_selection(self._request, self._permission_profile, cwd)
+        self._permission_preparing = True
+        return {"permissions": self._permission_profile}
+
+    def _bind_permission_selection(self, result: dict[str, Any], thread_id: str, cwd: Path) -> None:
+        if self._permission_profile is None:
+            return  # Legacy validation already ran before the sandbox check.
+        binding = CodexPermissionBinding(
+            thread_id,
+            cwd,
+            self._permission_profile,
+            self._approval_policy,
+            self._model_provider or "openai",
+        )
+        binding.validate(result)
+        for params in self._preparation_settings:
+            if params.get("threadId") == thread_id:
+                binding.validate(params.get("threadSettings"))
+        self._permission_binding = binding
+
+    @contextmanager
+    def _permission_preparation(
+        self, cwd: Path, *, thread_id: str | None = None
+    ) -> Iterator[dict[str, str]]:
+        try:
+            params = self._prepare_permission_selection(cwd)
+            self._preparation_thread_id = thread_id
+            yield params
+        finally:
+            self._permission_preparing = False
+            self._preparation_thread_id = None
+            self._preparation_settings.clear()
+
+    def _observe_permission_settings(self, message: dict[str, Any]) -> None:
+        binding = self._permission_binding
+        if message.get("method") != "thread/settings/updated" or "id" in message:
+            return
+        params = message.get("params")
+        if not isinstance(params, dict):
+            return
+        if binding is None:
+            if self._permission_preparing:
+                if (
+                    self._preparation_thread_id is not None
+                    and params.get("threadId") != self._preparation_thread_id
+                ):
+                    return
+                if len(self._preparation_settings) >= 32:
+                    raise CodexPermissionProfileError()
+                self._preparation_settings.append(params)
+            return
+        if params.get("threadId") != binding.thread_id:
+            return
+        try:
+            binding.validate(params.get("threadSettings"))
+        except CodexPermissionProfileError:
+            self._permission_drifted = True
+
+    def _refuse_permission_drift(self, turn_id: str, partial: str) -> None:
+        if not self._permission_drifted:
+            return
+        try:
+            self._request(
+                "turn/interrupt",
+                {
+                    "threadId": self._permission_binding.thread_id
+                    if self._permission_binding
+                    else self._activity_thread_id,
+                    "turnId": turn_id,
+                },
+                deadline=time.monotonic() + 5.0,
+            )
+        except Exception as error:
+            survived("codex_permissions.interrupt", error)
+        raise CodexTurnError(CodexPermissionPolicyDriftError(), partial)
 
     def _handle_server_request(self, message: dict[str, Any]) -> bool:
         if self._approval_policy != "never":
@@ -572,6 +676,7 @@ class CodexAppServerClient:
             # only bounded protocol objects; hidden reasoning is never emitted
             # to Telegram by this client.
             if "method" in message and "id" not in message:
+                self._observe_permission_settings(message)
                 if message.get("method") == "serverRequest/resolved":
                     self._observe_activity(message)
                     continue
@@ -755,48 +860,52 @@ class CodexAppServerClient:
         if not self._initialized:
             raise RpcError("Codex client is not initialized")
         canonical_cwd = cwd.expanduser().resolve(strict=True)
-        instruction_params = (
-            {"developerInstructions": developer_instructions}
-            if developer_instructions is not None
-            else {}
-        )
-        result = self._request(
-            "thread/start",
-            {
-                "cwd": str(canonical_cwd),
-                "model": model,
-                "sandbox": "workspace-write",
-                **self._approval_params(),
-                **instruction_params,
-                "experimentalRawEvents": False,
-                **({"modelProvider": self._model_provider} if self._model_provider else {}),
-            },
-        )
-        if not isinstance(result, dict) or not isinstance(result.get("thread"), dict):
-            raise RpcError("thread/start returned an invalid result")
-        if self._model_provider and result.get("modelProvider") != self._model_provider:
-            raise RpcError("thread/start returned a different model provider")
-        returned_cwd = Path(str(result.get("cwd"))).resolve(strict=True)
-        if returned_cwd != canonical_cwd:
-            raise RpcError("thread/start returned a different cwd")
-        if result.get("approvalPolicy") != self._approval_policy:
-            raise RpcError("thread/start returned an unsafe approval policy")
-        _validate_legacy_permission_profile(result)
-        sandbox = result.get("sandbox")
-        sandbox_is_safe = sandbox == "workspace-write" or (
-            isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite"
-        )
-        if not sandbox_is_safe:
-            raise RpcError("thread/start returned an unsafe sandbox")
-        thread_id = result["thread"].get("id")
-        if not isinstance(thread_id, str) or not thread_id:
-            raise RpcError("thread/start did not return a thread id")
-        return CodexThread(
-            thread_id=thread_id,
-            cwd=returned_cwd,
-            model=str(result.get("model") or model),
-            model_provider=str(result.get("modelProvider") or "unknown"),
-        )
+        with self._permission_preparation(canonical_cwd) as permission_params:
+            instruction_params = (
+                {"developerInstructions": developer_instructions}
+                if developer_instructions is not None
+                else {}
+            )
+            result = self._request(
+                "thread/start",
+                {
+                    "cwd": str(canonical_cwd),
+                    "model": model,
+                    **permission_params,
+                    **self._approval_params(),
+                    **instruction_params,
+                    "experimentalRawEvents": False,
+                    **({"modelProvider": self._model_provider} if self._model_provider else {}),
+                },
+            )
+            if not isinstance(result, dict) or not isinstance(result.get("thread"), dict):
+                raise RpcError("thread/start returned an invalid result")
+            if self._model_provider and result.get("modelProvider") != self._model_provider:
+                raise RpcError("thread/start returned a different model provider")
+            returned_cwd = Path(str(result.get("cwd"))).resolve(strict=True)
+            if returned_cwd != canonical_cwd:
+                raise RpcError("thread/start returned a different cwd")
+            if result.get("approvalPolicy") != self._approval_policy:
+                raise RpcError("thread/start returned an unsafe approval policy")
+            sandbox = result.get("sandbox")
+            if self._permission_profile is None:
+                _validate_legacy_permission_profile(result)
+            sandbox_is_safe = sandbox == "workspace-write" or (
+                isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite"
+            )
+            if not sandbox_is_safe:
+                raise RpcError("thread/start returned an unsafe sandbox")
+            thread_id = result["thread"].get("id")
+            if not isinstance(thread_id, str) or not thread_id:
+                raise RpcError("thread/start did not return a thread id")
+            self._bind_permission_selection(result, thread_id, canonical_cwd)
+            return CodexThread(
+                thread_id=thread_id,
+                cwd=returned_cwd,
+                model=str(result.get("model") or model),
+                model_provider=str(result.get("modelProvider") or "unknown"),
+                permission_profile=self._permission_profile,
+            )
 
     def resume_thread(
         self,
@@ -810,50 +919,54 @@ class CodexAppServerClient:
         if not self._initialized:
             raise RpcError("Codex client is not initialized")
         canonical_cwd = cwd.expanduser().resolve(strict=True)
-        instruction_params = (
-            {"developerInstructions": developer_instructions}
-            if developer_instructions is not None
-            else {}
-        )
-        result = self._request(
-            "thread/resume",
-            {
-                "threadId": thread_id,
-                "cwd": str(canonical_cwd),
-                "model": model,
-                "sandbox": "workspace-write",
-                **self._approval_params(),
-                **instruction_params,
-                "excludeTurns": True,
-                **({"modelProvider": self._model_provider} if self._model_provider else {}),
-            },
-        )
-        thread = result.get("thread") if isinstance(result, dict) else None
-        returned_id = thread.get("id") if isinstance(thread, dict) else None
-        if self._model_provider and (
-            not isinstance(result, dict) or result.get("modelProvider") != self._model_provider
-        ):
-            raise RpcError("thread/resume returned a different model provider")
-        returned_cwd = result.get("cwd") if isinstance(result, dict) else None
-        if returned_id != thread_id:
-            raise RpcError("thread/resume returned a different thread id")
-        if Path(str(returned_cwd)).resolve(strict=True) != canonical_cwd:
-            raise RpcError("thread/resume returned a different cwd")
-        if result.get("approvalPolicy") != self._approval_policy:
-            raise RpcError("thread/resume returned an unsafe approval policy")
-        _validate_legacy_permission_profile(result)
-        sandbox = result.get("sandbox")
-        if not (
-            sandbox == "workspace-write"
-            or (isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite")
-        ):
-            raise RpcError("thread/resume returned an unsafe sandbox")
-        return CodexThread(
-            thread_id=thread_id,
-            cwd=canonical_cwd,
-            model=str(result.get("model") or model),
-            model_provider=str(result.get("modelProvider") or "unknown"),
-        )
+        with self._permission_preparation(canonical_cwd, thread_id=thread_id) as permission_params:
+            instruction_params = (
+                {"developerInstructions": developer_instructions}
+                if developer_instructions is not None
+                else {}
+            )
+            result = self._request(
+                "thread/resume",
+                {
+                    "threadId": thread_id,
+                    "cwd": str(canonical_cwd),
+                    "model": model,
+                    **permission_params,
+                    **self._approval_params(),
+                    **instruction_params,
+                    "excludeTurns": True,
+                    **({"modelProvider": self._model_provider} if self._model_provider else {}),
+                },
+            )
+            thread = result.get("thread") if isinstance(result, dict) else None
+            returned_id = thread.get("id") if isinstance(thread, dict) else None
+            if self._model_provider and (
+                not isinstance(result, dict) or result.get("modelProvider") != self._model_provider
+            ):
+                raise RpcError("thread/resume returned a different model provider")
+            returned_cwd = result.get("cwd") if isinstance(result, dict) else None
+            if returned_id != thread_id:
+                raise RpcError("thread/resume returned a different thread id")
+            if Path(str(returned_cwd)).resolve(strict=True) != canonical_cwd:
+                raise RpcError("thread/resume returned a different cwd")
+            if result.get("approvalPolicy") != self._approval_policy:
+                raise RpcError("thread/resume returned an unsafe approval policy")
+            sandbox = result.get("sandbox")
+            if self._permission_profile is None:
+                _validate_legacy_permission_profile(result)
+            if not (
+                sandbox == "workspace-write"
+                or (isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite")
+            ):
+                raise RpcError("thread/resume returned an unsafe sandbox")
+            self._bind_permission_selection(result, thread_id, canonical_cwd)
+            return CodexThread(
+                thread_id=thread_id,
+                cwd=canonical_cwd,
+                model=str(result.get("model") or model),
+                model_provider=str(result.get("modelProvider") or "unknown"),
+                permission_profile=self._permission_profile,
+            )
 
     def start_turn(
         self,
@@ -868,6 +981,24 @@ class CodexAppServerClient:
         self._clear_activity()
         self.notifications.clear()
         canonical_cwd = cwd.expanduser().resolve(strict=True)
+        if self._permission_profile is not None and (
+            self._permission_binding is None
+            or self._permission_binding.thread_id != thread_id
+            or self._permission_binding.root != canonical_cwd
+            or self._permission_drifted
+        ):
+            raise CodexPermissionProfileError()
+        permission_params: dict[str, Any] = (
+            {"permissions": self._permission_profile}
+            if self._permission_profile is not None
+            else {
+                "sandboxPolicy": {
+                    "type": "workspaceWrite",
+                    "writableRoots": [str(canonical_cwd)],
+                    "networkAccess": False,
+                }
+            }
+        )
         turn_input: list[dict[str, str]] = [{"type": "text", "text": text}]
         for image_path in local_image_paths:
             if image_path.is_symlink():
@@ -890,11 +1021,7 @@ class CodexAppServerClient:
                     "model": model,
                     "effort": effort,
                     **self._approval_params(),
-                    "sandboxPolicy": {
-                        "type": "workspaceWrite",
-                        "writableRoots": [str(canonical_cwd)],
-                        "networkAccess": False,
-                    },
+                    **permission_params,
                 },
             )
             turn = result.get("turn") if isinstance(result, dict) else None
@@ -925,6 +1052,8 @@ class CodexAppServerClient:
         text: str,
         client_user_message_id: str,
     ) -> str:
+        if self._permission_profile is not None:
+            raise CodexPermissionProfileError()
         result = self._request(
             "turn/steer",
             {
@@ -953,6 +1082,7 @@ class CodexAppServerClient:
         seen_items: set[str] = set()
         context_window: int | None = None
         context_tokens_used: int | None = None
+        self._refuse_permission_drift(turn_id, "")
         # The worker enters this method only after persisting native acceptance.
         # An early request supplies IDs to validate, never authority to bind a job.
         self._activity_ready = self._activity_turn_id == turn_id
@@ -980,6 +1110,8 @@ class CodexAppServerClient:
             except Exception as exc:
                 raise CodexTurnError(exc, "\n\n".join(answers)) from exc
             method = message.get("method")
+            self._observe_permission_settings(message)
+            self._refuse_permission_drift(turn_id, "\n\n".join(answers))
             if method and "id" in message:
                 # tlive answers approvals on its companion connection.
                 # This client deliberately neither allows nor denies.
