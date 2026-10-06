@@ -6,8 +6,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .claude_catalog import CLAUDE_EFFORTS, parse_claude_catalog
 from .claude_permissions_config import ClaudeFilePermissionsConfig, parse_claude_file_permissions
 from .codex_permissions import validate_permission_profile_id
+from .provider_catalog import ProviderModel
 
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
@@ -41,6 +43,7 @@ class AgentDefinition:
     executable: str | None = None
     runtime_home: Path | None = None
     service_unit: str | None = None
+    model_catalog: tuple[ProviderModel, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -572,8 +575,20 @@ def _parse_agent(
         "ultra",
     }:
         raise HubConfigError(f"default_effort is invalid for {agent_id}")
-    if runtime == "claude" and default_effort not in {"low", "medium", "high", "xhigh", "max"}:
+    if runtime == "claude" and default_effort not in CLAUDE_EFFORTS:
         raise HubConfigError(f"default_effort is invalid for {agent_id}")
+    model_catalog = None
+    if "model_catalog" in data:
+        if runtime != "claude":
+            raise HubConfigError("model_catalog is supported only for Claude")
+        try:
+            model_catalog = parse_claude_catalog(
+                data["model_catalog"],
+                default_model=default_model.strip(),
+                default_effort=default_effort,
+            )
+        except ValueError as exc:
+            raise HubConfigError(str(exc)) from None
     executable = data.get("executable")
     if executable is not None and (not isinstance(executable, str) or not executable.strip()):
         raise HubConfigError(f"executable is invalid for {agent_id}")
@@ -605,6 +620,7 @@ def _parse_agent(
         executable=executable.strip() if executable else None,
         runtime_home=runtime_home,
         service_unit=service_unit,
+        model_catalog=model_catalog,
     )
 
 

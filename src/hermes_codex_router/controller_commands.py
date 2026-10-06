@@ -218,6 +218,13 @@ class ControllerCommandOrchestrator:
         if catalog.agent_id != agent_id:
             raise ModelSelectionError("provider selection is no longer available")
 
+    def model_refresh_acknowledgement(self, agent_id: str, *, external_worker: bool) -> str:
+        if self.config.require_agent(agent_id).runtime == "claude":
+            return "Refreshing configured choices…"
+        if external_worker:
+            return "Refresh queued for monitor; reopen /model after its next check."
+        return "Refreshing catalog…"
+
     def model_menu(
         self,
         topic: TopicRecord,
@@ -272,8 +279,22 @@ class ControllerCommandOrchestrator:
         )
         agent = self.config.require_agent(agent_id)
         cached = " · cached" if catalog.last_failure_at is not None else ""
+        description = f"{agent.display_name}: choose model · {page + 1}/{page_count}{cached}"
+        if agent.runtime == "claude":
+            description += "\nConfigured choices; availability unverified."
+            if (
+                active
+                and active.agent_id == agent_id
+                and not any(
+                    model.model_id == active.model and active.effort in model.efforts
+                    for model in catalog.models
+                )
+            ):
+                description += (
+                    f"\nCurrent: {active.model} · {active.effort} (outside configured choices)."
+                )
         return HtmlCommandDecision(
-            html.escape(f"{agent.display_name}: choose model · {page + 1}/{page_count}{cached}"),
+            html.escape(description),
             {"inline_keyboard": keyboard},
         )
 
@@ -370,6 +391,7 @@ class ControllerCommandOrchestrator:
                     model=model,
                     effort=effort,
                     expected_session_id=replacement.session_id,
+                    runtime=agent.runtime,
                 )
             return TextCommandDecision(
                 f"{agent.display_name} is now active (generation {replacement.generation}). "
@@ -382,6 +404,7 @@ class ControllerCommandOrchestrator:
             model=model,
             effort=effort,
             expected_session_id=active.session_id,
+            runtime=agent.runtime,
         )
         return TextCommandDecision(
             f"{agent.display_name} · {model} · {effort.title()} will start on the next "

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Callable
 
+from .claude_catalog import configured_claude_snapshot
 from .codex_appserver import CodexAppServerClient, UnixWebSocketTransport
 from .hub_config import HubConfig
 from .model_selection import available_openai_models
@@ -15,6 +16,7 @@ from .provider_catalog import (
     ProviderModel,
     antigravity_models,
     opencode_models,
+    provider_source_version,
 )
 from .provider_catalog_cache import ProviderCatalogCache
 
@@ -51,23 +53,6 @@ class CatalogRefreshResult:
     added: dict[str, tuple[str, ...]]
 
 
-def _source_version(executable: str, *, run: Run) -> str | None:
-    try:
-        result = run(
-            (executable, "--version"),
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode != 0:
-        return None
-    lines = (result.stdout or result.stderr).strip().splitlines()
-    return lines[0][:128] if lines else None
-
-
 def refresh_provider_catalogs(
     config: HubConfig,
     *,
@@ -97,15 +82,16 @@ def refresh_provider_catalogs(
         }:
             continue
         if agent.runtime == "claude":
-            if not cache.is_stale(agent.agent_id, max_age=max_age, now=observed_at):
+            before = cache.load(agent.agent_id)
+            try:
+                snapshot = configured_claude_snapshot(
+                    cache, agent, now=observed_at, max_age=max_age
+                )
+            except ProviderCatalogError:
+                failed.append(agent.agent_id)
                 continue
-            cache.store(
-                agent.agent_id,
-                (ProviderModel(agent.default_model, agent.default_model, (agent.default_effort,)),),
-                source_version="configured Claude model",
-                observed_at=observed_at,
-            )
-            refreshed.append(agent.agent_id)
+            if snapshot != before:
+                refreshed.append(agent.agent_id)
             continue
         if agent.runtime == "codex":
             before = cache.load(agent.agent_id)
@@ -152,7 +138,7 @@ def refresh_provider_catalogs(
             snapshot = cache.store(
                 agent.agent_id,
                 models,
-                source_version=_source_version(executable, run=run),
+                source_version=provider_source_version(executable, run=run),
                 observed_at=observed_at,
             )
         except (OSError, subprocess.SubprocessError, ProviderCatalogError, RuntimeError):

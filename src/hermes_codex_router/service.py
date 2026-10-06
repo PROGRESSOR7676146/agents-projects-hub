@@ -18,6 +18,7 @@ from .artifacts import (
     verify_spooled_artifact,
 )
 from .catalog_refresh import native_codex_catalog_source
+from .claude_catalog import configured_claude_snapshot
 from .codex_appserver import (
     CodexAppServerClient,
     RpcError,
@@ -95,6 +96,7 @@ from .provider_catalog import (
     ProviderModel,
     antigravity_models,
     opencode_models,
+    provider_source_version,
 )
 from .provider_catalog_cache import CatalogSnapshot, ProviderCatalogCache
 from .registry import (
@@ -1418,20 +1420,7 @@ class ProjectHubService:
 
     @staticmethod
     def _source_version(executable: str) -> str | None:
-        try:
-            result = subprocess.run(
-                (executable, "--version"),
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        if result.returncode != 0:
-            return None
-        first = (result.stdout or result.stderr).strip().splitlines()
-        return first[0][:128] if first else None
+        return provider_source_version(executable, run=subprocess.run)
 
     def _discover_provider_models(self, agent_id: str) -> tuple[ProviderModel, ...]:
         agent = self.config.require_agent(agent_id)
@@ -1444,10 +1433,6 @@ class ProjectHubService:
             return opencode_models(agent.executable or "opencode")
         if agent.runtime == "antigravity":
             return antigravity_models(agent.executable or "agy")
-        if agent.runtime == "claude":
-            return (
-                ProviderModel(agent.default_model, agent.default_model, (agent.default_effort,)),
-            )
         return (ProviderModel("provider-selected", "Provider selected", ("high",)),)
 
     def _provider_catalog(
@@ -1459,6 +1444,8 @@ class ProjectHubService:
     ) -> CatalogSnapshot:
         cache = self._catalog_cache()
         agent = self.config.require_agent(agent_id)
+        if agent.runtime == "claude":
+            return configured_claude_snapshot(cache, agent, refresh=refresh, max_age=max_age)
         if agent.managed_externally:
             # The native gateway owns this provider process. Even an explicit
             # refresh callback must remain local-data-only in the Controller.
@@ -1546,6 +1533,8 @@ class ProjectHubService:
         cached = cache.load(agent_id)
         if cached is None:
             raise ProviderCatalogError("model selection expired; run /model again")
+        if agent.runtime == "claude":
+            return configured_claude_snapshot(cache, agent)
         if agent.runtime == "codex":
             cached = self._safe_cached_codex_catalog(cache, agent_id, cached)
         return cached
@@ -1613,6 +1602,8 @@ class ProjectHubService:
             expected_session_id=previous.session_id,
             control_only=True,
         )
+        selected_model = target_model or replacement.model
+        selected_effort = target_effort or replacement.effort
         if replacement.writer_mode != "telegram":
             command = "/release" if replacement.writer_mode == "terminal" else "/return"
             self._send_text(
@@ -1642,6 +1633,7 @@ class ProjectHubService:
                 model=selected_model,
                 effort=selected_effort,
                 expected_session_id=replacement.session_id,
+                runtime=target.runtime,
             )
         self._send_text(
             message,
@@ -2003,12 +1995,14 @@ class ProjectHubService:
                 return True
             if callback.data.startswith("modelrefresh:"):
                 _, agent_id, raw_page = callback.data.split(":", 2)
-                self.config.require_agent(agent_id)
                 self.telegram.answer_callback(
                     callback.callback_id,
-                    "Refresh queued for monitor; reopen /model after its next check."
-                    if self._uses_external_codex_worker() or self._queue_enabled(agent_id)
-                    else "Refreshing catalog…",
+                    self._command_orchestrator().model_refresh_acknowledgement(
+                        agent_id,
+                        external_worker=(
+                            self._uses_external_codex_worker() or self._queue_enabled(agent_id)
+                        ),
+                    ),
                 )
                 self._show_model_menu(
                     message,

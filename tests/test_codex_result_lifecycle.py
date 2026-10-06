@@ -245,7 +245,9 @@ class ResultLifecycleTests(unittest.TestCase):
         self.assertNotIn("fictional private", " ".join(logs.output))
 
     def test_queued_other_catalogs_request_refresh_and_monitor_updates_them(self):
-        for runtime in ("opencode", "antigravity", "claude"):
+        # Claude projects configured choices locally; native-discovery runtimes
+        # retain monitor-owned refresh without touching the productive client.
+        for runtime in ("opencode", "antigravity"):
             with self.subTest(runtime=runtime):
                 fixture = embedded.EmbeddedQueueServiceTests()
                 fixture.setUp()
@@ -278,7 +280,7 @@ class ResultLifecycleTests(unittest.TestCase):
                             return_value=new,
                         ),
                         patch(
-                            "hermes_codex_router.catalog_refresh._source_version",
+                            "hermes_codex_router.catalog_refresh.provider_source_version",
                             return_value="example-cli",
                         ),
                     ):
