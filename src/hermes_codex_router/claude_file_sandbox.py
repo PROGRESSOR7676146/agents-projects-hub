@@ -166,10 +166,10 @@ def _immutable_tree(path: Path) -> None:
                 raise FileToolSandboxError("runtime tree contains a special entry")
 
 
-def _scan_writable_tree(root: Path, source_fd: int) -> None:
+def _scan_writable_tree(root: Path, source_fd: int) -> set[tuple[int, int]]:
     """Scan the pinned source, never a replacement bearing the same path name."""
     try:
-        _scan_pinned_tree(source_fd)
+        return _scan_pinned_tree(source_fd)
     except (OSError, MountPinError) as exc:
         error = exc if isinstance(exc, OSError) else exc.__cause__
         if not isinstance(error, OSError):
@@ -183,11 +183,13 @@ def _scan_writable_tree(root: Path, source_fd: int) -> None:
         raise FileToolSandboxError(message) from exc
 
 
-def _scan_pinned_tree(source_fd: int) -> None:
+def _scan_pinned_tree(source_fd: int) -> set[tuple[int, int]]:
     """Own only the current ancestor chain while examining each pinned entry."""
     count = 0
     expected_mount = mount_id(source_fd)
-    expected_device = os.fstat(source_fd).st_dev
+    root_info = os.fstat(source_fd)
+    expected_device = root_info.st_dev
+    identities = {(root_info.st_dev, root_info.st_ino)}
     first = os.open(".", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC, dir_fd=source_fd)
     try:
         entries = os.scandir(first)
@@ -233,12 +235,14 @@ def _scan_pinned_tree(source_fd: int) -> None:
                     frames.append((child, child_entries))
                 else:
                     raise FileToolSandboxError("writable tree contains a special file")
+                identities.add((info.st_dev, info.st_ino))
             finally:
                 os.close(fd)
     finally:
         for descriptor, entries in reversed(frames):
             entries.close()
             os.close(descriptor)
+    return identities
 
 
 def _reject_nested_mounts(*roots: Path, mount_ids: Mapping[Path, int] | None = None) -> None:
@@ -355,8 +359,10 @@ class FileToolSandboxConfig:
         if home_stat.st_uid != os.geteuid() or stat.S_IMODE(home_stat.st_mode) != 0o700:
             raise FileToolSandboxError("provider home must be owned by worker UID and mode 0700")
         _reject_nested_mounts(*source_fds, mount_ids=mount_ids)
-        _scan_writable_tree(project, source_fds[project])
-        _scan_writable_tree(home, source_fds[home])
+        project_ids = _scan_writable_tree(project, source_fds[project])
+        home_ids = _scan_writable_tree(home, source_fds[home])
+        if not project_ids.isdisjoint(home_ids):
+            raise FileToolSandboxError("project and session-home tree mount roles overlap")
         socket_stat = os.fstat(source_fds[sock])
         if not stat.S_ISSOCK(socket_stat.st_mode):
             raise FileToolSandboxError("permission endpoint must be a Unix socket")

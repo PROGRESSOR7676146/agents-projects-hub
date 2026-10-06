@@ -187,6 +187,65 @@ class ClaudeFileSandboxTests(unittest.TestCase):
         ):
             self.config.wrap([str(self.executable)], {}, self.project / ".." / "project")
 
+    def test_home_cannot_alias_an_empty_or_populated_project_descendant(self) -> None:
+        for relative, populated in (
+            (".git/objects", False),
+            ("ordinary", False),
+            ("ordinary", True),
+        ):
+            with self.subTest(relative=relative, populated=populated):
+                target = self.project / relative
+                target.mkdir(mode=0o700)
+                try:
+                    if populated:
+                        (target / "material").write_text("fictional material", encoding="utf-8")
+                    with sandbox_module.MountPins() as pins:
+                        project_fd = pins.open(self.project, directory=True)
+                        fds = {
+                            self.project: project_fd,
+                            self.project / ".git": pins.open_relative(
+                                project_fd, ".git", directory=True
+                            ),
+                            self.home: pins.open(target, directory=True),
+                            self.socket_path: pins.open(self.socket_path),
+                            self.executable: pins.open(self.executable),
+                            self.config.hook_code_root: pins.open(self.config.hook_code_root),
+                        }
+                        before_fds = len(list(Path("/proc/self/fd").iterdir()))
+                        with self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"):
+                            self.config._validate(
+                                {path: pins.mount_id(fd) for path, fd in fds.items()}, fds
+                            )
+                        self.assertEqual(len(list(Path("/proc/self/fd").iterdir())), before_fds)
+                finally:
+                    shutil.rmtree(target)
+
+    def test_home_symlink_to_project_is_not_a_writable_inode_alias(self) -> None:
+        link = self.home / "project-link"
+        link.symlink_to(self.project / ".git", target_is_directory=True)
+        try:
+            argv, _ = self._wrap()
+            self.assertIn("--ro-bind-fd", argv)
+        finally:
+            link.unlink()
+
+    def test_tree_identity_scan_includes_empty_root_and_ignores_symlink_target(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="example-tree-identities-") as directory:
+            root = Path(directory) / "root"
+            root.mkdir()
+            outside = Path(directory) / "outside"
+            outside.mkdir()
+            with sandbox_module.MountPins() as pins:
+                fd = pins.open(root, directory=True)
+                info = os.fstat(fd)
+                self.assertEqual(
+                    sandbox_module._scan_writable_tree(root, fd), {(info.st_dev, info.st_ino)}
+                )
+                (root / "link").symlink_to(outside, target_is_directory=True)
+                self.assertEqual(
+                    sandbox_module._scan_writable_tree(root, fd), {(info.st_dev, info.st_ino)}
+                )
+
     def test_rejects_private_overlap_symlink_and_writable_hook(self) -> None:
         with patch("hermes_codex_router.claude_file_sandbox._immutable_tree"):
             unsafe = dataclasses.replace(self.config, private_paths=(self.project / ".git",))
@@ -440,11 +499,12 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
             opened.append(fd)
             return fd
 
-        def replace(root: Path, source_fd: int) -> None:
-            scan(root, source_fd)
+        def replace(root: Path, source_fd: int) -> set[tuple[int, int]]:
+            identities = scan(root, source_fd)
             if root == self.home:
                 self.home.rename(original)
                 self.home.mkdir(mode=0o700)
+            return identities
 
         try:
             with (
