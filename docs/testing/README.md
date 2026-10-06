@@ -268,6 +268,15 @@ roundtrip, plus an authority-alias/privilege/shared-network rehearsal with
 fictional sentinels, with no model or Telegram calls. The third scenario
 deliberately demonstrates loopback and abstract-socket descriptor exposure;
 see the [custody runbook](../operations/CLAUDE_CUSTODY.md#automated-offline-rehearsal).
+The same strict job runs `tests.test_process_namespace_rehearsal`, a second
+provider-free consumer of the [neutral namespace core](../decisions/0056-provider-neutral-process-namespace.md).
+Its Python parent and exec child read authorized project material, fail project
+and Git writes, retain a separate writable session HOME, and cannot reach
+fictional host TCP, pathname or abstract sockets. Host controls prove those
+targets work, including a real synthetic `SCM_RIGHTS` transfer. An accessible
+process FD-table census checks authority and mount-pin inode identities rather
+than reusable descriptor numbers. This is kernel/fixture evidence, with no
+provider, Telegram, live service or advisor activation.
 An executable-specific AppArmor
 profile permits bubblewrap user namespaces only on that disposable CI runner.
 Developer environments may skip unavailable namespace fixtures; those skips
