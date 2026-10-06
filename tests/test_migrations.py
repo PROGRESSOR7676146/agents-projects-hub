@@ -798,13 +798,13 @@ class MigrationTests(unittest.TestCase):
                     """INSERT INTO runtime_events
                        (component, level, code, detail, created_at)
                        VALUES ('controller', 'warning', 'legacy', 'kept',
-                               '2026-09-05T12:00:00+00:00')"""
+                               strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', '-1 day'))"""
                 )
                 connection.execute(
                     """INSERT INTO runtime_events
                        (component, level, code, detail, created_at)
                        VALUES ('controller', 'info', 'expired', 'removed',
-                               '2020-01-01T00:00:00+00:00')"""
+                               strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', '-31 days'))"""
                 )
                 connection.executescript(
                     """INSERT INTO topics

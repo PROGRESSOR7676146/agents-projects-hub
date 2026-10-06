@@ -61,7 +61,10 @@ Offline evidence covers durable deduplication, binding changes, approval
 resolution, passive deadlines and delivery certainty. The integrated revision
 `3750ccfb0f8eb98333f9219f3a697d6328890d04` passed canonical and hosted validation
 after exact-candidate independent reviews; active-work retry controls, approval
-before native acceptance and wider provider visibility remain open. This does
+before native acceptance and wider provider visibility remain open. The
+[notice-bound retry candidate](../decisions/0054-notice-bound-work-retry-reports.md)
+now reports the same existing job offline; publication, independent review and
+live acceptance remain pending. This does
 not change the text-only Claude capability boundary.
 
 Participant evaluation and resource-aware task allocation are an accepted
