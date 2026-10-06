@@ -10,6 +10,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -45,6 +46,8 @@ lock = threading.Lock()
 write_lock = threading.Lock()
 total_requests = 0
 mcp_fixture: dict[str, Any] | None = None
+notification_burst = threading.Event()
+notification_finish = threading.Event()
 
 
 def emit(value: dict) -> None:
@@ -84,6 +87,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(400)
             return
         data = json.loads(self.rfile.read(length))
+        if plan.kind == "notifications":
+            with lock:
+                plan.requests += 1
+                total_requests += 1
+                if plan.requests != 1 or data.get("model") != "example-offline":
+                    self.send_error(409)
+                    return
+                case = plan.case
+            self.send_notifications(case)
+            return
         with lock:
             plan.requests += 1
             total_requests += 1
@@ -220,8 +233,110 @@ class Handler(BaseHTTPRequestHandler):
         except BrokenPipeError:
             return  # The native client may close a stream after its terminal event.
 
+    def send_notifications(self, case: str) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        response = {
+            "id": "resp_" + case,
+            "object": "response",
+            "created_at": 1,
+            "status": "in_progress",
+            "model": "example-offline",
+            "output": [],
+        }
+        item = {
+            "type": "message",
+            "id": "msg_" + case,
+            "status": "in_progress",
+            "role": "assistant",
+            "content": [],
+        }
+        part = {"type": "output_text", "text": "", "annotations": []}
+        sequence = 0
 
-def launch_native(port: int) -> tuple[subprocess.Popen[str], list[threading.Thread]]:
+        def send(event: dict) -> None:
+            nonlocal sequence
+            self.wfile.write(
+                (
+                    "event: "
+                    + event["type"]
+                    + "\ndata: "
+                    + json.dumps({**event, "sequence_number": sequence})
+                    + "\n\n"
+                ).encode()
+            )
+            self.wfile.flush()
+            sequence += 1
+
+        try:
+            send({"type": "response.created", "response": response})
+            send({"type": "response.output_item.added", "output_index": 0, "item": item})
+            send(
+                {
+                    "type": "response.content_part.added",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "item_id": item["id"],
+                    "part": part,
+                }
+            )
+            delta = {
+                "type": "response.output_text.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "item_id": item["id"],
+                "delta": "x",
+            }
+            send(delta)
+            emit({"fixture_event": "stream_waiting", "case": case})
+            if not notification_burst.wait(30):
+                raise RuntimeError("offline notification burst deadline")
+            for _ in range(1200):
+                send(delta)
+            emit({"fixture_event": "burst_sent", "case": case})
+            if not notification_finish.wait(30):
+                raise RuntimeError("offline notification completion deadline")
+            content = {**part, "text": "x" * 1201}
+            completed = {**item, "status": "completed", "content": [content]}
+            send(
+                {
+                    "type": "response.output_text.done",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "item_id": item["id"],
+                    "text": content["text"],
+                }
+            )
+            send(
+                {
+                    "type": "response.content_part.done",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "item_id": item["id"],
+                    "part": content,
+                }
+            )
+            send({"type": "response.output_item.done", "output_index": 0, "item": completed})
+            send(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        **response,
+                        "status": "completed",
+                        "output": [completed],
+                        "usage": {"input_tokens": 0, "output_tokens": 1201, "total_tokens": 1201},
+                    },
+                }
+            )
+        except BrokenPipeError:
+            return
+
+
+def launch_native(
+    port: int, *, listener: Path | None = None
+) -> tuple[subprocess.Popen[str], list[threading.Thread]]:
     mcp_config = "mcp_servers={}"
     if mcp_fixture is not None:
         root = mcp_fixture["trusted_root"]()
@@ -252,14 +367,19 @@ def launch_native(port: int) -> tuple[subprocess.Popen[str], list[threading.Thre
         mcp_config,
     ]
     process = subprocess.Popen(
-        ["codex", "app-server", *flags],
+        [
+            "codex",
+            "app-server",
+            *flags,
+            *(["--listen", "unix://" + str(listener)] if listener else []),
+        ],
         executable=BINARY,
         stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
+        stdout=subprocess.DEVNULL if listener else subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
-    assert process.stdin is not None and process.stdout is not None and process.stderr is not None
+    assert process.stdin is not None and process.stderr is not None
 
     def output() -> None:
         assert process.stdout is not None
@@ -271,10 +391,9 @@ def launch_native(port: int) -> tuple[subprocess.Popen[str], list[threading.Thre
         for line in process.stderr:
             sys.stderr.write(line)
 
-    threads = [
-        threading.Thread(target=output, daemon=True),
-        threading.Thread(target=errors, daemon=True),
-    ]
+    threads = [threading.Thread(target=errors, daemon=True)]
+    if listener is None:
+        threads.append(threading.Thread(target=output, daemon=True))
     for thread in threads:
         thread.start()
     return process, threads
@@ -308,15 +427,23 @@ def main() -> None:
         mcp_fixture = runpy.run_path("/opt/example-native/mcp_server.py")
         # This is trusted fixture setup, never a tool-selected root.
         os.environ["EXAMPLE_MCP_PROJECT"] = str(Path.cwd())
-    elif sys.argv[1:]:
+    elif sys.argv[1:] not in ([], ["--notifications"]):
         raise RuntimeError("invalid offline fixture arguments")
     if (Path.home() / ".codex" / "auth.json").exists():
         raise RuntimeError("offline fixture must hide real authentication data")
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     port = server.server_address[1]
-    process, threads = launch_native(port)
-    emit({"fixture_event": "ready"})
+    listener = Path.cwd() / "example-native.sock" if sys.argv[1:] == ["--notifications"] else None
+    process, threads = launch_native(port, listener=listener)
+    if listener is not None:
+        deadline = time.monotonic() + 15
+        while not listener.exists():
+            if process.poll() is not None or time.monotonic() >= deadline:
+                close_native(process, threads)
+                raise RuntimeError("offline native listener unavailable")
+            threading.Event().wait(0.01)
+    emit({"fixture_event": "ready", "listener_mode": listener is not None})
     try:
         for line in sys.stdin:
             message = json.loads(line)
@@ -328,26 +455,40 @@ def main() -> None:
                     plan.case, plan.requests, plan.emitted = case, 0, False
                     plan.kind = message.get("fixture_kind", "command")
                     plan.nonce = message.get("fixture_nonce")
-                    if plan.kind not in ("command", "mcp", "custody_command") or (
+                    if plan.kind not in ("command", "mcp", "custody_command", "notifications") or (
                         plan.kind == "mcp"
                         and (mcp_fixture is None or not mcp_fixture["valid_nonce"](plan.nonce))
                     ):
                         raise RuntimeError("invalid offline fixture kind")
                     if plan.kind == "custody_command" and mcp_fixture is None:
                         raise RuntimeError("custody command requires fixed MCP fixture")
+                    if plan.kind == "notifications" and listener is None:
+                        raise RuntimeError("notification case requires native listener")
+                    notification_burst.clear()
+                    notification_finish.clear()
                 emit({"fixture_event": "case_selected", "case": case})
+            elif message.get("fixture_burst") is True and listener is not None:
+                notification_burst.set()
+            elif message.get("fixture_finish") is True and listener is not None:
+                notification_finish.set()
             elif message.get("fixture_stats") is True:
                 with lock:
                     emit({"fixture_event": "stats", "responses_requests": total_requests})
             elif message.get("fixture_restart") is True:
+                if listener is not None:
+                    raise RuntimeError("listener restart unsupported")
                 close_native(process, threads)
-                process, threads = launch_native(port)
+                process, threads = launch_native(port, listener=listener)
                 emit({"fixture_event": "native_restarted"})
             else:
+                if listener is not None:
+                    raise RuntimeError("listener fixture control pipe cannot forward RPC")
                 assert process.stdin is not None
                 process.stdin.write(line)
                 process.stdin.flush()
     finally:
+        notification_burst.set()
+        notification_finish.set()
         close_native(process, threads)
         server.shutdown()
         server.server_close()

@@ -156,6 +156,19 @@ acceptance.
 
 ## Follow-ups found during execution
 
+- Native notification attribution has an optional offline direct-socket fixture
+  in `tests/test_codex_native_notification_origin.py`: two native connections,
+  a deterministic Responses stream with more than 1,024 notifications, exact
+  completion and a subscribed positive control. It uses no real login, model
+  endpoint or deployment socket. Fresh observers and retained subscriptions are
+  measured separately. Native subscriptions survive starting another thread on
+  the same connection; Hub's worker-client reuse permits that state. This is a
+  demonstrated mechanism, not attribution of a particular deployment failure.
+  Keep the foreign-notification filter independently of subscription cleanup.
+  The next resource-lifecycle slice must bound idle transport inboxes without
+  dropping final events, approvals or RPC responses, and evaluate subscription
+  release only at a proven terminal boundary. Publication/review and coordinated
+  live acceptance remain separate gates.
 - The Codex daemon moved its shared socket into `/tmp/codex-daemon-UID`, which
   the Hub units' `PrivateTmp` hid (found 2026-09-29). Since about 2026-09-27
   the Codex worker ran on the stdio fallback, without companion approvals, and
