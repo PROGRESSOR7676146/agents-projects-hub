@@ -153,10 +153,11 @@ class ClaudeFileSandboxTests(unittest.TestCase):
                             self.executable: pins.open(self.executable),
                             self.config.hook_code_root: pins.open(self.config.hook_code_root),
                         }
+                        mount_ids = {path: pins.mount_id(fd) for path, fd in fds.items()}
+                        mount_ids[self.home] = max(mount_ids.values()) + 1
+                        self.assertNotEqual(mount_ids[self.home], mount_ids[target])
                         with self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"):
-                            self.config._validate(
-                                {path: pins.mount_id(fd) for path, fd in fds.items()}, fds
-                            )
+                            self.config._validate(mount_ids, fds)
                 finally:
                     target.chmod(original_mode)
 
