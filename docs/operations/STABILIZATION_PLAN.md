@@ -208,6 +208,41 @@ acceptance.
   Remaining work: active-work retry controls, approval before turn acceptance,
   broader provider/compatibility coverage, and separately authorized capacity
   and canary-root checks. No background inference or automatic replay is added.
+- **Recovery after bounded observation (planned; lead development agent).** An
+  accepted turn may remain `active` when the bounded read-only observation budget
+  expires and later become terminal. Preserve its root exclusion while active,
+  but provide an owner-visible, model-free exact-turn recheck and an idempotent
+  path to publish the stored completed result or corrected terminal-failure
+  notice. Test late completion after the final automatic observation, worker and
+  Controller restart, concurrent sender lease, and a second topic on the same
+  root. Never turn an old uncertain job back into queued productive work. The
+  [recovery runbook](QUEUE_RECOVERY.md#provider-job-recovery) must explain the
+  distinction between the Hub job's uncertain label and the provider turn's
+  current status; a one-time observation is not a promise of ongoing monitoring.
+- **Owner-authorized cross-topic continuation (planned; lead development agent).**
+  A separate Telegram user account may be allowlisted as an owner even when its
+  MTProto configuration was created for a single acceptance topic. Do not treat
+  that test configuration as a general sender or the secondary account as the
+  primary owner identity. Specify a reviewed, explicit operator action for one
+  exact registered project/topic and delivered provider Reply target, with
+  account-identity and authorization checks, duplicate-send protection,
+  Telegram readback, and exactly one Hub admission. Refuse absent scope,
+  unconfirmed provider terminality, wrong topic, missing Reply provenance, or
+  ambiguous send. Keep credentials and live identifiers outside Git. Extend
+  the [testing guide](../testing/README.md#dedicated-acceptance-user) and
+  [recovery runbook](QUEUE_RECOVERY.md#provider-job-recovery) to distinguish
+  the fixed canary actor from this exceptional owner-requested continuation;
+  cover a real Reply without bot-to-bot messages or direct provider invocation.
+- **Approval/release recovery rehearsal (planned; operations owner).** Cover
+  the shared Codex socket appearing *after* isolated workers start, recovery
+  from latched stdio fallback between turns, and a cold-boot `PrivateTmp` bind
+  source. Require a schema-compatible distinct rollback artifact before a
+  schema-advancing cutover; the old installed release is not automatically a
+  valid rollback. Verify queue/uncertain-work drain and the exact live transport,
+  then separately observe human Deny and Allow through the companion. Update the
+  [live canary](LIVE_CANARY.md) and release/recovery instructions to separate
+  offline wheel rehearsal from deployed approval acceptance. Do not interrupt
+  active turns, weaken the sandbox, or infer human approval from socket presence.
 
 ## Closure
 

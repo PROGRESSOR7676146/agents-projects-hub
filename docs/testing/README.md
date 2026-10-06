@@ -229,6 +229,15 @@ Hub identity, and configured provider identities. Re-run only after the topic is
 quiet; an interrupted or contaminated artifact is not acceptance evidence.
 The runner stops after its first failed check; diagnose and drain that bounded
 scenario before starting another run.
+The configured canary chat/topic and the account's Hub authorization are
+different scopes. A secondary user account that is also allowlisted as an owner
+must not be called the operator's main identity or treated as a general sender
+merely because an acceptance session exists. `e2e-run` accepts fixed checks,
+not arbitrary prompts; an explicitly requested continuation in another project
+topic is an operator recovery action with separate identity, exact-topic,
+Reply-provenance and duplicate-send checks. See the
+[queue recovery runbook](../operations/QUEUE_RECOVERY.md#provider-job-recovery)
+and the [planned scoped workflow](../operations/STABILIZATION_PLAN.md#follow-ups-found-during-execution).
 
 The optional `p0_p1_live` check is the disruptive seven-result P0/P1 suite.
 Add `state_path` (an absolute mode-`0600` live SQLite file) and
