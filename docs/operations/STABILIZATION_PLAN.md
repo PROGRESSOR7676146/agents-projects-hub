@@ -149,6 +149,7 @@ acceptance.
 | Durable root blockers (schema 35) | REQ-WRITER-008 | Blocked input, held job, owner decision |
 | Exact Codex turn recovery (schema 34) | REQ-QUEUE-004 | Uncertain turn, read-only proof, continuation |
 | Root concurrency, worktree lanes, Codex slots | REQ-QUEUE-002, REQ-QUEUE-003 | Three projects on independent roots |
+| Codex preparation notification conservation | REQ-QUEUE-004, REQ-QUEUE-012 | Keep one exact turn active on root A while root B starts or resumes; preserve both finals, early/late human approvals, context and account quota observations, with no additional invocation or unrelated-worker restart |
 | Project-group provisioning | REQ-ONBOARD-003, REQ-ONBOARD-006 | New project canary |
 | Registered-project editing | REQ-PROJECT-EDIT-001..004 | Rename and relocation canary |
 | Machine-loss recovery drill | REQ-OPS-012 | Private cold-restore drill |
@@ -156,6 +157,16 @@ acceptance.
 
 ## Follow-ups found during execution
 
+- Codex preparation notification overflow: the source filter is present at
+  `5a1b12d608873b4660b758f43d0e9a5dac37d404`. The combined offline regression
+  uses two independent worker connections and roots, injects 3,600 foreign events
+  during the second worker's initialization, preparation and turn submission,
+  and checks both durable completions/outboxes, approval resolution and telemetry.
+  Start and exact resume are separate cases. A control case reproduces the
+  1,024-entry overflow under the older unfiltered retention rule. Next trigger:
+  complete exact-revision publication/review, then separately authorize deployed
+  conservation acceptance and bounded native event-source attribution. The native
+  broadcast source remains unverified; offline scripts do not close live debt.
 - The Codex daemon moved its shared socket into `/tmp/codex-daemon-UID`, which
   the Hub units' `PrivateTmp` hid (found 2026-09-29). Since about 2026-09-27
   the Codex worker ran on the stdio fallback, without companion approvals, and
