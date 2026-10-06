@@ -134,6 +134,26 @@ primary failure and the cleanup problem is recorded separately.
 
 ### Durable dispositions
 
+Repeated Codex notification-buffer failures before `turn/start` require a
+transport/consumption investigation even after an idle-worker restart. Keep
+the exact failure notices and saved inputs. Inspect subscriptions retained by
+successful clients and notification traffic during initialize, preparation and
+submission; a demonstrated retained subscription is not exact attribution of
+every deployed overflow. Restart is temporary recovery, not closure evidence.
+Do not restart an active worker or the shared daemon to clear this condition.
+Any maintenance restart needs a separately approved drained boundary and a
+fresh consistent backup.
+
+For a delivered text-only preparation notice offering saved-task retry, the
+owner can Reply exactly `retry`. Schema 41 records one child while keeping the
+failed source and original input membership. A second preparation failure needs
+an explicit Reply to its own new notice; repeating the older notice cannot
+create another child. Inspect the child payload/context and exact session
+binding before calling the task recovered. Materials, missing legacy tickets,
+changed bindings and contradictory execution evidence cause refusal. Follow
+[REQ-QUEUE-004](../product/PERSISTENCE_AND_RECOVERY.md) for the safety contract;
+never grant or replay native tool permissions from task authorization text.
+
 - Expired `leased` means provider invocation was not recorded as possible. The
   scope may be claimed by another eligible job; normal stale recovery returns
   the old job to `queued`, and the expired token cannot start it late.

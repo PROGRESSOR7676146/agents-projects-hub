@@ -141,6 +141,7 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
                     for name in (
                         "__init__.py",
                         "migrations.py",
+                        "migration_sql.py",
                         "models.py",
                         "registry.py",
                         "schema_task_lifecycle.py",
@@ -148,6 +149,7 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
                         "schema_claude_permissions.py",
                         "schema_codex_permissions.py",
                         "schema_preacceptance_approvals.py",
+                        "schema_preexecution_retry.py",
                         "session_adoption_policy.py",
                     ):
                         archive.writestr(

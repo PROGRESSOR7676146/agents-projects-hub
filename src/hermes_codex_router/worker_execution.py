@@ -14,7 +14,7 @@ from .artifacts import (
 from .claude_file_sandbox import FileToolSandboxConfig
 from .claude_stream import ClaudeStreamError, ClaudeTerminalFailure, VisibleAssistantCallback
 from .codex_appserver import CodexAppServerClient, CodexThread, RateLimits, TurnResult
-from .codex_failure import CodexPreparationError
+from .codex_failure import CodexPreparationError, CodexRetryBindingError
 from .codex_permissions import CodexPermissionProfileError
 from .execution_journal import CLAUDE_PRE_INVOCATION_ERROR_CODES, ClaudeSessionBinding
 from .external_runtime import (
@@ -31,6 +31,7 @@ from .incoming_materials import (
 )
 from .metadata import format_agent_response, format_telegram_response
 from .models import Project, ProjectRegistry
+from .preexecution_retry_state import PreexecutionRetryState, PreparationRetryRefused
 from .project_resolution import resolve_project_context
 from .registry import ExecutionRootError
 from .state import HubState, ProviderJobRecord, TopicRecord
@@ -316,6 +317,18 @@ def validate_codex_job_selection(
         raise CodexPermissionProfileError()
 
 
+def validate_codex_worker_binding(
+    state: HubState, job: ProviderJobRecord, config: HubConfig, root: Path
+) -> None:
+    validate_codex_job_selection(state, job, config.codex_permission_profile)
+    try:
+        PreexecutionRetryState(state).require_execution_binding(
+            job, root=root, model_provider=config.codex_model_provider
+        )
+    except PreparationRetryRefused as exc:
+        raise CodexRetryBindingError() from exc
+
+
 def should_transfer_legacy_fallback(
     job: ProviderJobRecord,
     *,
@@ -331,6 +344,17 @@ def should_transfer_legacy_fallback(
         and job.provider_session_id
         and transport_mode == "stdio-fallback"
     )
+
+
+def require_exact_retry_transport(job: ProviderJobRecord, fallback_transfer: bool) -> None:
+    if not fallback_transfer:
+        return
+    if job.idempotency_key.startswith("preexecution-retry:"):
+        raise CodexRetryBindingError()
+    if job.idempotency_key.startswith("continuation:"):
+        raise CodexPreparationError(
+            "continuation requires the owning Codex socket; fallback cannot preserve its thread"
+        )
 
 
 def open_codex_provider_thread(

@@ -218,6 +218,20 @@ acceptance.
   broader provider/compatibility coverage, and separately authorized capacity
   and canary-root checks. No background inference or automatic replay is added.
 
+- **Repeated notification/preparation failure and saved-payload retry:** source
+  candidates and isolated native corpus are under review. The next trigger is
+  exact-revision canonical/independent review of bounded transport consumption
+  and schema-41 text-only notice-bound retry, then owner integration and a
+  separately approved two-worker canary. Last verified published transport
+  revision: `1a54af15d375992001579e328e8b31b5e1b9267d`; this is repository
+  evidence only. Verify more than 1,024 foreign notifications and both results;
+  two consecutive preparation failures must retain the original task/context
+  through explicit retries. Restart alone does not close the item. Materials,
+  safe unsubscribe, stdio buffering and exact deployed-source attribution remain
+  open; no deployment or active-worker restart follows from this entry. See the
+  [recovery procedure](QUEUE_RECOVERY.md#durable-dispositions) and
+  [acceptance strategy](../testing/README.md).
+
 ## Closure
 
 The plan closes when stages 0–3 are merged into `main`, the hotspot ratchet

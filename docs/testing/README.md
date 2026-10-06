@@ -40,6 +40,18 @@ Automated tests
 use fake transports and temporary Git/SQLite fixtures. They must not contact
 real Telegram groups or consume provider tokens.
 
+Notification/preparation recovery acceptance must cover two independent roots
+and worker connections: more than 1,024 foreign notifications during preparation
+of the second turn must not abort it before start. Preserve both exact results,
+final events, approvals and visible telemetry. Repeat after a successful client
+has retained a previous thread subscription. Separately inject two consecutive
+preparation failures, Reply to each exact delivered notice and verify that only
+one eventual native turn receives the original authorized task/context, with
+truthful retry controls and no reused tool grants. Include stop/contradiction,
+materials, queued binding drift, transaction faults, restart deduplication and
+earlier holds. Offline native fixtures use deterministic local protocol stubs;
+their evidence does not close separately authorized live Telegram acceptance.
+
 Publication sequence with the installed hooks: focused checks → commit (the
 pre-commit gate) → push (one full canonical run on the clean commit) →
 independent exact-revision CI/CodeQL. Do not run the same full validator

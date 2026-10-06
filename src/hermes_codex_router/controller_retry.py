@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from .hub_config import HubConfig
 from .models import ProjectRegistry
+from .preexecution_retry_state import PreexecutionRetryState, PreparationRetryRefused
 from .state import HubState, StateError, TopicRecord
 from .state_errors import CodexPermissionSelectionChanged
 from .telegram import TopicMessage
@@ -56,8 +57,30 @@ class ControllerRetryOrchestrator:
             thread_id=message.thread_id,
             notice_message_id=message.reply_to_message_id,
         )
+        preparation = PreexecutionRetryState(self.state)
+        preparation_source = preparation.source_for_notice(
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            notice_message_id=message.reply_to_message_id,
+        )
         try:
             root = resolve_topic_execution_root(self.state, self.registry, topic)
+            if preparation_source is not None:
+                _, created = preparation.retry_from_notice(
+                    source_job_id=preparation_source,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    notice_message_id=message.reply_to_message_id,
+                    reply_message_id=message.message_id,
+                    canonical_root=root,
+                    model_provider=self.config.codex_model_provider,
+                )
+                return RetryControlDecision(
+                    True,
+                    "Saved task text accepted for a new turn in the same Codex session."
+                    if created
+                    else "This notice already has a retry; no additional task was started.",
+                )
             if source is not None:
                 _, created, held_count = continuation.continue_from_notice(
                     source_job_id=source,
@@ -90,6 +113,8 @@ class ControllerRetryOrchestrator:
                 canonical_root=root,
                 now=datetime.now(timezone.utc),
             )
+        except PreparationRetryRefused as exc:
+            return self._reject(message, exc.public_message)
         except CodexPermissionSelectionChanged:
             try:
                 assert source is not None

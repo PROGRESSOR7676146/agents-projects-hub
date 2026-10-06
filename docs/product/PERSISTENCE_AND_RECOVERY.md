@@ -238,7 +238,25 @@ recreate unsaved provider context or a partially executed turn.
   completed visible items by ID. A handled turn failure MUST retain a bounded,
   explicitly incomplete visible excerpt in its durable notice and show a safe
   cause without exposing raw diagnostics. A caught preparation failure before
-  `turn/start` MUST be classified separately from uncertain invocation. These
+  `turn/start` MUST be classified separately from uncertain invocation. An exact
+  plain owner Reply `retry` to a delivered Codex preparation-failure notice MAY
+  submit the saved text-only request once, only with a failure-time durable
+  retry binding and a verified transient transport cause. The child MUST retain
+  the original payload, context and input provenance, with the actual `retry`
+  control recorded separately. Root, project, session generation, exact nullable
+  thread, model, effort, permission profile and provider route MUST be rechecked
+  at admission and before worker preparation. Any accepted-turn, visible-item,
+  completion or result evidence MUST prohibit replay; contradictory evidence
+  MUST preserve uncertainty, including when a stop is pending. Earlier holds,
+  FIFO and root exclusions MUST remain effective. A retry child MUST NOT absorb
+  ambient materials, batch with later input, steer into another turn, substitute
+  a thread or reuse native tool permissions. Any source material membership,
+  including unavailable or discarded material, MUST cause a visible refusal
+  requesting the original task and materials again. Missing legacy retry binding
+  MUST refuse visibly; absence of a provider turn ID alone never proves safety.
+  Ticket/failure/outbox and child/provenance/control/admission notices MUST each
+  commit atomically; duplicate updates and distinct repeated Replies MUST create
+  at most one child per source. These
   Codex queue paths additionally persist execution identity and completed visible
   items in schema 22, separately from immutable enqueue snapshots. Thread identity
   MUST be recorded before `turn/start`; accepted turn identity MUST be recorded
