@@ -289,11 +289,10 @@ class HubState:
         self._connection.execute("BEGIN IMMEDIATE")
         try:
             yield
+            self._connection.commit()
         except BaseException:
             self._connection.rollback()
             raise
-        else:
-            self._connection.commit()
 
     @contextmanager
     def _connection_transaction(self) -> Iterator[None]:

@@ -95,6 +95,17 @@ schema-36 send completion/recovery remain unchanged. Schema-39-only binaries
 cannot open the upgraded database; upgrade and rollback retain the existing
 consistent backup and migration transaction.
 
+Visibility is optional execution metadata. Scope, observation, promotion and
+retirement failures disable both activity callbacks and emit bounded diagnostics;
+they cannot interrupt native response consumption or replace its primary error.
+The execution journal remains strict and separate. Cleanup retires the exact
+unpromoted scope and invalidates accepted activity only for the matching job/lease,
+preserving attempted or unknown notice receipts. Failed cleanup gets one final
+state-only attempt; healthy promotion needs no final retirement write. A new scope
+can atomically replace only an obsolete same-instance scope, never another valid
+live binding. Prepared and accepted first-send guards share the existing covering
+stop rule through a dependency-neutral helper.
+
 This slice does not complete every requirement in ADR 0049. Broader provider and
 compatibility-path visibility remain separate work.
 Claude human approval hosting, tools, read-only advisor isolation, native local

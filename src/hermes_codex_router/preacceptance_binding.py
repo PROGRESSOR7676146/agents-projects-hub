@@ -6,6 +6,7 @@ import sqlite3
 from collections.abc import Callable
 
 from .state_errors import StateError
+from .stop_coverage import pending_stop_for_job
 from .task_activity_binding import activity_notice_is_current
 
 PREPARED_BINDING = (
@@ -31,7 +32,7 @@ def current_prepared_binding(
     timestamp: str,
     selected_profile: Callable[[], str | None] | None,
 ) -> sqlite3.Row | None:
-    if selected_profile is None:
+    if selected_profile is None or pending_stop_for_job(db, job_id) is not None:
         return None
     try:
         profile = selected_profile()

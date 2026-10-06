@@ -162,6 +162,28 @@ class PreacceptanceApprovalState:
                     )
                     else None
                 )
+            for old in self.db.execute(
+                "SELECT * FROM preacceptance_scopes WHERE slot_key=? AND state='open'",
+                (runtime.slot_key,),
+            ).fetchall():
+                if (old["epoch"], old["instance_token"], old["agent_id"]) != (
+                    runtime.epoch,
+                    runtime.instance_token,
+                    runtime.agent_id,
+                ):
+                    return None
+                old_live = current_prepared_binding(
+                    self.db,
+                    old["job_id"],
+                    old["lease_token"],
+                    timestamp,
+                    lambda: self.state.codex_permission_profile,
+                )
+                if old_live is not None and all(
+                    old[key] == old_live[key] for key in PREPARED_BINDING
+                ):
+                    return None
+                self._retire(old["scope_id"], timestamp)
             scope_id = str(uuid.uuid4())
             columns = (
                 "scope_id",
