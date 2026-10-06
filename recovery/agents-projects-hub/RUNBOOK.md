@@ -55,7 +55,7 @@ or package version alone is not deployment identity.
   gates; do not reinstall from a dirty checkout.
 - Schema/integrity failure: stop database users and preserve evidence before a
   reviewed restore. Ordinary runtime rollback retains the current additive
-  state schema; do not open schema 38 with an older executable.
+  state schema; do not open schema 39 with an older executable.
 - Retained Codex origins: never delete origin records or change a provider
   thread ID to bypass a resume failure. Inline/embedded execution is unsupported
   while any origin remains, including archived bindings. Schema compatibility

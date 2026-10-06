@@ -1115,6 +1115,7 @@ class ProjectHubService:
                         lease_token=token,
                         agent_id=agent.agent_id,
                         client_factory=self.supervisor.client,
+                        execution_error=exc,
                     )
                     recovered = turn_status == "completed"
                 except Exception as recovery_error:  # a stop may win the commit (R-021)
@@ -3086,6 +3087,11 @@ class ProjectHubService:
                 self._send_text(message, MANAGED_LOCAL_REFUSAL)
                 return True
             session = self._ensure_codex_session(topic)
+            if session.codex_permission_profile is not None:
+                from .codex_permissions import MANAGED_LOCAL_REFUSAL
+
+                self._send_text(message, MANAGED_LOCAL_REFUSAL)
+                return True
             if session.writer_mode == "local":
                 self._send_text(message, "Use /return before starting a managed terminal.")
                 return True

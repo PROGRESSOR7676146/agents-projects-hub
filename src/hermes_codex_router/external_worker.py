@@ -610,6 +610,7 @@ class ExternalQueueWorker:
                             lease_token=token,
                             agent_id=self.agent.agent_id,
                             client_factory=self.supervisor.client,
+                            execution_error=exc,
                         )
                         recovered = turn_status == "completed"
                     except ProviderTurnStopped:  # won the recovery commit (R-021)

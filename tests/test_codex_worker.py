@@ -4,6 +4,7 @@ import json
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -280,6 +281,35 @@ class CodexQueueWorkerTests(unittest.TestCase):
         self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
         self.assertEqual(worker.state.get_provider_job(job_id).attempt_count, 1)
         self.assertEqual(client.turns, 1)
+
+    def test_completed_drift_recovery_preserves_warning_without_reinvocation(self) -> None:
+        job_id = self.enqueue()
+
+        class DriftingClient(WorkerClient):
+            def wait_for_turn(self, _turn_id: str) -> TurnResult:
+                raise CodexTurnError(CodexPermissionPolicyDriftError(), "Example partial")
+
+            def read_completed_turn(self, **kwargs: object) -> TurnResult:
+                self.last_read = kwargs
+                return TurnResult("Recovered final", None, None)
+
+        client = DriftingClient()
+        worker = self.worker(client)
+        self.assertTrue(worker.run_cycle())
+        recovered = worker.state.get_provider_job(job_id)
+        self.assertEqual(recovered.status, "result_ready")
+        outbox = worker.state.get_telegram_outbox_for_job(job_id)
+        assert outbox is not None
+        self.assertIn("Recovered final", outbox.telegram_html)
+        self.assertIn("permission selection changed", outbox.telegram_html)
+        self.assertIn("Review the recovered result and project changes", outbox.telegram_html)
+        self.assertEqual(client.last_read["turn_id"], "turn-1")
+        self.assertEqual(client.turns, 1)
+        worker.close()
+        with closing(HubState.open(self.config.state_path, codex_permission_profile=None)) as state:
+            retained = state.get_telegram_outbox_for_job(job_id)
+            assert retained is not None
+            self.assertEqual(retained.telegram_html, outbox.telegram_html)
 
     def test_stdio_fallback_starts_a_new_thread_with_bounded_visible_context(self) -> None:
         state = HubState.open(self.config.state_path, codex_permission_profile=None)

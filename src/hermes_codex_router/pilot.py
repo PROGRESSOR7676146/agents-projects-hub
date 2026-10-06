@@ -51,13 +51,20 @@ def run_codex_pilot(
     state = HubState.open(
         config.state_path, codex_permission_profile=config.codex_permission_profile
     )
-    supervisor = CodexAppServerSupervisor(
-        config.state_path.parent / "codex-stdio-placeholder.sock",
-        stdio_executable=config.codex_stdio_executable,
-        model_provider=config.codex_model_provider,
-        permission_profile=config.codex_permission_profile,
-    )
+    supervisor: CodexAppServerSupervisor | None = None
     try:
+        existing_topic = state.find_topic(chat_id, thread_id)
+        existing_session = (
+            None
+            if existing_topic is None
+            else state.retained_session(existing_topic.topic_id, "codex")
+        )
+        if (
+            existing_session is not None
+            and existing_session.agent_id == "codex"
+            and existing_session.codex_permission_profile is not None
+        ):
+            raise ValueError("managed Codex session requires the external queue worker")
         state.reconcile_legacy_execution_scopes(
             {entry.project_id: entry.root for entry in registry.projects}
         )
@@ -77,7 +84,15 @@ def run_codex_pilot(
                 agent.default_model,
                 agent.default_effort,
             )
+        if session.codex_permission_profile is not None:
+            raise ValueError("managed Codex session requires the external queue worker")
 
+        supervisor = CodexAppServerSupervisor(
+            config.state_path.parent / "codex-stdio-placeholder.sock",
+            stdio_executable=config.codex_stdio_executable,
+            model_provider=config.codex_model_provider,
+            permission_profile=config.codex_permission_profile,
+        )
         supervisor.start()
         client = supervisor.client()
         thread = client.start_thread(
@@ -120,5 +135,6 @@ def run_codex_pilot(
         client.close()
         return PilotResult(session.session_id, thread.thread_id, message_id, tab_name)
     finally:
-        supervisor.stop()
+        if supervisor is not None:
+            supervisor.stop()
         state.close()

@@ -18,7 +18,8 @@ import test_embedded_queue_service as embedded_fixtures
 from schema_fixtures import remove_adoption_schema
 from test_codex_appserver import FakeTransport
 
-from hermes_codex_router.codex_appserver import CodexAppServerClient, TurnResult
+from hermes_codex_router.codex_appserver import CodexAppServerClient, CodexTurnError, TurnResult
+from hermes_codex_router.codex_permissions import CodexPermissionPolicyDriftError
 from hermes_codex_router.codex_worker import CodexQueueWorker
 from hermes_codex_router.state import HubState, StateError
 
@@ -288,6 +289,31 @@ class ExecutionJournalTests(unittest.TestCase):
             self.assertEqual(worker.state.get_provider_job(job_id).status, "result_ready")
         finally:
             worker.close()
+
+    def test_embedded_completed_drift_recovery_keeps_warning(self) -> None:
+        class Client(embedded_fixtures.QueueClient):
+            def wait_for_turn(self, turn_id: str) -> TurnResult:
+                raise CodexTurnError(CodexPermissionPolicyDriftError(), "Example partial")
+
+            def read_completed_turn(self, **_kwargs: Any) -> TurnResult:
+                return TurnResult("Recovered embedded result", None, None)
+
+        fixture = embedded_fixtures.EmbeddedQueueServiceTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        client = Client()
+        service, telegram = fixture.service(client)
+        self.addCleanup(service.close)
+        with patch.object(service, "_start_embedded_queue_consumer"):
+            self.assertTrue(service.handle_update(embedded_fixtures.update(1, "Fictional task")))
+        self.assertTrue(service.run_embedded_queue_cycle())
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        job = service.state.provider_jobs_for_topic(topic.topic_id)[0]
+        self.assertEqual(job.status, "completed")
+        self.assertTrue(any("permission selection changed" in text for text in telegram.sent))
+        self.assertTrue(any("Recovered embedded result" in text for text in telegram.sent))
+        self.assertEqual(len(client.turn_threads), 1)
 
     def test_owner_direct_job_recovery_uses_exact_configured_project(self) -> None:
         from hermes_codex_router.execution_journal import ExecutionJournal
