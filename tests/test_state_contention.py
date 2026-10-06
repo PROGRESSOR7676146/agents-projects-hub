@@ -21,17 +21,24 @@ class StateContentionTests(unittest.TestCase):
         self.state._connection.execute("PRAGMA busy_timeout=10")
 
     def test_real_commit_busy_rolls_back_and_connection_can_begin_again(self) -> None:
+        for transaction in (self.state._immediate_transaction, self.state._connection_transaction):
+            with self.subTest(transaction=transaction.__name__):
+                self.assert_real_commit_busy_rolls_back(transaction)
+
+    def assert_real_commit_busy_rolls_back(self, transaction) -> None:
+        with self.state._connection:
+            self.state._connection.execute("UPDATE topics SET title='Example'")
         with closing(sqlite3.connect(self.path, timeout=0.01)) as reader:
             reader.execute("BEGIN")
             reader.execute("SELECT title FROM topics").fetchall()
             with self.assertRaises(sqlite3.OperationalError) as raised:
-                with self.state._immediate_transaction():
+                with transaction():
                     self.state._connection.execute("UPDATE topics SET title='Uncommitted'")
             self.assertEqual(raised.exception.sqlite_errorcode, sqlite3.SQLITE_BUSY)
             self.assertFalse(self.state._connection.in_transaction)
             self.assertEqual(reader.execute("SELECT title FROM topics").fetchone()[0], "Example")
             reader.rollback()
-        with self.state._immediate_transaction():
+        with transaction():
             self.state._connection.execute("UPDATE topics SET title='Committed'")
         self.assertEqual(self.state.get_topic(self.topic.topic_id).title, "Committed")
         self.assertFalse(self.state._connection.in_transaction)
