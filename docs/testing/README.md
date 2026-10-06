@@ -92,6 +92,18 @@ forced process termination to join real Controller polling, SQLite recovery,
 isolated workers, and the standalone sender. Lower-level state-machine tests
 remain in their focused modules.
 
+## Codex preparation conservation regression
+
+The preparation conservation regression is
+`tests.test_codex_notification_conservation`. Two independent workers and roots
+join the real client, execution journal and durable outbox against scripted
+transports. The second receives 3,600 foreign events while the first remains
+accepted and active. Separate start/resume cases check both saved finals,
+early/late approval resolution, context and account quota observations. A control
+case models the older unfiltered retention rule and reproduces its bounded
+preparation failure. It is offline conservation evidence, without native
+broadcast attribution, live approvals, services, Telegram or inference.
+
 ## Privacy gate
 
 `python -m hermes_codex_router.privacy_scan . --history` scans both the proposed
