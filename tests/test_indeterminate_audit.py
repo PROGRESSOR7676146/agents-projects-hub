@@ -36,7 +36,7 @@ class IndeterminateAuditTests(unittest.TestCase):
         notice: bool,
         terminal: str | None = None,
     ) -> str:
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id=f"fictional-audit-{message_id}",
@@ -113,7 +113,7 @@ class IndeterminateAuditTests(unittest.TestCase):
         rendered = json.dumps(report)
         self.assertNotIn("private-", rendered)
         self.assertNotIn("saved final", rendered)
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         try:
             self.assertTrue(
                 all(state.get_provider_job(job_id).status == "indeterminate" for job_id in expected)
@@ -172,7 +172,7 @@ class IndeterminateAuditTests(unittest.TestCase):
     def test_resolution_is_idempotent_immutable_and_preserves_job_evidence(self) -> None:
         job_id = self._indeterminate(1, "none", notice=False)
         queued_id = self.fixture.enqueue(message_id=2, payload="private-queued")
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         try:
             before = state.get_provider_job(job_id)
             self.assertTrue(state.resolve_indeterminate_job(job_id, "acknowledged"))
@@ -226,7 +226,7 @@ class IndeterminateAuditTests(unittest.TestCase):
         self.assertEqual(result["resolution"], "superseded")
         self.assertTrue(result["created"])
         self.assertNotIn("private-", output.getvalue())
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         try:
             job = state.get_provider_job(job_id)
             self.assertEqual(job.status, "indeterminate")

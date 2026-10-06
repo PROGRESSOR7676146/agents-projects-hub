@@ -46,7 +46,7 @@ class CodexSessionAdoptionTests(unittest.TestCase):
                 }
             )
         )
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             state.observe_topic(
                 project_id="example-project", chat_id=-1001234567890, thread_id=7, title="Example"
@@ -82,7 +82,7 @@ class CodexSessionAdoptionTests(unittest.TestCase):
 
     def test_exact_repeat_needs_no_provider_and_preserves_returned_writer(self) -> None:
         result = self.run_attach(apply=True, confirm_cli_closed=True)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             topic = state.find_topic(-1001234567890, 7)
             assert topic is not None
@@ -103,7 +103,7 @@ class CodexSessionAdoptionTests(unittest.TestCase):
         self.assertEqual(repeated["writer_mode"], "telegram")
 
     def test_job_admitted_during_metadata_read_wins_without_partial_attachment(self) -> None:
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             topic = state.find_topic(-1001234567890, 7)
             assert topic is not None
@@ -198,7 +198,7 @@ class CodexSessionAdoptionTests(unittest.TestCase):
 
     def test_dynamic_binding_rejects_registry_root_replacement_before_inspection(self) -> None:
         self.config = replace(self.config, projects=())
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             with state._immediate_transaction():
                 state._connection.execute(

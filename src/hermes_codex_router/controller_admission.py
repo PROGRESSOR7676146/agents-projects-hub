@@ -22,6 +22,7 @@ from .state import (
     TopicRecord,
     WriterTransferSnapshot,
 )
+from .state_errors import CodexPermissionSelectionChanged
 from .telegram import TelegramError, TopicMessage
 
 AdmissionRejection = Literal[
@@ -29,6 +30,7 @@ AdmissionRejection = Literal[
     "input_before_session_activation",
     "local_transfer_changed",
     "persistent_root_blocker",
+    "codex_permission_selection_changed",
 ]
 AdmissionFailureReason = Literal["material_download", "enqueue_uncommitted"]
 
@@ -104,6 +106,11 @@ class DurableProviderAdmission:
         message = request.message
         if self.state.message_already_observed(message.chat_id, message.message_id):
             return DuplicateAdmission()
+
+        if request.session.agent_id == "codex":
+            refusal = self._permission_refusal(request)
+            if refusal is not None:
+                return refusal
 
         if request.batchable_user_text is not None and len(request.batchable_user_text) > 18_000:
             if not self.state.claim_message(
@@ -223,6 +230,10 @@ class DurableProviderAdmission:
                     prepare_task_notices=self.prepare_task_notices,
                     queue_capacity=self.queue_capacity,
                 )
+        except CodexPermissionSelectionChanged as exc:
+            return self._permission_refusal(request) or DurableAdmissionFailure(
+                "enqueue_uncommitted", exc
+            )
         except StateError as exc:
             if str(exc) == "execution root has a persistent local writer or uncertainty":
                 blocked = self.state.reject_blocked_provider_input(
@@ -253,6 +264,31 @@ class DurableProviderAdmission:
         if not created:
             return DuplicateAdmission()
         return CommittedAdmission(job)
+
+    def _permission_refusal(
+        self,
+        request: DurableAdmissionRequest,
+    ) -> DuplicateAdmission | RejectedAdmission | DurableAdmissionFailure | None:
+        try:
+            refused = self.state.reject_changed_codex_input(
+                chat_id=request.message.chat_id,
+                message_id=request.message.message_id,
+                thread_id=request.message.thread_id,
+                topic_id=request.topic.topic_id,
+                session_id=request.session.session_id,
+                session_generation=request.session.generation,
+            )
+        except Exception as exc:
+            # A changed snapshot or failed refusal transaction has no durable
+            # disposition. Ingress must retain the update for safe redelivery.
+            return DurableAdmissionFailure("enqueue_uncommitted", exc)
+        if refused is None:
+            return None
+        return (
+            DuplicateAdmission()
+            if refused == "duplicate"
+            else RejectedAdmission("codex_permission_selection_changed")
+        )
 
     @staticmethod
     def _album_group_key(message: TopicMessage) -> str | None:

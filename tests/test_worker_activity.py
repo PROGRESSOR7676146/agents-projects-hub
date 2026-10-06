@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from typing import Any
 
 from hermes_codex_router.codex_activity import CodexActivityEvent
-from hermes_codex_router.state import StateError
 from hermes_codex_router.worker_activity import codex_activity_for_turn
 from tests import test_task_activity
 
@@ -90,20 +89,21 @@ class WorkerActivityTests(unittest.TestCase):
 
     def test_binding_failure_clears_callback_without_replay(self):
         starts = 0
-        with self.assertRaises(StateError):
-            with self.observe() as accepted:
-                starts += 1
-                accepted("thread", "wrong-turn")
+        with self.observe() as accepted:
+            starts += 1
+            accepted("thread", "wrong-turn")
+            self.assertIsNone(self.client.on_activity)
+            accepted("thread", "turn")
         self.assertEqual(starts, 1)
         self.assertIsNone(self.client.on_activity)
         self.assertIsNone(self.fixture.row())
 
     def test_unaccepted_early_event_cannot_create_notice(self):
-        with self.assertRaises(StateError):
-            with self.observe():
-                self.client.on_activity(
-                    CodexActivityEvent("approval_requested", "command", "thread", "turn", "item", 1)
-                )
+        with self.observe():
+            self.client.on_activity(
+                CodexActivityEvent("approval_requested", "command", "thread", "turn", "item", 1)
+            )
+            self.assertIsNone(self.client.on_activity)
         self.assertIsNone(self.fixture.row())
         self.assertEqual(
             self.fixture.db.execute("SELECT count(*) FROM task_lifecycle_notices").fetchone()[0], 0

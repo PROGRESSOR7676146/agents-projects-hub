@@ -50,7 +50,7 @@ class SessionAdoptionJourneyTests(unittest.TestCase):
     def journey(self, fixture, replacement, mode, route=None, source="openai"):
         config = replace(fixture.config, codex_model_provider=route)
         registry = load_registry(config.registry_path)
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             topic = state.find_topic(-1001234567890, 7)
             assert topic is not None
@@ -152,7 +152,7 @@ class SessionAdoptionJourneyTests(unittest.TestCase):
             self.assertEqual(len([name for name, _ in calls if name == "turn"]), 1)
             # Reopen Hub state and construct a fresh worker/client: no in-memory binding.
             state.close()
-            state = HubState.open(config.state_path)
+            state = HubState.open(config.state_path, codex_permission_profile=None)
             service.state = state
             self.assertTrue(send(31, "Continue after local work"))
             second = deliver()

@@ -14,7 +14,8 @@ from .artifacts import (
 from .claude_file_sandbox import FileToolSandboxConfig
 from .claude_stream import ClaudeStreamError, ClaudeTerminalFailure, VisibleAssistantCallback
 from .codex_appserver import CodexAppServerClient, CodexThread, RateLimits, TurnResult
-from .codex_failure import CodexPreparationError
+from .codex_failure import CodexPreparationError, CodexRetryBindingError
+from .codex_permissions import CodexPermissionProfileError
 from .execution_journal import CLAUDE_PRE_INVOCATION_ERROR_CODES, ClaudeSessionBinding
 from .external_runtime import (
     ExternalCliAdapter,
@@ -30,6 +31,7 @@ from .incoming_materials import (
 )
 from .metadata import format_agent_response, format_telegram_response
 from .models import Project, ProjectRegistry
+from .preexecution_retry_state import PreexecutionRetryState, PreparationRetryRefused
 from .project_resolution import resolve_project_context
 from .registry import ExecutionRootError
 from .state import HubState, ProviderJobRecord, TopicRecord
@@ -110,6 +112,7 @@ class WorkerFailureClassification:
         "uncertain",
         "provider_session_preparation",
         "claude_terminal",
+        "retry_binding",
     ]
 
 
@@ -173,6 +176,10 @@ def classify_worker_failure(
     if isinstance(error, IncomingMaterialError):
         return WorkerFailureClassification(
             "failed", "pre_execution", type(error).__name__, False, "incoming_material"
+        )
+    if isinstance(error, CodexRetryBindingError):
+        return WorkerFailureClassification(
+            "failed", "pre_execution", type(error).__name__, False, "retry_binding"
         )
     if isinstance(error, CodexPreparationError):
         return WorkerFailureClassification(
@@ -301,6 +308,66 @@ def external_provider_prompt(
     )
 
 
+def validate_codex_job_selection(
+    state: HubState, job: ProviderJobRecord, selected_profile: str | None
+) -> None:
+    """Refuse a stale snapshot before materials, staging or provider preparation."""
+    session = state.get_session(job.session_id)
+    if not (
+        job.codex_permission_profile
+        == selected_profile
+        == state.codex_permission_profile
+        == session.codex_permission_profile
+    ):
+        raise CodexPermissionProfileError()
+
+
+def validate_provider_worker_binding(
+    state: HubState, job: ProviderJobRecord, config: HubConfig, root: Path
+) -> None:
+    """Recheck saved retry authority before dispatching to any configured runtime."""
+    try:
+        runtime = config.require_agent(job.agent_id).runtime
+        PreexecutionRetryState(state).require_execution_binding(
+            job,
+            root=root,
+            model_provider=config.codex_model_provider,
+            provider_runtime=runtime,
+        )
+    except (PreparationRetryRefused, KeyError) as exc:
+        raise CodexRetryBindingError() from exc
+    if runtime == "codex":
+        validate_codex_job_selection(state, job, config.codex_permission_profile)
+
+
+def should_transfer_legacy_fallback(
+    job: ProviderJobRecord,
+    *,
+    has_origin: bool,
+    model_provider: str | None,
+    transport_mode: str | None,
+) -> bool:
+    """Only unpinned legacy conversations may use a substitute stdio thread."""
+    return bool(
+        not has_origin
+        and model_provider is None
+        and job.codex_permission_profile is None
+        and job.provider_session_id
+        and transport_mode == "stdio-fallback"
+    )
+
+
+def require_exact_retry_transport(job: ProviderJobRecord, fallback_transfer: bool) -> None:
+    if not fallback_transfer:
+        return
+    if job.idempotency_key.startswith("preexecution-retry:"):
+        raise CodexRetryBindingError()
+    if job.idempotency_key.startswith("continuation:"):
+        raise CodexPreparationError(
+            "continuation requires the owning Codex socket; fallback cannot preserve its thread"
+        )
+
+
 def open_codex_provider_thread(
     client: CodexAppServerClient,
     job: ProviderJobRecord,
@@ -310,6 +377,10 @@ def open_codex_provider_thread(
     force_new_thread: bool = False,
 ) -> CodexThread:
     """Start or resume the exact Codex thread selected by the job snapshot."""
+    if getattr(client, "permission_profile", None) != job.codex_permission_profile:
+        raise CodexPermissionProfileError()
+    if force_new_thread and job.codex_permission_profile is not None:
+        raise CodexPermissionProfileError()
     if job.provider_session_id and not force_new_thread:
         return client.resume_thread(
             thread_id=job.provider_session_id,
@@ -335,6 +406,8 @@ def start_codex_provider_turn(
     local_image_paths: Sequence[Path] = (),
 ) -> str:
     """Cross the Codex invocation-accepted boundary."""
+    if thread.permission_profile != job.codex_permission_profile:
+        raise CodexPermissionProfileError()
     return client.start_turn(
         thread_id=thread.thread_id,
         cwd=project.root,

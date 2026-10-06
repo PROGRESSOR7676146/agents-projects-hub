@@ -31,6 +31,7 @@ from hermes_codex_router.hub_config import (
     ProjectBinding,
     TerminalSettings,
 )
+from hermes_codex_router.migrations import LATEST_SCHEMA_VERSION
 from hermes_codex_router.state import HubState
 from hermes_codex_router.tlive_permissions import ProtectedTliveClient, TlivePermissionConfig
 from tests.namespace_fixture import (
@@ -238,9 +239,9 @@ class PermissionHostRoundtripTests(unittest.TestCase):
             ),
         )
         self._registry(self.root)
-        self.state = HubState.open(self.config.state_path)
+        self.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         self.addCleanup(self.state.close)
-        self.assertEqual(self.state.schema_version, 38)
+        self.assertEqual(self.state.schema_version, LATEST_SCHEMA_VERSION)
         topic = self.state.observe_topic(
             project_id="example-project",
             chat_id=-1001234567890,

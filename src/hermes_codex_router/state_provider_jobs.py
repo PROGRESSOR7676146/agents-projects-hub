@@ -16,28 +16,7 @@ from .provider_queue_capacity import (
     parallel_worker_declarations as _parallel_worker_declarations,
 )
 from .queue_visibility import QueueVisibilityState
-
-
-# An emergency stop covers the work that existed when it was recorded, except
-# work then held for an owner decision (REQ-CMD-007, ADR 0046). Every stop
-# check uses this one rule, so an unfinished older stop or a repeated stop
-# message never reaches later work, including a held job confirmed after it.
-def _stop_covers(stop: str, job: str) -> str:
-    """SQL that is true when the ``stop`` request row covers the ``job`` row."""
-    return f"""{stop}.topic_id = {job}.topic_id AND {job}.created_at <= {stop}.created_at
-     AND NOT EXISTS (
-       SELECT 1 FROM provider_job_holds held
-       WHERE held.job_id = {job}.job_id AND held.held_at <= {stop}.created_at
-         AND (held.decision = 'pending' OR held.decided_at > {stop}.created_at)
-     )"""
-
-
-STOP_COVERS_JOB_SQL = _stop_covers("stop", "job")
-
-_PENDING_STOP_FOR_JOB_SQL = f"""SELECT stop.request_id FROM provider_stop_requests stop
-   JOIN provider_jobs job ON job.job_id = ?
-   WHERE stop.status = 'pending' AND {STOP_COVERS_JOB_SQL}
-   ORDER BY stop.created_at LIMIT 1"""
+from .stop_coverage import STOP_COVERS_JOB_SQL, pending_stop_for_job, stop_covers
 
 # A stop is complete once none of its covered work can still start or run: a
 # follow-up that is leased, or that a rejected steering call returned to the
@@ -57,7 +36,7 @@ COMPLETE_FINISHED_STOPS_SQL = f"""UPDATE provider_stop_requests
                              WHERE e.job_id = other.job_id)
              AND NOT EXISTS (SELECT 1 FROM provider_job_resolutions r
                              WHERE r.job_id = other.job_id)))
-           AND {_stop_covers("stop", "other")}
+           AND {stop_covers("stop", "other")}
        )
    )"""
 
@@ -168,6 +147,7 @@ class ProviderJobRecord:
     error_detail: str | None
     created_at: str
     updated_at: str
+    codex_permission_profile: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +181,7 @@ class ProviderJobsStateFacade:
         state_error: StateErrorFactory,
         job_has_materials: JobHasMaterials,
         queue_visibility: QueueVisibilityState | None = None,
+        selected_codex_profile: Callable[[], str | None] | None = None,
     ) -> None:
         self._connection = connection
         self._transaction = transaction
@@ -208,6 +189,21 @@ class ProviderJobsStateFacade:
         self._state_error = state_error
         self._job_has_materials = job_has_materials
         self._queue_visibility = queue_visibility
+        self._selected_codex_profile = selected_codex_profile
+
+    def queued_input_group(self, topic_id: int, input_group_key: str) -> ProviderJobRecord | None:
+        """Read an album routing candidate without extending its queue hold."""
+        key = self._bounded(input_group_key, name="input group key", maximum=256)
+        row = self._connection.execute(
+            """SELECT * FROM provider_jobs
+               WHERE topic_id=? AND input_group_key=? AND status='queued'
+                 AND topic_sequence=(
+                   SELECT MAX(tail.topic_sequence) FROM provider_jobs tail
+                   WHERE tail.topic_id=provider_jobs.topic_id)
+               ORDER BY topic_sequence DESC LIMIT 1""",
+            (topic_id, key),
+        ).fetchone()
+        return self.record(row) if row is not None else None
 
     def _bounded(self, value: str, *, name: str, maximum: int) -> str:
         normalized = value.strip()
@@ -243,6 +239,7 @@ class ProviderJobsStateFacade:
             context_watermark=row["context_watermark"],
             handoff_id=row["handoff_id"],
             input_group_key=row["input_group_key"],
+            codex_permission_profile=row["codex_permission_profile"],
             status=str(row["status"]),
             attempt_count=int(row["attempt_count"]),
             max_attempts=int(row["max_attempts"]),
@@ -571,8 +568,7 @@ class ProviderJobsStateFacade:
 
     def pending_stop_for_job(self, job_id: str) -> str | None:
         """Return the oldest pending emergency stop that covers this job."""
-        row = self._connection.execute(_PENDING_STOP_FOR_JOB_SQL, (job_id,)).fetchone()
-        return None if row is None else str(row["request_id"])
+        return pending_stop_for_job(self._connection, job_id)
 
     def stop_notice_job(self, request_id: str) -> sqlite3.Row | None:
         """Choose the covered job that carries a stop's Hub acknowledgement.
@@ -862,6 +858,14 @@ class ProviderJobsStateFacade:
             # Nothing joins a turn that a pending emergency stop is ending.
             if parent is None or self.pending_stop_for_job(parent_job_id) is not None:
                 return None
+            # Managed steering lacks an independently verified active-policy read.
+            # Keep the follow-up queued for normal exact-profile preparation.
+            if (
+                self._selected_codex_profile is None
+                or parent["codex_permission_profile"] != self._selected_codex_profile()
+                or parent["codex_permission_profile"] is not None
+            ):
+                return None
             candidate = self._connection.execute(
                 """SELECT * FROM provider_jobs
                    WHERE topic_id = ? AND topic_sequence = (
@@ -873,10 +877,25 @@ class ProviderJobsStateFacade:
             ).fetchone()
             if candidate is None or any(
                 candidate[field] != parent[field]
-                for field in ("agent_id", "session_id", "session_generation", "model", "effort")
+                for field in (
+                    "agent_id",
+                    "session_id",
+                    "session_generation",
+                    "model",
+                    "effort",
+                    "codex_permission_profile",
+                )
             ):
                 return None
             if str(candidate["status"]) != "queued":
+                return None
+            if (
+                self._connection.execute(
+                    "SELECT 1 FROM provider_preexecution_retries WHERE child_job_id=?",
+                    (candidate["job_id"],),
+                ).fetchone()
+                is not None
+            ):
                 return None
             held = self._connection.execute(
                 """SELECT 1 FROM provider_job_holds
@@ -902,6 +921,7 @@ class ProviderJobsStateFacade:
             return self.get(str(candidate["job_id"]))
 
     def reject_unaccepted_steer(self, job_id: str, lease_token: str) -> None:
+        """Requeue an executing child only after proven rejection or no RPC attempt."""
         timestamp = self._now()
         with self._write_transaction():
             cursor = self._connection.execute(

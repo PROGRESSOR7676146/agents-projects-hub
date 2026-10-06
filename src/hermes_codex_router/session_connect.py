@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .session_adoption_state import AdoptionRequest, CodexSessionOrigins
 from .state import HubState, StateError, _now
+from .state_errors import ConnectPermissionSelectionChanged
 
 WORKFLOW_TTL = timedelta(minutes=15)
 WORKER_LEASE = timedelta(seconds=30)
@@ -93,6 +94,7 @@ class ConnectWorkflow:
     error_code: str | None
     expires_at: str
     source_model_provider: str = "openai"
+    codex_permission_profile: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +142,7 @@ class SessionConnectStore:
             row["error_code"],
             str(row["expires_at"]),
             str(row["source_model_provider"]),
+            row["codex_permission_profile"],
         )
 
     @staticmethod
@@ -236,8 +239,8 @@ class SessionConnectStore:
             self.connection.execute(
                 """INSERT INTO session_connect_workflows (
                    workflow_id,owner_user_id,entrypoint,project_id,canonical_root,
-                   model,effort,stage,expires_at,created_at,updated_at)
-                   VALUES (?,?,'direct',NULL,NULL,?,?,'choosing_project',?,?,?)""",
+                   model,effort,stage,expires_at,created_at,updated_at,codex_permission_profile)
+                   VALUES (?,?,'direct',NULL,NULL,?,?,'choosing_project',?,?,?,?)""",
                 (
                     workflow_id,
                     owner_user_id,
@@ -246,6 +249,7 @@ class SessionConnectStore:
                     _deadline(WORKFLOW_TTL),
                     now,
                     now,
+                    self.state.codex_permission_profile,
                 ),
             )
             for project_id, canonical_root, label in projects[:MAX_CANDIDATES]:
@@ -361,8 +365,8 @@ class SessionConnectStore:
                    workflow_id,owner_user_id,entrypoint,project_id,canonical_root,
                    source_thread_id,source_label,source_updated_at,destination_chat_id,
                    destination_thread_id,expected_session_id,replaces_session_id,model,effort,
-                   stage,code_id,expires_at,created_at,updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   stage,code_id,expires_at,created_at,updated_at,codex_permission_profile)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     workflow_id,
                     owner_user_id,
@@ -387,6 +391,7 @@ class SessionConnectStore:
                     _deadline(WORKFLOW_TTL),
                     now,
                     now,
+                    self.state.codex_permission_profile,
                 ),
             )
         return self.get(workflow_id)
@@ -574,8 +579,8 @@ class SessionConnectStore:
                                     source_thread_id,source_label,source_updated_at,
                                     destination_chat_id,destination_thread_id,expected_session_id,
                                     replaces_session_id,model,effort,stage,code_id,expires_at,
-                                    created_at,updated_at)
-                                   VALUES (?,?,'code',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                    created_at,updated_at,codex_permission_profile)
+                                   VALUES (?,?,'code',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                                 (
                                     workflow_id,
                                     owner_user_id,
@@ -604,6 +609,7 @@ class SessionConnectStore:
                                     ).isoformat(),
                                     now,
                                     now,
+                                    self.state.codex_permission_profile,
                                 ),
                             )
                             self.connection.execute(
@@ -975,6 +981,7 @@ class SessionConnectStore:
             workflow = self.get(workflow_id)
             if workflow.stage != "activation_requested" or workflow.lease_token != lease_token:
                 raise StateError("connect_worker_lease_changed")
+            self.require_permission_selection(workflow)
             CodexSessionOrigins(self.state).preview(self._adoption_request(workflow))
             self.connection.execute(
                 """UPDATE session_connect_workflows SET stage='marker_ready',lease_owner=NULL,
@@ -1103,6 +1110,51 @@ class SessionConnectStore:
         ).fetchone()
         return self._outbox(current)
 
+    def require_permission_selection(self, workflow: ConnectWorkflow) -> None:
+        if workflow.codex_permission_profile != self.state.codex_permission_profile:
+            raise ConnectPermissionSelectionChanged()
+
+    def refuse_changed_marker_selection(self, outbox: ConnectOutbox) -> bool:
+        """Refuse before Telegram delivery, with a proven unsent marker outcome."""
+        if outbox.kind != "activation_marker":
+            return False
+        with self.state._immediate_transaction():
+            row = self.connection.execute(
+                "SELECT status,lease_token FROM session_connect_outbox WHERE outbox_id=?",
+                (outbox.outbox_id,),
+            ).fetchone()
+            if row is None or row["status"] != "leased" or row["lease_token"] != outbox.lease_token:
+                raise StateError("connect_outbox_lease_changed")
+            workflow = self.get(outbox.workflow_id)
+            try:
+                self.require_permission_selection(workflow)
+            except ConnectPermissionSelectionChanged:
+                error_code = "connect_permission_selection_changed"
+            else:
+                if workflow.stage == "marker_ready":
+                    return False
+                error_code = "connect_marker_stale"
+            now = _now()
+            self.connection.execute(
+                """UPDATE session_connect_outbox SET status='failed',error_code=?,
+                   lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE outbox_id=?""",
+                (error_code, now, outbox.outbox_id),
+            )
+            if workflow.stage == "marker_ready":
+                self.connection.execute(
+                    """UPDATE session_connect_workflows SET stage='failed',error_code='connect_permission_selection_changed',
+                       updated_at=? WHERE workflow_id=?""",
+                    (now, workflow.workflow_id),
+                )
+                self._insert_outbox_locked(
+                    workflow.workflow_id,
+                    "notice",
+                    workflow.destination_chat_id or workflow.owner_user_id,
+                    workflow.destination_thread_id or 1,
+                    "Подключение остановлено: изменились разрешения Codex. Служебная граница не отправлена, текущая сессия не изменена. Запустите /connect снова.",
+                )
+            return True
+
     def complete_marker(
         self, outbox: ConnectOutbox, *, telegram_message_id: int
     ) -> ConnectWorkflow:
@@ -1122,6 +1174,7 @@ class SessionConnectStore:
             workflow = self.get(outbox.workflow_id)
             if workflow.stage != "marker_ready":
                 raise StateError("connect_marker_stale")
+            self.require_permission_selection(workflow)
             origins = CodexSessionOrigins(self.state)
             attached = origins._attach_locked(
                 self._adoption_request(workflow),
@@ -1297,6 +1350,7 @@ class SessionConnectStore:
             workflow.effort,
             workflow.replaces_session_id,
             workflow.source_model_provider,
+            workflow.codex_permission_profile,
         )
 
 

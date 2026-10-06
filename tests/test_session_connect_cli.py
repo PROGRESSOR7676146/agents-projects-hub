@@ -47,7 +47,7 @@ class SessionConnectCliTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         state.close()
 
     def test_missing_config_does_not_guess_a_private_path(self) -> None:
@@ -69,7 +69,7 @@ class SessionConnectCliTests(unittest.TestCase):
         command = str(result["telegram_command"])
         code = command.split()[1]
         self.assertEqual(len(code), 10)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         self.addCleanup(state.close)
         row = state._connection.execute(
             "SELECT code_digest,consumed_at FROM session_connect_codes"

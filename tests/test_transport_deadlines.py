@@ -16,6 +16,7 @@ from hermes_codex_router.codex_appserver import (
     StdioJsonLineTransport,
     UnixWebSocketTransport,
 )
+from hermes_codex_router.codex_inbox import BoundedInbox
 
 
 class TransportDeadlineTests(unittest.TestCase):
@@ -48,7 +49,7 @@ class TransportDeadlineTests(unittest.TestCase):
             async def close(self):
                 pass
 
-            async def send_json(self, value):
+            async def send_str(self, value):
                 pass
 
             async def __aiter__(self):
@@ -62,21 +63,23 @@ class TransportDeadlineTests(unittest.TestCase):
             async def __aexit__(self, *args):
                 pass
 
-            def ws_connect(self, url):
+            def ws_connect(self, url, **kwargs):
                 return Socket()
 
         transport = UnixWebSocketTransport.__new__(UnixWebSocketTransport)
         transport._socket_path = Path("/tmp/fictional-unused-socket")
-        transport._inbound = queue.Queue()
+        transport._inbound = BoundedInbox()
         transport._outbound = queue.Queue()
         transport._ready = threading.Event()
+        transport._receiver_done = threading.Event()
+        transport._closed = False
         transport._timeout = 0.05
 
         def run() -> None:
             with (
-                patch("hermes_codex_router.codex_appserver.aiohttp.UnixConnector"),
+                patch("hermes_codex_router.codex_transports.aiohttp.UnixConnector"),
                 patch(
-                    "hermes_codex_router.codex_appserver.aiohttp.ClientSession",
+                    "hermes_codex_router.codex_transports.aiohttp.ClientSession",
                     return_value=Session(),
                 ),
             ):

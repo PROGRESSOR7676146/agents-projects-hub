@@ -57,7 +57,7 @@ class ObservingClaudeAdapter:
             self.observed.append((current, tuple(checkpoint) if checkpoint is not None else None))
         expected = session_id or new_session_id or NATIVE_UUID
         if self.stop:
-            state = HubState.open(self.state_path)
+            state = HubState.open(self.state_path, codex_permission_profile=None)
             try:
                 state.request_emergency_stop(
                     topic_id=job["topic_id"],
@@ -289,9 +289,61 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
         self.assert_binding_visible_before_invocation(adapter, 1)
         self.assertEqual(worker.state.get_provider_job(second).status, "result_ready")
 
+    def test_changed_model_and_effort_resume_exact_completed_native_session(self) -> None:
+        first = self.enqueue(1)
+        adapter = ObservingClaudeAdapter(self.path)
+        worker = self.worker(adapter)
+        self.assertTrue(worker.run_cycle())
+        first_job = worker.state.get_provider_job(first)
+        native = self.assert_binding_visible_before_invocation(adapter)
+        with worker.state._connection:
+            worker.state._connection.execute(
+                "UPDATE provider_jobs SET status='completed' WHERE job_id=?", (first,)
+            )
+            worker.state._connection.execute(
+                "UPDATE telegram_outbox SET status='delivered' WHERE job_id=?", (first,)
+            )
+        prior_checkpoint = ExecutionJournal(worker.state).read(first)
+        selected = worker.state.replace_active_session(
+            first_job.topic_id,
+            model="example-next",
+            effort="medium",
+            runtime="claude",
+            expected_session_id=first_job.session_id,
+        )
+        self.assertEqual(len(adapter.calls), 1)  # Selection itself invokes no provider.
+        second, created = worker.state.enqueue_provider_job(
+            idempotency_key="example-second-selection",
+            chat_id=first_job.chat_id,
+            message_id=2,
+            topic_id=first_job.topic_id,
+            agent_id=selected.agent_id,
+            session_id=selected.session_id,
+            session_generation=selected.generation,
+            provider_session_id=selected.provider_session_id,
+            model=selected.model,
+            effort=selected.effort,
+            payload_text="Fictional next request",
+        )
+        self.assertTrue(created)
+        self.assertTrue(worker.run_cycle())
+        self.assertEqual(len(adapter.calls), 2)
+        self.assertEqual(adapter.calls[1]["session_id"], native)
+        self.assertIsNone(adapter.calls[1]["new_session_id"])
+        self.assertEqual(
+            (adapter.calls[1]["model"], adapter.calls[1]["effort"]), ("example-next", "medium")
+        )
+        self.assertEqual(selected.session_id, first_job.session_id)
+        self.assertEqual(selected.generation, first_job.session_generation)
+        self.assertEqual(ExecutionJournal(worker.state).read(first), prior_checkpoint)
+        self.assertEqual(
+            worker.state.get_provider_job(first), replace(first_job, status="completed")
+        )
+        self.assertEqual(worker.state.get_provider_job(second.job_id).status, "result_ready")
+
     def test_missing_native_root_provenance_refuses_before_adapter_invocation(self) -> None:
         job_id = self.enqueue(1)
-        state = HubState.open(self.path)
+        state = HubState.open(self.path, codex_permission_profile=None)
         job = state.get_provider_job(job_id)
         with state._connection:
             state._connection.execute(
@@ -319,7 +371,7 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
 
     def test_conflicting_native_root_provenance_refuses_before_adapter_invocation(self) -> None:
         prior_id = self.enqueue(1)
-        state = HubState.open(self.path)
+        state = HubState.open(self.path, codex_permission_profile=None)
         prior = state.lease_provider_job("claude", "fictional-prior-worker")
         assert prior is not None and prior.lease_token is not None
         state.mark_provider_job_executing(prior_id, prior.lease_token)

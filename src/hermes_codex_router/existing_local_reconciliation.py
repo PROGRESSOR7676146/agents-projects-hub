@@ -12,6 +12,7 @@ from .codex_appserver import (
     StoredTurnOutcome,
     UnixWebSocketTransport,
 )
+from .codex_permissions import MANAGED_LOCAL_REFUSAL
 from .codex_session_adoption import open_adoption_state
 from .hub_config import HubConfig
 from .local_transfer import local_resume_command
@@ -76,6 +77,11 @@ def reconcile_existing_local(
     root = expected_root.resolve(strict=True)
     with open_adoption_state(config.state_path) as state:
         session = state.get_session(session_id)
+        if (
+            config.codex_permission_profile is not None
+            or session.codex_permission_profile is not None
+        ):
+            raise StateError(MANAGED_LOCAL_REFUSAL)
         topic = state.get_topic(session.topic_id)
         resolved = resolve_project_context(
             config,
@@ -142,6 +148,7 @@ def reconcile_existing_local(
         model_provider=config.codex_model_provider,
         model=session.model,
         codex_socket_path=config.codex_socket_path,
+        permission_profile=session.codex_permission_profile,
     )
     if not apply:
         return ExistingLocalResult(
@@ -153,7 +160,9 @@ def reconcile_existing_local(
             outcome.status,
             False,
         )
-    with open_adoption_state(config.state_path, writable=True) as state:
+    with open_adoption_state(
+        config.state_path, writable=True, codex_permission_profile=config.codex_permission_profile
+    ) as state:
         changed = _claim_exact_local(
             state,
             session_id=session_id,

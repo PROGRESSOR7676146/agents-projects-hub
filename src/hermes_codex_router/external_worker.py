@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from html import escape
@@ -17,15 +18,17 @@ from .claude_stream import (
 )
 from .codex_appserver import (
     CodexAppServerClient,
-    RateLimits,
-    RpcRejectedError,
-    context_remaining_percent,
 )
 from .codex_failure import codex_preparation, uncertain_provider_notice
+from .codex_live_control import CodexLiveControl
 from .codex_recovery import (
-    checkpoint_failure_notice,
     reconcile_codex_completion,
     recover_codex_job,
+)
+from .codex_result_lifecycle import (
+    post_completion_context,
+    post_completion_limits,
+    retire_completed_connection,
 )
 from .controller_result_publication import (
     PreparedResultPublication,
@@ -40,6 +43,7 @@ from .external_runtime import (
     ProviderUnavailableError,
 )
 from .hub_config import HubConfig
+from .preacceptance_approvals import PreacceptanceApprovalState
 from .project_resolution import (
     ProjectResolutionError,
     resolve_project_context,
@@ -50,6 +54,7 @@ from .session_adoption_policy import validate_adoption_mode
 from .session_adoption_state import CodexSessionOrigins
 from .session_connect import ConnectCandidate, SessionConnectStore
 from .state import HubState, ProviderJobRecord, StateError
+from .state_errors import ConnectPermissionSelectionChanged
 from .supervisor import CodexAppServerSupervisor
 from .telegram_interaction import (
     telegram_contract_version,
@@ -72,13 +77,17 @@ from .worker_execution import (
     prepare_worker_artifacts,
     prepare_worker_materials,
     prepare_worker_staging_directory,
+    require_exact_retry_transport,
     require_provider_job_lease,
     resolve_external_worker_target,
     revalidate_worker_execution_root,
+    should_transfer_legacy_fallback,
     start_codex_provider_turn,
+    validate_provider_worker_binding,
     wait_for_codex_provider_turn,
     worker_needs_full_telegram_contract,
 )
+from .worker_failure_notice import commit_worker_failure_notice
 
 
 class ExternalQueueWorkerError(RuntimeError):
@@ -129,7 +138,9 @@ class ExternalQueueWorker:
             raise ExternalQueueWorkerError("worker slot is not configured for this agent")
         validate_adoption_mode(config)
         self.registry = registry or load_registry(config.registry_path)
-        self.state = HubState.open(config.state_path)
+        self.state = HubState.open(
+            config.state_path, codex_permission_profile=config.codex_permission_profile
+        )
         try:
             self.state.reconcile_legacy_execution_scopes(
                 {project.project_id: project.root for project in self.registry.projects}
@@ -144,6 +155,22 @@ class ExternalQueueWorker:
         )
         self._started_at = datetime.now(timezone.utc)
         self._process_start_marker = uuid.uuid4().hex
+        self._preacceptance_epoch = None
+        if (
+            self.agent.runtime == "codex"
+            and config.hub_bot is not None
+            and config.outbox_runtime == "external"
+        ):
+            try:
+                self._preacceptance_epoch = PreacceptanceApprovalState(self.state).register_runtime(
+                    agent_id=self.agent.agent_id,
+                    worker_slot=worker_slot,
+                    instance_token=self._process_start_marker,
+                    now=self._started_at,
+                )
+            except BaseException:
+                self.state.close()
+                raise
         self._last_success_at: datetime | None = None
         self._last_error_code: str | None = None
         self._provider_state = "unknown"
@@ -158,6 +185,7 @@ class ExternalQueueWorker:
                 manage_process=config.manage_codex_server,
                 stdio_executable=config.codex_stdio_executable,
                 model_provider=config.codex_model_provider,
+                permission_profile=config.codex_permission_profile,
             )
         else:
             self.adapter = adapter or ExternalCliAdapter(
@@ -185,18 +213,36 @@ class ExternalQueueWorker:
             self._codex_client = self.supervisor.client()
         return self._codex_client
 
-    def _discard_client(self) -> None:
-        client = self._codex_client
-        self._codex_client = None
+    def _discard_client(
+        self,
+        *,
+        expected_client: CodexAppServerClient | None = None,
+        report_close_error: bool = False,
+    ) -> None:
+        client = expected_client if expected_client is not None else self._codex_client
+        if self._codex_client is client:
+            self._codex_client = None
         if client is not None:
             try:
                 client.close()
             except Exception as survived_error:
                 survived("external_worker.client_close", survived_error)
+                if report_close_error:
+                    raise
+
+    def _restore_codex_socket_at_idle(self) -> None:
+        # The productive worker calls this only between run_cycle invocations.
+        # Its cached stdio client may retain a different native writer, so close
+        # it only after the shared socket has answered a metadata handshake.
+        if self.supervisor is not None and self.supervisor.restore_socket_at_idle():
+            self._discard_client()
 
     def _record_event(self, level: str, code: str, detail: str) -> None:
         try:
-            event_state = HubState.open(self.config.state_path)
+            event_state = HubState.open(
+                self.config.state_path,
+                codex_permission_profile=self.config.codex_permission_profile,
+            )
             try:
                 event_state.record_runtime_event(self.agent.agent_id, level, code, detail)
             finally:
@@ -224,7 +270,15 @@ class ExternalQueueWorker:
                 started_at=self._started_at,
                 heartbeat_at=datetime.now(timezone.utc),
                 success_at=self._last_success_at,
-                error_code=self._last_error_code,
+                error_code=(
+                    self._last_error_code
+                    or (
+                        "codex_approvals_unavailable"
+                        if self.supervisor is not None
+                        and not self.supervisor.human_approvals_available()
+                        else None
+                    )
+                ),
                 activity_state=activity_state,
                 active_job_id=None if active_job is None else active_job.job_id,
                 active_lease_expires_at=(
@@ -271,7 +325,10 @@ class ExternalQueueWorker:
         """Serve metadata requests while the productive worker waits on a turn."""
         while not self._stop.is_set():
             try:
-                state = HubState.open(self.config.state_path)
+                state = HubState.open(
+                    self.config.state_path,
+                    codex_permission_profile=self.config.codex_permission_profile,
+                )
                 try:
                     while not self._stop.is_set():
                         worked = self._run_connect_cycle(state=state)
@@ -286,6 +343,8 @@ class ExternalQueueWorker:
         """Lease and execute at most one job for this worker's sole agent."""
         if self._stop.is_set():
             return False
+        if isinstance(self.supervisor, CodexAppServerSupervisor):
+            self._restore_codex_socket_at_idle()
         self._publish_health()
         if self.agent.runtime == "codex":
             assert self.supervisor is not None
@@ -344,6 +403,7 @@ class ExternalQueueWorker:
             return False
         client: CodexAppServerClient | None = None
         try:
+            store.require_permission_selection(workflow)
             if workflow.canonical_root is None:
                 raise ExternalQueueWorkerError("connect project is missing")
             if workflow.project_id is None:
@@ -364,7 +424,7 @@ class ExternalQueueWorker:
                     expected_root=workflow.canonical_root,
                 )
             assert self.supervisor is not None
-            client = self.supervisor.client()
+            client = self.supervisor.client(allow_fallback=False)
             client.initialize()
             if workflow.stage == "discovering":
                 discovered = client.list_connectable_threads(root=workflow.canonical_root)
@@ -392,7 +452,11 @@ class ExternalQueueWorker:
                 raise ExternalQueueWorkerError("connect workflow stage is not executable")
         except Exception as exc:
             safe_code = (
-                str(exc) if type(exc).__name__ == "CodexMetadataError" else "metadata_unavailable"
+                exc.code
+                if isinstance(exc, ConnectPermissionSelectionChanged)
+                else str(exc)
+                if type(exc).__name__ == "CodexMetadataError"
+                else "metadata_unavailable"
             )
             store.fail_worker(workflow.workflow_id, workflow.lease_token, safe_code)
         finally:
@@ -412,6 +476,7 @@ class ExternalQueueWorker:
                 expected_status="leased",
                 error_class="pre_execution",
                 error_code=str(exc),
+                provider_runtime=self.agent.runtime,
                 sender_agent_id=self.agent.agent_id,
                 telegram_html=(
                     f"{self.agent.display_name} did not start: the project binding is invalid; verify it locally."
@@ -433,7 +498,10 @@ class ExternalQueueWorker:
         heartbeat_stop = threading.Event()
 
         def maintain_lease() -> None:
-            heartbeat_state = HubState.open(self.config.state_path)
+            heartbeat_state = HubState.open(
+                self.config.state_path,
+                codex_permission_profile=self.config.codex_permission_profile,
+            )
             try:
                 while not heartbeat_stop.is_set():
                     try:
@@ -462,6 +530,8 @@ class ExternalQueueWorker:
         try:
             target = revalidate_worker_execution_root(self.state, target)
             project = target.project
+            with codex_preparation():
+                validate_provider_worker_binding(self.state, executing, self.config, project.root)
             if self.agent.runtime == "codex":
                 self._execute_codex(executing, token, project, topic)
             else:
@@ -512,6 +582,7 @@ class ExternalQueueWorker:
                     status=failure.status,
                     error_class=failure.error_class,
                     error_code=failure.error_code,
+                    provider_runtime=self.agent.runtime,
                     sender_agent_id=self.agent.agent_id,
                     telegram_html=exc.public_message,
                 )
@@ -538,6 +609,7 @@ class ExternalQueueWorker:
                     status=failure.status,
                     error_class=failure.error_class,
                     error_code=failure.error_code,
+                    provider_runtime=self.agent.runtime,
                     sender_agent_id=self.agent.agent_id,
                     telegram_html=(
                         f"{self.agent.display_name} limit reached. Reset telemetry was "
@@ -555,6 +627,7 @@ class ExternalQueueWorker:
                     status=failure.status,
                     error_class=failure.error_class,
                     error_code=failure.error_code,
+                    provider_runtime=self.agent.runtime,
                     sender_agent_id=self.agent.agent_id,
                     telegram_html=exc.public_message,
                 )
@@ -573,6 +646,7 @@ class ExternalQueueWorker:
                             lease_token=token,
                             agent_id=self.agent.agent_id,
                             client_factory=self.supervisor.client,
+                            execution_error=exc,
                         )
                         recovered = turn_status == "completed"
                     except ProviderTurnStopped:  # won the recovery commit (R-021)
@@ -597,32 +671,24 @@ class ExternalQueueWorker:
                     error_detail = " ".join(str(exc).split())[:1000] or None
                     # Invocation has been marked executing; no automatic replay
                     # is safe without runtime-specific proof that it never began.
-                    record = self.state.terminate_provider_job_with_notice(
-                        executing.job_id,
+                    record = commit_worker_failure_notice(
+                        self.state,
+                        self.config,
+                        executing,
                         token,
-                        status=failure.status,
-                        error_class=failure.error_class,
-                        error_code=failure.error_code,
+                        root=project_root,
+                        error=exc,
+                        failure=failure,
+                        turn_status=turn_status,
                         error_detail=error_detail,
-                        terminal_turn_status=(
-                            turn_status if turn_status in {"failed", "interrupted"} else None
-                        ),
-                        sender_agent_id=self.agent.agent_id,
-                        telegram_html=(
-                            "Incoming material integrity validation failed; "
-                            "the provider was not started. Send the material again."
-                            if failure.notice == "incoming_material"
-                            else checkpoint_failure_notice(
-                                self.state, executing.job_id, exc, turn_status=turn_status
-                            )
-                            if failure.notice == "checkpoint"
-                            else self._claude_partial_notice(
-                                executing,
-                                token,
-                                project_root,
-                                uncertain_provider_notice(self.agent.display_name),
-                            )
-                        ),
+                        fallback_notice=self._claude_partial_notice(
+                            executing,
+                            token,
+                            project_root,
+                            uncertain_provider_notice(self.agent.display_name),
+                        )
+                        if failure.notice == "uncertain"
+                        else "",
                     )
                     if record.status == "cancelled":  # a covering stop won the commit
                         self._last_error_code = None
@@ -654,6 +720,7 @@ class ExternalQueueWorker:
             status=failure.status,
             error_class=failure.error_class,
             error_code=failure.error_code,
+            provider_runtime=self.agent.runtime,
             sender_agent_id=self.agent.agent_id,
             telegram_html=(
                 self._claude_partial_notice(job, token, project_root, error.public_message)
@@ -769,16 +836,13 @@ class ExternalQueueWorker:
                     not in {origin.model_provider, self.config.codex_model_provider}
                 ):
                     raise ExternalQueueWorkerError("adopted Codex source mismatch")
-            fallback_transfer = bool(
-                origin is None
-                and self.config.codex_model_provider is None
-                and job.provider_session_id
-                and self.supervisor.transport_mode == "stdio-fallback"
+            fallback_transfer = should_transfer_legacy_fallback(
+                job,
+                has_origin=origin is not None,
+                model_provider=self.config.codex_model_provider,
+                transport_mode=self.supervisor.transport_mode,
             )
-            if fallback_transfer and job.idempotency_key.startswith("continuation:"):
-                raise ExternalQueueWorkerError(
-                    "continuation requires the owning Codex socket; fallback cannot preserve its thread"
-                )
+            require_exact_retry_transport(job, fallback_transfer)
             turn_text = codex_turn_text(job, prepared)
             if fallback_transfer:
                 visible_context = self.state.recent_external_context(
@@ -808,9 +872,22 @@ class ExternalQueueWorker:
                 != (self.config.codex_model_provider or origin.model_provider)
             ):
                 raise ExternalQueueWorkerError("adopted Codex resume identity mismatch")
-            journal.record_thread(job.job_id, token, thread.thread_id, project.root)
+            journal.record_thread(
+                job.job_id,
+                token,
+                thread.thread_id,
+                project.root,
+                codex_permission_profile=thread.permission_profile,
+            )
         with codex_activity_for_turn(
-            client, self.state, self.config, job.job_id, token, project.root
+            client,
+            self.state,
+            self.config,
+            job.job_id,
+            token,
+            project.root,
+            runtime_epoch=self._preacceptance_epoch,
+            prepared_thread_id=thread.thread_id,
         ) as accepted_activity:
             turn_id = start_codex_provider_turn(
                 client,
@@ -822,76 +899,44 @@ class ExternalQueueWorker:
             )
             journal.record_turn(job.job_id, token, turn_id)
             accepted_activity(thread.thread_id, turn_id)
-            client.on_visible_item = lambda item_id, text, phase: journal.record_item(
-                job.job_id, token, item_id, text, phase
+            supervisor = self.supervisor
+            control = CodexLiveControl(
+                state_factory=lambda: HubState.open_existing(
+                    self.config.state_path,
+                    codex_permission_profile=self.config.codex_permission_profile,
+                    contention_timeout_seconds=0.1,
+                ),
+                client_factory=lambda: supervisor.client(
+                    allow_fallback=False, deadline=time.monotonic() + 2
+                ),
+                job=job,
+                worker_id=self.worker_id,
+                thread_id=thread.thread_id,
+                turn_id=turn_id,
+                transport_mode=supervisor.transport_mode,
+                close_owned_turn_client=client.close,
             )
-            client.on_completed = lambda result: journal.record_completion(
-                job.job_id, token, result.text
-            )
-            monitor_stop = threading.Event()
-            interrupted_request: list[str] = []
-
-            def monitor_control() -> None:
-                monitor_state = HubState.open(self.config.state_path)
+            with control.running():
+                client.on_visible_item = lambda item_id, text, phase: journal.record_item(
+                    job.job_id, token, item_id, text, phase
+                )
+                client.on_completed = lambda result: journal.record_completion(
+                    job.job_id, token, result.text
+                )
                 try:
-                    while not monitor_stop.wait(0.2):
-                        request_id = monitor_state.pending_emergency_stop_for_job(job.job_id)
-                        if request_id is not None:
-                            try:
-                                assert self.supervisor is not None
-                                if self.supervisor.transport_mode == "stdio-fallback":
-                                    client.close()
-                                else:
-                                    interrupt_client = self.supervisor.client()
-                                    try:
-                                        interrupt_client.interrupt_turn(
-                                            thread_id=thread.thread_id, turn_id=turn_id
-                                        )
-                                    finally:
-                                        interrupt_client.close()
-                            except Exception as exc:
-                                self._record_event(
-                                    "warning", "provider_interrupt_unconfirmed", type(exc).__name__
-                                )
-                            else:
-                                interrupted_request.append(request_id)
-                            return
-                        assert self.supervisor is not None
-                        if self.supervisor.transport_mode == "stdio-fallback":
-                            # A fallback client owns a private app-server process;
-                            # a second client cannot address its active turn.
-                            continue
-                        self._steer_ready_followup(monitor_state, job, thread.thread_id, turn_id)
+                    result = wait_for_codex_provider_turn(client, turn_id)
+                    journal.record_completion(job.job_id, token, result.text)
                 finally:
-                    monitor_state.close()
-
-            monitor = threading.Thread(
-                target=monitor_control,
-                name="codex-live-control",
-                daemon=True,
-            )
-            monitor.start()
-            try:
-                result = wait_for_codex_provider_turn(client, turn_id)
-                journal.record_completion(job.job_id, token, result.text)
-            finally:
-                client.on_visible_item = None
-                client.on_completed = None
-                monitor_stop.set()
-                monitor.join(timeout=2)
+                    client.on_visible_item = None
+                    client.on_completed = None
+        if control.confirmed_interrupt_request is not None:
+            raise ProviderTurnStopped(control.confirmed_interrupt_request)
         late_request = self.state.pending_emergency_stop_for_job(job.job_id)
-        if interrupted_request:
-            raise ProviderTurnStopped(interrupted_request[0])
         if late_request is not None:
             raise ProviderTurnStopped(late_request)
-        try:
-            self.state.set_context_remaining(job.session_id, context_remaining_percent(result))
-        except Exception as survived_error:
-            survived("external_worker.context_telemetry", survived_error)
-        try:
-            limits = client.read_rate_limits()
-        except Exception:
-            limits = RateLimits(None, None)
+        control.raise_deferred_failure()
+        post_completion_context(self.state, job.session_id, result)
+        limits = post_completion_limits(client)
         artifacts = prepare_worker_artifacts(
             Path(project.root),
             job.job_id,
@@ -928,55 +973,13 @@ class ExternalQueueWorker:
             )
         )
 
-    def _steer_ready_followup(
-        self, state: HubState, job: ProviderJobRecord, thread_id: str, turn_id: str
-    ) -> None:
-        """Steer the next compatible queued message into the running Codex turn.
-
-        The follow-up starts only through ``start_steer_followup``, which honors
-        a pending emergency stop in the same transaction, so a follow-up that
-        is cancelled or returned to the queue never reaches the provider.
-        """
-        followup = state.lease_steer_followup(
-            job.job_id, f"{self.worker_id}-steer", lease_seconds=120
+        retire_completed_connection(
+            client,
+            thread_id=thread.thread_id,
+            turn_id=turn_id,
+            retire=lambda: self._discard_client(expected_client=client, report_close_error=True),
+            warning=lambda code, detail: self._record_event("warning", code, detail),
         )
-        if followup is None or followup.lease_token is None:
-            return
-        steer_token = followup.lease_token
-        started = state.start_steer_followup(followup.job_id, steer_token, parent_job_id=job.job_id)
-        if started.status != "executing":
-            return
-        assert self.supervisor is not None
-        steer_client = None
-        try:
-            steer_client = self.supervisor.client()
-            returned_turn = steer_client.steer_turn(
-                thread_id=thread_id,
-                turn_id=turn_id,
-                text=followup.payload_text,
-                client_user_message_id=followup.job_id,
-            )
-            state.complete_steered_job(
-                followup.job_id,
-                steer_token,
-                parent_job_id=job.job_id,
-                provider_turn_id=returned_turn,
-            )
-        except RpcRejectedError:
-            state.reject_unaccepted_steer(followup.job_id, steer_token)
-        except Exception as exc:
-            state.mark_provider_job_indeterminate(
-                followup.job_id,
-                steer_token,
-                error_code=type(exc).__name__,
-                error_detail="same-turn steering outcome is unknown",
-            )
-        finally:
-            if steer_client is not None:
-                try:
-                    steer_client.close()
-                except Exception as survived_error:
-                    survived("external_worker.steer_client_close", survived_error)
 
     def _execute_external(
         self, job: ProviderJobRecord, token: str, project: object, topic: object
@@ -1034,7 +1037,10 @@ class ExternalQueueWorker:
         interrupted_request: list[str] = []
 
         def monitor_interrupt() -> None:
-            monitor_state = HubState.open(self.config.state_path)
+            monitor_state = HubState.open(
+                self.config.state_path,
+                codex_permission_profile=self.config.codex_permission_profile,
+            )
             try:
                 while not monitor_stop.wait(0.2):
                     request_id = monitor_state.pending_emergency_stop_for_job(job.job_id)

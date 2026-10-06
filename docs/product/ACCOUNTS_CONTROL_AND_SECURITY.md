@@ -71,6 +71,14 @@ This normative module is part of the
   against the exact cached catalog snapshot displayed to the user. The final
   click changes local session state deterministically and MUST NOT depend on a
   new provider RPC or an AI-generated handoff.
+  Claude MAY expose an explicit local `model_catalog`: 1–32 unique ASCII model
+  IDs of at most 128 characters, printable labels of 1–96 characters, and
+  unique nonempty effort subsets of `low`, `medium`, `high`, `xhigh`, and `max`.
+  Every entry contains only `model_id`, `label`, and `efforts`; the configured
+  default model/effort pair MUST be included. Omission retains the single
+  configured default. This field MUST be rejected for other runtimes. Claude
+  menus MUST label these as configured choices with availability unverified;
+  neither entitlement, effective effort nor billing route is established.
 - **REQ-CMD-002A (Implemented):** Successful provider discovery updates a
   private atomic last-known-good catalog with source version and timestamp.
   Telegram callbacks use bounded opaque keys rather than provider model IDs;
@@ -82,6 +90,12 @@ This normative module is part of the
   refresh. Discovery failures preserve the last good catalog. The isolated Controller
   never discovers models itself: Refresh requests monitor refresh while keeping
   cached choices usable. Only an empty cache uses the configured default.
+  Claude catalog display, callback validation and monitor refresh MUST project
+  the same current local configuration without subprocess, network, provider
+  or account-helper invocation. A configuration change MUST invalidate removed
+  model/effort choices even when the cache is fresh. An already selected choice
+  outside the updated catalog MUST remain visibly selected without an automatic
+  reset, session replacement or false availability claim.
 - **REQ-CMD-003 (Implemented):** `/accounts` lists configured provider accounts
   and observable limits. OpenCode Go exact exhaustion/reset telemetry is shown
   only after a real provider `429`; plan caps are labelled separately. The
@@ -183,6 +197,9 @@ This normative module is part of the
   Antigravity MUST use the configured executable and the same model/effort
   argument builder as productive turns. An explicit effort replaces a known
   existing effort suffix; default effort preserves the selected model ID.
+  Named managed Codex profiles remain excluded from local/tmux transfer until
+  its execution boundary is independently verified; refusal MUST precede
+  provider preparation, process launch and lease mutation (REQ-SEC-001).
 - **REQ-WRITER-007 (Implemented for Codex with explicit owner assertion):**
   after the owner closes the CLI and Hub work is terminal, `/return` changes
   only the lease; it invokes no model and copies no summary or transcript. The
@@ -284,6 +301,31 @@ single-writer checks remain mandatory. See
   requested. Any unexpected server approval request on that fallback MUST be
   explicitly declined. `danger-full-access`, dangerous provider bypass flags,
   and automatic approval MUST be rejected.
+  An explicit local `codex_permission_profile` MAY select a bounded named
+  managed profile through external Codex queue workers. Hub MUST verify, through
+  bounded passive metadata on the preparing connection, that the configured
+  selection is the managed default and the sole allowed profile. Start/resume
+  and turn submission MUST select that exact profile without legacy sandbox
+  overrides, retaining the transport's approval policy and human reviewer.
+  The session generation, accepted job, confirmed execution checkpoint and
+  connect authorization MUST retain immutable selection snapshots. Missing
+  configuration context MUST refuse Codex creation/admission/activation;
+  explicit legacy `null` remains distinct. Existing legacy rows MUST stay
+  legacy after migration. A configuration change MUST NOT retarget old work;
+  an explicit `/new` MAY create a generation with the current selection.
+  Confirmation MUST match the profile, canonical root, provider, approval
+  policy and reviewer and reject visible network access, writable roots outside
+  the project and implicit temporary writable roots. Managed parent metadata
+  MAY explicitly be `null`; it is not proof of inheritance. Matching settings
+  changes during preparation MUST be checked before turn submission. A later
+  policy change MUST trigger a bounded interrupt and retain uncertain execution
+  status until exact native terminality is separately proven.
+  Managed exact resume MUST NOT substitute another thread. Managed steering,
+  inline/pilot execution and local/tmux transfer MUST refuse before their effects
+  until separately supported. Metadata proves selection continuity only; it
+  does not expose the full managed definition or establish read isolation,
+  authority-data custody, helper isolation or an advisor boundary. Those claims
+  require independent OS-boundary and negative access evidence.
 - **REQ-SEC-002 (Implemented):** Hermes and Hub are not approval authorities.
   Codex/tlive retains approval ownership and first-valid-answer-wins behavior.
 - **REQ-SEC-003 (Accepted):** Timeout, restart, ambiguity, missing state, and

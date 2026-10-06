@@ -69,7 +69,7 @@ class ProjectEditingTests(unittest.TestCase):
             projects=(ProjectBinding("example", -1001234567890),),
             agents=(),
         )
-        self.state = HubState.open(self.config.state_path)
+        self.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         self.addCleanup(lambda: self.state.close())
 
     def _start(self) -> tuple[ProjectEditStore, str]:
@@ -449,7 +449,7 @@ class ProjectEditingTests(unittest.TestCase):
             with self.subTest(scenario=scenario):
                 self.state.close()
                 self.config.state_path.unlink(missing_ok=True)
-                self.state = HubState.open(self.config.state_path)
+                self.state = HubState.open(self.config.state_path, codex_permission_profile=None)
                 topic_id = self._topic()
                 session = self.state.activate_agent(topic_id, "codex", "model", "high")
                 now = "2026-01-01T00:00:00+00:00"
@@ -580,7 +580,7 @@ class ProjectEditingTests(unittest.TestCase):
 
         self.assertEqual(load_registry(self.registry_path).require_project("example").root, target)
         self.assertEqual(store.get(workflow_id).stage, "applying")
-        reopened = HubState.open(self.config.state_path)
+        reopened = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             recovered = ProjectEditStore(reopened, self.registry_path).recover_pending()
             self.assertEqual([item.workflow_id for item in recovered], [workflow_id])

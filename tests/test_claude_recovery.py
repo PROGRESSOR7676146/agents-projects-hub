@@ -21,7 +21,7 @@ PARTIAL_TEXT = "Fictional provisional Claude response."
 
 
 def crash_after_completion(path: Path, job_id: str, token: str, native: str, root: Path) -> None:
-    state = HubState.open(path)
+    state = HubState.open(path, codex_permission_profile=None)
     ExecutionJournal(state).record_claude_completion(job_id, token, native, SAVED_TEXT, cwd=root)
     os._exit(17)
 

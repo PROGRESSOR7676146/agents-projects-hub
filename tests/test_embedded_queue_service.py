@@ -77,7 +77,10 @@ class QueueClient:
             self.release.wait(3)
         return TurnResult("Visible answer", 1000, 100)
 
-    def read_rate_limits(self) -> RateLimits:
+    def consume_completed_connection(self, *, thread_id: str, turn_id: str) -> bool:
+        return False
+
+    def read_rate_limits(self, *, deadline: float | None = None) -> RateLimits:
         if self.fail_limits:
             raise RuntimeError("telemetry unavailable")
         return RateLimits(None, None)
@@ -172,7 +175,7 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         value = ProjectHubService.__new__(ProjectHubService)
         value.config = self.config
         value.registry = self.registry
-        value.state = HubState.open(self.config.state_path)
+        value.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         value.agent = self.config.agents[0]
         telegram = FakeTelegram()
         value.telegram = cast(Any, telegram)

@@ -91,7 +91,7 @@ class LaneWriterTransferTests(unittest.TestCase):
 
     def test_scope_lane_and_generation_drift_are_rechecked_inside_return_transaction(self) -> None:
         self.command(2, "/local")
-        peer = HubState.open(self.harness.config.state_path)
+        peer = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         mutations = (
             (
                 "UPDATE topics SET execution_scope=? WHERE topic_id=?",
@@ -149,7 +149,7 @@ class LaneWriterTransferTests(unittest.TestCase):
 
         with self.assertRaises(QueueAcceptanceError):
             self.command(3, "/return")
-        peer = HubState.open(self.harness.config.state_path)
+        peer = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         try:
             self.assertEqual(peer.get_session(self.session.session_id), before)
             self.assertEqual(peer.provider_jobs_for_topic(self.topic.topic_id), ())
@@ -157,7 +157,7 @@ class LaneWriterTransferTests(unittest.TestCase):
             peer.close()
 
     def check_interleaving(self, command: str, writer: str) -> None:
-        peer = HubState.open(self.harness.config.state_path)
+        peer = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         try:
 
             def interleave(state, registry, topic):

@@ -22,7 +22,7 @@ class SessionConnectStateTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.state = HubState.open(self.root / "state.db")
+        self.state = HubState.open(self.root / "state.db", codex_permission_profile=None)
         self.addCleanup(self.state.close)
         self.topic = self.state.observe_topic(
             project_id="example-project",
@@ -105,7 +105,7 @@ class SessionConnectStateTests(unittest.TestCase):
                 ("2000-01-01T00:00:00+00:00", workflow.workflow_id),
             )
         self.assertIsNone(self.store.lease_worker("worker-before-restart"))
-        restarted_state = HubState.open(self.root / "state.db")
+        restarted_state = HubState.open(self.root / "state.db", codex_permission_profile=None)
         try:
             restarted = SessionConnectStore(restarted_state)
             self.assertIsNone(restarted.lease_worker("worker-after-restart"))
@@ -336,7 +336,7 @@ class SessionConnectStateTests(unittest.TestCase):
         failures: list[BaseException] = []
 
         def redeem() -> None:
-            state = HubState.open(self.root / "state.db")
+            state = HubState.open(self.root / "state.db", codex_permission_profile=None)
             try:
                 barrier.wait()
                 result = SessionConnectStore(state).redeem_code_direct(
@@ -447,7 +447,7 @@ class SessionConnectStateTests(unittest.TestCase):
         )
         option = self.store.options(workflow.workflow_id, "project")[0]
         self.store.select_project(42, option.option_id)
-        reopened = HubState.open(self.root / "state.db")
+        reopened = HubState.open(self.root / "state.db", codex_permission_profile=None)
         self.addCleanup(reopened.close)
         restarted = SessionConnectStore(reopened)
         self.assertEqual(restarted.get(workflow.workflow_id).stage, "discovering")

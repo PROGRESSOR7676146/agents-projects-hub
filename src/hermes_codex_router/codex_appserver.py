@@ -1,33 +1,52 @@
 from __future__ import annotations
 
-import asyncio
-import json
-import queue
 import re
-import socket
-import subprocess
-import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal, Protocol, Sequence, cast
-
-import aiohttp
+from typing import Any, Callable, Iterator, Literal, Protocol, Sequence, cast
 
 from .codex_activity import (
     CodexActivityEvent,
     normalize_codex_activity,
     normalize_codex_approval_resolution,
 )
+from .codex_connection_completion import CompletedConnectionProof
 from .codex_failure import (
     MAX_PARTIAL_TEXT,
     UnsupportedCodexPermissionProfileError,
     codex_failure_reason,
 )
+from .codex_notifications import retain_turn_notification
+from .codex_permissions import (
+    CodexPermissionBinding,
+    CodexPermissionPolicyDriftError,
+    CodexPermissionProfileError,
+    validate_permission_profile_id,
+    verify_managed_selection,
+)
+from .codex_response_drain import CodexResponseDrain
+from .codex_rpc import RpcError as RpcError
+from .codex_rpc import RpcOutboundUnavailableError
+from .codex_rpc import RpcRejectedError as RpcRejectedError
+from .codex_transports import (
+    StdioJsonLineTransport as StdioJsonLineTransport,
+)
+from .codex_transports import (
+    UnixJsonLineTransport as UnixJsonLineTransport,
+)
+from .codex_transports import (
+    UnixWebSocketTransport as UnixWebSocketTransport,
+)
+from .diagnostic_log import survived
 
 MAX_PENDING_ACTIVITY = 128
+DEFAULT_RPC_RESPONSE_SECONDS = 120.0
+DEFAULT_RPC_QUIET_SECONDS = 20.0
+TURN_START_RESPONSE_SECONDS = 300.0
 
 
 def _validate_legacy_permission_profile(result: dict[str, Any]) -> None:
@@ -46,14 +65,6 @@ def _validate_legacy_permission_profile(result: dict[str, Any]) -> None:
     raise UnsupportedCodexPermissionProfileError()
 
 
-class RpcError(RuntimeError):
-    pass
-
-
-class RpcRejectedError(RpcError):
-    """The app-server returned an explicit JSON-RPC rejection."""
-
-
 class CodexMetadataError(RpcError):
     """Safe capability/precondition failure; never contains provider payloads."""
 
@@ -63,16 +74,20 @@ def validate_codex_thread_id(value: str) -> None:
         raise CodexMetadataError("invalid_thread_id")
 
 
+def _bounded_partial_text(text: str) -> str:
+    return (
+        "[Earlier partial text omitted]\n" + text[-(MAX_PARTIAL_TEXT - 40) :]
+        if len(text) > MAX_PARTIAL_TEXT
+        else text
+    )
+
+
 class CodexTurnError(RpcError):
     """A failed wait retains visible output without claiming task success."""
 
     def __init__(self, cause: BaseException, partial_text: str = "") -> None:
         super().__init__(str(cause))
-        self.partial_text = (
-            "[Earlier partial text omitted]\n" + partial_text[-(MAX_PARTIAL_TEXT - 40) :]
-            if len(partial_text) > MAX_PARTIAL_TEXT
-            else partial_text
-        )
+        self.partial_text = _bounded_partial_text(partial_text)
         self.failure_reason = codex_failure_reason(cause)
 
 
@@ -91,255 +106,13 @@ class MessageTransport(Protocol):
     def close(self) -> None: ...
 
 
-class UnixJsonLineTransport:
-    """Newline-delimited JSON transport for a local Codex app-server socket."""
-
-    def __init__(self, connection: socket.socket) -> None:
-        self._connection = connection
-        self._reader = connection.makefile("r", encoding="utf-8", newline="\n")
-        self._writer = connection.makefile("w", encoding="utf-8", newline="\n")
-
-    @classmethod
-    def connect(cls, socket_path: Path, *, timeout: float = 20.0) -> "UnixJsonLineTransport":
-        path = socket_path.expanduser().resolve(strict=True)
-        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        connection.settimeout(timeout)
-        connection.connect(str(path))
-        return cls(connection)
-
-    def send(self, message: dict[str, Any]) -> None:
-        self._writer.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")))
-        self._writer.write("\n")
-        self._writer.flush()
-
-    def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
-        del timeout
-        line = self._reader.readline()
-        if not line:
-            raise EOFError("Codex app-server closed the connection")
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise RpcError("Codex app-server emitted malformed JSON") from exc
-        if not isinstance(message, dict):
-            raise RpcError("Codex app-server message must be an object")
-        return message
-
-    def close(self) -> None:
-        self._reader.close()
-        self._writer.close()
-        self._connection.close()
-
-
-class StdioJsonLineTransport:
-    """JSONL transport backed by the official `codex app-server --stdio`."""
-
-    def __init__(self, process: subprocess.Popen[str]) -> None:
-        if process.stdin is None or process.stdout is None:
-            raise RpcError("Codex stdio pipes are unavailable")
-        self._process = process
-        self._reader = process.stdout
-        self._writer = process.stdin
-        self._closed = False
-        self._lines: queue.Queue[str | BaseException] = queue.Queue()
-        self._reader_thread = threading.Thread(target=self._read_stdout, daemon=True)
-        self._reader_thread.start()
-
-    def _read_stdout(self) -> None:
-        try:
-            while line := self._reader.readline():
-                self._lines.put(line)
-            self._lines.put(EOFError("Codex app-server closed stdout"))
-        except Exception as exc:
-            self._lines.put(exc)
-
-    @classmethod
-    def start(cls, executable: str = "codex") -> "StdioJsonLineTransport":
-        process = subprocess.Popen(
-            (executable, "app-server", "--stdio"),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            start_new_session=True,
-        )
-        return cls(process)
-
-    def send(self, message: dict[str, Any]) -> None:
-        self._writer.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")))
-        self._writer.write("\n")
-        self._writer.flush()
-
-    def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
-        try:
-            line = self._lines.get(timeout=20.0 if timeout is None else timeout)
-        except queue.Empty as exc:
-            raise RpcError("timed out waiting for Codex stdio") from exc
-        if isinstance(line, BaseException):
-            raise line
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise RpcError("Codex app-server emitted malformed JSON") from exc
-        if not isinstance(message, dict):
-            raise RpcError("Codex app-server message must be an object")
-        return message
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        try:
-            self._writer.close()
-        finally:
-            if self._process.poll() is None:
-                self._process.terminate()
-                try:
-                    self._process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self._process.kill()
-                    self._process.wait(timeout=5)
-            self._reader_thread.join(timeout=2)
-            if not self._reader_thread.is_alive():
-                self._reader.close()
-
-
-class UnixWebSocketTransport:
-    """Synchronous facade over Codex's WebSocket-over-Unix transport."""
-
-    def __init__(self, socket_path: Path, *, timeout: float = 20.0) -> None:
-        self._socket_path = socket_path.expanduser().resolve(strict=True)
-        self._timeout = timeout
-        self._outbound: queue.Queue[dict[str, Any] | None] = queue.Queue()
-        self._inbound: queue.Queue[dict[str, Any] | BaseException] = queue.Queue()
-        self._ready = threading.Event()
-        self._outbound_event: asyncio.Event | None = None
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._task: asyncio.Task[None] | None = None
-        self._closed = False
-        self._thread = threading.Thread(target=self._thread_main, daemon=True)
-        self._thread.start()
-        if not self._ready.wait(timeout):
-            self.close()
-            raise RpcError("timed out connecting to Codex Unix WebSocket")
-        if not self._inbound.empty():
-            first = self._inbound.queue[0]
-            if isinstance(first, BaseException):
-                self.close()
-                raise RpcError(f"Codex Unix WebSocket failed: {type(first).__name__}")
-
-    def _thread_main(self) -> None:
-        try:
-            asyncio.run(self._run_owned())
-        except BaseException as exc:
-            self._inbound.put(exc)
-            self._ready.set()
-
-    async def _run_owned(self) -> None:
-        self._loop = asyncio.get_running_loop()
-        self._task = asyncio.current_task()
-        try:
-            if not self._closed:
-                await self._run()
-        finally:
-            self._task = None
-            self._loop = None
-
-    async def _run(self) -> None:
-        self._loop = asyncio.get_running_loop()
-        outbound_event = asyncio.Event()
-        self._outbound_event = outbound_event
-        connector = aiohttp.UnixConnector(path=str(self._socket_path))
-        try:
-            async with aiohttp.ClientSession(connector=connector) as session:
-                async with session.ws_connect("http://localhost/") as websocket:
-                    self._ready.set()
-
-                    async def sender() -> None:
-                        while True:
-                            outbound_event.clear()
-                            try:
-                                message = self._outbound.get_nowait()
-                            except queue.Empty:
-                                await outbound_event.wait()
-                                continue
-                            if message is None:
-                                await websocket.close()
-                                return
-                            await websocket.send_json(message)
-
-                    async def receiver() -> None:
-                        try:
-                            async for message in websocket:
-                                if message.type == aiohttp.WSMsgType.TEXT:
-                                    try:
-                                        value = json.loads(message.data)
-                                    except json.JSONDecodeError as exc:
-                                        self._inbound.put(exc)
-                                        continue
-                                    if isinstance(value, dict):
-                                        self._inbound.put(value)
-                                elif message.type == aiohttp.WSMsgType.ERROR:
-                                    self._inbound.put(
-                                        websocket.exception() or RpcError("Codex WebSocket failed")
-                                    )
-                                    return
-                        finally:
-                            self._inbound.put(EOFError("Codex WebSocket closed"))
-                            self._outbound.put(None)
-                            outbound_event.set()
-
-                    await asyncio.gather(sender(), receiver())
-        finally:
-            self._outbound_event = None
-            self._loop = None
-
-    def _wake_sender(self) -> None:
-        loop = self._loop
-        event = self._outbound_event
-        if loop is not None and event is not None and not loop.is_closed():
-            try:
-                loop.call_soon_threadsafe(event.set)
-            except RuntimeError:
-                pass  # Concurrent transport teardown already closed the loop.
-
-    def send(self, message: dict[str, Any]) -> None:
-        if self._closed:
-            raise RpcError("Codex Unix WebSocket is closed")
-        self._outbound.put(message)
-        self._wake_sender()
-
-    def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
-        try:
-            value = self._inbound.get(timeout=self._timeout if timeout is None else timeout)
-        except queue.Empty as exc:
-            raise RpcError("timed out waiting for Codex Unix WebSocket") from exc
-        if isinstance(value, BaseException):
-            raise RpcError(f"Codex Unix WebSocket failed: {type(value).__name__}") from value
-        return value
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        self._outbound.put(None)
-        self._wake_sender()
-        loop, task = self._loop, self._task
-        if loop is not None and task is not None and not loop.is_closed():
-            try:
-                loop.call_soon_threadsafe(task.cancel)
-            except RuntimeError:
-                pass  # The loop completed between inspection and notification.
-        self._thread.join(timeout=5)
-
-
 @dataclass(frozen=True, slots=True)
 class CodexThread:
     thread_id: str
     cwd: Path
     model: str
     model_provider: str
+    permission_profile: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,13 +185,23 @@ class CodexAppServerClient:
         initialized: bool = False,
         approval_policy: str = "on-request",
         model_provider: str | None = None,
+        permission_profile: str | None = None,
+        retire_completed_connection: bool = False,
     ) -> None:
         if approval_policy not in {"on-request", "never"}:
             raise ValueError("unsupported Codex approval policy")
         self._transport = transport
+        self._response_drain = CodexResponseDrain()
         self._initialized = initialized
         self._approval_policy = approval_policy
         self._model_provider = model_provider
+        self._permission_profile = validate_permission_profile_id(permission_profile)
+        self._permission_binding: CodexPermissionBinding | None = None
+        self._permission_drifted = False
+        self._permission_preparing = False
+        self._completed_connection = CompletedConnectionProof(enabled=retire_completed_connection)
+        self._preparation_thread_id: str | None = None
+        self._preparation_settings: list[dict[str, Any]] = []
         self._session_providers = tuple(dict.fromkeys(("openai", model_provider or "openai")))
         self._next_request_id = 1
         self.notifications: deque[dict[str, Any]] = deque()
@@ -432,6 +215,8 @@ class CodexAppServerClient:
         self.on_completed: Callable[[TurnResult], None] | None = None
         # Install before start_turn; callbacks begin only at accepted-turn wait.
         self.on_activity: Callable[[CodexActivityEvent], None] | None = None
+        self.on_preacceptance_approval: Callable[[CodexActivityEvent], None] | None = None
+        self._turn_start_pending = False
         self._activity_thread_id: str | None = None
         self._activity_turn_id: str | None = None
         self._activity_ready = False
@@ -441,10 +226,16 @@ class CodexAppServerClient:
         self._activity_observed_notifications: set[int] = set()
 
     def close(self) -> None:
+        self._completed_connection.invalidate()
         self._clear_activity()
         self._transport.close()
 
+    def consume_completed_connection(self, *, thread_id: str, turn_id: str) -> bool:
+        """Authorize local retirement once; never unsubscribe or mutate a saved thread."""
+        return self._completed_connection.consume(thread_id=thread_id, turn_id=turn_id)
+
     def _clear_activity(self) -> None:
+        self._turn_start_pending = False
         self._activity_thread_id = self._activity_turn_id = None
         self._activity_ready = False
         self._pending_activity.clear()
@@ -453,7 +244,9 @@ class CodexAppServerClient:
         self._activity_observed_notifications.clear()
 
     def _observe_activity(self, message: dict[str, Any]) -> None:
-        if self.on_activity is None or self._activity_thread_id is None:
+        if (
+            self.on_activity is None and self.on_preacceptance_approval is None
+        ) or self._activity_thread_id is None:
             return
         params = message.get("params")
         if not isinstance(params, dict):
@@ -494,18 +287,111 @@ class CodexAppServerClient:
                 if len(self._activity_requests) >= MAX_PENDING_ACTIVITY:
                     raise RpcError("Codex activity request buffer exceeded its bound")
                 self._activity_requests[key] = event
+        if (
+            self._turn_start_pending
+            and event.kind in {"approval_requested", "approval_resolved"}
+            and self.on_preacceptance_approval is not None
+        ):
+            self.on_preacceptance_approval(event)
         if not self._activity_ready:
             if len(self._pending_activity) >= MAX_PENDING_ACTIVITY:
                 raise RpcError("Codex pending activity buffer exceeded its bound")
             self._pending_activity.append(event)
-        elif event.turn_id == self._activity_turn_id:
+        elif event.turn_id == self._activity_turn_id and self.on_activity is not None:
             self.on_activity(event)
 
     def _approval_params(self) -> dict[str, str]:
         params = {"approvalPolicy": self._approval_policy}
-        if self._approval_policy == "on-request":
+        if self._approval_policy == "on-request" or self._permission_profile is not None:
             params["approvalsReviewer"] = "user"
         return params
+
+    @property
+    def permission_profile(self) -> str | None:
+        return self._permission_profile
+
+    def _prepare_permission_selection(self, cwd: Path) -> dict[str, str]:
+        self._permission_binding = None
+        self._permission_drifted = False
+        self._permission_preparing = False
+        self._preparation_settings.clear()
+        if self._permission_profile is None:
+            return {"sandbox": "workspace-write"}
+        verify_managed_selection(self._request, self._permission_profile, cwd)
+        self._permission_preparing = True
+        return {"permissions": self._permission_profile}
+
+    def _bind_permission_selection(self, result: dict[str, Any], thread_id: str, cwd: Path) -> None:
+        if self._permission_profile is None:
+            return  # Legacy validation already ran before the sandbox check.
+        binding = CodexPermissionBinding(
+            thread_id,
+            cwd,
+            self._permission_profile,
+            self._approval_policy,
+            self._model_provider or "openai",
+        )
+        binding.validate(result)
+        for params in self._preparation_settings:
+            if params.get("threadId") == thread_id:
+                binding.validate(params.get("threadSettings"))
+        self._permission_binding = binding
+
+    @contextmanager
+    def _permission_preparation(
+        self, cwd: Path, *, thread_id: str | None = None
+    ) -> Iterator[dict[str, str]]:
+        try:
+            params = self._prepare_permission_selection(cwd)
+            self._preparation_thread_id = thread_id
+            yield params
+        finally:
+            self._permission_preparing = False
+            self._preparation_thread_id = None
+            self._preparation_settings.clear()
+
+    def _observe_permission_settings(self, message: dict[str, Any]) -> None:
+        binding = self._permission_binding
+        if message.get("method") != "thread/settings/updated" or "id" in message:
+            return
+        params = message.get("params")
+        if not isinstance(params, dict):
+            return
+        if binding is None:
+            if self._permission_preparing:
+                if (
+                    self._preparation_thread_id is not None
+                    and params.get("threadId") != self._preparation_thread_id
+                ):
+                    return
+                if len(self._preparation_settings) >= 32:
+                    raise CodexPermissionProfileError()
+                self._preparation_settings.append(params)
+            return
+        if params.get("threadId") != binding.thread_id:
+            return
+        try:
+            binding.validate(params.get("threadSettings"))
+        except CodexPermissionProfileError:
+            self._permission_drifted = True
+
+    def _refuse_permission_drift(self, turn_id: str, partial: str) -> None:
+        if not self._permission_drifted:
+            return
+        try:
+            self._request(
+                "turn/interrupt",
+                {
+                    "threadId": self._permission_binding.thread_id
+                    if self._permission_binding
+                    else self._activity_thread_id,
+                    "turnId": turn_id,
+                },
+                deadline=time.monotonic() + 5.0,
+            )
+        except Exception as error:
+            survived("codex_permissions.interrupt", error)
+        raise CodexTurnError(CodexPermissionPolicyDriftError(), partial)
 
     def _handle_server_request(self, message: dict[str, Any]) -> bool:
         if self._approval_policy != "never":
@@ -514,45 +400,74 @@ class CodexAppServerClient:
         method = message.get("method")
         if request_id is None or not isinstance(method, str):
             return False
+        result: dict[str, Any] | None = None
         if method in {
             "item/commandExecution/requestApproval",
             "item/fileChange/requestApproval",
         }:
-            result: dict[str, Any] = {"decision": "decline"}
+            result = {"decision": "decline"}
         elif method == "item/permissions/requestApproval":
             result = {"permissions": [], "scope": "turn"}
         elif method == "mcpServer/elicitation/request":
             result = {"action": "decline", "content": None}
+        if result is None:
+            response: dict[str, Any] = {
+                "id": request_id,
+                "error": {
+                    "code": -32601,
+                    "message": "server request unavailable in headless stdio fallback",
+                },
+            }
         else:
-            self._transport.send(
-                {
-                    "id": request_id,
-                    "error": {
-                        "code": -32601,
-                        "message": "server request unavailable in headless stdio fallback",
-                    },
-                }
-            )
-            return True
-        self._transport.send({"id": request_id, "result": result})
+            response = {"id": request_id, "result": result}
+        try:
+            self._transport.send(response)
+        except RpcOutboundUnavailableError:
+            # Only a known terminal admission refusal is recoverable here.
+            # Queue admission never proves that a decline was delivered.
+            self._response_drain.record(now=time.monotonic())
         return True
+
+    def _response_remaining(
+        self, seconds: float = float("inf"), *, deadline: float | None = None
+    ) -> float:
+        now = time.monotonic()
+        self._response_drain.observe(self._transport, now=now)
+        if deadline is not None:
+            seconds = min(seconds, deadline - now)
+        return self._response_drain.remaining(now=now, seconds=seconds)
+
+    def _receive(self, *, timeout: float) -> dict[str, Any]:
+        if isinstance(self._transport, StdioJsonLineTransport):
+            return self._transport.receive(
+                timeout=timeout, response_remaining=self._response_remaining
+            )
+        return self._transport.receive(timeout=timeout)
 
     def _request(
         self, method: str, params: dict[str, Any], *, deadline: float | None = None
     ) -> Any:
-        if deadline is not None and time.monotonic() >= deadline:
+        default_deadline = deadline is None
+        if default_deadline:
+            deadline = time.monotonic() + DEFAULT_RPC_RESPONSE_SECONDS
+        assert deadline is not None
+        if self._response_remaining(deadline=deadline) <= 0:
             raise RpcError("Codex request deadline exceeded")
         request_id = self._next_request_id
         self._next_request_id += 1
         self._transport.send({"method": method, "id": request_id, "params": params})
         while True:
-            if deadline is None:
-                message = self._transport.receive()
-            else:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise RpcError("Codex request deadline exceeded")
-                message = self._transport.receive(timeout=remaining)
+            remaining = self._response_remaining(deadline=deadline)
+            if remaining <= 0:
+                raise RpcError("Codex request deadline exceeded")
+            # Foreign frames cannot renew the total response deadline. Keep
+            # the existing quiet ceiling only for calls without an explicit
+            # deadline; early human approvals use turn/start's longer budget.
+            message = self._receive(
+                timeout=min(remaining, DEFAULT_RPC_QUIET_SECONDS) if default_deadline else remaining
+            )
+            if self._response_remaining(deadline=deadline) <= 0:
+                raise RpcError("Codex request deadline exceeded")
             if "method" in message and "id" in message:
                 # A companion client such as tlive owns remote approval. Do
                 # not answer from this headless bridge and never auto-allow.
@@ -571,6 +486,7 @@ class CodexAppServerClient:
             # only bounded protocol objects; hidden reasoning is never emitted
             # to Telegram by this client.
             if "method" in message and "id" not in message:
+                self._observe_permission_settings(message)
                 if message.get("method") == "serverRequest/resolved":
                     self._observe_activity(message)
                     continue
@@ -579,10 +495,17 @@ class CodexAppServerClient:
                     if isinstance(update, dict):
                         self._observe_rate_limits(update.get("rateLimits"))
                     continue
-                if len(self.notifications) >= 1024:
-                    raise RpcError("Codex notification buffer exceeded its bound")
                 if self.on_activity is not None and self._activity_thread_id is not None:
                     self._observe_activity(message)
+                if not retain_turn_notification(
+                    message,
+                    thread_id=self._activity_thread_id,
+                    turn_id=self._activity_turn_id,
+                ):
+                    continue
+                if len(self.notifications) >= 1024:
+                    raise RpcError("Codex notification buffer exceeded its bound")
+                if self.on_activity is not None:
                     # The raw notification still serves visible output and telemetry.
                     # Its activity has already been buffered in receive order.
                     self._activity_observed_notifications.add(id(message))
@@ -743,52 +666,57 @@ class CodexAppServerClient:
         project_id: str,
         developer_instructions: str | None = None,
     ) -> CodexThread:
+        self._completed_connection.invalidate()
         self._clear_activity()
         if not self._initialized:
             raise RpcError("Codex client is not initialized")
         canonical_cwd = cwd.expanduser().resolve(strict=True)
-        instruction_params = (
-            {"developerInstructions": developer_instructions}
-            if developer_instructions is not None
-            else {}
-        )
-        result = self._request(
-            "thread/start",
-            {
-                "cwd": str(canonical_cwd),
-                "model": model,
-                "sandbox": "workspace-write",
-                **self._approval_params(),
-                **instruction_params,
-                "experimentalRawEvents": False,
-                **({"modelProvider": self._model_provider} if self._model_provider else {}),
-            },
-        )
-        if not isinstance(result, dict) or not isinstance(result.get("thread"), dict):
-            raise RpcError("thread/start returned an invalid result")
-        if self._model_provider and result.get("modelProvider") != self._model_provider:
-            raise RpcError("thread/start returned a different model provider")
-        returned_cwd = Path(str(result.get("cwd"))).resolve(strict=True)
-        if returned_cwd != canonical_cwd:
-            raise RpcError("thread/start returned a different cwd")
-        if result.get("approvalPolicy") != self._approval_policy:
-            raise RpcError("thread/start returned an unsafe approval policy")
-        _validate_legacy_permission_profile(result)
-        sandbox = result.get("sandbox")
-        sandbox_is_safe = sandbox == "workspace-write" or (
-            isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite"
-        )
-        if not sandbox_is_safe:
-            raise RpcError("thread/start returned an unsafe sandbox")
-        thread_id = result["thread"].get("id")
-        if not isinstance(thread_id, str) or not thread_id:
-            raise RpcError("thread/start did not return a thread id")
-        return CodexThread(
-            thread_id=thread_id,
-            cwd=returned_cwd,
-            model=str(result.get("model") or model),
-            model_provider=str(result.get("modelProvider") or "unknown"),
-        )
+        with self._permission_preparation(canonical_cwd) as permission_params:
+            instruction_params = (
+                {"developerInstructions": developer_instructions}
+                if developer_instructions is not None
+                else {}
+            )
+            result = self._request(
+                "thread/start",
+                {
+                    "cwd": str(canonical_cwd),
+                    "model": model,
+                    **permission_params,
+                    **self._approval_params(),
+                    **instruction_params,
+                    "experimentalRawEvents": False,
+                    **({"modelProvider": self._model_provider} if self._model_provider else {}),
+                },
+            )
+            if not isinstance(result, dict) or not isinstance(result.get("thread"), dict):
+                raise RpcError("thread/start returned an invalid result")
+            if self._model_provider and result.get("modelProvider") != self._model_provider:
+                raise RpcError("thread/start returned a different model provider")
+            returned_cwd = Path(str(result.get("cwd"))).resolve(strict=True)
+            if returned_cwd != canonical_cwd:
+                raise RpcError("thread/start returned a different cwd")
+            if result.get("approvalPolicy") != self._approval_policy:
+                raise RpcError("thread/start returned an unsafe approval policy")
+            sandbox = result.get("sandbox")
+            if self._permission_profile is None:
+                _validate_legacy_permission_profile(result)
+            sandbox_is_safe = sandbox == "workspace-write" or (
+                isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite"
+            )
+            if not sandbox_is_safe:
+                raise RpcError("thread/start returned an unsafe sandbox")
+            thread_id = result["thread"].get("id")
+            if not isinstance(thread_id, str) or not thread_id:
+                raise RpcError("thread/start did not return a thread id")
+            self._bind_permission_selection(result, thread_id, canonical_cwd)
+            return CodexThread(
+                thread_id=thread_id,
+                cwd=returned_cwd,
+                model=str(result.get("model") or model),
+                model_provider=str(result.get("modelProvider") or "unknown"),
+                permission_profile=self._permission_profile,
+            )
 
     def resume_thread(
         self,
@@ -798,54 +726,59 @@ class CodexAppServerClient:
         model: str,
         developer_instructions: str | None = None,
     ) -> CodexThread:
+        self._completed_connection.invalidate()
         self._clear_activity()
         if not self._initialized:
             raise RpcError("Codex client is not initialized")
         canonical_cwd = cwd.expanduser().resolve(strict=True)
-        instruction_params = (
-            {"developerInstructions": developer_instructions}
-            if developer_instructions is not None
-            else {}
-        )
-        result = self._request(
-            "thread/resume",
-            {
-                "threadId": thread_id,
-                "cwd": str(canonical_cwd),
-                "model": model,
-                "sandbox": "workspace-write",
-                **self._approval_params(),
-                **instruction_params,
-                "excludeTurns": True,
-                **({"modelProvider": self._model_provider} if self._model_provider else {}),
-            },
-        )
-        thread = result.get("thread") if isinstance(result, dict) else None
-        returned_id = thread.get("id") if isinstance(thread, dict) else None
-        if self._model_provider and (
-            not isinstance(result, dict) or result.get("modelProvider") != self._model_provider
-        ):
-            raise RpcError("thread/resume returned a different model provider")
-        returned_cwd = result.get("cwd") if isinstance(result, dict) else None
-        if returned_id != thread_id:
-            raise RpcError("thread/resume returned a different thread id")
-        if Path(str(returned_cwd)).resolve(strict=True) != canonical_cwd:
-            raise RpcError("thread/resume returned a different cwd")
-        if result.get("approvalPolicy") != self._approval_policy:
-            raise RpcError("thread/resume returned an unsafe approval policy")
-        _validate_legacy_permission_profile(result)
-        sandbox = result.get("sandbox")
-        if not (
-            sandbox == "workspace-write"
-            or (isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite")
-        ):
-            raise RpcError("thread/resume returned an unsafe sandbox")
-        return CodexThread(
-            thread_id=thread_id,
-            cwd=canonical_cwd,
-            model=str(result.get("model") or model),
-            model_provider=str(result.get("modelProvider") or "unknown"),
-        )
+        with self._permission_preparation(canonical_cwd, thread_id=thread_id) as permission_params:
+            instruction_params = (
+                {"developerInstructions": developer_instructions}
+                if developer_instructions is not None
+                else {}
+            )
+            result = self._request(
+                "thread/resume",
+                {
+                    "threadId": thread_id,
+                    "cwd": str(canonical_cwd),
+                    "model": model,
+                    **permission_params,
+                    **self._approval_params(),
+                    **instruction_params,
+                    "excludeTurns": True,
+                    **({"modelProvider": self._model_provider} if self._model_provider else {}),
+                },
+            )
+            thread = result.get("thread") if isinstance(result, dict) else None
+            returned_id = thread.get("id") if isinstance(thread, dict) else None
+            if self._model_provider and (
+                not isinstance(result, dict) or result.get("modelProvider") != self._model_provider
+            ):
+                raise RpcError("thread/resume returned a different model provider")
+            returned_cwd = result.get("cwd") if isinstance(result, dict) else None
+            if returned_id != thread_id:
+                raise RpcError("thread/resume returned a different thread id")
+            if Path(str(returned_cwd)).resolve(strict=True) != canonical_cwd:
+                raise RpcError("thread/resume returned a different cwd")
+            if result.get("approvalPolicy") != self._approval_policy:
+                raise RpcError("thread/resume returned an unsafe approval policy")
+            sandbox = result.get("sandbox")
+            if self._permission_profile is None:
+                _validate_legacy_permission_profile(result)
+            if not (
+                sandbox == "workspace-write"
+                or (isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite")
+            ):
+                raise RpcError("thread/resume returned an unsafe sandbox")
+            self._bind_permission_selection(result, thread_id, canonical_cwd)
+            return CodexThread(
+                thread_id=thread_id,
+                cwd=canonical_cwd,
+                model=str(result.get("model") or model),
+                model_provider=str(result.get("modelProvider") or "unknown"),
+                permission_profile=self._permission_profile,
+            )
 
     def start_turn(
         self,
@@ -857,8 +790,29 @@ class CodexAppServerClient:
         effort: str,
         local_image_paths: Sequence[Path] = (),
     ) -> str:
+        self._completed_connection.invalidate()
         self._clear_activity()
+        self._response_drain = CodexResponseDrain()
+        self.notifications.clear()
         canonical_cwd = cwd.expanduser().resolve(strict=True)
+        if self._permission_profile is not None and (
+            self._permission_binding is None
+            or self._permission_binding.thread_id != thread_id
+            or self._permission_binding.root != canonical_cwd
+            or self._permission_drifted
+        ):
+            raise CodexPermissionProfileError()
+        permission_params: dict[str, Any] = (
+            {"permissions": self._permission_profile}
+            if self._permission_profile is not None
+            else {
+                "sandboxPolicy": {
+                    "type": "workspaceWrite",
+                    "writableRoots": [str(canonical_cwd)],
+                    "networkAccess": False,
+                }
+            }
+        )
         turn_input: list[dict[str, str]] = [{"type": "text", "text": text}]
         for image_path in local_image_paths:
             if image_path.is_symlink():
@@ -871,6 +825,7 @@ class CodexAppServerClient:
         self._turn_rate_limits = {}
         self._collecting_rate_limits = True
         self._activity_thread_id = thread_id
+        self._turn_start_pending = True
         try:
             result = self._request(
                 "turn/start",
@@ -881,22 +836,22 @@ class CodexAppServerClient:
                     "model": model,
                     "effort": effort,
                     **self._approval_params(),
-                    "sandboxPolicy": {
-                        "type": "workspaceWrite",
-                        "writableRoots": [str(canonical_cwd)],
-                        "networkAccess": False,
-                    },
+                    **permission_params,
                 },
+                deadline=time.monotonic() + TURN_START_RESPONSE_SECONDS,
             )
             turn = result.get("turn") if isinstance(result, dict) else None
             turn_id = turn.get("id") if isinstance(turn, dict) else None
             if not isinstance(turn_id, str) or not turn_id:
                 raise RpcError("turn/start did not return a turn id")
         except BaseException:
-            # No turn started, so nothing that follows may count as its telemetry.
+            # Acceptance is unconfirmed: the submission may have started a
+            # turn. Clear unattributed telemetry; do not infer replay safety.
             self._collecting_rate_limits = False
             self._clear_activity()
             raise
+        finally:
+            self._turn_start_pending = False
         self._activity_turn_id = turn_id
         return turn_id
 
@@ -904,6 +859,7 @@ class CodexAppServerClient:
         result = self._request(
             "turn/interrupt",
             {"threadId": thread_id, "turnId": turn_id},
+            deadline=time.monotonic() + 10,
         )
         if result is not None and not isinstance(result, dict):
             raise RpcError("turn/interrupt returned an invalid result")
@@ -916,6 +872,8 @@ class CodexAppServerClient:
         text: str,
         client_user_message_id: str,
     ) -> str:
+        if self._permission_profile is not None:
+            raise CodexPermissionProfileError()
         result = self._request(
             "turn/steer",
             {
@@ -924,6 +882,7 @@ class CodexAppServerClient:
                 "clientUserMessageId": client_user_message_id,
                 "input": [{"type": "text", "text": text}],
             },
+            deadline=time.monotonic() + 10,
         )
         returned_turn = result.get("turnId") if isinstance(result, dict) else None
         if not isinstance(returned_turn, str) or not returned_turn:
@@ -932,8 +891,20 @@ class CodexAppServerClient:
 
     def wait_for_turn(self, turn_id: str) -> TurnResult:
         """Wait for one turn while excluding hidden reasoning from the result."""
+        self._completed_connection.invalidate()
         try:
             return self._wait_for_turn(turn_id)
+        except CodexTurnError as exc:
+            # Keep permission/storage/provider failures authoritative. The
+            # channel warning is visible context, not a new failure cause.
+            self._response_drain.observe(self._transport, now=time.monotonic())
+            exc.partial_text = _bounded_partial_text(
+                self._response_drain.annotate(exc.partial_text)
+            )
+            raise
+        except Exception as exc:
+            self._response_drain.observe(self._transport, now=time.monotonic())
+            raise CodexTurnError(exc, self._response_drain.annotate("")) from exc
         finally:
             self._collecting_rate_limits = False
             self._clear_activity()
@@ -944,6 +915,7 @@ class CodexAppServerClient:
         seen_items: set[str] = set()
         context_window: int | None = None
         context_tokens_used: int | None = None
+        self._refuse_permission_drift(turn_id, "")
         # The worker enters this method only after persisting native acceptance.
         # An early request supplies IDs to validate, never authority to bind a job.
         self._activity_ready = self._activity_turn_id == turn_id
@@ -963,19 +935,24 @@ class CodexAppServerClient:
             # Keep a finite ceiling so a lost app-server cannot strand a worker
             # forever; the worker heartbeat protects the durable job meanwhile.
             try:
+                remaining = self._response_remaining(3600.0)
                 message = (
                     self.notifications.popleft()
                     if self.notifications
-                    else self._transport.receive(timeout=3600.0)
+                    else self._receive(timeout=remaining)
                 )
+                self._response_remaining(3600.0)
             except Exception as exc:
                 raise CodexTurnError(exc, "\n\n".join(answers)) from exc
             method = message.get("method")
+            self._observe_permission_settings(message)
+            self._refuse_permission_drift(turn_id, "\n\n".join(answers))
             if method and "id" in message:
                 # tlive answers approvals on its companion connection.
                 # This client deliberately neither allows nor denies.
-                self._handle_server_request(message)
                 try:
+                    self._handle_server_request(message)
+                    self._response_remaining(3600.0)
                     self._observe_activity(message)
                 except Exception as exc:
                     raise CodexTurnError(exc, "\n\n".join(answers)) from exc
@@ -992,6 +969,12 @@ class CodexAppServerClient:
                 continue
             if method == "account/rateLimits/updated":
                 self._observe_rate_limits(params.get("rateLimits"))
+                continue
+            if (
+                self._activity_thread_id is not None
+                and "threadId" in params
+                and params["threadId"] != self._activity_thread_id
+            ):
                 continue
             if method == "thread/tokenUsage/updated" and params.get("turnId") == turn_id:
                 usage = params.get("tokenUsage")
@@ -1018,7 +1001,10 @@ class CodexAppServerClient:
                             seen_items.add(item_id)
                             if self.on_visible_item is not None and item["text"].strip():
                                 phase = item.get("phase") or "unknown"
-                                self.on_visible_item(item_id, item["text"], str(phase))
+                                try:
+                                    self.on_visible_item(item_id, item["text"], str(phase))
+                                except Exception as exc:
+                                    raise CodexTurnError(exc, "\n\n".join(answers)) from exc
                 continue
             if method == "turn/completed":
                 turn = params.get("turn")
@@ -1030,13 +1016,37 @@ class CodexAppServerClient:
                             RpcError(str(message or f"Codex turn {turn.get('status')}")),
                             "\n\n".join(answers),
                         )
+                    try:
+                        self._response_remaining(3600.0)
+                    except Exception as exc:
+                        raise CodexTurnError(exc, "\n\n".join(answers)) from exc
+                    if not self._response_drain.proves_completed(
+                        params,
+                        thread_id=self._activity_thread_id,
+                        turn_id=turn_id,
+                        accepted_turn_id=self._activity_turn_id,
+                    ):
+                        raise CodexTurnError(
+                            RpcError(
+                                "Codex completion proof unavailable after response channel failure"
+                            ),
+                            "\n\n".join(answers),
+                        )
                     result = TurnResult(
-                        text=_final_visible_text(final_items),
+                        text=self._response_drain.annotate(_final_visible_text(final_items)),
                         context_window=context_window,
                         context_tokens_used=context_tokens_used,
                     )
                     if self.on_completed is not None:
-                        self.on_completed(result)
+                        try:
+                            self.on_completed(result)
+                        except Exception as exc:
+                            raise CodexTurnError(exc, "\n\n".join(answers)) from exc
+                    self._completed_connection.observe(
+                        thread_id=self._activity_thread_id,
+                        turn_id=self._activity_turn_id,
+                        params=params,
+                    )
                     return result
             if method == "error" and params.get("turnId") == turn_id:
                 # Current app-server nests the public message under ``error``.
@@ -1249,7 +1259,7 @@ class CodexAppServerClient:
             secondary=self._limit_window(snapshot.get("secondary")) or previous.secondary,
         )
 
-    def read_rate_limits(self) -> RateLimits:
+    def read_rate_limits(self, *, deadline: float | None = None) -> RateLimits:
         """Read the account snapshot, filling missing windows from the last turn.
 
         The turn's windows are used once, by the read that follows the turn, so a
@@ -1257,8 +1267,8 @@ class CodexAppServerClient:
         """
         observed, self._turn_rate_limits = self._turn_rate_limits, {}
         try:
-            result = self._request("account/rateLimits/read", {})
-        except RpcError:
+            result = self._request("account/rateLimits/read", {}, deadline=deadline)
+        except (RpcError, TimeoutError):
             if "codex" not in observed:
                 raise
             return observed["codex"]

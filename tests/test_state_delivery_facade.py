@@ -33,7 +33,7 @@ class DeliveryStateFacadeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.base = Path(self.tempdir.name)
-        self.state = HubState.open(self.base / "private" / "hub.db")
+        self.state = HubState.open(self.base / "private" / "hub.db", codex_permission_profile=None)
         self.topic = self.state.observe_topic(
             project_id="example-project",
             chat_id=-1001234567890,

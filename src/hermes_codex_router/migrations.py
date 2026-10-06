@@ -9,8 +9,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
+from .migration_sql import _execute_migration_script
 from .schema_claude_permissions import CLAUDE_PERMISSIONS_SCHEMA as MIGRATION_38
+from .schema_codex_permissions import (
+    CODEX_PERMISSIONS_SCHEMA as MIGRATION_39,
+)
+from .schema_codex_permissions import (
+    ensure_codex_permission_columns,
+)
 from .schema_compatibility import TARGET_SCHEMA_VERSION
+from .schema_preacceptance_approvals import PREACCEPTANCE_APPROVAL_SCHEMA as MIGRATION_40
+from .schema_preexecution_retry import PREEXECUTION_RETRY_SCHEMA as MIGRATION_41
 from .schema_task_activity import TASK_ACTIVITY_SCHEMA as MIGRATION_37
 from .schema_task_lifecycle import MIGRATION_36
 
@@ -1432,28 +1441,6 @@ def _ensure_hold_decision_columns(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE provider_job_holds ADD COLUMN decided_at TEXT")
 
 
-def _execute_migration_script(connection: sqlite3.Connection, script: str) -> None:
-    """Execute one trusted migration script without sqlite3's implicit COMMIT.
-
-    ``Connection.executescript`` commits an open transaction before executing
-    its input.  Migrations must instead remain inside the surrounding
-    ``BEGIN IMMEDIATE`` so a DDL or retention fault restores the exact
-    pre-migration database, including writes which committed after the backup
-    snapshot was taken.
-    """
-    pending: list[str] = []
-    for line in script.splitlines(keepends=True):
-        pending.append(line)
-        statement = "".join(pending)
-        if not sqlite3.complete_statement(statement):
-            continue
-        if statement.strip():
-            connection.execute(statement)
-        pending.clear()
-    if "".join(pending).strip():
-        raise RuntimeError("incomplete SQLite migration statement")
-
-
 def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     connection.execute("PRAGMA busy_timeout = 5000")
     connection.execute("PRAGMA foreign_keys = ON")
@@ -1502,6 +1489,9 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_36,
         MIGRATION_37,
         MIGRATION_38,
+        MIGRATION_39,
+        MIGRATION_40,
+        MIGRATION_41,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:
@@ -1515,6 +1505,8 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
                     _ensure_input_group_key_column(connection)
                 if version == 35:
                     _ensure_hold_decision_columns(connection)
+                if version == 39:
+                    ensure_codex_permission_columns(connection)
                 _execute_migration_script(connection, script)
                 if version == 1:
                     _ensure_legacy_columns(connection)

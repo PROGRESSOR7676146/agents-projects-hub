@@ -20,6 +20,7 @@ from .codex_appserver import (
     UnixWebSocketTransport,
     validate_codex_thread_id,
 )
+from .codex_permissions import MISSING_PERMISSION_CONTEXT, MissingPermissionContext
 from .hub_config import HubConfig
 from .migrations import LATEST_SCHEMA_VERSION
 from .project_resolution import ProjectResolutionError, resolve_project_context
@@ -38,7 +39,12 @@ class AdoptionError(ValueError):
 
 
 @contextmanager
-def open_adoption_state(path: Path, *, writable: bool = False) -> Iterator[HubState]:
+def open_adoption_state(
+    path: Path,
+    *,
+    writable: bool = False,
+    codex_permission_profile: str | None | MissingPermissionContext = MISSING_PERMISSION_CONTEXT,
+) -> Iterator[HubState]:
     """Open an existing private database without migration, chmod or creation."""
     connection = None
     state = None
@@ -62,7 +68,7 @@ def open_adoption_state(path: Path, *, writable: bool = False) -> Iterator[HubSt
         if connection.execute("PRAGMA user_version").fetchone()[0] != LATEST_SCHEMA_VERSION:
             raise AdoptionError("schema_upgrade_required")
         connection.execute("PRAGMA foreign_keys=ON")
-        yield HubState(connection)
+        yield HubState(connection, codex_permission_profile=codex_permission_profile)
     except (OSError, sqlite3.Error):
         raise AdoptionError("state_unavailable") from None
     finally:
@@ -223,6 +229,7 @@ def attach_codex_session(
             selected_model,
             selected_effort,
             replace_session,
+            codex_permission_profile=config.codex_permission_profile,
         )
         with open_adoption_state(config.state_path) as state:
             target = CodexSessionOrigins(state).preview(request)
@@ -241,7 +248,11 @@ def attach_codex_session(
             return _result(request, target, "preview")
         if _project_root(config, project_id, chat_id) != root:
             raise AdoptionError("project_root_changed")
-        with open_adoption_state(config.state_path, writable=True) as state:
+        with open_adoption_state(
+            config.state_path,
+            writable=True,
+            codex_permission_profile=config.codex_permission_profile,
+        ) as state:
             result = CodexSessionOrigins(state).attach(
                 request, expected_session_id=target.session.session_id if target.session else None
             )

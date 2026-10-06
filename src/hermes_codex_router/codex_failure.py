@@ -12,11 +12,27 @@ class CodexPreparationError(RuntimeError):
     """Caught setup failure before the productive turn/start call was made."""
 
 
+class CodexRetryBindingError(CodexPreparationError):
+    """A queued saved retry no longer has its exact execution authority."""
+
+
 class UnsupportedCodexPermissionProfileError(CodexPreparationError):
     """The legacy turn policy cannot safely retain a selected custom profile."""
 
     def __init__(self) -> None:
         super().__init__("Codex selected an unsupported permission profile")
+
+
+class CodexPermissionProfileError(CodexPreparationError):
+    def __init__(self) -> None:
+        super().__init__("Codex permission profile selection could not be verified")
+
+
+class CodexPermissionPolicyDriftError(RuntimeError):
+    """Invocation may have effects; terminality still needs exact reconciliation."""
+
+    def __init__(self) -> None:
+        super().__init__("Codex permission selection changed during execution")
 
 
 @contextmanager
@@ -31,6 +47,8 @@ def codex_preparation() -> Iterator[None]:
 
 def codex_failure_reason(error: BaseException) -> str:
     """Classify a cause for display; this never proves side-effect safety."""
+    if isinstance(error, CodexPermissionPolicyDriftError):
+        return "permission_policy_changed"
     message = str(error)[:2000].lower()
     if re.search(r"\b429\b|too many requests|usage limit|rate.?limit", message):
         return "rate_limited"
@@ -49,6 +67,19 @@ def codex_failure_notice(
     error: BaseException, *, turn_status: str = "unknown", held_count: int = 0
 ) -> str:
     """Only fixed causes and explicitly visible assistant text reach Telegram."""
+    if isinstance(error, CodexRetryBindingError):
+        return (
+            "Retry paused: Hub could not verify the saved task/context, session, root, route or permissions. "
+            "The provider was not started. Inspect /status and send a fresh task "
+            "only after checking the binding."
+        )
+    if isinstance(error, CodexPermissionProfileError):
+        return (
+            "What happened: Hub could not verify the configured Codex permission profile.\n\n"
+            "Saved: No productive provider turn was sent. The task was not replayed.\n\n"
+            "Next: Verify the local profile configuration and supported launch route. "
+            "Keep the existing restrictions; use /new for an explicitly changed selection."
+        )
     if isinstance(error, UnsupportedCodexPermissionProfileError):
         return (
             "What happened: Codex selected an unsupported permission profile. "
@@ -61,10 +92,11 @@ def codex_failure_notice(
         return (
             "What happened: Codex could not prepare the task before starting it.\n\n"
             "Saved: No productive provider turn was sent.\n\n"
-            "Next: Retry after Codex is available."
+            "Next: Check /status and resolve the preparation failure."
         )
     reason = getattr(error, "failure_reason", codex_failure_reason(error))
     causes = {
+        "permission_policy_changed": "Codex permission selection changed during the task; Hub requested interruption.",
         "rate_limited": "Codex stopped after a provider rate-limit error (429 or usage limit).",
         "connection_lost": "Hub lost the connection to Codex before confirming completion.",
         "timeout": "Hub timed out waiting for Codex to confirm completion.",

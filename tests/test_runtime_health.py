@@ -28,7 +28,9 @@ from hermes_codex_router.state import HubState, StateError
 class RuntimeHealthTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
-        self.state = HubState.open(Path(self.tempdir.name) / "state.db")
+        self.state = HubState.open(
+            Path(self.tempdir.name) / "state.db", codex_permission_profile=None
+        )
         self.now = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
 
     def tearDown(self) -> None:
@@ -383,7 +385,7 @@ class RuntimeHealthTests(unittest.TestCase):
     def test_status_never_migrates_an_older_database(self) -> None:
         # A newer checkout must not migrate a live database it only inspects.
         path = Path(self.tempdir.name) / "older" / "state.db"
-        HubState.open(path).close()
+        HubState.open(path, codex_permission_profile=None).close()
         older = LATEST_SCHEMA_VERSION - 1
         with closing(sqlite3.connect(path)) as connection, connection:
             connection.execute(f"PRAGMA user_version = {older}")

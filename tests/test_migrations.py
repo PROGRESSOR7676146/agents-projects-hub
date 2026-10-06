@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from schema_fixtures import remove_adoption_schema, remove_task_lifecycle_schema
+from schema_fixtures import (
+    legacy_selection_columns,
+    remove_adoption_schema,
+    remove_task_lifecycle_schema,
+)
 
 from hermes_codex_router import migrations as migrations_module
 from hermes_codex_router.migrations import (
@@ -25,8 +29,11 @@ class MigrationTests(unittest.TestCase):
     def test_schema_34_hold_evidence_survives_schema_35_upgrade(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
-            with mock.patch.object(migrations_module, "LATEST_SCHEMA_VERSION", 34):
-                state = HubState.open(path)
+            with (
+                mock.patch.object(migrations_module, "LATEST_SCHEMA_VERSION", 34),
+                legacy_selection_columns(path),
+            ):
+                state = HubState.open(path, codex_permission_profile=None)
                 try:
                     topic = state.observe_topic(
                         project_id="example-project",
@@ -241,6 +248,8 @@ class MigrationTests(unittest.TestCase):
             connection = sqlite3.connect(path)
             try:
                 for table, rows in before.items():
+                    if table == "session_connect_workflows":
+                        rows = [(*row, None) for row in rows]
                     self.assertEqual(connection.execute(f"SELECT * FROM {table}").fetchall(), rows)
                 self.assertEqual(
                     connection.execute("SELECT execution_scope FROM topics").fetchone()[0],

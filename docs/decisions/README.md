@@ -74,6 +74,7 @@ with a new record.
 | Protected Claude file permissions | An opt-in native hook uses a bounded pinned tlive extension; the existing worker/SQLite own binding, one-use receipt consumption and cleanup. | [ADR 0052](0052-protected-claude-file-permissions.md) |
 | Claude authority custody | Assess existing-host launch/service exposure before choosing infrastructure; VM remains conditional, with the unchanged installed custody gate. | [ADR 0053](0053-claude-custody-reference-deployment.md) |
 | Notice-bound work retry reports | Candidate passive Reply control reports the existing job through the durable notice sender; independent review and deployment remain separate. | [ADR 0054](0054-notice-bound-work-retry-reports.md) |
+| Managed Codex profile continuity | Immutable selection snapshots and passive native confirmation preserve named profiles without claiming complete custody or enabling unsupported writers. | [ADR 0055](0055-managed-codex-profile-continuity.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

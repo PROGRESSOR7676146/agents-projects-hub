@@ -80,6 +80,19 @@ class DiagnosticLogTests(unittest.TestCase):
         self.assertNotIn("/home/example", output)
         self.assertNotIn("Traceback", output)
 
+    def test_extracted_rpc_errors_keep_public_identity_and_safe_diagnostic_names(self) -> None:
+        from hermes_codex_router import codex_appserver, codex_rpc
+
+        for name in ("RpcError", "RpcRejectedError"):
+            public_error = getattr(codex_appserver, name)
+            self.assertIs(public_error, getattr(codex_rpc, name))
+            self.assertEqual(public_error.__module__, "hermes_codex_router.codex_rpc")
+            diagnostic_log.survived("service.client_close", public_error(SECRET))
+        output = self.stream.getvalue()
+        self.assertIn("survived RpcError at service.client_close", output)
+        self.assertIn("survived RpcRejectedError at service.client_close", output)
+        self.assertNotIn(SECRET, output)
+
     def test_unregistered_or_dynamic_sites_are_not_logged(self) -> None:
         for site, error_type in zip(
             ("service.session_fictional_1234", "service.topic -1001234567890", "/home/example/db"),
@@ -119,12 +132,12 @@ class DiagnosticLogTests(unittest.TestCase):
         sys.modules[factory.__name__] = factory
         diagnostic_log.survived("service.health_publish", dynamic("x"))
         diagnostic_log.survived("service.client_close", spoofed("x"))
-        diagnostic_log.survived("service.context_telemetry", TokenBearingError("x"))
+        diagnostic_log.survived("codex_result_lifecycle.context", TokenBearingError("x"))
         diagnostic_log.survived("service.queue_error_record", registered("x"))
         output = self.stream.getvalue()
         self.assertIn("survived TimeoutError at service.health_publish", output)
         self.assertIn("survived RuntimeError at service.client_close", output)
-        self.assertIn("survived RuntimeError at service.context_telemetry", output)
+        self.assertIn("survived RuntimeError at codex_result_lifecycle.context", output)
         self.assertIn("survived RuntimeError at service.queue_error_record", output)
         self.assertNotIn("fictional", output)
         self.assertNotIn("TokenBearingError", output)
@@ -170,7 +183,7 @@ class DiagnosticLogTests(unittest.TestCase):
         keyed = type("ExampleError", (RuntimeError,), {Key("__module__"): "example"})
         diagnostic_log.survived("service.health_publish", unhashable("x"))
         diagnostic_log.survived("service.client_close", disguised("x"))
-        diagnostic_log.survived("service.context_telemetry", raising("x"))
+        diagnostic_log.survived("codex_result_lifecycle.context", raising("x"))
         keyed_error = keyed("x")
         armed = True
         diagnostic_log.survived("service.outbox_error_record", keyed_error)
@@ -180,7 +193,7 @@ class DiagnosticLogTests(unittest.TestCase):
         output = self.stream.getvalue()
         self.assertIn("survived RuntimeError at service.health_publish", output)
         self.assertIn("survived RuntimeError at service.client_close", output)
-        self.assertIn("survived RuntimeError at service.context_telemetry", output)
+        self.assertIn("survived RuntimeError at codex_result_lifecycle.context", output)
         self.assertIn("survived RuntimeError at service.outbox_error_record", output)
         self.assertIn(f"survived RuntimeError at {diagnostic_log.INVALID_SITE}", output)
         self.assertNotIn("fictional", output)

@@ -136,20 +136,47 @@ class ExecutionJournal:
             )
             return ClaudeSessionBinding(identifier, is_new)
 
-    def record_thread(self, job_id: str, token: str, thread_id: str, cwd: Path) -> None:
+    def record_thread(
+        self,
+        job_id: str,
+        token: str,
+        thread_id: str,
+        cwd: Path,
+        *,
+        codex_permission_profile: str | None = None,
+    ) -> None:
         thread_id = _bounded(thread_id, 256)
         root = _bounded(str(cwd.resolve(strict=True)), 4096)
         with self.state._immediate_transaction():
             job = self._lease(job_id, token)
+            if job["agent_id"] == "codex":
+                session = self.state.get_session(str(job["session_id"]))
+                if not (
+                    codex_permission_profile
+                    == job["codex_permission_profile"]
+                    == session.codex_permission_profile
+                    == self.state.codex_permission_profile
+                ):
+                    raise StateError(
+                        "execution permission selection differs from its immutable snapshot"
+                    )
             prior = self.read(job_id)
             if prior and (
-                prior["provider_thread_id"] != thread_id or prior["project_root"] != root
+                prior["provider_thread_id"] != thread_id
+                or prior["project_root"] != root
+                or prior["codex_permission_profile"] != codex_permission_profile
             ):
                 raise StateError("execution thread binding is immutable")
             self.connection.execute(
                 "INSERT OR IGNORE INTO provider_execution_checkpoints "
-                "(job_id, provider_thread_id, project_root, updated_at) VALUES (?, ?, ?, ?)",
-                (job_id, thread_id, root, datetime.now(timezone.utc).isoformat()),
+                "(job_id, provider_thread_id, project_root, updated_at, codex_permission_profile) VALUES (?, ?, ?, ?, ?)",
+                (
+                    job_id,
+                    thread_id,
+                    root,
+                    datetime.now(timezone.utc).isoformat(),
+                    codex_permission_profile,
+                ),
             )
             changed = self.connection.execute(
                 "UPDATE agent_sessions SET provider_session_id = ?, updated_at = ? "

@@ -29,7 +29,7 @@ class ProviderJobsStateFacadeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.state_path = Path(self.tempdir.name) / "private" / "hub.db"
-        self.state = HubState.open(self.state_path)
+        self.state = HubState.open(self.state_path, codex_permission_profile=None)
 
     def tearDown(self) -> None:
         self.state.close()

@@ -76,6 +76,269 @@ uses the conservative rules below.
 
 ## Provider-job recovery
 
+### Codex preparation notification overflow
+
+An older client may report `Codex notification buffer exceeded its bound` while
+initializing or preparing a thread. Distinguish this local preparation failure
+from a provider quota rejection using the durable job classification and exact
+checkpoint, rather than assuming every failed Reply reached the model.
+Confirm a caught preparation failure before `turn/start` and that its failure
+notice was delivered. A missing accepted-turn ID alone does not prove that
+invocation never happened. Preserve the original attempt and its partial effects;
+never rewrite its status or automatically resend the input.
+The same error after `turn/start` was sent, including while awaiting its
+acknowledgement, means an uncertain turn: use exact Codex turn recovery rather
+than preparation-failure handling.
+
+The prepared client filters foreign notifications before its bounded useful-result
+queue. It handles approvals, their resolutions and account quota updates separately,
+and preserves exact-current-turn final items and context updates, including those
+received before the `turn/start` acknowledgement. An active owning connection must
+still receive its final events. The synthetic two-worker regression demonstrates
+this conservation; it does not prove the source or fan-out of native broadcasts.
+Useful-result and optional-activity limits remain fail-closed guards.
+
+Before an owner-authorized temporary worker restart, take a SQLite-consistent
+backup and verify that the exact affected worker has no active or uncertain
+provider turn. Restart only that free slot; preserve other productive workers,
+the shared daemon, sender and approvals host. A cached idle worker label alone
+does not prove provider terminality. Only after a proven pre-`turn/start`
+preparation failure may one explicit continuation follow after
+rechecking the attempt, current queue, session binding and delivered notice;
+reconcile an unknown prior outcome before considering another invocation.
+
+Before calling the root cause closed, separately verify the exact installed
+revision and every required component, then run the coordinated independent-root
+scenario in the [stabilization backlog](STABILIZATION_PLAN.md#live-acceptance-backlog).
+Use only bounded method/count and binding metadata for private protocol attribution;
+do not expose reasoning, prompts, tool payloads or raw protocol streams. Neither
+quota status nor a restart alone proves the buffering fix is installed.
+
+### WebSocket transport backpressure
+
+The native Unix WebSocket inbox retains raw frames in FIFO order, with limits
+of 1,024 queued frames, 8 MiB serialized input bytes and 4 MiB per frame.
+JSON parsing happens on consumption. One received frame may wait outside the
+inbox for capacity; parser, string and WebSocket-library overhead remain separate
+from the serialized-byte budget. Outbound messages are immutable serialized
+snapshots, limited to 16 queued frames and 4 MiB each.
+
+Ordinary inbound saturation pauses only its asynchronous producer. Sending,
+receive deadlines and close remain independent. Accepted frames drain before
+the recorded terminal error; terminal state needs no queue slot. No protocol
+frame is coalesced or classified by the transport. Client-level filtering still
+selects the current turn's results.
+
+A disconnect or explicit close can interrupt a frame still waiting for
+capacity, and an upstream slow-consumer policy can end the stream. Apply the
+ordinary exact-turn recovery rules below; backpressure never proves completion
+or authorizes replay.
+
+The official stdio transport uses the same inbound wire-byte/frame budgets,
+with a blocking pipe reader instead of an asynchronous WebSocket receiver.
+Bounded JSONL reads reject oversized lines, including unterminated lines, before unlimited
+allocation; valid final JSON without a newline remains supported. UTF-8
+admission also checks multibyte text. One decoding frame, Python objects,
+client-retained events and OS pipe buffers are outside the queued wire-byte
+budget. This is not a total process-memory limit.
+
+Stdio uses a dedicated writer and a nonblocking, immutable outbound queue with
+16 slots and an 8 MiB aggregate UTF-8 payload budget; each frame is at most
+4 MiB. A full outbound queue is refused visibly, never silently dropped. This
+allows a request larger than the pipe capacity to progress while the caller
+drains notifications, instead of forming a bidirectional pipe deadlock.
+Successful `send()` means queue admission; the exact RPC response remains
+submission evidence. EOF or a read failure seals both queues. A physical writer
+failure seals only outbound: stdout may still contain final, approval and telemetry
+frames. The reader continues, applying the same backpressure. One transport lock
+selects the first recorded cause; both queues use that cause when they terminate.
+
+Stdio close wakes blocked producers/consumers before process cleanup. Accepted
+frames drain before the first EOF/read/size error; a receive timeout leaves
+later delivery usable. Shutdown is checked before each outbound write; a write
+already past that final check may have been submitted and needs ordinary uncertainty
+handling. Client-retained event bytes and a shared preparation budget remain
+separate resource-lifecycle work; do not interpret receipt traffic as productive
+progress or approval.
+
+For headless stdio, Hub attempts only explicit declines or unsupported-request
+errors. A typed refusal to admit such a reply after EOF/read/write termination
+does not discard later buffered output. Other send errors still fail normally;
+explicit close is a cancellation boundary. A writer failure can occur after
+successful admission, so the client also observes physical write faults while
+consuming frames and immediately before its completion checkpoint. It never
+claims that an admitted decline was delivered.
+
+After detecting a failed response channel, Hub reads for at most **20 seconds**,
+with one fixed deadline. A quiet stdio receive checks for faults on its next
+poll, normally within one second, without renewing its original quiet timeout.
+Notifications, approvals and queued frames cannot renew the drain window. These
+are consumption bounds, not a hard real-time guarantee through synchronous
+callbacks or local I/O, nor a promise to save an arbitrarily late pipe tail.
+
+Completion after this fault requires explicit matching thread and previously
+accepted turn identity with native status `completed`. Hub appends a fixed,
+payload-free transport notice before persisting the completed result; raw
+visible-item callbacks retain provider text. The same notice remains in bounded
+partial failures without replacing permission, provider or storage failure
+causes. Missing proof, EOF or expiry retains ordinary uncertainty and root
+exclusion, with no resubmission or permission grant. An ordinary EOF without a
+refused reply or observed physical write failure adds no warning. If completion
+is persisted before any writer fault is observable, a later fault cannot amend
+that checkpoint; queue admission provides no per-frame delivery receipt.
+
+Explicit close wakes both queues immediately and may discard frames that never
+entered inbound. Repeated exception traceback retention and descendant-held
+pipes remain separate cleanup/resource work; this slice neither adds process-group
+authority nor establishes a durable owned-process exclusion barrier.
+
+### Codex RPC response deadlines
+
+Each RPC without an explicit caller deadline has a fixed 120-second response
+budget, computed before send, and a 20-second quiet receive ceiling. Explicit
+metadata/control deadlines keep their existing budget and receive allowance.
+`turn/start` uses a fixed 300-second response deadline, allowing a quiet early
+human approval wait within that window. Notifications and approvals never renew
+or suspend either deadline. A frame arriving at or after expiry is rejected
+before interpreting a result, rejection or approval. Optional post-completion
+quota reads retain their five-second total budget.
+
+These are local response-consumption policies, not native protocol guarantees,
+a productive-turn duration or one whole preparation budget. Separate RPCs,
+connection startup, synchronous parsing/callbacks and local I/O remain separate;
+the legacy Unix JSONL transport does not enforce receive timeouts.
+
+A timeout after sending `turn/start` may hide native acceptance. External and
+embedded queues retain `indeterminate`, the prepared thread checkpoint and root
+exclusion when no exact accepted turn ID was saved. They never infer that no
+turn started from the missing ID or retry the submission automatically. An
+ordinary request-deadline error creates no saved-task preparation-retry authority.
+Legacy inline execution retains its weaker dispatch/recovery boundary.
+
+### Completed Codex socket connection retirement
+
+A productive WebSocket client is disposable after its exact accepted thread and
+turn report explicit `completed` status and the result publication succeeds.
+External and embedded workers first settle controls and persist the result/outbox;
+the legacy inline route first sends the result and records its successful dispatch.
+Inline delivery retains its existing non-atomic recovery limitations.
+The single-use proof cannot come from another turn, missing/unknown status,
+failed publication or a covering stop. New preparation invalidates old proof.
+
+Retirement detaches only the expected cached client, then closes its connection;
+it sends no unsubscribe, interrupt, archive or delete RPC and never stops the
+shared daemon. A close exception records the bounded
+`completed_socket_retirement_error` warning without undoing the saved result.
+The local transport seals its inbox and gives its receiver up to five seconds
+to join. A bounded return alone confirms neither receiver termination nor
+immediate server-side subscription teardown, and a join timeout need not warn.
+Optional quota collection has one five-second total deadline and can use the
+just-completed turn's rolling windows once.
+
+The next invocation opens a fresh connection and resumes the saved native thread.
+The existing unpinned socket-to-stdio fallback exception still applies
+([REQ-AUTH-004](../product/ACCOUNTS_CONTROL_AND_SECURITY.md)); reconnect does not
+promise exact continuity when that fallback replaces a legacy thread. Retiring
+after each successful turn causes more connection attempts, increasing exposure
+to that configured fallback on a transient construction/initialize failure.
+External workers reconsider fallback at idle through a bounded metadata handshake;
+legacy inline/embedded services retain their preexisting fallback mode until
+service recovery. This slice does not change their fallback policy. Stdio
+retirement is deliberately disabled: disposal of its owned process requires a
+separate durable lifecycle barrier across workers/restarts before root exclusion
+may be released. A process-local poison flag would not provide that barrier.
+
+Queued native-discovery menus, including stale and explicit refresh callbacks,
+read only the catalog cache. The independent monitor owns metadata refresh through its own
+connection; Controller must not become a competing reader of the productive
+client. See the [offline native evidence and live boundary](../testing/README.md#optional-offline-native-notification-attribution).
+
+### Codex live-control contention
+
+The accepted-turn stop/steer observer opens only existing current-schema state
+with a short lock timeout. SQLite BUSY/LOCKED, including extended result codes,
+retain the exact pending state operation for the next stop-first poll; they never
+repeat a provider call or lease another follow-up while settlement is pending.
+Shutdown makes one final bounded state-only attempt and releases a pending
+unstarted lease. A child proven unsent or explicitly rejected may return to the
+queue through its original token. Persistent contention, expired tokens or
+uncertain invocation retain the conservative durable disposition and require
+the recovery rules below. Do not requeue a child because the parent result was
+recovered.
+
+An explicit steer rejection disables steering for that parent while stop polling
+continues. The follow-up remains FIFO work for normal execution after the parent
+completion/delivery boundary. A rejected settlement that cannot commit retains
+its conservative execution disposition and does not authorize another RPC.
+
+A permanent steering-path failure disables steering, retains the first error
+and continues stop polling. The worker evaluates an observed stop before late
+lookup or that deferred error. Opening/stop-lookup failure and unconfirmed
+shutdown enter the ordinary failure path. Saved parent completion may still be
+recovered; a stopped observer checks shutdown again before any new RPC, while
+an executing child keeps its root blocker. An interrupt is attempted once, and
+its acknowledgement is not proof that the provider turn ended. Read the exact
+accepted turn before releasing uncertain work or coordinating a restart.
+
+Bounded private diagnostics distinguish contention, monitor failure,
+unconfirmed interruption and cleanup failure without recording exception text.
+Control RPCs have total response deadlines, including notification traffic.
+Shutdown closes an active control client before joining the observer; the
+client close allowance and the ten-second join allowance are additive. If native
+waiting or a visible callback also failed, that original error remains the
+primary failure and the cleanup problem is recorded separately.
+
+### Durable dispositions
+
+Repeated Codex notification-buffer failures before `turn/start` require a
+transport/consumption investigation even after an idle-worker restart. Keep
+the exact failure notices and saved inputs. Inspect subscriptions retained by
+successful clients and notification traffic during initialize, preparation and
+submission; a demonstrated retained subscription is not exact attribution of
+every deployed overflow. Restart is temporary recovery, not closure evidence.
+Do not restart an active worker or the shared daemon to clear this condition.
+Any maintenance restart needs a separately approved drained boundary and a
+fresh consistent backup.
+
+For a delivered text-only preparation notice offering saved-task retry, the
+owner can Reply exactly `retry`. Schema 41 records one child while keeping the
+failed source and original input membership. A second preparation failure needs
+an explicit Reply to its own new notice; repeating the older notice cannot
+create another child. Inspect the child payload/context and exact session
+binding before calling the task recovered. Materials, missing legacy tickets,
+changed bindings and contradictory execution evidence cause refusal. Follow
+[REQ-QUEUE-004](../product/PERSISTENCE_AND_RECOVERY.md) for the safety contract;
+never grant or replay native tool permissions from task authorization text.
+
+This is a new owner input in FIFO arrival order. Later work already queued or
+completed can precede it in the same session; retry does not restore the old
+queue position or rewind native context. Configured Codex aliases keep their
+actual agent identity. Runtime provenance comes from trusted local configuration,
+not the agent's label. Reconfiguring that alias to another runtime must refuse
+the saved retry before either worker dispatch or material preparation; its
+durable notice must say the provider did not start and must offer no new ticket.
+A changed child snapshot or attached child material refuses
+before preparation. An unavailable root refuses retry authority while preserving
+the original failure and notice.
+
+The ticket update guard is installed by the unreleased schema-41 migration.
+An existing development database already marked schema 41 does not rerun that
+migration on reopen; discard only disposable fixtures or prepare an explicit
+upgrade before retaining such a database. Production migration and deployment
+remain separately authorized.
+
+Preparation that replaces an existing Codex thread cannot offer saved-task
+retry without a frozen effective-context snapshot. The fallback's bounded
+visible-context bridge currently exists only in memory. Hub refuses new tickets
+and previously saved tickets and descendants for that transition rather than
+submit a shortened task. Missing, cyclic or over-64-generation retry ancestry
+also refuses rather than inferring safe context. Send a new request with the
+complete task and relevant context. Preparing
+the first thread from no prior identity, or retaining the exact existing thread,
+remains supported. Effective-input preservation and historical context for an
+ordinary Reply need separate follow-up; this conditional failure test does not
+establish the deployed overflow's cause or a natural post-binding trigger.
+
 - Expired `leased` means provider invocation was not recorded as possible. The
   scope may be claimed by another eligible job; normal stale recovery returns
   the old job to `queued`, and the expired token cannot start it late.

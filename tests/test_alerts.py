@@ -252,7 +252,7 @@ class OperationalAlertTests(unittest.TestCase):
         self.assertEqual([item.code for item in unknown], ["deployment_revision_unknown"])
         self.assertEqual([item.key for item in mixed], ["deployment:revision"])
         with TemporaryDirectory() as directory:
-            state = HubState.open(Path(directory) / "state.db")
+            state = HubState.open(Path(directory) / "state.db", codex_permission_profile=None)
             self.assertTrue(_claim_operational_alert(state, unknown[0], cooldown_seconds=0))
             self.assertFalse(_claim_operational_alert(state, mixed[0], cooldown_seconds=0))
             _release_resolved_operational_alerts(state, alerts("converged"))
@@ -263,7 +263,7 @@ class OperationalAlertTests(unittest.TestCase):
         # Alert episodes claimed by a release with multi-auth must not stay latched.
         retired = ("codex:account:1:5h-low", "codex:pool", "codex:runtime-proxy")
         with TemporaryDirectory() as directory:
-            state = HubState.open(Path(directory) / "state.db")
+            state = HubState.open(Path(directory) / "state.db", codex_permission_profile=None)
             for key in retired:
                 self.assertTrue(state.claim_alert_transition(f"{key}:operations"))
             current = evaluate_operational_alerts(
@@ -282,7 +282,7 @@ class OperationalAlertTests(unittest.TestCase):
         )
         self.assertEqual([alert.code for alert in alerts], ["codex_config_proxy_unavailable"])
         with TemporaryDirectory() as directory:
-            state = HubState.open(Path(directory) / "state.db")
+            state = HubState.open(Path(directory) / "state.db", codex_permission_profile=None)
             self.assertTrue(_claim_operational_alert(state, alerts[0], cooldown_seconds=0))
             self.assertFalse(_claim_operational_alert(state, alerts[0], cooldown_seconds=0))
             _release_resolved_operational_alerts(

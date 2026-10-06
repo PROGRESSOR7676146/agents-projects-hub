@@ -328,7 +328,9 @@ def _project_command(args: argparse.Namespace) -> int:
 
 def _lane_command(args: argparse.Namespace) -> int:
     config = load_hub_config(args.config)
-    state = HubState.open(config.state_path)
+    state = HubState.open(
+        config.state_path, codex_permission_profile=config.codex_permission_profile
+    )
     try:
         if args.lane_command == "list":
             _print({"ok": True, "lanes": state.list_lanes()})
@@ -628,7 +630,9 @@ def _indeterminate_audit_command(args: argparse.Namespace) -> int:
 
 def _indeterminate_resolve_command(args: argparse.Namespace) -> int:
     config = load_external_worker_config(args.config)
-    state = HubState.open(config.state_path)
+    state = HubState.open(
+        config.state_path, codex_permission_profile=config.codex_permission_profile
+    )
     try:
         created = state.resolve_indeterminate_job(args.job_id, args.resolution)
     finally:
@@ -753,7 +757,9 @@ def _project_provisioner_command(args: argparse.Namespace) -> int:
 
 def _project_provision_reconcile_command(args: argparse.Namespace) -> int:
     config = load_project_provisioner_config(args.config)
-    state = HubState.open(config.state_path)
+    state = HubState.open(
+        config.state_path, codex_permission_profile=config.codex_permission_profile
+    )
     try:
         workflow = ProjectOnboardingStore(state).reconcile_unknown(
             args.workflow_id,
@@ -770,7 +776,9 @@ def _project_provision_reconcile_command(args: argparse.Namespace) -> int:
 
 def _project_provision_resume_command(args: argparse.Namespace) -> int:
     config = load_project_provisioner_config(args.config)
-    state = HubState.open(config.state_path)
+    state = HubState.open(
+        config.state_path, codex_permission_profile=config.codex_permission_profile
+    )
     try:
         workflow = ProjectOnboardingStore(state).resume_blocked(
             args.workflow_id,
@@ -793,7 +801,9 @@ def _project_command_retry_command(args: argparse.Namespace) -> int:
         identities.add("hub")
     if args.bot_identity not in identities:
         raise StateError("project_command_scope_identity_invalid")
-    state = HubState.open(config.state_path)
+    state = HubState.open(
+        config.state_path, codex_permission_profile=config.codex_permission_profile
+    )
     try:
         ProjectOnboardingStore(state).reset_failed_command_scope(args.chat_id, args.bot_identity)
     finally:

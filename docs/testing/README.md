@@ -40,6 +40,58 @@ Automated tests
 use fake transports and temporary Git/SQLite fixtures. They must not contact
 real Telegram groups or consume provider tokens.
 
+Codex transport pressure tests use scripted pipes/WebSockets and an owned
+fictional Python JSONL peer. More than 1,024 foreign notifications must not
+prevent an RPC response; early final/completion/context and rolling quota
+updates must survive, and an interleaved approval must be declined on stdio
+without an automatic grant. Cover a successful client left idle before its
+next turn, bounded multibyte and unterminated frames, ordered drain before
+terminal failure, close during producer/consumer waits and delivery after a
+receive timeout. These fixtures establish source transport behavior, not the
+origin of a deployed subscription or native/Telegram live acceptance.
+
+`tests.test_codex_stdio_failure_drain` and the stdio pressure tests additionally
+cover writer failure with a full inbound queue and unread pipe tail, delayed
+tail after an empty receive timeout, both first-cause orders and a synchronized
+race, and close while the reader is full or empty. A controlled writer proves
+that a decline can enter the outbound queue before failing; its final/context/quota
+tail still reaches the exact completion checkpoint with the Hub notice and
+unchanged raw visible items. EOF before a buffered approval covers terminal
+reply-admission refusal; ordinary healthy EOF produces no notice.
+
+Fault-drain regressions require saved accepted identity and explicit completion,
+bound foreign traffic and an already-blocked quiet reader, preserve the original
+quiet deadline while polling, and retain text/notice across storage, permission,
+EOF and completion-boundary expiry failures. They prove no second submission or
+grant, not delivery of an admitted decline. Test-only shortened poll/window
+values make the quiet fault test bounded; production values and limitations
+are described in [queue recovery](../operations/QUEUE_RECOVERY.md).
+
+`tests.test_codex_rpc_deadlines` uses module-local fake clocks with real Hub
+clients. It covers more than 1,024 foreign frames exhausting a fixed default
+response deadline, explicit/quiet budgets, late responses/rejections/approvals,
+send time, managed metadata refusal, early approval visibility and actual
+external/embedded post-submission uncertainty with retained root exclusion and
+one submission. It does not establish a whole preparation wall-clock budget or
+legacy inline recovery parity.
+
+Notification/preparation recovery acceptance must cover two independent roots
+and worker connections: more than 1,024 foreign notifications during preparation
+of the second turn must not abort it before start. Preserve both exact results,
+final events, approvals and visible telemetry. Repeat after a successful client
+has retained a previous thread subscription. Separately inject two consecutive
+preparation failures, Reply to each exact delivered notice and verify that only
+one eventual native turn receives the original authorized task/context, with
+truthful retry controls and no reused tool grants. Include stop/contradiction,
+materials, queued binding drift, transaction faults, restart deduplication and
+earlier holds. Offline native fixtures use deterministic local protocol stubs;
+their evidence does not close separately authorized live Telegram acceptance.
+
+`tests.test_preexecution_retry_runtime` reconfigures a queued Codex alias retry
+to OpenCode or Antigravity in each queue consumer. Dispatch and material
+preparation must remain untouched; the saved payload and truthful pre-execution
+notice survive without another retry ticket or execution checkpoint.
+
 Publication sequence with the installed hooks: focused checks → commit (the
 pre-commit gate) → push (one full canonical run on the clean commit) →
 independent exact-revision CI/CodeQL. Do not run the same full validator
@@ -92,6 +144,18 @@ forced process termination to join real Controller polling, SQLite recovery,
 isolated workers, and the standalone sender. Lower-level state-machine tests
 remain in their focused modules.
 
+## Codex preparation conservation regression
+
+The preparation conservation regression is
+`tests.test_codex_notification_conservation`. Two independent workers and roots
+join the real client, execution journal and durable outbox against scripted
+transports. The second receives 3,600 foreign events while the first remains
+accepted and active. Separate start/resume cases check both saved finals,
+early/late approval resolution, context and account quota observations. A control
+case models the older unfiltered retention rule and reproduces its bounded
+preparation failure. It is offline conservation evidence, without native
+broadcast attribution, live approvals, services, Telegram or inference.
+
 ## Privacy gate
 
 `python -m hermes_codex_router.privacy_scan . --history` scans both the proposed
@@ -123,6 +187,77 @@ real temporary Git objects and a mocked successful signature result to test
 policy wiring only. Pinned-key cryptographic verification has separate tests;
 the mock is not evidence that a fixture was cryptographically signed.
 
+## Optional offline native Codex profile rehearsal
+
+`tests.test_codex_native_profiles` exercises an explicitly supplied native Codex
+binary against a deterministic local Responses fixture. It requires Linux,
+system bubblewrap and usable network/PID/IPC namespaces. Supply the native executable,
+not a shell wrapper or the ordinary logged-in CLI configuration:
+
+```bash
+HUB_NATIVE_CODEX_FIXTURE_EXECUTABLE=/home/example/tools/codex-native \
+  HUB_REQUIRE_NATIVE_CODEX_PROFILE_TESTS=1 \
+  HUB_REQUIRE_NAMESPACE_TESTS=1 \
+  PYTHONPATH=src python -m unittest -v \
+  tests.test_codex_native_profiles tests.test_codex_native_mcp \
+  tests.test_codex_native_namespace
+```
+
+The binary is copied into a disposable empty-root namespace with read-only
+system runtime, fixture scripts and managed requirements. Real Codex authentication and
+configuration are hidden, provider credential variables are excluded, and external
+network access is unavailable. A temporary managed requirements file and fictional
+project/key/symlink controls establish the policy under test. The fixture permits
+at most four local Responses requests per case. Command and file approvals are
+declined; permission requests receive an empty turn-scoped grant. MCP elicitations
+are declined unless the test explicitly
+arms one exact synthetic fixture consent; the fixture requests no persisted grant. This is not a
+human approval host or approval transport acceptance.
+It controls only its owned disposable processes, never installed services.
+Host-side repairs and observations reject symlinks at every project path
+component. The unarmed MCP case also verifies the absence of probe mutations
+independently of the native item's reported failure.
+
+The native cases cover explicit profile selection, exact stored-thread resume
+after restarting the disposable app-server, actual tool access denials, legacy
+turn policy replacement, separate standalone command overrides, and the limits
+of profile metadata. A native final message alone is insufficient: denial evidence
+requires one completed successful command from the exact current thread and turn,
+project read/write controls, and the complete boolean probe payload. Old resumed
+output, duplicate commands, failed execution and partial payloads are rejected.
+
+The fixed MCP server exposes only a nonce-only fictional probe. Direct RPC must
+use zero Responses requests; it is diagnostic evidence without a native turn.
+Current-turn evidence requires one completed MCP item matching the exact
+thread, turn, server, tool, arguments and fresh nonce. Both structured and textual
+versioned probe payloads must agree; duplicate JSON fields, malformed booleans,
+old items and assistant completion alone are rejected. Explicit synthetic consent
+is one-use and bound to that current item; restart and terminality clear it.
+Each armed native turn must record exactly one matching fresh consent acceptance,
+including after restart, before its successful output counts as exposure evidence.
+
+With native Codex 0.159.2, the fixed command descendant retained positive project
+read/write controls while denying fictional authority reads/writes and Git writes.
+Direct MCP RPC exposed the fictional authority to both the MCP process and its
+fixed Python child. A current-turn MCP call was denied by default; after one
+explicitly armed synthetic fixture consent, it showed the same exposure,
+including after exact-thread restart/resume with a fresh nonce. These results
+demonstrate a custody gap for this tested MCP launch path. They do not establish
+human approval delivery, arbitrary helper isolation, deployed custody or Telegram
+acceptance. The server validates visible fictional authority controls at startup;
+a future launch that hides those controls may fail startup and requires separate
+investigation, rather than being counted as a successful denial probe.
+
+The corpus was rehearsed with native Codex 0.159.2. No binary is downloaded by
+the tests or bundled with the repository. With no executable supplied, the
+native cases explicitly skip; requiring them makes that absence fail. Once opted
+in, fixture/protocol/namespace failures fail the run. The ordinary canonical suite
+still exercises the evidence parser without starting Codex. Skips and parser
+tests are not native evidence, and this offline corpus neither implements managed
+profile support in Hub nor establishes deployed custody or Telegram acceptance.
+The required CI namespace job also runs the outer wrapper witness without a
+Codex binary, proving absent source aliases and unwritable mounted scripts.
+
 ## Live acceptance boundary
 
 The reusable validation workflow also runs a required Ubuntu 24.04 namespace
@@ -145,6 +280,49 @@ IDs, account hints, screenshots, and service logs outside Git. Public status may
 state only the reusable behavior tested and the kind of acceptance required.
 The reusable go/no-go sequence and rollback boundary are defined in
 [`LIVE_CANARY.md`](../operations/LIVE_CANARY.md).
+
+## Optional offline native notification attribution
+
+The direct-socket fixture uses an explicitly supplied native Codex executable
+inside an empty filesystem/network/PID namespace. A local deterministic
+Responses server emits the traffic; real authentication, provider endpoints,
+installed services and daemon sockets are absent. Its disposable endpoint
+storage is mounted only inside that namespace. Both clients connect directly
+to a pinned native socket, without an RPC forwarding proxy.
+
+```bash
+HUB_NATIVE_CODEX_FIXTURE_EXECUTABLE=/home/example/tools/codex \
+  HUB_REQUIRE_NATIVE_CODEX_PROFILE_TESTS=1 HUB_REQUIRE_NAMESPACE_TESTS=1 \
+  PYTHONPATH=src:tests python -m unittest -v \
+  tests.test_codex_native_notification_origin tests.test_codex_native_completed_connection
+```
+
+Attribution distinguishes fresh connection, initialization, passive metadata and
+explicit subscription. It requires source traffic above 1,024 events, exact
+terminal history, healthy observers and a positive control after a thread
+switch. Structural method/phase/count summaries contain no payload text.
+The retirement test uses the real Hub client/transport against that same
+disposable native listener. After exact completion and saved native output, it
+closes only the completed connection. An independently subscribed peer emits
+over 1,024 frames while a fresh Hub client prepares a different thread; raw
+pre-filter counts and same-connection RPC barriers prove no inherited turn/item
+subscription stream. Global `thread/status/changed` can still reach fresh
+unrelated connections; the test excludes only that observed broadcast method.
+The peer remains healthy, both threads retain exact final output, and a later
+fresh client resumes the original identity and completes another turn.
+Four local Responses requests account for all scripted productive turns.
+The fixture supports one active scripted Responses stream at a time; this is
+parallel metadata preparation, not two concurrently streaming native turns.
+Hub durable outbox/stop/publication and cleanup-fault ordering have separate
+pipeline regressions in `tests.test_codex_result_lifecycle`.
+
+These tests establish behavior of the supplied executable, not a deployed failure's
+source or live Telegram acceptance. Missing optional executables may skip;
+the required flags turn unavailable native/namespace execution into failure.
+The owner-authorized two-worker canary still must verify both productive results,
+final events, approvals, visible progress and quota telemetry through delivery,
+plus two successive pre-execution failures retaining the exact task through
+notice-bound retries. No restart-only recovery counts as a permanent fix.
 
 ## Publication preflight
 

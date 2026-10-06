@@ -134,7 +134,7 @@ class ActiveWorkRetryTests(unittest.TestCase):
         self.start_job()
         self.assertIsNotNone(self.report())
         before = self.execution_snapshot()
-        reopened = HubState.open(self.harness.config.state_path)
+        reopened = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         try:
             repeated = WorkRetryState(reopened).report_from_notice(
                 chat_id=CHAT_ID,

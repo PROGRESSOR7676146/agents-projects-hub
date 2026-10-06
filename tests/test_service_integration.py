@@ -62,7 +62,10 @@ class FakeClient:
     def wait_for_turn(self, _: str) -> TurnResult:
         return TurnResult("Visible answer", 1000, 100)
 
-    def read_rate_limits(self) -> RateLimits:
+    def consume_completed_connection(self, *, thread_id: str, turn_id: str) -> bool:
+        return False
+
+    def read_rate_limits(self, *, deadline: float | None = None) -> RateLimits:
         return RateLimits(None, None)
 
     def list_models(self) -> list[dict[str, object]]:
@@ -225,7 +228,7 @@ class ServiceIntegrationTests(unittest.TestCase):
                 1, (base,), (Project("project", "Project", "Project", project_root),)
             )
             persist_registry(config.registry_path, value.registry)
-            value.state = HubState.open(config.state_path)
+            value.state = HubState.open(config.state_path, codex_permission_profile=None)
             value.agent = config.agents[0]
             telegram = FakeTelegram()
             value.telegram = cast(Any, telegram)
@@ -347,7 +350,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             value = ProjectHubService.__new__(ProjectHubService)
             value.config = config
             value.registry = registry
-            value.state = HubState.open(state_path)
+            value.state = HubState.open(state_path, codex_permission_profile=None)
             value.agent = config.agents[0]
             value.telegram = cast(Any, FakeTelegram())
             value.supervisor = cast(Any, FakeSupervisor(client))
@@ -413,7 +416,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             value = ProjectHubService.__new__(ProjectHubService)
             value.config = config
             value.registry = registry
-            value.state = HubState.open(state_path)
+            value.state = HubState.open(state_path, codex_permission_profile=None)
             value.agent = config.agents[0]
             value.telegram = cast(Any, telegram)
             value.supervisor = cast(Any, FakeSupervisor(client))
@@ -491,7 +494,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             value = ProjectHubService.__new__(ProjectHubService)
             value.config = config
             value.registry = registry
-            value.state = HubState.open(state_path)
+            value.state = HubState.open(state_path, codex_permission_profile=None)
             value.agent = config.agents[0]
             value.telegram = cast(Any, FakeTelegram())
             value.supervisor = cast(Any, FakeSupervisor(client))
@@ -547,7 +550,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             value = ProjectHubService.__new__(ProjectHubService)
             value.config = config
             persist_registry(config.registry_path, ProjectRegistry(1, (base,), ()))
-            value.state = HubState.open(config.state_path)
+            value.state = HubState.open(config.state_path, codex_permission_profile=None)
             value.agent = config.agents[0]
             value.telegram = cast(Any, FakeTelegram())
             value.usernames = {"codex": "project_codex_bot"}
@@ -613,7 +616,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             value = ProjectHubService.__new__(ProjectHubService)
             value.config = config
             value.registry = registry
-            value.state = HubState.open(state_path)
+            value.state = HubState.open(state_path, codex_permission_profile=None)
             value.agent = config.agents[0]
             value.telegram = cast(Any, FakeTelegram())
             value.supervisor = cast(Any, FakeSupervisor(client))
@@ -682,7 +685,7 @@ class ServiceIntegrationTests(unittest.TestCase):
                 value = ProjectHubService.__new__(ProjectHubService)
                 value.config = config
                 value.registry = registry
-                value.state = HubState.open(state_path)
+                value.state = HubState.open(state_path, codex_permission_profile=None)
                 value.agent = config.agents[0]
                 value.telegram = cast(Any, telegram)
                 supervisor = FakeSupervisor(client)
@@ -747,7 +750,7 @@ class ServiceIntegrationTests(unittest.TestCase):
             value = ProjectHubService.__new__(ProjectHubService)
             value.config = config
             value.registry = registry
-            value.state = HubState.open(config.state_path)
+            value.state = HubState.open(config.state_path, codex_permission_profile=None)
             value.agent = config.agents[0]
             value.telegram = cast(Any, telegram)
             value.supervisor = cast(Any, FakeSupervisor(client))

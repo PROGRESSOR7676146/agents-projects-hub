@@ -85,7 +85,7 @@ class DurableProgressDeliveryTests(unittest.TestCase):
             outbox_runtime="external",
             external_worker_agent_ids=("codex",),
         )
-        self.state = HubState.open(self.config.state_path)
+        self.state = HubState.open(self.config.state_path, codex_permission_profile=None)
 
     def tearDown(self) -> None:
         self.state.close()

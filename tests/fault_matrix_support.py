@@ -148,7 +148,7 @@ class FaultMatrixHarness:
         service = cast(Any, ProjectHubService.__new__(ProjectHubService))
         service.config = self.config
         service.registry = self.registry
-        service.state = HubState.open(self.config.state_path)
+        service.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         service.agent = self.config.require_agent("codex")
         service.telegram = RecordingBot()
         service.usernames = {
@@ -211,7 +211,7 @@ class FaultMatrixHarness:
         )
 
     def one_job(self, thread_id: int):
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             topic = state.find_topic(CHAT_ID, thread_id)
             assert topic is not None

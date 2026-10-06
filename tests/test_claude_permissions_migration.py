@@ -8,11 +8,12 @@ from unittest.mock import patch
 
 from hermes_codex_router import migrations
 from hermes_codex_router.state import HubState
+from tests.schema_fixtures import legacy_selection_columns
 
 
 def create_version37(path: Path) -> dict[str, list[tuple[object, ...]]]:
-    with patch.object(migrations, "LATEST_SCHEMA_VERSION", 37):
-        state = HubState.open(path)
+    with patch.object(migrations, "LATEST_SCHEMA_VERSION", 37), legacy_selection_columns(path):
+        state = HubState.open(path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project", chat_id=-1001234567890, thread_id=7, title="Example"
@@ -53,7 +54,8 @@ class ClaudePermissionsMigrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
             expected = create_version37(path)
-            result = migrations.migrate_database(path)
+            with patch.object(migrations, "LATEST_SCHEMA_VERSION", 38):
+                result = migrations.migrate_database(path)
             self.assertEqual((result.previous_version, result.current_version), (37, 38))
             self.assertEqual(rows(path), expected)
             assert result.backup_path is not None

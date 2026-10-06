@@ -13,7 +13,7 @@ class IncomingMaterialsStateFacadeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.state_path = Path(self.tempdir.name) / "private" / "hub.db"
-        self.state = HubState.open(self.state_path)
+        self.state = HubState.open(self.state_path, codex_permission_profile=None)
         self.topic = self.state.observe_topic(
             project_id="example-project",
             chat_id=-1001234567890,

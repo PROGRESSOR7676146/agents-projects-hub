@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -131,7 +133,9 @@ class ResultReliabilityTests(unittest.TestCase):
                 old_id = fixture.enqueue(1, "Fictional task")
                 tail_id = None
                 if final_status == "failed":
-                    tail_state = HubState.open(fixture.config.state_path)
+                    tail_state = HubState.open(
+                        fixture.config.state_path, codex_permission_profile=None
+                    )
                     old_job = tail_state.get_provider_job(old_id)
                     tail, _ = tail_state.enqueue_provider_job(
                         idempotency_key="telegram:fictional-held-tail",
@@ -163,7 +167,9 @@ class ResultReliabilityTests(unittest.TestCase):
                         delivery.outbox_id, delivery.lease_token, telegram_message_id=101
                     )
                     client.observed = final_status
-                    reopened = HubState.open(fixture.config.state_path)
+                    reopened = HubState.open(
+                        fixture.config.state_path, codex_permission_profile=None
+                    )
                     try:
                         self.assertTrue(
                             TurnObservation(reopened, fixture.config).run_once(
@@ -359,7 +365,7 @@ class ResultReliabilityTests(unittest.TestCase):
         fixture.setUp()
         client = Client()
         old_job_id = fixture.enqueue(1, "Original fictional task")
-        setup_state = HubState.open(fixture.config.state_path)
+        setup_state = HubState.open(fixture.config.state_path, codex_permission_profile=None)
         try:
             old = setup_state.get_provider_job(old_job_id)
             tail, _ = setup_state.enqueue_provider_job(
@@ -444,15 +450,24 @@ class ResultReliabilityTests(unittest.TestCase):
     def test_completion_buffered_during_rpc_is_consumed_before_transport(self) -> None:
         transport = FakeTransport(
             [
+                {"id": 1, "result": {"turn": {"id": "turn-1"}}},
                 item("Already finished"),
                 completion(),
-                {"id": 1, "result": {"data": []}},
+                {"id": 2, "result": {"data": []}},
             ]
         )
         client = CodexAppServerClient(transport, initialized=True)
+        with tempfile.TemporaryDirectory() as root:
+            client.start_turn(
+                thread_id="thread-1",
+                cwd=Path(root),
+                text="Example request",
+                model="example-model",
+                effort="high",
+            )
         client.list_models()
         self.assertEqual(client.wait_for_turn("turn-1").text, "Already finished")
-        self.assertEqual(len(transport.receive_timeouts), 3)
+        self.assertEqual(len(transport.receive_timeouts), 4)
 
     def test_duplicate_visible_item_is_not_published_twice(self) -> None:
         client = CodexAppServerClient(
@@ -628,7 +643,7 @@ class ResultReliabilityTests(unittest.TestCase):
         fixture = worker_fixtures.CodexQueueWorkerTests()
         fixture.setUp()
         job_id = fixture.enqueue()
-        state = HubState.open(fixture.config.state_path)
+        state = HubState.open(fixture.config.state_path, codex_permission_profile=None)
         try:
             leased = state.lease_provider_job("codex", "fictional-worker")
             assert leased is not None and leased.lease_token is not None
@@ -656,7 +671,7 @@ class ResultReliabilityTests(unittest.TestCase):
         fixture = worker_fixtures.CodexQueueWorkerTests()
         fixture.setUp()
         job_id = fixture.enqueue()
-        state = HubState.open(fixture.config.state_path)
+        state = HubState.open(fixture.config.state_path, codex_permission_profile=None)
         try:
             past = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat()
             state._connection.execute(
@@ -674,7 +689,7 @@ class ResultReliabilityTests(unittest.TestCase):
         fixture.setUp()
         active_id = fixture.enqueue(1)
         waiting_id = fixture.enqueue(2)
-        state = HubState.open(fixture.config.state_path)
+        state = HubState.open(fixture.config.state_path, codex_permission_profile=None)
         try:
             leased = state.lease_provider_job("codex", "fictional-worker")
             assert leased is not None and leased.lease_token is not None
@@ -694,7 +709,7 @@ class ResultReliabilityTests(unittest.TestCase):
         fixture = worker_fixtures.CodexQueueWorkerTests()
         fixture.setUp()
         job_id = fixture.enqueue()
-        state = HubState.open(fixture.config.state_path)
+        state = HubState.open(fixture.config.state_path, codex_permission_profile=None)
         try:
             past = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat()
             future = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
@@ -746,7 +761,7 @@ class ResultReliabilityTests(unittest.TestCase):
     def test_compatibility_sender_persists_server_retry_minimum(self) -> None:
         fixture = sender_fixtures.TelegramOutboxSenderTests()
         fixture.setUp()
-        state = HubState.open(fixture.config.state_path)
+        state = HubState.open(fixture.config.state_path, codex_permission_profile=None)
         service = cast(
             Any, embedded_fixtures.ProjectHubService.__new__(embedded_fixtures.ProjectHubService)
         )

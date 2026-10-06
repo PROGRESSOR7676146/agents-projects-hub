@@ -6,7 +6,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .claude_catalog import CLAUDE_EFFORTS, parse_claude_catalog
 from .claude_permissions_config import ClaudeFilePermissionsConfig, parse_claude_file_permissions
+from .codex_permissions import validate_permission_profile_id
+from .provider_catalog import ProviderModel
 
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
@@ -40,6 +43,7 @@ class AgentDefinition:
     executable: str | None = None
     runtime_home: Path | None = None
     service_unit: str | None = None
+    model_catalog: tuple[ProviderModel, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +157,7 @@ class HubConfig:
     codex_sessions_dir: Path | None = None
     codex_stdio_executable: Path | None = None
     codex_model_provider: str | None = None
+    codex_permission_profile: str | None = None
     provider_account_hints: dict[str, tuple[str, ...]] = field(default_factory=dict)
     provider_telemetry: dict[str, ProviderTelemetrySettings] = field(default_factory=dict)
     project_provisioning: ProjectProvisioningSettings = field(
@@ -222,6 +227,17 @@ def _absolute_path(value: Any, label: str, *, must_exist: bool) -> Path:
         raise HubConfigError(f"cannot resolve {label}: {exc}") from exc
 
 
+def _logical_socket_path(value: Any) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise HubConfigError("codex_socket_path must be an absolute path")
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise HubConfigError("codex_socket_path must be absolute")
+    # The companion may replace this link on restart. Resolving it here
+    # would pin every worker and passive health check to the old daemon.
+    return path.absolute()
+
+
 def _private_token_file(value: Any, agent_id: str, *, validate_secret: bool) -> Path:
     path = _absolute_path(
         value,
@@ -262,6 +278,7 @@ _RETIRED_KEYS = frozenset(
 class _CodexTransport:
     manage_codex_server: bool
     codex_model_provider: str | None
+    codex_permission_profile: str | None
     codex_stdio_executable: Path | None
     codex_sessions_dir: Path | None
 
@@ -324,6 +341,10 @@ def _parse_acceptance_actors(root: dict[str, Any], raw_owners: list[int]) -> lis
 
 
 def _parse_codex_transport(root: dict[str, Any]) -> _CodexTransport:
+    try:
+        permission_profile = validate_permission_profile_id(root.get("codex_permission_profile"))
+    except ValueError as error:
+        raise HubConfigError(str(error)) from None
     manage_codex_server = root.get("manage_codex_server", False)
     if not isinstance(manage_codex_server, bool):
         raise HubConfigError("manage_codex_server must be boolean")
@@ -358,6 +379,7 @@ def _parse_codex_transport(root: dict[str, Any]) -> _CodexTransport:
     return _CodexTransport(
         manage_codex_server=manage_codex_server,
         codex_model_provider=codex_model_provider,
+        codex_permission_profile=permission_profile,
         codex_stdio_executable=codex_stdio_executable,
         codex_sessions_dir=codex_sessions_dir,
     )
@@ -553,8 +575,20 @@ def _parse_agent(
         "ultra",
     }:
         raise HubConfigError(f"default_effort is invalid for {agent_id}")
-    if runtime == "claude" and default_effort not in {"low", "medium", "high", "xhigh", "max"}:
+    if runtime == "claude" and default_effort not in CLAUDE_EFFORTS:
         raise HubConfigError(f"default_effort is invalid for {agent_id}")
+    model_catalog = None
+    if "model_catalog" in data:
+        if runtime != "claude":
+            raise HubConfigError("model_catalog is supported only for Claude")
+        try:
+            model_catalog = parse_claude_catalog(
+                data["model_catalog"],
+                default_model=default_model.strip(),
+                default_effort=default_effort,
+            )
+        except ValueError as exc:
+            raise HubConfigError(str(exc)) from None
     executable = data.get("executable")
     if executable is not None and (not isinstance(executable, str) or not executable.strip()):
         raise HubConfigError(f"executable is invalid for {agent_id}")
@@ -586,6 +620,7 @@ def _parse_agent(
         executable=executable.strip() if executable else None,
         runtime_home=runtime_home,
         service_unit=service_unit,
+        model_catalog=model_catalog,
     )
 
 
@@ -979,13 +1014,11 @@ def load_hub_config(
     acceptance_actors = _parse_acceptance_actors(root, raw_owners)
     registry_path = _absolute_path(root.get("registry_path"), "registry_path", must_exist=True)
     state_path = _absolute_path(root.get("state_path"), "state_path", must_exist=False)
-    codex_socket_path = _absolute_path(
+    codex_socket_path = _logical_socket_path(
         root.get(
             "codex_socket_path",
             str(Path.home() / ".codex/app-server-control/app-server-control.sock"),
         ),
-        "codex_socket_path",
-        must_exist=False,
     )
     codex = _parse_codex_transport(root)
     terminal = _parse_terminal(root)
@@ -1069,13 +1102,16 @@ def load_hub_config(
         codex_sessions_dir=codex.codex_sessions_dir,
         codex_stdio_executable=codex.codex_stdio_executable,
         codex_model_provider=codex.codex_model_provider,
+        codex_permission_profile=codex.codex_permission_profile,
         provider_account_hints=provider_account_hints,
         provider_telemetry=provider_telemetry,
         project_provisioning=project_provisioning,
     )
+    from .codex_permissions import validate_managed_execution_mode
     from .session_adoption_policy import validate_adoption_mode
 
     try:
+        validate_managed_execution_mode(config)
         validate_adoption_mode(config)
     except ValueError as exc:
         raise HubConfigError(str(exc)) from None

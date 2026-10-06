@@ -18,7 +18,8 @@ import test_embedded_queue_service as embedded_fixtures
 from schema_fixtures import remove_adoption_schema
 from test_codex_appserver import FakeTransport
 
-from hermes_codex_router.codex_appserver import CodexAppServerClient, TurnResult
+from hermes_codex_router.codex_appserver import CodexAppServerClient, CodexTurnError, TurnResult
+from hermes_codex_router.codex_permissions import CodexPermissionPolicyDriftError
 from hermes_codex_router.codex_worker import CodexQueueWorker
 from hermes_codex_router.state import HubState, StateError
 
@@ -72,7 +73,7 @@ class ExecutionJournalTests(unittest.TestCase):
         assert migrated.backup_path is not None
         with closing(sqlite3.connect(migrated.backup_path)) as con, con:
             self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0], 21)
-        state = HubState.open(path)
+        state = HubState.open(path, codex_permission_profile=None)
         try:
             self.assertEqual(state.get_provider_job(job_id).status, "queued")
         finally:
@@ -94,7 +95,7 @@ class ExecutionJournalTests(unittest.TestCase):
                         process.kill()
                         process.join(3)
                     self.assertEqual(process.exitcode, 17)
-                    state = HubState.open(fixture.config.state_path)
+                    state = HubState.open(fixture.config.state_path, codex_permission_profile=None)
                     job = state.get_provider_job(job_id)
                     self.assertIsNotNone(state.get_session(job.session_id).provider_session_id)
                     assert job.lease_token is not None
@@ -255,7 +256,7 @@ class ExecutionJournalTests(unittest.TestCase):
         from hermes_codex_router.execution_journal import ExecutionJournal
 
         job_id = self.fixture.enqueue()
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         lease = state.lease_provider_job("codex", "old-worker")
         assert lease and lease.lease_token
         state.mark_provider_job_executing(job_id, lease.lease_token)
@@ -289,6 +290,31 @@ class ExecutionJournalTests(unittest.TestCase):
         finally:
             worker.close()
 
+    def test_embedded_completed_drift_recovery_keeps_warning(self) -> None:
+        class Client(embedded_fixtures.QueueClient):
+            def wait_for_turn(self, turn_id: str) -> TurnResult:
+                raise CodexTurnError(CodexPermissionPolicyDriftError(), "Example partial")
+
+            def read_completed_turn(self, **_kwargs: Any) -> TurnResult:
+                return TurnResult("Recovered embedded result", None, None)
+
+        fixture = embedded_fixtures.EmbeddedQueueServiceTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        client = Client()
+        service, telegram = fixture.service(client)
+        self.addCleanup(service.close)
+        with patch.object(service, "_start_embedded_queue_consumer"):
+            self.assertTrue(service.handle_update(embedded_fixtures.update(1, "Fictional task")))
+        self.assertTrue(service.run_embedded_queue_cycle())
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        job = service.state.provider_jobs_for_topic(topic.topic_id)[0]
+        self.assertEqual(job.status, "completed")
+        self.assertTrue(any("permission selection changed" in text for text in telegram.sent))
+        self.assertTrue(any("Recovered embedded result" in text for text in telegram.sent))
+        self.assertEqual(len(client.turn_threads), 1)
+
     def test_owner_direct_job_recovery_uses_exact_configured_project(self) -> None:
         from hermes_codex_router.execution_journal import ExecutionJournal
 
@@ -296,7 +322,7 @@ class ExecutionJournalTests(unittest.TestCase):
             self.fixture.config, direct_message_project_id="example-project"
         )
         job_id = self.fixture.enqueue()
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         job = state.get_provider_job(job_id)
         state._connection.execute("UPDATE topics SET chat_id=42 WHERE topic_id=?", (job.topic_id,))
         state._connection.execute("UPDATE provider_jobs SET chat_id=42 WHERE job_id=?", (job_id,))
@@ -335,7 +361,7 @@ class ExecutionJournalTests(unittest.TestCase):
         from hermes_codex_router.execution_journal import ExecutionJournal
         from hermes_codex_router.worktrees import create_worktree
 
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         project = self.fixture.registry.projects[0]
         lane_root, branch = create_worktree(project, "recovery")
         try:
@@ -399,7 +425,7 @@ class ExecutionJournalTests(unittest.TestCase):
         from hermes_codex_router.execution_journal import ExecutionJournal
 
         job_id = self.fixture.enqueue()
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         try:
             lease = state.lease_provider_job("codex", "lost-worker")
             assert lease is not None and lease.lease_token is not None
@@ -529,11 +555,15 @@ class ExecutionJournalTests(unittest.TestCase):
                     for name in (
                         "__init__.py",
                         "migrations.py",
+                        "migration_sql.py",
                         "models.py",
                         "registry.py",
                         "schema_task_lifecycle.py",
                         "schema_task_activity.py",
                         "schema_claude_permissions.py",
+                        "schema_codex_permissions.py",
+                        "schema_preacceptance_approvals.py",
+                        "schema_preexecution_retry.py",
                     ):
                         archive.writestr(
                             f"hermes_codex_router/{name}", (package / name).read_text()
@@ -556,7 +586,7 @@ class ExecutionJournalTests(unittest.TestCase):
         from hermes_codex_router.execution_journal import ExecutionJournal
 
         job_id = self.fixture.enqueue()
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         try:
             lease = state.lease_provider_job("codex", "worker")
             assert lease and lease.lease_token

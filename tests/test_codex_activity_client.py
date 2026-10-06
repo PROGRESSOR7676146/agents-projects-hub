@@ -119,6 +119,38 @@ class CodexActivityClientTests(unittest.TestCase):
         self.assertEqual([message["method"] for message in transport.sent], ["turn/start"])
         self.assertNotIn("command", asdict(events[0]))
 
+    def test_early_callback_runs_inside_start_before_acceptance_and_keeps_normal_buffer(
+        self,
+    ) -> None:
+        client, transport, events = self.client(
+            [approval(), resolved(), started_response(), completed()]
+        )
+        early: list[CodexActivityEvent] = []
+        client.on_preacceptance_approval = early.append
+        turn_id = self.start(client)
+        self.assertEqual(
+            [event.kind for event in early], ["approval_requested", "approval_resolved"]
+        )
+        self.assertEqual(events, [])
+        self.assertNotIn("private", repr(early))
+        client.wait_for_turn(turn_id)
+        self.assertEqual(events, early)
+        self.assertEqual(len(early), 2)
+        self.assertEqual([message["method"] for message in transport.sent], ["turn/start"])
+
+    def test_never_policy_and_unrelated_rpc_do_not_publish_early_human_wait(self) -> None:
+        for policy in ("never", "on-request"):
+            with self.subTest(policy=policy):
+                messages = [approval(), started_response(), completed()]
+                client, _, _ = self.client(messages, policy=policy)
+                early: list[CodexActivityEvent] = []
+                client.on_preacceptance_approval = early.append
+                if policy == "never":
+                    client.wait_for_turn(self.start(client))
+                else:
+                    client._request("thread/read", {})
+                self.assertEqual(early, [])
+
     def test_early_resolved_maps_only_matching_typed_request_and_thread(self) -> None:
         client, _, events = self.client(
             [

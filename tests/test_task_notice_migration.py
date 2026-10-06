@@ -270,7 +270,10 @@ class TaskNoticeMigrationTests(unittest.TestCase):
             self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
         after = self._snapshot()
         for table in ("provider_jobs", "provider_job_results", "provider_stop_requests", "topics"):
-            self.assertEqual(after[table], self.before[table])
+            expected = self.before[table]
+            if table == "provider_jobs":
+                expected = [(*row, None) for row in expected]
+            self.assertEqual(after[table], expected)
         self.assertEqual(
             after["telegram_outbox"],
             [row for row in self.before["telegram_outbox"] if row[0] == "provider"],

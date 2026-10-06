@@ -142,11 +142,14 @@ acceptance.
 | Inbound materials and context/quota labels | REQ-UX-009, REQ-QUEUE-010, REQ-CMD-001 | Acceptance actor `p0_p1_live` in a maintenance window |
 | Restart continuity and exactly-once processing | AC-F-005, AC-F-010 | Controlled restart during queued and active work |
 | Summary-free Codex `/local` → `/return` | REQ-WRITER-006, REQ-WRITER-007 | Telegram → native CLI → Telegram on the same thread |
+| Managed Codex profile continuity and custody (schema 39) | REQ-SEC-001, ADR 0055 | Exact start/resume/restart selection, approvals, negative project/service-data access; local/advisor routes remain unsupported pending their own boundary evidence |
 | Saved-session `/connect` | REQ-CMD-008, REQ-WRITER-012, AC-F-013 | Topic, Hub-private and local-code entry paths |
 | Accepted-turn activity and queue snapshots (schema 37) | REQ-QUEUE-012, REQ-QUEUE-013 | Queue blocker, long tool, approval resolution, restart and ambiguous delivery at the exact deployed revision |
+| Preacceptance Codex approval observations (schema 40) | REQ-QUEUE-012, REQ-QUEUE-013 | Human wait before native acknowledgement, exact promotion, worker-epoch restart and preserved unknown sends |
 | Durable root blockers (schema 35) | REQ-WRITER-008 | Blocked input, held job, owner decision |
 | Exact Codex turn recovery (schema 34) | REQ-QUEUE-004 | Uncertain turn, read-only proof, continuation |
 | Root concurrency, worktree lanes, Codex slots | REQ-QUEUE-002, REQ-QUEUE-003 | Three projects on independent roots |
+| Codex preparation notification conservation | REQ-QUEUE-004, REQ-QUEUE-012 | Keep one exact turn active on root A while root B starts or resumes; preserve both finals, early/late human approvals, context and account quota observations, with no additional invocation or unrelated-worker restart |
 | Project-group provisioning | REQ-ONBOARD-003, REQ-ONBOARD-006 | New project canary |
 | Registered-project editing | REQ-PROJECT-EDIT-001..004 | Rename and relocation canary |
 | Machine-loss recovery drill | REQ-OPS-012 | Private cold-restore drill |
@@ -154,6 +157,29 @@ acceptance.
 
 ## Follow-ups found during execution
 
+- Codex preparation notification overflow: the source filter is present at
+  `5a1b12d608873b4660b758f43d0e9a5dac37d404`. The combined offline regression
+  uses two independent worker connections and roots, injects 3,600 foreign events
+  during the second worker's initialization, preparation and turn submission,
+  and checks both durable completions/outboxes, approval resolution and telemetry.
+  Start and exact resume are separate cases. A control case reproduces the
+  1,024-entry overflow under the older unfiltered retention rule. Next trigger:
+  complete exact-revision publication/review, then separately authorize deployed
+  conservation acceptance and bounded native event-source attribution. The deployed
+  notification source remains unverified; offline scripts do not close live debt.
+- Native notification attribution has an optional offline direct-socket fixture
+  in `tests/test_codex_native_notification_origin.py`: two native connections,
+  a deterministic Responses stream with more than 1,024 notifications, exact
+  completion and a subscribed positive control. It uses no real login, model
+  endpoint or deployment socket. Fresh observers and retained subscriptions are
+  measured separately. Native subscriptions survive starting another thread on
+  the same connection; worker-client reuse before strict completed-connection
+  retirement, or without exact completion proof, permits that state. This is a
+  demonstrated mechanism, not attribution of a particular deployment failure.
+  Keep the foreign-notification filter independently of subscription cleanup.
+  Transport bounds and completed-connection retirement are described below;
+  their repository evidence does not close installed-source attribution. Publication/review and coordinated
+  live acceptance remain separate gates.
 - The Codex daemon moved its shared socket into `/tmp/codex-daemon-UID`, which
   the Hub units' `PrivateTmp` hid (found 2026-09-29). Since about 2026-09-27
   the Codex worker ran on the stdio fallback, without companion approvals, and
@@ -216,7 +242,144 @@ acceptance.
   broader provider/compatibility coverage, and separately authorized capacity
   and canary-root checks. No background inference or automatic replay is added.
 
+- **Repeated notification/preparation failure and saved-payload retry:** source
+  candidates and isolated native corpus are under review. The next trigger is
+  exact-revision canonical/independent review of bounded transport consumption
+  and schema-41 text-only notice-bound retry, then owner integration and a
+  separately approved two-worker canary. Last verified published transport
+  revision: `1a54af15d375992001579e328e8b31b5e1b9267d`; this is repository
+  evidence only. Verify more than 1,024 foreign notifications and both results;
+  two consecutive preparation failures must retain the original task/context
+  through explicit retries, or visibly refuse when preparation replaced an
+  existing thread without saving its effective context. Frozen fallback-context
+  preservation and ordinary Reply historical context remain separate follow-ups.
+  Restart alone does not close the item. Materials,
+  safe unsubscribe, stdio buffering and exact deployed-source attribution remain
+  open; no deployment or active-worker restart follows from this entry. See the
+  [recovery procedure](QUEUE_RECOVERY.md#durable-dispositions) and
+  [acceptance strategy](../testing/README.md).
+  Independent Opus source review of retry head
+  `fc1265286ab8b56b730cb371008ab9cc29d7a93b` completed. Its follow-up now
+  protects failure publication when root resolution fails, derives Codex runtime
+  from trusted configuration while retaining aliases, rechecks child selections
+  and materials, and makes tickets update-immutable in unreleased migration 41.
+  Astra reviewed the domain/transaction ownership and direct failure paths.
+  Lease-crash and execution-crash regressions retain their distinct certainty;
+  a real 65-source chain refuses at the ancestry bound without invocation.
+  Final exact-head publication/review is pending. Explicit retries follow FIFO
+  arrival order; they do not rewind the session. This source lane stacks on
+  transport head `1a54af15`, separately from later transport/retirement/deadline
+  siblings. Integration and live evidence remain open.
+
 ## Closure
+
+Repeated Codex preparation overflow has source-level transport and saved-task
+retry candidates, not deployment acceptance. The schema-41 text-only retry
+candidate is published at `fc1265286ab8b56b730cb371008ab9cc29d7a93b`;
+canonical publication validation passed, while required opposite-runtime review
+and live gates remain open. It refuses thread-replacement retry ancestry that
+lacks a frozen effective context. The stdio follow-up bounds both directions and
+preserves accepted inbound frames at
+`9a70840f362bd28f860c9bede44ecacefebd3307` (1,887 automated tests, canonical typing/privacy
+and all seven hosted checks). Its actual Opus review found no blocker/high/medium,
+but confirmed that immediate inbound sealing on writer failure could lose an
+unread stdout tail. The response-channel follow-up below closes that source gap;
+the older candidate alone is not full tail-conservation evidence.
+The completed-socket retirement slice is in progress on that base: strict
+single-use proof, publish-before-close, exact-client cache removal, optional
+telemetry deadlines and cache-only queued catalogs passed focused checks and
+architectural review. Eight offline native/observer cases passed with Codex
+0.159.2, including surviving-peer operation, fresh metadata preparation under
+over 1,024 foreign stream events and exact stored resume. Final publication and
+required Claude review remain separate gates. The first Opus review requested
+full idle-restoration/catalog context and explicit reconnect tradeoffs; follow-up
+also guards queued clients against unrelated foreground poller cleanup.
+Closeout requires a separately
+authorized two-worker canary with more than 1,024 foreign notifications, both
+results saved and two successive preparation failures retaining the original
+task through explicit notice-bound retries. Restart alone does not close this
+item. Absolute preparation/metadata deadlines, client-event
+byte bounds, material retry and exact deployed-source attribution remain open.
+See [queue recovery](QUEUE_RECOVERY.md) and the
+[acceptance strategy](../testing/README.md).
+
+### Completed-socket slice ownership and extraction
+
+Owner: lead agent / Hub maintainer. Source lane
+`fix/codex-successful-unsubscribe` owns this bounded slice, despite its historical
+branch name; it performs connection retirement without an unsubscribe RPC.
+Base/last canonical verified revision is
+`9a70840f362bd28f860c9bede44ecacefebd3307` on `fix/codex-stdio-backpressure`.
+The native notification test dependency comes from the independently reviewed
+source corpus at `dc289f816cb6f83ae36641f89af857aa75cefd1e`; this slice shortens
+its disposable endpoint directory to fit the Unix socket pathname limit
+when the real Hub transport resolves a pinned descriptor, and stamps the scripted
+message's final-answer phase for exact stored-output assertions.
+After integration, recheck tracked/staged/untracked lane state before any removal.
+Next trigger: exact clean publication, required Claude review, then an explicitly
+authorized integration and live canary. No deployment acceptance is claimed.
+
+Architecture review retained HubState as transaction owner, workers/Controller
+as invocation and cache owners, and transports as connection cleanup owners.
+`codex_connection_completion` owns exact completion proof;
+`codex_result_lifecycle` owns optional context/quota and survived cleanup/report
+failures; `inline_codex_execution` owns legacy inline invocation and its completion
+journal. This extracts one shared lifecycle instead of copying policy across
+three runtime paths and reduces Controller responsibility. External execution
+keeps the explicit result checkpoint/publication/retirement order; its reviewed
+207-line exception is recorded in `hotspots.json`. Next extraction review remains
+stabilization stage 3 or any new lifecycle/transaction/invocation branch.
+Failure before publication retains existing certainty/recovery rules; cleanup
+after publication cannot cause productive replay. Stdio retirement awaits a
+durable owned-process exclusion barrier and is outside this slice.
+
+### RPC deadline follow-up ownership
+
+Owner: lead agent / Hub maintainer. Source lane `fix/codex-rpc-deadlines`
+owns fixed per-RPC response deadlines, with base/last verified source revision
+`3b40ae80d8bc34f2ae4105d10b6c75085d6e43c6` (1,915 commit-gate tests; canonical
+publication and opposite-runtime review are separate gates). State/transaction,
+invocation, completion-proof and cleanup ownership remain unchanged. The
+bounded policy is in the protocol client; no new retry authority, schema,
+shared preparation budget or provider inference is added. Architecture review
+approved default 120-second response/20-second quiet bounds and explicit
+300-second turn submission with existing caller deadlines preserved.
+
+Next trigger: exact clean publication and independent review, then integrated
+regression and the separately authorized canary. After integration, inspect
+tracked/staged/untracked lane state before changing or removing the worktree.
+See [RPC recovery procedures](QUEUE_RECOVERY.md#codex-rpc-response-deadlines) and
+the [testing guide](../testing/README.md). Native/live acceptance remains open;
+legacy inline uncertainty, event-byte budgets and a durable owned-process
+barrier including idle stdio restoration remain separate work.
+
+### Stdio response-channel follow-up ownership
+
+Owner: lead agent / Hub maintainer. Lane `fix/codex-stdio-tail-conservation` is
+based on clean `ebd92469f0701c70539ce95a70bcbbd445868d62`, the independently
+reviewed RPC-deadline candidate (1,926 canonical tests, typing/privacy and seven
+hosted checks). This lane does not include the sibling schema-41 saved-task retry
+candidate; integration must verify both together. Work is in progress: focused
+synthetic regressions pass, while exact clean publication and opposite-runtime
+review remain separate gates. No deployment or live acceptance is claimed.
+
+Transport owns first-cause selection, bounded FIFO and pipe cleanup. The client
+owns native submission/accepted identity, visible callbacks and completion;
+dependency-neutral `codex_response_drain` owns the narrow deadline, notice and
+fault-time proof policy. State and worker transaction/invocation ownership are
+unchanged. Independent Astra review closed quiet asynchronous fault detection,
+accepted-turn matching and partial-text retention at deadline expiry; it found
+no remaining blocker/high/medium in that diff. The extraction avoids copying
+fault policy across worker paths and requires no new hotspot exception.
+
+Next trigger: exact clean publication/review, integrated regressions, then the
+separately authorized two-worker canary above. Include approval before final
+under a broken stdio response channel and verify the saved result carries the
+fixed Hub notice without a grant or another invocation. Inspect tracked, staged
+and untracked lane state after integration before any worktree change/removal.
+See [queue recovery](QUEUE_RECOVERY.md) for the 20-second observed-fault drain
+and its late-tail limits. Traceback retention and descendant-held pipe cleanup
+remain open; restart is still temporary recovery, not incident closure.
 
 The plan closes when stages 0–3 are merged into `main`, the hotspot ratchet
 runs in the canonical gate, and the owner has either completed or explicitly

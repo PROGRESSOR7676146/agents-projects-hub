@@ -242,7 +242,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
         token.write_text("fictional-token", encoding="utf-8")
         token.chmod(0o600)
         config = replace(self.config, hub_bot=HubTelegramBot("example_hub_bot", token))
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             owner = state.observe_topic(
                 project_id="example-project",
@@ -307,7 +307,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
     def ready_outbox(
         self, agent_id: str, message_id: int, *, telegram_html: str | None = None
     ) -> str:
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",
@@ -374,7 +374,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             now = datetime.now(timezone.utc)
             workflow_id = f"workflow-{project_id}"
@@ -524,7 +524,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
         healthy_chat = -1001111111111
         self.add_dynamic_binding("exhausted", exhausted_chat)
         self.add_dynamic_binding("healthy", healthy_chat)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             store = ProjectOnboardingStore(state)
             store.ensure_command_scope_tasks(("opencode",))
@@ -561,7 +561,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
     def test_successful_final_set_attempt_gets_a_fresh_verify_budget(self) -> None:
         chat_id = -1002222222222
         self.add_dynamic_binding("final-set", chat_id)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             store = ProjectOnboardingStore(state)
             store.ensure_command_scope_tasks(("opencode",))
@@ -586,7 +586,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
     def test_repeated_set_verify_mismatch_has_a_total_attempt_limit(self) -> None:
         chat_id = -1002222222222
         self.add_dynamic_binding("bounded-mismatch", chat_id)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             store = ProjectOnboardingStore(state)
             store.ensure_command_scope_tasks(("opencode",))
@@ -621,7 +621,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
     def test_successful_set_at_total_limit_becomes_explicitly_resettable(self) -> None:
         chat_id = -1002222222222
         self.add_dynamic_binding("final-total-set", chat_id)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             store = ProjectOnboardingStore(state)
             store.ensure_command_scope_tasks(("opencode",))
@@ -692,7 +692,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             sender.close()
 
     def test_private_work_refreshes_native_thinking_draft(self) -> None:
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",
@@ -808,7 +808,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
     def test_multipart_retry_resumes_at_first_undelivered_part(self) -> None:
         long_html = ("part " * 3999) + "part"
         job_id = self.ready_outbox("opencode", 12, telegram_html=long_html)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             outbox = state.get_telegram_outbox_for_job(job_id)
             self.assertEqual(
@@ -917,7 +917,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
     def test_mixed_rollout_separates_execution_and_delivery_recovery_ownership(self) -> None:
         open_job = self.ready_outbox("opencode", 40)
         agy_job = self.ready_outbox("antigravity", 41)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             for agent_id in ("opencode", "antigravity"):
                 leased = state.lease_telegram_outbox(agent_id, f"lost-{agent_id}")
@@ -940,7 +940,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
         controller.telegram = Bot()
 
         self.assertFalse(controller.run_embedded_queue_cycle())
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             self.assertEqual(state.get_telegram_outbox_for_job(open_job).status, "sending")
             self.assertEqual(state.get_telegram_outbox_for_job(agy_job).status, "sending")
@@ -972,7 +972,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             self.config,
             hub_bot=HubTelegramBot("example_hub_bot", token),
         )
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",
@@ -1032,7 +1032,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
         self,
     ) -> None:
         config, job_id, request_id = self.stop_notice_fixture(executing=True)
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             job = state.get_provider_job(job_id)
             assert job.lease_token is not None
@@ -1155,7 +1155,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
 
     def test_mixed_embedded_execution_commits_without_controller_telegram_send(self) -> None:
         mixed = replace(self.config, external_worker_agent_ids=("opencode",))
-        state = HubState.open(mixed.state_path)
+        state = HubState.open(mixed.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",
@@ -1222,7 +1222,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
 
     def test_stale_recovery_is_scoped_to_configured_sender_agents(self) -> None:
         self.ready_outbox("opencode", 20)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             leased = state.lease_telegram_outbox("opencode", "lost-sender", lease_seconds=60)
             assert leased is not None
@@ -1309,7 +1309,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
         controller._outbox_agent_cursor = 0
 
         self.assertTrue(controller.run_controller_outbox_cycle())
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             self.assertEqual(state.get_provider_job(job_id).status, "completed")
             self.assertEqual(len(bot.sent), 1)
@@ -1339,7 +1339,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             artifact_spool_root(self.config.state_path),
         )[0]
 
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",
@@ -1405,7 +1405,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             "tamper-test",
             artifact_spool_root(self.config.state_path),
         )[0]
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",

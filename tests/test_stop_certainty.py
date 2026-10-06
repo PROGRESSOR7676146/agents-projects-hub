@@ -61,7 +61,9 @@ class StopCertaintyTests(unittest.TestCase):
                         def start(self) -> None:
                             pass
 
-                        def client(self) -> object:
+                        def client(
+                            self, *, allow_fallback: bool = True, deadline: float | None = None
+                        ) -> object:
                             self.calls += 1
                             if self.calls == 1:
                                 return self.main
@@ -101,7 +103,9 @@ class StopCertaintyTests(unittest.TestCase):
                     def request_stop() -> None:
                         if not entered.wait(2):
                             return
-                        state = HubState.open(fixture.config.state_path)
+                        state = HubState.open(
+                            fixture.config.state_path, codex_permission_profile=None
+                        )
                         try:
                             active = state.get_provider_job(job_id)
                             state.request_emergency_stop(
@@ -163,7 +167,7 @@ class StopCertaintyTests(unittest.TestCase):
         class Adapter(external_fixtures.Adapter):
             def run_turn(self, **kwargs: object) -> Any:
                 self.calls += 1
-                state = HubState.open(fixture.config.state_path)
+                state = HubState.open(fixture.config.state_path, codex_permission_profile=None)
                 try:
                     active = state.get_provider_job(job_id)
                     state.request_emergency_stop(
