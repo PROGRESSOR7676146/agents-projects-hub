@@ -277,6 +277,26 @@ Failure before publication retains existing certainty/recovery rules; cleanup
 after publication cannot cause productive replay. Stdio retirement awaits a
 durable owned-process exclusion barrier and is outside this slice.
 
+### RPC deadline follow-up ownership
+
+Owner: lead agent / Hub maintainer. Source lane `fix/codex-rpc-deadlines`
+owns fixed per-RPC response deadlines, with base/last verified source revision
+`3b40ae80d8bc34f2ae4105d10b6c75085d6e43c6` (1,915 commit-gate tests; canonical
+publication and opposite-runtime review are separate gates). State/transaction,
+invocation, completion-proof and cleanup ownership remain unchanged. The
+bounded policy is in the protocol client; no new retry authority, schema,
+shared preparation budget or provider inference is added. Architecture review
+approved default 120-second response/20-second quiet bounds and explicit
+300-second turn submission with existing caller deadlines preserved.
+
+Next trigger: exact clean publication and independent review, then integrated
+regression and the separately authorized canary. After integration, inspect
+tracked/staged/untracked lane state before changing or removing the worktree.
+See [RPC recovery procedures](QUEUE_RECOVERY.md#codex-rpc-response-deadlines) and
+the [testing guide](../testing/README.md). Native/live acceptance remains open;
+legacy inline uncertainty, event-byte budgets and a durable owned-process
+barrier including idle stdio restoration remain separate work.
+
 The plan closes when stages 0–3 are merged into `main`, the hotspot ratchet
 runs in the canonical gate, and the owner has either completed or explicitly
 re-scoped every backlog item. Record the closing revision here.
