@@ -79,3 +79,4 @@ jobs:
           tests.test_claude_custody_rehearsal.ClaudeCustodyRehearsalTests.test_namespace_blocks_authority_aliases_and_privilege_but_shares_network
           tests.test_codex_native_namespace
           tests.test_process_namespace_rehearsal
+          tests.test_review_materials_namespace

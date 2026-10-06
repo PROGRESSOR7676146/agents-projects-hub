@@ -112,7 +112,8 @@ def _assert_namespace_job(job: dict[str, Any]) -> None:
         "tests.test_claude_custody_rehearsal.ClaudeCustodyRehearsalTests."
         "test_namespace_blocks_authority_aliases_and_privilege_but_shares_network "
         "tests.test_codex_native_namespace "
-        "tests.test_process_namespace_rehearsal"
+        "tests.test_process_namespace_rehearsal "
+        "tests.test_review_materials_namespace"
     ):
         raise AssertionError(
             "namespace job must run all real namespace scenarios and both wrapper witnesses"
@@ -314,6 +315,7 @@ class WorkflowContractTests(unittest.TestCase):
             "missing",
             "missing_custody",
             "missing_private",
+            "missing_materials",
             "wrong_command",
             "tolerate_failure",
         ):
@@ -334,6 +336,10 @@ class WorkflowContractTests(unittest.TestCase):
                 elif mutation == "missing_private":
                     invocation["run"] = invocation["run"].replace(
                         " tests.test_process_namespace_rehearsal", ""
+                    )
+                elif mutation == "missing_materials":
+                    invocation["run"] = invocation["run"].replace(
+                        " tests.test_review_materials_namespace", ""
                     )
                 elif mutation == "wrong_command":
                     invocation["run"] = "echo skipped"
