@@ -80,22 +80,28 @@ uses the conservative rules below.
 
 The accepted-turn stop/steer observer opens only existing current-schema state
 with a short lock timeout. SQLite BUSY/LOCKED, including extended result codes,
-postpone the next state poll; they never repeat a provider call. A failure before
-child execution retains its lease. A failure after invocation retains execution
-or uncertainty and requires the recovery rules below. Do not requeue a child
-because the parent result was recovered.
+retain the exact pending state operation for the next stop-first poll; they never
+repeat a provider call or lease another follow-up while settlement is pending.
+Shutdown makes one final bounded state-only attempt and releases a pending
+unstarted lease. A child proven unsent or explicitly rejected may return to the
+queue through its original token. Persistent contention, expired tokens or
+uncertain invocation retain the conservative durable disposition and require
+the recovery rules below. Do not requeue a child because the parent result was
+recovered.
 
 An explicit steer rejection disables steering for that parent while stop polling
 continues. The follow-up remains FIFO work for normal execution after the parent
 completion/delivery boundary. A rejected settlement that cannot commit retains
 its conservative execution disposition and does not authorize another RPC.
 
-Monitor failure and unconfirmed shutdown enter the worker's ordinary failure
-path. Saved parent completion may still be recovered; a stopped observer checks
-shutdown again before any new RPC, while an executing child keeps its root
-blocker. An interrupt is attempted once, and its acknowledgement is not proof
-that the provider turn ended. Read the exact accepted turn before releasing
-uncertain work or coordinating a restart.
+A permanent steering-path failure disables steering, retains the first error
+and continues stop polling. The worker evaluates an observed stop before late
+lookup or that deferred error. Opening/stop-lookup failure and unconfirmed
+shutdown enter the ordinary failure path. Saved parent completion may still be
+recovered; a stopped observer checks shutdown again before any new RPC, while
+an executing child keeps its root blocker. An interrupt is attempted once, and
+its acknowledgement is not proof that the provider turn ended. Read the exact
+accepted turn before releasing uncertain work or coordinating a restart.
 
 Bounded private diagnostics distinguish contention, monitor failure,
 unconfirmed interruption and cleanup failure without recording exception text.

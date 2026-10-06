@@ -190,7 +190,7 @@ class CodexLiveControlWorkerTests(unittest.TestCase):
 
         class FailedCleanupControl(CodexLiveControl):
             def start(self) -> None:
-                pass
+                self._deferred_failure = OSError("Example independent steering failure")
 
             def stop_and_join(self, *, timeout: float = 10) -> None:
                 raise CodexLiveControlError("Example independent shutdown failure")
@@ -234,6 +234,57 @@ class CodexLiveControlWorkerTests(unittest.TestCase):
 
     def test_visible_callback_failure_remains_primary_when_shutdown_also_fails(self) -> None:
         self.assert_primary_failure(callback_failure=True)
+
+    def assert_stop_precedes_deferred_fault(self, *, confirmed: bool) -> None:
+        parent_id = self.fixture.enqueue()
+        client = CallbackClient()
+        worker = self.fixture.worker(client)
+        deferred_calls = []
+
+        class FailedSteeringControl(CodexLiveControl):
+            def start(self) -> None:
+                self._deferred_failure = ValueError("Example permanent steering failure")
+                if confirmed:
+                    self.confirmed_interrupt_request = "example-stop"
+
+            def stop_and_join(self, *, timeout: float = 10) -> None:
+                pass
+
+            def raise_deferred_failure(self) -> None:
+                deferred_calls.append(1)
+                super().raise_deferred_failure()
+
+        try:
+            leased = worker.state.lease_provider_job("codex", worker.worker_id)
+            assert leased is not None and leased.lease_token is not None
+            job = worker.state.mark_provider_job_executing(parent_id, leased.lease_token)
+            with (
+                patch.object(external_worker, "CodexLiveControl", FailedSteeringControl),
+                patch.object(
+                    worker.state,
+                    "pending_emergency_stop_for_job",
+                    side_effect=OSError("Example late stop lookup failed") if confirmed else None,
+                    return_value="example-stop",
+                ) as lookup,
+                self.assertRaises(external_worker.ProviderTurnStopped),
+            ):
+                worker._execute_codex(
+                    job,
+                    leased.lease_token,
+                    self.fixture.registry.projects[0],
+                    worker.state.get_topic(job.topic_id),
+                )
+            self.assertEqual(deferred_calls, [])
+            self.assertEqual(lookup.call_count, 0 if confirmed else 1)
+            self.assertEqual(client.turns, 1)
+        finally:
+            worker.close()
+
+    def test_confirmed_stop_precedes_deferred_fault_and_failing_late_lookup(self) -> None:
+        self.assert_stop_precedes_deferred_fault(confirmed=True)
+
+    def test_late_stop_precedes_deferred_steering_fault(self) -> None:
+        self.assert_stop_precedes_deferred_fault(confirmed=False)
 
 
 if __name__ == "__main__":

@@ -206,12 +206,9 @@ class CodexLiveControlTests(unittest.TestCase):
         control.stop_and_join()
         self.assertEqual(self.client.steers, [])
         retained = self.state.get_provider_job(child)
-        self.assertEqual(retained.status, "leased")
-        assert retained.lease_token is not None
-        cancelled = self.state.start_steer_followup(
-            child, retained.lease_token, parent_job_id=self.job.job_id
-        )
-        self.assertEqual(cancelled.status, "cancelled")
+        self.assertEqual(retained.status, "queued")
+        self.assertIsNone(retained.lease_token)
+        self.assertEqual(retained.attempt_count, 0)
 
     def test_accepted_steer_busy_settlement_keeps_execution_nonreplayable(self) -> None:
         child = self.fixture.enqueue(2, "Example follow-up")
@@ -219,11 +216,11 @@ class CodexLiveControlTests(unittest.TestCase):
 
         def decorate(state):
             def fail_complete(*args, **kwargs):
+                settlement_failed.set()
                 raise busy()
 
             def fail_uncertainty(*args, **kwargs):
-                settlement_failed.set()
-                raise busy()
+                raise AssertionError("Transient completion contention must retain its write")
 
             state.complete_steered_job = fail_complete
             state.mark_provider_job_indeterminate = fail_uncertainty
@@ -415,7 +412,7 @@ class CodexLiveControlTests(unittest.TestCase):
         control.stop_and_join()
         self.assertTrue(closed.is_set())
         self.assertEqual(self.client.steers, [])
-        self.assertEqual(self.state.get_provider_job(child).status, "leased")
+        self.assertEqual(self.state.get_provider_job(child).status, "queued")
 
     def test_noncontention_sqlite_failure_is_visible_and_not_retried(self) -> None:
         failed = threading.Event()
@@ -467,11 +464,19 @@ class CodexLiveControlTests(unittest.TestCase):
                 with (
                     patch.object(self.state, "lease_steer_followup", return_value=child),
                     patch.object(self.state, "complete_steered_job", side_effect=original),
-                    marking,
                     self.assertRaises(sqlite3.OperationalError) as raised,
                 ):
                     control._steer(self.state)
                 self.assertIs(raised.exception, original)
+                with marking:
+                    if marking_code is None:
+                        control._steer(self.state)
+                    else:
+                        with self.assertRaises(sqlite3.OperationalError):
+                            control._steer(self.state)
+                with self.assertRaises(CodexLiveControlError) as deferred:
+                    control.raise_deferred_failure()
+                self.assertIs(deferred.exception.__cause__, original)
                 self.assertEqual(
                     self.state.get_provider_job(child_id).status,
                     "indeterminate" if marking_code is None else "executing",
@@ -553,13 +558,13 @@ class CodexLiveControlTests(unittest.TestCase):
         control._steer(self.state)
         control._steer(self.state)
         self.assertEqual(len(self.client.steers), 1)
-        self.assertEqual(self.state.get_provider_job(child).status, "executing")
+        self.assertEqual(self.state.get_provider_job(child).status, "queued")
         request = self.stop_request()
         control._interrupt(request)
         self.assertEqual(len(self.client.interrupts), 1)
         self.assertEqual(control.confirmed_interrupt_request, request)
 
-    def test_busy_absorption_does_not_hide_noncontention_unknown_marking_failure(self) -> None:
+    def test_busy_absorption_does_not_attempt_uncertainty_marking(self) -> None:
         self.fixture.enqueue(2, "Example follow-up")
         control = CodexLiveControl(
             state_factory=lambda: self.state,
@@ -574,12 +579,14 @@ class CodexLiveControlTests(unittest.TestCase):
         original, marking = busy(), busy(sqlite3.SQLITE_IOERR)
         with (
             patch.object(self.state, "complete_steered_job", side_effect=original),
-            patch.object(self.state, "mark_provider_job_indeterminate", side_effect=marking),
+            patch.object(
+                self.state, "mark_provider_job_indeterminate", side_effect=marking
+            ) as mark,
             self.assertRaises(sqlite3.OperationalError) as raised,
         ):
             control._steer(self.state)
-        self.assertIs(raised.exception, marking)
-        self.assertIs(raised.exception.__context__, original)
+        self.assertIs(raised.exception, original)
+        mark.assert_not_called()
 
 
 if __name__ == "__main__":

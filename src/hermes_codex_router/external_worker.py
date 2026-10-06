@@ -922,11 +922,12 @@ class ExternalQueueWorker:
                 finally:
                     client.on_visible_item = None
                     client.on_completed = None
-        late_request = self.state.pending_emergency_stop_for_job(job.job_id)
         if control.confirmed_interrupt_request is not None:
             raise ProviderTurnStopped(control.confirmed_interrupt_request)
+        late_request = self.state.pending_emergency_stop_for_job(job.job_id)
         if late_request is not None:
             raise ProviderTurnStopped(late_request)
+        control.raise_deferred_failure()
         try:
             self.state.set_context_remaining(job.session_id, context_remaining_percent(result))
         except Exception as survived_error:

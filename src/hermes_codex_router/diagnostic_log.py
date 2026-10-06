@@ -41,6 +41,8 @@ SITES = frozenset(
         "codex_live_control.failure",
         "codex_live_control.interrupt_unconfirmed",
         "codex_live_control.shutdown",
+        "codex_live_control.state_close",
+        "codex_live_control.steering_failure",
         "codex_recovery.artifact_cleanup",
         "codex_recovery.client_close",
         "codex_permissions.interrupt",

@@ -5,7 +5,8 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Protocol
+from dataclasses import dataclass
+from typing import Literal, Protocol
 
 from .codex_appserver import RpcRejectedError
 from .diagnostic_log import survived
@@ -23,6 +24,14 @@ class ControlClient(Protocol):
 
 class CodexLiveControlError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class PendingStateOperation:
+    child: ProviderJobRecord
+    operation: Literal["start", "release", "reject", "complete", "unknown"]
+    returned_turn: str | None = None
+    error: Exception | None = None
 
 
 class CodexLiveControl:
@@ -56,6 +65,8 @@ class CodexLiveControl:
         self._failure: BaseException | None = None
         self._contention_episode = False
         self._steering_rejected = False
+        self._pending: PendingStateOperation | None = None
+        self._deferred_failure: Exception | None = None
 
     def start(self) -> None:
         if self._thread is not None:
@@ -89,6 +100,17 @@ class CodexLiveControl:
                 raise CodexLiveControlError("control observer shutdown is unconfirmed")
         if self._failure is not None:
             raise CodexLiveControlError("control observer failed") from self._failure
+
+    def raise_deferred_failure(self) -> None:
+        """Called by the worker only after evaluating stop provenance."""
+        if self._deferred_failure is not None:
+            raise CodexLiveControlError("steering observer failed") from self._deferred_failure
+
+    def _defer_steering_failure(self, error: Exception) -> None:
+        self._steering_rejected = True
+        if self._deferred_failure is None:
+            self._deferred_failure = error
+            survived("codex_live_control.steering_failure", error)
 
     @staticmethod
     def _close_client(client: ControlClient) -> None:
@@ -137,7 +159,12 @@ class CodexLiveControl:
                         self._interrupt(request_id)
                         return
                     if self.transport_mode != "stdio-fallback":
-                        self._steer(state)
+                        try:
+                            self._steer(state)
+                        except Exception as error:
+                            if is_sqlite_contention(error):
+                                raise
+                            self._defer_steering_failure(error)
                     self._contention_episode = False
                 except Exception as error:
                     if not is_sqlite_contention(error):
@@ -150,10 +177,18 @@ class CodexLiveControl:
         finally:
             if state is not None:
                 try:
+                    # Exactly one final state-only attempt; never start or invoke
+                    # a provider operation while the observer is shutting down.
+                    self._settle_pending(state, stopping=True)
+                except Exception as error:
+                    if is_sqlite_contention(error):
+                        self._observe_contention(error)
+                    else:
+                        self._defer_steering_failure(error)
+                try:
                     state.close()
                 except Exception as error:
-                    if self._failure is None:
-                        self._failure = error
+                    survived("codex_live_control.state_close", error)
 
     def _interrupt(self, request_id: str) -> None:
         client = None
@@ -175,65 +210,119 @@ class CodexLiveControl:
             if client is not None:
                 self._release_client(client)
 
-    def _unknown(self, state: HubState, child: ProviderJobRecord, error: Exception) -> None:
-        assert child.lease_token is not None
-        state.mark_provider_job_indeterminate(
-            child.job_id,
-            child.lease_token,
-            error_code=type(error).__name__,
-            error_detail="same-turn steering outcome is unknown",
-        )
-
     def _steer(self, state: HubState) -> None:
-        if self._stop.is_set() or self._steering_rejected:
+        if self._stop.is_set():
+            return
+        if self._pending is not None:
+            ready = self._settle_pending(state)
+            if ready is not None:
+                self._invoke_steer(state, ready)
+            return
+        if self._steering_rejected:
             return
         child = state.lease_steer_followup(
             self.job.job_id, f"{self.worker_id}-steer", lease_seconds=120
         )
-        if child is None or child.lease_token is None or self._stop.is_set():
+        if child is None or child.lease_token is None:
             return
-        started = state.start_steer_followup(
-            child.job_id, child.lease_token, parent_job_id=self.job.job_id
-        )
-        if started.status != "executing" or self._stop.is_set():
-            return
-        client = None
+        self._pending = PendingStateOperation(child, "start")
+        ready = self._settle_pending(state, stopping=self._stop.is_set())
+        if ready is not None:
+            self._invoke_steer(state, ready)
+
+    def _settle_pending(
+        self, state: HubState, *, stopping: bool = False
+    ) -> ProviderJobRecord | None:
+        pending = self._pending
+        if pending is None:
+            return None
+        if stopping and pending.operation == "start":
+            pending = self._pending = PendingStateOperation(pending.child, "release")
+        child = pending.child
+        assert child.lease_token is not None
         try:
-            try:
-                client = self._acquire_client()
-                if client is None or self._stop.is_set():
-                    return
-                returned_turn = client.steer_turn(
-                    thread_id=self.thread_id,
-                    turn_id=self.turn_id,
-                    text=child.payload_text,
-                    client_user_message_id=child.job_id,
+            if pending.operation == "start":
+                started = state.start_steer_followup(
+                    child.job_id, child.lease_token, parent_job_id=self.job.job_id
                 )
-            except RpcRejectedError:
-                # Return the FIFO head to ordinary execution; later polls must
-                # not send it (or a later child) into this rejected parent again.
-                self._steering_rejected = True
+                self._pending = None
+                return child if started.status == "executing" else None
+            if pending.operation == "release":
+                state.release_provider_job_lease(child.job_id, child.lease_token)
+            elif pending.operation == "reject":
                 state.reject_unaccepted_steer(child.job_id, child.lease_token)
-                return
-            except Exception as error:
-                self._unknown(state, child, error)
-                return
-            try:
+            elif pending.operation == "complete":
+                assert pending.returned_turn is not None
                 state.complete_steered_job(
                     child.job_id,
                     child.lease_token,
                     parent_job_id=self.job.job_id,
-                    provider_turn_id=returned_turn,
+                    provider_turn_id=pending.returned_turn,
                 )
+            else:
+                assert pending.error is not None
+                state.mark_provider_job_indeterminate(
+                    child.job_id,
+                    child.lease_token,
+                    error_code=type(pending.error).__name__,
+                    error_detail=(
+                        "same-turn steering was accepted; settlement failed for turn "
+                        + pending.returned_turn[:256]
+                        if pending.returned_turn is not None
+                        else "same-turn steering outcome is unknown"
+                    ),
+                )
+        except Exception as error:
+            if is_sqlite_contention(error):
+                # Retain the exact state write, not a callback that could invoke.
+                raise
+            self._pending = None
+            if pending.operation == "complete":
+                self._defer_steering_failure(error)
+                self._pending = PendingStateOperation(
+                    child, "unknown", pending.returned_turn, error
+                )
+                # The next poll checks stop before attempting uncertainty
+                # marking. Keep this first failure as the deferred cause.
+            raise
+        self._pending = None
+        return None
+
+    def _invoke_steer(self, state: HubState, child: ProviderJobRecord) -> None:
+        assert child.lease_token is not None
+        client = None
+        rpc_attempted = False
+        try:
+            try:
+                client = self._acquire_client()
+                if client is None or self._stop.is_set():
+                    self._pending = PendingStateOperation(child, "reject")
+                else:
+                    rpc_attempted = True
+                    returned_turn = client.steer_turn(
+                        thread_id=self.thread_id,
+                        turn_id=self.turn_id,
+                        text=child.payload_text,
+                        client_user_message_id=child.job_id,
+                    )
+                    self._pending = PendingStateOperation(child, "complete", returned_turn)
+            except RpcRejectedError as error:
+                # Return the FIFO head to ordinary execution; later polls must
+                # not send it (or a later child) into this rejected parent again.
+                self._steering_rejected = True
+                if not rpc_attempted:
+                    self._defer_steering_failure(error)
+                self._pending = PendingStateOperation(child, "reject")
             except Exception as error:
-                try:
-                    self._unknown(state, child, error)
-                except Exception as marking_error:
-                    if not is_sqlite_contention(error):
-                        raise error from marking_error
-                    raise
-                if not is_sqlite_contention(error):
-                    raise
+                self._steering_rejected = True
+                if not rpc_attempted:
+                    self._defer_steering_failure(error)
+                self._pending = PendingStateOperation(
+                    child,
+                    "unknown" if rpc_attempted else "reject",
+                    error=error,
+                )
+            self._settle_pending(state)
         finally:
             if client is not None:
                 self._release_client(client)

@@ -935,6 +935,7 @@ class ProviderJobsStateFacade:
             return self.get(str(candidate["job_id"]))
 
     def reject_unaccepted_steer(self, job_id: str, lease_token: str) -> None:
+        """Requeue an executing child only after proven rejection or no RPC attempt."""
         timestamp = self._now()
         with self._write_transaction():
             cursor = self._connection.execute(
