@@ -25,6 +25,29 @@ class CodexLiveControlWorkerTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
 
+    def test_observer_start_failure_does_not_leave_native_callbacks_installed(self) -> None:
+        job_id = self.fixture.enqueue()
+        client = CallbackClient()
+        worker = self.fixture.worker(client)
+
+        class CannotStartControl(CodexLiveControl):
+            def start(self) -> None:
+                raise RuntimeError("Example observer thread cannot start")
+
+        try:
+            with patch.object(external_worker, "CodexLiveControl", CannotStartControl):
+                self.assertTrue(worker.run_cycle())
+            self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
+            self.assertEqual(client.turns, 1)
+            self.assertIsNone(client.on_visible_item)
+            self.assertIsNone(client.on_completed)
+            checkpoint = ExecutionJournal(worker.state).read(job_id)
+            assert checkpoint is not None
+            self.assertEqual(checkpoint["provider_turn_id"], "turn-1")
+            self.assertIsNone(checkpoint["completed_text"])
+        finally:
+            worker.close()
+
     def assert_join_timeout_recovery(self, *, after_start: bool) -> None:
         parent_id = self.fixture.enqueue()
         child_id = self.fixture.enqueue(2, "Example follow-up")
