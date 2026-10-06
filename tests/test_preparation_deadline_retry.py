@@ -78,6 +78,7 @@ class PreparationDeadlineRetryTests(unittest.TestCase):
                     )
                     notice = state.get_telegram_outbox_for_job(job_id)
                     assert notice is not None
+                assert notice.telegram_message_id is not None
                 topic = state.get_topic(job.topic_id)
                 child, created = PreexecutionRetryState(state).retry_from_notice(
                     source_job_id=job_id,
