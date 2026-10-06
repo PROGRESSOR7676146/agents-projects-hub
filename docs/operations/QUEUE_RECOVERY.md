@@ -86,6 +86,9 @@ Confirm a caught preparation failure before `turn/start` and that its failure
 notice was delivered. A missing accepted-turn ID alone does not prove that
 invocation never happened. Preserve the original attempt and its partial effects;
 never rewrite its status or automatically resend the input.
+The same error after `turn/start` was sent, including while awaiting its
+acknowledgement, means an uncertain turn: use exact Codex turn recovery rather
+than preparation-failure handling.
 
 The prepared client filters foreign notifications before its bounded useful-result
 queue. It handles approvals, their resolutions and account quota updates separately,
@@ -99,7 +102,8 @@ Before an owner-authorized temporary worker restart, take a SQLite-consistent
 backup and verify that the exact affected worker has no active or uncertain
 provider turn. Restart only that free slot; preserve other productive workers,
 the shared daemon, sender and approvals host. A cached idle worker label alone
-does not prove provider terminality. One explicit continuation may follow after
+does not prove provider terminality. Only after a proven pre-`turn/start`
+preparation failure may one explicit continuation follow after
 rechecking the attempt, current queue, session binding and delivered notice;
 reconcile an unknown prior outcome before considering another invocation.
 

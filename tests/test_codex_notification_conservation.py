@@ -45,6 +45,7 @@ class ScriptedTransport:
         self.sent: list[dict] = []
         self.completed_wait = False
         self.foreign_count = 0
+        self.quota_used = 25 if name == "a" else 35
 
     def foreign(self) -> list[dict]:
         self.foreign_count += 1200
@@ -61,7 +62,9 @@ class ScriptedTransport:
             {
                 "method": "account/rateLimits/updated",
                 "params": {
-                    "rateLimits": {"primary": {"usedPercent": 10, "windowDurationMins": 300}},
+                    "rateLimits": {
+                        "primary": {"usedPercent": self.quota_used, "windowDurationMins": 300}
+                    },
                 },
             },
             visible(f"Saved answer {self.name}", thread=self.thread, turn=self.turn),
@@ -74,6 +77,8 @@ class ScriptedTransport:
         if method == "initialized":
             return
         if method in ("initialize", "thread/start", "thread/resume"):
+            if method == "thread/resume":
+                assert message["params"]["threadId"] == self.thread
             if self.name == "b":
                 if not self.active.is_set():
                     raise AssertionError("first worker must be waiting on its accepted turn")
@@ -91,6 +96,7 @@ class ScriptedTransport:
             )
             self.incoming.append({"id": identifier, "result": result})
         elif method == "turn/start":
+            assert message["params"]["threadId"] == self.thread
             if self.name == "b":
                 self.incoming.extend(self.foreign())
                 # A complete current turn can arrive before its RPC acknowledgement.
@@ -104,7 +110,7 @@ class ScriptedTransport:
     def receive(self, timeout: float | None = None) -> dict:
         if not self.incoming and self.name == "a" and not self.completed_wait:
             self.active.set()
-            if not self.release.wait(10):
+            if not self.release.wait(30):
                 raise AssertionError("second worker did not reach its saved result boundary")
             self.completed_wait = True
             # The owning connection receives its own late final, never B's result.
@@ -223,7 +229,7 @@ class NotificationConservationTests(unittest.TestCase):
             finally:
                 worker.close()
 
-        runner = threading.Thread(target=execute_a)
+        runner = threading.Thread(target=execute_a, daemon=True)
         runner.start()
         try:
             self.assertTrue(active.wait(5))
@@ -241,6 +247,9 @@ class NotificationConservationTests(unittest.TestCase):
                     current.status, "result_ready", (current.error_code, current.error_detail)
                 )
                 self.assertEqual(worker.state.get_provider_job(first).status, "executing")
+                accepted = ExecutionJournal(worker.state).read(first)
+                assert accepted is not None
+                self.assertEqual(accepted["provider_turn_id"], "example-turn-a")
             finally:
                 worker.close()
         finally:
@@ -259,8 +268,11 @@ class NotificationConservationTests(unittest.TestCase):
                 outbox = state.get_telegram_outbox_for_job(job_id)
                 self.assertIn(f"Saved answer {name}", outbox.telegram_html)
                 self.assertNotIn("Foreign", outbox.telegram_html)
-                self.assertIn("90%", outbox.telegram_html)
+                self.assertIn("75%" if name == "a" else "65%", outbox.telegram_html)
                 self.assertEqual(state.get_session(job.session_id).context_remaining_percent, 90)
+                self.assertEqual(
+                    state.get_session(job.session_id).provider_session_id, f"example-thread-{name}"
+                )
                 activity = state._connection.execute(
                     "SELECT kind,state FROM task_activity_entries WHERE job_id=? ORDER BY kind",
                     (job_id,),
@@ -278,10 +290,20 @@ class NotificationConservationTests(unittest.TestCase):
             methods = [message.get("method") for message in transport.sent]
             self.assertEqual(methods.count("turn/start"), 1)
             self.assertTrue(all("method" in message for message in transport.sent))
-        self.assertIn(
-            "thread/resume" if resume else "thread/start",
-            [message["method"] for message in transports[1].sent],
+            self.assertFalse(transport.incoming)
+            submitted = [message for message in transport.sent if message["method"] == "turn/start"]
+            self.assertEqual(submitted[0]["params"]["threadId"], transport.thread)
+        preparation = [
+            message
+            for message in transports[1].sent
+            if message["method"] in ("thread/start", "thread/resume")
+        ]
+        self.assertEqual(
+            [message["method"] for message in preparation],
+            ["thread/resume" if resume else "thread/start"],
         )
+        if resume:
+            self.assertEqual(preparation[0]["params"]["threadId"], "example-thread-b")
 
     def test_second_worker_start_conserves_both_finals_approvals_and_telemetry(self):
         self.run_pair(resume=False)
