@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from html import escape
@@ -18,10 +19,10 @@ from .claude_stream import (
 from .codex_appserver import (
     CodexAppServerClient,
     RateLimits,
-    RpcRejectedError,
     context_remaining_percent,
 )
 from .codex_failure import codex_preparation, uncertain_provider_notice
+from .codex_live_control import CodexLiveControl
 from .codex_recovery import (
     checkpoint_failure_notice,
     reconcile_codex_completion,
@@ -897,63 +898,33 @@ class ExternalQueueWorker:
             client.on_completed = lambda result: journal.record_completion(
                 job.job_id, token, result.text
             )
-            monitor_stop, turn_transport_mode = threading.Event(), self.supervisor.transport_mode
-            interrupted_request: list[str] = []
-
-            def monitor_control() -> None:
-                monitor_state = HubState.open(
+            supervisor = self.supervisor
+            control = CodexLiveControl(
+                state_factory=lambda: HubState.open_existing(
                     self.config.state_path,
                     codex_permission_profile=self.config.codex_permission_profile,
-                )
-                try:
-                    while not monitor_stop.wait(0.2):
-                        request_id = monitor_state.pending_emergency_stop_for_job(job.job_id)
-                        if request_id is not None:
-                            try:
-                                assert self.supervisor is not None
-                                if turn_transport_mode == "stdio-fallback":
-                                    client.close()
-                                else:
-                                    interrupt_client = self.supervisor.client(allow_fallback=False)
-                                    try:
-                                        interrupt_client.interrupt_turn(
-                                            thread_id=thread.thread_id, turn_id=turn_id
-                                        )
-                                    finally:
-                                        interrupt_client.close()
-                            except Exception as exc:
-                                self._record_event(
-                                    "warning", "provider_interrupt_unconfirmed", type(exc).__name__
-                                )
-                            else:
-                                interrupted_request.append(request_id)
-                            return
-                        assert self.supervisor is not None
-                        if turn_transport_mode == "stdio-fallback":
-                            # A fallback client owns a private app-server process;
-                            # a second client cannot address its active turn.
-                            continue
-                        self._steer_ready_followup(monitor_state, job, thread.thread_id, turn_id)
-                finally:
-                    monitor_state.close()
-
-            monitor = threading.Thread(
-                target=monitor_control,
-                name="codex-live-control",
-                daemon=True,
+                    contention_timeout_seconds=0.1,
+                ),
+                client_factory=lambda: supervisor.client(
+                    allow_fallback=False, deadline=time.monotonic() + 2
+                ),
+                job=job,
+                worker_id=self.worker_id,
+                thread_id=thread.thread_id,
+                turn_id=turn_id,
+                transport_mode=supervisor.transport_mode,
+                close_owned_turn_client=client.close,
             )
-            monitor.start()
-            try:
-                result = wait_for_codex_provider_turn(client, turn_id)
-                journal.record_completion(job.job_id, token, result.text)
-            finally:
-                client.on_visible_item = None
-                client.on_completed = None
-                monitor_stop.set()
-                monitor.join(timeout=2)
+            with control.running():
+                try:
+                    result = wait_for_codex_provider_turn(client, turn_id)
+                    journal.record_completion(job.job_id, token, result.text)
+                finally:
+                    client.on_visible_item = None
+                    client.on_completed = None
         late_request = self.state.pending_emergency_stop_for_job(job.job_id)
-        if interrupted_request:
-            raise ProviderTurnStopped(interrupted_request[0])
+        if control.confirmed_interrupt_request is not None:
+            raise ProviderTurnStopped(control.confirmed_interrupt_request)
         if late_request is not None:
             raise ProviderTurnStopped(late_request)
         try:
@@ -999,56 +970,6 @@ class ExternalQueueWorker:
                 artifacts=artifacts.artifacts,
             )
         )
-
-    def _steer_ready_followup(
-        self, state: HubState, job: ProviderJobRecord, thread_id: str, turn_id: str
-    ) -> None:
-        """Steer the next compatible queued message into the running Codex turn.
-
-        The follow-up starts only through ``start_steer_followup``, which honors
-        a pending emergency stop in the same transaction, so a follow-up that
-        is cancelled or returned to the queue never reaches the provider.
-        """
-        followup = state.lease_steer_followup(
-            job.job_id, f"{self.worker_id}-steer", lease_seconds=120
-        )
-        if followup is None or followup.lease_token is None:
-            return
-        steer_token = followup.lease_token
-        started = state.start_steer_followup(followup.job_id, steer_token, parent_job_id=job.job_id)
-        if started.status != "executing":
-            return
-        assert self.supervisor is not None
-        steer_client = None
-        try:
-            steer_client = self.supervisor.client(allow_fallback=False)
-            returned_turn = steer_client.steer_turn(
-                thread_id=thread_id,
-                turn_id=turn_id,
-                text=followup.payload_text,
-                client_user_message_id=followup.job_id,
-            )
-            state.complete_steered_job(
-                followup.job_id,
-                steer_token,
-                parent_job_id=job.job_id,
-                provider_turn_id=returned_turn,
-            )
-        except RpcRejectedError:
-            state.reject_unaccepted_steer(followup.job_id, steer_token)
-        except Exception as exc:
-            state.mark_provider_job_indeterminate(
-                followup.job_id,
-                steer_token,
-                error_code=type(exc).__name__,
-                error_detail="same-turn steering outcome is unknown",
-            )
-        finally:
-            if steer_client is not None:
-                try:
-                    steer_client.close()
-                except Exception as survived_error:
-                    survived("external_worker.steer_client_close", survived_error)
 
     def _execute_external(
         self, job: ProviderJobRecord, token: str, project: object, topic: object

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from collections import deque
 from pathlib import Path
+from unittest.mock import patch
 
 from hermes_codex_router.codex_appserver import CodexAppServerClient, RateLimits, RpcError
 
@@ -35,6 +36,43 @@ class CodexAppServerTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
+
+    def test_control_rpc_deadlines_are_total_even_with_endless_unrelated_notifications(
+        self,
+    ) -> None:
+        for method in ("interrupt", "steer"):
+            with self.subTest(method=method):
+                ticks = [0.0]
+
+                class FloodTransport(FakeTransport):
+                    def receive(self, *, timeout: float | None = None) -> dict:
+                        self.receive_timeouts.append(timeout)
+                        ticks[0] += 3
+                        return {
+                            "method": "thread/status/changed",
+                            "params": {"threadId": "example-other-thread"},
+                        }
+
+                transport = FloodTransport([])
+                client = CodexAppServerClient(transport, initialized=True)
+                with (
+                    patch(
+                        "hermes_codex_router.codex_appserver.time.monotonic",
+                        side_effect=lambda: ticks[0],
+                    ),
+                    self.assertRaisesRegex(RpcError, "deadline exceeded"),
+                ):
+                    if method == "interrupt":
+                        client.interrupt_turn(thread_id="example-thread", turn_id="example-turn")
+                    else:
+                        client.steer_turn(
+                            thread_id="example-thread",
+                            turn_id="example-turn",
+                            text="Example follow-up",
+                            client_user_message_id="example-child",
+                        )
+                self.assertEqual(len(transport.sent), 1)
+                self.assertEqual(transport.receive_timeouts, [10, 7, 4, 1])
 
     def test_completed_turn_keeps_progress_separate_from_final_answer(self) -> None:
         transport = FakeTransport(

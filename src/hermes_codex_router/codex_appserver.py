@@ -1054,6 +1054,7 @@ class CodexAppServerClient:
         result = self._request(
             "turn/interrupt",
             {"threadId": thread_id, "turnId": turn_id},
+            deadline=time.monotonic() + 10,
         )
         if result is not None and not isinstance(result, dict):
             raise RpcError("turn/interrupt returned an invalid result")
@@ -1076,6 +1077,7 @@ class CodexAppServerClient:
                 "clientUserMessageId": client_user_message_id,
                 "input": [{"type": "text", "text": text}],
             },
+            deadline=time.monotonic() + 10,
         )
         returned_turn = result.get("turnId") if isinstance(result, dict) else None
         if not isinstance(returned_turn, str) or not returned_turn:

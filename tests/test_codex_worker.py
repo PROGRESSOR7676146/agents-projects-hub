@@ -78,7 +78,7 @@ class WorkerSupervisor:
     def start(self) -> None:
         self.started = True
 
-    def client(self, *, allow_fallback: bool = True) -> WorkerClient:
+    def client(self, *, allow_fallback: bool = True, deadline: float | None = None) -> WorkerClient:
         return self.client_value
 
     def stop(self) -> None:
@@ -450,7 +450,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-            def client(self, *, allow_fallback: bool = True) -> object:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> object:
                 self.calls += 1
                 return self.main if self.calls == 1 else ControlClient()
 
@@ -520,7 +522,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-            def client(self, *, allow_fallback: bool = True) -> object:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> object:
                 self.calls += 1
                 return self.main if self.calls == 1 else ControlClient()
 
@@ -630,7 +634,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-            def client(self, *, allow_fallback: bool = True) -> object:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> object:
                 self.calls += 1
                 return self.main if self.calls == 1 else ControlClient()
 
@@ -699,7 +705,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-            def client(self, *, allow_fallback: bool = True) -> object:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> object:
                 self.calls += 1
                 return self.main if self.calls == 1 else ControlClient()
 
@@ -764,7 +772,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-            def client(self, *, allow_fallback: bool = True) -> WorkerClient:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> WorkerClient:
                 client: WorkerClient = Client() if not clients else WorkerClient()
                 clients.append(client)
                 return client
@@ -1081,7 +1091,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
                 self.telegram = Telegram()
 
         class ForbiddenSupervisor:
-            def client(self, *, allow_fallback: bool = True) -> object:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> object:
                 raise AssertionError("controller called Codex RPC")
 
         external = External()
@@ -1104,7 +1116,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 raise AssertionError("controller started Codex supervisor")
 
-            def client(self, *, allow_fallback: bool = True) -> object:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> object:
                 raise AssertionError("controller called Codex RPC")
 
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
@@ -1128,7 +1142,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
                 return 1
 
         class ForbiddenSupervisor:
-            def client(self, *, allow_fallback: bool = True) -> object:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> object:
                 raise AssertionError("controller called Codex RPC")
 
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))

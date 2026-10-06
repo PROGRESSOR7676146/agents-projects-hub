@@ -168,7 +168,9 @@ class CodexAppServerSupervisor:
                 survived("supervisor.client_close", error)
             raise
 
-    def client(self, *, allow_fallback: bool = True) -> CodexAppServerClient:
+    def client(
+        self, *, allow_fallback: bool = True, deadline: float | None = None
+    ) -> CodexAppServerClient:
         if self.transport_mode is None:
             if not allow_fallback:
                 if self.manage_process or not self._shared_socket_present():
@@ -181,7 +183,9 @@ class CodexAppServerSupervisor:
                 raise AppServerError("shared Codex control transport is unavailable")
             assert self.stdio_executable is not None
             return self._initialized_client(
-                StdioJsonLineTransport.start(str(self.stdio_executable)), approval_policy="never"
+                StdioJsonLineTransport.start(str(self.stdio_executable)),
+                approval_policy="never",
+                deadline=deadline,
             )
         if self.transport_mode == "managed-socket" and (
             self.process is None or self.process.poll() is not None
@@ -190,7 +194,14 @@ class CodexAppServerSupervisor:
         if self.transport_mode == "socket" and not self._shared_socket_present():
             raise AppServerError("shared Codex app-server socket is unavailable")
         try:
-            return self._initialized_client(UnixWebSocketTransport(self.socket_path))
+            transport = (
+                UnixWebSocketTransport(self.socket_path)
+                if deadline is None
+                else UnixWebSocketTransport(
+                    self.socket_path, timeout=max(0.001, deadline - time.monotonic())
+                )
+            )
+            return self._initialized_client(transport, deadline=deadline)
         except Exception:
             if (
                 not allow_fallback
@@ -200,7 +211,9 @@ class CodexAppServerSupervisor:
                 raise
             self.transport_mode = "stdio-fallback"
             return self._initialized_client(
-                StdioJsonLineTransport.start(str(self.stdio_executable)), approval_policy="never"
+                StdioJsonLineTransport.start(str(self.stdio_executable)),
+                approval_policy="never",
+                deadline=deadline,
             )
 
     def _shared_socket_present(self) -> bool:
