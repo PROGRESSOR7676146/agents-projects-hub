@@ -18,7 +18,7 @@ This is a source assessment, not an inventory of any installed host:
 
 | Launch path | Current source evidence | Remaining custody question |
 | --- | --- | --- |
-| Claude file-tool turn | `claude_file_sandbox.py` pins explicit mounts, hides host files/PIDs, drops capabilities and preserves only the per-turn permission socket. | Shared network exposure remains; installed descriptor closure and authority-service exclusion need evidence. Writable project/session mounts do not make this an advisor boundary. |
+| Claude file-tool turn | `claude_file_sandbox.py` preserves Claude policy through the pinned provider-neutral `process_namespace.py` builder: explicit mounts, hidden host files/PIDs, dropped capabilities and one per-turn permission socket. | Shared network exposure remains; installed descriptor closure and authority-service exclusion need evidence. Writable project/session mounts do not make this an advisor boundary. |
 | Text-only Claude | `external_runtime.py` disables tools/customizations and runs the CLI without the file-tool namespace. | Trusted CLI/dependency and host execution authority need separate assessment; text-only flags do not prove OS custody. |
 | Codex shared/stdio app-server | `codex_appserver.py` checks legacy sandbox and approval policy; the external queue route also supports explicitly configured managed selection, bounded metadata rechecks, immutable selection snapshots and drift refusal. See [ADR 0055](../decisions/0055-managed-codex-profile-continuity.md). | Native metadata does not expose the complete managed definition or establish filesystem custody. Managed local/tmux, steering and inline routes remain refused; helpers and advisor routes need separate boundaries. Neither app-server route uses the Claude wrapper. Verify effective access to authority files, processes, endpoints and host management, then complete coordinated live acceptance. |
 | Hermes native Gateway | `hermes_plugin.py` adds Hub admission and visible-context integration; Gateway owns native execution. | The plugin does not establish an OS boundary. Inspect the Gateway's actual tools, children, MCP and recovery paths independently. |
@@ -47,8 +47,10 @@ identities. Symlinks remain references through the namespace's existing mount
 policy; their targets are not traversed or treated as inode aliases. Scan failure
 returns no partial set, and launch retains its final pin recheck and cleanup.
 These checks do not freeze directory contents or exclude an unconfined host actor
-changing them between or after scans. Neutral namespace extraction, installed
-custody and the full advisor boundary remain open.
+changing them between or after scans. The [neutral namespace extraction](../decisions/0056-provider-neutral-process-namespace.md)
+also has a provider-free read-only/private-network consumer. It does not enable
+an advisor or its inference transport; installed custody and the full advisor
+boundary remain open.
 
 Choose the smallest candidate that can meet REQ-SEC-008 with those facts. Assess
 separate Linux identities only under an independently trusted management boundary;

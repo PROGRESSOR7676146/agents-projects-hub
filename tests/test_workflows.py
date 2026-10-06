@@ -111,10 +111,11 @@ def _assert_namespace_job(job: dict[str, Any]) -> None:
         "test_namespace_client_preserves_peer_gate_and_atomic_allow_deny "
         "tests.test_claude_custody_rehearsal.ClaudeCustodyRehearsalTests."
         "test_namespace_blocks_authority_aliases_and_privilege_but_shares_network "
-        "tests.test_codex_native_namespace"
+        "tests.test_codex_native_namespace "
+        "tests.test_process_namespace_rehearsal"
     ):
         raise AssertionError(
-            "namespace job must run all three real namespace scenarios and outer wrapper witness"
+            "namespace job must run all real namespace scenarios and both wrapper witnesses"
         )
 
 
@@ -309,7 +310,13 @@ class WorkflowContractTests(unittest.TestCase):
             _assert_ruleset_required_checks(script, WORKFLOWS)
 
     def test_contract_rejects_missing_or_bypassed_namespace_invocation(self) -> None:
-        for mutation in ("missing", "missing_custody", "wrong_command", "tolerate_failure"):
+        for mutation in (
+            "missing",
+            "missing_custody",
+            "missing_private",
+            "wrong_command",
+            "tolerate_failure",
+        ):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
                 workflows = Path(directory) / "workflows"
                 shutil.copytree(WORKFLOWS, workflows)
@@ -319,7 +326,15 @@ class WorkflowContractTests(unittest.TestCase):
                 if mutation == "missing":
                     invocation["run"] = ""
                 elif mutation == "missing_custody":
-                    invocation["run"] = invocation["run"].rstrip().rsplit(" ", 1)[0]
+                    invocation["run"] = invocation["run"].replace(
+                        "tests.test_claude_custody_rehearsal.ClaudeCustodyRehearsalTests."
+                        "test_namespace_blocks_authority_aliases_and_privilege_but_shares_network ",
+                        "",
+                    )
+                elif mutation == "missing_private":
+                    invocation["run"] = invocation["run"].replace(
+                        " tests.test_process_namespace_rehearsal", ""
+                    )
                 elif mutation == "wrong_command":
                     invocation["run"] = "echo skipped"
                 else:
