@@ -59,16 +59,16 @@
     },
     {
       "target": "src/hermes_codex_router/service.py",
-      "max_lines": 3737,
-      "rationale": "Bounded 2026-10-06 managed-profile slice; independently reviewed architectural scope. Managed launch guards and explicit context wiring only; codex_permissions owns route/selection policy, session/state facades own immutable snapshots, and execution_journal owns confirmation. Keep refusal before observer/lease effects in Controller sequencing. The planned vertical dispatcher extraction remains separate; relocating these wiring calls would not remove that responsibility. codex_permission_refusals owns refusal SQL/receipt transactions; dependency-neutral state_errors owns typed errors. Controller wires final inherited routing, safe admission failure propagation and control-only stale-generation recovery at existing owned boundaries. Independent follow-up reviewed preserved local/terminal satellite promotion, writer-aware recovery and durable continuation-refusal wiring; no SQL or new invocation authority belongs here.",
+      "max_lines": 3743,
+      "rationale": "Bounded 2026-10-06 managed-profile slice; independently reviewed architectural scope. Managed launch guards and explicit context wiring only; codex_permissions owns route/selection policy, session/state facades own immutable snapshots, and execution_journal owns confirmation. Keep refusal before observer/lease effects in Controller sequencing. The planned vertical dispatcher extraction remains separate; relocating these wiring calls would not remove that responsibility. codex_permission_refusals owns refusal SQL/receipt transactions; dependency-neutral state_errors owns typed errors. Controller wires final inherited routing, safe admission failure propagation and control-only stale-generation recovery at existing owned boundaries. Independent follow-up reviewed preserved local/terminal satellite promotion, writer-aware recovery and durable continuation-refusal wiring; no SQL or new invocation authority belongs here. Independent closeout reviewed the returned-session terminal guard and forwarding of a caught execution cause to exact-completion recovery; no new policy, SQL, invocation or cleanup ownership.",
       "owner": "repository owner",
       "next_review": "2026-11-06",
       "reopen_event": "Any further growth, additional policy or lifecycle responsibility, change to transaction/invocation ordering, or the planned stabilization-stage-3 extraction."
     },
     {
       "target": "src/hermes_codex_router/service.py::ProjectHubService._execute_embedded_provider_job",
-      "max_lines": 302,
-      "rationale": "Bounded 2026-10-06 managed-profile slice; independently reviewed architectural scope. Explicit state-context wiring and confirmed legacy profile forwarding to the existing execution journal only. Named managed execution is excluded by mode validation before this consumer. Keep one lifecycle and cleanup owner until embedded compatibility is retired. The shared pure selection guard also precedes materials and staging on the embedded compatibility route.",
+      "max_lines": 303,
+      "rationale": "Bounded 2026-10-06 managed-profile slice; independently reviewed architectural scope. Explicit state-context wiring and confirmed legacy profile forwarding to the existing execution journal only. Named managed execution is excluded by mode validation before this consumer. Keep one lifecycle and cleanup owner until embedded compatibility is retired. The shared pure selection guard also precedes materials and staging on the embedded compatibility route. Independent closeout reviewed one execution-cause argument to the existing exact-completion reconciler; its existing result transaction persists the policy-drift warning without productive replay.",
       "owner": "repository owner",
       "next_review": "2026-11-06",
       "reopen_event": "Any further growth, additional policy or lifecycle responsibility, change to transaction/invocation ordering, or the planned stabilization-stage-3 extraction."
@@ -91,16 +91,16 @@
     },
     {
       "target": "src/hermes_codex_router/service.py::ProjectHubService._handle_update",
-      "max_lines": 883,
-      "rationale": "Bounded 2026-10-06 managed-profile slice; independently reviewed architectural scope. Two bounded managed local/tmux refusals precede provider observation, preparation, launch and writer-lease mutation. Policy constants live in codex_permissions. Keep command sequencing with existing Controller dispatcher until stabilization-stage-3 extraction; no SQL or provider invocation is added by the guards. Read-only album target discovery precedes final-target permission refusal; only a compatible exact candidate may extend its hold. The refusal domain owns persistence. Independent follow-up reviewed propagation of an uncommitted retry refusal and embedded notice delivery at the existing transport boundary, plus compatible-only retry advice after ownership return.",
+      "max_lines": 888,
+      "rationale": "Bounded 2026-10-06 managed-profile slice; independently reviewed architectural scope. Two bounded managed local/tmux refusals precede provider observation, preparation, launch and writer-lease mutation. Policy constants live in codex_permissions. Keep command sequencing with existing Controller dispatcher until stabilization-stage-3 extraction; no SQL or provider invocation is added by the guards. Read-only album target discovery precedes final-target permission refusal; only a compatible exact candidate may extend its hold. The refusal domain owns persistence. Independent follow-up reviewed propagation of an uncommitted retry refusal and embedded notice delivery at the existing transport boundary, plus compatible-only retry advice after ownership return. Independent closeout reviewed revalidation of the returned selected-session snapshot before writer transfer and provider preparation; policy and transaction ownership remain outside the dispatcher.",
       "owner": "repository owner",
       "next_review": "2026-11-06",
       "reopen_event": "Any further growth, additional policy or lifecycle responsibility, change to transaction/invocation ordering, or the planned stabilization-stage-3 extraction."
     },
     {
       "target": "src/hermes_codex_router/state.py",
-      "max_lines": 3100,
-      "rationale": "Bounded 2026-10-06 managed-profile and schema-40 slices; independently reviewed architectural scope. Selection context is injected explicitly into the existing single-connection facade and task-notice domain; state_sessions owns generation policy, admission owns atomic input/job/notice transactions, and preacceptance_binding owns early-notice provenance checks. The nullable snapshots do not move SQLite ownership or introduce configuration loading. A separate facade for only context forwarding would duplicate the transaction boundary. codex_permission_refusals owns atomic input-refusal policy and SQL; ProviderJobsStateFacade owns passive album lookup. This facade only forwards explicit context and owned transactions.",
+      "max_lines": 3102,
+      "rationale": "Bounded 2026-10-06 managed-profile and schema-40 slices; independently reviewed architectural scope. Selection context is injected explicitly into the existing single-connection facade and task-notice domain; state_sessions owns generation policy, admission owns atomic input/job/notice transactions, and preacceptance_binding owns early-notice provenance checks. The nullable snapshots do not move SQLite ownership or introduce configuration loading. A separate facade for only context forwarding would duplicate the transaction boundary. codex_permission_refusals owns atomic input-refusal policy and SQL; ProviderJobsStateFacade owns passive album lookup. This facade only forwards explicit context and owned transactions. Stacked closeout includes the three-line read-only retained-session forwarding method; SessionsStateFacade retains session query/policy ownership, with no new transaction, lifecycle or authority.",
       "owner": "repository owner",
       "next_review": "2026-11-06",
       "reopen_event": "Any further growth, additional policy or lifecycle responsibility, change to transaction/invocation ordering, or the planned stabilization-stage-3 extraction."

@@ -676,6 +676,9 @@ class HubState:
     def active_session(self, topic_id: int) -> SessionRecord | None:
         return self._sessions_state.active_session(topic_id)
 
+    def retained_session(self, topic_id: int, agent_id: str) -> SessionRecord | None:
+        return self._sessions_state.retained_session(topic_id, agent_id)
+
     def get_session(self, session_id: str) -> SessionRecord:
         return self._sessions_state.get_session(session_id)
 
