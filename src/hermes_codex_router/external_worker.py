@@ -893,12 +893,6 @@ class ExternalQueueWorker:
             )
             journal.record_turn(job.job_id, token, turn_id)
             accepted_activity(thread.thread_id, turn_id)
-            client.on_visible_item = lambda item_id, text, phase: journal.record_item(
-                job.job_id, token, item_id, text, phase
-            )
-            client.on_completed = lambda result: journal.record_completion(
-                job.job_id, token, result.text
-            )
             supervisor = self.supervisor
             control = CodexLiveControl(
                 state_factory=lambda: HubState.open_existing(
@@ -917,6 +911,12 @@ class ExternalQueueWorker:
                 close_owned_turn_client=client.close,
             )
             with control.running():
+                client.on_visible_item = lambda item_id, text, phase: journal.record_item(
+                    job.job_id, token, item_id, text, phase
+                )
+                client.on_completed = lambda result: journal.record_completion(
+                    job.job_id, token, result.text
+                )
                 try:
                     result = wait_for_codex_provider_turn(client, turn_id)
                     journal.record_completion(job.job_id, token, result.text)
