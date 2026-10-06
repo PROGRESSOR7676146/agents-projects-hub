@@ -144,6 +144,7 @@ class CodexAppServerSupervisor:
         *,
         approval_policy: str = "on-request",
         deadline: float | None = None,
+        retire_completed_connection: bool = False,
     ) -> CodexAppServerClient:
         client: CodexAppServerClient | None = None
         try:
@@ -152,6 +153,7 @@ class CodexAppServerSupervisor:
                 approval_policy=approval_policy,
                 model_provider=self.model_provider,
                 permission_profile=self.permission_profile,
+                retire_completed_connection=retire_completed_connection,
             )
             if deadline is None:
                 client.initialize()
@@ -201,7 +203,9 @@ class CodexAppServerSupervisor:
                     self.socket_path, timeout=max(0.001, deadline - time.monotonic())
                 )
             )
-            return self._initialized_client(transport, deadline=deadline)
+            return self._initialized_client(
+                transport, deadline=deadline, retire_completed_connection=True
+            )
         except Exception:
             if (
                 not allow_fallback

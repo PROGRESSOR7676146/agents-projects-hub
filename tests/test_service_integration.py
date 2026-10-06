@@ -62,7 +62,10 @@ class FakeClient:
     def wait_for_turn(self, _: str) -> TurnResult:
         return TurnResult("Visible answer", 1000, 100)
 
-    def read_rate_limits(self) -> RateLimits:
+    def consume_completed_connection(self, *, thread_id: str, turn_id: str) -> bool:
+        return False
+
+    def read_rate_limits(self, *, deadline: float | None = None) -> RateLimits:
         return RateLimits(None, None)
 
     def list_models(self) -> list[dict[str, object]]:

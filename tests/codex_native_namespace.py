@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 ACTOR_PATH = "/opt/example-native/actor.py"
@@ -55,7 +56,13 @@ def native_namespace_argv(
     project: Path,
     authority: Path,
     mcp_server: Path | None = None,
+    notification_listener: bool = False,
+    listener_directory: Path | None = None,
 ) -> list[str]:
+    if notification_listener and mcp_server is not None:
+        raise ValueError("notification fixture excludes MCP")
+    if notification_listener != (listener_directory is not None):
+        raise ValueError("notification fixture requires disposable endpoint storage")
     return [
         "/usr/bin/bwrap",
         "--die-with-parent",
@@ -66,6 +73,11 @@ def native_namespace_argv(
         *_runtime_mounts(),
         "--tmpfs",
         "/tmp",
+        *(
+            ["--bind", str(listener_directory), f"/tmp/codex-daemon-{os.getuid()}"]
+            if listener_directory is not None
+            else []
+        ),
         "--dir",
         "/home/example/.codex",
         "--dir",
@@ -109,4 +121,5 @@ def native_namespace_argv(
         "-I",
         ACTOR_PATH,
         *(["--mcp"] if mcp_server is not None else []),
+        *(["--notifications"] if notification_listener else []),
     ]

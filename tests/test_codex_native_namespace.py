@@ -87,6 +87,32 @@ class NativeNamespaceTests(unittest.TestCase):
             },
         )
 
+    def test_listener_adds_only_fixture_owned_storage_and_excludes_mcp(self) -> None:
+        directory = self.base / "example-listener-storage"
+        directory.mkdir(mode=0o700)
+        parameters = {
+            "binary": self.binary,
+            "actor": self.actor,
+            "requirements": self.requirements,
+            "project": self.project,
+            "authority": self.authority,
+            "notification_listener": True,
+            "listener_directory": directory,
+        }
+        argv = native_namespace_argv(**parameters)
+        writable = [argv[i + 1 : i + 3] for i, token in enumerate(argv) if token == "--bind"]
+        self.assertEqual(
+            writable,
+            [
+                [str(directory), f"/tmp/codex-daemon-{os.getuid()}"],
+                [str(self.project), str(self.project)],
+                [str(self.authority), str(self.authority)],
+            ],
+        )
+        self.assertIn("--notifications", argv)
+        with self.assertRaises(ValueError):
+            native_namespace_argv(**parameters, mcp_server=self.mcp_server)
+
     def test_real_namespace_hides_host_files_and_control_sources_but_keeps_positive_controls(
         self,
     ) -> None:

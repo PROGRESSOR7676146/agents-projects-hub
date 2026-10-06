@@ -222,18 +222,60 @@ acceptance.
 
 Repeated Codex preparation overflow has source-level transport and saved-task
 retry candidates, not deployment acceptance. The schema-41 text-only retry
-candidate is published at `c2a9ec0ea97ad51f5fcf0b50c4bfd85f46ace32e`;
+candidate is published at `fc1265286ab8b56b730cb371008ab9cc29d7a93b`;
 canonical publication validation passed, while required opposite-runtime review
-and live gates remain open. The stdio follow-up bounds both directions and
-preserves final/approval/telemetry evidence; its candidate still needs exact-head
-publication checks and independent review. Closeout requires a separately
+and live gates remain open. It refuses thread-replacement retry ancestry that
+lacks a frozen effective context. The stdio follow-up bounds both directions and
+preserves final/approval/telemetry evidence at
+`9a70840f362bd28f860c9bede44ecacefebd3307` (1,887 automated tests, canonical typing/privacy
+and all seven hosted checks); opposite-runtime review remains open.
+The completed-socket retirement slice is in progress on that base: strict
+single-use proof, publish-before-close, exact-client cache removal, optional
+telemetry deadlines and cache-only queued catalogs passed focused checks and
+architectural review. Eight offline native/observer cases passed with Codex
+0.159.2, including surviving-peer operation, fresh metadata preparation under
+over 1,024 foreign stream events and exact stored resume. Final publication and
+required Claude review remain separate gates. The first Opus review requested
+full idle-restoration/catalog context and explicit reconnect tradeoffs; follow-up
+also guards queued clients against unrelated foreground poller cleanup.
+Closeout requires a separately
 authorized two-worker canary with more than 1,024 foreign notifications, both
 results saved and two successive preparation failures retaining the original
 task through explicit notice-bound retries. Restart alone does not close this
-item. Safe unsubscribe, absolute preparation/metadata deadlines, client-event
+item. Absolute preparation/metadata deadlines, client-event
 byte bounds, material retry and exact deployed-source attribution remain open.
 See [queue recovery](QUEUE_RECOVERY.md) and the
 [acceptance strategy](../testing/README.md).
+
+### Completed-socket slice ownership and extraction
+
+Owner: lead agent / Hub maintainer. Source lane
+`fix/codex-successful-unsubscribe` owns this bounded slice, despite its historical
+branch name; it performs connection retirement without an unsubscribe RPC.
+Base/last canonical verified revision is
+`9a70840f362bd28f860c9bede44ecacefebd3307` on `fix/codex-stdio-backpressure`.
+The native notification test dependency comes from the independently reviewed
+source corpus at `dc289f816cb6f83ae36641f89af857aa75cefd1e`; this slice shortens
+its disposable endpoint directory to fit the Unix socket pathname limit
+when the real Hub transport resolves a pinned descriptor, and stamps the scripted
+message's final-answer phase for exact stored-output assertions.
+After integration, recheck tracked/staged/untracked lane state before any removal.
+Next trigger: exact clean publication, required Claude review, then an explicitly
+authorized integration and live canary. No deployment acceptance is claimed.
+
+Architecture review retained HubState as transaction owner, workers/Controller
+as invocation and cache owners, and transports as connection cleanup owners.
+`codex_connection_completion` owns exact completion proof;
+`codex_result_lifecycle` owns optional context/quota and survived cleanup/report
+failures; `inline_codex_execution` owns legacy inline invocation and its completion
+journal. This extracts one shared lifecycle instead of copying policy across
+three runtime paths and reduces Controller responsibility. External execution
+keeps the explicit result checkpoint/publication/retirement order; its reviewed
+207-line exception is recorded in `hotspots.json`. Next extraction review remains
+stabilization stage 3 or any new lifecycle/transaction/invocation branch.
+Failure before publication retains existing certainty/recovery rules; cleanup
+after publication cannot cause productive replay. Stdio retirement awaits a
+durable owned-process exclusion barrier and is outside this slice.
 
 The plan closes when stages 0–3 are merged into `main`, the hotspot ratchet
 runs in the canonical gate, and the owner has either completed or explicitly

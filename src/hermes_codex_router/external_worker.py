@@ -18,8 +18,6 @@ from .claude_stream import (
 )
 from .codex_appserver import (
     CodexAppServerClient,
-    RateLimits,
-    context_remaining_percent,
 )
 from .codex_failure import codex_preparation, uncertain_provider_notice
 from .codex_live_control import CodexLiveControl
@@ -27,6 +25,11 @@ from .codex_recovery import (
     checkpoint_failure_notice,
     reconcile_codex_completion,
     recover_codex_job,
+)
+from .codex_result_lifecycle import (
+    post_completion_context,
+    post_completion_limits,
+    retire_completed_connection,
 )
 from .controller_result_publication import (
     PreparedResultPublication,
@@ -209,14 +212,22 @@ class ExternalQueueWorker:
             self._codex_client = self.supervisor.client()
         return self._codex_client
 
-    def _discard_client(self) -> None:
-        client = self._codex_client
-        self._codex_client = None
+    def _discard_client(
+        self,
+        *,
+        expected_client: CodexAppServerClient | None = None,
+        report_close_error: bool = False,
+    ) -> None:
+        client = expected_client if expected_client is not None else self._codex_client
+        if self._codex_client is client:
+            self._codex_client = None
         if client is not None:
             try:
                 client.close()
             except Exception as survived_error:
                 survived("external_worker.client_close", survived_error)
+                if report_close_error:
+                    raise
 
     def _restore_codex_socket_at_idle(self) -> None:
         # The productive worker calls this only between run_cycle invocations.
@@ -929,14 +940,8 @@ class ExternalQueueWorker:
         if late_request is not None:
             raise ProviderTurnStopped(late_request)
         control.raise_deferred_failure()
-        try:
-            self.state.set_context_remaining(job.session_id, context_remaining_percent(result))
-        except Exception as survived_error:
-            survived("external_worker.context_telemetry", survived_error)
-        try:
-            limits = client.read_rate_limits()
-        except Exception:
-            limits = RateLimits(None, None)
+        post_completion_context(self.state, job.session_id, result)
+        limits = post_completion_limits(client)
         artifacts = prepare_worker_artifacts(
             Path(project.root),
             job.job_id,
@@ -971,6 +976,14 @@ class ExternalQueueWorker:
                 telegram_contract_version=telegram_contract_version(self.agent.runtime),
                 artifacts=artifacts.artifacts,
             )
+        )
+
+        retire_completed_connection(
+            client,
+            thread_id=thread.thread_id,
+            turn_id=turn_id,
+            retire=lambda: self._discard_client(expected_client=client, report_close_error=True),
+            warning=lambda code, detail: self._record_event("warning", code, detail),
         )
 
     def _execute_external(
