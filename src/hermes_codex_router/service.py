@@ -950,6 +950,7 @@ class ProjectHubService:
         )
         heartbeat.start()
         prepared = None
+        retirement_target: tuple[CodexAppServerClient, str, str] | None = None
         try:
             target = revalidate_worker_execution_root(queue_state, target)
             project = target.project
@@ -1020,6 +1021,7 @@ class ProjectHubService:
                 post_completion_context(queue_state, executing.session_id, result)
                 provider_session_id = thread.thread_id
                 actual_model = thread.model
+                retirement_target = (client, thread.thread_id, turn_id)
                 limits = post_completion_limits(client)
                 artifacts = prepare_worker_artifacts(
                     project.root,
@@ -1092,10 +1094,11 @@ class ProjectHubService:
                     artifacts=artifacts.artifacts,
                 )
             )
-            if agent.runtime == "codex":
+            if retirement_target is not None:
+                client, thread_id, turn_id = retirement_target
                 retire_completed_connection(
                     client,
-                    thread_id=thread.thread_id,
+                    thread_id=thread_id,
                     turn_id=turn_id,
                     retire=lambda: self._discard_codex_client(
                         expected_client=client, report_close_error=True

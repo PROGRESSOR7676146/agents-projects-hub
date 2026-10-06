@@ -22,7 +22,12 @@ class CompletedConnectionTests(unittest.TestCase):
         self.root = Path(temp.name)
 
     def completed_client(
-        self, *, status="completed", thread="example-thread", enabled=True, rate_limits=None
+        self,
+        *,
+        status: str | None = "completed",
+        thread="example-thread",
+        enabled=True,
+        rate_limits=None,
     ):
         transport = FakeTransport(
             [
