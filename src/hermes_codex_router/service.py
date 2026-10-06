@@ -2865,6 +2865,17 @@ class ProjectHubService:
             if not isinstance(decision, ProductiveRouteDecision):
                 raise ServiceError("unexpected reclassified ingress decision")
             command = decision.parsed_command
+        if command and command.name in {"local", "return"}:
+            refusal = ControllerCommandOrchestrator(
+                self.config, self.state
+            ).native_transfer_refusal(self.state.active_session(topic.topic_id))
+            if refusal is not None:
+                if not self.state.claim_message(
+                    message.chat_id, message.message_id, observer_agent_id=self.agent.agent_id
+                ):
+                    return False
+                self._send_text(message, refusal.text)
+                return True
         return_session = (
             self.state.active_session(topic.topic_id)
             if command and command.name == "return"

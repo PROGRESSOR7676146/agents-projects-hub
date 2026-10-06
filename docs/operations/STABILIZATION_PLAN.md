@@ -173,7 +173,8 @@ acceptance.
   completion and a subscribed positive control. It uses no real login, model
   endpoint or deployment socket. Fresh observers and retained subscriptions are
   measured separately. Native subscriptions survive starting another thread on
-  the same connection; Hub's worker-client reuse permits that state. This is a
+  the same connection; worker-client reuse before strict completed-connection
+  retirement, or without exact completion proof, permits that state. This is a
   demonstrated mechanism, not attribution of a particular deployment failure.
   Keep the foreign-notification filter independently of subscription cleanup.
   Transport bounds and completed-connection retirement are described below;

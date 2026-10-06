@@ -20,7 +20,7 @@ This is a source assessment, not an inventory of any installed host:
 | --- | --- | --- |
 | Claude file-tool turn | `claude_file_sandbox.py` pins explicit mounts, hides host files/PIDs, drops capabilities and preserves only the per-turn permission socket. | Shared network exposure remains; installed descriptor closure and authority-service exclusion need evidence. Writable project/session mounts do not make this an advisor boundary. |
 | Text-only Claude | `external_runtime.py` disables tools/customizations and runs the CLI without the file-tool namespace. | Trusted CLI/dependency and host execution authority need separate assessment; text-only flags do not prove OS custody. |
-| Codex shared/stdio app-server | `codex_appserver.py` checks legacy sandbox and approval policy and refuses unsupported active profiles reported by `thread/start` or `thread/resume`; stdio launches the official app-server. | Absent/null profiles remain compatible; this guard cannot detect a profile already lost during resume or later control-plane changes. Explicit managed-profile support remains pending. Neither route uses the Claude wrapper. Verify effective access to authority files, processes, endpoints and host management without weakening Codex policy. |
+| Codex shared/stdio app-server | `codex_appserver.py` checks legacy sandbox and approval policy; the external queue route also supports explicitly configured managed selection, bounded metadata rechecks, immutable selection snapshots and drift refusal. See [ADR 0055](../decisions/0055-managed-codex-profile-continuity.md). | Native metadata does not expose the complete managed definition or establish filesystem custody. Managed local/tmux, steering and inline routes remain refused; helpers and advisor routes need separate boundaries. Neither app-server route uses the Claude wrapper. Verify effective access to authority files, processes, endpoints and host management, then complete coordinated live acceptance. |
 | Hermes native Gateway | `hermes_plugin.py` adds Hub admission and visible-context integration; Gateway owns native execution. | The plugin does not establish an OS boundary. Inspect the Gateway's actual tools, children, MCP and recovery paths independently. |
 | OpenCode/Antigravity | `external_runtime.py` owns their CLI invocation and safe argument construction. | Provider sandbox flags are not evidence of Hub/tlive authority exclusion. Inspect actual execution identities and access. |
 | Native/local transfer | `local_transfer.py` builds Codex remote attach and OpenCode/Antigravity resume commands; Claude transfer is unsupported. | Writer leases prevent competing Hub writers, not credential access. Local tools/hooks/children must retain the chosen custody boundary. |
@@ -32,6 +32,23 @@ boundary, accessible local services and management capability. Use fictional
 sentinels to test denied authority reads/writes and permitted project/session
 access. Keep absent, unsupported and untested paths explicit. A process snapshot
 or declared setting cannot prove future starts and resumes stay confined.
+
+The narrow mount-role guard rejects a session HOME using the same canonical
+source as the project, or the same pinned directory inode as the project or its
+ordinary `.git`. Such an alias could otherwise expose writable Git through HOME
+despite the project's read-only Git overlay. The guard uses device/inode identity,
+not equal mount IDs. Descriptor-level regressions model top-level bind aliases;
+they do not perform host bind mounts or establish complete alias exclusion.
+The existing bounded descriptor scans also collect each root and its non-symlink
+descendant device/inode identities, refusing intersecting project/HOME trees.
+This detects pre-existing deeper directory aliases, including empty `.git/objects`,
+without another walk or an intersection allocation. Each set has at most 100,001
+identities. Symlinks remain references through the namespace's existing mount
+policy; their targets are not traversed or treated as inode aliases. Scan failure
+returns no partial set, and launch retains its final pin recheck and cleanup.
+These checks do not freeze directory contents or exclude an unconfined host actor
+changing them between or after scans. Neutral namespace extraction, installed
+custody and the full advisor boundary remain open.
 
 Choose the smallest candidate that can meet REQ-SEC-008 with those facts. Assess
 separate Linux identities only under an independently trusted management boundary;
