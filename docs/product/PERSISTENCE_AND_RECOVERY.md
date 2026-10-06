@@ -382,18 +382,34 @@ recreate unsaved provider context or a partially executed turn.
   consumers; unsupported modes MUST be refused explicitly.
   The current implemented subset is Hub-owned external queue/external outbox
   admission and execution notices, with accepted-turn activity for Codex only.
+  Schema 40 extends Codex visibility to payload-free approval observations during
+  `turn/start`; its implementation remains under validation.
   Queue reasons are bounded admission/handoff snapshots, not continuous capacity
   claims. `task_no_progress_seconds` and `task_tool_no_progress_seconds` configure
   the ordinary/tool thresholds; each MUST be an integer from 1 to 86,400, with
-  defaults 300 and 1,200 respectively. Activity and first delivery of an activity notice MUST
+  defaults 300 and 1,200 respectively. Accepted-turn activity and first delivery of its notice MUST
   revalidate the exact live execution lease, unchanged project/scope, numeric
   topic, session agent/generation, Telegram writer and accepted native checkpoint.
   Completed checkpoints MUST NOT generate active-turn warnings. Meaningful
   activity MUST supersede never-attempted warnings for the recovered episode;
   exact approval resolution MUST supersede its never-attempted approval notice.
   Approval notices MUST remain generic and direct the owner to the native
-  Codex/tlive request; no raw permission payload is stored or forwarded. An
-  approval preceding native turn acceptance remains outside this observer.
+  Codex/tlive request; no raw permission payload is stored or forwarded.
+  A separate preacceptance observer MAY report a request in the prepared Codex
+  session while `turn/start` is pending. It MUST NOT claim that the submitted
+  task or observed turn has been accepted. Its scope MUST bind the exact live
+  lease, session generation, Telegram writer, numeric destination, canonical
+  root and explicit permission selection to a prepared checkpoint and the
+  current persisted worker-slot epoch. Old process instances MUST NOT register
+  a fresh epoch while creating observations. Missing permission context MUST
+  decline this visibility. Only an exact accepted checkpoint MAY promote matching
+  request metadata; early native IDs MUST NOT authorize execution, interruption,
+  lease release, approval or replay. Resolved, retired, mismatched or stale
+  observations MUST suppress only never-attempted notices. Promotion MUST preserve
+  notice identity and immutable copy; attempted/unknown transport evidence MUST
+  retain REQ-QUEUE-013 semantics independently of an epoch change. Early copy
+  MUST NOT promise that `/stop` interrupts a submission before acceptance.
+  Early request metadata MUST have a separate bound of 128 entries per scope.
   Payload-free event/tool/approval metadata MUST total at most 512 entries per
   job; an exhausted bound MUST NOT authorize execution, replay or approval.
 - **REQ-QUEUE-013 (Accepted; implementation in progress):** Control delivery

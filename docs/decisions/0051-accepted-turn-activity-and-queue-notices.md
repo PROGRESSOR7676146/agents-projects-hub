@@ -68,10 +68,35 @@ control receipts and unknown sends. Migration uses the existing consistent
 backup and atomic DDL rollback. A runtime rollback must explicitly support
 schema 37; schema-36-only binaries cannot open the upgraded database.
 
-This slice does not complete every requirement in ADR 0049. Approval that blocks
-`turn/start` before an exact accepted turn exists remains the native host's
-responsibility and cannot receive an accepted-turn notice. Active-work retry
-controls and broader provider/compatibility-path visibility remain separate work.
+Schema 40 adds a separate, bounded observation scope for approvals seen during
+`turn/start`. Three additive tables retain prepared-checkpoint scopes, typed
+request metadata and monotonic runtime epochs. A runtime registers once for its
+configured external-worker slot; creating observations never registers another
+epoch. Startup atomically retires older open scopes and only their unattempted
+notices. Heartbeat remains telemetry. Each write and first unattempted send checks
+the exact prepared lease/session/root/destination and explicit profile context.
+
+On a shared socket, a same-thread early turn ID cannot establish acceptance of
+the submitted task. The common early/accepted copy therefore reports a request
+observed in the Codex session. Early IDs never enter the execution journal or
+authorize interruption, approval or replay. After journal acceptance, one
+transaction binds ordinary activity, imports only matching pending/resolved
+requests and promotes the scope before buffered events drain. Resolution and
+retirement cannot erase attempted/unknown transport evidence. Promoted scopes
+use exact accepted proof rather than the runtime epoch. The first-send guard
+allows a matching accepted checkpoint during the small journal-to-promotion gap;
+stale early provenance never falls through to an unrelated accepted alias.
+
+The early bound is 128 requests per scope; physical early plus accepted metadata
+remains bounded by 512 rows per job. Both phases share one notice key and immutable
+copy. Native `never` declines do not advertise a human wait. Copy does not promise
+that `/stop` interrupts an unaccepted submission. Native approval ownership and
+schema-36 send completion/recovery remain unchanged. Schema-39-only binaries
+cannot open the upgraded database; upgrade and rollback retain the existing
+consistent backup and migration transaction.
+
+This slice does not complete every requirement in ADR 0049. Broader provider and
+compatibility-path visibility remain separate work.
 Claude human approval hosting, tools, read-only advisor isolation, native local
 transfer and full parity are not enabled by Codex activity observation.
 

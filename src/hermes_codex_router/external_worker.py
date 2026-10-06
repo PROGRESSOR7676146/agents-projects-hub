@@ -40,6 +40,7 @@ from .external_runtime import (
     ProviderUnavailableError,
 )
 from .hub_config import HubConfig
+from .preacceptance_approvals import PreacceptanceApprovalState
 from .project_resolution import (
     ProjectResolutionError,
     resolve_project_context,
@@ -149,6 +150,22 @@ class ExternalQueueWorker:
         )
         self._started_at = datetime.now(timezone.utc)
         self._process_start_marker = uuid.uuid4().hex
+        self._preacceptance_epoch = None
+        if (
+            self.agent.runtime == "codex"
+            and config.hub_bot is not None
+            and config.outbox_runtime == "external"
+        ):
+            try:
+                self._preacceptance_epoch = PreacceptanceApprovalState(self.state).register_runtime(
+                    agent_id=self.agent.agent_id,
+                    worker_slot=worker_slot,
+                    instance_token=self._process_start_marker,
+                    now=self._started_at,
+                )
+            except BaseException:
+                self.state.close()
+                raise
         self._last_success_at: datetime | None = None
         self._last_error_code: str | None = None
         self._provider_state = "unknown"
@@ -855,7 +872,14 @@ class ExternalQueueWorker:
                 codex_permission_profile=thread.permission_profile,
             )
         with codex_activity_for_turn(
-            client, self.state, self.config, job.job_id, token, project.root
+            client,
+            self.state,
+            self.config,
+            job.job_id,
+            token,
+            project.root,
+            runtime_epoch=self._preacceptance_epoch,
+            prepared_thread_id=thread.thread_id,
         ) as accepted_activity:
             turn_id = start_codex_provider_turn(
                 client,

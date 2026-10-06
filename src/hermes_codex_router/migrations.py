@@ -17,6 +17,7 @@ from .schema_codex_permissions import (
     ensure_codex_permission_columns,
 )
 from .schema_compatibility import TARGET_SCHEMA_VERSION
+from .schema_preacceptance_approvals import PREACCEPTANCE_APPROVAL_SCHEMA as MIGRATION_40
 from .schema_task_activity import TASK_ACTIVITY_SCHEMA as MIGRATION_37
 from .schema_task_lifecycle import MIGRATION_36
 
@@ -1509,6 +1510,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_37,
         MIGRATION_38,
         MIGRATION_39,
+        MIGRATION_40,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:
