@@ -31,9 +31,13 @@ class StateContentionTests(unittest.TestCase):
         with closing(sqlite3.connect(self.path, timeout=0.01)) as reader:
             reader.execute("BEGIN")
             reader.execute("SELECT title FROM topics").fetchall()
+            reached_commit = False
             with self.assertRaises(sqlite3.OperationalError) as raised:
                 with transaction():
                     self.state._connection.execute("UPDATE topics SET title='Uncommitted'")
+                    self.assertTrue(self.state._connection.in_transaction)
+                    reached_commit = True
+            self.assertTrue(reached_commit)
             self.assertEqual(raised.exception.sqlite_errorcode, sqlite3.SQLITE_BUSY)
             self.assertFalse(self.state._connection.in_transaction)
             self.assertEqual(reader.execute("SELECT title FROM topics").fetchone()[0], "Example")
