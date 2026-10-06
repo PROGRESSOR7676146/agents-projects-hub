@@ -100,7 +100,8 @@ class PreacceptanceMigrationTests(unittest.TestCase):
     def test_additive_upgrade_preserves_attempted_unknown_and_delivered_evidence(self) -> None:
         with sqlite3.connect(self.path) as old:
             before = self.snapshot(old)
-        result = migrations.migrate_database(self.path)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 40):
+            result = migrations.migrate_database(self.path)
         self.assertEqual((result.previous_version, result.current_version), (39, 40))
         assert result.backup_path is not None
         self.assertEqual(result.backup_path.stat().st_mode & 0o777, 0o600)

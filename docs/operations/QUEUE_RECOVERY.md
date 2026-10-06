@@ -134,6 +134,55 @@ primary failure and the cleanup problem is recorded separately.
 
 ### Durable dispositions
 
+Repeated Codex notification-buffer failures before `turn/start` require a
+transport/consumption investigation even after an idle-worker restart. Keep
+the exact failure notices and saved inputs. Inspect subscriptions retained by
+successful clients and notification traffic during initialize, preparation and
+submission; a demonstrated retained subscription is not exact attribution of
+every deployed overflow. Restart is temporary recovery, not closure evidence.
+Do not restart an active worker or the shared daemon to clear this condition.
+Any maintenance restart needs a separately approved drained boundary and a
+fresh consistent backup.
+
+For a delivered text-only preparation notice offering saved-task retry, the
+owner can Reply exactly `retry`. Schema 41 records one child while keeping the
+failed source and original input membership. A second preparation failure needs
+an explicit Reply to its own new notice; repeating the older notice cannot
+create another child. Inspect the child payload/context and exact session
+binding before calling the task recovered. Materials, missing legacy tickets,
+changed bindings and contradictory execution evidence cause refusal. Follow
+[REQ-QUEUE-004](../product/PERSISTENCE_AND_RECOVERY.md) for the safety contract;
+never grant or replay native tool permissions from task authorization text.
+
+This is a new owner input in FIFO arrival order. Later work already queued or
+completed can precede it in the same session; retry does not restore the old
+queue position or rewind native context. Configured Codex aliases keep their
+actual agent identity. Runtime provenance comes from trusted local configuration,
+not the agent's label. Reconfiguring that alias to another runtime must refuse
+the saved retry before either worker dispatch or material preparation; its
+durable notice must say the provider did not start and must offer no new ticket.
+A changed child snapshot or attached child material refuses
+before preparation. An unavailable root refuses retry authority while preserving
+the original failure and notice.
+
+The ticket update guard is installed by the unreleased schema-41 migration.
+An existing development database already marked schema 41 does not rerun that
+migration on reopen; discard only disposable fixtures or prepare an explicit
+upgrade before retaining such a database. Production migration and deployment
+remain separately authorized.
+
+Preparation that replaces an existing Codex thread cannot offer saved-task
+retry without a frozen effective-context snapshot. The fallback's bounded
+visible-context bridge currently exists only in memory. Hub refuses new tickets
+and previously saved tickets and descendants for that transition rather than
+submit a shortened task. Missing, cyclic or over-64-generation retry ancestry
+also refuses rather than inferring safe context. Send a new request with the
+complete task and relevant context. Preparing
+the first thread from no prior identity, or retaining the exact existing thread,
+remains supported. Effective-input preservation and historical context for an
+ordinary Reply need separate follow-up; this conditional failure test does not
+establish the deployed overflow's cause or a natural post-binding trigger.
+
 - Expired `leased` means provider invocation was not recorded as possible. The
   scope may be claimed by another eligible job; normal stale recovery returns
   the old job to `queued`, and the expired token cannot start it late.

@@ -16,6 +16,7 @@ from .codex_permissions import (
     MissingPermissionContext,
     validate_permission_profile_id,
 )
+from .codex_retry_policy import PreparationRetryBinding
 from .incoming_materials import (
     IncomingMaterialDraft,
     IncomingMaterialRecord,
@@ -51,6 +52,7 @@ from .state_sessions import (
     WriterTransferSnapshot,
 )
 from .state_stop import StopState
+from .state_values import _bounded, _now, _optional_bounded, _timestamp
 from .task_lifecycle import TaskLifecycleState
 
 MAX_PROVIDER_RESPONSE_LENGTH = 200_000
@@ -90,30 +92,6 @@ class ProviderJobResultRecord:
     context_watermark: int | None
     handoff_id: str | None
     created_at: str
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _timestamp(value: datetime | None = None) -> str:
-    current = value or datetime.now(timezone.utc)
-    if current.tzinfo is None:
-        raise StateError("timestamp must be timezone-aware")
-    return current.astimezone(timezone.utc).isoformat()
-
-
-def _bounded(value: str, *, name: str, maximum: int) -> str:
-    normalized = value.strip()
-    if not normalized or len(normalized) > maximum:
-        raise StateError(f"invalid {name}")
-    return normalized
-
-
-def _optional_bounded(value: str | None, *, name: str, maximum: int) -> str | None:
-    if value is None:
-        return None
-    return _bounded(value, name=name, maximum=maximum)
 
 
 def _visible_excerpt(value: str) -> str:
@@ -895,238 +873,33 @@ class HubState:
         prepare_task_notices: bool = False,
         queue_capacity: QueueCapacityConfig | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
-        """Atomically accept one bounded provider request.
+        """Atomically accept one provider input and its receipt/notices."""
+        from .provider_admission_state import ProviderAdmissionState
 
-        This method is deliberately local-only: callers must finish Telegram
-        admission and content redaction before calling it. It performs no
-        network or provider operation. A duplicate idempotency key returns the
-        original immutable snapshot without allocating another topic sequence.
-        """
-        from .session_adoption_state import CodexSessionOrigins
-
-        key = _bounded(idempotency_key, name="idempotency key", maximum=256)
-        target_agent = _bounded(agent_id, name="agent id", maximum=64)
-        target_session = _bounded(session_id, name="session id", maximum=128)
-        selected_model = _bounded(model, name="model", maximum=200)
-        selected_effort = _bounded(effort, name="effort", maximum=64)
-        payload = _bounded(payload_text, name="payload", maximum=20000)
-        requested_provider_session = (
-            _bounded(provider_session_id, name="provider session id", maximum=256)
-            if provider_session_id is not None
-            else None
-        )
-        handoff = (
-            _bounded(handoff_id, name="handoff id", maximum=128) if handoff_id is not None else None
-        )
-        group_key = _optional_bounded(input_group_key, name="input group key", maximum=256)
-        if chat_id == 0 or message_id <= 0 or session_generation <= 0:
-            raise StateError("invalid provider job identity")
-        if context_watermark is not None and context_watermark < 0:
-            raise StateError("invalid context watermark")
-        if not 1 <= max_attempts <= 20:
-            raise StateError("invalid max attempts")
-
-        created = False
         with self._immediate_transaction():
-            existing = self._connection.execute(
-                "SELECT * FROM provider_jobs WHERE idempotency_key = ?", (key,)
-            ).fetchone()
-            if existing is not None:
-                if int(existing["chat_id"]) != chat_id or int(existing["message_id"]) != message_id:
-                    raise StateError("idempotency key belongs to another Telegram message")
-                return self._provider_job(existing), False
-
-            topic = self._connection.execute(
-                "SELECT chat_id, thread_id FROM topics WHERE topic_id = ?", (topic_id,)
-            ).fetchone()
-            if topic is None:
-                raise StateError(f"unknown topic_id: {topic_id}")
-            if int(topic["chat_id"]) != chat_id:
-                raise StateError("provider job chat does not match topic")
-            session = self._connection.execute(
-                """SELECT * FROM agent_sessions
-                   WHERE session_id = ?""",
-                (target_session,),
-            ).fetchone()
-            if (
-                session is None
-                or int(session["topic_id"]) != topic_id
-                or str(session["agent_id"]) != target_agent
-                or int(session["generation"]) != session_generation
-            ):
-                raise StateError("provider job session snapshot does not match persisted session")
-            if str(session["status"]) not in {"active", "satellite"}:
-                raise StateError("provider job session is not routable")
-            self._sessions_state.require_codex_selection(SessionsStateFacade.record(session))
-            CodexSessionOrigins(self).require_admission(target_session, message_id)
-            expected_writer = "local" if take_local_writer else "telegram"
-            if str(session["writer_mode"]) != expected_writer:
-                raise StateError(f"provider job session writer is not {expected_writer}")
-            if (
-                not take_local_writer
-                and persistent_root_blocker(self._connection, topic_id=topic_id) is not None
-            ):
-                raise StateError("execution root has a persistent local writer or uncertainty")
-            if str(session["model"]) != selected_model or str(session["effort"]) != selected_effort:
-                raise StateError("provider job model or effort does not match persisted session")
-            persisted_provider_session = session["provider_session_id"]
-            if (
-                requested_provider_session is not None
-                and requested_provider_session != persisted_provider_session
-            ):
-                raise StateError("provider job provider session does not match persisted session")
-            if context_watermark is not None:
-                context_turn = self._connection.execute(
-                    """SELECT 1 FROM external_turn_excerpts
-                       WHERE turn_id = ? AND topic_id = ?""",
-                    (context_watermark, topic_id),
-                ).fetchone()
-                if context_turn is None:
-                    raise StateError(
-                        "provider job context watermark is not a visible turn for topic"
-                    )
-            if handoff is not None:
-                pending = self._connection.execute(
-                    """SELECT 1 FROM pending_handoffs
-                       WHERE handoff_id = ? AND topic_id = ? AND target_agent_id = ?""",
-                    (handoff, topic_id, target_agent),
-                ).fetchone()
-                if pending is None:
-                    raise StateError("provider job handoff snapshot is not pending")
-
-            if take_local_writer:
-                if (
-                    expected_transfer is None
-                    or expected_transfer.session.session_id != target_session
-                ):
-                    raise StateError("local writer transfer requires a validated snapshot")
-                self._require_writer_transfer_snapshot(expected_transfer)
-                pending_job = self._connection.execute(
-                    """SELECT 1 FROM provider_jobs
-                       WHERE topic_id = ? AND status IN
-                         ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
-                       LIMIT 1""",
-                    (topic_id,),
-                ).fetchone()
-                if pending_job is not None:
-                    raise StateError("provider work is already pending for this topic")
-                cursor = self._connection.execute(
-                    """UPDATE agent_sessions SET writer_mode = 'telegram', updated_at = ?
-                       WHERE session_id = ? AND writer_mode = 'local'""",
-                    (_now(), target_session),
-                )
-                if cursor.rowcount != 1:
-                    raise StateError("local writer ownership changed during provider admission")
-
-            now = _now()
-            ready_at = _timestamp(available_at) if available_at is not None else None
-            self._connection.execute(
-                """INSERT OR IGNORE INTO observed_messages
-                   (chat_id, message_id, observer_agent_id, observed_at)
-                   VALUES (?, ?, 'hub', ?)""",
-                (chat_id, message_id, now),
-            )
-            self._connection.execute(
-                """INSERT INTO topic_queue_counters(topic_id, next_sequence, updated_at)
-                   VALUES (?, 1, ?)
-                   ON CONFLICT(topic_id) DO NOTHING""",
-                (topic_id, now),
-            )
-            counter = self._connection.execute(
-                "SELECT next_sequence FROM topic_queue_counters WHERE topic_id = ?",
-                (topic_id,),
-            ).fetchone()
-            if counter is None:
-                raise StateError("failed to allocate provider job sequence")
-            topic_sequence = int(counter["next_sequence"])
-            self._connection.execute(
-                """UPDATE topic_queue_counters
-                   SET next_sequence = next_sequence + 1, updated_at = ?
-                   WHERE topic_id = ?""",
-                (now, topic_id),
-            )
-            job_id = str(uuid.uuid4())
-            try:
-                self._connection.execute(
-                    """INSERT INTO provider_jobs (
-                         job_id, idempotency_key, chat_id, message_id, topic_id,
-                         topic_sequence, agent_id, session_id, session_generation,
-                         provider_session_id, model, effort, payload_text, codex_permission_profile,
-                         context_watermark, handoff_id, input_group_key, status, attempt_count,
-                         max_attempts, next_attempt_at, created_at, updated_at
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                 'queued', 0, ?, ?, ?, ?)""",
-                    (
-                        job_id,
-                        key,
-                        chat_id,
-                        message_id,
-                        topic_id,
-                        topic_sequence,
-                        target_agent,
-                        target_session,
-                        session_generation,
-                        persisted_provider_session,
-                        selected_model,
-                        selected_effort,
-                        payload,
-                        session["codex_permission_profile"],
-                        context_watermark,
-                        handoff,
-                        group_key,
-                        max_attempts,
-                        ready_at,
-                        now,
-                        now,
-                    ),
-                )
-            except sqlite3.IntegrityError as exc:
-                duplicate = self._connection.execute(
-                    """SELECT * FROM provider_jobs
-                       WHERE idempotency_key = ? OR (chat_id = ? AND message_id = ?)""",
-                    (key, chat_id, message_id),
-                ).fetchone()
-                if duplicate is None:
-                    raise
-                if str(duplicate["idempotency_key"]) != key:
-                    raise StateError("Telegram message already has another provider job") from exc
-                return self._provider_job(duplicate), False
-            self._connection.execute(
-                """INSERT INTO provider_job_inputs (
-                       job_id, chat_id, message_id, part_index, input_text, received_at
-                   ) VALUES (?, ?, ?, 1, ?, ?)""",
-                (job_id, chat_id, message_id, payload, now),
-            )
-            self._attach_forwarded_materials(
-                job_id=job_id,
-                topic_id=topic_id,
-                agent_id=target_agent,
-                session_id=target_session,
-                session_generation=session_generation,
-            )
-            self._insert_incoming_materials(
-                job_id=job_id,
-                topic_id=topic_id,
+            return ProviderAdmissionState(self).admit_in_transaction(
+                idempotency_key=idempotency_key,
                 chat_id=chat_id,
                 message_id=message_id,
-                agent_id=target_agent,
-                session_id=target_session,
+                topic_id=topic_id,
+                agent_id=agent_id,
+                session_id=session_id,
                 session_generation=session_generation,
+                model=model,
+                effort=effort,
+                payload_text=payload_text,
+                provider_session_id=provider_session_id,
+                context_watermark=context_watermark,
+                handoff_id=handoff_id,
                 materials=materials,
-                timestamp=now,
+                input_group_key=input_group_key,
+                max_attempts=max_attempts,
+                take_local_writer=take_local_writer,
+                available_at=available_at,
+                expected_transfer=expected_transfer,
+                prepare_task_notices=prepare_task_notices,
+                queue_capacity=queue_capacity,
             )
-            created = True
-            row = self._connection.execute(
-                "SELECT * FROM provider_jobs WHERE job_id = ?", (job_id,)
-            ).fetchone()
-            if row is None:
-                raise StateError("failed to persist provider job")
-            job = self._provider_job(row)
-            if prepare_task_notices:
-                self.queue_visibility.admitted_in_transaction(
-                    job_id, now=datetime.fromisoformat(now), capacity=queue_capacity
-                )
-        return job, created
 
     def enqueue_or_append_provider_job(
         self,
@@ -1652,6 +1425,8 @@ class HubState:
         expected_status: str = "executing",
         error_detail: str | None = None,
         terminal_turn_status: str | None = None,
+        preparation_retry: PreparationRetryBinding | None = None,
+        provider_runtime: str | None = None,
         now: datetime | None = None,
     ) -> ProviderJobRecord:
         """Terminalize work with one failure notice, or cancel it for a covering stop."""
@@ -1678,6 +1453,22 @@ class HubState:
         detail = error_detail.strip()[:1000] if error_detail else None
         timestamp = _timestamp(now)
         with self._immediate_transaction():
+            from .preexecution_retry_state import PreexecutionRetryState
+
+            retry = PreexecutionRetryState(self)
+            contradictory = (
+                status == "failed"
+                and failure_class == "pre_execution"
+                and provider_runtime == "codex"
+                and retry.has_execution_evidence(job_id)
+            )
+            if contradictory:
+                status, failure_class = "indeterminate", "ambiguous_execution"
+                html = (
+                    "Codex preparation failure conflicts with saved execution evidence. "
+                    "The outcome is unconfirmed; Hub kept the evidence and did not retry. "
+                    "Inspect /status before continuing."
+                )
             if status == "failed" and self._provider_job_state.honor_stop(
                 job_id, lease_token, expected_status
             ):
@@ -1693,6 +1484,13 @@ class HubState:
                 raise StateError("provider job lease is missing or invalid")
             if sender != str(row["agent_id"]):
                 raise StateError("Telegram outbox sender does not match provider job agent")
+            if (
+                status == "failed"
+                and failure_class == "pre_execution"
+                and provider_runtime == "codex"
+            ):
+                if preparation_retry is not None and code == "CodexPreparationError":
+                    html += retry.record_ticket_in_transaction(row, preparation_retry, timestamp)
             if terminal_turn_status is not None:
                 checkpoint = self._connection.execute(
                     "SELECT provider_thread_id, provider_turn_id, project_root "
