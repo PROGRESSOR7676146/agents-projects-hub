@@ -220,6 +220,21 @@ acceptance.
 
 ## Closure
 
+Repeated Codex preparation overflow has source-level transport and saved-task
+retry candidates, not deployment acceptance. The schema-41 text-only retry
+candidate is published at `c2a9ec0ea97ad51f5fcf0b50c4bfd85f46ace32e`;
+canonical publication validation passed, while required opposite-runtime review
+and live gates remain open. The stdio follow-up bounds both directions and
+preserves final/approval/telemetry evidence; its candidate still needs exact-head
+publication checks and independent review. Closeout requires a separately
+authorized two-worker canary with more than 1,024 foreign notifications, both
+results saved and two successive preparation failures retaining the original
+task through explicit notice-bound retries. Restart alone does not close this
+item. Safe unsubscribe, absolute preparation/metadata deadlines, client-event
+byte bounds, material retry and exact deployed-source attribution remain open.
+See [queue recovery](QUEUE_RECOVERY.md) and the
+[acceptance strategy](../testing/README.md).
+
 The plan closes when stages 0–3 are merged into `main`, the hotspot ratchet
 runs in the canonical gate, and the owner has either completed or explicitly
 re-scoped every backlog item. Record the closing revision here.

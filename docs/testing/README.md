@@ -40,6 +40,16 @@ Automated tests
 use fake transports and temporary Git/SQLite fixtures. They must not contact
 real Telegram groups or consume provider tokens.
 
+Codex transport pressure tests use scripted pipes/WebSockets and an owned
+fictional Python JSONL peer. More than 1,024 foreign notifications must not
+prevent an RPC response; early final/completion/context and rolling quota
+updates must survive, and an interleaved approval must be declined on stdio
+without an automatic grant. Cover a successful client left idle before its
+next turn, bounded multibyte and unterminated frames, ordered drain before
+terminal failure, close during producer/consumer waits and delivery after a
+receive timeout. These fixtures establish source transport behavior, not the
+origin of a deployed subscription or native/Telegram live acceptance.
+
 Publication sequence with the installed hooks: focused checks → commit (the
 pre-commit gate) → push (one full canonical run on the clean commit) →
 independent exact-revision CI/CodeQL. Do not run the same full validator

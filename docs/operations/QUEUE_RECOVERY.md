@@ -94,8 +94,34 @@ selects the current turn's results.
 A disconnect or explicit close can interrupt a frame still waiting for
 capacity, and an upstream slow-consumer policy can end the stream. Apply the
 ordinary exact-turn recovery rules below; backpressure never proves completion
-or authorizes replay. Stdio stdout buffering and subscription cleanup remain
-separate resource-lifecycle work.
+or authorizes replay.
+
+The official stdio transport uses the same inbound wire-byte/frame budgets,
+with a blocking pipe reader instead of an asynchronous WebSocket receiver.
+Bounded JSONL reads reject oversized lines, including unterminated lines, before unlimited
+allocation; valid final JSON without a newline remains supported. UTF-8
+admission also checks multibyte text. One decoding frame, Python objects,
+client-retained events and OS pipe buffers are outside the queued wire-byte
+budget. This is not a total process-memory limit.
+
+Stdio uses a dedicated writer and a nonblocking, immutable outbound queue with
+16 slots and an 8 MiB aggregate UTF-8 payload budget; each frame is at most
+4 MiB. A full outbound queue is refused visibly, never silently dropped. This
+allows a request larger than the pipe capacity to progress while the caller
+drains notifications, instead of forming a bidirectional pipe deadlock.
+Successful `send()` means queue admission; the exact RPC response remains
+submission evidence. EOF or a read/write failure seals both queues.
+
+Stdio close wakes blocked producers/consumers before process cleanup. Accepted
+frames drain before the first EOF/read/size error; a receive timeout leaves
+later delivery usable. Client approval handling and result/telemetry filtering
+remain unchanged. Shutdown is checked before each outbound write; a write
+already past that final check may have been submitted and needs ordinary uncertainty
+handling. Client-retained event bytes,
+absolute preparation/metadata deadlines and safe subscription cleanup remain
+separate resource-lifecycle work. Endless unrelated notifications can still
+extend an RPC that has only a fresh timeout for each received frame; do not
+interpret receipt traffic as productive progress or approval.
 
 ### Codex live-control contention
 

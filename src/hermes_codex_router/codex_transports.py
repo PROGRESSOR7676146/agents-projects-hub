@@ -58,24 +58,63 @@ class UnixJsonLineTransport:
 class StdioJsonLineTransport:
     """JSONL transport backed by the official `codex app-server --stdio`."""
 
-    def __init__(self, process: subprocess.Popen[str]) -> None:
+    def __init__(
+        self,
+        process: subprocess.Popen[str],
+        *,
+        max_pending_frames: int = 1024,
+        max_frame_bytes: int = 4 * 1024 * 1024,
+    ) -> None:
         if process.stdin is None or process.stdout is None:
             raise RpcError("Codex stdio pipes are unavailable")
+        if not 1 <= max_frame_bytes <= 4 * 1024 * 1024:
+            raise ValueError("invalid Codex stdio frame bound")
         self._process = process
         self._reader = process.stdout
         self._writer = process.stdin
         self._closed = False
-        self._lines: queue.Queue[str | BaseException] = queue.Queue()
+        self._max_frame_bytes = max_frame_bytes
+        self._inbound: BoundedInbox[str] = BoundedInbox(
+            max_frames=max_pending_frames, max_frame_bytes=max_frame_bytes
+        )
+        self._outbound: BoundedInbox[str] = BoundedInbox(max_frames=16)
+        self._writer_thread = threading.Thread(target=self._write_stdin, daemon=True)
         self._reader_thread = threading.Thread(target=self._read_stdout, daemon=True)
+        self._writer_thread.start()
         self._reader_thread.start()
+
+    def _write_stdin(self) -> None:
+        try:
+            while not self._closed:
+                try:
+                    line = self._outbound.get(timeout=20)
+                except queue.Empty:
+                    continue
+                if (
+                    self._closed
+                    or self._outbound.terminal is not None
+                    or self._inbound.terminal is not None
+                ):
+                    return
+                self._writer.write(line)
+                self._writer.flush()
+        except Exception as exc:
+            self._finish(exc)
+
+    def _finish(self, error: BaseException) -> None:
+        self._inbound.finish(error)
+        self._outbound.finish(error)
 
     def _read_stdout(self) -> None:
         try:
-            while line := self._reader.readline():
-                self._lines.put(line)
-            self._lines.put(EOFError("Codex app-server closed stdout"))
+            # TextIO's limit is in characters. UTF-8 byte admission below also
+            # rejects oversized multibyte frames; allocation stays bounded even
+            # for a peer that never emits a newline.
+            while line := self._reader.readline(self._max_frame_bytes + 1):
+                self._inbound.put(line, len(line.encode("utf-8")))
+            self._finish(EOFError("Codex app-server closed stdout"))
         except Exception as exc:
-            self._lines.put(exc)
+            self._finish(exc)
 
     @classmethod
     def start(cls, executable: str = "codex") -> "StdioJsonLineTransport":
@@ -91,20 +130,27 @@ class StdioJsonLineTransport:
         return cls(process)
 
     def send(self, message: dict[str, Any]) -> None:
-        self._writer.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")))
-        self._writer.write("\n")
-        self._writer.flush()
+        """Admit an immutable frame; the RPC response remains submission evidence."""
+        if self._closed:
+            raise RpcError("Codex stdio is closed")
+        terminal = self._inbound.terminal
+        if terminal is not None:
+            raise terminal
+        line = json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n"
+        size = len(line.encode("utf-8"))
+        if size > 4 * 1024 * 1024:
+            raise RpcError("Codex outbound frame exceeded its bound")
+        if not self._outbound.try_put(line, size):
+            raise RpcError("Codex outbound buffer exceeded its bound")
 
     def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
         try:
-            line = self._lines.get(timeout=20.0 if timeout is None else timeout)
+            line = self._inbound.get(timeout=20.0 if timeout is None else timeout)
         except queue.Empty as exc:
             raise RpcError("timed out waiting for Codex stdio") from exc
-        if isinstance(line, BaseException):
-            raise line
         try:
             message = json.loads(line)
-        except json.JSONDecodeError as exc:
+        except (ValueError, RecursionError) as exc:
             raise RpcError("Codex app-server emitted malformed JSON") from exc
         if not isinstance(message, dict):
             raise RpcError("Codex app-server message must be an object")
@@ -114,9 +160,10 @@ class StdioJsonLineTransport:
         if self._closed:
             return
         self._closed = True
+        self._finish(EOFError("Codex stdio closed"))
         try:
-            self._writer.close()
-        finally:
+            # Stop the owned peer before taking TextIO locks: a writer may be
+            # blocked on a full stdin pipe while the peer is blocked on stdout.
             if self._process.poll() is None:
                 self._process.terminate()
                 try:
@@ -124,9 +171,18 @@ class StdioJsonLineTransport:
                 except subprocess.TimeoutExpired:
                     self._process.kill()
                     self._process.wait(timeout=5)
+        finally:
             self._reader_thread.join(timeout=2)
-            if not self._reader_thread.is_alive():
-                self._reader.close()
+            self._writer_thread.join(timeout=2)
+            try:
+                if not self._reader_thread.is_alive():
+                    self._reader.close()
+            finally:
+                if not self._writer_thread.is_alive():
+                    try:
+                        self._writer.close()
+                    except BrokenPipeError:
+                        pass  # Owned peer already terminated; no further flush is possible.
 
 
 class UnixWebSocketTransport:
