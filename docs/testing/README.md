@@ -217,6 +217,29 @@ state only the reusable behavior tested and the kind of acceptance required.
 The reusable go/no-go sequence and rollback boundary are defined in
 [`LIVE_CANARY.md`](../operations/LIVE_CANARY.md).
 
+## Optional offline native notification attribution
+
+The direct-socket fixture uses an explicitly supplied native Codex executable
+inside an empty filesystem/network/PID namespace. A local deterministic
+Responses server emits the traffic; real authentication, provider endpoints,
+installed services and daemon sockets are absent. Its disposable endpoint
+storage is mounted only inside that namespace. Both clients connect directly
+to a pinned native socket, without an RPC forwarding proxy.
+
+```bash
+HUB_NATIVE_CODEX_FIXTURE_EXECUTABLE=/home/example/tools/codex \
+  HUB_REQUIRE_NATIVE_CODEX_PROFILE_TESTS=1 HUB_REQUIRE_NAMESPACE_TESTS=1 \
+  PYTHONPATH=src:tests python -m unittest tests.test_codex_native_notification_origin -v
+```
+
+The test distinguishes fresh connection, initialization, passive metadata and
+explicit subscription. It requires source traffic above 1,024 events, exact
+terminal history, healthy observers and a positive control after a thread
+switch. Structural method/phase/count summaries contain no payload text.
+This establishes behavior of the supplied executable, not a deployed failure's
+source or live Telegram acceptance. Missing optional executables may skip;
+the required flags turn unavailable native/namespace execution into failure.
+
 ## Publication preflight
 
 Repository maintainers can install the versioned pre-commit and pre-push hooks
