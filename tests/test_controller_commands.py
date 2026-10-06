@@ -253,6 +253,7 @@ class ControllerCommandTests(unittest.TestCase):
         assert selected is not None
         self.assertEqual(selected.session_id, active.session_id)
         self.assertEqual(selected.provider_session_id, active.provider_session_id)
+        self.assertEqual((selected.model, selected.effort), ("gpt-next", "medium"))
         other = self.state.activate_agent(
             self.topic.topic_id,
             "codex",

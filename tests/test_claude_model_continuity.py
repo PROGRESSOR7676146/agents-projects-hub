@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+from dataclasses import replace
+from unittest.mock import patch
 
 from hermes_codex_router.root_blockers import persistent_root_blocker
 from hermes_codex_router.state import StateError
+from hermes_codex_router.telegram import parse_topic_message
 from tests import test_claude_session_binding as binding_fixtures
+from tests import test_embedded_queue_service as service_fixtures
 
 
 class ClaudeModelContinuityTests(unittest.TestCase):
@@ -33,6 +37,11 @@ class ClaudeModelContinuityTests(unittest.TestCase):
     def test_model_and_effort_changes_preserve_identity_provenance_and_prior_snapshots(self):
         self.finish_prior()
         previous = self.state.get_session(self.fixture.session.session_id)
+        previous_row = dict(
+            self.state._connection.execute(
+                "SELECT * FROM agent_sessions WHERE session_id=?", (previous.session_id,)
+            ).fetchone()
+        )
         before = self.fixture.snapshot()
         for model, effort in (("example-next", "high"), ("example-next", "medium")):
             selected = self.select(model=model, effort=effort)
@@ -42,6 +51,15 @@ class ClaudeModelContinuityTests(unittest.TestCase):
             )
             self.assertEqual((selected.model, selected.effort), (model, effort))
         after = self.fixture.snapshot()
+        selected_row = dict(
+            self.state._connection.execute(
+                "SELECT * FROM agent_sessions WHERE session_id=?", (previous.session_id,)
+            ).fetchone()
+        )
+        for name in ("model", "effort", "updated_at"):
+            previous_row.pop(name)
+            selected_row.pop(name)
+        self.assertEqual(selected_row, previous_row)
         for table in ("provider_jobs", "provider_execution_checkpoints"):
             self.assertEqual(after[table], before[table])
         self.fixture.session = selected
@@ -184,6 +202,88 @@ class ClaudeModelContinuityTests(unittest.TestCase):
         binding = self.fixture.prepare(current, self.fixture.execute(current))
         self.assertTrue(binding.is_new)
         self.assertNotEqual(binding.session_id, binding_fixtures.NATIVE_UUID)
+
+
+class ClaudeServiceSelectionTests(unittest.TestCase):
+    def setUp(self):
+        fixture = service_fixtures.EmbeddedQueueServiceTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        fixture.config = replace(
+            fixture.config,
+            agents=(
+                fixture.config.agents[0],
+                replace(
+                    fixture.config.agents[0],
+                    agent_id="claude",
+                    runtime="claude",
+                    display_name="Claude",
+                    telegram_username="example_claude_bot",
+                    default_model="example-default",
+                    default_effort="high",
+                ),
+            ),
+        )
+        self.client = service_fixtures.QueueClient()
+        self.service, self.telegram = fixture.service(self.client)
+        self.addCleanup(self.service.close)
+        self.project = fixture.registry.projects[0]
+        self.topic = self.service.state.observe_topic(
+            project_id=self.project.project_id,
+            chat_id=-1001234567890,
+            thread_id=77,
+            title="Example topic",
+            execution_root=self.project.root,
+        )
+        self.saved = self.service.state.activate_agent(
+            self.topic.topic_id, "claude", "example-saved", "low"
+        )
+        self.saved = self.service.state.bind_provider_session(
+            self.saved.session_id, binding_fixtures.NATIVE_UUID, None
+        )
+        self.service.state.activate_agent(
+            self.topic.topic_id,
+            "codex",
+            "example-codex",
+            "high",
+            expected_session_id=self.saved.session_id,
+        )
+
+    def test_agent_command_preserves_saved_claude_settings_and_identity_without_invocation(self):
+        self.assertTrue(self.service.handle_update(service_fixtures.update(1, "/agent claude")))
+        current = self.service.state.active_session(self.topic.topic_id)
+        assert current is not None
+        self.assertEqual((current.model, current.effort), ("example-saved", "low"))
+        self.assertEqual(
+            (current.session_id, current.generation, current.provider_session_id),
+            (self.saved.session_id, self.saved.generation, self.saved.provider_session_id),
+        )
+        self.assertEqual(self.client.started_threads, 0)
+        self.assertEqual(self.client.turn_threads, [])
+
+    def test_explicit_service_settings_preserve_exact_claude_session(self):
+        message = parse_topic_message(service_fixtures.update(1, "/agent claude"))
+        assert message is not None
+        with patch.object(
+            self.service.state,
+            "replace_active_session",
+            wraps=self.service.state.replace_active_session,
+        ) as selection:
+            self.service._switch_agent(
+                project=self.project,
+                topic=self.topic,
+                target_agent_id="claude",
+                message=message,
+                target_model="example-selected",
+                target_effort="medium",
+            )
+        self.assertEqual(selection.call_args.kwargs["runtime"], "claude")
+        current = self.service.state.active_session(self.topic.topic_id)
+        assert current is not None
+        self.assertEqual((current.model, current.effort), ("example-selected", "medium"))
+        self.assertEqual(current.session_id, self.saved.session_id)
+        self.assertEqual(current.provider_session_id, self.saved.provider_session_id)
+        self.assertEqual(self.client.started_threads, 0)
 
 
 if __name__ == "__main__":
