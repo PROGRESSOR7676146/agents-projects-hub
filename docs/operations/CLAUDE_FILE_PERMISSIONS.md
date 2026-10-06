@@ -135,6 +135,23 @@ This proves the protected namespace and old-channel exclusion, not actual human
 Telegram delivery. Canonical validation, independent exact-candidate review and
 hosted gates still apply before publication.
 
+## Unsupported native transfer recovery
+
+Claude `/local` and `/return` are refused before transfer preparation, writer
+mutation or summary enqueue, including for configured aliases of the Claude
+runtime. The command receipt still deduplicates an exact Telegram redelivery.
+If retained state has a local Claude writer, preserve that lease, native identity
+and earlier held work for explicit local investigation. The refusal does not
+close the CLI or establish a safe handover; do not clear the lease or use a
+generic non-Codex summary as transfer proof. Supported native transfer and saved
+session discovery remain separate parity work under
+[REQ-WRITER-006..007](../product/ACCOUNTS_CONTROL_AND_SECURITY.md#implemented-minimal-native-transfer).
+
+`tests.test_claude_transfer_refusal` covers retained local leases, aliases,
+missing native identity, duplicate controls and unchanged held work, using only
+fake transports and disposable state. Other supported runtimes keep their
+existing transfer paths.
+
 ## Separate live acceptance
 
 Before enabling this in a deployment, prepare the exact candidate/rollback,

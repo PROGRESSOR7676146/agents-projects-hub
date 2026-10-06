@@ -12,7 +12,7 @@ from .provider_catalog_cache import CatalogSnapshot
 from .provider_limits import ProviderLimit, decode_provider_limit
 from .provider_telemetry import load_antigravity_telemetry
 from .session_controls import bind_controls
-from .state import HubState, StateError, TopicRecord
+from .state import HubState, SessionRecord, StateError, TopicRecord
 from .status_view import format_accounts, format_session_status
 
 
@@ -224,6 +224,17 @@ class ControllerCommandOrchestrator:
         if external_worker:
             return "Refresh queued for monitor; reopen /model after its next check."
         return "Refreshing catalog…"
+
+    def native_transfer_refusal(self, session: SessionRecord | None) -> TextCommandDecision | None:
+        if session is None or self.config.require_agent(session.agent_id).runtime != "claude":
+            return None
+        detail = (
+            "Claude native session transfer is not supported yet. Writer ownership is "
+            "unchanged; this command did not invoke the provider."
+        )
+        if session.writer_mode == "local":
+            detail += " A retained local lease requires local reconciliation before Telegram work can resume."
+        return TextCommandDecision(detail)
 
     def model_menu(
         self,
