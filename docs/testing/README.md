@@ -50,6 +50,23 @@ terminal failure, close during producer/consumer waits and delivery after a
 receive timeout. These fixtures establish source transport behavior, not the
 origin of a deployed subscription or native/Telegram live acceptance.
 
+`tests.test_codex_stdio_failure_drain` and the stdio pressure tests additionally
+cover writer failure with a full inbound queue and unread pipe tail, delayed
+tail after an empty receive timeout, both first-cause orders and a synchronized
+race, and close while the reader is full or empty. A controlled writer proves
+that a decline can enter the outbound queue before failing; its final/context/quota
+tail still reaches the exact completion checkpoint with the Hub notice and
+unchanged raw visible items. EOF before a buffered approval covers terminal
+reply-admission refusal; ordinary healthy EOF produces no notice.
+
+Fault-drain regressions require saved accepted identity and explicit completion,
+bound foreign traffic and an already-blocked quiet reader, preserve the original
+quiet deadline while polling, and retain text/notice across storage, permission,
+EOF and completion-boundary expiry failures. They prove no second submission or
+grant, not delivery of an admitted decline. Test-only shortened poll/window
+values make the quiet fault test bounded; production values and limitations
+are described in [queue recovery](../operations/QUEUE_RECOVERY.md).
+
 `tests.test_codex_rpc_deadlines` uses module-local fake clocks with real Hub
 clients. It covers more than 1,024 foreign frames exhausting a fixed default
 response deadline, explicit/quiet budgets, late responses/rejections/approvals,

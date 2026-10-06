@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import queue
 import subprocess
 import sys
 import threading
@@ -13,6 +14,7 @@ from unittest.mock import patch
 
 from hermes_codex_router.codex_appserver import CodexAppServerClient, RpcError
 from hermes_codex_router.codex_inbox import BoundedInbox
+from hermes_codex_router.codex_rpc import RpcOutboundUnavailableError
 from hermes_codex_router.codex_transports import StdioJsonLineTransport
 
 
@@ -310,16 +312,77 @@ threading.Event().wait()
 
     def test_writer_failure_drains_accepted_inbound_before_original_cause(self):
         error = OSError("fictional writer failed")
-        transport, writer, _ = self.blocked_writer_transport(error=error)
+        transport, writer, reader = self.blocked_writer_transport(error=error)
         writer.release.set()
         transport._writer_thread.join(1)
         self.assertFalse(transport._writer_thread.is_alive())
         self.assertEqual(transport.receive(timeout=1), {"id": "example-accepted"})
+        reader.release.set()
+        transport._reader_thread.join(5)
         with self.assertRaises(OSError) as raised:
             transport.receive(timeout=1)
         self.assertIs(raised.exception, error)
-        with self.assertRaises(OSError):
+        with self.assertRaises(RpcOutboundUnavailableError) as refused:
             transport.send({"id": "example-refused"})
+        self.assertIs(refused.exception.__cause__, error)
+
+    def test_writer_failure_keeps_unread_pipe_tail_in_order_under_backpressure(self):
+        frames = [
+            {"id": "example-approval", "method": "item/fileChange/requestApproval"},
+            {"method": "thread/tokenUsage/updated"},
+            {"method": "account/rateLimits/updated"},
+            {"method": "item/completed"},
+            {"method": "turn/completed"},
+        ]
+        reader = ScriptedReader("".join(json.dumps(frame) + "\n" for frame in frames))
+        error = OSError("fictional writer failure")
+        writer = ControlledWriter(error=error)
+        process = SimpleNamespace(stdin=writer, stdout=reader, poll=lambda: 0)
+        transport, full, _ = self.transport(reader=reader, process=process)
+        self.addCleanup(writer.release.set)
+        self.assertTrue(full.wait(5))
+        transport.send({"method": "example-control"})
+        self.assertTrue(writer.entered.wait(5))
+        transport.send({"method": "example-never-written"})
+        writer.release.set()
+        transport._writer_thread.join(5)
+        self.assertFalse(transport._writer_thread.is_alive())
+        self.assertEqual([transport.receive(timeout=5) for _ in frames], frames)
+        with self.assertRaises(OSError) as raised:
+            transport.receive(timeout=0)
+        self.assertIs(raised.exception, error)
+        self.assertFalse(writer.writes)
+
+    def test_writer_fault_before_next_read_allows_delayed_tail_after_receive_timeout(self):
+        class DelayedReader(ScriptedReader):
+            def readline(self, size=-1):
+                if self.text.tell() == len(self.text.getvalue()):
+                    self.at_end.set()
+                    if not self.release.wait(5):
+                        raise AssertionError("fictional reader was not released")
+                return self.text.readline(size)
+
+        reader = DelayedReader('{"id":"example-accepted"}\n')
+        error = OSError("fictional writer failure")
+        writer = ControlledWriter(error=error)
+        process = SimpleNamespace(stdin=writer, stdout=reader, poll=lambda: 0)
+        transport, _, _ = self.transport(reader=reader, process=process)
+        self.addCleanup(writer.release.set)
+        self.assertTrue(reader.at_end.wait(5))
+        transport.send({"method": "example-control"})
+        self.assertTrue(writer.entered.wait(5))
+        writer.release.set()
+        transport._writer_thread.join(5)
+        self.assertEqual(transport.receive(timeout=0), {"id": "example-accepted"})
+        with self.assertRaisesRegex(RpcError, "timed out"):
+            transport.receive(timeout=0)
+        reader.text = io.StringIO('{"id":"example-delayed-final"}\n')
+        reader.wait_at_end = False
+        reader.release.set()
+        self.assertEqual(transport.receive(timeout=5), {"id": "example-delayed-final"})
+        with self.assertRaises(OSError) as raised:
+            transport.receive(timeout=5)
+        self.assertIs(raised.exception, error)
 
     def test_reader_failure_seals_outbound_without_losing_accepted_inbound(self):
         transport, writer, reader = self.blocked_writer_transport()
@@ -329,9 +392,9 @@ threading.Event().wait()
         reader.release.set()
         transport._reader_thread.join(1)
         self.assertFalse(transport._reader_thread.is_alive())
-        with self.assertRaises(OSError) as raised:
+        with self.assertRaises(RpcOutboundUnavailableError) as raised:
             transport.send({"id": "example-refused"})
-        self.assertIs(raised.exception, error)
+        self.assertIs(raised.exception.__cause__, error)
         writer.release.set()
         transport._writer_thread.join(1)
         self.assertFalse(transport._writer_thread.is_alive())
@@ -340,6 +403,108 @@ threading.Event().wait()
         with self.assertRaises(OSError) as raised:
             transport.receive(timeout=0)
         self.assertIs(raised.exception, error)
+
+    def test_reader_and_writer_faults_share_one_first_cause_in_each_order_and_race(self):
+        for first in ("writer", "reader", "race"):
+            with self.subTest(first=first):
+                write_error, read_error = OSError("fictional write"), OSError("fictional read")
+                transport, writer, reader = self.blocked_writer_transport(error=write_error)
+                reader.error = read_error
+                if first == "race":
+                    barrier = threading.Barrier(3)
+                    finish = transport._finish
+
+                    def raced(error, **kwargs):
+                        if error in (write_error, read_error):
+                            barrier.wait(5)
+                        return finish(error, **kwargs)
+
+                    with patch.object(transport, "_finish", side_effect=raced):
+                        writer.release.set()
+                        reader.release.set()
+                        barrier.wait(5)
+                        transport._writer_thread.join(5)
+                        transport._reader_thread.join(5)
+                else:
+                    if first == "writer":
+                        writer.release.set()
+                        transport._writer_thread.join(5)
+                        reader.release.set()
+                    else:
+                        reader.release.set()
+                        transport._reader_thread.join(5)
+                        writer.release.set()
+                    transport._reader_thread.join(5)
+                    transport._writer_thread.join(5)
+                self.assertFalse(transport._reader_thread.is_alive())
+                self.assertFalse(transport._writer_thread.is_alive())
+                cause = transport._inbound.terminal
+                self.assertIs(cause, transport._outbound.terminal)
+                self.assertIs(cause, transport._first_error)
+                if first != "race":
+                    self.assertIs(cause, write_error if first == "writer" else read_error)
+                else:
+                    self.assertIn(cause, (write_error, read_error))
+                self.assertEqual(transport.receive(timeout=0), {"id": "example-accepted"})
+                with self.assertRaises(OSError) as raised:
+                    transport.receive(timeout=0)
+                self.assertIs(raised.exception, cause)
+                with self.assertRaises(RpcOutboundUnavailableError) as refused:
+                    transport.send({"id": "example-refused"})
+                self.assertIs(refused.exception.__cause__, cause)
+                failure = transport.writer_failure
+                assert failure is not None
+                self.assertIs(failure.__cause__, write_error)
+
+    def test_explicit_close_after_writer_fault_wakes_full_and_empty_readers(self):
+        for full in (False, True):
+            with self.subTest(full=full):
+                error = OSError("fictional write")
+                if full:
+                    reader = ScriptedReader('{"id":1}\n{"id":2}\n')
+                    writer = ControlledWriter(error=error)
+                    process = SimpleNamespace(stdin=writer, stdout=reader, poll=lambda: 0)
+                    transport, blocked, _ = self.transport(reader=reader, process=process)
+                    self.addCleanup(writer.release.set)
+                    self.assertTrue(blocked.wait(5))
+                    transport.send({"id": "example-inflight"})
+                    self.assertTrue(writer.entered.wait(5))
+                else:
+                    transport, writer, reader = self.blocked_writer_transport(error=error)
+                    self.assertEqual(transport.receive(timeout=0), {"id": "example-accepted"})
+                writer.release.set()
+                transport._writer_thread.join(5)
+                transport.close()
+                self.assertFalse(transport._reader_thread.is_alive())
+                self.assertFalse(transport._writer_thread.is_alive())
+                if full:
+                    self.assertEqual(transport.receive(timeout=0), {"id": 1})
+                with self.assertRaises(OSError) as raised:
+                    transport.receive(timeout=0)
+                self.assertIs(raised.exception, error)
+
+    def test_failure_polling_without_fault_keeps_the_original_quiet_deadline(self):
+        reader = ScriptedReader("", wait_at_end=True)
+        transport, _, _ = self.transport(reader=reader)
+        clock = SimpleNamespace(now=0.0)
+        waits = []
+
+        def get(*, timeout):
+            waits.append(timeout)
+            clock.now += timeout
+            raise queue.Empty
+
+        with (
+            patch.object(transport._inbound, "get", side_effect=get),
+            patch(
+                "hermes_codex_router.codex_transports.time",
+                SimpleNamespace(monotonic=lambda: clock.now),
+            ),
+        ):
+            with self.assertRaisesRegex(RpcError, "timed out"):
+                transport.receive(timeout=3.0, response_remaining=lambda: float("inf"))
+        self.assertEqual(waits, [1.0, 1.0, 1.0])
+        self.assertIsNone(transport.writer_failure)
 
     def test_outbound_admission_serializes_an_immutable_snapshot(self):
         transport, writer, _ = self.blocked_writer_transport()

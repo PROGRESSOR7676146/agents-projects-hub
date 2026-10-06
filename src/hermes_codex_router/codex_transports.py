@@ -6,13 +6,16 @@ import queue
 import socket
 import subprocess
 import threading
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import aiohttp
 
 from .codex_inbox import BoundedInbox
-from .codex_rpc import RpcError
+from .codex_rpc import RpcError, RpcOutboundUnavailableError
+
+STDIO_FAILURE_POLL_SECONDS = 1.0
 
 
 class UnixJsonLineTransport:
@@ -73,6 +76,9 @@ class StdioJsonLineTransport:
         self._reader = process.stdout
         self._writer = process.stdin
         self._closed = False
+        self._state_lock = threading.Lock()
+        self._first_error: BaseException | None = None
+        self._writer_failure: RpcOutboundUnavailableError | None = None
         self._max_frame_bytes = max_frame_bytes
         self._inbound: BoundedInbox[str] = BoundedInbox(
             max_frames=max_pending_frames, max_frame_bytes=max_frame_bytes
@@ -84,26 +90,49 @@ class StdioJsonLineTransport:
         self._reader_thread.start()
 
     def _write_stdin(self) -> None:
-        try:
-            while not self._closed:
-                try:
-                    line = self._outbound.get(timeout=20)
-                except queue.Empty:
-                    continue
-                if (
-                    self._closed
-                    or self._outbound.terminal is not None
-                    or self._inbound.terminal is not None
-                ):
+        while True:
+            try:
+                line = self._outbound.get(timeout=20)
+            except queue.Empty:
+                continue
+            except Exception as exc:
+                # The queue's recorded terminal is not a physical write fault.
+                self._finish(exc)
+                return
+            with self._state_lock:
+                if self._closed or self._first_error is not None:
                     return
+            try:
                 self._writer.write(line)
                 self._writer.flush()
-        except Exception as exc:
-            self._finish(exc)
+            except Exception as exc:
+                self._finish(exc, writer_failed=True)
+                return
 
-    def _finish(self, error: BaseException) -> None:
-        self._inbound.finish(error)
-        self._outbound.finish(error)
+    @property
+    def writer_failure(self) -> RpcOutboundUnavailableError | None:
+        with self._state_lock:
+            return self._writer_failure
+
+    def _finish(
+        self, error: BaseException, *, writer_failed: bool = False, closing: bool = False
+    ) -> bool:
+        with self._state_lock:
+            if closing:
+                if self._closed:
+                    return False
+                self._closed = True
+            if self._first_error is None:
+                self._first_error = error
+            if writer_failed and not self._closed and self._writer_failure is None:
+                self._writer_failure = RpcOutboundUnavailableError()
+                self._writer_failure.__cause__ = error
+            # A broken stdin does not terminate stdout. Let the reader consume
+            # its remaining pipe tail, backpressuring until the caller drains it.
+            if not writer_failed:
+                self._inbound.finish(self._first_error)
+            self._outbound.finish(self._first_error)
+            return True
 
     def _read_stdout(self) -> None:
         try:
@@ -131,23 +160,37 @@ class StdioJsonLineTransport:
 
     def send(self, message: dict[str, Any]) -> None:
         """Admit an immutable frame; the RPC response remains submission evidence."""
-        if self._closed:
-            raise RpcError("Codex stdio is closed")
-        terminal = self._inbound.terminal
-        if terminal is not None:
-            raise terminal
         line = json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n"
         size = len(line.encode("utf-8"))
         if size > 4 * 1024 * 1024:
             raise RpcError("Codex outbound frame exceeded its bound")
-        if not self._outbound.try_put(line, size):
-            raise RpcError("Codex outbound buffer exceeded its bound")
+        with self._state_lock:
+            if self._closed:
+                raise RpcError("Codex stdio is closed")
+            if self._first_error is not None:
+                raise RpcOutboundUnavailableError() from self._first_error
+            if not self._outbound.try_put(line, size):
+                raise RpcError("Codex outbound buffer exceeded its bound")
 
-    def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
-        try:
-            line = self._inbound.get(timeout=20.0 if timeout is None else timeout)
-        except queue.Empty as exc:
-            raise RpcError("timed out waiting for Codex stdio") from exc
+    def receive(
+        self,
+        *,
+        timeout: float | None = None,
+        response_remaining: Callable[[], float] | None = None,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + max(0.0, 20.0 if timeout is None else timeout)
+        while True:
+            remaining = max(0.0, deadline - time.monotonic())
+            if response_remaining is not None:
+                # Run outside transport/queue locks. A caller already waiting
+                # on quiet stdout must still notice an asynchronous stdin fault.
+                remaining = min(remaining, response_remaining(), STDIO_FAILURE_POLL_SECONDS)
+            try:
+                line = self._inbound.get(timeout=remaining)
+                break
+            except queue.Empty as exc:
+                if time.monotonic() >= deadline:
+                    raise RpcError("timed out waiting for Codex stdio") from exc
         try:
             message = json.loads(line)
         except (ValueError, RecursionError) as exc:
@@ -157,10 +200,8 @@ class StdioJsonLineTransport:
         return message
 
     def close(self) -> None:
-        if self._closed:
+        if not self._finish(EOFError("Codex stdio closed"), closing=True):
             return
-        self._closed = True
-        self._finish(EOFError("Codex stdio closed"))
         try:
             # Stop the owned peer before taking TextIO locks: a writer may be
             # blocked on a full stdin pipe while the peer is blocked on stdout.
