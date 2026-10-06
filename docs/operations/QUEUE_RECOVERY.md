@@ -76,6 +76,44 @@ uses the conservative rules below.
 
 ## Provider-job recovery
 
+### Codex preparation notification overflow
+
+An older client may report `Codex notification buffer exceeded its bound` while
+initializing or preparing a thread. Distinguish this local preparation failure
+from a provider quota rejection using the durable job classification and exact
+checkpoint, rather than assuming every failed Reply reached the model.
+Confirm a caught preparation failure before `turn/start` and that its failure
+notice was delivered. A missing accepted-turn ID alone does not prove that
+invocation never happened. Preserve the original attempt and its partial effects;
+never rewrite its status or automatically resend the input.
+The same error after `turn/start` was sent, including while awaiting its
+acknowledgement, means an uncertain turn: use exact Codex turn recovery rather
+than preparation-failure handling.
+
+The prepared client filters foreign notifications before its bounded useful-result
+queue. It handles approvals, their resolutions and account quota updates separately,
+and preserves exact-current-turn final items and context updates, including those
+received before the `turn/start` acknowledgement. An active owning connection must
+still receive its final events. The synthetic two-worker regression demonstrates
+this conservation; it does not prove the source or fan-out of native broadcasts.
+Useful-result and optional-activity limits remain fail-closed guards.
+
+Before an owner-authorized temporary worker restart, take a SQLite-consistent
+backup and verify that the exact affected worker has no active or uncertain
+provider turn. Restart only that free slot; preserve other productive workers,
+the shared daemon, sender and approvals host. A cached idle worker label alone
+does not prove provider terminality. Only after a proven pre-`turn/start`
+preparation failure may one explicit continuation follow after
+rechecking the attempt, current queue, session binding and delivered notice;
+reconcile an unknown prior outcome before considering another invocation.
+
+Before calling the root cause closed, separately verify the exact installed
+revision and every required component, then run the coordinated independent-root
+scenario in the [stabilization backlog](STABILIZATION_PLAN.md#live-acceptance-backlog).
+Use only bounded method/count and binding metadata for private protocol attribution;
+do not expose reasoning, prompts, tool payloads or raw protocol streams. Neither
+quota status nor a restart alone proves the buffering fix is installed.
+
 ### Codex live-control contention
 
 The accepted-turn stop/steer observer opens only existing current-schema state
