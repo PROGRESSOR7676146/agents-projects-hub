@@ -7,14 +7,18 @@ import os
 import queue
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
 import time
-from contextlib import AbstractContextManager
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
+from tests.codex_native_mcp_consent import SyntheticMcpConsent
+from tests.codex_native_namespace import native_namespace_argv, native_namespace_environment
 from tests.codex_native_profile_actor import COMMAND
 
 PROFILE_ID = "example-managed-custody"
@@ -86,7 +90,7 @@ def proven_probe(result: dict[str, Any]) -> dict[str, bool]:
 
 
 class NativeProfileFixture(AbstractContextManager["NativeProfileFixture"]):
-    def __init__(self, executable: Path) -> None:
+    def __init__(self, executable: Path, *, mcp: bool = False) -> None:
         self.executable = executable.resolve(strict=True)
         self.temporary = tempfile.TemporaryDirectory(prefix="example-native-profile-")
         self.base = Path(self.temporary.name)
@@ -99,6 +103,9 @@ class NativeProfileFixture(AbstractContextManager["NativeProfileFixture"]):
         self.reader_error: str | None = None
         self.next_id = 0
         self.case_id = 0
+        self.mcp = mcp
+        self.synthetic_consent: SyntheticMcpConsent | None = None
+        self.pending_mcp_request: dict | None = None
 
     def __enter__(self) -> NativeProfileFixture:
         try:
@@ -145,63 +152,21 @@ extends = ":workspace"
 enabled = false
 ''')
         actor = Path(__file__).with_name("codex_native_profile_actor.py").resolve(strict=True)
-        home_data = Path.home() / ".codex"
-        argv = [
-            str(bwrap),
-            "--die-with-parent",
-            "--unshare-net",
-            "--unshare-pid",
-            "--ro-bind",
-            "/",
-            "/",
-            "--tmpfs",
-            "/tmp",
-            "--bind",
-            str(self.base),
-            str(self.base),
-            "--ro-bind",
-            str(actor),
-            str(actor),
-            "--tmpfs",
-            str(home_data),
-            "--tmpfs",
-            "/etc",
-            "--dir",
-            "/etc/codex",
-            "--ro-bind",
-            str(requirements),
-            "/etc/codex/requirements.toml",
-            "--proc",
-            "/proc",
-            "--dev",
-            "/dev",
-            "--tmpfs",
-            "/usr/local",
-            "--dir",
-            "/usr/local/bin",
-            "--ro-bind",
-            str(snapshot),
-            "/usr/local/bin/example-codex",
-            "--chdir",
-            str(self.project),
-            "--",
-            "/usr/bin/python3",
-            "-I",
-            str(actor),
-        ]
-        environment = {
-            key: value
-            for key, value in os.environ.items()
-            if key in ("HOME", "USER", "LOGNAME", "PATH", "LANG", "LC_ALL", "TERM")
-        }
-        environment["RUST_LOG"] = "error"
+        argv = native_namespace_argv(
+            binary=snapshot,
+            actor=actor,
+            requirements=requirements,
+            project=self.project,
+            authority=key,
+            mcp_server=actor.with_name("codex_native_mcp_server.py") if self.mcp else None,
+        )
         self.process = subprocess.Popen(
             argv,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=environment,
+            env=native_namespace_environment(),
         )
         assert self.process.stdout is not None and self.process.stderr is not None
         self.output_thread = threading.Thread(target=self._read_output, daemon=True)
@@ -225,6 +190,7 @@ enabled = false
 
     def restart_native(self) -> None:
         """Restart only the disposable app-server, retaining its private state."""
+        self._clear_consent()
         self._send({"fixture_restart": True})
         deadline = time.monotonic() + 30
         while self._take(deadline).get("fixture_event") != "native_restarted":
@@ -279,6 +245,18 @@ enabled = false
                 self._send({"id": message["id"], "result": {"decision": "decline"}})
             elif message["method"] == "item/permissions/requestApproval":
                 self._send({"id": message["id"], "result": {"permissions": {}, "scope": "turn"}})
+            elif message["method"] == "mcpServer/elicitation/request":
+                if self.pending_mcp_request is not None:
+                    self._clear_consent()
+                answer = (
+                    self.synthetic_consent.answer(message, self.events)
+                    if self.synthetic_consent is not None
+                    else {"action": "decline"}
+                )
+                if answer is None:
+                    self.pending_mcp_request = message
+                else:
+                    self._answer_mcp(message, answer)
             else:
                 self._send(
                     {
@@ -290,6 +268,28 @@ enabled = false
                     }
                 )
         return message
+
+    def _clear_consent(self) -> None:
+        self.synthetic_consent = None
+        request, self.pending_mcp_request = self.pending_mcp_request, None
+        if request is not None:
+            try:
+                self._answer_mcp(request, {"action": "decline"})
+            except OSError:
+                pass  # Disposal still owns process cleanup after a dead fixture pipe.
+
+    def _answer_mcp(self, request: dict, answer: dict) -> None:
+        self._send({"id": request["id"], "result": answer})
+        params = request.get("params", {})
+        self.events.append(
+            {
+                "fixture_event": "mcp_consent_decision",
+                "request_id": request["id"],
+                "thread_id": params.get("threadId"),
+                "turn_id": params.get("turnId"),
+                "action": answer["action"],
+            }
+        )
 
     def rpc(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         self.next_id += 1
@@ -333,18 +333,83 @@ enabled = false
             },
         )
 
-    def prepare_turn_case(self) -> int:
+    def prepare_turn_case(self, *, kind: str = "command", nonce: str | None = None) -> int:
         self.case_id += 1
         case = f"example-case-{self.case_id}"
-        (self.project / ".git" / "HEAD").write_text("ref: refs/heads/example\n")
-        self._send({"fixture_case": case})
+        with self._project_directory(".git") as directory:
+            descriptor = os.open(
+                "HEAD",
+                os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+                0o644,
+                dir_fd=directory,
+            )
+            with os.fdopen(descriptor, "wb") as output:
+                if not stat.S_ISREG(os.fstat(output.fileno()).st_mode):
+                    raise NativeProfileFixtureError("native_fixture_project_path_unsafe")
+                os.ftruncate(output.fileno(), 0)
+                output.write(b"ref: refs/heads/example\n")
+        with self._project_directory() as directory:
+            try:
+                os.unlink("example-write", dir_fd=directory)
+            except FileNotFoundError:
+                pass
+        # Reset content in place; the namespace retains this exact mounted inode.
+        (self.base / "example-authority.key").write_text("fictional sentinel; no real credential")
+        self._send({"fixture_case": case, "fixture_kind": kind, "fixture_nonce": nonce})
         deadline = time.monotonic() + 30
         while self._take(deadline).get("case") != case:
             pass
         return len(self.events)
 
-    def turn(self, thread_id: str, *, legacy: bool = False) -> dict[str, Any]:
-        offset = self.prepare_turn_case()
+    @contextmanager
+    def _project_directory(self, *parts: str) -> Iterator[int]:
+        # Host repairs must not follow entries writable by the namespace.
+        try:
+            with ExitStack() as cleanup:
+                descriptor = os.open(self.project, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                cleanup.callback(os.close, descriptor)
+                for part in parts:
+                    descriptor = os.open(
+                        part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor
+                    )
+                    cleanup.callback(os.close, descriptor)
+                yield descriptor
+        except FileNotFoundError:
+            raise
+        except OSError as error:
+            raise NativeProfileFixtureError("native_fixture_project_path_unsafe") from error
+
+    def project_file_bytes(self, *parts: str) -> bytes | None:
+        try:
+            with self._project_directory(*parts[:-1]) as directory:
+                descriptor = os.open(
+                    parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
+                )
+                with os.fdopen(descriptor, "rb") as source:
+                    if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                        raise NativeProfileFixtureError("native_fixture_project_path_unsafe")
+                    value = source.read(4097)
+                    if len(value) > 4096:
+                        raise NativeProfileFixtureError("native_fixture_project_file_bound")
+                    return value
+        except FileNotFoundError:
+            return None
+
+    def turn(
+        self,
+        thread_id: str,
+        *,
+        legacy: bool = False,
+        kind: str = "command",
+        nonce: str | None = None,
+        synthetic_consent: bool = False,
+    ) -> dict[str, Any]:
+        offset = self.prepare_turn_case(kind=kind, nonce=nonce)
+        self._clear_consent()
+        if synthetic_consent:
+            if not self.mcp or kind != "mcp" or nonce is None:
+                raise NativeProfileFixtureError("synthetic_consent_requires_fixed_mcp_case")
+            self.synthetic_consent = SyntheticMcpConsent(thread_id, nonce)
         deadline = time.monotonic() + 30
         policy = (
             {
@@ -357,6 +422,14 @@ enabled = false
             if legacy
             else {"permissions": PROFILE_ID}
         )
+        try:
+            return self._run_turn(thread_id, offset, deadline, policy)
+        finally:
+            self._clear_consent()
+
+    def _run_turn(
+        self, thread_id: str, offset: int, deadline: float, policy: dict
+    ) -> dict[str, Any]:
         started = self.rpc(
             "turn/start",
             {
@@ -376,6 +449,14 @@ enabled = false
             },
         )
         turn_id = started["turn"]["id"]
+        if self.synthetic_consent is not None:
+            self.synthetic_consent.turn_id = turn_id
+            if self.pending_mcp_request is not None:
+                request = self.pending_mcp_request
+                self.pending_mcp_request = None
+                answer = self.synthetic_consent.answer(request, self.events)
+                assert answer is not None
+                self._answer_mcp(request, answer)
         while not any(
             message.get("method") == "turn/completed"
             and message.get("params", {}).get("threadId") == thread_id
@@ -384,6 +465,14 @@ enabled = false
         ):
             self._take(deadline)
         return self.turn_evidence(thread_id, turn_id, offset)
+
+    def responses_count(self) -> int:
+        self._send({"fixture_stats": True})
+        deadline = time.monotonic() + 30
+        while True:
+            message = self._take(deadline)
+            if message.get("fixture_event") == "stats":
+                return message["responses_requests"]
 
     def turn_evidence(self, thread_id: str, turn_id: str, offset: int) -> dict[str, Any]:
         messages = self.events[offset:]
@@ -435,6 +524,7 @@ enabled = false
 
     def __exit__(self, *args: object) -> None:
         if self.process is not None:
+            self._clear_consent()
             if self.process.stdin is not None:
                 try:
                     self.process.stdin.close()

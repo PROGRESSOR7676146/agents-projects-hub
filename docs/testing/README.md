@@ -127,21 +127,32 @@ the mock is not evidence that a fixture was cryptographically signed.
 
 `tests.test_codex_native_profiles` exercises an explicitly supplied native Codex
 binary against a deterministic local Responses fixture. It requires Linux,
-system bubblewrap and usable network/PID namespaces. Supply the native executable,
+system bubblewrap and usable network/PID/IPC namespaces. Supply the native executable,
 not a shell wrapper or the ordinary logged-in CLI configuration:
 
 ```bash
 HUB_NATIVE_CODEX_FIXTURE_EXECUTABLE=/home/example/tools/codex-native \
   HUB_REQUIRE_NATIVE_CODEX_PROFILE_TESTS=1 \
-  PYTHONPATH=src python -m unittest tests.test_codex_native_profiles -v
+  HUB_REQUIRE_NAMESPACE_TESTS=1 \
+  PYTHONPATH=src python -m unittest -v \
+  tests.test_codex_native_profiles tests.test_codex_native_mcp \
+  tests.test_codex_native_namespace
 ```
 
-The binary is copied into a disposable namespace. Real Codex authentication and
+The binary is copied into a disposable empty-root namespace with read-only
+system runtime, fixture scripts and managed requirements. Real Codex authentication and
 configuration are hidden, provider credential variables are excluded, and external
 network access is unavailable. A temporary managed requirements file and fictional
 project/key/symlink controls establish the policy under test. The fixture permits
-at most four local Responses requests per case and declines approval requests.
+at most four local Responses requests per case. Command and file approvals are
+declined; permission requests receive an empty turn-scoped grant. MCP elicitations
+are declined unless the test explicitly
+arms one exact synthetic fixture consent; the fixture requests no persisted grant. This is not a
+human approval host or approval transport acceptance.
 It controls only its owned disposable processes, never installed services.
+Host-side repairs and observations reject symlinks at every project path
+component. The unarmed MCP case also verifies the absence of probe mutations
+independently of the native item's reported failure.
 
 The native cases cover explicit profile selection, exact stored-thread resume
 after restarting the disposable app-server, actual tool access denials, legacy
@@ -151,13 +162,37 @@ requires one completed successful command from the exact current thread and turn
 project read/write controls, and the complete boolean probe payload. Old resumed
 output, duplicate commands, failed execution and partial payloads are rejected.
 
+The fixed MCP server exposes only a nonce-only fictional probe. Direct RPC must
+use zero Responses requests; it is diagnostic evidence without a native turn.
+Current-turn evidence requires one completed MCP item matching the exact
+thread, turn, server, tool, arguments and fresh nonce. Both structured and textual
+versioned probe payloads must agree; duplicate JSON fields, malformed booleans,
+old items and assistant completion alone are rejected. Explicit synthetic consent
+is one-use and bound to that current item; restart and terminality clear it.
+Each armed native turn must record exactly one matching fresh consent acceptance,
+including after restart, before its successful output counts as exposure evidence.
+
+With native Codex 0.159.2, the fixed command descendant retained positive project
+read/write controls while denying fictional authority reads/writes and Git writes.
+Direct MCP RPC exposed the fictional authority to both the MCP process and its
+fixed Python child. A current-turn MCP call was denied by default; after one
+explicitly armed synthetic fixture consent, it showed the same exposure,
+including after exact-thread restart/resume with a fresh nonce. These results
+demonstrate a custody gap for this tested MCP launch path. They do not establish
+human approval delivery, arbitrary helper isolation, deployed custody or Telegram
+acceptance. The server validates visible fictional authority controls at startup;
+a future launch that hides those controls may fail startup and requires separate
+investigation, rather than being counted as a successful denial probe.
+
 The corpus was rehearsed with native Codex 0.159.2. No binary is downloaded by
-the tests or bundled with the repository. With no executable supplied, the four
+the tests or bundled with the repository. With no executable supplied, the
 native cases explicitly skip; requiring them makes that absence fail. Once opted
 in, fixture/protocol/namespace failures fail the run. The ordinary canonical suite
 still exercises the evidence parser without starting Codex. Skips and parser
 tests are not native evidence, and this offline corpus neither implements managed
 profile support in Hub nor establishes deployed custody or Telegram acceptance.
+The required CI namespace job also runs the outer wrapper witness without a
+Codex binary, proving absent source aliases and unwritable mounted scripts.
 
 ## Live acceptance boundary
 
