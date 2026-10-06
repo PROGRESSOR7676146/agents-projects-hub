@@ -5,7 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from hermes_codex_router.codex_appserver import RpcRejectedError
 from hermes_codex_router.supervisor import AppServerError, CodexAppServerSupervisor
+from tests.test_codex_appserver import FakeTransport
 
 
 class SupervisorFallbackTests(unittest.TestCase):
@@ -231,6 +233,106 @@ class SupervisorFallbackTests(unittest.TestCase):
             self.assertFalse(supervisor.restore_socket_at_idle())
         transport.close.assert_called_once()
         self.assertEqual(supervisor.transport_mode, "stdio-fallback")
+
+    def test_failed_client_initialization_closes_each_owned_transport(self) -> None:
+        for mode, allow_fallback in (("stdio-fallback", True), ("socket", False)):
+            with self.subTest(mode=mode, allow_fallback=allow_fallback):
+                supervisor = CodexAppServerSupervisor(
+                    self.base / "codex.sock", manage_process=False, stdio_executable=self.fallback
+                )
+                supervisor.transport_mode = mode
+                transport = FakeTransport(
+                    [{"id": 1, "error": {"code": -32603, "message": "fictional init rejection"}}]
+                )
+                with (
+                    patch.object(Path, "is_socket", return_value=True),
+                    patch.object(transport, "close") as close,
+                    patch(
+                        "hermes_codex_router.supervisor.UnixWebSocketTransport",
+                        return_value=transport,
+                    ),
+                    patch(
+                        "hermes_codex_router.supervisor.StdioJsonLineTransport.start",
+                        return_value=transport,
+                    ),
+                ):
+                    with self.assertRaises(RpcRejectedError):
+                        supervisor.client(allow_fallback=allow_fallback)
+                    close.assert_called_once()
+
+    def test_failed_shared_initialize_is_closed_before_fallback_invocation(self) -> None:
+        supervisor = CodexAppServerSupervisor(
+            self.base / "codex.sock", manage_process=False, stdio_executable=self.fallback
+        )
+        supervisor.transport_mode = "socket"
+        shared = FakeTransport(
+            [{"id": 1, "error": {"code": -32603, "message": "fictional init rejection"}}]
+        )
+        fallback = FakeTransport(
+            [
+                {"id": 1, "result": {}},
+                {
+                    "id": 2,
+                    "result": {
+                        "thread": {"id": "example-thread"},
+                        "cwd": str(self.base),
+                        "approvalPolicy": "never",
+                        "sandbox": "workspace-write",
+                    },
+                },
+            ]
+        )
+        with (
+            patch.object(Path, "is_socket", return_value=True),
+            patch.object(shared, "close") as close,
+            patch("hermes_codex_router.supervisor.UnixWebSocketTransport", return_value=shared),
+            patch("hermes_codex_router.supervisor.StdioJsonLineTransport.start") as start,
+        ):
+
+            def create_fallback(*args: object) -> FakeTransport:
+                close.assert_called_once()
+                return fallback
+
+            start.side_effect = create_fallback
+            client = supervisor.client()
+            client.start_thread(cwd=self.base, model="example-model", project_id="example-project")
+            self.assertEqual(fallback.sent[-1]["params"]["approvalPolicy"], "never")
+            client.close()
+        self.assertEqual(supervisor.transport_mode, "stdio-fallback")
+
+    def test_failed_fallback_initialize_closes_both_transports(self) -> None:
+        supervisor = CodexAppServerSupervisor(
+            self.base / "codex.sock", manage_process=False, stdio_executable=self.fallback
+        )
+        supervisor.transport_mode = "socket"
+        rejected = {"id": 1, "error": {"code": -32603, "message": "fictional rejection"}}
+        shared, fallback = FakeTransport([rejected]), FakeTransport([rejected])
+        with (
+            patch.object(Path, "is_socket", return_value=True),
+            patch.object(shared, "close") as shared_close,
+            patch.object(fallback, "close") as fallback_close,
+            patch("hermes_codex_router.supervisor.UnixWebSocketTransport", return_value=shared),
+            patch(
+                "hermes_codex_router.supervisor.StdioJsonLineTransport.start", return_value=fallback
+            ),
+        ):
+            with self.assertRaises(RpcRejectedError):
+                supervisor.client()
+            shared_close.assert_called_once()
+            fallback_close.assert_called_once()
+
+    def test_client_construction_failure_closes_acquired_control_transport(self) -> None:
+        supervisor = CodexAppServerSupervisor(self.base / "codex.sock", manage_process=False)
+        supervisor.transport_mode = "socket"
+        transport = Mock()
+        with (
+            patch.object(Path, "is_socket", return_value=True),
+            patch("hermes_codex_router.supervisor.UnixWebSocketTransport", return_value=transport),
+            patch("hermes_codex_router.supervisor.CodexAppServerClient", side_effect=ValueError),
+        ):
+            with self.assertRaises(ValueError):
+                supervisor.client(allow_fallback=False)
+        transport.close.assert_called_once()
 
     def test_idle_fallback_recovers_only_after_shared_socket_initialize(self) -> None:
         socket_path = self.base / "codex.sock"

@@ -61,6 +61,8 @@ SITES = frozenset(
         "service.health_publish",
         "service.outbox_error_record",
         "service.queue_error_record",
+        "supervisor.client_close",
+        "supervisor.idle_probe",
         "telegram_activity.initial_publish",
         "telegram_activity.message_draft",
         "telegram_activity.refresh",

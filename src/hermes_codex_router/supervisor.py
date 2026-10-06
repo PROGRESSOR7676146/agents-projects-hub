@@ -9,9 +9,11 @@ from typing import BinaryIO
 
 from .codex_appserver import (
     CodexAppServerClient,
+    MessageTransport,
     StdioJsonLineTransport,
     UnixWebSocketTransport,
 )
+from .diagnostic_log import survived
 
 
 class AppServerError(RuntimeError):
@@ -133,6 +135,33 @@ class CodexAppServerSupervisor:
         self.stop()
         raise AppServerError("Codex app-server socket did not appear")
 
+    def _initialized_client(
+        self,
+        transport: MessageTransport,
+        *,
+        approval_policy: str = "on-request",
+        deadline: float | None = None,
+    ) -> CodexAppServerClient:
+        client: CodexAppServerClient | None = None
+        try:
+            client = CodexAppServerClient(
+                transport, approval_policy=approval_policy, model_provider=self.model_provider
+            )
+            if deadline is None:
+                client.initialize()
+            else:
+                client.initialize(deadline=deadline)
+            return client
+        except Exception:
+            try:
+                if client is not None:
+                    client.close()
+                else:
+                    transport.close()
+            except Exception as error:
+                survived("supervisor.client_close", error)
+            raise
+
     def client(self, *, allow_fallback: bool = True) -> CodexAppServerClient:
         if self.transport_mode is None:
             if not allow_fallback:
@@ -145,13 +174,9 @@ class CodexAppServerSupervisor:
             if not allow_fallback:
                 raise AppServerError("shared Codex control transport is unavailable")
             assert self.stdio_executable is not None
-            client = CodexAppServerClient(
-                StdioJsonLineTransport.start(str(self.stdio_executable)),
-                approval_policy="never",
-                model_provider=self.model_provider,
+            return self._initialized_client(
+                StdioJsonLineTransport.start(str(self.stdio_executable)), approval_policy="never"
             )
-            client.initialize()
-            return client
         if self.transport_mode == "managed-socket" and (
             self.process is None or self.process.poll() is not None
         ):
@@ -159,11 +184,7 @@ class CodexAppServerSupervisor:
         if self.transport_mode == "socket" and not self._shared_socket_present():
             raise AppServerError("shared Codex app-server socket is unavailable")
         try:
-            client = CodexAppServerClient(
-                UnixWebSocketTransport(self.socket_path), model_provider=self.model_provider
-            )
-            client.initialize()
-            return client
+            return self._initialized_client(UnixWebSocketTransport(self.socket_path))
         except Exception:
             if (
                 not allow_fallback
@@ -172,13 +193,9 @@ class CodexAppServerSupervisor:
             ):
                 raise
             self.transport_mode = "stdio-fallback"
-            fallback = CodexAppServerClient(
-                StdioJsonLineTransport.start(str(self.stdio_executable)),
-                approval_policy="never",
-                model_provider=self.model_provider,
+            return self._initialized_client(
+                StdioJsonLineTransport.start(str(self.stdio_executable)), approval_policy="never"
             )
-            fallback.initialize()
-            return fallback
 
     def _shared_socket_present(self) -> bool:
         try:
@@ -211,25 +228,14 @@ class CodexAppServerSupervisor:
         if now < self._next_idle_socket_probe:
             return False
         self._next_idle_socket_probe = now + 5.0
-        probe: CodexAppServerClient | None = None
-        transport: UnixWebSocketTransport | None = None
-        ready = False
         try:
-            transport = UnixWebSocketTransport(self.socket_path, timeout=2.0)
-            probe = CodexAppServerClient(transport, model_provider=self.model_provider)
-            probe.initialize(deadline=time.monotonic() + 2.0)
-            ready = True
-        except Exception:
-            ready = False
-        finally:
-            try:
-                if probe is not None:
-                    probe.close()
-                elif transport is not None:
-                    transport.close()
-            except Exception:
-                ready = False
-        if not ready:
+            probe = self._initialized_client(
+                UnixWebSocketTransport(self.socket_path, timeout=2.0),
+                deadline=time.monotonic() + 2.0,
+            )
+            probe.close()
+        except Exception as error:
+            survived("supervisor.idle_probe", error)
             return False
         self.transport_mode = "socket"
         return True
