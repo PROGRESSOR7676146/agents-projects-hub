@@ -860,7 +860,7 @@ class ProviderJobsStateFacade:
                 return None
             # Managed steering lacks an independently verified active-policy read.
             # Keep the follow-up queued for normal exact-profile preparation.
-            if parent["agent_id"] == "codex" and (
+            if (
                 self._selected_codex_profile is None
                 or parent["codex_permission_profile"] != self._selected_codex_profile()
                 or parent["codex_permission_profile"] is not None
