@@ -165,8 +165,20 @@ acceptance.
   Start and exact resume are separate cases. A control case reproduces the
   1,024-entry overflow under the older unfiltered retention rule. Next trigger:
   complete exact-revision publication/review, then separately authorize deployed
-  conservation acceptance and bounded native event-source attribution. The native
-  broadcast source remains unverified; offline scripts do not close live debt.
+  conservation acceptance and bounded native event-source attribution. The deployed
+  notification source remains unverified; offline scripts do not close live debt.
+- Native notification attribution has an optional offline direct-socket fixture
+  in `tests/test_codex_native_notification_origin.py`: two native connections,
+  a deterministic Responses stream with more than 1,024 notifications, exact
+  completion and a subscribed positive control. It uses no real login, model
+  endpoint or deployment socket. Fresh observers and retained subscriptions are
+  measured separately. Native subscriptions survive starting another thread on
+  the same connection; Hub's worker-client reuse permits that state. This is a
+  demonstrated mechanism, not attribution of a particular deployment failure.
+  Keep the foreign-notification filter independently of subscription cleanup.
+  Transport bounds and completed-connection retirement are described below;
+  their repository evidence does not close installed-source attribution. Publication/review and coordinated
+  live acceptance remain separate gates.
 - The Codex daemon moved its shared socket into `/tmp/codex-daemon-UID`, which
   the Hub units' `PrivateTmp` hid (found 2026-09-29). Since about 2026-09-27
   the Codex worker ran on the stdio fallback, without companion approvals, and
