@@ -206,10 +206,9 @@ acceptance.
   bounded, redacted handoff to the responsible development thread only after
   checking its binding, queue and existing ownership. The handoff must distinguish
   Hub's state from exact provider terminality and avoid a second productive turn
-  behind unresolved work. Hermes may investigate and coordinate when explicitly
-  engaged by the owner; unattended diagnosis/repair would change maintenance
-  rule 8 and ADR 0048, so requires a separate informed owner decision, bounded
-  quota/storm controls, and independent acceptance before implementation.
+  behind unresolved work. Owner decision: keep monitoring passive; Hermes
+  investigates on an explicit message or button, not from unattended alerts.
+  Background LLM triage remains forbidden by maintenance rule 8 and ADR 0048.
   Acceptance: simulated duplicate/error storms produce one deterministic card;
   wrong-topic and active/uncertain-turn cases do not send or restart; a real
   authorized handoff is read back from Telegram; a controlled restart proves
