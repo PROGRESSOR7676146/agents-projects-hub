@@ -226,9 +226,12 @@ candidate is published at `fc1265286ab8b56b730cb371008ab9cc29d7a93b`;
 canonical publication validation passed, while required opposite-runtime review
 and live gates remain open. It refuses thread-replacement retry ancestry that
 lacks a frozen effective context. The stdio follow-up bounds both directions and
-preserves final/approval/telemetry evidence at
+preserves accepted inbound frames at
 `9a70840f362bd28f860c9bede44ecacefebd3307` (1,887 automated tests, canonical typing/privacy
-and all seven hosted checks); opposite-runtime review remains open.
+and all seven hosted checks). Its actual Opus review found no blocker/high/medium,
+but confirmed that immediate inbound sealing on writer failure could lose an
+unread stdout tail. The response-channel follow-up below closes that source gap;
+the older candidate alone is not full tail-conservation evidence.
 The completed-socket retirement slice is in progress on that base: strict
 single-use proof, publish-before-close, exact-client cache removal, optional
 telemetry deadlines and cache-only queued catalogs passed focused checks and
@@ -296,6 +299,34 @@ See [RPC recovery procedures](QUEUE_RECOVERY.md#codex-rpc-response-deadlines) an
 the [testing guide](../testing/README.md). Native/live acceptance remains open;
 legacy inline uncertainty, event-byte budgets and a durable owned-process
 barrier including idle stdio restoration remain separate work.
+
+### Stdio response-channel follow-up ownership
+
+Owner: lead agent / Hub maintainer. Lane `fix/codex-stdio-tail-conservation` is
+based on clean `ebd92469f0701c70539ce95a70bcbbd445868d62`, the independently
+reviewed RPC-deadline candidate (1,926 canonical tests, typing/privacy and seven
+hosted checks). This lane does not include the sibling schema-41 saved-task retry
+candidate; integration must verify both together. Work is in progress: focused
+synthetic regressions pass, while exact clean publication and opposite-runtime
+review remain separate gates. No deployment or live acceptance is claimed.
+
+Transport owns first-cause selection, bounded FIFO and pipe cleanup. The client
+owns native submission/accepted identity, visible callbacks and completion;
+dependency-neutral `codex_response_drain` owns the narrow deadline, notice and
+fault-time proof policy. State and worker transaction/invocation ownership are
+unchanged. Independent Astra review closed quiet asynchronous fault detection,
+accepted-turn matching and partial-text retention at deadline expiry; it found
+no remaining blocker/high/medium in that diff. The extraction avoids copying
+fault policy across worker paths and requires no new hotspot exception.
+
+Next trigger: exact clean publication/review, integrated regressions, then the
+separately authorized two-worker canary above. Include approval before final
+under a broken stdio response channel and verify the saved result carries the
+fixed Hub notice without a grant or another invocation. Inspect tracked, staged
+and untracked lane state after integration before any worktree change/removal.
+See [queue recovery](QUEUE_RECOVERY.md) for the 20-second observed-fault drain
+and its late-tail limits. Traceback retention and descendant-held pipe cleanup
+remain open; restart is still temporary recovery, not incident closure.
 
 The plan closes when stages 0–3 are merged into `main`, the hotspot ratchet
 runs in the canonical gate, and the owner has either completed or explicitly

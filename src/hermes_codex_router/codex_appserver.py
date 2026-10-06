@@ -28,7 +28,9 @@ from .codex_permissions import (
     validate_permission_profile_id,
     verify_managed_selection,
 )
+from .codex_response_drain import CodexResponseDrain
 from .codex_rpc import RpcError as RpcError
+from .codex_rpc import RpcOutboundUnavailableError
 from .codex_rpc import RpcRejectedError as RpcRejectedError
 from .codex_transports import (
     StdioJsonLineTransport as StdioJsonLineTransport,
@@ -72,16 +74,20 @@ def validate_codex_thread_id(value: str) -> None:
         raise CodexMetadataError("invalid_thread_id")
 
 
+def _bounded_partial_text(text: str) -> str:
+    return (
+        "[Earlier partial text omitted]\n" + text[-(MAX_PARTIAL_TEXT - 40) :]
+        if len(text) > MAX_PARTIAL_TEXT
+        else text
+    )
+
+
 class CodexTurnError(RpcError):
     """A failed wait retains visible output without claiming task success."""
 
     def __init__(self, cause: BaseException, partial_text: str = "") -> None:
         super().__init__(str(cause))
-        self.partial_text = (
-            "[Earlier partial text omitted]\n" + partial_text[-(MAX_PARTIAL_TEXT - 40) :]
-            if len(partial_text) > MAX_PARTIAL_TEXT
-            else partial_text
-        )
+        self.partial_text = _bounded_partial_text(partial_text)
         self.failure_reason = codex_failure_reason(cause)
 
 
@@ -185,6 +191,7 @@ class CodexAppServerClient:
         if approval_policy not in {"on-request", "never"}:
             raise ValueError("unsupported Codex approval policy")
         self._transport = transport
+        self._response_drain = CodexResponseDrain()
         self._initialized = initialized
         self._approval_policy = approval_policy
         self._model_provider = model_provider
@@ -393,28 +400,49 @@ class CodexAppServerClient:
         method = message.get("method")
         if request_id is None or not isinstance(method, str):
             return False
+        result: dict[str, Any] | None = None
         if method in {
             "item/commandExecution/requestApproval",
             "item/fileChange/requestApproval",
         }:
-            result: dict[str, Any] = {"decision": "decline"}
+            result = {"decision": "decline"}
         elif method == "item/permissions/requestApproval":
             result = {"permissions": [], "scope": "turn"}
         elif method == "mcpServer/elicitation/request":
             result = {"action": "decline", "content": None}
+        if result is None:
+            response: dict[str, Any] = {
+                "id": request_id,
+                "error": {
+                    "code": -32601,
+                    "message": "server request unavailable in headless stdio fallback",
+                },
+            }
         else:
-            self._transport.send(
-                {
-                    "id": request_id,
-                    "error": {
-                        "code": -32601,
-                        "message": "server request unavailable in headless stdio fallback",
-                    },
-                }
-            )
-            return True
-        self._transport.send({"id": request_id, "result": result})
+            response = {"id": request_id, "result": result}
+        try:
+            self._transport.send(response)
+        except RpcOutboundUnavailableError:
+            # Only a known terminal admission refusal is recoverable here.
+            # Queue admission never proves that a decline was delivered.
+            self._response_drain.record(now=time.monotonic())
         return True
+
+    def _response_remaining(
+        self, seconds: float = float("inf"), *, deadline: float | None = None
+    ) -> float:
+        now = time.monotonic()
+        self._response_drain.observe(self._transport, now=now)
+        if deadline is not None:
+            seconds = min(seconds, deadline - now)
+        return self._response_drain.remaining(now=now, seconds=seconds)
+
+    def _receive(self, *, timeout: float) -> dict[str, Any]:
+        if isinstance(self._transport, StdioJsonLineTransport):
+            return self._transport.receive(
+                timeout=timeout, response_remaining=self._response_remaining
+            )
+        return self._transport.receive(timeout=timeout)
 
     def _request(
         self, method: str, params: dict[str, Any], *, deadline: float | None = None
@@ -423,22 +451,22 @@ class CodexAppServerClient:
         if default_deadline:
             deadline = time.monotonic() + DEFAULT_RPC_RESPONSE_SECONDS
         assert deadline is not None
-        if time.monotonic() >= deadline:
+        if self._response_remaining(deadline=deadline) <= 0:
             raise RpcError("Codex request deadline exceeded")
         request_id = self._next_request_id
         self._next_request_id += 1
         self._transport.send({"method": method, "id": request_id, "params": params})
         while True:
-            remaining = deadline - time.monotonic()
+            remaining = self._response_remaining(deadline=deadline)
             if remaining <= 0:
                 raise RpcError("Codex request deadline exceeded")
             # Foreign frames cannot renew the total response deadline. Keep
             # the existing quiet ceiling only for calls without an explicit
             # deadline; early human approvals use turn/start's longer budget.
-            message = self._transport.receive(
+            message = self._receive(
                 timeout=min(remaining, DEFAULT_RPC_QUIET_SECONDS) if default_deadline else remaining
             )
-            if time.monotonic() >= deadline:
+            if self._response_remaining(deadline=deadline) <= 0:
                 raise RpcError("Codex request deadline exceeded")
             if "method" in message and "id" in message:
                 # A companion client such as tlive owns remote approval. Do
@@ -764,6 +792,7 @@ class CodexAppServerClient:
     ) -> str:
         self._completed_connection.invalidate()
         self._clear_activity()
+        self._response_drain = CodexResponseDrain()
         self.notifications.clear()
         canonical_cwd = cwd.expanduser().resolve(strict=True)
         if self._permission_profile is not None and (
@@ -865,6 +894,17 @@ class CodexAppServerClient:
         self._completed_connection.invalidate()
         try:
             return self._wait_for_turn(turn_id)
+        except CodexTurnError as exc:
+            # Keep permission/storage/provider failures authoritative. The
+            # channel warning is visible context, not a new failure cause.
+            self._response_drain.observe(self._transport, now=time.monotonic())
+            exc.partial_text = _bounded_partial_text(
+                self._response_drain.annotate(exc.partial_text)
+            )
+            raise
+        except Exception as exc:
+            self._response_drain.observe(self._transport, now=time.monotonic())
+            raise CodexTurnError(exc, self._response_drain.annotate("")) from exc
         finally:
             self._collecting_rate_limits = False
             self._clear_activity()
@@ -895,11 +935,13 @@ class CodexAppServerClient:
             # Keep a finite ceiling so a lost app-server cannot strand a worker
             # forever; the worker heartbeat protects the durable job meanwhile.
             try:
+                remaining = self._response_remaining(3600.0)
                 message = (
                     self.notifications.popleft()
                     if self.notifications
-                    else self._transport.receive(timeout=3600.0)
+                    else self._receive(timeout=remaining)
                 )
+                self._response_remaining(3600.0)
             except Exception as exc:
                 raise CodexTurnError(exc, "\n\n".join(answers)) from exc
             method = message.get("method")
@@ -908,8 +950,9 @@ class CodexAppServerClient:
             if method and "id" in message:
                 # tlive answers approvals on its companion connection.
                 # This client deliberately neither allows nor denies.
-                self._handle_server_request(message)
                 try:
+                    self._handle_server_request(message)
+                    self._response_remaining(3600.0)
                     self._observe_activity(message)
                 except Exception as exc:
                     raise CodexTurnError(exc, "\n\n".join(answers)) from exc
@@ -958,7 +1001,10 @@ class CodexAppServerClient:
                             seen_items.add(item_id)
                             if self.on_visible_item is not None and item["text"].strip():
                                 phase = item.get("phase") or "unknown"
-                                self.on_visible_item(item_id, item["text"], str(phase))
+                                try:
+                                    self.on_visible_item(item_id, item["text"], str(phase))
+                                except Exception as exc:
+                                    raise CodexTurnError(exc, "\n\n".join(answers)) from exc
                 continue
             if method == "turn/completed":
                 turn = params.get("turn")
@@ -970,13 +1016,32 @@ class CodexAppServerClient:
                             RpcError(str(message or f"Codex turn {turn.get('status')}")),
                             "\n\n".join(answers),
                         )
+                    try:
+                        self._response_remaining(3600.0)
+                    except Exception as exc:
+                        raise CodexTurnError(exc, "\n\n".join(answers)) from exc
+                    if not self._response_drain.proves_completed(
+                        params,
+                        thread_id=self._activity_thread_id,
+                        turn_id=turn_id,
+                        accepted_turn_id=self._activity_turn_id,
+                    ):
+                        raise CodexTurnError(
+                            RpcError(
+                                "Codex completion proof unavailable after response channel failure"
+                            ),
+                            "\n\n".join(answers),
+                        )
                     result = TurnResult(
-                        text=_final_visible_text(final_items),
+                        text=self._response_drain.annotate(_final_visible_text(final_items)),
                         context_window=context_window,
                         context_tokens_used=context_tokens_used,
                     )
                     if self.on_completed is not None:
-                        self.on_completed(result)
+                        try:
+                            self.on_completed(result)
+                        except Exception as exc:
+                            raise CodexTurnError(exc, "\n\n".join(answers)) from exc
                     self._completed_connection.observe(
                         thread_id=self._activity_thread_id,
                         turn_id=self._activity_turn_id,

@@ -110,16 +110,49 @@ Stdio uses a dedicated writer and a nonblocking, immutable outbound queue with
 allows a request larger than the pipe capacity to progress while the caller
 drains notifications, instead of forming a bidirectional pipe deadlock.
 Successful `send()` means queue admission; the exact RPC response remains
-submission evidence. EOF or a read/write failure seals both queues.
+submission evidence. EOF or a read failure seals both queues. A physical writer
+failure seals only outbound: stdout may still contain final, approval and telemetry
+frames. The reader continues, applying the same backpressure. One transport lock
+selects the first recorded cause; both queues use that cause when they terminate.
 
 Stdio close wakes blocked producers/consumers before process cleanup. Accepted
 frames drain before the first EOF/read/size error; a receive timeout leaves
-later delivery usable. Client approval handling and result/telemetry filtering
-remain unchanged. Shutdown is checked before each outbound write; a write
+later delivery usable. Shutdown is checked before each outbound write; a write
 already past that final check may have been submitted and needs ordinary uncertainty
 handling. Client-retained event bytes and a shared preparation budget remain
 separate resource-lifecycle work; do not interpret receipt traffic as productive
 progress or approval.
+
+For headless stdio, Hub attempts only explicit declines or unsupported-request
+errors. A typed refusal to admit such a reply after EOF/read/write termination
+does not discard later buffered output. Other send errors still fail normally;
+explicit close is a cancellation boundary. A writer failure can occur after
+successful admission, so the client also observes physical write faults while
+consuming frames and immediately before its completion checkpoint. It never
+claims that an admitted decline was delivered.
+
+After detecting a failed response channel, Hub reads for at most **20 seconds**,
+with one fixed deadline. A quiet stdio receive checks for faults on its next
+poll, normally within one second, without renewing its original quiet timeout.
+Notifications, approvals and queued frames cannot renew the drain window. These
+are consumption bounds, not a hard real-time guarantee through synchronous
+callbacks or local I/O, nor a promise to save an arbitrarily late pipe tail.
+
+Completion after this fault requires explicit matching thread and previously
+accepted turn identity with native status `completed`. Hub appends a fixed,
+payload-free transport notice before persisting the completed result; raw
+visible-item callbacks retain provider text. The same notice remains in bounded
+partial failures without replacing permission, provider or storage failure
+causes. Missing proof, EOF or expiry retains ordinary uncertainty and root
+exclusion, with no resubmission or permission grant. An ordinary EOF without a
+refused reply or observed physical write failure adds no warning. If completion
+is persisted before any writer fault is observable, a later fault cannot amend
+that checkpoint; queue admission provides no per-frame delivery receipt.
+
+Explicit close wakes both queues immediately and may discard frames that never
+entered inbound. Repeated exception traceback retention and descendant-held
+pipes remain separate cleanup/resource work; this slice neither adds process-group
+authority nor establishes a durable owned-process exclusion barrier.
 
 ### Codex RPC response deadlines
 
