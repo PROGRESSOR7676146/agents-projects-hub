@@ -118,6 +118,27 @@ class TaskActivityState:
     def _digest(value: str | int) -> str:
         return hashlib.sha256((type(value).__name__ + ":" + str(value)).encode()).hexdigest()
 
+    def retire_observation(self, job_id: str, token: str, *, now: datetime) -> bool:
+        """Drop failed optional visibility without touching execution authority."""
+        timestamp = self._time(now)
+        with self.transaction():
+            bound = self.db.execute(
+                "SELECT 1 FROM task_activity WHERE job_id=? AND lease_token=?", (job_id, token)
+            ).fetchone()
+            if bound is None:
+                return False
+            self.db.execute("DELETE FROM task_activity_entries WHERE job_id=?", (job_id,))
+            self.db.execute(
+                "DELETE FROM task_activity WHERE job_id=? AND lease_token=?", (job_id, token)
+            )
+            self.db.execute(
+                "UPDATE task_lifecycle_notices SET status='superseded',updated_at=? "
+                "WHERE job_id=? AND kind IN ('approval_wait','no_progress') "
+                "AND status IN ('pending','leased') AND attempt_count=0 AND send_started_at IS NULL",
+                (timestamp, job_id),
+            )
+            return True
+
     def _event_identity(self, event: CodexActivityEvent) -> tuple[str, str, str | None] | None:
         if not isinstance(event, CodexActivityEvent):
             raise self.state_error("invalid activity observation")

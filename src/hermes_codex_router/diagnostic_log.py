@@ -33,6 +33,12 @@ UNNAMED_ERROR = "UnnamedError"
 # logged as INVALID_SITE, so dynamic text can never become a log field.
 SITES = frozenset(
     {
+        "worker_activity.scope_open",
+        "worker_activity.accepted_binding",
+        "worker_activity.observe",
+        "worker_activity.observe_early",
+        "worker_activity.scope_retire",
+        "worker_activity.activity_retire",
         "alerts.session_meta_read",
         "alerts.thread_metadata_read",
         "claude_recovery.artifact_cleanup",

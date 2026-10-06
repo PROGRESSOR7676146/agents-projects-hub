@@ -123,6 +123,14 @@ class SessionsStateFacade:
         ).fetchone()
         return None if row is None else self.record(row)
 
+    def retained_session(self, topic_id: int, agent_id: str) -> SessionRecord | None:
+        row = self._connection.execute(
+            "SELECT * FROM agent_sessions WHERE topic_id=? AND agent_id=? "
+            "AND status IN ('active','satellite')",
+            (topic_id, agent_id),
+        ).fetchone()
+        return None if row is None else self.record(row)
+
     def get_session(self, session_id: str) -> SessionRecord:
         row = self._connection.execute(
             "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)

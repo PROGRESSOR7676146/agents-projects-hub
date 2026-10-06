@@ -11,7 +11,7 @@ from .artifacts import (
     spool_staged_artifacts,
 )
 from .codex_appserver import CodexAppServerClient, CodexTurnError, RpcError
-from .codex_failure import CodexPreparationError, codex_failure_notice
+from .codex_failure import CodexPreparationError, codex_failure_notice, codex_failure_reason
 from .diagnostic_log import survived
 from .execution_journal import ExecutionJournal
 from .hub_config import HubConfig
@@ -43,6 +43,7 @@ def reconcile_codex_completion(
     lease_token: str,
     agent_id: str,
     client_factory: Callable[[], CodexAppServerClient],
+    execution_error: BaseException | None = None,
 ) -> Literal["completed", "failed", "interrupted", "active", "unknown"]:
     """Reconcile one accepted turn by exact identity without productive work."""
     journal = ExecutionJournal(state)
@@ -93,6 +94,15 @@ def reconcile_codex_completion(
             rejection_sink=rejections,
         )
         visible = text or "Codex completed the turn without visible text."
+        if execution_error is not None and (
+            getattr(execution_error, "failure_reason", codex_failure_reason(execution_error))
+            == "permission_policy_changed"
+        ):
+            visible += (
+                "\n\nWarning: Codex permission selection changed during this turn; "
+                "Hub requested interruption. The exact turn completed. "
+                "Review the recovered result and project changes before continuing."
+            )
         if rejections:
             visible += "\n\nSome staged artifacts could not be recovered; inspect the task staging."
         job = state.get_provider_job(job_id)

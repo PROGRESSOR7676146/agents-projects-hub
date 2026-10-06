@@ -4,6 +4,7 @@ import sqlite3
 import threading
 import unittest
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import patch
 
 from hermes_codex_router.codex_appserver import RpcRejectedError
@@ -21,7 +22,7 @@ class CodexControlSettlementTests(unittest.TestCase):
         self.client = self.fixture.client
 
     def direct_control(self, **changes):
-        options = dict(
+        options: dict[str, Any] = dict(
             state_factory=lambda: self.state,
             client_factory=lambda: self.client,
             job=self.fixture.job,

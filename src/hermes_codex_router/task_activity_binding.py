@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from .stop_coverage import pending_stop_for_job
+
 ACTIVITY_BINDING = (
     "lease_token",
     "topic_id",
@@ -23,6 +25,8 @@ ACTIVITY_BINDING = (
 def current_activity_binding(
     connection: sqlite3.Connection, job_id: str, token: str, timestamp: str
 ) -> sqlite3.Row | None:
+    if pending_stop_for_job(connection, job_id) is not None:
+        return None
     row = connection.execute(
         "SELECT job.lease_token,job.topic_id,topic.project_id,"
         "COALESCE(topic.execution_scope,'project:'||topic.project_id) AS execution_scope,"

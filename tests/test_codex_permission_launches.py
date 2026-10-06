@@ -126,6 +126,63 @@ class ManagedCodexLaunchTests(unittest.TestCase):
         supervisor.assert_not_called()
         telegram.assert_not_called()
 
+    def test_pilot_refuses_retained_managed_session_under_legacy_config(self) -> None:
+        self.assert_pilot_refuses_retained_managed_session()
+
+    def test_pilot_refuses_retained_managed_satellite_before_topic_mutation(self) -> None:
+        other = self.service.state.activate_agent(self.topic.topic_id, "claude", "example", "high")
+        self.assert_pilot_refuses_retained_managed_session()
+        self.assertEqual(self.service.state.get_session(other.session_id), other)
+
+    def assert_pilot_refuses_retained_managed_session(self) -> None:
+        before = self.service.state.get_session(self.session.session_id)
+        topic_before = self.service.state.get_topic(self.topic.topic_id)
+        config = replace(
+            self.service.config,
+            codex_permission_profile=None,
+            agents=(
+                replace(self.service.config.agents[0], token_file=self.project.root / "token"),
+            ),
+        )
+        with (
+            patch(
+                "hermes_codex_router.pilot.CodexAppServerSupervisor",
+                side_effect=AssertionError("pilot created a provider before refusing"),
+            ) as supervisor,
+            patch("hermes_codex_router.pilot.TelegramBotApi") as telegram,
+        ):
+            with self.assertRaisesRegex(ValueError, "managed Codex session"):
+                run_codex_pilot(
+                    config,
+                    project_id=self.project.project_id,
+                    chat_id=self.topic.chat_id,
+                    thread_id=self.topic.thread_id,
+                    topic_title="Changed pilot title",
+                )
+        supervisor.assert_not_called()
+        telegram.assert_not_called()
+        self.assertEqual(self.service.state.get_session(self.session.session_id), before)
+        self.assertEqual(self.service.state.get_topic(self.topic.topic_id), topic_before)
+
+    def test_terminal_rechecks_selected_session_before_writer_transfer(self) -> None:
+        self.service.terminal = Mock()
+        self.service.config = replace(
+            self.service.config, codex_permission_profile=None, dispatch_mode="inline"
+        )
+        managed = self.service.state.get_session(self.session.session_id)
+        legacy = replace(managed, codex_permission_profile=None)
+        with (
+            patch.object(self.service.state, "active_session", return_value=legacy),
+            patch.object(self.service, "_ensure_codex_session", return_value=managed) as selected,
+            patch.object(self.service, "_queue_enabled", return_value=False),
+            patch.object(self.service.state, "set_writer_mode") as transfer,
+            patch.object(self.service, "_ensure_provider_thread") as preparation,
+        ):
+            self.assertTrue(self.service.handle_update(fixtures.update(1, "/terminal")))
+        selected.assert_called_once()
+        transfer.assert_not_called()
+        preparation.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
