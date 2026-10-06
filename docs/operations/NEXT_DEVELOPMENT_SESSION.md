@@ -209,6 +209,14 @@ Prepare bounded live scenarios with exact candidate/rollback revisions, commands
 temporary root/topic, provider calls, expected effects and cleanup before asking
 permission. Request provider acceptance, any restart and deployment separately.
 Update private handoff whenever plan, pending decisions or deployment state changes.
+Include the [recovery-scenario follow-ups](STABILIZATION_PLAN.md#follow-ups-found-during-execution)
+when selecting the next reliability slice: late terminality after exhausted
+observations, an owner-requested cross-topic Reply from an authorized secondary
+Telegram account, and startup-order/schema-compatible rollback acceptance.
+Keep the acceptance actor's fixed canary scope separate from an operator action;
+neither a saved user session nor an uncertain Hub job alone authorizes sending
+or replaying a provider turn. These are planned tests and documentation repairs,
+not proof that a general continuation tool or cold-boot recovery is deployed.
 
 ## Current evidence and source pointers
 

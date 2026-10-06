@@ -115,6 +115,34 @@ queued requests on the root remain paused and visible. Active or unproven
 status keeps root exclusion. Do not use `indeterminate-resolve` merely to make
 a failed-turn continuation move, and do not reset the old job to `queued`.
 
+The observation budget is finite: an `indeterminate` Hub job may still have an
+active native turn, and a later native completion does not by itself deliver the
+result. After the exact turn becomes terminal, a trusted local operator can
+invoke the installed `TurnObservation.observe_topic` for the exact numeric topic;
+there is no general owner-facing recheck command yet. Its provider read is
+model-free, but the operation may commit a corrected Hub job/outbox state, so
+back up state first and verify the resulting job and delivery receipt.
+If the turn is still active or exact binding cannot be proved, leave it alone;
+do not restart its worker, resolve the job to free the root, or start a duplicate
+turn. Recheck is an explicit owner action, not a passive model probe.
+
+For an **explicit owner request** to continue a completed but unfinished task
+in another registered topic, prefer a real Telegram Reply to that topic's
+delivered provider result so Hub performs its normal admission and ownership
+checks. A separately authenticated, owner-allowlisted Telegram *secondary*
+account can carry that Reply; it is not the operator's main account. Verify its
+identity and authorization, exact numeric project chat/topic, delivered provider
+message and Reply target, and that no continuation was already accepted. Send
+once, read back the exact Telegram message and Reply provenance, then confirm
+exactly one new Hub job. An ambiguous send requires inspection, not a retry.
+The fixed [acceptance actor](../testing/README.md#dedicated-acceptance-user) is
+a canary runner, not a general-purpose sender; do not silently expand its test
+scope because a stored session exists. A reviewed scoped operator tool is
+planned. Until then, use a controlled one-off action only with the owner's
+specific authorization and private evidence; otherwise ask the owner to Reply
+personally. Never send bot-to-bot, invoke Codex directly, or edit queue rows to
+manufacture a continuation.
+
 When the owner already opened a native Codex CLI outside Hub ownership, first
 check whether it uses the owning app-server through `--remote`. A standalone
 `codex resume` is a separate persistence writer. Wait for its current turn to
