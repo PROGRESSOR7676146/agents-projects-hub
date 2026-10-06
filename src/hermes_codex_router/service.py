@@ -1721,6 +1721,7 @@ class ProjectHubService:
                 model=selected_model,
                 effort=selected_effort,
                 expected_session_id=replacement.session_id,
+                runtime=target.runtime,
             )
         self._send_text(
             message,
