@@ -12,6 +12,10 @@ class CodexPreparationError(RuntimeError):
     """Caught setup failure before the productive turn/start call was made."""
 
 
+class CodexRetryBindingError(CodexPreparationError):
+    """A queued saved retry no longer has its exact execution authority."""
+
+
 class UnsupportedCodexPermissionProfileError(CodexPreparationError):
     """The legacy turn policy cannot safely retain a selected custom profile."""
 
@@ -63,6 +67,12 @@ def codex_failure_notice(
     error: BaseException, *, turn_status: str = "unknown", held_count: int = 0
 ) -> str:
     """Only fixed causes and explicitly visible assistant text reach Telegram."""
+    if isinstance(error, CodexRetryBindingError):
+        return (
+            "Retry paused: Hub could not verify the saved task/context, session, root, route or permissions. "
+            "The provider was not started. Inspect /status and send a fresh task "
+            "only after checking the binding."
+        )
     if isinstance(error, CodexPermissionProfileError):
         return (
             "What happened: Hub could not verify the configured Codex permission profile.\n\n"
@@ -82,7 +92,7 @@ def codex_failure_notice(
         return (
             "What happened: Codex could not prepare the task before starting it.\n\n"
             "Saved: No productive provider turn was sent.\n\n"
-            "Next: Retry after Codex is available."
+            "Next: Check /status and resolve the preparation failure."
         )
     reason = getattr(error, "failure_reason", codex_failure_reason(error))
     causes = {

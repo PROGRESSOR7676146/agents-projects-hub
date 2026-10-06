@@ -889,6 +889,14 @@ class ProviderJobsStateFacade:
                 return None
             if str(candidate["status"]) != "queued":
                 return None
+            if (
+                self._connection.execute(
+                    "SELECT 1 FROM provider_preexecution_retries WHERE child_job_id=?",
+                    (candidate["job_id"],),
+                ).fetchone()
+                is not None
+            ):
+                return None
             held = self._connection.execute(
                 """SELECT 1 FROM provider_job_holds
                    WHERE job_id = ? AND decision = 'pending'""",

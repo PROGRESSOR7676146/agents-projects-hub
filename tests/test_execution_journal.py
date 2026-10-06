@@ -555,6 +555,7 @@ class ExecutionJournalTests(unittest.TestCase):
                     for name in (
                         "__init__.py",
                         "migrations.py",
+                        "migration_sql.py",
                         "models.py",
                         "registry.py",
                         "schema_task_lifecycle.py",
@@ -562,6 +563,7 @@ class ExecutionJournalTests(unittest.TestCase):
                         "schema_claude_permissions.py",
                         "schema_codex_permissions.py",
                         "schema_preacceptance_approvals.py",
+                        "schema_preexecution_retry.py",
                     ):
                         archive.writestr(
                             f"hermes_codex_router/{name}", (package / name).read_text()

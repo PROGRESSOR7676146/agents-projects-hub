@@ -24,7 +24,6 @@ from .codex_appserver import (
 )
 from .codex_failure import codex_preparation, uncertain_provider_notice
 from .codex_recovery import (
-    checkpoint_failure_notice,
     reconcile_codex_completion,
     recover_codex_job,
 )
@@ -150,9 +149,10 @@ from .worker_execution import (
     resolve_embedded_worker_target,
     revalidate_worker_execution_root,
     start_codex_provider_turn,
-    validate_codex_job_selection,
+    validate_provider_worker_binding,
     wait_for_codex_provider_turn,
 )
+from .worker_failure_notice import commit_worker_failure_notice
 
 
 class ServiceError(RuntimeError):
@@ -954,11 +954,8 @@ class ProjectHubService:
         try:
             target = revalidate_worker_execution_root(queue_state, target)
             project = target.project
-            if agent.runtime == "codex":
-                with codex_preparation():
-                    validate_codex_job_selection(
-                        queue_state, executing, self.config.codex_permission_profile
-                    )
+            with codex_preparation():
+                validate_provider_worker_binding(queue_state, executing, self.config, project.root)
             prepared = prepare_worker_materials(
                 queue_state,
                 state_path=self.config.state_path,
@@ -1139,6 +1136,7 @@ class ProjectHubService:
                         status=failure.status,
                         error_class=failure.error_class,
                         error_code=failure.error_code,
+                        provider_runtime=agent.runtime,
                         sender_agent_id=agent.agent_id,
                         telegram_html=exc.public_message,
                     )
@@ -1156,6 +1154,7 @@ class ProjectHubService:
                         status=failure.status,
                         error_class=failure.error_class,
                         error_code=failure.error_code,
+                        provider_runtime=agent.runtime,
                         sender_agent_id=agent.agent_id,
                         telegram_html=(
                             f"{agent.display_name} limit reached. Reset telemetry was "
@@ -1170,30 +1169,21 @@ class ProjectHubService:
                         status=failure.status,
                         error_class=failure.error_class,
                         error_code=failure.error_code,
+                        provider_runtime=agent.runtime,
                         sender_agent_id=agent.agent_id,
                         telegram_html=exc.public_message,
                     )
                 else:
-                    queue_state.terminate_provider_job_with_notice(
-                        executing.job_id,
+                    commit_worker_failure_notice(
+                        queue_state,
+                        self.config,
+                        executing,
                         token,
-                        status=failure.status,
-                        error_class=failure.error_class,
-                        error_code=failure.error_code,
-                        terminal_turn_status=(
-                            turn_status if turn_status in {"failed", "interrupted"} else None
-                        ),
-                        sender_agent_id=agent.agent_id,
-                        telegram_html=(
-                            "Incoming material integrity validation failed; "
-                            "the provider was not started. Send the material again."
-                            if failure.notice == "incoming_material"
-                            else checkpoint_failure_notice(
-                                queue_state, executing.job_id, exc, turn_status=turn_status
-                            )
-                            if failure.notice == "checkpoint"
-                            else uncertain_provider_notice(agent.display_name)
-                        ),
+                        root=project.root,
+                        error=exc,
+                        failure=failure,
+                        turn_status=turn_status,
+                        fallback_notice=uncertain_provider_notice(agent.display_name),
                     )
             except Exception as survived_error:
                 survived("service.failure_notice_record", survived_error)

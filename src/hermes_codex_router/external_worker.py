@@ -22,7 +22,6 @@ from .codex_appserver import (
 from .codex_failure import codex_preparation, uncertain_provider_notice
 from .codex_live_control import CodexLiveControl
 from .codex_recovery import (
-    checkpoint_failure_notice,
     reconcile_codex_completion,
     recover_codex_job,
 )
@@ -78,15 +77,17 @@ from .worker_execution import (
     prepare_worker_artifacts,
     prepare_worker_materials,
     prepare_worker_staging_directory,
+    require_exact_retry_transport,
     require_provider_job_lease,
     resolve_external_worker_target,
     revalidate_worker_execution_root,
     should_transfer_legacy_fallback,
     start_codex_provider_turn,
-    validate_codex_job_selection,
+    validate_provider_worker_binding,
     wait_for_codex_provider_turn,
     worker_needs_full_telegram_contract,
 )
+from .worker_failure_notice import commit_worker_failure_notice
 
 
 class ExternalQueueWorkerError(RuntimeError):
@@ -475,6 +476,7 @@ class ExternalQueueWorker:
                 expected_status="leased",
                 error_class="pre_execution",
                 error_code=str(exc),
+                provider_runtime=self.agent.runtime,
                 sender_agent_id=self.agent.agent_id,
                 telegram_html=(
                     f"{self.agent.display_name} did not start: the project binding is invalid; verify it locally."
@@ -528,6 +530,8 @@ class ExternalQueueWorker:
         try:
             target = revalidate_worker_execution_root(self.state, target)
             project = target.project
+            with codex_preparation():
+                validate_provider_worker_binding(self.state, executing, self.config, project.root)
             if self.agent.runtime == "codex":
                 self._execute_codex(executing, token, project, topic)
             else:
@@ -578,6 +582,7 @@ class ExternalQueueWorker:
                     status=failure.status,
                     error_class=failure.error_class,
                     error_code=failure.error_code,
+                    provider_runtime=self.agent.runtime,
                     sender_agent_id=self.agent.agent_id,
                     telegram_html=exc.public_message,
                 )
@@ -604,6 +609,7 @@ class ExternalQueueWorker:
                     status=failure.status,
                     error_class=failure.error_class,
                     error_code=failure.error_code,
+                    provider_runtime=self.agent.runtime,
                     sender_agent_id=self.agent.agent_id,
                     telegram_html=(
                         f"{self.agent.display_name} limit reached. Reset telemetry was "
@@ -621,6 +627,7 @@ class ExternalQueueWorker:
                     status=failure.status,
                     error_class=failure.error_class,
                     error_code=failure.error_code,
+                    provider_runtime=self.agent.runtime,
                     sender_agent_id=self.agent.agent_id,
                     telegram_html=exc.public_message,
                 )
@@ -664,32 +671,24 @@ class ExternalQueueWorker:
                     error_detail = " ".join(str(exc).split())[:1000] or None
                     # Invocation has been marked executing; no automatic replay
                     # is safe without runtime-specific proof that it never began.
-                    record = self.state.terminate_provider_job_with_notice(
-                        executing.job_id,
+                    record = commit_worker_failure_notice(
+                        self.state,
+                        self.config,
+                        executing,
                         token,
-                        status=failure.status,
-                        error_class=failure.error_class,
-                        error_code=failure.error_code,
+                        root=project_root,
+                        error=exc,
+                        failure=failure,
+                        turn_status=turn_status,
                         error_detail=error_detail,
-                        terminal_turn_status=(
-                            turn_status if turn_status in {"failed", "interrupted"} else None
-                        ),
-                        sender_agent_id=self.agent.agent_id,
-                        telegram_html=(
-                            "Incoming material integrity validation failed; "
-                            "the provider was not started. Send the material again."
-                            if failure.notice == "incoming_material"
-                            else checkpoint_failure_notice(
-                                self.state, executing.job_id, exc, turn_status=turn_status
-                            )
-                            if failure.notice == "checkpoint"
-                            else self._claude_partial_notice(
-                                executing,
-                                token,
-                                project_root,
-                                uncertain_provider_notice(self.agent.display_name),
-                            )
-                        ),
+                        fallback_notice=self._claude_partial_notice(
+                            executing,
+                            token,
+                            project_root,
+                            uncertain_provider_notice(self.agent.display_name),
+                        )
+                        if failure.notice == "uncertain"
+                        else "",
                     )
                     if record.status == "cancelled":  # a covering stop won the commit
                         self._last_error_code = None
@@ -721,6 +720,7 @@ class ExternalQueueWorker:
             status=failure.status,
             error_class=failure.error_class,
             error_code=failure.error_code,
+            provider_runtime=self.agent.runtime,
             sender_agent_id=self.agent.agent_id,
             telegram_html=(
                 self._claude_partial_notice(job, token, project_root, error.public_message)
@@ -787,8 +787,6 @@ class ExternalQueueWorker:
         assert isinstance(project, Project)
         assert isinstance(topic, TopicRecord)
         assert self.supervisor is not None
-        with codex_preparation():
-            validate_codex_job_selection(self.state, job, self.config.codex_permission_profile)
         prepared = prepare_worker_materials(
             self.state,
             state_path=self.config.state_path,
@@ -844,10 +842,7 @@ class ExternalQueueWorker:
                 model_provider=self.config.codex_model_provider,
                 transport_mode=self.supervisor.transport_mode,
             )
-            if fallback_transfer and job.idempotency_key.startswith("continuation:"):
-                raise ExternalQueueWorkerError(
-                    "continuation requires the owning Codex socket; fallback cannot preserve its thread"
-                )
+            require_exact_retry_transport(job, fallback_transfer)
             turn_text = codex_turn_text(job, prepared)
             if fallback_transfer:
                 visible_context = self.state.recent_external_context(

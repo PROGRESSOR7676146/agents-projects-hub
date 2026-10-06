@@ -218,6 +218,35 @@ acceptance.
   broader provider/compatibility coverage, and separately authorized capacity
   and canary-root checks. No background inference or automatic replay is added.
 
+- **Repeated notification/preparation failure and saved-payload retry:** source
+  candidates and isolated native corpus are under review. The next trigger is
+  exact-revision canonical/independent review of bounded transport consumption
+  and schema-41 text-only notice-bound retry, then owner integration and a
+  separately approved two-worker canary. Last verified published transport
+  revision: `1a54af15d375992001579e328e8b31b5e1b9267d`; this is repository
+  evidence only. Verify more than 1,024 foreign notifications and both results;
+  two consecutive preparation failures must retain the original task/context
+  through explicit retries, or visibly refuse when preparation replaced an
+  existing thread without saving its effective context. Frozen fallback-context
+  preservation and ordinary Reply historical context remain separate follow-ups.
+  Restart alone does not close the item. Materials,
+  safe unsubscribe, stdio buffering and exact deployed-source attribution remain
+  open; no deployment or active-worker restart follows from this entry. See the
+  [recovery procedure](QUEUE_RECOVERY.md#durable-dispositions) and
+  [acceptance strategy](../testing/README.md).
+  Independent Opus source review of retry head
+  `fc1265286ab8b56b730cb371008ab9cc29d7a93b` completed. Its follow-up now
+  protects failure publication when root resolution fails, derives Codex runtime
+  from trusted configuration while retaining aliases, rechecks child selections
+  and materials, and makes tickets update-immutable in unreleased migration 41.
+  Astra reviewed the domain/transaction ownership and direct failure paths.
+  Lease-crash and execution-crash regressions retain their distinct certainty;
+  a real 65-source chain refuses at the ancestry bound without invocation.
+  Final exact-head publication/review is pending. Explicit retries follow FIFO
+  arrival order; they do not rewind the session. This source lane stacks on
+  transport head `1a54af15`, separately from later transport/retirement/deadline
+  siblings. Integration and live evidence remain open.
+
 ## Closure
 
 Repeated Codex preparation overflow has source-level transport and saved-task
