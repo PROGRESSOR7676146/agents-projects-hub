@@ -99,6 +99,73 @@ class InterruptibleAdapter(Adapter):
 
 
 class ExternalQueueWorkerTests(unittest.TestCase):
+    def test_idle_codex_worker_discards_cached_fallback_after_socket_recovery(self) -> None:
+        class OldClient:
+            closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        class Supervisor:
+            recovered = False
+
+            def restore_socket_at_idle(self) -> bool:
+                return self.recovered
+
+        worker = cast(Any, ExternalQueueWorker.__new__(ExternalQueueWorker))
+        worker.supervisor = Supervisor()
+        old = OldClient()
+        worker._codex_client = old
+        worker._restore_codex_socket_at_idle()
+        self.assertFalse(old.closed)
+        self.assertIs(worker._codex_client, old)
+
+        worker.supervisor.recovered = True
+        worker._restore_codex_socket_at_idle()
+        self.assertTrue(old.closed)
+        self.assertIsNone(worker._codex_client)
+
+    def test_worker_health_names_missing_human_approval_transport(self) -> None:
+        codex = AgentDefinition(
+            "codex",
+            "Codex",
+            "example_codex_bot",
+            "codex",
+            None,
+            True,
+            False,
+            "gpt-5.6-sol",
+            "high",
+        )
+        config = replace(
+            self.config,
+            agents=(codex, *self.config.agents),
+            external_worker_agent_ids=("codex", *self.config.external_worker_agent_ids),
+        )
+        worker = ExternalQueueWorker(config, "codex", registry=self.registry)
+        self.addCleanup(worker.close)
+        assert worker.supervisor is not None
+        worker.supervisor.transport_mode = "stdio-fallback"
+        worker._publish_health()
+        health = worker.state.get_runtime_health("provider_worker", worker.worker_id)
+        assert health is not None
+        self.assertEqual(health.error_code, "codex_approvals_unavailable")
+
+        worker.supervisor.transport_mode = "socket"
+        with patch.object(Path, "is_socket", return_value=True):
+            worker._publish_health()
+        health = worker.state.get_runtime_health("provider_worker", worker.worker_id)
+        assert health is not None
+        self.assertIsNone(health.error_code)
+
+        # Before any turn: an invisible shared socket is already approval loss.
+        worker.supervisor.transport_mode = None
+        with patch.object(Path, "is_socket", return_value=False):
+            worker._publish_health()
+        health = worker.state.get_runtime_health("provider_worker", worker.worker_id)
+        assert health is not None
+        self.assertEqual(health.error_code, "codex_approvals_unavailable")
+
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         base = Path(self.tempdir.name)

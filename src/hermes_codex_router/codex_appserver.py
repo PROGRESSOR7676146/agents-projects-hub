@@ -26,6 +26,7 @@ from .codex_failure import (
     UnsupportedCodexPermissionProfileError,
     codex_failure_reason,
 )
+from .codex_notifications import retain_turn_notification
 
 MAX_PENDING_ACTIVITY = 128
 
@@ -579,10 +580,17 @@ class CodexAppServerClient:
                     if isinstance(update, dict):
                         self._observe_rate_limits(update.get("rateLimits"))
                     continue
-                if len(self.notifications) >= 1024:
-                    raise RpcError("Codex notification buffer exceeded its bound")
                 if self.on_activity is not None and self._activity_thread_id is not None:
                     self._observe_activity(message)
+                if not retain_turn_notification(
+                    message,
+                    thread_id=self._activity_thread_id,
+                    turn_id=self._activity_turn_id,
+                ):
+                    continue
+                if len(self.notifications) >= 1024:
+                    raise RpcError("Codex notification buffer exceeded its bound")
+                if self.on_activity is not None:
                     # The raw notification still serves visible output and telemetry.
                     # Its activity has already been buffered in receive order.
                     self._activity_observed_notifications.add(id(message))
@@ -858,6 +866,7 @@ class CodexAppServerClient:
         local_image_paths: Sequence[Path] = (),
     ) -> str:
         self._clear_activity()
+        self.notifications.clear()
         canonical_cwd = cwd.expanduser().resolve(strict=True)
         turn_input: list[dict[str, str]] = [{"type": "text", "text": text}]
         for image_path in local_image_paths:
@@ -992,6 +1001,12 @@ class CodexAppServerClient:
                 continue
             if method == "account/rateLimits/updated":
                 self._observe_rate_limits(params.get("rateLimits"))
+                continue
+            if (
+                self._activity_thread_id is not None
+                and "threadId" in params
+                and params["threadId"] != self._activity_thread_id
+            ):
                 continue
             if method == "thread/tokenUsage/updated" and params.get("turnId") == turn_id:
                 usage = params.get("tokenUsage")

@@ -37,6 +37,13 @@ later control-plane changes.
 Next implement narrowly explicit managed-profile support; profile ID and
 `extends` alone cannot establish equivalent or stricter permissions. Keep
 custody and native/Telegram acceptance open; this refusal is not profile support.
+The optional [offline native profile corpus](../testing/README.md#optional-offline-native-codex-profile-rehearsal)
+now makes the access-denial and legacy-override experiments reproducible with
+fictional fixtures. Current native metadata exposes profile selection and
+allowlisting, but not the managed profile definition. Resolve trustworthy effective
+policy evidence before enabling profile support; meanwhile continue the remaining
+repository lifecycle work below. This corpus is not a Hub implementation or live
+acceptance result.
 
 ## Objective and authority
 

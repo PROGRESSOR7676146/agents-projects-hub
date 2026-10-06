@@ -222,6 +222,17 @@ def _absolute_path(value: Any, label: str, *, must_exist: bool) -> Path:
         raise HubConfigError(f"cannot resolve {label}: {exc}") from exc
 
 
+def _logical_socket_path(value: Any) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise HubConfigError("codex_socket_path must be an absolute path")
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise HubConfigError("codex_socket_path must be absolute")
+    # The companion may replace this link on restart. Resolving it here
+    # would pin every worker and passive health check to the old daemon.
+    return path.absolute()
+
+
 def _private_token_file(value: Any, agent_id: str, *, validate_secret: bool) -> Path:
     path = _absolute_path(
         value,
@@ -979,13 +990,11 @@ def load_hub_config(
     acceptance_actors = _parse_acceptance_actors(root, raw_owners)
     registry_path = _absolute_path(root.get("registry_path"), "registry_path", must_exist=True)
     state_path = _absolute_path(root.get("state_path"), "state_path", must_exist=False)
-    codex_socket_path = _absolute_path(
+    codex_socket_path = _logical_socket_path(
         root.get(
             "codex_socket_path",
             str(Path.home() / ".codex/app-server-control/app-server-control.sock"),
         ),
-        "codex_socket_path",
-        must_exist=False,
     )
     codex = _parse_codex_transport(root)
     terminal = _parse_terminal(root)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +15,7 @@ from hermes_codex_router.hub_config import (
     load_external_worker_config,
     load_hub_config,
 )
+from hermes_codex_router.supervisor import CodexAppServerSupervisor
 
 
 class HubConfigTests(unittest.TestCase):
@@ -78,6 +80,36 @@ class HubConfigTests(unittest.TestCase):
         self.assertFalse(config.manage_codex_server)
         self.assertEqual(config.terminal.backend, "auto")
         self.assertNotIn("secret-token-value", path.read_text(encoding="utf-8"))
+
+    def test_loaded_shared_socket_link_recovers_after_daemon_replacement(self) -> None:
+        previous = self.base / "old.sock"
+        current = self.base / "new.sock"
+        logical = self.base / "shared.sock"
+        previous.touch()
+        logical.symlink_to(previous)
+        config = load_hub_config(self.write_config(codex_socket_path=str(logical)))
+        fallback = self.base / "codex"
+        fallback.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        fallback.chmod(0o700)
+        supervisor = CodexAppServerSupervisor(
+            config.codex_socket_path, manage_process=False, stdio_executable=fallback
+        )
+        supervisor.transport_mode = "stdio-fallback"
+        previous.unlink()
+        logical.unlink()
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as daemon:
+            daemon.bind(str(current))
+            logical.symlink_to(current)
+            with (
+                patch("hermes_codex_router.supervisor.UnixWebSocketTransport") as transport,
+                patch("hermes_codex_router.supervisor.CodexAppServerClient") as client,
+            ):
+                self.assertTrue(supervisor.restore_socket_at_idle())
+                transport.assert_called_once_with(logical, timeout=2.0)
+                client.return_value.initialize.assert_called_once()
+                client.return_value.close.assert_called_once()
+        self.assertEqual(config.codex_socket_path, logical)
+        self.assertEqual(supervisor.transport_mode, "socket")
 
     def test_loads_masked_provider_account_hints(self) -> None:
         config = load_hub_config(

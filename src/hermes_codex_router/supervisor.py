@@ -36,7 +36,12 @@ class CodexAppServerSupervisor:
         stdio_executable: Path | None = None,
         model_provider: str | None = None,
     ) -> None:
-        self.socket_path = socket_path.expanduser().resolve()
+        expanded_socket = socket_path.expanduser()
+        # A companion may replace its logical symlink when the daemon restarts.
+        # Resolve managed ownership targets, but keep the unmanaged link live.
+        self.socket_path = (
+            expanded_socket.resolve() if manage_process else expanded_socket.absolute()
+        )
         self.manage_process = manage_process
         self.stdio_executable = (
             stdio_executable.expanduser().resolve(strict=True) if stdio_executable else None
@@ -45,6 +50,7 @@ class CodexAppServerSupervisor:
         self.process: subprocess.Popen[bytes] | None = None
         self.transport_mode: str | None = None
         self._ownership_file: BinaryIO | None = None
+        self._next_idle_socket_probe = 0.0
 
     def _acquire_socket_ownership(self) -> None:
         if self._ownership_file is not None:
@@ -86,15 +92,16 @@ class CodexAppServerSupervisor:
             ownership_file.close()
 
     def start(self, *, timeout: float = 15.0) -> None:
-        if not self.manage_process and self.socket_path.is_socket():
+        if not self.manage_process and self._shared_socket_present():
             self.transport_mode = "socket"
             return
         if self.stdio_executable is not None:
             self.transport_mode = "stdio-fallback"
             return
         if not self.manage_process:
-            if not self.socket_path.is_socket():
+            if not self._shared_socket_present():
                 raise AppServerError("shared Codex app-server socket is unavailable")
+            self.transport_mode = "socket"
             return
         self._acquire_socket_ownership()
         if os.path.lexists(self.socket_path):
@@ -126,10 +133,17 @@ class CodexAppServerSupervisor:
         self.stop()
         raise AppServerError("Codex app-server socket did not appear")
 
-    def client(self) -> CodexAppServerClient:
+    def client(self, *, allow_fallback: bool = True) -> CodexAppServerClient:
         if self.transport_mode is None:
-            self.start()
+            if not allow_fallback:
+                if self.manage_process or not self._shared_socket_present():
+                    raise AppServerError("shared Codex control transport is unavailable")
+                self.transport_mode = "socket"
+            else:
+                self.start()
         if self.transport_mode == "stdio-fallback":
+            if not allow_fallback:
+                raise AppServerError("shared Codex control transport is unavailable")
             assert self.stdio_executable is not None
             client = CodexAppServerClient(
                 StdioJsonLineTransport.start(str(self.stdio_executable)),
@@ -142,7 +156,7 @@ class CodexAppServerSupervisor:
             self.process is None or self.process.poll() is not None
         ):
             raise AppServerError("Codex app-server is not started")
-        if self.transport_mode == "socket" and not self.socket_path.is_socket():
+        if self.transport_mode == "socket" and not self._shared_socket_present():
             raise AppServerError("shared Codex app-server socket is unavailable")
         try:
             client = CodexAppServerClient(
@@ -151,7 +165,11 @@ class CodexAppServerSupervisor:
             client.initialize()
             return client
         except Exception:
-            if self.stdio_executable is None or self.transport_mode == "managed-socket":
+            if (
+                not allow_fallback
+                or self.stdio_executable is None
+                or self.transport_mode == "managed-socket"
+            ):
                 raise
             self.transport_mode = "stdio-fallback"
             fallback = CodexAppServerClient(
@@ -161,6 +179,60 @@ class CodexAppServerSupervisor:
             )
             fallback.initialize()
             return fallback
+
+    def _shared_socket_present(self) -> bool:
+        try:
+            return self.socket_path.is_socket()
+        except OSError:
+            return False
+
+    def human_approvals_available(self) -> bool:
+        """Whether the next turn can reach the shared human approval companion.
+
+        A worker namespace built before the daemon directory existed never sees
+        the socket, so report loss before any turn has fallen back to ``never``.
+        """
+        if self.manage_process:
+            return True
+        return self.transport_mode != "stdio-fallback" and self._shared_socket_present()
+
+    def restore_socket_at_idle(self) -> bool:
+        """Reconsider a headless fallback only between productive turns.
+
+        The caller owns the idle boundary. In particular, a background control
+        client must not change the mode used by an active turn's stop handler.
+        A socket inode alone is not readiness: initialize before switching.
+        """
+        if self.manage_process or self.transport_mode != "stdio-fallback":
+            return False
+        if not self._shared_socket_present():
+            return False
+        now = time.monotonic()
+        if now < self._next_idle_socket_probe:
+            return False
+        self._next_idle_socket_probe = now + 5.0
+        probe: CodexAppServerClient | None = None
+        transport: UnixWebSocketTransport | None = None
+        ready = False
+        try:
+            transport = UnixWebSocketTransport(self.socket_path, timeout=2.0)
+            probe = CodexAppServerClient(transport, model_provider=self.model_provider)
+            probe.initialize(deadline=time.monotonic() + 2.0)
+            ready = True
+        except Exception:
+            ready = False
+        finally:
+            try:
+                if probe is not None:
+                    probe.close()
+                elif transport is not None:
+                    transport.close()
+            except Exception:
+                ready = False
+        if not ready:
+            return False
+        self.transport_mode = "socket"
+        return True
 
     def stop(self) -> None:
         if self.transport_mode == "stdio-fallback":
