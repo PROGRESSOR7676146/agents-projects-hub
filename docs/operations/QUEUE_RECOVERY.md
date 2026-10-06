@@ -76,6 +76,27 @@ uses the conservative rules below.
 
 ## Provider-job recovery
 
+### WebSocket transport backpressure
+
+The native Unix WebSocket inbox retains raw frames in FIFO order, with limits
+of 1,024 queued frames, 8 MiB serialized input bytes and 4 MiB per frame.
+JSON parsing happens on consumption. One received frame may wait outside the
+inbox for capacity; parser, string and WebSocket-library overhead remain separate
+from the serialized-byte budget. Outbound messages are immutable serialized
+snapshots, limited to 16 queued frames and 4 MiB each.
+
+Ordinary inbound saturation pauses only its asynchronous producer. Sending,
+receive deadlines and close remain independent. Accepted frames drain before
+the recorded terminal error; terminal state needs no queue slot. No protocol
+frame is coalesced or classified by the transport. Client-level filtering still
+selects the current turn's results.
+
+A disconnect or explicit close can interrupt a frame still waiting for
+capacity, and an upstream slow-consumer policy can end the stream. Apply the
+ordinary exact-turn recovery rules below; backpressure never proves completion
+or authorizes replay. Stdio stdout buffering and subscription cleanup remain
+separate resource-lifecycle work.
+
 ### Codex live-control contention
 
 The accepted-turn stop/steer observer opens only existing current-schema state
