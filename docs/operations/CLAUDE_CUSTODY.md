@@ -39,9 +39,16 @@ ordinary `.git`. Such an alias could otherwise expose writable Git through HOME
 despite the project's read-only Git overlay. The guard uses device/inode identity,
 not equal mount IDs. Descriptor-level regressions model top-level bind aliases;
 they do not perform host bind mounts or establish complete alias exclusion.
-An alias of a deeper protected subtree still needs cross-role tree-identity
-validation in the planned namespace extraction. Keep that limitation open; this
-guard does not enable an advisor or close installed custody acceptance.
+The existing bounded descriptor scans also collect each root and its non-symlink
+descendant device/inode identities, refusing intersecting project/HOME trees.
+This detects pre-existing deeper directory aliases, including empty `.git/objects`,
+without another walk or an intersection allocation. Each set has at most 100,001
+identities. Symlinks remain references through the namespace's existing mount
+policy; their targets are not traversed or treated as inode aliases. Scan failure
+returns no partial set, and launch retains its final pin recheck and cleanup.
+These checks do not freeze directory contents or exclude an unconfined host actor
+changing them between or after scans. Neutral namespace extraction, installed
+custody and the full advisor boundary remain open.
 
 Choose the smallest candidate that can meet REQ-SEC-008 with those facts. Assess
 separate Linux identities only under an independently trusted management boundary;
