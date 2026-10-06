@@ -73,6 +73,12 @@ class BoundedInbox(Generic[T]):
         if callback is not None:
             callback()
 
+    def put(self, value: T, size: int) -> None:
+        """Wait for capacity; finish wakes blocked producers as well as consumers."""
+        with self._condition:
+            while not self.try_put(value, size):
+                self._condition.wait()
+
     def get(self, *, timeout: float) -> T:
         deadline = time.monotonic() + max(0, timeout)
         with self._condition:
