@@ -27,6 +27,7 @@ def commit_worker_failure_notice(
     fallback_notice: str,
     error_detail: str | None = None,
 ) -> ProviderJobRecord:
+    runtime = config.require_agent(job.agent_id).runtime
     if failure.notice == "incoming_material":
         notice = (
             "Incoming material integrity validation failed; "
@@ -44,10 +45,11 @@ def commit_worker_failure_notice(
         error_code=failure.error_code,
         error_detail=error_detail,
         terminal_turn_status=turn_status if turn_status in {"failed", "interrupted"} else None,
+        provider_runtime=runtime,
         preparation_retry=preparation_retry_binding(
             error, root=root, model_provider=config.codex_model_provider
         )
-        if job.agent_id == "codex"
+        if runtime == "codex"
         else None,
         sender_agent_id=job.agent_id,
         telegram_html=notice,

@@ -4,7 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
@@ -25,13 +25,18 @@ from hermes_codex_router.preexecution_retry_state import (
     PreexecutionRetryState,
     PreparationRetryRefused,
 )
+from hermes_codex_router.registry import ExecutionRootError
 from hermes_codex_router.state import HubState, StateError
+from hermes_codex_router.state_errors import CodexPermissionSelectionChanged
 from hermes_codex_router.worker_execution import (
+    classify_worker_failure,
     codex_turn_text,
     require_exact_retry_transport,
     validate_codex_worker_binding,
 )
+from hermes_codex_router.worker_failure_notice import commit_worker_failure_notice
 from tests import test_codex_worker as worker_fixtures
+from tests import test_embedded_queue_service as embedded_fixtures
 from tests.hub_service_harness import CHAT_ID, CODEX, THREAD_ID, HubHarness, text_update
 
 
@@ -77,6 +82,7 @@ class PreexecutionRetryTests(unittest.TestCase):
             error_code=CodexPreparationError.__name__,
             sender_agent_id="codex",
             telegram_html="Example preparation failed",
+            provider_runtime="codex",
             preparation_retry=PreparationRetryBinding(self.harness.root, None),
         )
         delivery = self.state.lease_telegram_outbox("codex", "example-sender")
@@ -96,7 +102,128 @@ class PreexecutionRetryTests(unittest.TestCase):
             reply_message_id=reply_id,
             canonical_root=self.harness.root,
             model_provider=None,
+            provider_runtime="codex",
         )
+
+    def test_unavailable_root_cannot_abort_failure_binding_construction(self) -> None:
+        error = CodexPreparationError("Example setup EOF")
+        error.__cause__ = EOFError("Example closed")
+        with patch.object(Path, "resolve", side_effect=OSError("fictional private path")):
+            self.assertIsNone(
+                preparation_retry_binding(error, root=self.harness.root, model_provider=None)
+            )
+
+    def test_real_symlink_loop_refuses_binding_without_raw_failure(self) -> None:
+        root = self.harness.root.parent / "example-loop"
+        root.symlink_to(root.name)
+        error = CodexPreparationError("Example setup EOF")
+        error.__cause__ = EOFError("Example closed")
+        self.assertIsNone(preparation_retry_binding(error, root=root, model_provider=None))
+
+    def test_worker_failure_helper_commits_notice_when_binding_root_is_unavailable(self) -> None:
+        lease = self.state.lease_provider_job("codex", "example-worker")
+        assert lease is not None and lease.lease_token is not None
+        executing = self.state.mark_provider_job_executing(lease.job_id, lease.lease_token)
+        error = CodexPreparationError("Example setup EOF")
+        error.__cause__ = EOFError("Example closed")
+        with patch.object(Path, "resolve", side_effect=OSError("fictional private path")):
+            result = commit_worker_failure_notice(
+                self.state,
+                self.harness.config,
+                executing,
+                lease.lease_token,
+                root=self.harness.root,
+                error=error,
+                failure=classify_worker_failure(error, runtime="codex"),
+                turn_status="unknown",
+                fallback_notice="Example failure",
+            )
+        self.assertEqual(result.status, "failed")
+        self.assertIsNotNone(self.state.get_telegram_outbox_for_job(result.job_id))
+        self.assertIsNone(self.sql("SELECT 1 FROM provider_preexecution_retry_tickets").fetchone())
+
+    def test_retry_child_lease_crash_preserves_attempt_then_execution_crash_blocks_replay(
+        self,
+    ) -> None:
+        self.preparation_failure(self.job.job_id, 101)
+        child, _ = self.retry(self.job.job_id, 101)
+        now = datetime.now(timezone.utc) + timedelta(seconds=1)
+        leased = self.state.lease_provider_job("codex", "example-worker", lease_seconds=1, now=now)
+        assert leased is not None
+        self.assertEqual(
+            (leased.job_id, leased.attempt_count, leased.max_attempts), (child.job_id, 0, 1)
+        )
+        self.state.recover_stale_provider_jobs(agent_id="codex", now=now + timedelta(seconds=2))
+        queued = self.state.get_provider_job(child.job_id)
+        self.assertEqual((queued.status, queued.attempt_count), ("queued", 0))
+        again = self.state.lease_provider_job(
+            "codex", "example-worker", lease_seconds=1, now=now + timedelta(seconds=3)
+        )
+        assert again is not None and again.lease_token is not None
+        executing = self.state.mark_provider_job_executing(
+            again.job_id, again.lease_token, now=now + timedelta(seconds=3)
+        )
+        self.assertEqual(executing.attempt_count, 1)
+        self.state.recover_stale_provider_jobs(agent_id="codex", now=now + timedelta(seconds=5))
+        uncertain = self.state.get_provider_job(child.job_id)
+        self.assertEqual((uncertain.status, uncertain.attempt_count), ("indeterminate", 1))
+        self.assertEqual(self.state.execution_capacity_snapshot(1)["blocked_uncertain_scopes"], 1)
+        self.assertIsNone(
+            self.state.lease_provider_job("codex", "example-worker", now=now + timedelta(seconds=6))
+        )
+
+    def test_unavailable_root_inside_failure_commit_keeps_notice_without_ticket(self) -> None:
+        lease = self.state.lease_provider_job("codex", "example-worker")
+        assert lease is not None and lease.lease_token is not None
+        self.state.mark_provider_job_executing(self.job.job_id, lease.lease_token)
+        with patch.object(Path, "resolve", side_effect=OSError("fictional private path")):
+            result = self.state.terminate_provider_job_with_notice(
+                self.job.job_id,
+                lease.lease_token,
+                status="failed",
+                error_class="pre_execution",
+                error_code="CodexPreparationError",
+                sender_agent_id="codex",
+                telegram_html="Example setup failed; no turn sent",
+                provider_runtime="codex",
+                preparation_retry=PreparationRetryBinding(self.harness.root, None),
+            )
+        self.assertEqual(result.status, "failed")
+        notice = self.state.get_telegram_outbox_for_job(self.job.job_id)
+        self.assertIn("root", notice.telegram_html)
+        self.assertNotIn("fictional private path", notice.telegram_html)
+        self.assertIsNone(self.sql("SELECT 1 FROM provider_preexecution_retry_tickets").fetchone())
+        self.assertEqual(len(self.state.provider_jobs_for_topic(self.topic.topic_id)), 1)
+
+    def test_unavailable_retry_root_is_a_fixed_refusal_without_effects(self) -> None:
+        self.preparation_failure(self.job.job_id, 101)
+        before = self.snapshot()
+        with (
+            patch.object(Path, "resolve", side_effect=OSError("fictional private path")),
+            self.assertRaises(PreparationRetryRefused) as caught,
+        ):
+            self.retry(self.job.job_id, 101)
+        self.assertNotIn("fictional private path", caught.exception.public_message)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_preparation_permission_exception_uses_its_original_source(self) -> None:
+        self.preparation_failure(self.job.job_id, 101)
+        update = text_update(30, "retry")
+        cast(dict[str, Any], update["message"])["reply_to_message"] = {"message_id": 101}
+        with (
+            patch.object(
+                PreexecutionRetryState,
+                "retry_from_notice",
+                side_effect=CodexPermissionSelectionChanged(),
+            ),
+            patch.object(
+                self.state, "reject_changed_codex_input", return_value="rejected"
+            ) as reject,
+        ):
+            self.assertTrue(self.harness.service.handle_update(update))
+        self.assertEqual(reject.call_args.kwargs["session_id"], self.job.session_id)
+        self.assertEqual(reject.call_args.kwargs["session_generation"], self.job.session_generation)
+        self.assertEqual(len(self.state.provider_jobs_for_topic(self.topic.topic_id)), 1)
 
     def test_exact_saved_task_survives_two_preparation_failures(self) -> None:
         self.preparation_failure(self.job.job_id, 101)
@@ -119,6 +246,216 @@ class PreexecutionRetryTests(unittest.TestCase):
         self.assertEqual(self.state.get_provider_job(self.job.job_id).payload_text, self.payload)
         self.assertIsNone(self.sql("SELECT 1 FROM provider_job_continuations LIMIT 1").fetchone())
 
+    def alias_job(self):
+        self.preparation_failure(self.job.job_id, 101)
+        alias = replace(CODEX, agent_id="example-codex", telegram_username="example_alias_bot")
+        self.harness.with_config(agents=(CODEX, alias))
+        session = self.harness.activate(alias, provider_session_id=None)
+        job, _ = self.state.enqueue_provider_job(
+            idempotency_key="example:alias",
+            chat_id=CHAT_ID,
+            message_id=21,
+            topic_id=self.topic.topic_id,
+            agent_id=alias.agent_id,
+            session_id=session.session_id,
+            session_generation=session.generation,
+            model=session.model,
+            effort=session.effort,
+            payload_text=self.payload,
+        )
+        lease = self.state.lease_provider_job(alias.agent_id, "example-worker")
+        assert lease is not None and lease.lease_token is not None
+        return self.state.mark_provider_job_executing(job.job_id, lease.lease_token)
+
+    def test_configured_codex_alias_retry_preserves_agent_and_authorized_text(self) -> None:
+        job = self.alias_job()
+        assert job.lease_token is not None
+        error = CodexPreparationError("Example setup EOF")
+        error.__cause__ = EOFError("Example closed")
+        commit_worker_failure_notice(
+            self.state,
+            self.harness.service.config,
+            job,
+            job.lease_token,
+            root=self.harness.root,
+            error=error,
+            failure=classify_worker_failure(error, runtime="codex"),
+            turn_status="unknown",
+            fallback_notice="Example failure",
+        )
+        delivery = self.state.lease_telegram_outbox(job.agent_id, "example-sender")
+        assert delivery is not None and delivery.lease_token is not None
+        self.state.mark_telegram_outbox_delivered(
+            delivery.outbox_id, delivery.lease_token, telegram_message_id=102
+        )
+        update = text_update(30, "retry")
+        cast(dict[str, Any], update["message"])["reply_to_message"] = {"message_id": 102}
+        self.assertTrue(self.harness.service.handle_update(update))
+        child = self.state.provider_jobs_for_topic(self.topic.topic_id)[-1]
+        self.assertNotEqual(child.job_id, job.job_id)
+        self.assertEqual((child.agent_id, child.payload_text), (job.agent_id, self.payload))
+        validate_codex_worker_binding(
+            self.state, child, self.harness.service.config, self.harness.root
+        )
+
+    def test_alias_contradiction_without_retry_binding_keeps_root_uncertain(self) -> None:
+        job = self.alias_job()
+        assert job.lease_token is not None
+        journal = ExecutionJournal(self.state)
+        journal.record_thread(job.job_id, job.lease_token, "example-thread", self.harness.root)
+        journal.record_turn(job.job_id, job.lease_token, "example-turn")
+        error = CodexPreparationError("Example setup EOF")
+        error.__cause__ = EOFError("Example closed")
+        with patch.object(Path, "resolve", side_effect=OSError("fictional private path")):
+            result = commit_worker_failure_notice(
+                self.state,
+                self.harness.service.config,
+                job,
+                job.lease_token,
+                root=self.harness.root,
+                error=error,
+                failure=classify_worker_failure(error, runtime="codex"),
+                turn_status="unknown",
+                fallback_notice="Example failure",
+            )
+        self.assertEqual(result.status, "indeterminate")
+        self.assertEqual(self.state.execution_capacity_snapshot(1)["blocked_uncertain_scopes"], 1)
+        self.assertIsNone(
+            self.sql(
+                "SELECT 1 FROM provider_preexecution_retry_tickets WHERE source_job_id=?",
+                (job.job_id,),
+            ).fetchone()
+        )
+
+    def test_direct_root_failure_preserves_contradiction_on_both_worker_paths(self) -> None:
+        def contradictory_root(state, target):
+            job = next(
+                job
+                for job in state.provider_jobs_for_topic(target.topic.topic_id)
+                if job.status == "executing"
+            )
+            assert job.lease_token is not None
+            journal = ExecutionJournal(state)
+            journal.record_thread(
+                job.job_id, job.lease_token, "example-thread", target.project.root
+            )
+            journal.record_turn(job.job_id, job.lease_token, "example-turn")
+            raise ExecutionRootError()
+
+        for external in (True, False):
+            with self.subTest(external=external):
+                fixture = (
+                    worker_fixtures.CodexQueueWorkerTests()
+                    if external
+                    else embedded_fixtures.EmbeddedQueueServiceTests()
+                )
+                self.addCleanup(fixture.doCleanups)
+                fixture.setUp()
+                self.addCleanup(fixture.tearDown)
+                if external:
+                    fixture = cast(worker_fixtures.CodexQueueWorkerTests, fixture)
+                    job_id = fixture.enqueue()
+                    worker = fixture.worker(worker_fixtures.WorkerClient())
+                    self.addCleanup(worker.close)
+                    with patch(
+                        "hermes_codex_router.external_worker.revalidate_worker_execution_root",
+                        side_effect=contradictory_root,
+                    ):
+                        self.assertTrue(worker.run_cycle())
+                    state = worker.state
+                else:
+                    fixture = cast(embedded_fixtures.EmbeddedQueueServiceTests, fixture)
+                    service, _ = fixture.service(embedded_fixtures.QueueClient())
+                    self.addCleanup(service.close)
+                    self.assertTrue(
+                        service.handle_update(embedded_fixtures.update(1, "Example task"))
+                    )
+                    with patch(
+                        "hermes_codex_router.service.revalidate_worker_execution_root",
+                        side_effect=contradictory_root,
+                    ):
+                        self.assertTrue(service.run_embedded_queue_cycle())
+                    state = service.state
+                    topic = state.find_topic(CHAT_ID, THREAD_ID)
+                    assert topic is not None
+                    job_id = state.provider_jobs_for_topic(topic.topic_id)[0].job_id
+                self.assertEqual(state.get_provider_job(job_id).status, "indeterminate")
+                self.assertEqual(
+                    state.execution_capacity_snapshot(1)["blocked_uncertain_scopes"], 1
+                )
+                self.assertIn("conflicts", state.get_telegram_outbox_for_job(job_id).telegram_html)
+
+    def test_codex_label_on_another_runtime_cannot_create_retry_authority(self) -> None:
+        lease = self.state.lease_provider_job("codex", "example-worker")
+        assert lease is not None and lease.lease_token is not None
+        job = self.state.mark_provider_job_executing(lease.job_id, lease.lease_token)
+        error = CodexPreparationError("Example setup EOF")
+        error.__cause__ = EOFError("Example closed")
+        config = replace(self.harness.config, agents=(replace(CODEX, runtime="antigravity"),))
+        commit_worker_failure_notice(
+            self.state,
+            config,
+            job,
+            lease.lease_token,
+            root=self.harness.root,
+            error=error,
+            failure=classify_worker_failure(error, runtime="antigravity"),
+            turn_status="unknown",
+            fallback_notice="Example failure",
+        )
+        self.assertIsNone(self.sql("SELECT 1 FROM provider_preexecution_retry_tickets").fetchone())
+
+    def test_retry_execution_rechecks_every_child_selection_and_material_membership(self) -> None:
+        self.preparation_failure(self.job.job_id, 101)
+        child, _ = self.retry(self.job.job_id, 101)
+        for change in (
+            {"agent_id": "example-other"},
+            {"topic_id": child.topic_id + 1},
+            {"session_id": "example-other"},
+            {"session_generation": child.session_generation + 1},
+            {"model": "example-other"},
+            {"effort": "low"},
+            {"codex_permission_profile": "example-other"},
+        ):
+            with self.subTest(change=change), self.assertRaises(CodexRetryBindingError):
+                validate_codex_worker_binding(
+                    self.state, replace(child, **change), self.harness.config, self.harness.root
+                )
+        self.add_material(child.job_id, message_id=30)
+        with self.assertRaises(CodexRetryBindingError):
+            validate_codex_worker_binding(self.state, child, self.harness.config, self.harness.root)
+
+    def test_preparation_retry_ticket_cannot_be_updated(self) -> None:
+        self.preparation_failure(self.job.job_id, 101)
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.sql(
+                "UPDATE provider_preexecution_retry_tickets SET payload_text='Example changed' "
+                "WHERE source_job_id=?",
+                (self.job.job_id,),
+            )
+
+    def test_real_65_source_chain_refuses_without_any_provider_invocation(self) -> None:
+        source = self.job.job_id
+        for index in range(65):
+            notice = 101 + index
+            self.preparation_failure(source, notice)
+            if index < 64:
+                child, created = self.retry(source, notice, 201 + index)
+                self.assertTrue(created)
+                self.assertEqual(child.payload_text, self.payload)
+                source = child.job_id
+        self.assertIn("ancestry", self.state.get_telegram_outbox_for_job(source).telegram_html)
+        self.assertIsNone(
+            self.sql(
+                "SELECT 1 FROM provider_preexecution_retry_tickets WHERE source_job_id=?", (source,)
+            ).fetchone()
+        )
+        before = self.snapshot()
+        with self.assertRaises(PreparationRetryRefused):
+            self.retry(source, 165, 265)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.harness.client.turns, 0)
+
     def test_restart_and_distinct_replies_do_not_create_another_child(self) -> None:
         self.preparation_failure(self.job.job_id, 101)
         child, _ = self.retry(self.job.job_id, 101)
@@ -132,6 +469,7 @@ class PreexecutionRetryTests(unittest.TestCase):
             reply_message_id=31,
             canonical_root=self.harness.root,
             model_provider=None,
+            provider_runtime="codex",
         )
         self.assertFalse(created)
         self.assertEqual(repeated.job_id, child.job_id)
@@ -251,7 +589,10 @@ class PreexecutionRetryTests(unittest.TestCase):
         before = self.snapshot()
         with self.assertRaisesRegex(PreparationRetryRefused, "no saved context snapshot"):
             PreexecutionRetryState(self.state)._validate(
-                self.job.job_id, canonical_root=self.harness.root, model_provider=None
+                self.job.job_id,
+                canonical_root=self.harness.root,
+                model_provider=None,
+                provider_runtime="codex",
             )
         self.assertEqual(self.snapshot(), before)
         with (
@@ -342,7 +683,10 @@ class PreexecutionRetryTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(PreparationRetryRefused, "retry ancestry"):
             PreexecutionRetryState(self.state)._validate(
-                self.job.job_id, canonical_root=self.harness.root, model_provider=None
+                self.job.job_id,
+                canonical_root=self.harness.root,
+                model_provider=None,
+                provider_runtime="codex",
             )
 
     def sql(self, statement, parameters=()):
@@ -404,6 +748,7 @@ class PreexecutionRetryTests(unittest.TestCase):
                         self.job.job_id,
                         canonical_root=self.harness.root,
                         model_provider=None,
+                        provider_runtime="codex",
                     )
                 with self.assertRaises(CodexRetryBindingError):
                     validate_codex_worker_binding(
@@ -494,6 +839,7 @@ class PreexecutionRetryTests(unittest.TestCase):
                     error_code="CodexPreparationError",
                     sender_agent_id="codex",
                     telegram_html="Example preparation failure",
+                    provider_runtime="codex",
                     preparation_retry=PreparationRetryBinding(self.harness.root, None),
                 )
         self.assertEqual(self.state.get_provider_job(self.job.job_id).status, "executing")
@@ -713,6 +1059,7 @@ class PreexecutionRetryTests(unittest.TestCase):
                     error_code="CodexPreparationError",
                     sender_agent_id="codex",
                     telegram_html="Example failure",
+                    provider_runtime="codex",
                     preparation_retry=PreparationRetryBinding(self.harness.root, None),
                 )
                 self.assertEqual(result.status, "indeterminate" if accepted else "cancelled")
@@ -817,8 +1164,10 @@ class PreexecutionRetryTests(unittest.TestCase):
 
     def test_external_worker_two_preparation_failures_then_success_preserves_task(self) -> None:
         class Client(worker_fixtures.WorkerClient):
-            attempts = 0
-            prompts: list[str] = []
+            def __init__(self):
+                super().__init__()
+                self.attempts = 0
+                self.prompts: list[str] = []
 
             def start_thread(self, **kwargs):
                 self.attempts += 1
@@ -834,6 +1183,7 @@ class PreexecutionRetryTests(unittest.TestCase):
                 raise AssertionError("task authorization cannot grant a native permission")
 
         fixture = worker_fixtures.CodexQueueWorkerTests()
+        self.addCleanup(fixture.doCleanups)
         fixture.setUp()
         self.addCleanup(fixture.tearDown)
         client = Client()
@@ -861,6 +1211,7 @@ class PreexecutionRetryTests(unittest.TestCase):
                 reply_message_id=30 + attempt,
                 canonical_root=fixture.registry.require_project("example-project").root,
                 model_provider=None,
+                provider_runtime="codex",
             )
             self.assertTrue(created)
             self.assertEqual(child.payload_text, self.payload)
@@ -941,6 +1292,7 @@ class PreexecutionRetryTests(unittest.TestCase):
                 reply_message_id=30,
                 canonical_root=fixture.registry.require_project("example-project").root,
                 model_provider=None,
+                provider_runtime="codex",
             )
         self.assertEqual(client.turns, 0)
         self.assertEqual(len(state.provider_jobs_for_topic(original.topic_id)), 1)

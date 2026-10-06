@@ -1128,6 +1128,7 @@ class ProjectHubService:
                         status=failure.status,
                         error_class=failure.error_class,
                         error_code=failure.error_code,
+                        provider_runtime=agent.runtime,
                         sender_agent_id=agent.agent_id,
                         telegram_html=exc.public_message,
                     )
@@ -1145,6 +1146,7 @@ class ProjectHubService:
                         status=failure.status,
                         error_class=failure.error_class,
                         error_code=failure.error_code,
+                        provider_runtime=agent.runtime,
                         sender_agent_id=agent.agent_id,
                         telegram_html=(
                             f"{agent.display_name} limit reached. Reset telemetry was "
@@ -1159,6 +1161,7 @@ class ProjectHubService:
                         status=failure.status,
                         error_class=failure.error_class,
                         error_code=failure.error_code,
+                        provider_runtime=agent.runtime,
                         sender_agent_id=agent.agent_id,
                         telegram_html=exc.public_message,
                     )

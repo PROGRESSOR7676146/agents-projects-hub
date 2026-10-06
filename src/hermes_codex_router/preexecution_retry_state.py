@@ -47,7 +47,7 @@ class PreexecutionRetryState:
                WHERE outbox.status='delivered' AND parts.delivered_at IS NOT NULL
                  AND parts.telegram_message_id=? AND outbox.chat_id=?
                  AND outbox.thread_id=? AND topics.thread_id=?
-                 AND outbox.sender_agent_id='codex' AND jobs.agent_id='codex'
+                 AND outbox.sender_agent_id=jobs.agent_id
                  AND jobs.status='failed' AND jobs.error_class='pre_execution'
                LIMIT 1""",
             (notice_message_id, chat_id, thread_id, thread_id),
@@ -93,15 +93,17 @@ class PreexecutionRetryState:
             )
         session = self.state.get_session(str(job["session_id"]))
         topic = self.state.get_topic(int(job["topic_id"]))
-        root = str(binding.canonical_root.resolve(strict=True))
+        try:
+            root = str(binding.canonical_root.resolve(strict=True))
+        except (OSError, RuntimeError):
+            return "\n\nRetry is unavailable: the saved project root cannot be verified. Inspect local registration."
         checkpoint = self.connection.execute(
             "SELECT * FROM provider_execution_checkpoints WHERE job_id=?", (job_id,)
         ).fetchone()
         if (
-            job["agent_id"] != "codex"
-            or topic.execution_scope not in {"root:" + root, "project:" + topic.project_id}
+            topic.execution_scope not in {"root:" + root, "project:" + topic.project_id}
             or session.topic_id != topic.topic_id
-            or session.agent_id != "codex"
+            or session.agent_id != job["agent_id"]
             or session.generation != job["session_generation"]
             or session.status not in {"active", "satellite"}
             or session.writer_mode != "telegram"
@@ -201,8 +203,17 @@ class PreexecutionRetryState:
         )
 
     def _validate(
-        self, source_id: str, *, canonical_root: Path, model_provider: str | None
+        self,
+        source_id: str,
+        *,
+        canonical_root: Path,
+        model_provider: str | None,
+        provider_runtime: str,
     ) -> sqlite3.Row:
+        if provider_runtime != "codex":
+            raise PreparationRetryRefused(
+                "Saved-task retry is unavailable for this runtime; no new task was started."
+            )
         ticket = self.connection.execute(
             "SELECT * FROM provider_preexecution_retry_tickets WHERE source_job_id=?",
             (source_id,),
@@ -214,31 +225,38 @@ class PreexecutionRetryState:
             )
         if ticket is None:
             raise PreparationRetryRefused(
-                "Retry unavailable: this old failure has no verified saved retry binding. "
+                "Retry unavailable: this failure has no verified saved retry binding. "
                 "Send the original task again; no new task was started."
             )
         old = self.state.get_provider_job(source_id)
         session = self.state.get_session(ticket["session_id"])
         topic = self.state.get_topic(old.topic_id)
-        root = str(canonical_root.resolve(strict=True))
+        try:
+            root = str(canonical_root.resolve(strict=True))
+        except (OSError, RuntimeError) as error:
+            raise PreparationRetryRefused(
+                "Retry unavailable: the project root cannot be verified. Inspect local registration; "
+                "no new task was started."
+            ) from error
         if (
             old.status != "failed"
             or old.error_class != "pre_execution"
             or old.error_code != "CodexPreparationError"
-            or old.agent_id != "codex"
             or self.has_execution_evidence(source_id)
             or root != ticket["canonical_root"]
             or topic.project_id != ticket["project_id"]
             or topic.execution_scope not in {"root:" + root, "project:" + topic.project_id}
             or model_provider != ticket["model_provider"]
             or session.topic_id != old.topic_id
-            or session.agent_id != "codex"
+            or session.agent_id != old.agent_id
             or session.session_id != old.session_id
             or session.generation != old.session_generation
             or session.generation != ticket["session_generation"]
             or session.status not in {"active", "satellite"}
             or session.writer_mode != "telegram"
             or session.provider_session_id != ticket["expected_thread_id"]
+            or old.model != ticket["model"]
+            or old.effort != ticket["effort"]
             or session.model != ticket["model"]
             or session.effort != ticket["effort"]
             or not (
@@ -271,6 +289,7 @@ class PreexecutionRetryState:
         reply_message_id: int,
         canonical_root: Path,
         model_provider: str | None,
+        provider_runtime: str,
     ) -> tuple[ProviderJobRecord, bool]:
         with self.state._immediate_transaction():
             if (
@@ -290,7 +309,10 @@ class PreexecutionRetryState:
                 )
                 return self.state.get_provider_job(prior[0]), False
             ticket = self._validate(
-                source_job_id, canonical_root=canonical_root, model_provider=model_provider
+                source_job_id,
+                canonical_root=canonical_root,
+                model_provider=model_provider,
+                provider_runtime=provider_runtime,
             )
             if self.state.message_already_observed(chat_id, reply_message_id):
                 raise StateError("preparation retry control was already consumed")
@@ -300,7 +322,7 @@ class PreexecutionRetryState:
                 chat_id=chat_id,
                 message_id=reply_message_id,
                 topic_id=old.topic_id,
-                agent_id="codex",
+                agent_id=old.agent_id,
                 session_id=old.session_id,
                 session_generation=old.session_generation,
                 model=ticket["model"],
@@ -359,7 +381,12 @@ class PreexecutionRetryState:
         )
 
     def require_execution_binding(
-        self, job: ProviderJobRecord, *, root: Path, model_provider: str | None
+        self,
+        job: ProviderJobRecord,
+        *,
+        root: Path,
+        model_provider: str | None,
+        provider_runtime: str,
     ) -> None:
         link = self.connection.execute(
             "SELECT source_job_id FROM provider_preexecution_retries WHERE child_job_id=?",
@@ -367,9 +394,23 @@ class PreexecutionRetryState:
         ).fetchone()
         if link is None:
             return
-        ticket = self._validate(link[0], canonical_root=root, model_provider=model_provider)
+        ticket = self._validate(
+            link[0],
+            canonical_root=root,
+            model_provider=model_provider,
+            provider_runtime=provider_runtime,
+        )
+        source = self.state.get_provider_job(link[0])
         if (
-            job.provider_session_id != ticket["expected_thread_id"]
+            job.agent_id != source.agent_id
+            or job.topic_id != source.topic_id
+            or job.session_id != ticket["session_id"]
+            or job.session_generation != ticket["session_generation"]
+            or job.model != ticket["model"]
+            or job.effort != ticket["effort"]
+            or job.codex_permission_profile != ticket["codex_permission_profile"]
+            or self.has_materials(job.job_id)
+            or job.provider_session_id != ticket["expected_thread_id"]
             or job.payload_text != ticket["payload_text"]
             or job.context_watermark != ticket["context_watermark"]
             or job.handoff_id != ticket["handoff_id"]

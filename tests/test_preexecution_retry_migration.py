@@ -38,6 +38,12 @@ class PreexecutionRetryMigrationTests(unittest.TestCase):
             self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 40)
         with sqlite3.connect(self.path) as connection:
             after = self.snapshot(connection)
+            self.assertIsNotNone(
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='trigger' "
+                    "AND name='provider_preexecution_retry_ticket_immutable'"
+                ).fetchone()
+            )
             self.assertEqual(
                 set(after) - set(before),
                 {
@@ -53,6 +59,13 @@ class PreexecutionRetryMigrationTests(unittest.TestCase):
         repeated = migrations.migrate_database(self.path)
         self.assertEqual((repeated.previous_version, repeated.current_version), (41, 41))
         self.assertIsNone(repeated.backup_path)
+        with sqlite3.connect(self.path) as connection:
+            self.assertIsNotNone(
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='trigger' "
+                    "AND name='provider_preexecution_retry_ticket_immutable'"
+                ).fetchone()
+            )
 
     def test_fault_rolls_back_tables_and_version_without_replacing_live_database(self) -> None:
         with sqlite3.connect(self.path) as connection:
@@ -64,4 +77,10 @@ class PreexecutionRetryMigrationTests(unittest.TestCase):
                 migrations.migrate_database(self.path, create_backup=False)
         with sqlite3.connect(self.path) as connection:
             self.assertEqual(self.snapshot(connection), before)
+            self.assertIsNone(
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='trigger' "
+                    "AND name='provider_preexecution_retry_ticket_immutable'"
+                ).fetchone()
+            )
             self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 40)

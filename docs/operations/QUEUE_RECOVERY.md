@@ -154,6 +154,20 @@ changed bindings and contradictory execution evidence cause refusal. Follow
 [REQ-QUEUE-004](../product/PERSISTENCE_AND_RECOVERY.md) for the safety contract;
 never grant or replay native tool permissions from task authorization text.
 
+This is a new owner input in FIFO arrival order. Later work already queued or
+completed can precede it in the same session; retry does not restore the old
+queue position or rewind native context. Configured Codex aliases keep their
+actual agent identity. Runtime provenance comes from trusted local configuration,
+not the agent's label. A changed child snapshot or attached child material refuses
+before preparation. An unavailable root refuses retry authority while preserving
+the original failure and notice.
+
+The ticket update guard is installed by the unreleased schema-41 migration.
+An existing development database already marked schema 41 does not rerun that
+migration on reopen; discard only disposable fixtures or prepare an explicit
+upgrade before retaining such a database. Production migration and deployment
+remain separately authorized.
+
 Preparation that replaces an existing Codex thread cannot offer saved-task
 retry without a frozen effective-context snapshot. The fallback's bounded
 visible-context bridge currently exists only in memory. Hub refuses new tickets

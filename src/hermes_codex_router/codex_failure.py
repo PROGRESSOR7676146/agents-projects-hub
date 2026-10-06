@@ -69,7 +69,7 @@ def codex_failure_notice(
     """Only fixed causes and explicitly visible assistant text reach Telegram."""
     if isinstance(error, CodexRetryBindingError):
         return (
-            "Retry paused: the saved session, root, route or permissions changed. "
+            "Retry paused: Hub could not verify the saved task/context, session, root, route or permissions. "
             "The provider was not started. Inspect /status and send a fresh task "
             "only after checking the binding."
         )
@@ -92,7 +92,7 @@ def codex_failure_notice(
         return (
             "What happened: Codex could not prepare the task before starting it.\n\n"
             "Saved: No productive provider turn was sent.\n\n"
-            "Next: Retry after Codex is available."
+            "Next: Check /status and resolve the preparation failure."
         )
     reason = getattr(error, "failure_reason", codex_failure_reason(error))
     causes = {

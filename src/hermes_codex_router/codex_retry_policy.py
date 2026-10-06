@@ -25,5 +25,11 @@ def preparation_retry_binding(
     if isinstance(cause, (EOFError, ConnectionError, TimeoutError)) or (
         type(cause) is RpcError and str(cause) == "Codex notification buffer exceeded its bound"
     ):
-        return PreparationRetryBinding(root.resolve(strict=True), model_provider)
+        try:
+            canonical_root = root.resolve(strict=True)
+        except (OSError, RuntimeError):
+            # An unavailable/looped root refuses replay authority, but must not
+            # prevent the worker from committing the original failure notice.
+            return None
+        return PreparationRetryBinding(canonical_root, model_provider)
     return None

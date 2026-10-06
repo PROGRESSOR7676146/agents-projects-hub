@@ -234,6 +234,18 @@ acceptance.
   open; no deployment or active-worker restart follows from this entry. See the
   [recovery procedure](QUEUE_RECOVERY.md#durable-dispositions) and
   [acceptance strategy](../testing/README.md).
+  Independent Opus source review of retry head
+  `fc1265286ab8b56b730cb371008ab9cc29d7a93b` completed. Its follow-up now
+  protects failure publication when root resolution fails, derives Codex runtime
+  from trusted configuration while retaining aliases, rechecks child selections
+  and materials, and makes tickets update-immutable in unreleased migration 41.
+  Astra reviewed the domain/transaction ownership and direct failure paths.
+  Lease-crash and execution-crash regressions retain their distinct certainty;
+  a real 65-source chain refuses at the ancestry bound without invocation.
+  Final exact-head publication/review is pending. Explicit retries follow FIFO
+  arrival order; they do not rewind the session. This source lane stacks on
+  transport head `1a54af15`, separately from later transport/retirement/deadline
+  siblings. Integration and live evidence remain open.
 
 ## Closure
 

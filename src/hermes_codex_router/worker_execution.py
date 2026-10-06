@@ -320,13 +320,16 @@ def validate_codex_job_selection(
 def validate_codex_worker_binding(
     state: HubState, job: ProviderJobRecord, config: HubConfig, root: Path
 ) -> None:
-    validate_codex_job_selection(state, job, config.codex_permission_profile)
     try:
         PreexecutionRetryState(state).require_execution_binding(
-            job, root=root, model_provider=config.codex_model_provider
+            job,
+            root=root,
+            model_provider=config.codex_model_provider,
+            provider_runtime=config.require_agent(job.agent_id).runtime,
         )
-    except PreparationRetryRefused as exc:
+    except (PreparationRetryRefused, KeyError) as exc:
         raise CodexRetryBindingError() from exc
+    validate_codex_job_selection(state, job, config.codex_permission_profile)
 
 
 def should_transfer_legacy_fallback(

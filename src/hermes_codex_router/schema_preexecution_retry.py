@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS provider_preexecution_retry_tickets (
     source_inputs_json TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TRIGGER IF NOT EXISTS provider_preexecution_retry_ticket_immutable
+BEFORE UPDATE ON provider_preexecution_retry_tickets
+BEGIN SELECT RAISE(ABORT, 'preparation retry ticket is immutable'); END;
 CREATE TABLE IF NOT EXISTS provider_preexecution_retries (
     source_job_id TEXT PRIMARY KEY REFERENCES provider_preexecution_retry_tickets(source_job_id),
     child_job_id TEXT NOT NULL UNIQUE REFERENCES provider_jobs(job_id),

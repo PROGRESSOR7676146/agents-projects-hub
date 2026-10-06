@@ -1426,6 +1426,7 @@ class HubState:
         error_detail: str | None = None,
         terminal_turn_status: str | None = None,
         preparation_retry: PreparationRetryBinding | None = None,
+        provider_runtime: str | None = None,
         now: datetime | None = None,
     ) -> ProviderJobRecord:
         """Terminalize work with one failure notice, or cancel it for a covering stop."""
@@ -1458,7 +1459,7 @@ class HubState:
             contradictory = (
                 status == "failed"
                 and failure_class == "pre_execution"
-                and sender == "codex"
+                and provider_runtime == "codex"
                 and retry.has_execution_evidence(job_id)
             )
             if contradictory:
@@ -1483,7 +1484,11 @@ class HubState:
                 raise StateError("provider job lease is missing or invalid")
             if sender != str(row["agent_id"]):
                 raise StateError("Telegram outbox sender does not match provider job agent")
-            if status == "failed" and failure_class == "pre_execution" and sender == "codex":
+            if (
+                status == "failed"
+                and failure_class == "pre_execution"
+                and provider_runtime == "codex"
+            ):
                 if preparation_retry is not None and code == "CodexPreparationError":
                     html += retry.record_ticket_in_transaction(row, preparation_retry, timestamp)
             if terminal_turn_status is not None:

@@ -66,6 +66,7 @@ class ControllerRetryOrchestrator:
         try:
             root = resolve_topic_execution_root(self.state, self.registry, topic)
             if preparation_source is not None:
+                job = self.state.get_provider_job(preparation_source)
                 _, created = preparation.retry_from_notice(
                     source_job_id=preparation_source,
                     chat_id=message.chat_id,
@@ -74,6 +75,7 @@ class ControllerRetryOrchestrator:
                     reply_message_id=message.message_id,
                     canonical_root=root,
                     model_provider=self.config.codex_model_provider,
+                    provider_runtime=self.config.require_agent(job.agent_id).runtime,
                 )
                 return RetryControlDecision(
                     True,
@@ -116,9 +118,14 @@ class ControllerRetryOrchestrator:
         except PreparationRetryRefused as exc:
             return self._reject(message, exc.public_message)
         except CodexPermissionSelectionChanged:
+            owner_source = preparation_source or source
+            if owner_source is None:
+                return self._reject(
+                    message,
+                    "Retry is paused: saved permissions changed. Use /new before sending a task.",
+                )
             try:
-                assert source is not None
-                job = self.state.get_provider_job(source)
+                job = self.state.get_provider_job(owner_source)
                 disposition = self.state.reject_changed_codex_input(
                     chat_id=message.chat_id,
                     message_id=message.message_id,
@@ -135,7 +142,7 @@ class ControllerRetryOrchestrator:
                 message,
                 "Retry is paused: saved permissions changed. Use /new before sending a task.",
             )
-        except (ExecutionRootError, StateError):
+        except (ExecutionRootError, StateError, KeyError):
             return self._reject(
                 message,
                 "Retry is paused: the session, root, or writer changed. Inspect /status before trying again.",

@@ -465,6 +465,7 @@ class ExternalQueueWorker:
                 expected_status="leased",
                 error_class="pre_execution",
                 error_code=str(exc),
+                provider_runtime=self.agent.runtime,
                 sender_agent_id=self.agent.agent_id,
                 telegram_html=(
                     f"{self.agent.display_name} did not start: the project binding is invalid; verify it locally."
@@ -568,6 +569,7 @@ class ExternalQueueWorker:
                     status=failure.status,
                     error_class=failure.error_class,
                     error_code=failure.error_code,
+                    provider_runtime=self.agent.runtime,
                     sender_agent_id=self.agent.agent_id,
                     telegram_html=exc.public_message,
                 )
@@ -594,6 +596,7 @@ class ExternalQueueWorker:
                     status=failure.status,
                     error_class=failure.error_class,
                     error_code=failure.error_code,
+                    provider_runtime=self.agent.runtime,
                     sender_agent_id=self.agent.agent_id,
                     telegram_html=(
                         f"{self.agent.display_name} limit reached. Reset telemetry was "
@@ -611,6 +614,7 @@ class ExternalQueueWorker:
                     status=failure.status,
                     error_class=failure.error_class,
                     error_code=failure.error_code,
+                    provider_runtime=self.agent.runtime,
                     sender_agent_id=self.agent.agent_id,
                     telegram_html=exc.public_message,
                 )
@@ -703,6 +707,7 @@ class ExternalQueueWorker:
             status=failure.status,
             error_class=failure.error_class,
             error_code=failure.error_code,
+            provider_runtime=self.agent.runtime,
             sender_agent_id=self.agent.agent_id,
             telegram_html=(
                 self._claude_partial_notice(job, token, project_root, error.public_message)
