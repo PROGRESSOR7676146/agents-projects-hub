@@ -144,11 +144,15 @@ system runtime, fixture scripts and managed requirements. Real Codex authenticat
 configuration are hidden, provider credential variables are excluded, and external
 network access is unavailable. A temporary managed requirements file and fictional
 project/key/symlink controls establish the policy under test. The fixture permits
-at most four local Responses requests per case. Command, file and permission
-approvals are declined. MCP elicitations are declined unless the test explicitly
+at most four local Responses requests per case. Command and file approvals are
+declined; permission requests receive an empty turn-scoped grant. MCP elicitations
+are declined unless the test explicitly
 arms one exact synthetic fixture consent; the fixture requests no persisted grant. This is not a
 human approval host or approval transport acceptance.
 It controls only its owned disposable processes, never installed services.
+Host-side repairs and observations reject symlinks at every project path
+component. The unarmed MCP case also verifies the absence of probe mutations
+independently of the native item's reported failure.
 
 The native cases cover explicit profile selection, exact stored-thread resume
 after restarting the disposable app-server, actual tool access denials, legacy

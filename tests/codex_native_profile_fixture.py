@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
 import time
-from contextlib import AbstractContextManager
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -333,7 +336,23 @@ enabled = false
     def prepare_turn_case(self, *, kind: str = "command", nonce: str | None = None) -> int:
         self.case_id += 1
         case = f"example-case-{self.case_id}"
-        (self.project / ".git" / "HEAD").write_text("ref: refs/heads/example\n")
+        with self._project_directory(".git") as directory:
+            descriptor = os.open(
+                "HEAD",
+                os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+                0o644,
+                dir_fd=directory,
+            )
+            with os.fdopen(descriptor, "wb") as output:
+                if not stat.S_ISREG(os.fstat(output.fileno()).st_mode):
+                    raise NativeProfileFixtureError("native_fixture_project_path_unsafe")
+                os.ftruncate(output.fileno(), 0)
+                output.write(b"ref: refs/heads/example\n")
+        with self._project_directory() as directory:
+            try:
+                os.unlink("example-write", dir_fd=directory)
+            except FileNotFoundError:
+                pass
         # Reset content in place; the namespace retains this exact mounted inode.
         (self.base / "example-authority.key").write_text("fictional sentinel; no real credential")
         self._send({"fixture_case": case, "fixture_kind": kind, "fixture_nonce": nonce})
@@ -341,6 +360,40 @@ enabled = false
         while self._take(deadline).get("case") != case:
             pass
         return len(self.events)
+
+    @contextmanager
+    def _project_directory(self, *parts: str) -> Iterator[int]:
+        # Host repairs must not follow entries writable by the namespace.
+        try:
+            with ExitStack() as cleanup:
+                descriptor = os.open(self.project, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                cleanup.callback(os.close, descriptor)
+                for part in parts:
+                    descriptor = os.open(
+                        part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor
+                    )
+                    cleanup.callback(os.close, descriptor)
+                yield descriptor
+        except FileNotFoundError:
+            raise
+        except OSError as error:
+            raise NativeProfileFixtureError("native_fixture_project_path_unsafe") from error
+
+    def project_file_bytes(self, *parts: str) -> bytes | None:
+        try:
+            with self._project_directory(*parts[:-1]) as directory:
+                descriptor = os.open(
+                    parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
+                )
+                with os.fdopen(descriptor, "rb") as source:
+                    if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                        raise NativeProfileFixtureError("native_fixture_project_path_unsafe")
+                    value = source.read(4097)
+                    if len(value) > 4096:
+                        raise NativeProfileFixtureError("native_fixture_project_file_bound")
+                    return value
+        except FileNotFoundError:
+            return None
 
     def turn(
         self,

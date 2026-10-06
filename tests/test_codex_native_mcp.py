@@ -19,7 +19,7 @@ from tests.codex_native_mcp_evidence import (
 )
 from tests.codex_native_mcp_server import SERVER, decode_json, dispatch, probe, trusted_root
 from tests.codex_native_profile_actor import select_tool
-from tests.codex_native_profile_fixture import NativeProfileFixture
+from tests.codex_native_profile_fixture import NativeProfileFixture, NativeProfileFixtureError
 
 
 def payload() -> dict:
@@ -139,6 +139,63 @@ class McpEvidenceTests(unittest.TestCase):
         for rows in (None, {}, [None], [{"item": None}]):
             with self.assertRaises(McpEvidenceError):
                 proven_mcp_probe({**evidence(), "items": rows}, "example-nonce-1")
+
+
+class HostFixturePathTests(unittest.TestCase):
+    def test_independent_observation_rejects_symlink_and_nonregular_entries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            fixture = object.__new__(NativeProfileFixture)
+            fixture.project = base / "example-project"
+            fixture.project.mkdir()
+            target = base / "example-sentinel"
+            target.write_text("fictional untouched sentinel")
+            entry = fixture.project / "example-write"
+            self.assertIsNone(fixture.project_file_bytes("example-write"))
+            entry.symlink_to(target)
+            with self.assertRaises(NativeProfileFixtureError):
+                fixture.project_file_bytes("example-write")
+            entry.unlink()
+            os.mkfifo(entry)
+            with self.assertRaises(NativeProfileFixtureError):
+                fixture.project_file_bytes("example-write")
+            self.assertEqual(target.read_text(), "fictional untouched sentinel")
+
+    def test_preparation_never_follows_replaced_project_git_or_head(self):
+        for component in ("project", "git", "head"):
+            with self.subTest(component=component), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                fixture = object.__new__(NativeProfileFixture)
+                fixture.base = base
+                fixture.project = base / "example-project"
+                fixture.project.mkdir()
+                (fixture.project / ".git").mkdir()
+                fixture.case_id = 0
+                fixture.events = []
+                outside = base / "example-outside"
+                outside.mkdir()
+                target = outside / "HEAD"
+                target.write_text("fictional untouched sentinel")
+                if component == "project":
+                    (fixture.project / ".git").rmdir()
+                    fixture.project.rmdir()
+                    (outside / ".git").mkdir()
+                    target.rename(outside / ".git" / "HEAD")
+                    target = outside / ".git" / "HEAD"
+                    fixture.project.symlink_to(outside, target_is_directory=True)
+                elif component == "git":
+                    (fixture.project / ".git").rmdir()
+                    (fixture.project / ".git").symlink_to(outside, target_is_directory=True)
+                else:
+                    (fixture.project / ".git" / "HEAD").symlink_to(target)
+                with (
+                    patch.object(fixture, "_send") as send,
+                    patch.object(fixture, "_take", return_value={"case": "example-case-1"}),
+                    self.assertRaises(NativeProfileFixtureError),
+                ):
+                    fixture.prepare_turn_case()
+                send.assert_not_called()
+                self.assertEqual(target.read_text(), "fictional untouched sentinel")
 
 
 class SyntheticConsentTests(unittest.TestCase):
@@ -285,6 +342,7 @@ class FixedMcpServerTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     trusted_root()
 
+    @unittest.skipUnless(Path("/usr/bin/python3").is_file(), "fixed namespace Python unavailable")
     def test_fixed_direct_and_child_probe_are_executable_and_observe_same_controls(self):
         with tempfile.TemporaryDirectory(prefix="example-mcp-unit-") as temporary:
             base = Path(temporary)
@@ -418,9 +476,36 @@ class NativeMcpCustodyTests(unittest.TestCase):
 
     def test_unarmed_native_mcp_call_is_denied_without_exposure_evidence(self):
         thread = self.fixture.start_thread()["thread"]["id"]
-        result = self.fixture.turn(thread, kind="mcp", nonce="example-nonce-1")
+        self.assertUnarmedDenied(
+            self.fixture.turn(thread, kind="mcp", nonce="example-nonce-1"), "example-nonce-1", 0
+        )
+
+    def test_accept_does_not_suppress_fresh_decline_in_same_native_process(self):
+        thread = self.fixture.start_thread()["thread"]["id"]
+        offset = len(self.fixture.events)
+        result = self.fixture.turn(
+            thread, kind="mcp", nonce="example-nonce-1", synthetic_consent=True
+        )
+        self.assertObservedExposure(proven_mcp_probe(result, "example-nonce-1"))
+        self.assertFreshConsent(result, offset)
+        offset = len(self.fixture.events)
+        self.assertUnarmedDenied(
+            self.fixture.turn(thread, kind="mcp", nonce="example-nonce-2"),
+            "example-nonce-2",
+            offset,
+        )
+
+    def assertUnarmedDenied(self, result, nonce, event_offset):
+        self.assertIsNone(self.fixture.project_file_bytes("example-write"))
+        self.assertEqual(
+            self.fixture.project_file_bytes(".git", "HEAD"), b"ref: refs/heads/example\n"
+        )
+        self.assertEqual(
+            (self.fixture.base / "example-authority.key").read_bytes(),
+            b"fictional sentinel; no real credential",
+        )
         with self.assertRaises(McpEvidenceError):
-            proven_mcp_probe(result, "example-nonce-1")
+            proven_mcp_probe(result, nonce)
         items = [row["item"] for row in result["items"] if row["item"].get("type") == "mcpToolCall"]
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["status"], "failed")
@@ -428,7 +513,7 @@ class NativeMcpCustodyTests(unittest.TestCase):
         self.assertIsNone(self.fixture.synthetic_consent)
         requests = [
             event
-            for event in self.fixture.events
+            for event in self.fixture.events[event_offset:]
             if event.get("method") == "mcpServer/elicitation/request"
         ]
         self.assertEqual(len(requests), 1)
@@ -437,7 +522,7 @@ class NativeMcpCustodyTests(unittest.TestCase):
                 event.get("fixture_event") == "mcp_consent_decision"
                 and event.get("request_id") == requests[0]["id"]
                 and event.get("action") == "decline"
-                for event in self.fixture.events
+                for event in self.fixture.events[event_offset:]
             )
         )
 
