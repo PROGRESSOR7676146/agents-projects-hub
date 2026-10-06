@@ -42,6 +42,9 @@ from .codex_transports import (
 from .diagnostic_log import survived
 
 MAX_PENDING_ACTIVITY = 128
+DEFAULT_RPC_RESPONSE_SECONDS = 120.0
+DEFAULT_RPC_QUIET_SECONDS = 20.0
+TURN_START_RESPONSE_SECONDS = 300.0
 
 
 def _validate_legacy_permission_profile(result: dict[str, Any]) -> None:
@@ -416,19 +419,27 @@ class CodexAppServerClient:
     def _request(
         self, method: str, params: dict[str, Any], *, deadline: float | None = None
     ) -> Any:
-        if deadline is not None and time.monotonic() >= deadline:
+        default_deadline = deadline is None
+        if default_deadline:
+            deadline = time.monotonic() + DEFAULT_RPC_RESPONSE_SECONDS
+        assert deadline is not None
+        if time.monotonic() >= deadline:
             raise RpcError("Codex request deadline exceeded")
         request_id = self._next_request_id
         self._next_request_id += 1
         self._transport.send({"method": method, "id": request_id, "params": params})
         while True:
-            if deadline is None:
-                message = self._transport.receive()
-            else:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise RpcError("Codex request deadline exceeded")
-                message = self._transport.receive(timeout=remaining)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RpcError("Codex request deadline exceeded")
+            # Foreign frames cannot renew the total response deadline. Keep
+            # the existing quiet ceiling only for calls without an explicit
+            # deadline; early human approvals use turn/start's longer budget.
+            message = self._transport.receive(
+                timeout=min(remaining, DEFAULT_RPC_QUIET_SECONDS) if default_deadline else remaining
+            )
+            if time.monotonic() >= deadline:
+                raise RpcError("Codex request deadline exceeded")
             if "method" in message and "id" in message:
                 # A companion client such as tlive owns remote approval. Do
                 # not answer from this headless bridge and never auto-allow.
@@ -798,13 +809,15 @@ class CodexAppServerClient:
                     **self._approval_params(),
                     **permission_params,
                 },
+                deadline=time.monotonic() + TURN_START_RESPONSE_SECONDS,
             )
             turn = result.get("turn") if isinstance(result, dict) else None
             turn_id = turn.get("id") if isinstance(turn, dict) else None
             if not isinstance(turn_id, str) or not turn_id:
                 raise RpcError("turn/start did not return a turn id")
         except BaseException:
-            # No turn started, so nothing that follows may count as its telemetry.
+            # Acceptance is unconfirmed: the submission may have started a
+            # turn. Clear unattributed telemetry; do not infer replay safety.
             self._collecting_rate_limits = False
             self._clear_activity()
             raise

@@ -50,6 +50,14 @@ terminal failure, close during producer/consumer waits and delivery after a
 receive timeout. These fixtures establish source transport behavior, not the
 origin of a deployed subscription or native/Telegram live acceptance.
 
+`tests.test_codex_rpc_deadlines` uses module-local fake clocks with real Hub
+clients. It covers more than 1,024 foreign frames exhausting a fixed default
+response deadline, explicit/quiet budgets, late responses/rejections/approvals,
+send time, managed metadata refusal, early approval visibility and actual
+external/embedded post-submission uncertainty with retained root exclusion and
+one submission. It does not establish a whole preparation wall-clock budget or
+legacy inline recovery parity.
+
 Publication sequence with the installed hooks: focused checks → commit (the
 pre-commit gate) → push (one full canonical run on the clean commit) →
 independent exact-revision CI/CodeQL. Do not run the same full validator

@@ -117,11 +117,32 @@ frames drain before the first EOF/read/size error; a receive timeout leaves
 later delivery usable. Client approval handling and result/telemetry filtering
 remain unchanged. Shutdown is checked before each outbound write; a write
 already past that final check may have been submitted and needs ordinary uncertainty
-handling. Client-retained event bytes,
-absolute preparation/metadata deadlines and client event-byte limits remain
-separate resource-lifecycle work. Endless unrelated notifications can still
-extend an RPC that has only a fresh timeout for each received frame; do not
-interpret receipt traffic as productive progress or approval.
+handling. Client-retained event bytes and a shared preparation budget remain
+separate resource-lifecycle work; do not interpret receipt traffic as productive
+progress or approval.
+
+### Codex RPC response deadlines
+
+Each RPC without an explicit caller deadline has a fixed 120-second response
+budget, computed before send, and a 20-second quiet receive ceiling. Explicit
+metadata/control deadlines keep their existing budget and receive allowance.
+`turn/start` uses a fixed 300-second response deadline, allowing a quiet early
+human approval wait within that window. Notifications and approvals never renew
+or suspend either deadline. A frame arriving at or after expiry is rejected
+before interpreting a result, rejection or approval. Optional post-completion
+quota reads retain their five-second total budget.
+
+These are local response-consumption policies, not native protocol guarantees,
+a productive-turn duration or one whole preparation budget. Separate RPCs,
+connection startup, synchronous parsing/callbacks and local I/O remain separate;
+the legacy Unix JSONL transport does not enforce receive timeouts.
+
+A timeout after sending `turn/start` may hide native acceptance. External and
+embedded queues retain `indeterminate`, the prepared thread checkpoint and root
+exclusion when no exact accepted turn ID was saved. They never infer that no
+turn started from the missing ID or retry the submission automatically. An
+ordinary request-deadline error creates no saved-task preparation-retry authority.
+Legacy inline execution retains its weaker dispatch/recovery boundary.
 
 ### Completed Codex socket connection retirement
 
