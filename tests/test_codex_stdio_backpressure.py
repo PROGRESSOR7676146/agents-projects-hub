@@ -8,6 +8,7 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import patch
 
 from hermes_codex_router.codex_appserver import CodexAppServerClient, RpcError
@@ -84,7 +85,9 @@ class StdioBackpressureTests(unittest.TestCase):
             process = SimpleNamespace(stdin=io.StringIO(), stdout=reader, poll=lambda: 0)
         with patch("hermes_codex_router.codex_transports.BoundedInbox", ObservedInbox):
             transport = StdioJsonLineTransport(
-                process, max_pending_frames=1, max_frame_bytes=frame_bytes
+                cast(subprocess.Popen[str], process),
+                max_pending_frames=1,
+                max_frame_bytes=frame_bytes,
             )
         self.addCleanup(transport.close)
         self.addCleanup(reader.release.set)
@@ -422,7 +425,9 @@ threading.Event().wait()
         )
         process = SimpleNamespace(stdin=io.StringIO(), stdout=reader, poll=lambda: 0)
         with patch("hermes_codex_router.codex_transports.BoundedInbox", IdleInbox):
-            transport = StdioJsonLineTransport(process, max_pending_frames=1)
+            transport = StdioJsonLineTransport(
+                cast(subprocess.Popen[str], process), max_pending_frames=1
+            )
         self.addCleanup(transport.close)
         self.addCleanup(reader.release.set)
         client = CodexAppServerClient(transport, initialized=True)
