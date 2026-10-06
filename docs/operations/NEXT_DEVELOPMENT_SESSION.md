@@ -170,7 +170,10 @@ The schema-37 slice now has queue admission/handoff snapshots and accepted Codex
 activity wired to the existing sender; see
 [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md). Do not
 restart that implementation as a new task. Its exact-revision publication
-validation and independent reviews are complete. Address active-work retries,
+validation and independent reviews are complete. The
+[notice-bound active-work retry candidate](../decisions/0054-notice-bound-work-retry-reports.md)
+has offline implementation; complete its publication/review gates separately.
+Address remaining retry surfaces,
 approval before native turn acceptance and explicitly scoped visibility for
 other execution paths next.
 

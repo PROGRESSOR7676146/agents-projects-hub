@@ -2733,53 +2733,15 @@ class ProjectHubService:
         )
         self._discard_terminal_materials(topic)
         active = self.state.active_session(topic.topic_id)
-        if (
-            message.text.strip().casefold() == "retry"
-            and message.reply_to_message_id is not None
-            and not message.is_forwarded
-            and not message.attachments
-            and message.quote_text is None
-        ):
-            from .turn_continuation_state import TurnContinuationState
+        from .controller_retry import ControllerRetryOrchestrator
 
-            continuation = TurnContinuationState(self.state)
-            source = continuation.source_for_notice(
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                notice_message_id=message.reply_to_message_id,
-            )
-            if source is not None:
-                try:
-                    root = resolve_topic_execution_root(self.state, self.registry, topic)
-                    _, created, held_count = continuation.continue_from_notice(
-                        source_job_id=source,
-                        chat_id=message.chat_id,
-                        thread_id=message.thread_id,
-                        notice_message_id=message.reply_to_message_id,
-                        reply_message_id=message.message_id,
-                        canonical_root=root,
-                    )
-                except (ExecutionRootError, StateError) as exc:
-                    if isinstance(exc, StateError) and "already" in str(exc):
-                        return False
-                    self._send_text(
-                        message,
-                        "Continuation is paused: the session, root, or writer changed. "
-                        "Inspect /status before trying again.",
-                    )
-                    return True
-                if created:
-                    self._send_text(
-                        message,
-                        "Continuation accepted in the same Codex session. Codex will first "
-                        "inspect current project state and prior changes."
-                        + (
-                            f" {held_count} earlier queued request(s) remain paused for review."
-                            if held_count
-                            else ""
-                        ),
-                    )
-                return created
+        retry = ControllerRetryOrchestrator(
+            self.config, self.state, self.registry, ingress_identity
+        ).handle(message, topic)
+        if retry is not None:
+            if retry.text is not None:
+                self._send_text(message, retry.text)
+            return retry.created
         ingress_context = IngressDecisionContext(
             active_agent_id=active.agent_id if active is not None else self.agent.agent_id,
             pending_batch_agent_id=None,

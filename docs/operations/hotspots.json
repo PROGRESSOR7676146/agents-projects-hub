@@ -59,10 +59,10 @@
     },
     {
       "target": "src/hermes_codex_router/service.py",
-      "max_lines": 3648,
-      "rationale": "Controller facade with command, ingress, admission and publication seams already extracted. Bounded 2026-10-02 scope is passing configured queue capacity and the supported Hub/external ownership gate into DurableProviderAdmission. queue_visibility.py owns notice policy and provider_queue_capacity.py shares scheduler predicates; neither SQL nor activity transitions move into Controller. Retain the existing dispatch extraction plan in stabilization stage 3; a broader dispatcher rewrite is not required for constructor wiring.",
+      "max_lines": 3610,
+      "rationale": "Controller facade with command, ingress, admission and publication seams already extracted. The 2026-10-05 retry slice extracts terminal-continuation selection into controller_retry.py and keeps passive report queries and the atomic input/notice transaction in work_retry_state.py. Controller retains only authorization, topic observation, delegation and immediate command replies. This reduces its responsibility and advances the stabilization-stage-3 vertical extraction plan; no provider invocation or notice SQL is added here.",
       "owner": "repository owner",
-      "next_review": "2026-11-02",
+      "next_review": "2026-11-05",
       "reopen_event": "Any growth, additional dispatch/lifecycle branch, queue-reason or activity policy added to Controller, or the next stabilization-stage-3 dispatcher extraction."
     },
     {
@@ -91,8 +91,8 @@
     },
     {
       "target": "src/hermes_codex_router/service.py::ProjectHubService._handle_update",
-      "max_lines": 879,
-      "rationale": "Central Telegram update dispatcher with every routing branch. Stabilization stage 3 extracts it one vertical seam at a time behind characterization tests. ADR 0049 bounded wiring of atomic stop notice; no additional dispatch responsibility.",
+      "max_lines": 841,
+      "rationale": "Central Telegram update dispatcher. The 2026-10-05 vertical retry extraction moves terminal-continuation selection into controller_retry.py behind existing continuation and new no-replay characterization tests; the dispatcher receives one typed decision and never queries retry state or creates retry jobs itself. Continue stabilization-stage-3 extraction by observable responsibility rather than line count.",
       "owner": "repository owner",
       "next_review": "2026-12-31",
       "reopen_event": "Any growth, or a new responsibility or lifecycle branch in this target."
