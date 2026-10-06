@@ -21,6 +21,32 @@ class SupervisorFallbackTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
+    def test_explicit_control_deadline_bounds_connect_and_initialize_without_fallback(self) -> None:
+        supervisor = CodexAppServerSupervisor(
+            self.base / "codex.sock", manage_process=False, stdio_executable=self.fallback
+        )
+        supervisor.transport_mode = "socket"
+        transport = Mock()
+        client = Mock()
+        with (
+            patch.object(Path, "is_socket", return_value=True),
+            patch("hermes_codex_router.supervisor.time.monotonic", return_value=20),
+            patch(
+                "hermes_codex_router.supervisor.UnixWebSocketTransport", return_value=transport
+            ) as connect,
+            patch("hermes_codex_router.supervisor.CodexAppServerClient", return_value=client),
+            patch("hermes_codex_router.supervisor.StdioJsonLineTransport.start") as fallback,
+        ):
+            self.assertIs(supervisor.client(allow_fallback=False, deadline=22), client)
+            connect.assert_called_once_with(supervisor.socket_path, timeout=2)
+            client.initialize.assert_called_once_with(deadline=22)
+            client.initialize.side_effect = TimeoutError("Example initialize timeout")
+            with self.assertRaises(TimeoutError):
+                supervisor.client(allow_fallback=False, deadline=22)
+            client.close.assert_called_once()
+            fallback.assert_not_called()
+        self.assertEqual(supervisor.transport_mode, "socket")
+
     def test_prefers_shared_socket_when_it_exists(self) -> None:
         socket_path = self.base / "codex.sock"
         socket_path.touch()

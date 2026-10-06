@@ -860,7 +860,7 @@ class ProviderJobsStateFacade:
                 return None
             # Managed steering lacks an independently verified active-policy read.
             # Keep the follow-up queued for normal exact-profile preparation.
-            if parent["agent_id"] == "codex" and (
+            if (
                 self._selected_codex_profile is None
                 or parent["codex_permission_profile"] != self._selected_codex_profile()
                 or parent["codex_permission_profile"] is not None
@@ -913,6 +913,7 @@ class ProviderJobsStateFacade:
             return self.get(str(candidate["job_id"]))
 
     def reject_unaccepted_steer(self, job_id: str, lease_token: str) -> None:
+        """Requeue an executing child only after proven rejection or no RPC attempt."""
         timestamp = self._now()
         with self._write_transaction():
             cursor = self._connection.execute(

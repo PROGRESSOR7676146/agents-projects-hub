@@ -262,10 +262,16 @@ class HubState:
         codex_permission_profile: str
         | None
         | MissingPermissionContext = MISSING_PERMISSION_CONTEXT,
+        contention_timeout_seconds: float | None = None,
     ) -> "HubState":
         """Open an existing current-schema database for writing; never create or migrate it."""
         return cls(
-            *connect_existing(path, writable=True, state_error=StateError),
+            *connect_existing(
+                path,
+                writable=True,
+                state_error=StateError,
+                contention_timeout_seconds=contention_timeout_seconds,
+            ),
             codex_permission_profile=codex_permission_profile,
         )
 

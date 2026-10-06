@@ -289,6 +289,67 @@ class CodexPermissionStateTests(unittest.TestCase):
         self.assertIsNone(self.state.lease_steer_followup(parent.job_id, "example-steerer"))
         self.assertEqual(self.state.get_provider_job(child.job_id).status, "queued")
 
+    def alias_pair(self, *, retained_managed: bool = False):
+        alias = "example-codex-alias"
+        if retained_managed:
+            # Defensive persisted-row coverage, not normal managed-alias admission.
+            with self.state._connection:
+                self.state._connection.execute(
+                    "INSERT INTO agent_sessions (session_id,topic_id,agent_id,generation,status,"
+                    "model,effort,created_at,updated_at,codex_permission_profile) "
+                    "VALUES ('example-alias-session',?,?,1,'satellite','example-model','low',"
+                    "'2026-01-01T00:00:00+00:00','2026-01-01T00:00:00+00:00',?)",
+                    (self.topic.topic_id, alias, PROFILE),
+                )
+        session = self.state.activate_agent(self.topic.topic_id, alias, "example-model", "low")
+        jobs = [
+            self.state.enqueue_provider_job(
+                idempotency_key=f"example-alias:{message}",
+                chat_id=self.topic.chat_id,
+                message_id=message,
+                topic_id=self.topic.topic_id,
+                agent_id=alias,
+                session_id=session.session_id,
+                session_generation=session.generation,
+                model=session.model,
+                effort=session.effort,
+                payload_text="Example task",
+            )[0]
+            for message in (1, 2)
+        ]
+        leased = self.state.lease_provider_job(alias, "example-worker")
+        assert leased is not None and leased.lease_token is not None
+        self.state.mark_provider_job_executing(jobs[0].job_id, leased.lease_token)
+        return self.state.get_provider_job(jobs[0].job_id), jobs[1]
+
+    def test_codex_alias_steering_requires_explicit_unchanged_legacy_context(self) -> None:
+        parent, child = self.alias_pair()
+        for context in ({}, {"codex_permission_profile": PROFILE}):
+            with (
+                self.subTest(context=context),
+                closing(HubState.open(self.path, **context)) as state,
+            ):
+                if not context:
+                    with self.assertRaisesRegex(StateError, "configuration is unavailable"):
+                        state.lease_steer_followup(parent.job_id, "example-steerer")
+                else:
+                    self.assertIsNone(state.lease_steer_followup(parent.job_id, "example-steerer"))
+                self.assertEqual(state.get_provider_job(parent.job_id), parent)
+                self.assertEqual(state.get_provider_job(child.job_id), child)
+                self.assertFalse(state._connection.in_transaction)
+        with closing(HubState.open(self.path, codex_permission_profile=None)) as state:
+            accepted = state.lease_steer_followup(parent.job_id, "example-steerer")
+            assert accepted is not None
+            self.assertEqual(accepted.job_id, child.job_id)
+            self.assertEqual(accepted.status, "leased")
+            self.assertIsNone(accepted.codex_permission_profile)
+
+    def test_retained_managed_codex_alias_keeps_followup_queued(self) -> None:
+        parent, child = self.alias_pair(retained_managed=True)
+        self.assertIsNone(self.state.lease_steer_followup(parent.job_id, "example-steerer"))
+        self.assertEqual(self.state.get_provider_job(parent.job_id), parent)
+        self.assertEqual(self.state.get_provider_job(child.job_id), child)
+
     def test_direct_writable_adoption_requires_explicit_context_before_mutation(self) -> None:
         request = AdoptionRequest(
             project_id="example-project",
