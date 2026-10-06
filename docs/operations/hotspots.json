@@ -27,16 +27,16 @@
     },
     {
       "target": "src/hermes_codex_router/external_worker.py::ExternalQueueWorker._execute_codex",
-      "max_lines": 227,
-      "rationale": "Bounded 2026-10-06 managed-profile slice; independently reviewed architectural scope. Forward the immutable permission selection into existing preparation/checkpoint calls. worker_execution owns the pure legacy-fallback decision and exact managed-thread guard; execution_journal owns snapshot confirmation. Keep native invocation, stop and cleanup sequencing in this existing lifecycle owner rather than splitting a transaction or resource boundary. The pure worker_execution snapshot guard now precedes materials, staging and client acquisition.",
+      "max_lines": 234,
+      "rationale": "Bounded 2026-10-06 managed-profile and schema-40 slices; independently reviewed architectural scope. Forward immutable permission selection and startup-captured observer epoch/prepared thread into domain helpers. worker_execution owns pure execution guards; execution_journal owns checkpoint confirmation; worker_activity and preacceptance_approvals own observer lifetime and SQL. Keep native invocation, stop and cleanup sequencing in this existing lifecycle owner rather than splitting a transaction or resource boundary. The snapshot guard precedes materials, staging and client acquisition.",
       "owner": "repository owner",
       "next_review": "2026-11-06",
       "reopen_event": "Any further growth, additional policy or lifecycle responsibility, change to transaction/invocation ordering, or the planned stabilization-stage-3 extraction."
     },
     {
       "target": "src/hermes_codex_router/migrations.py",
-      "max_lines": 1587,
-      "rationale": "Bounded 2026-10-06 managed-profile slice; independently reviewed architectural scope. Schema-39 import and dispatch only; schema_codex_permissions owns additive column DDL and snapshot guards. Released migrations remain append-only, with the existing backup and transaction as the sole upgrade owner. Extracting historical SQL is outside this bounded security slice.",
+      "max_lines": 1589,
+      "rationale": "Bounded 2026-10-06 managed-profile and schema-40 slices; independently reviewed architectural scope. Schema registration only; schema_codex_permissions and schema_preacceptance_approvals own additive DDL. Released migrations remain append-only, with the existing backup and transaction as the sole upgrade owner. Extracting historical SQL is outside this bounded security/visibility slice.",
       "owner": "repository owner",
       "next_review": "2026-11-06",
       "reopen_event": "Any further growth, additional policy or lifecycle responsibility, change to transaction/invocation ordering, or the planned stabilization-stage-3 extraction."
@@ -99,8 +99,8 @@
     },
     {
       "target": "src/hermes_codex_router/state.py",
-      "max_lines": 3100,
-      "rationale": "Bounded 2026-10-06 managed-profile slice; independently reviewed architectural scope. Schema-39 selection context is injected explicitly into the existing single-connection facade; state_sessions owns generation policy, and admission retains atomic input/job/notice transaction ownership. The nullable snapshots do not move SQLite ownership or introduce configuration loading. A separate facade for only context forwarding would duplicate the transaction boundary. codex_permission_refusals owns atomic input-refusal policy and SQL; ProviderJobsStateFacade owns passive album lookup. This facade only forwards explicit context and owned transactions. Independent closeout reviewed the read-only retained-session forwarding method; SessionsStateFacade retains session query/policy ownership, with no new transaction, lifecycle or authority.",
+      "max_lines": 3102,
+      "rationale": "Bounded 2026-10-06 managed-profile and schema-40 slices; independently reviewed architectural scope. Selection context is injected explicitly into the existing single-connection facade and task-notice domain; state_sessions owns generation policy, admission owns atomic input/job/notice transactions, and preacceptance_binding owns early-notice provenance checks. The nullable snapshots do not move SQLite ownership or introduce configuration loading. A separate facade for only context forwarding would duplicate the transaction boundary. codex_permission_refusals owns atomic input-refusal policy and SQL; ProviderJobsStateFacade owns passive album lookup. This facade only forwards explicit context and owned transactions. Stacked closeout includes the three-line read-only retained-session forwarding method; SessionsStateFacade retains session query/policy ownership, with no new transaction, lifecycle or authority.",
       "owner": "repository owner",
       "next_review": "2026-11-06",
       "reopen_event": "Any further growth, additional policy or lifecycle responsibility, change to transaction/invocation ordering, or the planned stabilization-stage-3 extraction."

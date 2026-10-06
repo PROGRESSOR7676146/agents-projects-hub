@@ -168,7 +168,10 @@ class HubState:
             state_error=StateError,
         )
         self.task_notices = TaskLifecycleState(
-            connection, transaction=self._immediate_transaction, state_error=StateError
+            connection,
+            transaction=self._immediate_transaction,
+            state_error=StateError,
+            selected_codex_profile=lambda: self.codex_permission_profile,
         )
         self.queue_visibility = QueueVisibilityState(
             connection, self.task_notices, state_error=StateError
@@ -286,11 +289,10 @@ class HubState:
         self._connection.execute("BEGIN IMMEDIATE")
         try:
             yield
+            self._connection.commit()
         except BaseException:
             self._connection.rollback()
             raise
-        else:
-            self._connection.commit()
 
     @contextmanager
     def _connection_transaction(self) -> Iterator[None]:

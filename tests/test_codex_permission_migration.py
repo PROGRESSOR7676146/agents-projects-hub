@@ -55,7 +55,10 @@ class CodexPermissionMigrationTests(unittest.TestCase):
         with sqlite3.connect(path) as old:
             before = self.snapshot(old)
         result = migrations.migrate_database(path)
-        self.assertEqual((result.previous_version, result.current_version), (38, 39))
+        self.assertEqual(
+            (result.previous_version, result.current_version),
+            (38, migrations.LATEST_SCHEMA_VERSION),
+        )
         assert result.backup_path is not None
         self.assertEqual(result.backup_path.stat().st_mode & 0o777, 0o600)
         with sqlite3.connect(result.backup_path) as backup:

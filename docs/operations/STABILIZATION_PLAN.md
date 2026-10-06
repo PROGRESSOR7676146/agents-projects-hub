@@ -145,6 +145,7 @@ acceptance.
 | Managed Codex profile continuity and custody (schema 39) | REQ-SEC-001, ADR 0055 | Exact start/resume/restart selection, approvals, negative project/service-data access; local/advisor routes remain unsupported pending their own boundary evidence |
 | Saved-session `/connect` | REQ-CMD-008, REQ-WRITER-012, AC-F-013 | Topic, Hub-private and local-code entry paths |
 | Accepted-turn activity and queue snapshots (schema 37) | REQ-QUEUE-012, REQ-QUEUE-013 | Queue blocker, long tool, approval resolution, restart and ambiguous delivery at the exact deployed revision |
+| Preacceptance Codex approval observations (schema 40) | REQ-QUEUE-012, REQ-QUEUE-013 | Human wait before native acknowledgement, exact promotion, worker-epoch restart and preserved unknown sends |
 | Durable root blockers (schema 35) | REQ-WRITER-008 | Blocked input, held job, owner decision |
 | Exact Codex turn recovery (schema 34) | REQ-QUEUE-004 | Uncertain turn, read-only proof, continuation |
 | Root concurrency, worktree lanes, Codex slots | REQ-QUEUE-002, REQ-QUEUE-003 | Three projects on independent roots |

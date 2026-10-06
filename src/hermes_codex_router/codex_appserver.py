@@ -450,6 +450,8 @@ class CodexAppServerClient:
         self.on_completed: Callable[[TurnResult], None] | None = None
         # Install before start_turn; callbacks begin only at accepted-turn wait.
         self.on_activity: Callable[[CodexActivityEvent], None] | None = None
+        self.on_preacceptance_approval: Callable[[CodexActivityEvent], None] | None = None
+        self._turn_start_pending = False
         self._activity_thread_id: str | None = None
         self._activity_turn_id: str | None = None
         self._activity_ready = False
@@ -463,6 +465,7 @@ class CodexAppServerClient:
         self._transport.close()
 
     def _clear_activity(self) -> None:
+        self._turn_start_pending = False
         self._activity_thread_id = self._activity_turn_id = None
         self._activity_ready = False
         self._pending_activity.clear()
@@ -471,7 +474,9 @@ class CodexAppServerClient:
         self._activity_observed_notifications.clear()
 
     def _observe_activity(self, message: dict[str, Any]) -> None:
-        if self.on_activity is None or self._activity_thread_id is None:
+        if (
+            self.on_activity is None and self.on_preacceptance_approval is None
+        ) or self._activity_thread_id is None:
             return
         params = message.get("params")
         if not isinstance(params, dict):
@@ -512,11 +517,17 @@ class CodexAppServerClient:
                 if len(self._activity_requests) >= MAX_PENDING_ACTIVITY:
                     raise RpcError("Codex activity request buffer exceeded its bound")
                 self._activity_requests[key] = event
+        if (
+            self._turn_start_pending
+            and event.kind in {"approval_requested", "approval_resolved"}
+            and self.on_preacceptance_approval is not None
+        ):
+            self.on_preacceptance_approval(event)
         if not self._activity_ready:
             if len(self._pending_activity) >= MAX_PENDING_ACTIVITY:
                 raise RpcError("Codex pending activity buffer exceeded its bound")
             self._pending_activity.append(event)
-        elif event.turn_id == self._activity_turn_id:
+        elif event.turn_id == self._activity_turn_id and self.on_activity is not None:
             self.on_activity(event)
 
     def _approval_params(self) -> dict[str, str]:
@@ -1011,6 +1022,7 @@ class CodexAppServerClient:
         self._turn_rate_limits = {}
         self._collecting_rate_limits = True
         self._activity_thread_id = thread_id
+        self._turn_start_pending = True
         try:
             result = self._request(
                 "turn/start",
@@ -1033,6 +1045,8 @@ class CodexAppServerClient:
             self._collecting_rate_limits = False
             self._clear_activity()
             raise
+        finally:
+            self._turn_start_pending = False
         self._activity_turn_id = turn_id
         return turn_id
 

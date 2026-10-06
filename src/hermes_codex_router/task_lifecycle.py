@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from .claude_permission_binding import permission_notice_is_current
+from .preacceptance_binding import preacceptance_notice_is_current
 from .task_activity_binding import activity_notice_is_current
 
 MAX_NOTICE_ATTEMPTS = 5
@@ -49,10 +50,12 @@ class TaskLifecycleState:
         *,
         transaction: TransactionFactory,
         state_error: Callable[[str], Exception],
+        selected_codex_profile: Callable[[], str | None] | None = None,
     ) -> None:
         self.db = connection
         self.transaction = transaction
         self.state_error = state_error
+        self.selected_codex_profile = selected_codex_profile
 
     def _time(self, now: datetime) -> str:
         if now.tzinfo is None or now.utcoffset() is None:
@@ -247,15 +250,33 @@ class TaskLifecycleState:
                         timestamp=timestamp,
                     )
                 if notice.kind in {"approval_wait", "no_progress"}:
-                    obsolete = not activity_notice_is_current(
-                        self.db,
-                        job_id=notice.job_id,
-                        kind=notice.kind,
-                        event_key=notice.event_key,
-                        chat_id=notice.chat_id,
-                        thread_id=notice.thread_id,
-                        created_at=notice.created_at,
-                        timestamp=timestamp,
+                    early = (
+                        preacceptance_notice_is_current(
+                            self.db,
+                            job_id=notice.job_id,
+                            event_key=notice.event_key,
+                            chat_id=notice.chat_id,
+                            thread_id=notice.thread_id,
+                            created_at=notice.created_at,
+                            timestamp=timestamp,
+                            selected_profile=self.selected_codex_profile,
+                        )
+                        if notice.kind == "approval_wait"
+                        else None
+                    )
+                    obsolete = not (
+                        early
+                        if early is not None
+                        else activity_notice_is_current(
+                            self.db,
+                            job_id=notice.job_id,
+                            kind=notice.kind,
+                            event_key=notice.event_key,
+                            chat_id=notice.chat_id,
+                            thread_id=notice.thread_id,
+                            created_at=notice.created_at,
+                            timestamp=timestamp,
+                        )
                     )
                 if valid_states is not None and notice.job_id is not None:
                     job = self.db.execute(
