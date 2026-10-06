@@ -22,6 +22,43 @@ Next trigger: the native human approval boundary in the
 authorized live backlog and ADR 0048 work.
 Deployment identity and private acceptance records remain outside this plan.
 
+## Current source integration checkpoint
+
+The goal integration candidate at clean
+`98c78fcfc40a3fba79a3cdecc2db8b609dabb78a` passed canonical validation
+(2,035 tests in 185 modules, zero typing errors, privacy/history and static
+gates) and all seven exact-head hosted checks. Its source includes notification
+conservation/backpressure, completion-safe connection retirement, RPC deadlines,
+schema-41 saved-task retry, managed-profile continuity, preacceptance observations,
+Claude configured choices/exact model continuation and explicit unsupported
+native-transfer refusal. This supersedes earlier pending-publication statements
+below for those integrated source slices; opposite-runtime/owner integration
+review, owner main merge and separately authorized live acceptance remain open.
+
+The stacked provider-neutral namespace extraction at clean
+`fcc755fe4d70ddbff6b544c2a1a7b09d4b27e0ac` passed canonical validation
+(2,042 tests in 187 modules) and seven hosted checks. The bounded sealed-material
+primitive at clean `cd8b6047177b92296df78f2dc5c1ef80c2c83490` passed canonical
+validation (2,051 tests in 189 modules); required independent review and its
+hosted checks remain separate. Both are offline foundations, with no productive
+advisor, role workflow or installed custody claim. ADRs 0056 and 0057 belong to
+those independent candidate branches; they are not part of this integration base.
+
+The next bounded recovery follow-up gives a typed local response-budget expiry
+the existing saved-task retry only at the exact pre-submission preparation
+boundary. Generic/profile/post-submission errors and contradictory execution
+evidence remain excluded; no new replay, approval, schema or lifecycle ownership
+is introduced. Source owner: Hub maintainer, lane
+`fix/codex-preparation-deadline-retry`, base `98c78fc`. After publication/review,
+integrate and revalidate the combined revision before the two-worker canary.
+Inspect tracked, staged and untracked lane state before any post-merge cleanup.
+
+Full authority custody, broader provider progress, Claude native transfer and
+saved-session connection, subscription/no-paid-fallback acceptance, role/review
+workflow and outcome journal, three-project/restart acceptance, Hermes incident
+and update plane, off-machine restore drill and release 0.8 remain open. Restart
+alone closes neither the repeated notification incident nor payload recovery.
+
 ## Why
 
 A read-only audit on 2026-09-27 found strong design and safety invariants but

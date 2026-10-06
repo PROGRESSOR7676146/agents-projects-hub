@@ -74,6 +74,12 @@ send time, managed metadata refusal, early approval visibility and actual
 external/embedded post-submission uncertainty with retained root exclusion and
 one submission. It does not establish a whole preparation wall-clock budget or
 legacy inline recovery parity.
+`tests.test_preparation_deadline_retry` exercises real flooded RPC preparation
+expiry through both workers, exact delivered-notice retry with the original
+payload/session generation and zero productive submission. Typed expiry under
+the exact preparation boundary is distinct from same-text generic errors,
+policy refusals, contradictory evidence and post-submission uncertainty; the
+latter retain zero retry tickets and the existing root exclusion.
 
 Notification/preparation recovery acceptance must cover two independent roots
 and worker connections: more than 1,024 foreign notifications during preparation

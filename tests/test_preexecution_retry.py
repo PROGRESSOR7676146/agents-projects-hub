@@ -18,7 +18,7 @@ from hermes_codex_router.codex_retry_policy import (
     PreparationRetryBinding,
     preparation_retry_binding,
 )
-from hermes_codex_router.codex_rpc import RpcError, RpcRejectedError
+from hermes_codex_router.codex_rpc import RpcDeadlineError, RpcError, RpcRejectedError
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.incoming_materials import IncomingMaterialDraft
 from hermes_codex_router.preexecution_retry_state import (
@@ -993,8 +993,14 @@ class PreexecutionRetryTests(unittest.TestCase):
         )
 
     def test_transient_cause_requires_exact_preparation_type(self) -> None:
+        class OtherDeadlineError(RpcDeadlineError):
+            pass
+
         for cause, eligible in (
             (RpcError("Codex notification buffer exceeded its bound"), True),
+            (RpcDeadlineError(), True),
+            (OtherDeadlineError(), False),
+            (RpcError("Codex request deadline exceeded"), False),
             (TimeoutError("Example timeout"), True),
             (RpcRejectedError("Codex notification buffer exceeded its bound"), False),
             (RpcError("Example policy refusal"), False),
@@ -1008,7 +1014,7 @@ class PreexecutionRetryTests(unittest.TestCase):
                 eligible,
             )
         unsupported = UnsupportedCodexPermissionProfileError()
-        unsupported.__cause__ = TimeoutError()
+        unsupported.__cause__ = RpcDeadlineError()
         self.assertIsNone(
             preparation_retry_binding(unsupported, root=self.harness.root, model_provider=None)
         )
@@ -1057,6 +1063,8 @@ class PreexecutionRetryTests(unittest.TestCase):
                     message_id=40 + int(accepted),
                     target_agent_id="codex",
                 )
+                error = CodexPreparationError("Example preparation expiry")
+                error.__cause__ = RpcDeadlineError()
                 result = self.state.terminate_provider_job_with_notice(
                     job.job_id,
                     lease.lease_token,
@@ -1066,7 +1074,9 @@ class PreexecutionRetryTests(unittest.TestCase):
                     sender_agent_id="codex",
                     telegram_html="Example failure",
                     provider_runtime="codex",
-                    preparation_retry=PreparationRetryBinding(self.harness.root, None),
+                    preparation_retry=preparation_retry_binding(
+                        error, root=self.harness.root, model_provider=None
+                    ),
                 )
                 self.assertEqual(result.status, "indeterminate" if accepted else "cancelled")
                 self.assertIsNone(

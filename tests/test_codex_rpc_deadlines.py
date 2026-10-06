@@ -11,6 +11,7 @@ from hermes_codex_router import codex_appserver as protocol
 from hermes_codex_router import codex_permissions as permissions
 from hermes_codex_router.codex_appserver import CodexAppServerClient, RpcError
 from hermes_codex_router.codex_permissions import CodexPermissionProfileError
+from hermes_codex_router.codex_retry_policy import preparation_retry_binding
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.root_blockers import persistent_root_blocker
 from tests import test_codex_worker as external
@@ -237,8 +238,11 @@ class RpcDeadlineTests(unittest.TestCase):
         client = CodexAppServerClient(
             transport, initialized=True, permission_profile="example-project-policy"
         )
-        with self.assertRaises(CodexPermissionProfileError):
+        with self.assertRaises(CodexPermissionProfileError) as caught:
             client.start_thread(cwd=self.root, model="example-model", project_id="example-project")
+        self.assertIsNone(
+            preparation_retry_binding(caught.exception, root=self.root, model_provider=None)
+        )
         self.assertEqual(self.clock.now, 10)
         self.assertIsNone(client._permission_binding)
         self.assertFalse(client._permission_preparing)
@@ -347,6 +351,11 @@ class RpcDeadlineTests(unittest.TestCase):
             [message["method"] for message in transport.sent], ["thread/start", "turn/start"]
         )
         self.assertIsNotNone(state.get_telegram_outbox_for_job(job_id))
+        self.assertIsNone(
+            state._connection.execute(
+                "SELECT 1 FROM provider_preexecution_retry_tickets WHERE source_job_id=?", (job_id,)
+            ).fetchone()
+        )
 
 
 if __name__ == "__main__":

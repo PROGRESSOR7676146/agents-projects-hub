@@ -5,6 +5,13 @@ class RpcError(RuntimeError):
     pass
 
 
+class RpcDeadlineError(RpcError):
+    """The local RPC response budget expired; submission certainty is separate."""
+
+    def __init__(self) -> None:
+        super().__init__("Codex request deadline exceeded")
+
+
 class RpcRejectedError(RpcError):
     """The app-server returned an explicit JSON-RPC rejection."""
 
