@@ -47,6 +47,11 @@ class PreacceptanceWorkerTests(unittest.TestCase):
             clock=lambda: f.now,
         )
 
+    def assert_accepted_checkpoint(self, fixture: fixtures.PreacceptanceApprovalTests) -> None:
+        checkpoint = fixture.journal.read(fixture.job.job_id)
+        assert checkpoint is not None
+        self.assertEqual(checkpoint["provider_turn_id"], "example-turn")
+
     def sender(self, bot: Bot) -> TelegramOutboxSender:
         f = self.fixture
         config_fixture = sender_fixtures.TelegramOutboxSenderTests()
@@ -246,7 +251,7 @@ class PreacceptanceWorkerTests(unittest.TestCase):
             accepted("example-thread", "example-turn")
             self.assertIsNone(client.on_activity)
             self.assertIsNone(client.on_preacceptance_approval)
-            self.assertEqual(f.journal.read(f.job.job_id)["provider_turn_id"], "example-turn")
+            self.assert_accepted_checkpoint(f)
         self.assertIsNone(client.on_activity)
         self.assertIsNone(client.on_preacceptance_approval)
         self.assertEqual(
@@ -303,7 +308,7 @@ class PreacceptanceWorkerTests(unittest.TestCase):
                     accepted("example-thread", turn)
                     client.wait_for_turn(turn)
                 ordinary.assert_not_called()
-                self.assertEqual(f.journal.read(f.job.job_id)["provider_turn_id"], "example-turn")
+                self.assert_accepted_checkpoint(f)
                 self.assertIsNone(client.on_activity)
                 self.assertIsNone(client.on_preacceptance_approval)
 
@@ -361,7 +366,7 @@ class PreacceptanceWorkerTests(unittest.TestCase):
                 reader.rollback()
                 f.journal.record_turn(f.job.job_id, f.token, "example-turn")
                 accepted("example-thread", "example-turn")
-        self.assertEqual(f.journal.read(f.job.job_id)["provider_turn_id"], "example-turn")
+        self.assert_accepted_checkpoint(f)
 
     def test_resolution_fault_suppresses_accepted_notice_before_turn_exits(self) -> None:
         for promoted in (False, True):
@@ -410,7 +415,7 @@ class PreacceptanceWorkerTests(unittest.TestCase):
             deliver_task_notice(f.state.task_notices, bot, "example-sender", now=f.now)
             self.assertEqual(bot.sent, [])
             self.assertEqual(f.notice()["status"], "unknown" if attempted else "superseded")
-            self.assertEqual(f.journal.read(f.job.job_id)["provider_turn_id"], "example-turn")
+            self.assert_accepted_checkpoint(f)
             self.assertEqual(f.state.get_provider_job(f.job.job_id).lease_token, f.token)
 
 
