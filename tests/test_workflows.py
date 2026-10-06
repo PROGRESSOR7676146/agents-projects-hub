@@ -110,9 +110,12 @@ def _assert_namespace_job(job: dict[str, Any]) -> None:
         "tests.test_claude_permission_host_roundtrip.PermissionHostRoundtripTests."
         "test_namespace_client_preserves_peer_gate_and_atomic_allow_deny "
         "tests.test_claude_custody_rehearsal.ClaudeCustodyRehearsalTests."
-        "test_namespace_blocks_authority_aliases_and_privilege_but_shares_network"
+        "test_namespace_blocks_authority_aliases_and_privilege_but_shares_network "
+        "tests.test_codex_native_namespace"
     ):
-        raise AssertionError("namespace job must run all three real namespace scenarios")
+        raise AssertionError(
+            "namespace job must run all three real namespace scenarios and outer wrapper witness"
+        )
 
 
 def _assert_ruleset_required_checks(script: str, workflows: Path) -> None:

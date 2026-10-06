@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import runpy
 import shlex
 import subprocess
 import sys
@@ -34,11 +36,15 @@ class ResponsePlan:
     case: str = "example-initial"
     requests: int = 0
     emitted: bool = False
+    kind: str = "command"
+    nonce: str | None = None
 
 
 plan = ResponsePlan()
 lock = threading.Lock()
 write_lock = threading.Lock()
+total_requests = 0
+mcp_fixture: dict[str, Any] | None = None
 
 
 def emit(value: dict) -> None:
@@ -46,11 +52,33 @@ def emit(value: dict) -> None:
         print(json.dumps(value), flush=True)
 
 
+def select_tool(tools: list[dict], kind: str, server: str | None) -> tuple[dict, str | None]:
+    matches: list[tuple[dict, str | None]] = []
+    namespace = "mcp__" + server.replace("-", "_") if server is not None else None
+    for tool in tools:
+        if tool.get("type") == "function":
+            names = (
+                {namespace + "__probe"}
+                if kind == "mcp" and namespace is not None
+                else {"exec_command", "shell_command", "shell"}
+            )
+            if tool.get("name") in names:
+                matches.append((tool, None))
+        elif kind == "mcp" and tool.get("type") == "namespace" and tool.get("name") == namespace:
+            for function in tool.get("tools", []):
+                if function.get("type") == "function" and function.get("name") == "probe":
+                    matches.append((function, namespace))
+    if len(matches) != 1:
+        raise ValueError("fixed execution tool is absent or ambiguous")
+    return matches[0]
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         pass
 
     def do_POST(self) -> None:
+        global total_requests
         length = int(self.headers.get("Content-Length", "0"))
         if self.path != "/v1/responses" or not 0 < length <= 2_000_000:
             self.send_error(400)
@@ -58,6 +86,7 @@ class Handler(BaseHTTPRequestHandler):
         data = json.loads(self.rfile.read(length))
         with lock:
             plan.requests += 1
+            total_requests += 1
             number = plan.requests
             case = plan.case
             if number > 4 or data.get("model") != "example-offline":
@@ -65,28 +94,46 @@ class Handler(BaseHTTPRequestHandler):
                 return
             emit({"fixture_event": "stub_request", "case": case, "sequence": number})
             if not plan.emitted:
-                tools = [tool for tool in data.get("tools", []) if tool.get("type") == "function"]
-                tool = next(
-                    (
-                        tool
-                        for tool in tools
-                        if tool.get("name") in ("exec_command", "shell_command", "shell")
-                    ),
-                    None,
-                )
-                if tool is None:
+                try:
+                    tool, namespace = select_tool(
+                        data.get("tools", []),
+                        plan.kind,
+                        mcp_fixture["SERVER"] if mcp_fixture is not None else None,
+                    )
+                except ValueError:
+                    emit(
+                        {
+                            "fixture_event": "tool_inventory",
+                            "tool_inventory": [
+                                {"type": tool.get("type"), "name": tool.get("name")}
+                                for tool in data.get("tools", [])
+                            ],
+                        }
+                    )
                     emit({"fixture_error": "execution_tool_absent"})
                     self.send_error(409)
                     return
                 properties = tool.get("parameters", {}).get("properties", {})
                 arguments: dict[str, Any]
-                if "cmd" in properties:
-                    arguments = {"cmd": shlex.join(COMMAND), "max_output_tokens": 1000}
+                command = COMMAND
+                if plan.kind == "custody_command" and mcp_fixture is not None:
+                    source = mcp_fixture["PROBE_SOURCE"].replace(
+                        "print(json.dumps(result))", 'print("EXAMPLE_CUSTODY:"+json.dumps(result))'
+                    )
+                    command = ["/usr/bin/python3", "-I", "-c", source]
+                if plan.kind == "mcp":
+                    if set(properties) != {"nonce"}:
+                        emit({"fixture_error": "mcp_tool_schema_unknown"})
+                        self.send_error(409)
+                        return
+                    arguments = {"nonce": plan.nonce}
+                elif "cmd" in properties:
+                    arguments = {"cmd": shlex.join(command), "max_output_tokens": 1000}
                 elif "command" in properties:
                     value = (
-                        COMMAND
+                        command
                         if properties["command"].get("type") == "array"
-                        else shlex.join(COMMAND)
+                        else shlex.join(command)
                     )
                     arguments = {"command": value}
                 else:
@@ -104,8 +151,21 @@ class Handler(BaseHTTPRequestHandler):
                     "name": tool["name"],
                     "arguments": json.dumps(arguments),
                 }
+                if namespace is not None:
+                    output["namespace"] = namespace
                 plan.emitted = True
             else:
+                matches = [
+                    item
+                    for item in data.get("input", [])
+                    if item.get("type") == "function_call_output"
+                    and item.get("call_id") == "call_" + case
+                    and isinstance(item.get("output"), (str, list))
+                ]
+                if len(matches) != 1:
+                    emit({"fixture_error": "matching_function_output_absent"})
+                    self.send_error(409)
+                    return
                 output = {
                     "type": "message",
                     "id": "msg_" + case,
@@ -162,6 +222,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def launch_native(port: int) -> tuple[subprocess.Popen[str], list[threading.Thread]]:
+    mcp_config = "mcp_servers={}"
+    if mcp_fixture is not None:
+        root = mcp_fixture["trusted_root"]()
+        mcp_config = (
+            f"mcp_servers.{mcp_fixture['SERVER']}="
+            + '{command="/usr/bin/python3",args=["-I","/opt/example-native/mcp_server.py"],'
+            + f"cwd={json.dumps(str(root))},env={{EXAMPLE_MCP_PROJECT={json.dumps(str(root))}}}"
+            + "}"
+        )
     flags = [
         "-c",
         'model="example-offline"',
@@ -180,7 +249,7 @@ def launch_native(port: int) -> tuple[subprocess.Popen[str], list[threading.Thre
         "-c",
         "analytics.enabled=false",
         "-c",
-        "mcp_servers={}",
+        mcp_config,
     ]
     process = subprocess.Popen(
         ["codex", "app-server", *flags],
@@ -234,6 +303,13 @@ def close_native(process: subprocess.Popen[str], threads: list[threading.Thread]
 
 
 def main() -> None:
+    global mcp_fixture
+    if sys.argv[1:] == ["--mcp"]:
+        mcp_fixture = runpy.run_path("/opt/example-native/mcp_server.py")
+        # This is trusted fixture setup, never a tool-selected root.
+        os.environ["EXAMPLE_MCP_PROJECT"] = str(Path.cwd())
+    elif sys.argv[1:]:
+        raise RuntimeError("invalid offline fixture arguments")
     if (Path.home() / ".codex" / "auth.json").exists():
         raise RuntimeError("offline fixture must hide real authentication data")
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -250,7 +326,19 @@ def main() -> None:
                     raise RuntimeError("invalid offline case")
                 with lock:
                     plan.case, plan.requests, plan.emitted = case, 0, False
+                    plan.kind = message.get("fixture_kind", "command")
+                    plan.nonce = message.get("fixture_nonce")
+                    if plan.kind not in ("command", "mcp", "custody_command") or (
+                        plan.kind == "mcp"
+                        and (mcp_fixture is None or not mcp_fixture["valid_nonce"](plan.nonce))
+                    ):
+                        raise RuntimeError("invalid offline fixture kind")
+                    if plan.kind == "custody_command" and mcp_fixture is None:
+                        raise RuntimeError("custody command requires fixed MCP fixture")
                 emit({"fixture_event": "case_selected", "case": case})
+            elif message.get("fixture_stats") is True:
+                with lock:
+                    emit({"fixture_event": "stats", "responses_requests": total_requests})
             elif message.get("fixture_restart") is True:
                 close_native(process, threads)
                 process, threads = launch_native(port)
