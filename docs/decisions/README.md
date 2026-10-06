@@ -76,6 +76,7 @@ with a new record.
 | Notice-bound work retry reports | Candidate passive Reply control reports the existing job through the durable notice sender; independent review and deployment remain separate. | [ADR 0054](0054-notice-bound-work-retry-reports.md) |
 | Managed Codex profile continuity | Immutable selection snapshots and passive native confirmation preserve named profiles without claiming complete custody or enabling unsupported writers. | [ADR 0055](0055-managed-codex-profile-continuity.md) |
 | Provider-neutral process namespace | Shared pinned builder preserves the Claude facade and adds a provider-free read-only/private-network witness; advisor and installed custody remain open. | [ADR 0056](0056-provider-neutral-process-namespace.md) |
+| Sealed review material capsules | A trusted explicit text selection becomes bounded digest-bound kernel-sealed bytes; no durable authorization, provider route or review workflow is enabled. | [ADR 0057](0057-sealed-review-material-capsules.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

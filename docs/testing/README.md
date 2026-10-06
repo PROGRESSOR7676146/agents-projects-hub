@@ -277,6 +277,12 @@ targets work, including a real synthetic `SCM_RIGHTS` transfer. An accessible
 process FD-table census checks authority and mount-pin inode identities rather
 than reusable descriptor numbers. This is kernel/fixture evidence, with no
 provider, Telegram, live service or advisor activation.
+`tests.test_review_materials_namespace` also runs in this strict job. It sends
+an explicitly selected [sealed text capsule](../decisions/0057-sealed-review-material-capsules.md)
+through owned stdin to an isolated parent and exec child, without mounting the
+original project or Git. Unit coverage checks exact digest/size, parser bounds,
+source replacement/mutation, kernel seals and failure cleanup. This is snapshot
+and fixture evidence; durable material authorization and productive review remain open.
 An executable-specific AppArmor
 profile permits bubblewrap user namespaces only on that disposable CI runner.
 Developer environments may skip unavailable namespace fixtures; those skips
