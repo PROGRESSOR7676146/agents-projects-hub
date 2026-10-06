@@ -80,6 +80,19 @@ class DiagnosticLogTests(unittest.TestCase):
         self.assertNotIn("/home/example", output)
         self.assertNotIn("Traceback", output)
 
+    def test_extracted_rpc_errors_keep_public_identity_and_safe_diagnostic_names(self) -> None:
+        from hermes_codex_router import codex_appserver, codex_rpc
+
+        for name in ("RpcError", "RpcRejectedError"):
+            public_error = getattr(codex_appserver, name)
+            self.assertIs(public_error, getattr(codex_rpc, name))
+            self.assertEqual(public_error.__module__, "hermes_codex_router.codex_rpc")
+            diagnostic_log.survived("service.client_close", public_error(SECRET))
+        output = self.stream.getvalue()
+        self.assertIn("survived RpcError at service.client_close", output)
+        self.assertIn("survived RpcRejectedError at service.client_close", output)
+        self.assertNotIn(SECRET, output)
+
     def test_unregistered_or_dynamic_sites_are_not_logged(self) -> None:
         for site, error_type in zip(
             ("service.session_fictional_1234", "service.topic -1001234567890", "/home/example/db"),

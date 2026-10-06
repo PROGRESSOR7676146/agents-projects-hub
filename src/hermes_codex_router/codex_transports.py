@@ -1,0 +1,293 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import queue
+import socket
+import subprocess
+import threading
+from pathlib import Path
+from typing import Any
+
+import aiohttp
+
+from .codex_inbox import BoundedInbox
+from .codex_rpc import RpcError
+
+
+class UnixJsonLineTransport:
+    """Newline-delimited JSON transport for a local Codex app-server socket."""
+
+    def __init__(self, connection: socket.socket) -> None:
+        self._connection = connection
+        self._reader = connection.makefile("r", encoding="utf-8", newline="\n")
+        self._writer = connection.makefile("w", encoding="utf-8", newline="\n")
+
+    @classmethod
+    def connect(cls, socket_path: Path, *, timeout: float = 20.0) -> "UnixJsonLineTransport":
+        path = socket_path.expanduser().resolve(strict=True)
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(timeout)
+        connection.connect(str(path))
+        return cls(connection)
+
+    def send(self, message: dict[str, Any]) -> None:
+        self._writer.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")))
+        self._writer.write("\n")
+        self._writer.flush()
+
+    def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
+        del timeout
+        line = self._reader.readline()
+        if not line:
+            raise EOFError("Codex app-server closed the connection")
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RpcError("Codex app-server emitted malformed JSON") from exc
+        if not isinstance(message, dict):
+            raise RpcError("Codex app-server message must be an object")
+        return message
+
+    def close(self) -> None:
+        self._reader.close()
+        self._writer.close()
+        self._connection.close()
+
+
+class StdioJsonLineTransport:
+    """JSONL transport backed by the official `codex app-server --stdio`."""
+
+    def __init__(self, process: subprocess.Popen[str]) -> None:
+        if process.stdin is None or process.stdout is None:
+            raise RpcError("Codex stdio pipes are unavailable")
+        self._process = process
+        self._reader = process.stdout
+        self._writer = process.stdin
+        self._closed = False
+        self._lines: queue.Queue[str | BaseException] = queue.Queue()
+        self._reader_thread = threading.Thread(target=self._read_stdout, daemon=True)
+        self._reader_thread.start()
+
+    def _read_stdout(self) -> None:
+        try:
+            while line := self._reader.readline():
+                self._lines.put(line)
+            self._lines.put(EOFError("Codex app-server closed stdout"))
+        except Exception as exc:
+            self._lines.put(exc)
+
+    @classmethod
+    def start(cls, executable: str = "codex") -> "StdioJsonLineTransport":
+        process = subprocess.Popen(
+            (executable, "app-server", "--stdio"),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            start_new_session=True,
+        )
+        return cls(process)
+
+    def send(self, message: dict[str, Any]) -> None:
+        self._writer.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")))
+        self._writer.write("\n")
+        self._writer.flush()
+
+    def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
+        try:
+            line = self._lines.get(timeout=20.0 if timeout is None else timeout)
+        except queue.Empty as exc:
+            raise RpcError("timed out waiting for Codex stdio") from exc
+        if isinstance(line, BaseException):
+            raise line
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RpcError("Codex app-server emitted malformed JSON") from exc
+        if not isinstance(message, dict):
+            raise RpcError("Codex app-server message must be an object")
+        return message
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._writer.close()
+        finally:
+            if self._process.poll() is None:
+                self._process.terminate()
+                try:
+                    self._process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._process.kill()
+                    self._process.wait(timeout=5)
+            self._reader_thread.join(timeout=2)
+            if not self._reader_thread.is_alive():
+                self._reader.close()
+
+
+class UnixWebSocketTransport:
+    """Synchronous facade over Codex's WebSocket-over-Unix transport."""
+
+    def __init__(
+        self, socket_path: Path, *, timeout: float = 20.0, max_pending_frames: int = 1024
+    ) -> None:
+        self._socket_path = socket_path.expanduser().resolve(strict=True)
+        self._timeout = timeout
+        self._outbound: queue.Queue[str] = queue.Queue(maxsize=16)
+        self._inbound: BoundedInbox[str] = BoundedInbox(max_frames=max_pending_frames)
+        self._receiver_done = threading.Event()
+        self._ready = threading.Event()
+        self._outbound_event: asyncio.Event | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._task: asyncio.Task[None] | None = None
+        self._closed = False
+        self._thread = threading.Thread(target=self._thread_main, daemon=True)
+        self._thread.start()
+        if not self._ready.wait(timeout):
+            self.close()
+            raise RpcError("timed out connecting to Codex Unix WebSocket")
+        first = self._inbound.terminal
+        if first is not None and not self._inbound.pending_frames:
+            self.close()
+            raise RpcError(f"Codex Unix WebSocket failed: {type(first).__name__}")
+
+    def _thread_main(self) -> None:
+        try:
+            asyncio.run(self._run_owned())
+        except BaseException as exc:
+            self._inbound.finish(
+                exc if isinstance(exc, Exception) else EOFError("Codex transport thread stopped")
+            )
+        finally:
+            self._ready.set()
+
+    async def _run_owned(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._task = asyncio.current_task()
+        try:
+            if not self._closed:
+                await self._run()
+        finally:
+            self._task = None
+            self._loop = None
+
+    async def _run(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        outbound_event = asyncio.Event()
+        capacity_event = asyncio.Event()
+        self._outbound_event = outbound_event
+        self._inbound.set_capacity_callback(lambda: self._wake_event(capacity_event))
+        connector = aiohttp.UnixConnector(path=str(self._socket_path))
+        try:
+            async with aiohttp.ClientSession(connector=connector) as session:
+                async with session.ws_connect(
+                    "http://localhost/", max_msg_size=4 * 1024 * 1024
+                ) as websocket:
+                    self._ready.set()
+
+                    async def sender() -> None:
+                        try:
+                            while not self._receiver_done.is_set():
+                                outbound_event.clear()
+                                try:
+                                    message = self._outbound.get_nowait()
+                                except queue.Empty:
+                                    await outbound_event.wait()
+                                    continue
+                                await websocket.send_str(message)
+                        except Exception as exc:
+                            self._inbound.finish(exc)
+                            raise
+
+                    async def receiver() -> None:
+                        try:
+                            async for message in websocket:
+                                if message.type == aiohttp.WSMsgType.TEXT:
+                                    size = len(message.data.encode("utf-8"))
+                                    while True:
+                                        # Clear before recheck: a concurrent dequeue cannot
+                                        # be lost between observing full and awaiting capacity.
+                                        capacity_event.clear()
+                                        if self._inbound.try_put(message.data, size):
+                                            break
+                                        await capacity_event.wait()
+                                elif message.type == aiohttp.WSMsgType.ERROR:
+                                    raise websocket.exception() or RpcError(
+                                        "Codex WebSocket failed"
+                                    )
+                                else:
+                                    raise RpcError("Codex WebSocket frame type is unsupported")
+                        except Exception as exc:
+                            self._inbound.finish(exc)
+                            raise
+                        finally:
+                            self._inbound.finish(EOFError("Codex WebSocket closed"))
+                            self._receiver_done.set()
+                            outbound_event.set()
+
+                    tasks = [asyncio.create_task(sender()), asyncio.create_task(receiver())]
+                    try:
+                        await asyncio.gather(*tasks)
+                    finally:
+                        for task in tasks:
+                            task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            self._inbound.set_capacity_callback(None)
+            self._outbound_event = None
+
+    def _wake_event(self, event: asyncio.Event | None) -> None:
+        loop = self._loop
+        if loop is not None and event is not None and not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(event.set)
+            except RuntimeError:
+                pass  # Concurrent transport teardown already closed the loop.
+
+    def send(self, message: dict[str, Any]) -> None:
+        if self._closed or self._receiver_done.is_set():
+            raise RpcError("Codex Unix WebSocket is closed")
+        encoded = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) > 4 * 1024 * 1024:
+            raise RpcError("Codex outbound frame exceeded its bound")
+        try:
+            self._outbound.put_nowait(encoded)
+        except queue.Full as exc:
+            raise RpcError("Codex outbound buffer exceeded its bound") from exc
+        self._wake_event(self._outbound_event)
+
+    def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
+        try:
+            value = self._inbound.get(timeout=self._timeout if timeout is None else timeout)
+        except queue.Empty as exc:
+            raise RpcError("timed out waiting for Codex Unix WebSocket") from exc
+        except RpcError:
+            raise
+        except Exception as exc:
+            raise RpcError(f"Codex Unix WebSocket failed: {type(exc).__name__}") from exc
+        try:
+            message = json.loads(value)
+        except (ValueError, RecursionError) as exc:
+            raise RpcError("Codex WebSocket emitted malformed JSON") from exc
+        if not isinstance(message, dict):
+            raise RpcError("Codex WebSocket message must be an object")
+        return message
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._inbound.finish(EOFError("Codex WebSocket closed"))
+        self._receiver_done.set()
+        self._wake_event(self._outbound_event)
+        loop, task = self._loop, self._task
+        if loop is not None and task is not None and not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(task.cancel)
+            except RuntimeError:
+                pass  # The loop completed between inspection and notification.
+        self._thread.join(timeout=5)

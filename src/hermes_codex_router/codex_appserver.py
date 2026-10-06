@@ -1,12 +1,6 @@
 from __future__ import annotations
 
-import asyncio
-import json
-import queue
 import re
-import socket
-import subprocess
-import threading
 import time
 from collections import deque
 from contextlib import contextmanager
@@ -14,8 +8,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Literal, Protocol, Sequence, cast
-
-import aiohttp
 
 from .codex_activity import (
     CodexActivityEvent,
@@ -34,6 +26,17 @@ from .codex_permissions import (
     CodexPermissionProfileError,
     validate_permission_profile_id,
     verify_managed_selection,
+)
+from .codex_rpc import RpcError as RpcError
+from .codex_rpc import RpcRejectedError as RpcRejectedError
+from .codex_transports import (
+    StdioJsonLineTransport as StdioJsonLineTransport,
+)
+from .codex_transports import (
+    UnixJsonLineTransport as UnixJsonLineTransport,
+)
+from .codex_transports import (
+    UnixWebSocketTransport as UnixWebSocketTransport,
 )
 from .diagnostic_log import survived
 
@@ -54,14 +57,6 @@ def _validate_legacy_permission_profile(result: dict[str, Any]) -> None:
     # ID/extends and the legacy sandbox projection cannot prove a custom
     # profile is equivalent or stricter. Do not replace it at turn/start.
     raise UnsupportedCodexPermissionProfileError()
-
-
-class RpcError(RuntimeError):
-    pass
-
-
-class RpcRejectedError(RpcError):
-    """The app-server returned an explicit JSON-RPC rejection."""
 
 
 class CodexMetadataError(RpcError):
@@ -99,249 +94,6 @@ class MessageTransport(Protocol):
     def receive(self, *, timeout: float | None = None) -> dict[str, Any]: ...
 
     def close(self) -> None: ...
-
-
-class UnixJsonLineTransport:
-    """Newline-delimited JSON transport for a local Codex app-server socket."""
-
-    def __init__(self, connection: socket.socket) -> None:
-        self._connection = connection
-        self._reader = connection.makefile("r", encoding="utf-8", newline="\n")
-        self._writer = connection.makefile("w", encoding="utf-8", newline="\n")
-
-    @classmethod
-    def connect(cls, socket_path: Path, *, timeout: float = 20.0) -> "UnixJsonLineTransport":
-        path = socket_path.expanduser().resolve(strict=True)
-        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        connection.settimeout(timeout)
-        connection.connect(str(path))
-        return cls(connection)
-
-    def send(self, message: dict[str, Any]) -> None:
-        self._writer.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")))
-        self._writer.write("\n")
-        self._writer.flush()
-
-    def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
-        del timeout
-        line = self._reader.readline()
-        if not line:
-            raise EOFError("Codex app-server closed the connection")
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise RpcError("Codex app-server emitted malformed JSON") from exc
-        if not isinstance(message, dict):
-            raise RpcError("Codex app-server message must be an object")
-        return message
-
-    def close(self) -> None:
-        self._reader.close()
-        self._writer.close()
-        self._connection.close()
-
-
-class StdioJsonLineTransport:
-    """JSONL transport backed by the official `codex app-server --stdio`."""
-
-    def __init__(self, process: subprocess.Popen[str]) -> None:
-        if process.stdin is None or process.stdout is None:
-            raise RpcError("Codex stdio pipes are unavailable")
-        self._process = process
-        self._reader = process.stdout
-        self._writer = process.stdin
-        self._closed = False
-        self._lines: queue.Queue[str | BaseException] = queue.Queue()
-        self._reader_thread = threading.Thread(target=self._read_stdout, daemon=True)
-        self._reader_thread.start()
-
-    def _read_stdout(self) -> None:
-        try:
-            while line := self._reader.readline():
-                self._lines.put(line)
-            self._lines.put(EOFError("Codex app-server closed stdout"))
-        except Exception as exc:
-            self._lines.put(exc)
-
-    @classmethod
-    def start(cls, executable: str = "codex") -> "StdioJsonLineTransport":
-        process = subprocess.Popen(
-            (executable, "app-server", "--stdio"),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            start_new_session=True,
-        )
-        return cls(process)
-
-    def send(self, message: dict[str, Any]) -> None:
-        self._writer.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")))
-        self._writer.write("\n")
-        self._writer.flush()
-
-    def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
-        try:
-            line = self._lines.get(timeout=20.0 if timeout is None else timeout)
-        except queue.Empty as exc:
-            raise RpcError("timed out waiting for Codex stdio") from exc
-        if isinstance(line, BaseException):
-            raise line
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise RpcError("Codex app-server emitted malformed JSON") from exc
-        if not isinstance(message, dict):
-            raise RpcError("Codex app-server message must be an object")
-        return message
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        try:
-            self._writer.close()
-        finally:
-            if self._process.poll() is None:
-                self._process.terminate()
-                try:
-                    self._process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self._process.kill()
-                    self._process.wait(timeout=5)
-            self._reader_thread.join(timeout=2)
-            if not self._reader_thread.is_alive():
-                self._reader.close()
-
-
-class UnixWebSocketTransport:
-    """Synchronous facade over Codex's WebSocket-over-Unix transport."""
-
-    def __init__(self, socket_path: Path, *, timeout: float = 20.0) -> None:
-        self._socket_path = socket_path.expanduser().resolve(strict=True)
-        self._timeout = timeout
-        self._outbound: queue.Queue[dict[str, Any] | None] = queue.Queue()
-        self._inbound: queue.Queue[dict[str, Any] | BaseException] = queue.Queue()
-        self._ready = threading.Event()
-        self._outbound_event: asyncio.Event | None = None
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._task: asyncio.Task[None] | None = None
-        self._closed = False
-        self._thread = threading.Thread(target=self._thread_main, daemon=True)
-        self._thread.start()
-        if not self._ready.wait(timeout):
-            self.close()
-            raise RpcError("timed out connecting to Codex Unix WebSocket")
-        if not self._inbound.empty():
-            first = self._inbound.queue[0]
-            if isinstance(first, BaseException):
-                self.close()
-                raise RpcError(f"Codex Unix WebSocket failed: {type(first).__name__}")
-
-    def _thread_main(self) -> None:
-        try:
-            asyncio.run(self._run_owned())
-        except BaseException as exc:
-            self._inbound.put(exc)
-            self._ready.set()
-
-    async def _run_owned(self) -> None:
-        self._loop = asyncio.get_running_loop()
-        self._task = asyncio.current_task()
-        try:
-            if not self._closed:
-                await self._run()
-        finally:
-            self._task = None
-            self._loop = None
-
-    async def _run(self) -> None:
-        self._loop = asyncio.get_running_loop()
-        outbound_event = asyncio.Event()
-        self._outbound_event = outbound_event
-        connector = aiohttp.UnixConnector(path=str(self._socket_path))
-        try:
-            async with aiohttp.ClientSession(connector=connector) as session:
-                async with session.ws_connect("http://localhost/") as websocket:
-                    self._ready.set()
-
-                    async def sender() -> None:
-                        while True:
-                            outbound_event.clear()
-                            try:
-                                message = self._outbound.get_nowait()
-                            except queue.Empty:
-                                await outbound_event.wait()
-                                continue
-                            if message is None:
-                                await websocket.close()
-                                return
-                            await websocket.send_json(message)
-
-                    async def receiver() -> None:
-                        try:
-                            async for message in websocket:
-                                if message.type == aiohttp.WSMsgType.TEXT:
-                                    try:
-                                        value = json.loads(message.data)
-                                    except json.JSONDecodeError as exc:
-                                        self._inbound.put(exc)
-                                        continue
-                                    if isinstance(value, dict):
-                                        self._inbound.put(value)
-                                elif message.type == aiohttp.WSMsgType.ERROR:
-                                    self._inbound.put(
-                                        websocket.exception() or RpcError("Codex WebSocket failed")
-                                    )
-                                    return
-                        finally:
-                            self._inbound.put(EOFError("Codex WebSocket closed"))
-                            self._outbound.put(None)
-                            outbound_event.set()
-
-                    await asyncio.gather(sender(), receiver())
-        finally:
-            self._outbound_event = None
-            self._loop = None
-
-    def _wake_sender(self) -> None:
-        loop = self._loop
-        event = self._outbound_event
-        if loop is not None and event is not None and not loop.is_closed():
-            try:
-                loop.call_soon_threadsafe(event.set)
-            except RuntimeError:
-                pass  # Concurrent transport teardown already closed the loop.
-
-    def send(self, message: dict[str, Any]) -> None:
-        if self._closed:
-            raise RpcError("Codex Unix WebSocket is closed")
-        self._outbound.put(message)
-        self._wake_sender()
-
-    def receive(self, *, timeout: float | None = None) -> dict[str, Any]:
-        try:
-            value = self._inbound.get(timeout=self._timeout if timeout is None else timeout)
-        except queue.Empty as exc:
-            raise RpcError("timed out waiting for Codex Unix WebSocket") from exc
-        if isinstance(value, BaseException):
-            raise RpcError(f"Codex Unix WebSocket failed: {type(value).__name__}") from value
-        return value
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        self._outbound.put(None)
-        self._wake_sender()
-        loop, task = self._loop, self._task
-        if loop is not None and task is not None and not loop.is_closed():
-            try:
-                loop.call_soon_threadsafe(task.cancel)
-            except RuntimeError:
-                pass  # The loop completed between inspection and notification.
-        self._thread.join(timeout=5)
 
 
 @dataclass(frozen=True, slots=True)
