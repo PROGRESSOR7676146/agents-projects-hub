@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 from unittest.mock import patch
 
+from hermes_codex_router.catalog_refresh import refresh_provider_catalogs
 from hermes_codex_router.codex_appserver import CodexAppServerClient, RpcError
 from hermes_codex_router.codex_result_lifecycle import retire_completed_connection
 from hermes_codex_router.provider_catalog import ProviderModel
@@ -242,3 +243,93 @@ class ResultLifecycleTests(unittest.TestCase):
         self.assertIn("codex_result_lifecycle.retirement", logs.output[0])
         self.assertIn("codex_result_lifecycle.warning", logs.output[1])
         self.assertNotIn("fictional private", " ".join(logs.output))
+
+    def test_queued_other_catalogs_request_refresh_and_monitor_updates_them(self):
+        for runtime in ("opencode", "antigravity", "claude"):
+            with self.subTest(runtime=runtime):
+                fixture = embedded.EmbeddedQueueServiceTests()
+                fixture.setUp()
+                try:
+                    service, _ = fixture.service(embedded.QueueClient())
+                    agent = replace(
+                        service.config.agents[0],
+                        agent_id=runtime,
+                        runtime=runtime,
+                        default_model="example-new",
+                        default_effort="high",
+                    )
+                    service.config = replace(service.config, agents=(agent,))
+                    cache = service._catalog_cache()
+                    old = (ProviderModel("example-old", "Old", ("high",)),)
+                    prior = cache.store(runtime, old, source_version="example-cli")
+                    new = (ProviderModel("example-new", "New", ("high",)),)
+                    with patch.object(service, "_discover_provider_models") as discovery:
+                        self.assertEqual(
+                            service._provider_catalog(runtime, refresh=True).models, prior.models
+                        )
+                        discovery.assert_not_called()
+                    self.assertTrue(cache.is_stale(runtime))
+                    with (
+                        patch(
+                            "hermes_codex_router.catalog_refresh.opencode_models", return_value=new
+                        ),
+                        patch(
+                            "hermes_codex_router.catalog_refresh.antigravity_models",
+                            return_value=new,
+                        ),
+                        patch(
+                            "hermes_codex_router.catalog_refresh._source_version",
+                            return_value="example-cli",
+                        ),
+                    ):
+                        result = refresh_provider_catalogs(service.config)
+                    self.assertEqual(result.refreshed, (runtime,))
+                    self.assertFalse(cache.is_stale(runtime))
+                    self.assertEqual(
+                        service._provider_catalog(runtime).models[0].model_id, "example-new"
+                    )
+                    service.close()
+                finally:
+                    fixture.tearDown()
+
+    def test_poller_foreground_error_cannot_discard_active_embedded_client(self):
+        fixture = embedded.EmbeddedQueueServiceTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        client = embedded.QueueClient(block=True)
+        service, telegram = fixture.service(client)
+        self.addCleanup(service.close)
+        self.assertTrue(service.handle_update(embedded.update(1, "Example long task")))
+        runner = threading.Thread(target=service.run_embedded_queue_cycle)
+        runner.start()
+        self.assertTrue(client.entered.wait(2))
+        stop = service._stop = threading.Event()
+
+        def fail_foreground(_update):
+            stop.set()
+            raise ValueError("fictional foreground fault")
+
+        try:
+            with (
+                patch.object(
+                    telegram, "updates", return_value=[embedded.update(2, "/status")], create=True
+                ),
+                patch.object(service, "handle_update", side_effect=fail_foreground),
+                patch.object(service, "_start_embedded_queue_consumer"),
+                patch.object(service, "_start_controller_outbox_delivery"),
+                patch.object(service, "_publish_runtime_health"),
+                patch.object(service, "_record_telegram_poll_success"),
+                patch.object(client, "close") as close,
+            ):
+                service.run_forever()
+                close.assert_not_called()
+            self.assertIs(service._codex_client, client)
+        finally:
+            client.release.set()
+            runner.join(4)
+        self.assertFalse(runner.is_alive())
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        saved = service.state.provider_jobs_for_topic(topic.topic_id)[0]
+        self.assertIn(saved.status, {"result_ready", "completed"})
+        self.assertIsNotNone(service.state.get_telegram_outbox_for_job(saved.job_id))

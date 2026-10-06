@@ -146,7 +146,12 @@ just-completed turn's rolling windows once.
 The next invocation opens a fresh connection and resumes the saved native thread.
 The existing unpinned socket-to-stdio fallback exception still applies
 ([REQ-AUTH-004](../product/ACCOUNTS_CONTROL_AND_SECURITY.md)); reconnect does not
-promise exact continuity when that fallback replaces a legacy thread. Stdio
+promise exact continuity when that fallback replaces a legacy thread. Retiring
+after each successful turn causes more connection attempts, increasing exposure
+to that configured fallback on a transient construction/initialize failure.
+External workers reconsider fallback at idle through a bounded metadata handshake;
+legacy inline/embedded services retain their preexisting fallback mode until
+service recovery. This slice does not change their fallback policy. Stdio
 retirement is deliberately disabled: disposal of its owned process requires a
 separate durable lifecycle barrier across workers/restarts before root exclusion
 may be released. A process-local poison flag would not provide that barrier.

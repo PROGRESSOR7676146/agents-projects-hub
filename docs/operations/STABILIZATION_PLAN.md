@@ -235,7 +235,9 @@ telemetry deadlines and cache-only queued catalogs passed focused checks and
 architectural review. Eight offline native/observer cases passed with Codex
 0.159.2, including surviving-peer operation, fresh metadata preparation under
 over 1,024 foreign stream events and exact stored resume. Final publication and
-required Claude review remain separate gates.
+required Claude review remain separate gates. The first Opus review requested
+full idle-restoration/catalog context and explicit reconnect tradeoffs; follow-up
+also guards queued clients against unrelated foreground poller cleanup.
 Closeout requires a separately
 authorized two-worker canary with more than 1,024 foreign notifications, both
 results saved and two successive preparation failures retaining the original

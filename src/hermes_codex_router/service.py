@@ -3641,7 +3641,8 @@ class ProjectHubService:
                             pass
                         self._health_last_error_code = "queue_enqueue_error"
                     except Exception as exc:
-                        self._discard_codex_client()
+                        if not self._queue_enabled(self.agent.agent_id):
+                            self._discard_codex_client()
                         self.state.record_runtime_event(
                             ingress_identity, "error", "update_error", type(exc).__name__
                         )
