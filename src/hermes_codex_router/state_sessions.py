@@ -568,8 +568,11 @@ class SessionsStateFacade:
         model: str,
         effort: str,
         expected_session_id: str | None = None,
+        runtime: str | None = None,
     ) -> SessionRecord:
         with self._transaction():
+            if runtime == "claude" and expected_session_id is None:
+                raise self._state_error("Claude settings require an explicit session snapshot")
             self._require_control_snapshot(topic_id, expected_session_id)
             previous = self.active_session(topic_id)
             if previous is None:
@@ -577,7 +580,7 @@ class SessionsStateFacade:
             if previous.writer_mode != "telegram":
                 raise self._state_error("return the local writer before changing session settings")
             self.require_codex_selection(previous)
-            if self._origin_exists(previous.session_id):
+            if runtime == "claude" or self._origin_exists(previous.session_id):
                 if previous.writer_mode != "telegram":
                     raise self._state_error(
                         "return the local writer before changing session settings"

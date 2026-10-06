@@ -370,6 +370,7 @@ class ControllerCommandOrchestrator:
                     model=model,
                     effort=effort,
                     expected_session_id=replacement.session_id,
+                    runtime=agent.runtime,
                 )
             return TextCommandDecision(
                 f"{agent.display_name} is now active (generation {replacement.generation}). "
@@ -382,6 +383,7 @@ class ControllerCommandOrchestrator:
             model=model,
             effort=effort,
             expected_session_id=active.session_id,
+            runtime=agent.runtime,
         )
         return TextCommandDecision(
             f"{agent.display_name} · {model} · {effort.title()} will start on the next "

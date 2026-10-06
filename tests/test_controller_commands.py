@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
@@ -229,6 +230,51 @@ class ControllerCommandTests(unittest.TestCase):
         assert current is not None
         self.assertEqual((current.model, current.effort), ("gpt-next", "medium"))
         self.assertEqual(self.state.get_session(old.session_id).status, "archived")
+
+    def test_claude_selection_and_switch_back_keep_exact_native_binding(self) -> None:
+        claude = replace(
+            self.config.agents[1], agent_id="claude", runtime="claude", display_name="Claude"
+        )
+        self.config = replace(self.config, agents=(self.config.agents[0], claude))
+        self.orchestrator = ControllerCommandOrchestrator(self.config, self.state)
+        active = self.state.activate_agent(self.topic.topic_id, "claude", "gpt-example", "high")
+        active = self.state.bind_provider_session(
+            active.session_id, "00000000-0000-4000-8000-000000000001", None
+        )
+        self.orchestrator.apply_model_selection(
+            self.topic,
+            "claude",
+            "key-two",
+            "medium",
+            self._catalog("claude"),
+            expected_session_id=active.session_id,
+        )
+        selected = self.state.active_session(self.topic.topic_id)
+        assert selected is not None
+        self.assertEqual(selected.session_id, active.session_id)
+        self.assertEqual(selected.provider_session_id, active.provider_session_id)
+        self.assertEqual((selected.model, selected.effort), ("gpt-next", "medium"))
+        other = self.state.activate_agent(
+            self.topic.topic_id,
+            "codex",
+            "gpt-example",
+            "high",
+            expected_session_id=selected.session_id,
+        )
+        self.orchestrator.apply_model_selection(
+            self.topic,
+            "claude",
+            "key-one",
+            "high",
+            self._catalog("claude"),
+            expected_session_id=other.session_id,
+        )
+        returned = self.state.active_session(self.topic.topic_id)
+        assert returned is not None
+        self.assertEqual(returned.session_id, active.session_id)
+        self.assertEqual(returned.generation, active.generation)
+        self.assertEqual(returned.provider_session_id, active.provider_session_id)
+        self.assertEqual((returned.model, returned.effort), ("gpt-example", "high"))
 
     def test_unknown_key_and_stale_session_are_rejected_before_mutation(self) -> None:
         old = self.state.activate_agent(self.topic.topic_id, "codex", "gpt-example", "high")

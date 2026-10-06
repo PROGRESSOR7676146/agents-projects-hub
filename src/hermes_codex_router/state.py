@@ -2363,13 +2363,20 @@ class HubState:
         )
 
     def replace_active_session(
-        self, topic_id: int, *, model: str, effort: str, expected_session_id: str | None = None
+        self,
+        topic_id: int,
+        *,
+        model: str,
+        effort: str,
+        expected_session_id: str | None = None,
+        runtime: str | None = None,
     ) -> SessionRecord:
         return self._sessions_state.replace_active_session(
             topic_id,
             model=model,
             effort=effort,
             expected_session_id=expected_session_id,
+            runtime=runtime,
         )
 
     def claim_message(self, chat_id: int, message_id: int, *, observer_agent_id: str) -> bool:

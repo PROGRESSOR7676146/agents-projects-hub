@@ -1692,6 +1692,8 @@ class ProjectHubService:
             expected_session_id=previous.session_id,
             control_only=True,
         )
+        selected_model = target_model or replacement.model
+        selected_effort = target_effort or replacement.effort
         if replacement.writer_mode != "telegram":
             command = "/release" if replacement.writer_mode == "terminal" else "/return"
             self._send_text(
@@ -1721,6 +1723,7 @@ class ProjectHubService:
                 model=selected_model,
                 effort=selected_effort,
                 expected_session_id=replacement.session_id,
+                runtime=target.runtime,
             )
         self._send_text(
             message,
