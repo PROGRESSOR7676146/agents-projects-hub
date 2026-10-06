@@ -33,6 +33,16 @@ sentinels to test denied authority reads/writes and permitted project/session
 access. Keep absent, unsupported and untested paths explicit. A process snapshot
 or declared setting cannot prove future starts and resumes stay confined.
 
+The narrow mount-role guard rejects a session HOME using the same canonical
+source as the project, or the same pinned directory inode as the project or its
+ordinary `.git`. Such an alias could otherwise expose writable Git through HOME
+despite the project's read-only Git overlay. The guard uses device/inode identity,
+not equal mount IDs. Descriptor-level regressions model top-level bind aliases;
+they do not perform host bind mounts or establish complete alias exclusion.
+An alias of a deeper protected subtree still needs cross-role tree-identity
+validation in the planned namespace extraction. Keep that limitation open; this
+guard does not enable an advisor or close installed custody acceptance.
+
 Choose the smallest candidate that can meet REQ-SEC-008 with those facts. Assess
 separate Linux identities only under an independently trusted management boundary;
 current hook/tlive peer checks are not compatible with arbitrary UID changes.

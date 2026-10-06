@@ -333,6 +333,8 @@ class FileToolSandboxConfig:
         bwrap = _absolute_path(self.bwrap_executable, "bwrap executable")
         project = _absolute_path(self.project_root, "project root")
         home = _absolute_path(self.provider_home, "provider home")
+        if project == home:
+            raise FileToolSandboxError("project and session-home mount roles overlap")
         hook = _absolute_path(self.hook_code_root, "hook code root")
         sock = _absolute_path(self.permission_socket, "permission socket")
         _not_broad(project, "project root")
@@ -345,6 +347,11 @@ class FileToolSandboxConfig:
         if not stat.S_ISDIR(os.fstat(source_fds[git]).st_mode):
             raise FileToolSandboxError("project must have an ordinary .git directory")
         home_stat = os.fstat(source_fds[home])
+        home_identity = (home_stat.st_dev, home_stat.st_ino)
+        for protected in (project, git):
+            protected_stat = os.fstat(source_fds[protected])
+            if home_identity == (protected_stat.st_dev, protected_stat.st_ino):
+                raise FileToolSandboxError("protected project and session-home mount roles overlap")
         if home_stat.st_uid != os.geteuid() or stat.S_IMODE(home_stat.st_mode) != 0o700:
             raise FileToolSandboxError("provider home must be owned by worker UID and mode 0700")
         _reject_nested_mounts(*source_fds, mount_ids=mount_ids)

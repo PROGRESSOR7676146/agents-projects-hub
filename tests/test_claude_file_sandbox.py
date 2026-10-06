@@ -115,6 +115,51 @@ class ClaudeFileSandboxTests(unittest.TestCase):
         self.assertNotIn("USER", env)
         self.assertEqual(argv[-3:], [str(self.executable), "-c", "pass"])
 
+    def test_project_cannot_also_be_the_writable_session_home(self) -> None:
+        # A second writable alias at HOME would expose .git without the
+        # project's readonly overlay, even with different pinned descriptors.
+        original_mode = stat.S_IMODE(self.project.stat().st_mode)
+        self.project.chmod(0o700)
+        before_fds = len(list(Path("/proc/self/fd").iterdir()))
+        try:
+            config = dataclasses.replace(self.config, provider_home=self.project)
+            with (
+                patch.object(sandbox_module, "_require_fd_bind_support"),
+                self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"),
+                config.wrap([str(self.executable)], {}, self.project),
+            ):
+                self.fail("equal project and session-home sources were accepted")
+        finally:
+            self.project.chmod(original_mode)
+        self.assertEqual(len(list(Path("/proc/self/fd").iterdir())), before_fds)
+
+    def test_distinct_home_path_cannot_alias_a_pinned_project_or_git_inode(self) -> None:
+        # Model the descriptors of a top-level bind alias: names and mount IDs
+        # can differ while fstat still identifies the same directory inode.
+        # This exercises validation, not an actual host bind-mount operation.
+        for target in (self.project, self.project / ".git"):
+            with self.subTest(target=target.name):
+                original_mode = stat.S_IMODE(target.stat().st_mode)
+                target.chmod(0o700)
+                try:
+                    with sandbox_module.MountPins() as pins:
+                        project_fd = pins.open(self.project, directory=True)
+                        git_fd = pins.open_relative(project_fd, ".git", directory=True)
+                        fds = {
+                            self.project: project_fd,
+                            self.project / ".git": git_fd,
+                            self.home: project_fd if target == self.project else git_fd,
+                            self.socket_path: pins.open(self.socket_path),
+                            self.executable: pins.open(self.executable),
+                            self.config.hook_code_root: pins.open(self.config.hook_code_root),
+                        }
+                        with self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"):
+                            self.config._validate(
+                                {path: pins.mount_id(fd) for path, fd in fds.items()}, fds
+                            )
+                finally:
+                    target.chmod(original_mode)
+
     def test_refuses_environment_and_path_authority_expansion(self) -> None:
         with (
             patch.object(sandbox_module, "_require_fd_bind_support"),
