@@ -158,7 +158,10 @@ This is a new owner input in FIFO arrival order. Later work already queued or
 completed can precede it in the same session; retry does not restore the old
 queue position or rewind native context. Configured Codex aliases keep their
 actual agent identity. Runtime provenance comes from trusted local configuration,
-not the agent's label. A changed child snapshot or attached child material refuses
+not the agent's label. Reconfiguring that alias to another runtime must refuse
+the saved retry before either worker dispatch or material preparation; its
+durable notice must say the provider did not start and must offer no new ticket.
+A changed child snapshot or attached child material refuses
 before preparation. An unavailable root refuses retry authority while preserving
 the original failure and notice.
 

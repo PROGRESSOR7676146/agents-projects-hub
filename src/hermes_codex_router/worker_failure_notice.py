@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .codex_failure import codex_failure_notice
 from .codex_recovery import checkpoint_failure_notice
 from .codex_retry_policy import preparation_retry_binding
 
@@ -28,7 +29,9 @@ def commit_worker_failure_notice(
     error_detail: str | None = None,
 ) -> ProviderJobRecord:
     runtime = config.require_agent(job.agent_id).runtime
-    if failure.notice == "incoming_material":
+    if failure.notice == "retry_binding":
+        notice = codex_failure_notice(error)
+    elif failure.notice == "incoming_material":
         notice = (
             "Incoming material integrity validation failed; "
             "the provider was not started. Send the material again."

@@ -151,7 +151,7 @@ from .worker_execution import (
     resolve_embedded_worker_target,
     revalidate_worker_execution_root,
     start_codex_provider_turn,
-    validate_codex_worker_binding,
+    validate_provider_worker_binding,
     wait_for_codex_provider_turn,
 )
 from .worker_failure_notice import commit_worker_failure_notice
@@ -947,9 +947,8 @@ class ProjectHubService:
         try:
             target = revalidate_worker_execution_root(queue_state, target)
             project = target.project
-            if agent.runtime == "codex":
-                with codex_preparation():
-                    validate_codex_worker_binding(queue_state, executing, self.config, project.root)
+            with codex_preparation():
+                validate_provider_worker_binding(queue_state, executing, self.config, project.root)
             prepared = prepare_worker_materials(
                 queue_state,
                 state_path=self.config.state_path,

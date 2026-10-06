@@ -112,6 +112,7 @@ class WorkerFailureClassification:
         "uncertain",
         "provider_session_preparation",
         "claude_terminal",
+        "retry_binding",
     ]
 
 
@@ -175,6 +176,10 @@ def classify_worker_failure(
     if isinstance(error, IncomingMaterialError):
         return WorkerFailureClassification(
             "failed", "pre_execution", type(error).__name__, False, "incoming_material"
+        )
+    if isinstance(error, CodexRetryBindingError):
+        return WorkerFailureClassification(
+            "failed", "pre_execution", type(error).__name__, False, "retry_binding"
         )
     if isinstance(error, CodexPreparationError):
         return WorkerFailureClassification(
@@ -317,19 +322,22 @@ def validate_codex_job_selection(
         raise CodexPermissionProfileError()
 
 
-def validate_codex_worker_binding(
+def validate_provider_worker_binding(
     state: HubState, job: ProviderJobRecord, config: HubConfig, root: Path
 ) -> None:
+    """Recheck saved retry authority before dispatching to any configured runtime."""
     try:
+        runtime = config.require_agent(job.agent_id).runtime
         PreexecutionRetryState(state).require_execution_binding(
             job,
             root=root,
             model_provider=config.codex_model_provider,
-            provider_runtime=config.require_agent(job.agent_id).runtime,
+            provider_runtime=runtime,
         )
     except (PreparationRetryRefused, KeyError) as exc:
         raise CodexRetryBindingError() from exc
-    validate_codex_job_selection(state, job, config.codex_permission_profile)
+    if runtime == "codex":
+        validate_codex_job_selection(state, job, config.codex_permission_profile)
 
 
 def should_transfer_legacy_fallback(

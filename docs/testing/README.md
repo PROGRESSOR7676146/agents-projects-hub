@@ -52,6 +52,11 @@ materials, queued binding drift, transaction faults, restart deduplication and
 earlier holds. Offline native fixtures use deterministic local protocol stubs;
 their evidence does not close separately authorized live Telegram acceptance.
 
+`tests.test_preexecution_retry_runtime` reconfigures a queued Codex alias retry
+to OpenCode or Antigravity in each queue consumer. Dispatch and material
+preparation must remain untouched; the saved payload and truthful pre-execution
+notice survive without another retry ticket or execution checkpoint.
+
 Publication sequence with the installed hooks: focused checks → commit (the
 pre-commit gate) → push (one full canonical run on the clean commit) →
 independent exact-revision CI/CodeQL. Do not run the same full validator

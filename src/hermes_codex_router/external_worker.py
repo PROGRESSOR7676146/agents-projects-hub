@@ -80,7 +80,7 @@ from .worker_execution import (
     revalidate_worker_execution_root,
     should_transfer_legacy_fallback,
     start_codex_provider_turn,
-    validate_codex_worker_binding,
+    validate_provider_worker_binding,
     wait_for_codex_provider_turn,
     worker_needs_full_telegram_contract,
 )
@@ -519,6 +519,8 @@ class ExternalQueueWorker:
         try:
             target = revalidate_worker_execution_root(self.state, target)
             project = target.project
+            with codex_preparation():
+                validate_provider_worker_binding(self.state, executing, self.config, project.root)
             if self.agent.runtime == "codex":
                 self._execute_codex(executing, token, project, topic)
             else:
@@ -774,8 +776,6 @@ class ExternalQueueWorker:
         assert isinstance(project, Project)
         assert isinstance(topic, TopicRecord)
         assert self.supervisor is not None
-        with codex_preparation():
-            validate_codex_worker_binding(self.state, job, self.config, Path(project.root))
         prepared = prepare_worker_materials(
             self.state,
             state_path=self.config.state_path,

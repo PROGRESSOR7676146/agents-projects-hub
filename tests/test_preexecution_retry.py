@@ -32,7 +32,7 @@ from hermes_codex_router.worker_execution import (
     classify_worker_failure,
     codex_turn_text,
     require_exact_retry_transport,
-    validate_codex_worker_binding,
+    validate_provider_worker_binding,
 )
 from hermes_codex_router.worker_failure_notice import commit_worker_failure_notice
 from tests import test_codex_worker as worker_fixtures
@@ -267,7 +267,7 @@ class PreexecutionRetryTests(unittest.TestCase):
         assert lease is not None and lease.lease_token is not None
         return self.state.mark_provider_job_executing(job.job_id, lease.lease_token)
 
-    def test_configured_codex_alias_retry_preserves_agent_and_authorized_text(self) -> None:
+    def alias_retry_child(self):
         job = self.alias_job()
         assert job.lease_token is not None
         error = CodexPreparationError("Example setup EOF")
@@ -294,7 +294,11 @@ class PreexecutionRetryTests(unittest.TestCase):
         child = self.state.provider_jobs_for_topic(self.topic.topic_id)[-1]
         self.assertNotEqual(child.job_id, job.job_id)
         self.assertEqual((child.agent_id, child.payload_text), (job.agent_id, self.payload))
-        validate_codex_worker_binding(
+        return child
+
+    def test_configured_codex_alias_retry_preserves_agent_and_authorized_text(self) -> None:
+        child = self.alias_retry_child()
+        validate_provider_worker_binding(
             self.state, child, self.harness.service.config, self.harness.root
         )
 
@@ -418,12 +422,14 @@ class PreexecutionRetryTests(unittest.TestCase):
             {"codex_permission_profile": "example-other"},
         ):
             with self.subTest(change=change), self.assertRaises(CodexRetryBindingError):
-                validate_codex_worker_binding(
+                validate_provider_worker_binding(
                     self.state, replace(child, **change), self.harness.config, self.harness.root
                 )
         self.add_material(child.job_id, message_id=30)
         with self.assertRaises(CodexRetryBindingError):
-            validate_codex_worker_binding(self.state, child, self.harness.config, self.harness.root)
+            validate_provider_worker_binding(
+                self.state, child, self.harness.config, self.harness.root
+            )
 
     def test_preparation_retry_ticket_cannot_be_updated(self) -> None:
         self.preparation_failure(self.job.job_id, 101)
@@ -751,7 +757,7 @@ class PreexecutionRetryTests(unittest.TestCase):
                         provider_runtime="codex",
                     )
                 with self.assertRaises(CodexRetryBindingError):
-                    validate_codex_worker_binding(
+                    validate_provider_worker_binding(
                         self.state, child, self.harness.service.config, self.harness.root
                     )
                 self.sql(
@@ -759,14 +765,14 @@ class PreexecutionRetryTests(unittest.TestCase):
                     (old, self.session.session_id),
                 )
         with self.assertRaises(CodexRetryBindingError):
-            validate_codex_worker_binding(
+            validate_provider_worker_binding(
                 self.state,
                 child,
                 replace(self.harness.service.config, codex_model_provider="example-route"),
                 self.harness.root,
             )
         with self.assertRaises(CodexRetryBindingError):
-            validate_codex_worker_binding(
+            validate_provider_worker_binding(
                 self.state, child, self.harness.service.config, self.harness.root.parent
             )
         self.assertEqual(self.harness.client.turns, 0)
@@ -1112,7 +1118,7 @@ class PreexecutionRetryTests(unittest.TestCase):
                 self.retry(self.job.job_id, 101)
         child, _ = self.retry(self.job.job_id, 101)
         with self.assertRaises(CodexPreparationError):
-            validate_codex_worker_binding(
+            validate_provider_worker_binding(
                 self.state,
                 child,
                 replace(self.harness.service.config, codex_permission_profile="example-managed"),
