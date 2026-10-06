@@ -57,6 +57,62 @@ class SupervisorFallbackTests(unittest.TestCase):
             supervisor.start()
             self.assertEqual(supervisor.transport_mode, "socket")
 
+    def test_completion_retirement_follows_actual_construction_not_mutable_transport_mode(self):
+        for path in ("socket", "stdio-fallback", "failed-socket-fallback"):
+            with self.subTest(path=path):
+                supervisor = CodexAppServerSupervisor(
+                    self.base / "codex.sock",
+                    manage_process=False,
+                    stdio_executable=self.fallback,
+                )
+                supervisor.transport_mode = (
+                    "stdio-fallback" if path == "stdio-fallback" else "socket"
+                )
+                transport = FakeTransport(
+                    [
+                        {"id": 1, "result": {}},
+                        {"id": 2, "result": {"turn": {"id": "example-turn"}}},
+                        {
+                            "method": "turn/completed",
+                            "params": {
+                                "threadId": "example-thread",
+                                "turn": {"id": "example-turn", "status": "completed"},
+                            },
+                        },
+                    ]
+                )
+                with (
+                    patch.object(Path, "is_socket", return_value=True),
+                    patch(
+                        "hermes_codex_router.supervisor.UnixWebSocketTransport",
+                        return_value=transport,
+                        side_effect=OSError("Example unavailable")
+                        if path == "failed-socket-fallback"
+                        else None,
+                    ),
+                    patch(
+                        "hermes_codex_router.supervisor.StdioJsonLineTransport.start",
+                        return_value=transport,
+                    ),
+                ):
+                    client = supervisor.client()
+                supervisor.transport_mode = "stdio-fallback" if path == "socket" else "socket"
+                client.start_turn(
+                    thread_id="example-thread",
+                    cwd=self.base,
+                    text="Example",
+                    model="example",
+                    effort="high",
+                )
+                client.wait_for_turn("example-turn")
+                self.assertEqual(
+                    client.consume_completed_connection(
+                        thread_id="example-thread", turn_id="example-turn"
+                    ),
+                    path == "socket",
+                )
+                client.close()
+
     def test_uses_official_stdio_when_shared_socket_is_down(self) -> None:
         supervisor = CodexAppServerSupervisor(
             self.base / "missing.sock",

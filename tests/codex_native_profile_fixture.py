@@ -90,7 +90,9 @@ def proven_probe(result: dict[str, Any]) -> dict[str, bool]:
 
 
 class NativeProfileFixture(AbstractContextManager["NativeProfileFixture"]):
-    def __init__(self, executable: Path, *, mcp: bool = False) -> None:
+    def __init__(
+        self, executable: Path, *, mcp: bool = False, notification_listener: bool = False
+    ) -> None:
         self.executable = executable.resolve(strict=True)
         self.temporary = tempfile.TemporaryDirectory(prefix="example-native-profile-")
         self.base = Path(self.temporary.name)
@@ -104,6 +106,10 @@ class NativeProfileFixture(AbstractContextManager["NativeProfileFixture"]):
         self.next_id = 0
         self.case_id = 0
         self.mcp = mcp
+        self.notification_listener = notification_listener
+        # The native leaf is 64 bytes; keep its resolved host pathname below
+        # Linux's Unix socket limit for the real Hub transport.
+        self.listener_directory = self.base / "s"
         self.synthetic_consent: SyntheticMcpConsent | None = None
         self.pending_mcp_request: dict | None = None
 
@@ -152,6 +158,8 @@ extends = ":workspace"
 enabled = false
 ''')
         actor = Path(__file__).with_name("codex_native_profile_actor.py").resolve(strict=True)
+        if self.notification_listener:
+            self.listener_directory.mkdir(mode=0o700)
         argv = native_namespace_argv(
             binary=snapshot,
             actor=actor,
@@ -159,6 +167,8 @@ enabled = false
             project=self.project,
             authority=key,
             mcp_server=actor.with_name("codex_native_mcp_server.py") if self.mcp else None,
+            notification_listener=self.notification_listener,
+            listener_directory=self.listener_directory if self.notification_listener else None,
         )
         self.process = subprocess.Popen(
             argv,
@@ -176,7 +186,8 @@ enabled = false
         deadline = time.monotonic() + 15
         while self._take(deadline).get("fixture_event") != "ready":
             pass
-        self._initialize()
+        if not self.notification_listener:
+            self._initialize()
 
     def _initialize(self) -> None:
         self.rpc(
@@ -190,6 +201,8 @@ enabled = false
 
     def restart_native(self) -> None:
         """Restart only the disposable app-server, retaining its private state."""
+        if self.notification_listener:
+            raise NativeProfileFixtureError("listener_restart_unsupported")
         self._clear_consent()
         self._send({"fixture_restart": True})
         deadline = time.monotonic() + 30

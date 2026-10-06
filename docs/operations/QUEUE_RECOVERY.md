@@ -118,10 +118,43 @@ later delivery usable. Client approval handling and result/telemetry filtering
 remain unchanged. Shutdown is checked before each outbound write; a write
 already past that final check may have been submitted and needs ordinary uncertainty
 handling. Client-retained event bytes,
-absolute preparation/metadata deadlines and safe subscription cleanup remain
+absolute preparation/metadata deadlines and client event-byte limits remain
 separate resource-lifecycle work. Endless unrelated notifications can still
 extend an RPC that has only a fresh timeout for each received frame; do not
 interpret receipt traffic as productive progress or approval.
+
+### Completed Codex socket connection retirement
+
+A productive WebSocket client is disposable after its exact accepted thread and
+turn report explicit `completed` status and the result publication succeeds.
+External and embedded workers first settle controls and persist the result/outbox;
+the legacy inline route first sends the result and records its successful dispatch.
+Inline delivery retains its existing non-atomic recovery limitations.
+The single-use proof cannot come from another turn, missing/unknown status,
+failed publication or a covering stop. New preparation invalidates old proof.
+
+Retirement detaches only the expected cached client, then closes its connection;
+it sends no unsubscribe, interrupt, archive or delete RPC and never stops the
+shared daemon. A close exception records the bounded
+`completed_socket_retirement_error` warning without undoing the saved result.
+The local transport seals its inbox and gives its receiver up to five seconds
+to join. A bounded return alone confirms neither receiver termination nor
+immediate server-side subscription teardown, and a join timeout need not warn.
+Optional quota collection has one five-second total deadline and can use the
+just-completed turn's rolling windows once.
+
+The next invocation opens a fresh connection and resumes the saved native thread.
+The existing unpinned socket-to-stdio fallback exception still applies
+([REQ-AUTH-004](../product/ACCOUNTS_CONTROL_AND_SECURITY.md)); reconnect does not
+promise exact continuity when that fallback replaces a legacy thread. Stdio
+retirement is deliberately disabled: disposal of its owned process requires a
+separate durable lifecycle barrier across workers/restarts before root exclusion
+may be released. A process-local poison flag would not provide that barrier.
+
+Queued menus, including stale and explicit refresh callbacks, read only the
+catalog cache. The independent monitor owns metadata refresh through its own
+connection; Controller must not become a competing reader of the productive
+client. See the [offline native evidence and live boundary](../testing/README.md#optional-offline-native-notification-attribution).
 
 ### Codex live-control contention
 

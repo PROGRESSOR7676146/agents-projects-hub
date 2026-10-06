@@ -12,25 +12,27 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .artifact_delivery import deliver_staged_artifacts_immediately
 from .artifacts import (
     artifact_spool_root,
-    create_job_staging,
     remove_spooled_artifact,
     verify_spooled_artifact,
 )
 from .catalog_refresh import native_codex_catalog_source
 from .codex_appserver import (
     CodexAppServerClient,
-    RateLimits,
     RpcError,
-    context_remaining_percent,
 )
 from .codex_failure import codex_preparation, uncertain_provider_notice
 from .codex_recovery import (
     checkpoint_failure_notice,
     reconcile_codex_completion,
     recover_codex_job,
+)
+from .codex_result_lifecycle import (
+    InlineCodexTurn,
+    post_completion_context,
+    post_completion_limits,
+    retire_completed_connection,
 )
 from .controller_admission import (
     CommittedAdmission,
@@ -73,8 +75,8 @@ from .ingress_decisions import (
     ProductiveRouteDecision,
     decide_ingress,
 )
+from .inline_codex_execution import commit_inline_codex_completion, run_inline_codex_turn
 from .local_transfer import LocalTransferError, local_resume_command
-from .metadata import format_telegram_response
 from .model_selection import (
     ModelSelectionError,
     available_openai_models,
@@ -125,14 +127,10 @@ from .telegram import (
     parse_topic_callback,
     parse_topic_message,
 )
-from .telegram_activity import telegram_activity
 from .telegram_interaction import (
-    CODEX_TELEGRAM_CONTRACT_VERSION,
     telegram_contract_version,
     telegram_developer_instructions,
-    telegram_user_turn_prompt,
 )
-from .telegram_multipart import send_telegram_html_parts
 from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
 from .topic_execution import require_inline_topic, resolve_topic_execution_root
@@ -467,15 +465,23 @@ class ProjectHubService:
             raise ServiceError("Codex RPC client was not initialized")
         return client
 
-    def _discard_codex_client(self) -> None:
+    def _discard_codex_client(
+        self,
+        *,
+        expected_client: CodexAppServerClient | None = None,
+        report_close_error: bool = False,
+    ) -> None:
         """Drop a failed RPC connection so the next turn reconnects cleanly."""
-        client = self._codex_client
-        self._codex_client = None
+        client = expected_client if expected_client is not None else self._codex_client
+        if self._codex_client is client:
+            self._codex_client = None
         if client is not None:
             try:
                 client.close()
             except Exception as survived_error:
                 survived("service.client_close", survived_error)
+                if report_close_error:
+                    raise
 
     def _send_text(self, message: TopicMessage, text: str) -> None:
         self.telegram.send_html(message.chat_id, message.thread_id, html.escape(text))
@@ -1011,22 +1017,10 @@ class ProjectHubService:
                 finally:
                     client.on_visible_item = None
                     client.on_completed = None
-                try:
-                    queue_state.set_context_remaining(
-                        executing.session_id, context_remaining_percent(result)
-                    )
-                except Exception as survived_error:
-                    # Context percentage is display telemetry, not part of
-                    # the productive result's durable commit.
-                    survived("service.context_telemetry", survived_error)
+                post_completion_context(queue_state, executing.session_id, result)
                 provider_session_id = thread.thread_id
                 actual_model = thread.model
-                try:
-                    limits = client.read_rate_limits()
-                except Exception:
-                    # Rate-limit telemetry is optional; the durable result must
-                    # not be discarded after the productive turn completed.
-                    limits = RateLimits(None, None)
+                limits = post_completion_limits(client)
                 artifacts = prepare_worker_artifacts(
                     project.root,
                     executing.job_id,
@@ -1098,6 +1092,18 @@ class ProjectHubService:
                     artifacts=artifacts.artifacts,
                 )
             )
+            if agent.runtime == "codex":
+                retire_completed_connection(
+                    client,
+                    thread_id=thread.thread_id,
+                    turn_id=turn_id,
+                    retire=lambda: self._discard_codex_client(
+                        expected_client=client, report_close_error=True
+                    ),
+                    warning=lambda code, detail: queue_state.record_runtime_event(
+                        "codex", "warning", code, detail
+                    ),
+                )
         except Exception as exc:
             # The provider call may have started.  Do not retry it without
             # provider-specific proof, even if an adapter reports an error.
@@ -1389,88 +1395,23 @@ class ProjectHubService:
         session: SessionRecord,
         text: str,
         message: TopicMessage,
-    ) -> str:
+    ) -> InlineCodexTurn:
         self._require_legacy_codex_execution(self.state)
         if session.codex_permission_profile is not None:
             raise ServiceError("managed Codex session requires the external queue worker")
-        require_inline_topic(self.state, topic)
-        validate_execution_root(self.registry, project)
-        client = self._client()
-        new_session = (
-            session.provider_session_id is None
-            or self.state.telegram_contract_version(session.session_id)
-            < CODEX_TELEGRAM_CONTRACT_VERSION
+        return run_inline_codex_turn(
+            state=self.state,
+            config=self.config,
+            registry=self.registry,
+            agent=self.agent,
+            client_factory=self._client,
+            telegram_factory=lambda: self._provider_telegram(self.agent.agent_id),
+            project=project,
+            topic=topic,
+            session=session,
+            text=text,
+            message=message,
         )
-        if session.provider_session_id:
-            thread = client.resume_thread(
-                thread_id=session.provider_session_id,
-                cwd=project.root,
-                model=session.model,
-                developer_instructions=telegram_developer_instructions(
-                    runtime="codex", new_session=new_session
-                ),
-            )
-        else:
-            thread = client.start_thread(
-                cwd=project.root,
-                model=session.model,
-                project_id=project.project_id,
-                developer_instructions=telegram_developer_instructions(
-                    runtime="codex", new_session=new_session
-                ),
-            )
-            tab_name = terminal_session_name(
-                project.display_name, topic.title, self.agent.display_name, topic.thread_id
-            )
-            session = self.state.bind_provider_session(
-                session.session_id, thread.thread_id, tab_name
-            )
-        with telegram_activity(
-            self._provider_telegram(self.agent.agent_id),
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            message_id=message.message_id,
-        ):
-            artifact_job_id, staging_dir = create_job_staging(project.root, prefix="codex-inline")
-            turn_id = client.start_turn(
-                thread_id=thread.thread_id,
-                cwd=project.root,
-                text=telegram_user_turn_prompt(text, staging_dir=staging_dir),
-                model=session.model,
-                effort=session.effort,
-            )
-            result = client.wait_for_turn(turn_id)
-        self.state.acknowledge_telegram_contract(
-            session.session_id, CODEX_TELEGRAM_CONTRACT_VERSION
-        )
-        session = self.state.set_context_remaining(
-            session.session_id, context_remaining_percent(result)
-        )
-        limits = client.read_rate_limits()
-        response = format_telegram_response(
-            result=result,
-            agent=self.agent.display_name,
-            model=thread.model,
-            effort=session.effort,
-            session_label=f"{project.display_name} · {topic.title} · {self.agent.display_name}",
-            limits=limits,
-            timezone_name="Europe/Moscow",
-        )
-        send_telegram_html_parts(
-            self._provider_telegram(self.agent.agent_id),
-            message.chat_id,
-            message.thread_id,
-            response,
-        )
-        deliver_staged_artifacts_immediately(
-            self._provider_telegram(self.agent.agent_id),
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            project_root=project.root,
-            state_path=self.config.state_path,
-            job_id=artifact_job_id,
-        )
-        return result.text
 
     def _model_catalog(self) -> dict[str, tuple[str, ...]]:
         return available_openai_models(
@@ -1555,8 +1496,9 @@ class ProjectHubService:
                     source_version="configured fallback",
                 )
                 cache.request_refresh(agent_id)
-        if self._uses_external_codex_worker():
-            # The isolated Controller must never own provider RPC/CLI discovery.
+        if self._uses_external_codex_worker() or self._queue_enabled(agent_id):
+            # Queue callbacks never share a productive client's RPC reader.
+            # The independent monitor owns discovery in either queue runtime.
             # Refresh invalidates freshness, not the selectable last-good models.
             if cached is None:
                 cached = cache.store(
@@ -1573,20 +1515,6 @@ class ProjectHubService:
             return cached
         if not refresh and cached is not None and not cache.is_stale(agent_id, max_age=max_age):
             return cached
-        if not refresh and cached is None and self._queue_enabled(agent_id):
-            # Controller callbacks are cache-only in queue mode. A cold cache
-            # gets a minimal configured choice without invoking a provider CLI.
-            return cache.store(
-                agent_id,
-                (
-                    ProviderModel(
-                        agent.default_model,
-                        agent.default_model,
-                        (agent.default_effort,),
-                    ),
-                ),
-                source_version="configured fallback",
-            )
         try:
             models = self._discover_provider_models(agent_id)
             executable = "codex" if agent.runtime == "codex" else agent.executable
@@ -2086,7 +2014,7 @@ class ProjectHubService:
                 self.telegram.answer_callback(
                     callback.callback_id,
                     "Refresh queued for monitor; reopen /model after its next check."
-                    if self._uses_external_codex_worker()
+                    if self._uses_external_codex_worker() or self._queue_enabled(agent_id)
                     else "Refreshing catalog…",
                 )
                 self._show_model_menu(
@@ -2124,7 +2052,7 @@ class ProjectHubService:
             StateError,
             RpcError,
         ) as exc:
-            if isinstance(exc, RpcError):
+            if isinstance(exc, RpcError) and not self._queue_enabled(self.agent.agent_id):
                 self._discard_codex_client()
             self.telegram.answer_callback(callback.callback_id, str(exc)[:180])
             return True
@@ -3620,27 +3548,26 @@ class ProjectHubService:
             agent_id=self.agent.agent_id,
         )
         try:
-            response_text = self._run_codex_turn(
+            completed_turn = self._run_codex_turn(
                 project=project,
                 topic=topic,
                 session=session,
                 text=prompt,
                 message=message,
             )
-            if context_watermark is not None:
-                self.state.acknowledge_visible_context(
-                    topic.topic_id, self.agent.agent_id, context_watermark
-                )
-            self.state.record_visible_turn(
-                topic.topic_id,
+            commit_inline_codex_completion(
+                state=self.state,
+                topic=topic,
                 agent_id=self.agent.agent_id,
-                provider="openai",
                 model=session.model,
-                provider_session_id=session.provider_session_id,
-                user_excerpt=clean_text,
-                response_excerpt=response_text,
+                user_text=clean_text,
+                context_watermark=context_watermark,
+                dispatch_id=dispatch_id,
+                completed_turn=completed_turn,
+                retire=lambda: self._discard_codex_client(
+                    expected_client=completed_turn.client, report_close_error=True
+                ),
             )
-            self.state.finish_dispatch(dispatch_id, success=True)
         except Exception as exc:
             self.state.finish_dispatch(dispatch_id, success=False, error_code=type(exc).__name__)
             self._discard_codex_client()

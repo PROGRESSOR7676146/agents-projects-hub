@@ -227,6 +227,49 @@ state only the reusable behavior tested and the kind of acceptance required.
 The reusable go/no-go sequence and rollback boundary are defined in
 [`LIVE_CANARY.md`](../operations/LIVE_CANARY.md).
 
+## Optional offline native notification attribution
+
+The direct-socket fixture uses an explicitly supplied native Codex executable
+inside an empty filesystem/network/PID namespace. A local deterministic
+Responses server emits the traffic; real authentication, provider endpoints,
+installed services and daemon sockets are absent. Its disposable endpoint
+storage is mounted only inside that namespace. Both clients connect directly
+to a pinned native socket, without an RPC forwarding proxy.
+
+```bash
+HUB_NATIVE_CODEX_FIXTURE_EXECUTABLE=/home/example/tools/codex \
+  HUB_REQUIRE_NATIVE_CODEX_PROFILE_TESTS=1 HUB_REQUIRE_NAMESPACE_TESTS=1 \
+  PYTHONPATH=src:tests python -m unittest -v \
+  tests.test_codex_native_notification_origin tests.test_codex_native_completed_connection
+```
+
+Attribution distinguishes fresh connection, initialization, passive metadata and
+explicit subscription. It requires source traffic above 1,024 events, exact
+terminal history, healthy observers and a positive control after a thread
+switch. Structural method/phase/count summaries contain no payload text.
+The retirement test uses the real Hub client/transport against that same
+disposable native listener. After exact completion and saved native output, it
+closes only the completed connection. An independently subscribed peer emits
+over 1,024 frames while a fresh Hub client prepares a different thread; raw
+pre-filter counts and same-connection RPC barriers prove no inherited turn/item
+subscription stream. Global `thread/status/changed` can still reach fresh
+unrelated connections; the test excludes only that observed broadcast method.
+The peer remains healthy, both threads retain exact final output, and a later
+fresh client resumes the original identity and completes another turn.
+Four local Responses requests account for all scripted productive turns.
+The fixture supports one active scripted Responses stream at a time; this is
+parallel metadata preparation, not two concurrently streaming native turns.
+Hub durable outbox/stop/publication and cleanup-fault ordering have separate
+pipeline regressions in `tests.test_codex_result_lifecycle`.
+
+These tests establish behavior of the supplied executable, not a deployed failure's
+source or live Telegram acceptance. Missing optional executables may skip;
+the required flags turn unavailable native/namespace execution into failure.
+The owner-authorized two-worker canary still must verify both productive results,
+final events, approvals, visible progress and quota telemetry through delivery,
+plus two successive pre-execution failures retaining the exact task through
+notice-bound retries. No restart-only recovery counts as a permanent fix.
+
 ## Publication preflight
 
 Repository maintainers can install the versioned pre-commit and pre-push hooks

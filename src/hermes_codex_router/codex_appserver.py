@@ -14,6 +14,7 @@ from .codex_activity import (
     normalize_codex_activity,
     normalize_codex_approval_resolution,
 )
+from .codex_connection_completion import CompletedConnectionProof
 from .codex_failure import (
     MAX_PARTIAL_TEXT,
     UnsupportedCodexPermissionProfileError,
@@ -176,6 +177,7 @@ class CodexAppServerClient:
         approval_policy: str = "on-request",
         model_provider: str | None = None,
         permission_profile: str | None = None,
+        retire_completed_connection: bool = False,
     ) -> None:
         if approval_policy not in {"on-request", "never"}:
             raise ValueError("unsupported Codex approval policy")
@@ -187,6 +189,7 @@ class CodexAppServerClient:
         self._permission_binding: CodexPermissionBinding | None = None
         self._permission_drifted = False
         self._permission_preparing = False
+        self._completed_connection = CompletedConnectionProof(enabled=retire_completed_connection)
         self._preparation_thread_id: str | None = None
         self._preparation_settings: list[dict[str, Any]] = []
         self._session_providers = tuple(dict.fromkeys(("openai", model_provider or "openai")))
@@ -213,8 +216,13 @@ class CodexAppServerClient:
         self._activity_observed_notifications: set[int] = set()
 
     def close(self) -> None:
+        self._completed_connection.invalidate()
         self._clear_activity()
         self._transport.close()
+
+    def consume_completed_connection(self, *, thread_id: str, turn_id: str) -> bool:
+        """Authorize local retirement once; never unsubscribe or mutate a saved thread."""
+        return self._completed_connection.consume(thread_id=thread_id, turn_id=turn_id)
 
     def _clear_activity(self) -> None:
         self._turn_start_pending = False
@@ -619,6 +627,7 @@ class CodexAppServerClient:
         project_id: str,
         developer_instructions: str | None = None,
     ) -> CodexThread:
+        self._completed_connection.invalidate()
         self._clear_activity()
         if not self._initialized:
             raise RpcError("Codex client is not initialized")
@@ -678,6 +687,7 @@ class CodexAppServerClient:
         model: str,
         developer_instructions: str | None = None,
     ) -> CodexThread:
+        self._completed_connection.invalidate()
         self._clear_activity()
         if not self._initialized:
             raise RpcError("Codex client is not initialized")
@@ -741,6 +751,7 @@ class CodexAppServerClient:
         effort: str,
         local_image_paths: Sequence[Path] = (),
     ) -> str:
+        self._completed_connection.invalidate()
         self._clear_activity()
         self.notifications.clear()
         canonical_cwd = cwd.expanduser().resolve(strict=True)
@@ -838,6 +849,7 @@ class CodexAppServerClient:
 
     def wait_for_turn(self, turn_id: str) -> TurnResult:
         """Wait for one turn while excluding hidden reasoning from the result."""
+        self._completed_connection.invalidate()
         try:
             return self._wait_for_turn(turn_id)
         finally:
@@ -952,6 +964,11 @@ class CodexAppServerClient:
                     )
                     if self.on_completed is not None:
                         self.on_completed(result)
+                    self._completed_connection.observe(
+                        thread_id=self._activity_thread_id,
+                        turn_id=self._activity_turn_id,
+                        params=params,
+                    )
                     return result
             if method == "error" and params.get("turnId") == turn_id:
                 # Current app-server nests the public message under ``error``.
@@ -1164,7 +1181,7 @@ class CodexAppServerClient:
             secondary=self._limit_window(snapshot.get("secondary")) or previous.secondary,
         )
 
-    def read_rate_limits(self) -> RateLimits:
+    def read_rate_limits(self, *, deadline: float | None = None) -> RateLimits:
         """Read the account snapshot, filling missing windows from the last turn.
 
         The turn's windows are used once, by the read that follows the turn, so a
@@ -1172,8 +1189,8 @@ class CodexAppServerClient:
         """
         observed, self._turn_rate_limits = self._turn_rate_limits, {}
         try:
-            result = self._request("account/rateLimits/read", {})
-        except RpcError:
+            result = self._request("account/rateLimits/read", {}, deadline=deadline)
+        except (RpcError, TimeoutError):
             if "codex" not in observed:
                 raise
             return observed["codex"]

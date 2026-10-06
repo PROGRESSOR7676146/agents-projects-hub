@@ -77,7 +77,10 @@ class QueueClient:
             self.release.wait(3)
         return TurnResult("Visible answer", 1000, 100)
 
-    def read_rate_limits(self) -> RateLimits:
+    def consume_completed_connection(self, *, thread_id: str, turn_id: str) -> bool:
+        return False
+
+    def read_rate_limits(self, *, deadline: float | None = None) -> RateLimits:
         if self.fail_limits:
             raise RuntimeError("telemetry unavailable")
         return RateLimits(None, None)
