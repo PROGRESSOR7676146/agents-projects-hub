@@ -154,6 +154,18 @@ changed bindings and contradictory execution evidence cause refusal. Follow
 [REQ-QUEUE-004](../product/PERSISTENCE_AND_RECOVERY.md) for the safety contract;
 never grant or replay native tool permissions from task authorization text.
 
+Preparation that replaces an existing Codex thread cannot offer saved-task
+retry without a frozen effective-context snapshot. The fallback's bounded
+visible-context bridge currently exists only in memory. Hub refuses new tickets
+and previously saved tickets and descendants for that transition rather than
+submit a shortened task. Missing, cyclic or over-64-generation retry ancestry
+also refuses rather than inferring safe context. Send a new request with the
+complete task and relevant context. Preparing
+the first thread from no prior identity, or retaining the exact existing thread,
+remains supported. Effective-input preservation and historical context for an
+ordinary Reply need separate follow-up; this conditional failure test does not
+establish the deployed overflow's cause or a natural post-binding trigger.
+
 - Expired `leased` means provider invocation was not recorded as possible. The
   scope may be claimed by another eligible job; normal stale recovery returns
   the old job to `queued`, and the expired token cannot start it late.

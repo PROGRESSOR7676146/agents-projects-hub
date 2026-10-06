@@ -16,6 +16,13 @@ if TYPE_CHECKING:
     from .state import HubState, ProviderJobRecord
 
 
+_UNSAVED_REPLACEMENT_CONTEXT = (
+    "Saved-task retry is unavailable: preparation changed the Codex thread, "
+    "and Hub has no saved context snapshot for that change. Send a new request "
+    "containing the complete task and relevant context."
+)
+
+
 class PreparationRetryRefused(StateError):
     """A saved failed request cannot safely become a new invocation."""
 
@@ -116,6 +123,9 @@ class PreexecutionRetryState:
             )
         ):
             return "\n\nRetry is unavailable: the saved execution binding changed. Inspect /status."
+        context_refusal = self._context_refusal(job_id, session.provider_session_id)
+        if context_refusal is not None:
+            return "\n\n" + context_refusal
         inputs = self._inputs(job_id)
         if inputs == "[]":
             return (
@@ -157,6 +167,38 @@ class PreexecutionRetryState:
             (job_id,),
         ).fetchall()
         return json.dumps([list(row) for row in rows], ensure_ascii=True, separators=(",", ":"))
+
+    def _context_refusal(self, source_id: str, prepared_thread_id: str | None) -> str | None:
+        """Check inherited context without revalidating ancestors against today's session."""
+        seen: set[str] = set()
+        current = source_id
+        for _ in range(64):
+            if current in seen:
+                break
+            row = self.connection.execute(
+                """SELECT jobs.provider_session_id,tickets.source_job_id AS ticket_source,
+                          tickets.expected_thread_id,retries.source_job_id AS retry_parent
+                   FROM provider_jobs jobs
+                   LEFT JOIN provider_preexecution_retry_tickets tickets
+                     ON tickets.source_job_id=jobs.job_id
+                   LEFT JOIN provider_preexecution_retries retries
+                     ON retries.child_job_id=jobs.job_id
+                   WHERE jobs.job_id=?""",
+                (current,),
+            ).fetchone()
+            if row is None or (seen and row["ticket_source"] is None):
+                break
+            expected = prepared_thread_id if not seen else row["expected_thread_id"]
+            if row["provider_session_id"] is not None and row["provider_session_id"] != expected:
+                return _UNSAVED_REPLACEMENT_CONTEXT
+            seen.add(current)
+            if row["retry_parent"] is None:
+                return None
+            current = str(row["retry_parent"])
+        return (
+            "Saved-task retry is unavailable: retry ancestry cannot be verified within "
+            "its safety bound. Send a new request containing the complete task and relevant context."
+        )
 
     def _validate(
         self, source_id: str, *, canonical_root: Path, model_provider: str | None
@@ -214,6 +256,9 @@ class PreexecutionRetryState:
                 "Retry paused: saved session, root, route, permissions or execution evidence "
                 "changed. Inspect /status; no new task was started."
             )
+        context_refusal = self._context_refusal(source_id, ticket["expected_thread_id"])
+        if context_refusal is not None:
+            raise PreparationRetryRefused(context_refusal)
         return ticket
 
     def retry_from_notice(

@@ -27,6 +27,7 @@ from hermes_codex_router.preexecution_retry_state import (
 )
 from hermes_codex_router.state import HubState, StateError
 from hermes_codex_router.worker_execution import (
+    codex_turn_text,
     require_exact_retry_transport,
     validate_codex_worker_binding,
 )
@@ -57,11 +58,17 @@ class PreexecutionRetryTests(unittest.TestCase):
             payload_text=self.payload,
         )
 
-    def preparation_failure(self, job_id: str, notice_id: int) -> None:
+    def preparation_failure(
+        self, job_id: str, notice_id: int, *, prepared_thread: str | None = None
+    ) -> None:
         lease = self.state.lease_provider_job("codex", "example-worker")
         assert lease is not None and lease.lease_token is not None
         self.assertEqual(lease.job_id, job_id)
         self.state.mark_provider_job_executing(job_id, lease.lease_token)
+        if prepared_thread is not None:
+            ExecutionJournal(self.state).record_thread(
+                job_id, lease.lease_token, prepared_thread, self.harness.root
+            )
         self.state.terminate_provider_job_with_notice(
             job_id,
             lease.lease_token,
@@ -195,6 +202,148 @@ class PreexecutionRetryTests(unittest.TestCase):
         child, created = self.retry(self.job.job_id, 101)
         self.assertTrue(created)
         self.assertEqual(child.payload_text, self.payload)
+
+    def test_existing_thread_preparation_can_retry_only_when_identity_is_retained(self) -> None:
+        self.state.bind_provider_session(self.session.session_id, "example-original-thread", None)
+        self.sql(
+            "UPDATE provider_jobs SET provider_session_id=? WHERE job_id=?",
+            ("example-original-thread", self.job.job_id),
+        )
+        self.preparation_failure(self.job.job_id, 101, prepared_thread="example-original-thread")
+        child, created = self.retry(self.job.job_id, 101)
+        self.assertTrue(created)
+        self.assertEqual(child.provider_session_id, "example-original-thread")
+        self.assertEqual(child.payload_text, self.payload)
+
+    def test_replaced_existing_thread_has_visible_refusal_without_retry_ticket(self) -> None:
+        self.state.bind_provider_session(self.session.session_id, "example-original-thread", None)
+        self.sql(
+            "UPDATE provider_jobs SET provider_session_id=? WHERE job_id=?",
+            ("example-original-thread", self.job.job_id),
+        )
+        self.preparation_failure(self.job.job_id, 101, prepared_thread="example-replacement-thread")
+        notice = self.state.get_telegram_outbox_for_job(self.job.job_id)
+        self.assertNotIn("Reply exactly retry", notice.telegram_html)
+        self.assertIn("no saved context snapshot", notice.telegram_html)
+        self.assertIsNone(
+            self.sql("SELECT 1 FROM provider_preexecution_retry_tickets LIMIT 1").fetchone()
+        )
+        old = self.state.get_provider_job(self.job.job_id)
+        self.assertEqual(old.provider_session_id, "example-original-thread")
+        self.assertEqual(old.payload_text, self.payload)
+        checkpoint = self.sql(
+            "SELECT provider_thread_id FROM provider_execution_checkpoints WHERE job_id=?",
+            (old.job_id,),
+        ).fetchone()
+        assert checkpoint is not None
+        self.assertEqual(checkpoint[0], "example-replacement-thread")
+
+    def test_previously_saved_replacement_thread_ticket_refuses_admission_and_execution(
+        self,
+    ) -> None:
+        # Represent a ticket persisted by the previous schema-41 candidate.
+        self.preparation_failure(self.job.job_id, 101, prepared_thread="example-replacement-thread")
+        child, _ = self.retry(self.job.job_id, 101)
+        self.sql(
+            "UPDATE provider_jobs SET provider_session_id=? WHERE job_id=?",
+            ("example-original-thread", self.job.job_id),
+        )
+        before = self.snapshot()
+        with self.assertRaisesRegex(PreparationRetryRefused, "no saved context snapshot"):
+            PreexecutionRetryState(self.state)._validate(
+                self.job.job_id, canonical_root=self.harness.root, model_provider=None
+            )
+        self.assertEqual(self.snapshot(), before)
+        with (
+            patch.object(self.harness.service, "_client", side_effect=AssertionError("no client")),
+            patch(
+                "hermes_codex_router.service.prepare_worker_materials",
+                side_effect=AssertionError("no materials"),
+            ),
+            patch(
+                "hermes_codex_router.service.prepare_worker_staging_directory",
+                side_effect=AssertionError("no staging"),
+            ),
+        ):
+            self.assertTrue(self.harness.service.run_embedded_queue_cycle())
+        failed = self.state.get_provider_job(child.job_id)
+        self.assertEqual(failed.error_code, "CodexRetryBindingError")
+        self.assertEqual(self.harness.client.turns, 0)
+        self.assertIsNone(
+            self.sql(
+                "SELECT 1 FROM provider_preexecution_retry_tickets WHERE source_job_id=?",
+                (child.job_id,),
+            ).fetchone()
+        )
+
+    def test_legacy_replacement_ancestor_refuses_new_and_already_queued_descendants(self) -> None:
+        self.preparation_failure(self.job.job_id, 101, prepared_thread="example-replacement-thread")
+        child, _ = self.retry(self.job.job_id, 101)
+        self.preparation_failure(child.job_id, 102, prepared_thread="example-replacement-thread")
+        # The old candidate allowed A→B, then B→B. Represent that ancestry.
+        self.sql(
+            "UPDATE provider_jobs SET provider_session_id=? WHERE job_id=?",
+            ("example-original-thread", self.job.job_id),
+        )
+        before = self.snapshot()
+        with self.assertRaisesRegex(PreparationRetryRefused, "no saved context snapshot"):
+            self.retry(child.job_id, 102, 31)
+        self.assertEqual(self.snapshot(), before)
+        self.sql(
+            "UPDATE provider_jobs SET provider_session_id=NULL WHERE job_id=?", (self.job.job_id,)
+        )
+        grandchild, _ = self.retry(child.job_id, 102, 31)
+        self.sql(
+            "UPDATE provider_jobs SET provider_session_id=? WHERE job_id=?",
+            ("example-original-thread", self.job.job_id),
+        )
+        with (
+            patch.object(self.harness.service, "_client", side_effect=AssertionError("no client")),
+            patch(
+                "hermes_codex_router.service.prepare_worker_materials",
+                side_effect=AssertionError("no materials"),
+            ),
+            patch(
+                "hermes_codex_router.service.prepare_worker_staging_directory",
+                side_effect=AssertionError("no staging"),
+            ),
+        ):
+            self.assertTrue(self.harness.service.run_embedded_queue_cycle())
+        self.assertEqual(
+            self.state.get_provider_job(grandchild.job_id).error_code, "CodexRetryBindingError"
+        )
+        self.assertEqual(self.harness.client.turns, 0)
+
+    def test_legacy_replacement_ancestor_prevents_a_fresh_descendant_ticket(self) -> None:
+        self.preparation_failure(self.job.job_id, 101, prepared_thread="example-replacement-thread")
+        child, _ = self.retry(self.job.job_id, 101)
+        self.sql(
+            "UPDATE provider_jobs SET provider_session_id=? WHERE job_id=?",
+            ("example-original-thread", self.job.job_id),
+        )
+        self.preparation_failure(child.job_id, 102, prepared_thread="example-replacement-thread")
+        self.assertIn(
+            "no saved context snapshot",
+            self.state.get_telegram_outbox_for_job(child.job_id).telegram_html,
+        )
+        self.assertIsNone(
+            self.sql(
+                "SELECT 1 FROM provider_preexecution_retry_tickets WHERE source_job_id=?",
+                (child.job_id,),
+            ).fetchone()
+        )
+
+    def test_cyclic_retry_ancestry_is_a_bounded_visible_refusal(self) -> None:
+        self.preparation_failure(self.job.job_id, 101)
+        self.retry(self.job.job_id, 101)
+        self.sql(
+            "UPDATE provider_preexecution_retries SET child_job_id=? WHERE source_job_id=?",
+            (self.job.job_id, self.job.job_id),
+        )
+        with self.assertRaisesRegex(PreparationRetryRefused, "retry ancestry"):
+            PreexecutionRetryState(self.state)._validate(
+                self.job.job_id, canonical_root=self.harness.root, model_provider=None
+            )
 
     def sql(self, statement, parameters=()):
         with self.state._connection:
@@ -722,3 +871,76 @@ class PreexecutionRetryTests(unittest.TestCase):
         self.assertIn(self.payload, client.prompts[0])
         self.assertEqual(worker.state.get_provider_job(source).status, "result_ready")
         self.assertEqual(worker.state.get_provider_job(original.job_id).payload_text, self.payload)
+
+    def test_fallback_bridge_after_binding_fault_cannot_retry_short_authorization(self) -> None:
+        fixture = worker_fixtures.CodexQueueWorkerTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        source = fixture.enqueue(payload="Run it", provider_session_id="example-original-thread")
+        client = worker_fixtures.WorkerClient()
+        supervisor = worker_fixtures.WorkerSupervisor(client)
+        supervisor.transport_mode = "stdio-fallback"
+        worker = worker_fixtures.CodexQueueWorker(
+            fixture.config, registry=fixture.registry, supervisor=cast(Any, supervisor)
+        )
+        self.addCleanup(worker.close)
+        state = worker.state
+        original = state.get_provider_job(source)
+        state.record_visible_turn(
+            original.topic_id,
+            agent_id="codex",
+            provider="codex",
+            model=original.model,
+            user_excerpt="Approved: run all six fictional scenarios",
+            response_excerpt=self.payload,
+            provider_session_id="example-original-thread",
+        )
+        record_thread = ExecutionJournal.record_thread
+
+        def bind_then_fail(journal, *args, **kwargs):
+            record_thread(journal, *args, **kwargs)
+            raise RpcError("Codex notification buffer exceeded its bound")
+
+        # Fault injection explores this boundary; it does not establish a live trigger.
+        with (
+            patch.object(ExecutionJournal, "record_thread", bind_then_fail),
+            patch(
+                "hermes_codex_router.external_worker.codex_turn_text", wraps=codex_turn_text
+            ) as prepared_text,
+        ):
+            self.assertTrue(worker.run_cycle())
+        self.assertIn(self.payload, prepared_text.call_args.kwargs["fallback_visible_context"])
+        failed = state.get_provider_job(source)
+        self.assertEqual(failed.error_code, "CodexPreparationError")
+        self.assertEqual(failed.payload_text, "Run it")
+        self.assertEqual(failed.provider_session_id, "example-original-thread")
+        self.assertEqual(state.get_session(original.session_id).provider_session_id, "thread-1")
+        delivery = state.lease_telegram_outbox("codex", "example-sender")
+        assert delivery is not None and delivery.lease_token is not None
+        self.assertIn("no saved context snapshot", delivery.telegram_html)
+        self.assertNotIn("Reply exactly retry", delivery.telegram_html)
+        state.mark_telegram_outbox_delivered(
+            delivery.outbox_id, delivery.lease_token, telegram_message_id=101
+        )
+        state.record_visible_turn(
+            original.topic_id,
+            agent_id="codex",
+            provider="codex",
+            model=original.model,
+            user_excerpt="Later unrelated question",
+            response_excerpt="Later unrelated answer",
+            provider_session_id="thread-1",
+        )
+        supervisor.transport_mode = "socket"
+        with self.assertRaisesRegex(PreparationRetryRefused, "no verified saved retry binding"):
+            PreexecutionRetryState(state).retry_from_notice(
+                source_job_id=source,
+                chat_id=CHAT_ID,
+                thread_id=THREAD_ID,
+                notice_message_id=101,
+                reply_message_id=30,
+                canonical_root=fixture.registry.require_project("example-project").root,
+                model_provider=None,
+            )
+        self.assertEqual(client.turns, 0)
+        self.assertEqual(len(state.provider_jobs_for_topic(original.topic_id)), 1)

@@ -226,7 +226,10 @@ acceptance.
   revision: `1a54af15d375992001579e328e8b31b5e1b9267d`; this is repository
   evidence only. Verify more than 1,024 foreign notifications and both results;
   two consecutive preparation failures must retain the original task/context
-  through explicit retries. Restart alone does not close the item. Materials,
+  through explicit retries, or visibly refuse when preparation replaced an
+  existing thread without saving its effective context. Frozen fallback-context
+  preservation and ordinary Reply historical context remain separate follow-ups.
+  Restart alone does not close the item. Materials,
   safe unsubscribe, stdio buffering and exact deployed-source attribution remain
   open; no deployment or active-worker restart follows from this entry. See the
   [recovery procedure](QUEUE_RECOVERY.md#durable-dispositions) and
