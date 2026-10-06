@@ -71,6 +71,14 @@ This normative module is part of the
   against the exact cached catalog snapshot displayed to the user. The final
   click changes local session state deterministically and MUST NOT depend on a
   new provider RPC or an AI-generated handoff.
+  Claude MAY expose an explicit local `model_catalog`: 1–32 unique ASCII model
+  IDs of at most 128 characters, printable labels of 1–96 characters, and
+  unique nonempty effort subsets of `low`, `medium`, `high`, `xhigh`, and `max`.
+  Every entry contains only `model_id`, `label`, and `efforts`; the configured
+  default model/effort pair MUST be included. Omission retains the single
+  configured default. This field MUST be rejected for other runtimes. Claude
+  menus MUST label these as configured choices with availability unverified;
+  neither entitlement, effective effort nor billing route is established.
 - **REQ-CMD-002A (Implemented):** Successful provider discovery updates a
   private atomic last-known-good catalog with source version and timestamp.
   Telegram callbacks use bounded opaque keys rather than provider model IDs;
@@ -82,6 +90,12 @@ This normative module is part of the
   refresh. Discovery failures preserve the last good catalog. The isolated Controller
   never discovers models itself: Refresh requests monitor refresh while keeping
   cached choices usable. Only an empty cache uses the configured default.
+  Claude catalog display, callback validation and monitor refresh MUST project
+  the same current local configuration without subprocess, network, provider
+  or account-helper invocation. A configuration change MUST invalidate removed
+  model/effort choices even when the cache is fresh. An already selected choice
+  outside the updated catalog MUST remain visibly selected without an automatic
+  reset, session replacement or false availability claim.
 - **REQ-CMD-003 (Implemented):** `/accounts` lists configured provider accounts
   and observable limits. OpenCode Go exact exhaustion/reset telemetry is shown
   only after a real provider `429`; plan caps are labelled separately. The
