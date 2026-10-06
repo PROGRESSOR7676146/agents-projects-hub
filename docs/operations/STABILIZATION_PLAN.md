@@ -198,6 +198,25 @@ acceptance.
   command, as a separate unit, with a watchdog for Hermes' own updates. Stages:
   the tool and a private stack manifest; the drift check; Hermes integration;
   the watchdog.
+- **Project-topic incident collaboration (new owner request; design/implementation pending).**
+  Extend the passive incident plane to classify durable queue, provider, delivery,
+  approval and Telegram topic problems, without scraping private topic messages
+  into a second monitoring store or starting model turns in a timer. Preserve
+  exact numeric topic/job provenance in private operator context and route one
+  bounded, redacted handoff to the responsible development thread only after
+  checking its binding, queue and existing ownership. The handoff must distinguish
+  Hub's state from exact provider terminality and avoid a second productive turn
+  behind unresolved work. Hermes may investigate and coordinate when explicitly
+  engaged by the owner; unattended diagnosis/repair would change maintenance
+  rule 8 and ADR 0048, so requires a separate informed owner decision, bounded
+  quota/storm controls, and independent acceptance before implementation.
+  Acceptance: simulated duplicate/error storms produce one deterministic card;
+  wrong-topic and active/uncertain-turn cases do not send or restart; a real
+  authorized handoff is read back from Telegram; a controlled restart proves
+  drain, backup, schema-compatible rollback, exact revision convergence and
+  post-restart delivery without replay. Existing Operations alerts remain the
+  independent fallback if Hermes is unavailable. No general standing restart or
+  deployment authority is implied by topic coordination.
 - `configure-github.sh` required nonexistent check names (fixed in #82).
 - Silent queue and execution waits: schema-37 repository implementation is
   under validation; [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md)
