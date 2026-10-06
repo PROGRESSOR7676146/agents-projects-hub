@@ -114,6 +114,180 @@ class PreacceptanceApprovalTests(unittest.TestCase):
     def notice(self):
         return self.state._connection.execute("SELECT * FROM task_lifecycle_notices").fetchone()
 
+    def next_prepared_job(self):
+        root = self.root / "next-project"
+        root.mkdir()
+        topic = self.state.observe_topic(
+            project_id="example-next",
+            chat_id=self.topic.chat_id,
+            thread_id=78,
+            title="Example next",
+            execution_root=root,
+        )
+        session = self.state.activate_agent(topic.topic_id, "codex", "example-model", "high")
+        job, _ = self.state.enqueue_provider_job(
+            idempotency_key="example-next-input",
+            chat_id=topic.chat_id,
+            message_id=2,
+            topic_id=topic.topic_id,
+            agent_id="codex",
+            session_id=session.session_id,
+            session_generation=session.generation,
+            model=session.model,
+            effort=session.effort,
+            payload_text="Example next task",
+        )
+        lease = self.state.lease_provider_job(
+            "codex",
+            "example-next-worker",
+            now=self.now,
+            max_parallel_roots=2,
+            agent_capacities={"codex": 2},
+        )
+        assert lease is not None and lease.lease_token is not None
+        self.state.mark_provider_job_executing(job.job_id, lease.lease_token)
+        self.journal.record_thread(job.job_id, lease.lease_token, "example-next-thread", root)
+        return job, lease.lease_token, root
+
+    def open_next_scope(self, job, token, root):
+        return self.early.open_scope(
+            job.job_id,
+            token,
+            self.runtime,
+            provider_thread_id="example-next-thread",
+            project_root=str(root),
+            now=self.now,
+        )
+
+    def test_same_instance_retires_abandoned_scope_before_next_job(self) -> None:
+        old = self.scope()
+        self.observe(old)
+        self.state.cancel_active_provider_job(self.job.job_id, self.token)
+        next_job, token, root = self.next_prepared_job()
+        new = self.open_next_scope(next_job, token, root)
+        self.assertIsNotNone(new)
+        self.assertNotEqual(new, old)
+        self.assertEqual(self.notice()["status"], "superseded")
+        row = self.state._connection.execute(
+            "SELECT state FROM preacceptance_scopes WHERE scope_id=?", (old,)
+        ).fetchone()
+        self.assertEqual(row["state"], "retired")
+        self.assertEqual(self.open_next_scope(next_job, token, root), new)
+        self.assertEqual(self.runtime.epoch, 1)
+
+    def test_same_instance_preserves_other_valid_live_scope(self) -> None:
+        old = self.scope()
+        self.observe(old)
+        next_job, token, root = self.next_prepared_job()
+        self.assertIsNone(self.open_next_scope(next_job, token, root))
+        self.assertEqual(self.scope(), old)
+        self.assertEqual(self.notice()["status"], "pending")
+
+    def test_replacement_insert_failure_rolls_back_retirement_and_suppression(self) -> None:
+        old = self.scope()
+        self.observe(old)
+        self.state.cancel_active_provider_job(self.job.job_id, self.token)
+        next_job, token, root = self.next_prepared_job()
+        with self.state._connection:
+            self.state._connection.execute(
+                "CREATE TRIGGER example_scope_insert_failure BEFORE INSERT ON preacceptance_scopes "
+                "BEGIN SELECT RAISE(ABORT,'example failure'); END"
+            )
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.open_next_scope(next_job, token, root)
+        row = self.state._connection.execute(
+            "SELECT state FROM preacceptance_scopes WHERE scope_id=?", (old,)
+        ).fetchone()
+        self.assertEqual(row["state"], "open")
+        self.assertEqual(self.notice()["status"], "pending")
+
+    def test_pending_covering_stop_suppresses_unattempted_early_notice(self) -> None:
+        scope = self.scope()
+        self.observe(scope)
+        self.state.request_emergency_stop(
+            topic_id=self.topic.topic_id,
+            chat_id=self.topic.chat_id,
+            message_id=3,
+            target_agent_id="codex",
+        )
+        bot = Bot()
+        deliver_task_notice(self.state.task_notices, bot, "example-sender", now=self.now)
+        self.assertEqual(bot.sent, [])
+        self.assertEqual(self.notice()["status"], "superseded")
+        self.assertEqual(self.state.get_provider_job(self.job.job_id).status, "executing")
+
+    def test_pending_covering_stop_suppresses_accepted_approval_notice(self) -> None:
+        self.journal.record_turn(self.job.job_id, self.token, "example-turn")
+        self.activity.bind_accepted(
+            self.job.job_id,
+            self.token,
+            "example-thread",
+            "example-turn",
+            str(self.root),
+            now=self.now,
+        )
+        self.activity.record_activity(self.job.job_id, self.token, self.event(), now=self.now)
+        self.state.request_emergency_stop(
+            topic_id=self.topic.topic_id,
+            chat_id=self.topic.chat_id,
+            message_id=3,
+            target_agent_id="codex",
+        )
+        bot = Bot()
+        deliver_task_notice(self.state.task_notices, bot, "example-sender", now=self.now)
+        self.assertEqual(bot.sent, [])
+        self.assertEqual(self.notice()["status"], "superseded")
+
+    def test_pending_stop_preserves_already_attempted_unknown_notice(self) -> None:
+        scope = self.scope()
+        self.observe(scope)
+        notices = self.state.task_notices
+        notice = notices.lease_notice("example-sender", now=self.now)
+        assert notice is not None and notice.lease_token is not None
+        notices.begin_send(notice.notice_id, notice.lease_token, now=self.now)
+        self.state.request_emergency_stop(
+            topic_id=self.topic.topic_id,
+            chat_id=self.topic.chat_id,
+            message_id=3,
+            target_agent_id="codex",
+        )
+        notices.mark_send_unknown(
+            notice.notice_id, notice.lease_token, error_code="example_timeout", now=self.now
+        )
+        self.early.retire(scope, self.runtime, now=self.now)
+        self.assertEqual(self.notice()["status"], "unknown")
+        self.assertEqual(self.notice()["attempt_count"], 1)
+
+    def test_conflicting_instance_scope_is_preserved(self) -> None:
+        scope = self.scope()
+        self.observe(scope)
+        next_job, token, root = self.next_prepared_job()
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE preacceptance_scopes SET instance_token='example-other-instance'"
+            )
+        self.assertIsNone(self.open_next_scope(next_job, token, root))
+        row = self.state._connection.execute(
+            "SELECT state FROM preacceptance_scopes WHERE scope_id=?", (scope,)
+        ).fetchone()
+        self.assertEqual(row["state"], "open")
+        self.assertEqual(self.notice()["status"], "pending")
+
+    def test_promotion_and_delivery_with_advanced_clock_preserve_pending_notice(self) -> None:
+        scope = self.scope()
+        self.observe(scope)
+        notice_id = self.notice()["notice_id"]
+        self.journal.record_turn(self.job.job_id, self.token, "example-turn")
+        self.now += timedelta(seconds=5)
+        self.assertTrue(self.promote(scope))
+        bot = Bot()
+        result = deliver_task_notice(
+            self.state.task_notices, bot, "example-sender", now=self.now + timedelta(seconds=1)
+        )
+        self.assertTrue(result.delivered)
+        self.assertEqual(self.notice()["notice_id"], notice_id)
+        self.assertEqual(len(bot.sent), 1)
+
     def test_approval_is_delivered_before_turn_acceptance_without_execution_authority(self) -> None:
         scope = self.scope()
         self.assertTrue(self.observe(scope))

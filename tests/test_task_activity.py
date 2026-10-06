@@ -36,6 +36,12 @@ class TaskActivityTests(unittest.TestCase):
             INSERT INTO provider_execution_checkpoints VALUES('job','thread','turn','/home/example/project',NULL);
         """)
         self.db.executescript(TASK_LIFECYCLE_SCHEMA + TASK_ACTIVITY_SCHEMA)
+        self.db.executescript("""
+            ALTER TABLE provider_jobs ADD COLUMN created_at TEXT DEFAULT '2026-01-01T00:00:00+00:00';
+            ALTER TABLE provider_stop_requests ADD COLUMN created_at TEXT;
+            ALTER TABLE provider_stop_requests ADD COLUMN status TEXT;
+            CREATE TABLE provider_job_holds(job_id TEXT,held_at TEXT,decision TEXT,decided_at TEXT);
+        """)
         self.notices = TaskLifecycleState(
             self.db, transaction=self.transaction, state_error=ValueError
         )
@@ -72,6 +78,20 @@ class TaskActivityTests(unittest.TestCase):
         )
         args.update(kwargs)
         return self.state.bind_accepted(**args)
+
+    def test_stale_retirement_cannot_remove_current_binding_entries_or_notice(self) -> None:
+        self.bind()
+        self.event("approval_requested", "command", request=7)
+        before = [
+            [tuple(row) for row in self.db.execute(f"SELECT * FROM {table}").fetchall()]
+            for table in ("task_activity", "task_activity_entries", "task_lifecycle_notices")
+        ]
+        self.assertFalse(self.state.retire_observation("job", "stale-lease", now=self.now))
+        after = [
+            [tuple(row) for row in self.db.execute(f"SELECT * FROM {table}").fetchall()]
+            for table in ("task_activity", "task_activity_entries", "task_lifecycle_notices")
+        ]
+        self.assertEqual(after, before)
 
     def event(
         self,
