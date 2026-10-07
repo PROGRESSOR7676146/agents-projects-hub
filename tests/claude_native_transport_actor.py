@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import cast
 
 MODEL = "claude-opus-5-5"
+NATIVE_SESSION_ID = "00000000-0000-4000-8000-000000000001"
 MARKER = "example-native-ok"
 DUMMY = "example-fixture-no-real-credential"
 CASES = {"api-key-success", "api-key-reject", "bearer-success", "bearer-reject"}
@@ -443,7 +444,9 @@ def main() -> None:
             visible_messages += 1
 
         terminal_shape["assistant_error_present"] = False
-        reader = DiagnosticReader(on_visible_assistant=count_visible)
+        reader = DiagnosticReader(
+            expected_session_id=NATIVE_SESSION_ID, on_visible_assistant=count_visible
+        )
         code, _ = capture_owned_process(
             argv,
             environment,
@@ -455,7 +458,12 @@ def main() -> None:
         stage = "terminal"
         success, failure, failure_code = False, False, None
         try:
-            result = parse_claude_stream(reader.finish(), requested_model=MODEL, returncode=code)
+            result = parse_claude_stream(
+                reader.finish(),
+                expected_session_id=NATIVE_SESSION_ID,
+                requested_model=MODEL,
+                returncode=code,
+            )
             success = result.text == MARKER and result.model == MODEL
         except ClaudeTerminalFailure as error:
             failure = True

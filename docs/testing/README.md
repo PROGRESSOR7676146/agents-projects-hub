@@ -269,7 +269,7 @@ Codex binary, proving absent source aliases and unwritable mounted scripts.
 `tests.test_claude_native_transport` uses an explicitly supplied standalone ELF
 Claude executable against a fictional HTTP endpoint inside a disposable empty-root
 network/PID/IPC namespace. It copies the bounded binary and supplies only readonly
-system runtime, the fixture actor, shared native settings and the production
+system runtime, the fixture actor and the production
 stream parser. Host HOME, project, credentials and service endpoints are absent.
 
 ```bash
@@ -282,7 +282,9 @@ HUB_NATIVE_CLAUDE_FIXTURE_EXECUTABLE=/home/example/tools/claude-native \
 
 The bearer/API-key × SSE-success/HTTP-529 matrix derives its base argv from the
 production text-only builder, without bare mode. A canonical regression checks
-every production argument and setting. Fixture-only additions empty setting
+every production start argument and setting, including a caller-chosen fictional
+session UUID checked by both reader and parser. Saved-session resume is separate.
+Shared native settings arrive through this host-built argv. Fixture-only additions empty setting
 sources/MCP, disable session persistence and model switching/fallback, limit the
 turn to one, and replace the system prompt. Fixture-only environment settings
 suppress retries and limit output tokens. Restricted mode already loads only
@@ -299,7 +301,9 @@ and parser Python version. Required native runs pin the expected digest and
 version from private locally verified evidence; never put real binary identities
 in Git. Success requires exactly one visible message; HTTP 529 requires the native
 `success`/`is_error:true`/exact-529/string-result envelope, an overloaded failure,
-and zero visible assistant error messages. The actor requires Python 3.11 or later.
+and zero visible assistant messages with an error-bearing latest assistant event.
+The actor requires Python 3.11 or later; the host validates the reported Python
+version and every terminal diagnostic key/value before printing the evidence.
 Special-file sources refuse before open and regular files use nonblocking open;
 timeout, output-bound, callback failure and parent-exits-first regressions check
 owned group termination before leader reaping and pipe cleanup.

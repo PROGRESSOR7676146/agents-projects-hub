@@ -12,8 +12,14 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from hermes_codex_router import claude_native_settings, claude_stream
-from tests.claude_native_transport_actor import CASES, FAILURE_CATEGORIES, MODEL, STAGES
+from hermes_codex_router import claude_stream
+from tests.claude_native_transport_actor import (
+    CASES,
+    FAILURE_CATEGORIES,
+    MODEL,
+    NATIVE_SESSION_ID,
+    STAGES,
+)
 from tests.native_process_capture import NativeCaptureError, capture_owned_process
 from tests.native_runtime_mounts import native_runtime_mounts
 
@@ -68,7 +74,11 @@ def build_native_fixture_argv(cwd: Path) -> tuple[str, ...]:
 
     argv = list(
         ExternalCliAdapter("claude", executable="/opt/example/claude").build_argv(
-            cwd=cwd, prompt="Return example-native-ok.", model=MODEL, effort="high"
+            cwd=cwd,
+            prompt="Return example-native-ok.",
+            model=MODEL,
+            effort="high",
+            new_session_id=NATIVE_SESSION_ID,
         )
     )
     settings_index = argv.index("--settings") + 1
@@ -139,13 +149,49 @@ def validate_transport_evidence(report: object, case: str) -> dict[str, Any]:
     ):
         raise NativeTransportFixtureError("native_terminal_shape_invalid")
     shape = report.get("terminal_shape")
+    python_version = report.get("parser_python_version")
     if (
         not isinstance(shape, dict)
+        or set(shape)
+        != {
+            "subtype",
+            "is_error",
+            "error_is_boolean",
+            "api_error_status",
+            "result_is_text",
+            "assistant_error_present",
+            "latest_assistant_error",
+            "errors_is_list",
+        }
+        or type(shape.get("errors_is_list")) is not bool
+        or (
+            shape.get("latest_assistant_error") is not None
+            and (
+                not isinstance(shape["latest_assistant_error"], str)
+                or shape["latest_assistant_error"]
+                not in {
+                    "overloaded",
+                    "unknown",
+                    "rate_limit",
+                    "authentication_failed",
+                    "billing_error",
+                    "model_not_found",
+                    "other",
+                }
+            )
+        )
+        or not isinstance(python_version, list)
+        or len(python_version) != 2
+        or any(type(part) is not int for part in python_version)
+        or python_version[0] != 3
+        or not 11 <= python_version[1] <= 99
         or shape.get("subtype") != "success"
         or shape.get("error_is_boolean") is not True
         or shape.get("result_is_text") is not True
         or shape.get("is_error") is not rejected
         or shape.get("assistant_error_present") is not rejected
+        or shape.get("assistant_error_present")
+        is not (shape.get("latest_assistant_error") is not None)
         or type(report.get("visible_messages")) is not int
         or report["visible_messages"] != (0 if rejected else 1)
         or (
@@ -202,7 +248,6 @@ def run_native_transport_case(
         actor = Path(__file__).with_name("claude_native_transport_actor.py")
         capture = Path(__file__).with_name("native_process_capture.py")
         parser = Path(claude_stream.__file__)
-        settings = Path(claude_native_settings.__file__)
         with socket.socket() as listener:
             listener.settimeout(2)
             listener.bind(("127.0.0.1", 0))
@@ -255,9 +300,6 @@ def run_native_transport_case(
                 "--ro-bind",
                 str(parser),
                 "/opt/example/hermes_codex_router/claude_stream.py",
-                "--ro-bind",
-                str(settings),
-                "/opt/example/hermes_codex_router/claude_native_settings.py",
                 "--ro-bind",
                 str(empty),
                 "/opt/example/hermes_codex_router/__init__.py",

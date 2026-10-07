@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.claude_native_transport_actor import (
+    NATIVE_SESSION_ID,
     failure_category,
     rejected_policy_shape,
     update_terminal_shape,
@@ -54,8 +55,11 @@ class NativeTransportEvidenceTests(unittest.TestCase):
                 "api_error_status": None,
                 "result_is_text": True,
                 "assistant_error_present": False,
+                "latest_assistant_error": None,
+                "errors_is_list": False,
             },
             "visible_messages": 1,
+            "parser_python_version": [3, 11],
         }
 
     def test_validated_success_and_terminal_rejection_are_distinct(self) -> None:
@@ -77,6 +81,8 @@ class NativeTransportEvidenceTests(unittest.TestCase):
                 "api_error_status": 529,
                 "result_is_text": True,
                 "assistant_error_present": True,
+                "latest_assistant_error": "other",
+                "errors_is_list": False,
             },
         )
         validate_transport_evidence(report, "bearer-reject")
@@ -92,7 +98,10 @@ class NativeTransportEvidenceTests(unittest.TestCase):
             visible_messages=0,
         )
         report["terminal_shape"].update(
-            is_error=True, api_error_status=529, assistant_error_present=True
+            is_error=True,
+            api_error_status=529,
+            assistant_error_present=True,
+            latest_assistant_error="other",
         )
         validate_transport_evidence(report, "bearer-reject")
         for change in (
@@ -119,6 +128,7 @@ class NativeTransportEvidenceTests(unittest.TestCase):
                     prompt="Return example-native-ok.",
                     model="claude-opus-5-5",
                     effort="high",
+                    new_session_id=NATIVE_SESSION_ID,
                 )
             )
             fixture = list(build_native_fixture_argv(cwd))
@@ -149,6 +159,23 @@ class NativeTransportEvidenceTests(unittest.TestCase):
                 "Return the fixture marker.",
             ],
         )
+
+    def test_host_refuses_unvalidated_diagnostics_before_printing_evidence(self) -> None:
+        report = self.report()
+        for change in (
+            {"parser_python_version": [3, True]},
+            {"parser_python_version": [3, 10]},
+            {"parser_python_version": "example-private-runtime"},
+            {"terminal_shape": {**report["terminal_shape"], "extra": "example-private-data"}},
+            {"terminal_shape": {**report["terminal_shape"], "latest_assistant_error": []}},
+            {"terminal_shape": {**report["terminal_shape"], "errors_is_list": 1}},
+        ):
+            with (
+                self.subTest(change=change),
+                self.assertRaises(NativeTransportFixtureError) as raised,
+            ):
+                validate_transport_evidence({**report, **change}, "bearer-success")
+            self.assertNotIn("example-private", str(raised.exception))
 
     def test_success_marker_cannot_hide_retry_unknown_request_or_server_violation(self) -> None:
         for change in (
