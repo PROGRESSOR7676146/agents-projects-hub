@@ -7,7 +7,8 @@ import unittest
 from pathlib import Path
 from typing import NoReturn
 
-from hermes_codex_router.claude_file_sandbox import FileToolSandboxError, _require_fd_bind_support
+from hermes_codex_router.process_namespace import NamespaceError as FileToolSandboxError
+from hermes_codex_router.process_namespace import _require_fd_bind_support
 
 
 def namespace_unavailable(case: unittest.TestCase, reason: str) -> NoReturn:

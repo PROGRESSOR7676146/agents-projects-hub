@@ -75,9 +75,10 @@ def read_mount_table() -> dict[int, _Mount]:
         if (
             not separator
             or not all(fields)
-            or not all(tail)
             or len(fields) < 6
             or len(tail) != 3
+            or not tail[0]
+            or not tail[2]
             or not re.fullmatch(r"[0-9]+", fields[0])
             or not re.fullmatch(r"[0-9]+", fields[1])
             or not re.fullmatch(r"[0-9]+:[0-9]+", fields[2])
@@ -182,8 +183,15 @@ class PrivateMountGuard:
                     raise PrivateMountError("private authority path cannot be pinned") from exc
                 anchor = anchor.parent
         suffix = path.relative_to(anchor).parts
-        if suffix and not stat.S_ISDIR(os.fstat(fd).st_mode):
-            raise PrivateMountError("private authority missing-path anchor is not a directory")
+        if suffix:
+            try:
+                info = os.fstat(fd)
+            except OSError as exc:
+                raise PrivateMountError(
+                    "private authority missing-path anchor is unavailable"
+                ) from exc
+            if not stat.S_ISDIR(info.st_mode):
+                raise PrivateMountError("private authority missing-path anchor is not a directory")
         return _PrivatePath(path, anchor, fd, suffix)
 
     @staticmethod

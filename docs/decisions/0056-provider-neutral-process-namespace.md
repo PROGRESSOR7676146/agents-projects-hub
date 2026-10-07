@@ -1,0 +1,101 @@
+# ADR 0056: Provider-neutral pinned process namespace
+
+Status: implemented extraction candidate; publication review and installed custody pending.
+Date: 2026-10-07.
+Owner: Hub maintainer.
+
+## Context
+
+The Claude file-tool wrapper already owns pinned mount validation, bounded
+tree scans, immutable-runtime checks and descriptor cleanup. Copying those
+controls for a future advisor would create two owners of the same security
+mechanism. Prompt restrictions cannot establish the read-only boundary required
+by [REQ-WRITER-013](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
+
+## Decision
+
+Extract those mechanisms into `process_namespace.py`. A frozen
+`NamespaceRuntime` captures trusted runtime identities once and rechecks them
+at each launch; a frozen `ProcessNamespaceConfig` declares explicit project,
+session-home and private sources. Its initial defaults are read-only project
+access, private networking and no permission socket. The initial private
+profile refuses a permission socket. Namespace-owned HOME, proc, dev and run
+destinations cannot be shadowed by ordinary mounts; a narrow project below
+disposable tmp, the readonly Git overlay and consistent readonly runtime nesting
+remain supported.
+
+Keep `FileToolSandboxConfig` as the frozen Claude facade with its existing
+constructor, public attributes and `wrap()` signature. It explicitly selects
+project read/write, readonly Git, shared networking for the existing loopback
+route, and the existing one-inode permission socket. Claude owns its environment
+allowlist and fixed config directory. The generic core validates explicit
+environment strings and fixes HOME, XDG, TMPDIR and PATH without inheriting host
+environment. The trusted caller must apply its own security allowlist before
+`wrap()`: those variables also reach bubblewrap before confinement, so loader
+or interpreter injection cannot be treated as confined by the child namespace.
+The Claude facade retains its narrow allowlist; a future productive consumer
+must establish its own before launch. The facade derives its config directory
+from the public core HOME constant. Alias the neutral error at the old import
+location, retaining catch behavior and original exception causes. The error class name is now
+`NamespaceError`; no state or protocol relies on the former Python class name.
+
+Keep `claude_mount_pins.py` as the sole inode/type identity, descriptor
+adoption and final pin-recheck owner. Its dependency-neutral `mount_lookup.py`
+guard requires explicit case-sensitive lookup evidence for the starting parent,
+every traversed directory and terminal directory pin, including missing-private
+anchors. Fresh final walks repeat that evidence. Dentry names alone cannot prove
+stored spelling: a cold casefold lookup can retain the caller's spelling.
+Reopen pinned `.` read-only for inspection and close the temporary descriptor;
+never reinterpret an unavailable ioctl as absence of casefolding.
+
+The supported inspection ABI is Linux LP64 x86-64/AArch64. Ext-family, tmpfs and
+btrfs directories require successful `FS_IOC_GETFLAGS` without `FS_CASEFOLD_FL`.
+XFS requires `XFS_IOC_FSGEOMETRY_V1` with its V1 response version `0` and without
+`DIRV2CI`. Every traversed ancestor must supply this evidence and permit the
+read-only inspection open. Unknown filesystems (including overlay), unsupported
+ABI, unavailable evidence and malformed responses refuse. Tmpfs acceptance
+depends on kernel flag-query support, including `CONFIG_TMPFS_XATTR` on kernels
+that condition its directory implementation on that option. Ordinary Unicode
+names on supported case-sensitive directories remain available.
+
+Carry the later private-source hardening
+into the core: one bounded LF/ASCII-space mount parser, validation-only private
+pins, filesystem/inode alias exclusion, fresh final provenance checks and
+single-link runtime/socket sources. Private validation descriptors close before
+returning the launch; only explicit public source pins are inherited. Every
+access/network profile enforces this boundary. Move test helper
+patches to their defining module rather than retaining facade callback plumbing.
+Existing invocation, process cleanup, native permissions, signed receipts,
+worker/state transactions and result publication keep their owners.
+
+The second consumer is an offline Python witness. It uses authorized material
+inside a readonly project and a separate writable session HOME; it exercises a
+parent and exec child without a provider, permission host or inference route.
+Required strict CI includes it alongside the existing Claude and Codex witnesses.
+The [testing guide](../testing/README.md#live-acceptance-boundary) owns its checks
+and evidence limits.
+
+## Consequences and next trigger
+
+There is one namespace validator and builder. Both access modes retain bounded
+scans and project/HOME inode-intersection rejection. Pinning does not freeze
+directory contents or exclude concurrent unconfined host mutation. The second
+consumer is not a production advisor, launcher for other providers, complete
+snapshot, deployment inventory or host-wide custody attestation.
+
+Private networking cuts the current loopback inference route. Next design a
+bounded inference transport and authorized-material boundary before wiring any
+advisor; do not reconnect host authority services or silently widen this profile
+to regain inference. Role changes, bounded review state, local/helper/MCP paths
+and the installed acceptance in [ADR 0053](0053-claude-custody-reference-deployment.md)
+remain separate work. No runtime feature flag, service change or live activation
+is introduced by this extraction.
+The filesystem allowlist is not a guarantee for every btrfs subvolume or bind
+layout: device/mount/kernel-path evidence must agree, otherwise launch refuses
+conservatively. Availability on those layouts remains unproven; no provenance
+check is relaxed to accommodate them.
+The shared lookup guard imposes additional availability restrictions even when
+the selected source itself is on a supported filesystem: an overlay ancestor or
+an unreadable ancestor refuses the whole walk. The fixtures exercise scripted
+filesystem evidence and ordinary real case-sensitive paths; they do not establish
+availability on every listed filesystem or a real casefold/cache-state witness.

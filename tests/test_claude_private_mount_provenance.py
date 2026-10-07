@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import errno
 import os
+import struct
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import hermes_codex_router.claude_private_mounts as private_mounts
-from hermes_codex_router.claude_file_sandbox import FileToolSandboxError, _reject_nested_mounts
-from hermes_codex_router.claude_mount_pins import MountPins
+from hermes_codex_router.claude_mount_pins import MountPinError, MountPins
 from hermes_codex_router.claude_private_mounts import PrivateMountError, PrivateMountGuard
+from hermes_codex_router.mount_lookup import LookupEvidenceError
+from hermes_codex_router.process_namespace import NamespaceError as FileToolSandboxError
+from hermes_codex_router.process_namespace import _reject_nested_mounts
+from tests.fd_fixture import assert_descriptor_cleanup
 
 
 class PrivateMountProvenanceTests(unittest.TestCase):
@@ -46,21 +50,20 @@ class PrivateMountProvenanceTests(unittest.TestCase):
             row.replace("ext4 example rw", "ext4"),
         ):
             with self.subTest(table=table):
-                before = len(os.listdir("/proc/self/fd"))
-                original = Path.read_text
+                with assert_descriptor_cleanup(self):
+                    original = Path.read_text
 
-                def read(path: Path, *args: object, **kwargs: object) -> str:
-                    if path == Path("/proc/self/mountinfo"):
-                        return table
-                    return original(path, *args, **kwargs)  # type: ignore[arg-type]
+                    def read(path: Path, *args: object, **kwargs: object) -> str:
+                        if path == Path("/proc/self/mountinfo"):
+                            return table
+                        return original(path, *args, **kwargs)  # type: ignore[arg-type]
 
-                with (
-                    patch.object(Path, "read_text", read),
-                    patch.object(private_mounts, "_read_mountinfo", return_value=table),
-                ):
-                    with self.assertRaises(PrivateMountError):
-                        self.check()
-                self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+                    with (
+                        patch.object(Path, "read_text", read),
+                        patch.object(private_mounts, "_read_mountinfo", return_value=table),
+                    ):
+                        with self.assertRaises(PrivateMountError):
+                            self.check()
 
     def test_selected_mount_device_must_match_actual_descriptor(self) -> None:
         original = Path.read_text
@@ -93,77 +96,78 @@ class PrivateMountProvenanceTests(unittest.TestCase):
             for suffix in ("casefold", " (deleted)"):
                 with self.subTest(path=path, suffix=suffix):
                     original = os.readlink
-                    before = len(os.listdir("/proc/self/fd"))
+                    with assert_descriptor_cleanup(self):
 
-                    def divergent(name: str, *args: object, **kwargs: object) -> str:
-                        value = original(name, *args, **kwargs)  # type: ignore[arg-type]
-                        if value != str(path):
-                            return value
-                        return (
-                            str(path.with_name(path.name.upper()))
-                            if suffix == "casefold"
-                            else value + suffix
-                        )
-
-                    with (
-                        MountPins() as pins,
-                        PrivateMountGuard() as guard,
-                        patch.object(os, "readlink", divergent),
-                    ):
-                        fds = {p: pins.open(p) for p in (self.source, self.source / ".git")}
-                        authority = (
-                            self.base / "missing" / "authority"
-                            if path == self.base
-                            else self.private
-                        )
-                        with self.assertRaisesRegex(PrivateMountError, "does not match its pin"):
-                            guard.check(
-                                fds, {p: pins.mount_id(fd) for p, fd in fds.items()}, (authority,)
+                        def divergent(name: str, *args: object, **kwargs: object) -> str:
+                            value = original(name, *args, **kwargs)  # type: ignore[arg-type]
+                            if value != str(path):
+                                return value
+                            return (
+                                str(path.with_name(path.name.upper()))
+                                if suffix == "casefold"
+                                else value + suffix
                             )
-                    self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
+                        with (
+                            MountPins() as pins,
+                            PrivateMountGuard() as guard,
+                            patch.object(os, "readlink", divergent),
+                        ):
+                            fds = {p: pins.open(p) for p in (self.source, self.source / ".git")}
+                            authority = (
+                                self.base / "missing" / "authority"
+                                if path == self.base
+                                else self.private
+                            )
+                            with self.assertRaisesRegex(
+                                PrivateMountError, "does not match its pin"
+                            ):
+                                guard.check(
+                                    fds,
+                                    {p: pins.mount_id(fd) for p, fd in fds.items()},
+                                    (authority,),
+                                )
 
     def test_kernel_path_recheck_divergence_and_unavailability_refuse(self) -> None:
         (self.source / ".git").mkdir()
         for path in (self.source, self.source / ".git", self.private, self.base):
             for effect in ("casefold", "unavailable"):
                 with self.subTest(path=path, effect=effect):
-                    before = len(os.listdir("/proc/self/fd"))
-                    with MountPins() as pins, PrivateMountGuard() as guard:
-                        fds = {p: pins.open(p) for p in (self.source, self.source / ".git")}
-                        authority = (
-                            self.base / "missing" / "authority"
-                            if path == self.base
-                            else self.private
-                        )
-                        guard.check(
-                            fds, {p: pins.mount_id(fd) for p, fd in fds.items()}, (authority,)
-                        )
-                        original = os.readlink
+                    with assert_descriptor_cleanup(self):
+                        with MountPins() as pins, PrivateMountGuard() as guard:
+                            fds = {p: pins.open(p) for p in (self.source, self.source / ".git")}
+                            authority = (
+                                self.base / "missing" / "authority"
+                                if path == self.base
+                                else self.private
+                            )
+                            guard.check(
+                                fds, {p: pins.mount_id(fd) for p, fd in fds.items()}, (authority,)
+                            )
+                            original = os.readlink
 
-                        def changed(name: str, *args: object, **kwargs: object) -> str:
-                            value = original(name, *args, **kwargs)  # type: ignore[arg-type]
-                            if value != str(path):
-                                return value
-                            if effect == "unavailable":
-                                raise PermissionError("fictional descriptor error")
-                            return str(path.with_name(path.name.upper()))
+                            def changed(name: str, *args: object, **kwargs: object) -> str:
+                                value = original(name, *args, **kwargs)  # type: ignore[arg-type]
+                                if value != str(path):
+                                    return value
+                                if effect == "unavailable":
+                                    raise PermissionError("fictional descriptor error")
+                                return str(path.with_name(path.name.upper()))
 
-                        with patch.object(os, "readlink", changed):
-                            with self.assertRaises(PrivateMountError):
-                                guard.recheck()
-                    self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+                            with patch.object(os, "readlink", changed):
+                                with self.assertRaises(PrivateMountError):
+                                    guard.recheck()
 
     def test_equal_private_file_inode_is_refused_even_with_different_names(self) -> None:
         private_file = self.private / "key"
         private_file.write_text("fictional key", encoding="utf-8")
         alias = self.base / "readonly-runtime"
         os.link(private_file, alias)
-        before = len(os.listdir("/proc/self/fd"))
-        with MountPins() as pins, PrivateMountGuard() as guard:
-            fd = pins.open(alias)
-            with self.assertRaisesRegex(PrivateMountError, "mount overlaps private authority"):
-                guard.check({alias: fd}, {alias: pins.mount_id(fd)}, (private_file,))
-        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+        with assert_descriptor_cleanup(self):
+            with MountPins() as pins, PrivateMountGuard() as guard:
+                fd = pins.open(alias)
+                with self.assertRaisesRegex(PrivateMountError, "mount overlaps private authority"):
+                    guard.check({alias: fd}, {alias: pins.mount_id(fd)}, (private_file,))
 
     def test_escaped_filesystem_coordinates_and_unrelated_nsfs_are_supported(self) -> None:
         table = Path("/proc/self/mountinfo").read_bytes().decode("utf-8")
@@ -213,23 +217,22 @@ class PrivateMountProvenanceTests(unittest.TestCase):
                 nested = private / "creds"
                 nested.mkdir()
                 rows = table + f"{identity} 1 0:999 / {nested} rw - tmpfs example rw\n"
-                before = len(os.listdir("/proc/self/fd"))
-                original_read = Path.read_text
+                with assert_descriptor_cleanup(self):
+                    original_read = Path.read_text
 
-                def read(path: Path, *args: object, **kwargs: object) -> str:
-                    if path == Path("/proc/self/mountinfo"):
-                        return rows
-                    return original_read(path, *args, **kwargs)  # type: ignore[arg-type]
+                    def read(path: Path, *args: object, **kwargs: object) -> str:
+                        if path == Path("/proc/self/mountinfo"):
+                            return rows
+                        return original_read(path, *args, **kwargs)  # type: ignore[arg-type]
 
-                with (
-                    patch.object(private_mounts, "_read_mountinfo", return_value=rows),
-                    patch.object(Path, "read_text", read),
-                ):
-                    with self.assertRaisesRegex(PrivateMountError, "unsupported nested mount"):
-                        self.check(private)
-                    with self.assertRaisesRegex(FileToolSandboxError, "nested mount"):
-                        _reject_nested_mounts(private)
-                self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+                    with (
+                        patch.object(private_mounts, "_read_mountinfo", return_value=rows),
+                        patch.object(Path, "read_text", read),
+                    ):
+                        with self.assertRaisesRegex(PrivateMountError, "unsupported nested mount"):
+                            self.check(private)
+                        with self.assertRaisesRegex(FileToolSandboxError, "nested mount"):
+                            _reject_nested_mounts(private)
 
     def test_mount_records_use_exact_delimiters_and_tail_cardinality(self) -> None:
         row = "1 0 0:1 / /example rw - tmpfs example rw"
@@ -248,18 +251,76 @@ class PrivateMountProvenanceTests(unittest.TestCase):
                     with self.assertRaisesRegex(PrivateMountError, "malformed"):
                         private_mounts.read_mount_table()
 
+    def test_empty_mount_source_is_valid_but_filesystem_and_options_are_required(self) -> None:
+        row = "1 0 0:1 / /example rw - tmpfs  rw\n"
+        with patch.object(private_mounts, "_read_mountinfo", return_value=row):
+            self.assertEqual(private_mounts.read_mount_table()[1].filesystem, "tmpfs")
+        for malformed in (row.replace("tmpfs  rw", "  rw"), row.replace("tmpfs  rw", "tmpfs  ")):
+            with self.subTest(malformed=malformed):
+                with patch.object(private_mounts, "_read_mountinfo", return_value=malformed):
+                    with self.assertRaises(PrivateMountError):
+                        private_mounts.read_mount_table()
+
+    def test_missing_private_anchor_metadata_error_is_normalized_and_closes_fds(self) -> None:
+        actual = MountPins.open
+        original_fstat = os.fstat
+        adopted: set[int] = set()
+
+        def track(pins: MountPins, path: Path, **kwargs: object) -> int:
+            fd = actual(pins, path, **kwargs)  # type: ignore[arg-type]
+            if path == self.private:
+                adopted.add(fd)
+            return fd
+
+        def fail(fd: int) -> os.stat_result:
+            if fd in adopted:
+                raise OSError(errno.EIO, "fictional private metadata error")
+            return original_fstat(fd)
+
+        with (
+            assert_descriptor_cleanup(self),
+            patch.object(MountPins, "open", track),
+            patch.object(os, "fstat", side_effect=fail),
+        ):
+            with self.assertRaisesRegex(PrivateMountError, "anchor.*unavailable") as error:
+                self.check(self.private / "missing" / "key")
+            self.assertIsInstance(error.exception.__cause__, OSError)
+
+    def test_missing_private_anchor_lookup_failure_is_not_treated_as_absence(self) -> None:
+        identity = self.private.stat()
+        for unavailable in (False, True):
+
+            def flags(fd: int, *_args: object) -> bytes:
+                info = os.fstat(fd)
+                if (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino):
+                    if unavailable:
+                        raise OSError(errno.ENOENT, "fictional missing lookup evidence")
+                    return struct.pack("=I", 0x40000000)
+                return struct.pack("=I", 0)
+
+            with self.subTest(unavailable=unavailable), assert_descriptor_cleanup(self):
+                with (
+                    patch("hermes_codex_router.mount_lookup._filesystem_type", return_value=0xEF53),
+                    patch("fcntl.ioctl", side_effect=flags),
+                    self.assertRaisesRegex(PrivateMountError, "cannot be pinned") as error,
+                ):
+                    self.check(self.private / "missing" / "key")
+                cause = error.exception.__cause__
+                self.assertIsInstance(cause, MountPinError)
+                assert isinstance(cause, MountPinError)
+                self.assertIsInstance(cause.__cause__, LookupEvidenceError)
+
     def test_partial_private_pin_failure_closes_prior_validation_handles(self) -> None:
         (self.private / "file").write_text("fictional material", encoding="utf-8")
-        before = len(os.listdir("/proc/self/fd"))
-        with MountPins() as pins, PrivateMountGuard() as guard:
-            fd = pins.open(self.source)
-            with self.assertRaisesRegex(PrivateMountError, "cannot be pinned"):
-                guard.check(
-                    {self.source: fd},
-                    {self.source: pins.mount_id(fd)},
-                    (self.private, self.private / "file" / "impossible"),
-                )
-        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+        with assert_descriptor_cleanup(self):
+            with MountPins() as pins, PrivateMountGuard() as guard:
+                fd = pins.open(self.source)
+                with self.assertRaisesRegex(PrivateMountError, "cannot be pinned"):
+                    guard.check(
+                        {self.source: fd},
+                        {self.source: pins.mount_id(fd)},
+                        (self.private, self.private / "file" / "impossible"),
+                    )
 
     def test_permission_failure_is_not_a_missing_private_path(self) -> None:
         actual = MountPins.open
@@ -271,8 +332,7 @@ class PrivateMountProvenanceTests(unittest.TestCase):
                 raise MountPinError("fixture") from PermissionError(errno.EACCES, "fixture")
             return actual(pins, path, **kwargs)  # type: ignore[arg-type]
 
-        before = len(os.listdir("/proc/self/fd"))
-        with patch.object(MountPins, "open", denied):
-            with self.assertRaisesRegex(PrivateMountError, "cannot be pinned"):
-                self.check()
-        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+        with assert_descriptor_cleanup(self):
+            with patch.object(MountPins, "open", denied):
+                with self.assertRaisesRegex(PrivateMountError, "cannot be pinned"):
+                    self.check()

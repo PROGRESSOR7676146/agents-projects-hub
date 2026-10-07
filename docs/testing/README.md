@@ -274,6 +274,34 @@ roundtrip, plus an authority-alias/privilege/shared-network rehearsal with
 fictional sentinels, with no model or Telegram calls. The third scenario
 deliberately demonstrates loopback and abstract-socket descriptor exposure;
 see the [custody runbook](../operations/CLAUDE_CUSTODY.md#automated-offline-rehearsal).
+The same strict job runs `tests.test_process_namespace_rehearsal`, a second
+provider-free consumer of the [neutral namespace core](../decisions/0056-provider-neutral-process-namespace.md).
+Its Python parent and exec child read authorized project material, fail project
+and Git writes, retain a separate writable session HOME, and cannot reach
+fictional host TCP, pathname or abstract sockets. Host controls prove those
+targets work, including a real synthetic `SCM_RIGHTS` transfer. An accessible
+process FD-table census checks authority and mount-pin inode identities rather
+than reusable descriptor numbers. This is kernel/fixture evidence, with no
+provider, Telegram, live service or advisor activation.
+`tests.test_review_materials_namespace` also runs in this strict job. It sends
+an explicitly selected [sealed text capsule](../decisions/0057-sealed-review-material-capsules.md)
+through owned stdin to an isolated parent and exec child, without mounting the
+original project or Git. Unit coverage checks exact digest/size, parser bounds,
+source replacement/mutation, kernel seals and failure cleanup.
+`tests.test_mount_lookup` and `tests.test_claude_mount_pins` cover the shared
+lookup guard with scripted flag/geometry evidence, targeted intermediate and
+terminal directories, repeated final walks, unavailable metadata, and ordinary
+real Unicode paths. They are not a real casefold/cache-state or XFS witness.
+All source ancestors must satisfy the supported lookup/read-access boundary in
+[ADR 0056](../decisions/0056-provider-neutral-process-namespace.md); overlay
+ancestors and tmpfs without working flag queries refuse conservatively. Such
+refusals must not be reclassified as absent private paths or ignored by fixtures.
+Descriptor assertions track calling-thread open/dup/dup2/pipe and the optional
+Python memfd allocator, without closing test resources; untracked snapshot
+differences remain diagnostics, not cleanup authority. Allocation-fault tests
+also check capsule descriptor closure explicitly.
+This is snapshot
+and fixture evidence; durable material authorization and productive review remain open.
 An executable-specific AppArmor
 profile permits bubblewrap user namespaces only on that disposable CI runner.
 Developer environments may skip unavailable namespace fixtures; those skips

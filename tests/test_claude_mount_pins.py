@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+import struct
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from hermes_codex_router.claude_mount_pins import MountPinError, MountPins
+from tests.fd_fixture import assert_descriptor_cleanup
 
 
 class ClaudeMountPinsTests(unittest.TestCase):
@@ -35,6 +37,80 @@ class ClaudeMountPinsTests(unittest.TestCase):
                 pins.recheck()
         with self.assertRaises(OSError):
             os.fstat(fd)
+
+    def test_casefold_lookup_parents_refuse_even_with_matching_kernel_spelling(self) -> None:
+        with assert_descriptor_cleanup(self):
+            with patch("fcntl.ioctl", return_value=struct.pack("=I", 0x40000000)):
+                with self.assertRaisesRegex(MountPinError, "cannot be pinned"):
+                    with MountPins() as pins:
+                        pins.open(self.project, directory=True)
+
+    def test_unavailable_lookup_semantics_refuse_and_close_temporary_descriptors(self) -> None:
+        with assert_descriptor_cleanup(self):
+            with patch("fcntl.ioctl", side_effect=OSError("fictional flag failure")):
+                with self.assertRaisesRegex(MountPinError, "cannot be pinned"):
+                    with MountPins() as pins:
+                        pins.open(self.project, directory=True)
+
+    def test_only_flagged_intermediate_or_terminal_directory_refuses(self) -> None:
+        for target in (self.base, self.project):
+            identity = target.stat()
+            inspected: list[tuple[int, int]] = []
+
+            def flags(fd: int, *_args: object) -> bytes:
+                info = os.fstat(fd)
+                current = (info.st_dev, info.st_ino)
+                inspected.append(current)
+                return struct.pack(
+                    "=I", 0x40000000 if current == (identity.st_dev, identity.st_ino) else 0
+                )
+
+            with self.subTest(target=target.name), assert_descriptor_cleanup(self):
+                with (
+                    patch("hermes_codex_router.mount_lookup._filesystem_type", return_value=0xEF53),
+                    patch("fcntl.ioctl", side_effect=flags),
+                    MountPins() as pins,
+                    self.assertRaises(MountPinError),
+                ):
+                    pins.open(self.project, directory=True)
+                self.assertIn((identity.st_dev, identity.st_ino), inspected)
+                self.assertGreater(len(inspected), 1)
+
+    def test_recheck_and_relative_walk_refuse_only_flagged_terminal_directory(self) -> None:
+        child = self.project / "selected"
+        child.mkdir()
+        identity = child.stat()
+
+        def flags(fd: int, *_args: object) -> bytes:
+            info = os.fstat(fd)
+            return struct.pack(
+                "=I",
+                0x40000000
+                if (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino)
+                else 0,
+            )
+
+        with assert_descriptor_cleanup(self), MountPins() as pins:
+            parent = pins.open(self.project, directory=True)
+            pins.open_relative(parent, "selected", directory=True)
+            with (
+                patch("hermes_codex_router.mount_lookup._filesystem_type", return_value=0xEF53),
+                patch("fcntl.ioctl", side_effect=flags),
+            ):
+                with self.assertRaises(MountPinError):
+                    pins.open_relative(parent, "selected", directory=True)
+                with self.assertRaises(MountPinError):
+                    pins.recheck()
+
+    def test_relative_lookup_and_final_recheck_repeat_casefold_guard(self) -> None:
+        with MountPins() as pins:
+            parent = pins.open(self.authority, directory=True)
+            with assert_descriptor_cleanup(self):
+                with patch("fcntl.ioctl", return_value=struct.pack("=I", 0x40000000)):
+                    with self.assertRaises(MountPinError):
+                        pins.open_relative(parent, "key", directory=False)
+                    with self.assertRaises(MountPinError):
+                        pins.recheck()
 
     def test_ancestor_replacement_and_git_alias_are_refused(self) -> None:
         with MountPins() as pins:
@@ -133,8 +209,12 @@ class ClaudeMountPinsTests(unittest.TestCase):
             self.assertIs(type(mount_id), int)
             self.assertGreater(mount_id, 0)
             ids = {
-                int(line.split()[0])
-                for line in Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
+                int(line.split(" ")[0])
+                for line in Path("/proc/self/mountinfo")
+                .read_bytes()
+                .decode("utf-8")
+                .removesuffix("\n")
+                .split("\n")
             }
             self.assertIn(mount_id, ids)
             for raw in ("", "mnt_id:\t0\n", "mnt_id:\t1\nmnt_id:\t2\n", "mnt_id:\tx\n"):
@@ -158,14 +238,13 @@ class ClaudeMountPinsTests(unittest.TestCase):
     def test_same_inode_on_a_replaced_mount_is_refused(self) -> None:
         with MountPins() as pins:
             descriptor = pins.open(self.project, directory=True)
-            before = len(os.listdir("/proc/self/fd"))
-            original = pins.mount_id(descriptor)
+            with assert_descriptor_cleanup(self):
+                original = pins.mount_id(descriptor)
 
-            def changed(fd: int) -> int:
-                return original if fd == descriptor else original + 1
+                def changed(fd: int) -> int:
+                    return original if fd == descriptor else original + 1
 
-            with patch("hermes_codex_router.claude_mount_pins.mount_id", side_effect=changed):
-                with self.assertRaisesRegex(MountPinError, "identity changed"):
-                    pins.recheck()
-            self.assertEqual(os.fstat(descriptor).st_ino, self.project.stat().st_ino)
-            self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+                with patch("hermes_codex_router.claude_mount_pins.mount_id", side_effect=changed):
+                    with self.assertRaisesRegex(MountPinError, "identity changed"):
+                        pins.recheck()
+                self.assertEqual(os.fstat(descriptor).st_ino, self.project.stat().st_ino)
