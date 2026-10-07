@@ -100,12 +100,21 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
         def decode(raw: str) -> Path:
             return Path(re.sub(r"\\(040|011|012|134)", lambda match: chr(int(match[1], 8)), raw))
 
+        def encode(path: Path) -> str:
+            return (
+                str(path)
+                .replace("\\", r"\134")
+                .replace(" ", r"\040")
+                .replace("\t", r"\011")
+                .replace("\n", r"\012")
+            )
+
         coordinate = decode(selected_mount[3]) / filesystem_root.relative_to(
             decode(selected_mount[4])
         )
         table += (
             f"{identity} 1 {os.major(device)}:{os.minor(device)} "
-            f"{coordinate} {destination} rw - ext4 example rw\n"
+            f"{encode(coordinate)} {encode(destination)} rw - ext4 example rw\n"
         )
 
         def read(path: Path, *args: object, **kwargs: object) -> str:
@@ -246,6 +255,19 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
         with self.alias(self.project, self.base / "independent"):
             with self.wrap():
                 pass
+
+    def test_scripted_bind_coordinates_preserve_kernel_path_escapes(self) -> None:
+        for name in ("space here", "back\\slash", "tab\tname", "new\nline"):
+            with self.subTest(name=name):
+                with self.alias(self.project, self.base / name):
+                    with self.wrap():
+                        pass
+                with self.alias(self.project, self.private / name):
+                    with self.assertRaisesRegex(
+                        sandbox.FileToolSandboxError, "mount overlaps private authority"
+                    ):
+                        with self.wrap():
+                            self.fail("escaped private coordinate was not excluded")
 
     def test_real_private_bind_alias_is_refused_before_any_provider_launch(self) -> None:
         bwrap = shutil.which("bwrap")
