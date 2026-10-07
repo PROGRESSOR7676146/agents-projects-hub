@@ -17,6 +17,7 @@ _TMPFS = 0x01021994
 _BTRFS = 0x9123683E
 _XFS = 0x58465342
 _CASEFOLD = 0x40000000
+_XFS_DIRV2 = 1 << 7
 _XFS_ASCII_CI = 1 << 12
 
 
@@ -62,7 +63,8 @@ def _filesystem_type(fd: int) -> int:
 
 def _directory_flags(fd: int) -> int:
     command = (2 << 30) | (ctypes.sizeof(ctypes.c_long) << 16) | (ord("f") << 8) | 1
-    data = fcntl.ioctl(fd, command, bytes(4))
+    # Success without copying evidence must retain a refusing casefold bit.
+    data = fcntl.ioctl(fd, command, struct.pack("=I", 0xFFFFFFFF))
     if not isinstance(data, bytes) or len(data) != 4:
         raise LookupEvidenceError("directory flag evidence is malformed")
     return struct.unpack("=I", data)[0]
@@ -72,13 +74,18 @@ def _xfs_geometry_flags(fd: int) -> int:
     # Linux xfs_fsop_geom_v1: 112 bytes on this supported 64-bit ABI;
     # flags is the uint32 at offset92, XFS_IOC_FSGEOMETRY_V1 uses _IOR('X',100).
     command = (2 << 30) | (112 << 16) | (ord("X") << 8) | 100
-    data = fcntl.ioctl(fd, command, bytes(112))
+    initial = bytearray(112)
+    struct.pack_into("=iI", initial, 88, -1, 0xFFFFFFFF)
+    data = fcntl.ioctl(fd, command, bytes(initial))
     if not isinstance(data, bytes) or len(data) != 112:
         raise LookupEvidenceError("XFS geometry evidence is malformed")
     # This V1 ioctl reports XFS_FSOP_GEOM_VERSION (0), even on V5 filesystems.
     if struct.unpack_from("=i", data, 88)[0] != 0:
         raise LookupEvidenceError("XFS geometry version is unsupported")
-    return struct.unpack_from("=I", data, 92)[0]
+    flags = struct.unpack_from("=I", data, 92)[0]
+    if struct.unpack_from("=I", data, 0)[0] == 0 or not flags & _XFS_DIRV2:
+        raise LookupEvidenceError("XFS geometry evidence is incomplete")
+    return flags
 
 
 def require_case_sensitive_directory(fd: int) -> None:

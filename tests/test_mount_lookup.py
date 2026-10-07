@@ -55,6 +55,7 @@ class MountLookupTests(unittest.TestCase):
                 with self.assertRaises(lookup.LookupEvidenceError) as error:
                     lookup.require_case_sensitive_directory(self.fd)
                 cause = error.exception.__cause__
+                self.assertIsInstance(cause, OSError)
                 assert isinstance(cause, OSError)
                 self.assertEqual(cause.errno, errno.EIO)
 
@@ -90,14 +91,27 @@ class MountLookupTests(unittest.TestCase):
             with self.assertRaisesRegex(lookup.LookupEvidenceError, "unsupported"):
                 lookup.require_case_sensitive_directory(self.fd)
 
+    def test_success_without_writing_ioctl_evidence_refuses(self) -> None:
+        for kind in (lookup._EXT, lookup._XFS):
+            with self.subTest(kind=kind), assert_descriptor_cleanup(self):
+                with (
+                    patch.object(lookup, "_filesystem_type", return_value=kind),
+                    patch.object(lookup.fcntl, "ioctl", side_effect=lambda _fd, _cmd, data: data),
+                    self.assertRaises(lookup.LookupEvidenceError),
+                ):
+                    lookup.require_case_sensitive_directory(self.fd)
+
     def test_xfs_geometry_ascii_ci_and_version_bounds_use_their_own_ioctl(self) -> None:
-        for version, flags, accepted in (
-            (0, 0, True),
-            (0, 1 << 12, False),
-            (4, 0, False),
-            (6, 0, False),
+        for version, flags, block_size, accepted in (
+            (0, 0x80, 4096, True),
+            (0, 0x80 | (1 << 12), 4096, False),
+            (0, 0, 4096, False),
+            (0, 0x80, 0, False),
+            (4, 0x80, 4096, False),
+            (6, 0x80, 4096, False),
         ):
             data = bytearray(112)
+            struct.pack_into("=I", data, 0, block_size)
             struct.pack_into("=iI", data, 88, version, flags)
             with self.subTest(version=version, flags=flags), assert_descriptor_cleanup(self):
                 with (
@@ -120,6 +134,32 @@ class MountLookupTests(unittest.TestCase):
             self.assertEqual(os.fstat(child).st_ino, (self.root / "обзор.txt").stat().st_ino)
             pins.recheck()
 
+    def test_unrelated_flagged_inode_does_not_refuse_a_case_sensitive_walk(self) -> None:
+        unrelated = self.root / "unrelated"
+        unrelated.mkdir()
+        identity = unrelated.stat()
+        (self.root / "visible").write_text("visible text", encoding="utf-8")
+
+        def flags(fd: int, *_args: object) -> bytes:
+            info = os.fstat(fd)
+            return struct.pack(
+                "=I",
+                lookup._CASEFOLD
+                if (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino)
+                else 0,
+            )
+
+        with (
+            assert_descriptor_cleanup(self),
+            patch.object(lookup, "_filesystem_type", return_value=lookup._EXT),
+            patch.object(lookup.fcntl, "ioctl", side_effect=flags),
+            MountPins() as pins,
+        ):
+            parent = pins.open(self.root, directory=True)
+            child = pins.open_relative(parent, "visible", directory=False)
+            self.assertEqual(os.fstat(child).st_ino, (self.root / "visible").stat().st_ino)
+            pins.recheck()
+
     def test_inspection_reopens_pinned_dot_readonly_and_unreadable_refuses(self) -> None:
         real_open = os.open
         with patch.object(lookup.os, "open", wraps=real_open) as opened:
@@ -130,15 +170,29 @@ class MountLookupTests(unittest.TestCase):
             with self.assertRaisesRegex(lookup.LookupEvidenceError, "unavailable"):
                 lookup.require_case_sensitive_directory(self.fd)
 
-    def test_casefold_root_blocks_ignorable_name_before_selected_open_or_read(self) -> None:
-        # Matching dentry spelling does not bypass flagged-parent refusal.
-        for name in ("visible.txt", ".g\u200cit/config"):
+    def test_flagged_root_or_selected_parent_blocks_before_content_read(self) -> None:
+        nested = self.root / "sub"
+        nested.mkdir()
+        for target, name in (
+            (self.root, "visible.txt"),
+            (self.root, ".g\u200cit/config"),
+            (nested, "sub/.g\u200cit/config"),
+        ):
+            identity = target.stat()
+            inspected: list[tuple[int, int]] = []
+
+            def flags(fd: int, *_args: object) -> bytes:
+                info = os.fstat(fd)
+                current = (info.st_dev, info.st_ino)
+                inspected.append(current)
+                return struct.pack(
+                    "=I", lookup._CASEFOLD if current == (identity.st_dev, identity.st_ino) else 0
+                )
+
             with self.subTest(name=name), assert_descriptor_cleanup(self):
                 with (
                     patch.object(lookup, "_filesystem_type", return_value=lookup._EXT),
-                    patch.object(
-                        lookup.fcntl, "ioctl", return_value=struct.pack("=I", lookup._CASEFOLD)
-                    ),
+                    patch.object(lookup.fcntl, "ioctl", side_effect=flags),
                     patch("hermes_codex_router.review_materials._read_selected") as read,
                 ):
                     with self.assertRaises(ReviewMaterialError) as raised:
@@ -148,6 +202,8 @@ class MountLookupTests(unittest.TestCase):
                             binding="example-result",
                         )
                     cause = raised.exception.__cause__
+                    self.assertIsInstance(cause, MountPinError)
                     assert isinstance(cause, MountPinError)
                     self.assertIsInstance(cause.__cause__, lookup.LookupEvidenceError)
+                    self.assertIn((identity.st_dev, identity.st_ino), inspected)
                     read.assert_not_called()

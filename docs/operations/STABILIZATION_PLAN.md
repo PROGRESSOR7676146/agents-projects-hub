@@ -96,8 +96,11 @@ The scripted private-alias corpus also runs directly through the readonly core.
 The real bind fixture exercises the private guard; it is not an additional
 kernel witness of the complete core launch.
 
-Last verified clean integration: `b1ff5179d1b5824f6a2e833614c3ee1e01cd20ec`,
-with the mandatory commit gate passing 2147 tests in 195 modules. Earlier focused strict evidence covers 94
+Last verified clean integration: `67f015f82ab2e64edd97d83773c2cdc979c5549b`,
+with the commit profile passing 2147 tests in 195 modules plus static and
+privacy/history checks. That profile excludes typing; the test-only follow-up
+also passed Pyright with zero errors. Canonical publication and the hosted
+Python 3.11/3.12/3.13 matrix for this integration lane remain pending. Earlier focused strict evidence covers 94
 core/facade/parser/workflow checks and 40 capsule/permission/namespace checks
 without optional namespace skips. Its independent architecture review found a
 material-name alias gap and an unsupported-filesystem fixture using the wrong
@@ -120,13 +123,18 @@ All parents and terminal directories, including final recheck walks, must provid
 supported case-sensitive evidence. Unknown/overlay ancestors, unreadable
 directories, unavailable flag queries and unsupported ABI refuse conservatively;
 ordinary Unicode names remain supported. See ADRs 0056 and 0057 for the precise
-boundary and availability limits. The expanded strict focused gate passed 119
+boundary and availability limits. The expanded strict focused gate passed 123
 tests with no namespace skips; the sole skip was the Python 3.11 build's absent
 memfd wrapper. A Python 3.12 subset passed 60 tests, including the real Python
-memfd tracker and two later ABI/native-inspection refusal tests. Fresh full-gate
+memfd tracker and two later ABI/native-inspection refusal tests; the later affected
+33-test subset also passed. Fresh full-gate
 evidence is still required. These are scripted metadata tests,
 not a real casefold or XFS acceptance result. Bare/separate Git directories remain
-the trusted caller's material-authorization responsibility.
+the trusted caller's material-authorization responsibility. The runtime Opus
+review found no blockers and two low-priority hardening/evidence findings; the
+working follow-up uses refusing ioctl sentinels and targets capsule refusals by
+inode, with an unrelated-inode positive control. The test-only review's broad
+assertion catch and evidence-wording lows are also addressed in that follow-up.
 Canonical publication, exact final-revision independent security review and
 hosted gates remain pending. Next trigger: those combined gates, then establish
 native compatibility with an isolated fake inference endpoint before implementing

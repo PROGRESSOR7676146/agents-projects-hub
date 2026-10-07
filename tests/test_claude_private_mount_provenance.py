@@ -306,6 +306,7 @@ class PrivateMountProvenanceTests(unittest.TestCase):
                 ):
                     self.check(self.private / "missing" / "key")
                 cause = error.exception.__cause__
+                self.assertIsInstance(cause, MountPinError)
                 assert isinstance(cause, MountPinError)
                 self.assertIsInstance(cause.__cause__, LookupEvidenceError)
 

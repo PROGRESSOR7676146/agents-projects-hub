@@ -112,7 +112,7 @@ class DescriptorFixtureTests(unittest.TestCase):
     def test_unobserved_same_inode_reuse_never_closes_replacement(self) -> None:
         replacement = None
         try:
-            with self.assertRaises(AssertionError):
+            with self.assertRaisesRegex(AssertionError, "calling-thread descriptors"):
                 with assert_descriptor_cleanup(self):
                     fd = os.open("/dev/null", os.O_RDONLY)
                     with os.fdopen(fd, "rb"):
