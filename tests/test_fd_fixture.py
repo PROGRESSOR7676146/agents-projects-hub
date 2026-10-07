@@ -188,6 +188,22 @@ class DescriptorFixtureTests(unittest.TestCase):
             except OSError:
                 pass
 
+    def test_dup2_noop_does_not_claim_a_borrowed_descriptor(self) -> None:
+        descriptor = os.open("/dev/null", os.O_RDONLY)
+        try:
+            with assert_descriptor_cleanup(self, forbid_preexisting_close=True):
+                self.assertEqual(os.dup2(descriptor, descriptor), descriptor)
+            os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def test_dup2_noop_cannot_hide_a_preexisting_close(self) -> None:
+        descriptor = os.open("/dev/null", os.O_RDONLY)
+        with self.assertRaisesRegex(AssertionError, "preexisting descriptors closed"):
+            with assert_descriptor_cleanup(self, forbid_preexisting_close=True):
+                os.dup2(descriptor, descriptor)
+                os.close(descriptor)
+
     def test_changed_inode_reuse_does_not_claim_a_foreign_close(self) -> None:
         old = os.open("/dev/null", os.O_RDONLY)
         source = os.open("/dev/zero", os.O_RDONLY)

@@ -89,6 +89,8 @@ def assert_descriptor_cleanup(
     def track_dup2(fd: int, target: int, inheritable: bool = True) -> int:
         closes_preexisting = fd != target and foreign_close(target)
         result = original_dup2(fd, target, inheritable=inheritable)
+        if fd == target:
+            return result
         if closes_preexisting:
             closed_preexisting.add(target)
         return record(result)
