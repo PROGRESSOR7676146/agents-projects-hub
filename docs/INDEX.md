@@ -28,6 +28,7 @@ subset; the plan's accepted role choices are not a claim of runtime parity.
 - [Claude Code and Codex: bounded lead/advisor plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
 - [Claude protected file-tool candidate](operations/CLAUDE_FILE_PERMISSIONS.md)
 - [Claude authority custody preparation](operations/CLAUDE_CUSTODY.md)
+- [Exact-job outcome diagnostics](operations/OUTCOME_JOURNAL.md)
 - [Inbound materials implementation plan](operations/INBOUND_MATERIALS_PLAN.md)
 - [Operations](operations/README.md)
 - [Queue and process recovery](operations/QUEUE_RECOVERY.md)

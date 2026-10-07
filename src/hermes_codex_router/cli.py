@@ -39,6 +39,7 @@ from .lifecycle import stop_on_signals
 from .migrations import backup_database, migrate_database
 from .monitoring import run_monitor_once
 from .outbox_sender import TelegramOutboxSender
+from .outcome_cli import add_outcome_parser, outcome_command
 from .pilot import run_codex_pilot
 from .project_admin import add_project, set_project_enabled
 from .project_onboarding import ProjectOnboardingStore
@@ -60,6 +61,7 @@ from .worktrees import WorktreeError, cleanup_worktree, create_worktree
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agents-projects-hub")
     commands = parser.add_subparsers(dest="command", required=True)
+    add_outcome_parser(commands)
 
     session = commands.add_parser("session", help="explicit local provider-session binding")
     session_commands = session.add_subparsers(dest="session_command", required=True)
@@ -841,6 +843,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "pilot": _pilot_command,
     "doctor": _doctor_command,
     "status": _status_command,
+    "outcome-journal": outcome_command,
     "indeterminate-audit": _indeterminate_audit_command,
     "indeterminate-resolve": _indeterminate_resolve_command,
     "release-info": _release_info_command,
