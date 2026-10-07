@@ -171,7 +171,7 @@ class OutcomeJournalTests(unittest.TestCase):
             )
         outcome = self.read(job.job_id)
         self.assertTrue(outcome["execution"]["completion_saved"])
-        self.assertFalse(outcome["execution"]["accepted_turn_saved"])
+        self.assertFalse(outcome["execution"]["native_turn_id_saved"])
         self.assertEqual(outcome["execution"]["terminal_status"], "failed")
         self.assertEqual(outcome["acceptance"]["decision"], "unknown")
         self.assertNotIn(self.poison, json.dumps(outcome))
@@ -193,7 +193,7 @@ class OutcomeJournalTests(unittest.TestCase):
         page = self.read(parent.job_id)["lineage"]
         self.assertEqual(page["total"], 70)
         self.assertTrue(page["truncated"])
-        self.assertLess(len(page["items"]), 70)
+        self.assertEqual(len(page["items"]), 64)
 
     def test_reads_are_query_only_and_leave_all_durable_state_unchanged(self) -> None:
         job, _ = self.complete()
@@ -247,8 +247,14 @@ class OutcomeJournalTests(unittest.TestCase):
         self.assertTrue(page["truncated"])
         self.assertEqual(page["items"][0]["size"], 9)
         self.assertEqual(page["items"][0]["sha256"], "a" * 64)
-        self.assertFalse(page["items"][0]["receipt_present"])
+        self.assertIs(page["items"][0]["receipt_present"], False)
         self.assertNotIn(self.poison, json.dumps(projection))
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE telegram_outbox_parts SET telegram_message_id=999 WHERE outbox_id=? AND part_index=2",
+                (outbox.outbox_id,),
+            )
+        self.assertIs(self.read(job.job_id)["artifacts"]["items"][0]["receipt_present"], True)
 
     def test_successful_delivery_and_incomplete_receipts_keep_acceptance_unknown(self) -> None:
         job, _ = self.complete()
@@ -281,6 +287,66 @@ class OutcomeJournalTests(unittest.TestCase):
         self.assertIsNone(projection["result_delivery"])
         self.assertEqual(projection["artifacts"]["items"], [])
         self.assertEqual(projection["inconsistencies"], ["result_delivery_missing_or_mismatched"])
+
+    def test_destination_mismatch_refuses_result_delivery_ownership(self) -> None:
+        job, _ = self.complete()
+        for column in ("chat_id", "thread_id"):
+            with self.subTest(column=column):
+                with self.state._connection:
+                    self.state._connection.execute(
+                        f"UPDATE telegram_outbox SET {column}={column}+1 WHERE job_id=?",
+                        (job.job_id,),
+                    )
+                try:
+                    projection = self.read(job.job_id)
+                    self.assertIsNone(projection["result_delivery"])
+                    self.assertEqual(projection["artifacts"]["items"], [])
+                    self.assertEqual(
+                        projection["inconsistencies"], ["result_delivery_missing_or_mismatched"]
+                    )
+                finally:
+                    with self.state._connection:
+                        self.state._connection.execute(
+                            f"UPDATE telegram_outbox SET {column}={column}-1 WHERE job_id=?",
+                            (job.job_id,),
+                        )
+
+    def test_cli_escapes_provider_control_characters_in_local_json(self) -> None:
+        from types import SimpleNamespace
+
+        label = "example\u009b31m\u202emodel"
+        job, _ = self.complete(model=label)
+        output = io.StringIO()
+        with (
+            patch(
+                "hermes_codex_router.outcome_cli.load_external_worker_config",
+                return_value=SimpleNamespace(state_path=self.path),
+            ),
+            redirect_stdout(output),
+        ):
+            code = main(["outcome-journal", "example-config.json", job.job_id])
+        self.assertEqual(code, 0)
+        self.assertNotIn("\u009b", output.getvalue())
+        self.assertNotIn("\u202e", output.getvalue())
+        self.assertEqual(json.loads(output.getvalue())["participant"]["stored_model_label"], label)
+
+    def test_cli_sanitizes_malformed_config_structure_errors(self) -> None:
+        for kind in (TypeError, KeyError, AttributeError, RecursionError):
+            with self.subTest(kind=kind):
+                output = io.StringIO()
+                with (
+                    patch(
+                        "hermes_codex_router.outcome_cli.load_external_worker_config",
+                        side_effect=kind(self.poison),
+                    ),
+                    redirect_stdout(output),
+                ):
+                    code = main(["outcome-journal", "example-config.json", "example-job"])
+                self.assertEqual(code, 2)
+                self.assertEqual(
+                    json.loads(output.getvalue()),
+                    {"ok": False, "error": "outcome_config_unavailable"},
+                )
 
     def test_sqlite_json_unavailable_is_a_fixed_error_without_writable_fallback(self) -> None:
         job, _ = self.complete()

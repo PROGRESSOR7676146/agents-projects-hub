@@ -20,19 +20,21 @@ WITH target AS (
            r.result_id, r.actual_model AS stored_model, r.created_at AS result_at,
            c.job_id IS NOT NULL AS checkpoint_present,
            c.completed_text IS NOT NULL AS completion_saved,
-           c.provider_turn_id IS NOT NULL AS accepted_turn_saved,
+           c.provider_turn_id IS NOT NULL AS native_turn_id_saved,
            e.terminal_status, e.observed_at AS terminal_at,
            h.resolution, h.resolved_at,
            o.outbox_id, o.status AS delivery_status, o.delivered_at,
            (SELECT COUNT(*) FROM provider_visible_items v WHERE v.job_id=j.job_id)
                AS visible_item_count
     FROM provider_jobs j
+    JOIN topics topic ON topic.topic_id=j.topic_id
     LEFT JOIN provider_job_results r ON r.job_id=j.job_id
     LEFT JOIN provider_execution_checkpoints c ON c.job_id=j.job_id
     LEFT JOIN provider_turn_terminal_evidence e ON e.job_id=j.job_id
     LEFT JOIN provider_job_resolutions h ON h.job_id=j.job_id
     LEFT JOIN telegram_outbox o ON o.job_id=j.job_id AND r.result_id IS NOT NULL
                                   AND o.sender_agent_id=j.agent_id
+                                  AND o.chat_id=j.chat_id AND o.thread_id=topic.thread_id
     WHERE j.job_id=?
 ), artifacts AS (
     SELECT p.outbox_id, p.part_index, p.file_size, p.file_sha256,
@@ -95,15 +97,17 @@ def _interval(
 ) -> dict[str, Any]:
     first, last = _time(start), _time(end)
     seconds = (last - first).total_seconds() if first is not None and last is not None else None
+    unknown_reason = "missing_or_invalid_endpoints" if seconds is None else None
     if seconds is not None and seconds < 0:
         seconds = None
+        unknown_reason = "reversed_endpoints"
     return {
         "start": first.isoformat() if first else None,
         "end": last.isoformat() if last else None,
         "start_source": start_source,
         "end_source": end_source,
         "seconds": seconds,
-        "unknown_reason": "missing_or_invalid_endpoints" if seconds is None else None,
+        "unknown_reason": unknown_reason,
     }
 
 
@@ -112,7 +116,7 @@ def _timestamp(value: str | None) -> str | None:
     return parsed.isoformat() if parsed is not None else None
 
 
-def _page(raw: str, total: int, keys: set[str]) -> dict[str, Any]:
+def _page(raw: str, total: int, keys: set[str], order: tuple[str, ...]) -> dict[str, Any]:
     items = json.loads(raw)
     if (
         not isinstance(items, list)
@@ -120,6 +124,7 @@ def _page(raw: str, total: int, keys: set[str]) -> dict[str, Any]:
         or any(not isinstance(item, dict) or set(item) != keys for item in items)
     ):
         raise ValueError("invalid outcome reference projection")
+    items.sort(key=lambda item: tuple(item[key] for key in order))
     return {"items": items, "total": total, "truncated": total > len(items)}
 
 
@@ -137,14 +142,25 @@ class OutcomeJournalStateFacade:
             row = self._connection.execute(
                 _PROJECTION, (job_id, REFERENCE_LIMIT, REFERENCE_LIMIT)
             ).fetchone()
-            if row is None:
-                raise self._state_error("outcome_job_not_found")
+        except sqlite3.Error as error:
+            raise self._state_error("outcome_projection_unavailable") from error
+        if row is None:
+            raise self._state_error("outcome_job_not_found")
+        try:
             return self._project(row)
         except (sqlite3.Error, ValueError, TypeError, OverflowError) as error:
             raise self._state_error("outcome_projection_unavailable") from error
 
     @staticmethod
     def _project(row: sqlite3.Row) -> ProviderJobOutcome:
+        artifacts = _page(
+            row["artifact_json"],
+            row["artifact_count"],
+            {"outbox_id", "part_index", "size", "sha256", "receipt_present"},
+            ("part_index",),
+        )
+        for artifact in artifacts["items"]:
+            artifact["receipt_present"] = bool(artifact["receipt_present"])
         delivery = None
         delivery_time = None
         if row["outbox_id"] is not None:
@@ -193,19 +209,20 @@ class OutcomeJournalStateFacade:
                 "execution": {
                     "checkpoint_present": bool(row["checkpoint_present"]),
                     "completion_saved": bool(row["completion_saved"]),
-                    "accepted_turn_saved": bool(row["accepted_turn_saved"]),
+                    "native_turn_id_saved": bool(row["native_turn_id_saved"]),
                     "visible_item_count": row["visible_item_count"],
                     "terminal_status": row["terminal_status"],
                     "terminal_observation": _timestamp(row["terminal_at"]),
                     "historical_resolution": row["resolution"],
                     "resolution_observation": _timestamp(row["resolved_at"]),
                 },
-                "artifacts": _page(
-                    row["artifact_json"],
-                    row["artifact_count"],
-                    {"outbox_id", "part_index", "size", "sha256", "receipt_present"},
+                "artifacts": artifacts,
+                "lineage": _page(
+                    row["lineage_json"],
+                    row["lineage_count"],
+                    {"kind", "job_id"},
+                    ("kind", "job_id"),
                 ),
-                "lineage": _page(row["lineage_json"], row["lineage_count"], {"kind", "job_id"}),
                 "acceptance": {
                     "decision": "unknown",
                     "reason": "no_authoritative_owner_decision_recorded",

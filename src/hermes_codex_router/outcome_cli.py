@@ -22,17 +22,33 @@ def add_outcome_parser(commands: argparse._SubParsersAction) -> None:
 def outcome_command(args: argparse.Namespace) -> int:
     try:
         config = load_external_worker_config(args.config)
-    except (HubConfigError, OSError, ValueError):
+    except (
+        HubConfigError,
+        OSError,
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+        RecursionError,
+    ):
         print(json.dumps({"ok": False, "error": "outcome_config_unavailable"}))
         return 2
     try:
         state = HubState.open_read_only(config.state_path)
         try:
             result = state.provider_job_outcome(args.job_id)
-            encoded = json.dumps({"ok": True, **result.as_dict()}, ensure_ascii=False, indent=2)
+            encoded = json.dumps({"ok": True, **result.as_dict()}, indent=2)
         finally:
             state.close()
-    except (StateError, sqlite3.Error, OSError, ValueError, TypeError) as error:
+    except (
+        StateError,
+        sqlite3.Error,
+        OSError,
+        ValueError,
+        TypeError,
+        RecursionError,
+        OverflowError,
+    ) as error:
         code = str(error) if isinstance(error, StateError) else "outcome_projection_unavailable"
         if code not in {
             "outcome_job_id_invalid",
