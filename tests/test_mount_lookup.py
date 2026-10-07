@@ -54,8 +54,9 @@ class MountLookupTests(unittest.TestCase):
                 libc.return_value.fstatfs.return_value = -1
                 with self.assertRaises(lookup.LookupEvidenceError) as error:
                     lookup.require_case_sensitive_directory(self.fd)
-                self.assertIsInstance(error.exception.__cause__, OSError)
-                self.assertEqual(error.exception.__cause__.errno, errno.EIO)
+                cause = error.exception.__cause__
+                assert isinstance(cause, OSError)
+                self.assertEqual(cause.errno, errno.EIO)
 
     def test_case_sensitive_supported_filesystems_accept_and_close_inspection_fd(self) -> None:
         for kind in (lookup._EXT, lookup._TMPFS, lookup._BTRFS):
@@ -146,8 +147,7 @@ class MountLookupTests(unittest.TestCase):
                             (MaterialSelection(name, 0, "0" * 64),),
                             binding="example-result",
                         )
-                    self.assertIsInstance(raised.exception.__cause__, MountPinError)
-                    self.assertIsInstance(
-                        raised.exception.__cause__.__cause__, lookup.LookupEvidenceError
-                    )
+                    cause = raised.exception.__cause__
+                    assert isinstance(cause, MountPinError)
+                    self.assertIsInstance(cause.__cause__, lookup.LookupEvidenceError)
                     read.assert_not_called()

@@ -306,7 +306,7 @@ class PrivateMountProvenanceTests(unittest.TestCase):
                 ):
                     self.check(self.private / "missing" / "key")
                 cause = error.exception.__cause__
-                self.assertIsInstance(cause, MountPinError)
+                assert isinstance(cause, MountPinError)
                 self.assertIsInstance(cause.__cause__, LookupEvidenceError)
 
     def test_partial_private_pin_failure_closes_prior_validation_handles(self) -> None:

@@ -68,15 +68,16 @@ gate on Python 3.11 (2,085 tests in 189 modules, zero typing errors, and passed
 privacy/history gates). Astra and Claude Opus independently reviewed the runtime
 at `1164770`; Opus found a supported-Python-3.13 test-gate failure. The `dcc6507`
 test/documentation follow-up fixes it and received a separate Opus review with
-no blocker/high/medium finding. Exact-head hosted matrix evidence remains
-separate; local validation does not establish the supported-version matrix. The
+no blocker/high/medium finding. All seven hosted checks at exact head `dcc6507`
+passed, including the Python 3.11/3.12/3.13 matrix and required namespace job.
+This remains repository evidence. The
 [local diagnostic](OUTCOME_JOURNAL.md) projects one saved job without a migration,
 provider invocation or new writer/decision authority. Requested/stored/observed
 model provenance, result/delivery, direct lineage and source-bound time intervals
 remain distinct. Acceptance, native durations and per-job usage stay unknown
 where the existing records cannot establish them. This does not close
 [REQ-EVAL-010](../product/EVALUATION_AND_ALLOCATION.md).
-Source owner: Hub maintainer; next trigger: exact-revision review/publication,
+Source owner: Hub maintainer; next trigger: integrate the reviewed foundations,
 then separately design authenticated immutable owner decisions and corrections.
 Inspect tracked, staged and untracked lane state before any post-merge cleanup.
 Closure remains open alongside the role/review workflow; there is no deployed
@@ -95,8 +96,8 @@ The scripted private-alias corpus also runs directly through the readonly core.
 The real bind fixture exercises the private guard; it is not an additional
 kernel witness of the complete core launch.
 
-Last verified clean integration: `1b2723364e38b0c45c41785f047463117f053a09`,
-with the mandatory commit gate passing 2131 tests in 194 modules. Earlier focused strict evidence covers 94
+Last verified clean integration: `b1ff5179d1b5824f6a2e833614c3ee1e01cd20ec`,
+with the mandatory commit gate passing 2147 tests in 195 modules. Earlier focused strict evidence covers 94
 core/facade/parser/workflow checks and 40 capsule/permission/namespace checks
 without optional namespace skips. Its independent architecture review found a
 material-name alias gap and an unsupported-filesystem fixture using the wrong
@@ -113,7 +114,7 @@ namespace skips. The casefold regression is scripted, not a real casefold
 filesystem witness. A subsequent actual Claude Opus review identified that cold
 casefold lookups can preserve requested dentry spelling; Astra confirmed this
 from public kernel source and withdrew the earlier closure. Publication remains
-pending while the working follow-up establishes explicit filesystem semantics
+pending while the committed follow-up establishes explicit filesystem semantics
 in the shared pin owner, rather than approximating Unicode normalization.
 All parents and terminal directories, including final recheck walks, must provide
 supported case-sensitive evidence. Unknown/overlay ancestors, unreadable

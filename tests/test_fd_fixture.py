@@ -77,6 +77,7 @@ class DescriptorFixtureTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "calling-thread descriptors"):
                 with assert_descriptor_cleanup(self):
                     descriptors = os.pipe()
+            assert descriptors is not None
             for fd in descriptors:
                 os.fstat(fd)
         finally:
@@ -102,6 +103,7 @@ class DescriptorFixtureTests(unittest.TestCase):
             with self.assertWarnsRegex(ResourceWarning, "ownership unknown"):
                 with assert_descriptor_cleanup(self):
                     stream = open("/dev/null", "rb")
+            assert stream is not None
             os.fstat(stream.fileno())
         finally:
             if stream is not None:
@@ -117,6 +119,7 @@ class DescriptorFixtureTests(unittest.TestCase):
                         pass  # FileIO close bypasses the os.close tracker.
                     replacement = open("/dev/null", "rb")
                     self.assertEqual(replacement.fileno(), fd)
+            assert replacement is not None
             os.fstat(replacement.fileno())
         finally:
             if replacement is not None:
