@@ -28,7 +28,7 @@ from tests.review_bridge_pipe_fixture import PipeFixtureResult, actor_argv, run_
 
 
 class ReviewBridgeNamespaceTests(unittest.TestCase):
-    def run_case(self, scenario: str) -> PipeFixtureResult:
+    def run_case(self, scenario: str, *, deny_inherited_stdin: bool = False) -> PipeFixtureResult:
         bwrap = Path(shutil.which("bwrap") or "/usr/bin/bwrap")
         require_namespace_runtime(self, bwrap)
         python = Path("/usr/bin/python3.12")
@@ -147,6 +147,7 @@ class ReviewBridgeNamespaceTests(unittest.TestCase):
                         inputs=inputs,
                         scenario=scenario,
                         timeout=4,
+                        deny_inherited_stdin=deny_inherited_stdin,
                     )
                 if result.stderr and namespace_permission_refused(result.stderr.decode()):
                     namespace_unavailable(self, "kernel disallows user namespaces")
@@ -180,6 +181,14 @@ class ReviewBridgeNamespaceTests(unittest.TestCase):
         self.assertTrue(result.escaped_ready)
         self.assertIn(result.error, ("example_pipe_deadline", "bridge_sequence_eof_incomplete"))
         self.assertLess(result.elapsed, 8)
+        self.assertTrue(result.cleanup_eof)
+
+    def test_inherited_pipe_inode_positive_control_detects_descriptor_leak(self) -> None:
+        result = self.run_case("success", deny_inherited_stdin=True)
+        self.assertFalse(result.success)
+        self.assertFalse(result.attempted)
+        self.assertIn(b"example_descriptor_leak", result.stderr)
+        self.assertNotIn(b"example_actor_deadline", result.stderr)
         self.assertTrue(result.cleanup_eof)
 
 

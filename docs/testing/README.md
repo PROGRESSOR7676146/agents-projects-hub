@@ -369,17 +369,23 @@ both sequence and buffer through fixed diagnostics without exception chains.
 
 Those primitives are in-process fixtures; the buffer performs no physical writes.
 `tests.test_review_bridge_pipe` adds actual nonblocking pipes and a fictional HTTP
-peer. It covers partial writes/backpressure, exact capsule request binding, a fresh
+peer. It covers recorded kernel short writes (8-KiB offers into a 4-KiB pipe),
+fragmentation/backpressure, exact capsule request binding, a fresh
 response digest receipt, cancellation before/after claim, duplicate requests,
 truncated frames, absolute deadlines during floods/held pipes, bounded HTTP
-headers/bodies and malformed requests. `tests.test_owned_fixture_process` covers
+headers/bodies and malformed requests. Extra-byte cases require an explicit
+rejection diagnostic, including a byte delivered during response transmission;
+an actor timeout is insufficient. Deterministic would-block offer conservation
+remains in the fake-owner tests. `tests.test_owned_fixture_process` covers
 kill-before-reap and closure of all owned streams; the existing native capture
 regressions reuse that lifecycle.
 
 `tests.test_review_bridge_namespace` adds the private namespace witness to the
 required strict CI job. Positive host controls precede parent/exec-child denial
 checks for original project/Git, authority paths, TCP/pathname/abstract sockets
-and inherited authority/capsule/mount-pin inodes. A setsid descendant holding the
+and inherited authority/capsule/mount-pin inodes. A positive control deliberately
+marks the inherited stdin pipe inode as denied; the detector must reject it
+before any callback. A TERM-ignoring setsid descendant holding the
 pipe must reach EOF after namespace teardown. Completion also requires drained
 writes, a client response receipt and valid EXIT/EOF after cleanup; END admission
 alone does not prove delivery. Run locally with:

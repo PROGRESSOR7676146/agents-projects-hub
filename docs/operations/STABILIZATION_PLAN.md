@@ -173,20 +173,25 @@ modules with zero typing errors and privacy/history checks at `cda15c3`.
 Exact-candidate Astra and actual Claude Opus 5.5/high reviews have no mandatory
 findings. All required hosted checks passed; the optional coverage job found a
 process-wide FD-count decrease without ownership attribution.
-The test-only correction at `c9b4bd5` tracks calling-thread allocations,
+The test-only correction tracks calling-thread allocations,
 preserves borrowed descriptor identities and explicitly checks that refused
-wrap pins were allocated and closed. Its 2,231-test commit gate passed;
-final canonical publication, independent follow-up and hosted checks are pending.
+wrap pins were allocated and closed. Follow-ups at `e563dd4` add strict identity
+and foreign-close checks without taking cleanup authority, including mocks,
+dup2 overwrite/no-op and primary-failure regressions. Its 2,241-test commit gate
+passed; exact Astra review is clear. Final canonical publication, Opus follow-up
+and hosted checks remain separate pending gates.
 
 The test-only follow-up in lane `test/review-private-pipe-witness`, based on
-`c9b4bd5`, joins actual owned nonblocking pipes, a private namespace supervisor,
+the sequencing lane, joins actual owned nonblocking pipes, a private namespace supervisor,
 one fictional HTTP POST and a recording fake callback. It reuses the owned
 process lifecycle of the native transport corpus, checks fresh client response
 receipt rather than END admission alone, and tests cleanup of escaped descendants.
-The ordinary pipe and required actual namespace witnesses passed 46 focused
-local tests (four separate opt-in native Claude cases skipped), with zero targeted
-typing errors. Dirty-candidate Astra review has no mandatory findings;
-canonical publication and independent exact-candidate review are pending.
+The initial `21d45fe` passed a 2,248-test commit gate and independent exact
+Astra/Opus reviews without mandatory findings. Their test-strength follow-ups
+add real kernel short-write accounting, late HTTP-read rejection and a positive
+inherited-inode detector control. The changed ordinary pipe, required actual
+namespace and shared-lifecycle modules passed 20 local tests without skips,
+with zero targeted typing errors. Final integrated publication/reviews are pending.
 It uses fixed bounded source snapshots, not an installed supervisor, and adds no
 productive entry point or live upstream. Source owner: Hub maintainer.
 

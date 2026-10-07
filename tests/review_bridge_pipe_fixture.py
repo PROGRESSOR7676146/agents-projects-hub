@@ -65,7 +65,7 @@ _SOURCES = (
 
 def actor_argv(executable: str) -> list[str]:
     root = Path(__file__).resolve().parents[1]
-    sources = [(name, (root / path).read_text()) for name, path in _SOURCES]
+    sources = [(name, (root / path).read_text(encoding="utf-8")) for name, path in _SOURCES]
     if any(len(source.encode()) > 40000 for _, source in sources):
         raise ValueError("example_source_bound")
     encoded = json.dumps(sources)
@@ -88,6 +88,8 @@ class PipeFixtureResult:
     stderr: bytes = field(default=b"", repr=False)
     receipt: dict[str, object] = field(default_factory=dict)
     write_calls: int = 0
+    short_writes: int = 0
+    would_block: int = 0
     elapsed: float = 0
     cleanup_eof: bool = False
     escaped_ready: bool = False
@@ -105,6 +107,7 @@ def run_pipe_fixture(
     cancel_at: str | None = None,
     pass_fds: tuple[int, ...] = (),
     inputs: dict[str, object] | None = None,
+    deny_inherited_stdin: bool = False,
 ) -> PipeFixtureResult:
     """Finite fake callback, absolute transport deadline and unconditional cleanup."""
     if not 0 < timeout <= 10 or not 1 <= write_quantum <= 8192:
@@ -113,18 +116,7 @@ def run_pipe_fixture(
         raise ValueError("example_cancel_stage")
     result = PipeFixtureResult()
     sequence, buffer, decoder = BridgeSequence(), BridgeWriteBuffer(), BridgeFrameDecoder()
-    specification = json.dumps(
-        {"scenario": scenario, "inputs": inputs or {}, "fixture_timeout": min(timeout * 0.8, 8)}
-    ).encode()
-    pending = deque(
-        (
-            BridgeFrame(BridgeFrameType.SPEC, specification),
-            BridgeFrame(BridgeFrameType.CAPSULE, gate.capsule_bytes),
-        )
-    )
-    if cancel_at == "before_claim":
-        gate.cancel()
-        pending.append(BridgeFrame(BridgeFrameType.CANCEL, b""))
+    pending: deque[BridgeFrame] = deque()
     started = time.monotonic()
     deadline = started + timeout
     output, diagnostics = bytearray(), bytearray()
@@ -141,6 +133,28 @@ def run_pipe_fixture(
                 and process.stdout is not None
                 and process.stderr is not None
             )
+            fixture_inputs = dict(inputs or {})
+            if deny_inherited_stdin:
+                info = os.fstat(process.stdin.fileno())
+                denied = fixture_inputs.get("denied_inodes", [])
+                assert isinstance(denied, list)
+                fixture_inputs["denied_inodes"] = [*denied, [info.st_dev, info.st_ino]]
+            specification = json.dumps(
+                {
+                    "scenario": scenario,
+                    "inputs": fixture_inputs,
+                    "fixture_timeout": min(timeout * 0.8, 8),
+                }
+            ).encode()
+            pending.extend(
+                (
+                    BridgeFrame(BridgeFrameType.SPEC, specification),
+                    BridgeFrame(BridgeFrameType.CAPSULE, gate.capsule_bytes),
+                )
+            )
+            if cancel_at == "before_claim":
+                gate.cancel()
+                pending.append(BridgeFrame(BridgeFrameType.CANCEL, b""))
             witness_descriptor = os.dup(process.stdout.fileno())
             for stream in (process.stdin, process.stdout, process.stderr):
                 os.set_blocking(stream.fileno(), False)
@@ -188,9 +202,12 @@ def run_pipe_fixture(
                             try:
                                 written = os.write(key.fd, offer)
                             except BlockingIOError:
+                                result.would_block += 1
                                 buffer.advance(0)
                                 continue
                             result.write_calls += 1
+                            if 0 < written < len(offer):
+                                result.short_writes += 1
                             buffer.advance(written)
                             if (
                                 cancel_at == "partial_response"

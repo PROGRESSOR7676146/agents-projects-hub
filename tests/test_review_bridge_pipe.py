@@ -94,6 +94,11 @@ class ReviewBridgePipeTests(unittest.TestCase):
         result = self.run_case(write_quantum=7, pipe_capacity=4096)
         self.assertTrue(result.success, result.error)
 
+    def test_real_pipe_short_writes_preserve_the_response(self) -> None:
+        result = self.run_case(write_quantum=8192, pipe_capacity=4096)
+        self.assertTrue(result.success, result.error)
+        self.assertGreater(result.short_writes, 0)
+
     def test_total_material_limit_transits_one_request(self) -> None:
         result = self.run_case(material_size=256 * 1024)
         self.assertTrue(result.success, result.error)
@@ -150,6 +155,20 @@ class ReviewBridgePipeTests(unittest.TestCase):
     def test_extra_http_bytes_cannot_create_second_claim(self) -> None:
         result = self.run_case("extra_request")
         self.assertFalse(result.success)
+        self.assertTrue(result.cleanup_eof)
+        self.assertTrue(
+            b"example_http_extra_bytes" in result.stderr
+            or b"example_http_repeat_or_eof" in result.stderr,
+            result.stderr,
+        )
+        self.assertNotIn(b"example_actor_deadline", result.stderr)
+
+    def test_delayed_extra_bytes_are_observed_while_sending_response(self) -> None:
+        result = self.run_case("delayed_extra_request")
+        self.assertFalse(result.success)
+        self.assertTrue(result.attempted)
+        self.assertIn(b"example_http_repeat_or_eof", result.stderr)
+        self.assertNotIn(b"example_actor_deadline", result.stderr)
         self.assertTrue(result.cleanup_eof)
         # Whether TCP delivers the extra bytes before or after the exact body
         # affects the first claim, never permits a second one.

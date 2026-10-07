@@ -151,9 +151,13 @@ The fixture accepts only its fixed POST path and canonical bounded Content-Lengt
 duplicate lengths, transfer encoding, alternate methods/absolute URLs and extra
 request bytes refuse. No redirects, retries or forwarding route exist. A repeat
 detected after the original request was already claimed cannot erase that claim;
-all late faults retain consumption. Absolute deadlines are independent of traffic,
-queues/output are finite, partial writes and would-block preserve offers, and
-cancel before/after claim retains the distinct zero/one-call observations.
+all late faults retain consumption. Reads remain observed while a response is
+sent; a deliberately delayed extra byte is rejected after the first claim.
+Absolute deadlines are independent of traffic, queues/output are finite, and
+actual kernel short writes preserve offers: an 8-KiB offer into a 4-KiB pipe must
+produce a positive recorded short-write count. Would-block accounting exists,
+but its deterministic zero-progress proof remains in the fake-owner tests.
+Cancellation before/after claim retains the distinct zero/one-call observations.
 The callback is synchronous and intentionally bounded fixture code; this is no
 claim of an interruptible provider call.
 
@@ -162,9 +166,13 @@ close_fds, explicit stdin/pass_fds, a new owned process group, kill before first
 reap, bounded wait and closure of every owned stream. Both native capture and
 the pipe runner use it. Completion is observed with waitid(WNOWAIT), preserving
 the leader PID until group cleanup. The actual namespace teardown witness checks
-EOF from a descendant that escaped the group with setsid; group killing alone
+EOF from a TERM-ignoring descendant that escaped the group with setsid; group killing alone
 does not establish that property. The strict required namespace CI job includes
 the private pipe/HTTP witness and its workflow contract rejects omission.
+An intentional denied-inode control uses the already inherited stdin pipe;
+it must trigger the same namespace FD-table detector before any fake callback.
+This gives the detector a positive control without adding an arbitrary inherited
+descriptor or relaxing the namespace builder.
 
 This is actual kernel/fictional-HTTP evidence, not native CLI compatibility,
 installed immutable supervisor custody, productive advisor authorization,

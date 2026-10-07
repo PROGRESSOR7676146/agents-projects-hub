@@ -78,7 +78,7 @@ with socket.socket() as channel, selectors.DefaultSelector() as selector:
     channel.setblocking(False)
     channel.connect_ex(('127.0.0.1',meta['port']))
     selector.register(channel,selectors.EVENT_READ|selectors.EVENT_WRITE)
-    offset=0; response=bytearray()
+    offset=0; response=bytearray(); late_sent=False
     while True:
         if time.monotonic()>=deadline: raise ValueError('example_client_deadline')
         for key,mask in selector.select(.05):
@@ -92,6 +92,9 @@ with socket.socket() as channel, selectors.DefaultSelector() as selector:
                 except BlockingIOError: continue
                 if not chunk: break
                 response.extend(chunk)
+                if scenario=='delayed_extra_request' and not late_sent:
+                    if channel.send(b'X')!=1: raise ValueError('example_late_extra_send')
+                    late_sent=True
                 if len(response)>70000: raise ValueError('example_response_bound')
         else: continue
         break
@@ -181,6 +184,9 @@ def main(_sources: object) -> None:
             os.close(ready_read)
             if scenario == "escaped_pipe":
                 os.setsid()
+                import signal
+
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
                 if (
                     os.getsid(0) == original_sid
                     or os.getsid(0) != os.getpid()
@@ -200,7 +206,10 @@ def main(_sources: object) -> None:
         os.close(ready_write)
         with selectors.DefaultSelector() as ready:
             ready.register(ready_read, selectors.EVENT_READ)
-            if not ready.select(0.5) or os.read(ready_read, 1) != b"r":
+            if (
+                not ready.select(max(0, deadline - time.monotonic()))
+                or os.read(ready_read, 1) != b"r"
+            ):
                 os._exit(2)
         os.close(ready_read)
         os._exit(0)
@@ -351,6 +360,23 @@ def _serve(
                                 selector.register(connection, selectors.EVENT_READ, "http")
                             elif key.data == "http":
                                 assert connection is not None
+                                if mask & selectors.EVENT_READ:
+                                    try:
+                                        chunk = connection.recv(4096)
+                                    except BlockingIOError:
+                                        chunk = None
+                                    if chunk is not None:
+                                        if not chunk or requested:
+                                            raise ValueError("example_http_repeat_or_eof")
+                                        request.extend(chunk)
+                                        if len(request) > 1048576 + 8196:
+                                            raise ValueError("example_http_bound")
+                                        body = _http_body(request)
+                                        if body is not None:
+                                            requested = True
+                                            pending.append(
+                                                BridgeFrame(BridgeFrameType.REQUEST, body)
+                                            )
                                 if mask & selectors.EVENT_WRITE:
                                     try:
                                         http_offset += connection.send(
@@ -361,20 +387,11 @@ def _serve(
                                     if http_offset == len(http_output):
                                         selector.unregister(connection)
                                         connection.close()
-                                elif mask & selectors.EVENT_READ:
-                                    try:
-                                        chunk = connection.recv(4096)
-                                    except BlockingIOError:
-                                        continue
-                                    if not chunk or requested:
-                                        raise ValueError("example_http_repeat_or_eof")
-                                    request.extend(chunk)
-                                    if len(request) > 1048576 + 8196:
-                                        raise ValueError("example_http_bound")
-                                    body = _http_body(request)
-                                    if body is not None:
-                                        requested = True
-                                        pending.append(BridgeFrame(BridgeFrameType.REQUEST, body))
+                                    elif incoming["scenario"] == "delayed_extra_request":
+                                        # Deterministic fixture handshake: the client sends
+                                        # one extra byte after its first response read.
+                                        # Keep the unfinished response open until observed.
+                                        selector.modify(connection, selectors.EVENT_READ, "http")
                             else:
                                 try:
                                     chunk = os.read(key.fd, 8192)
@@ -412,7 +429,9 @@ def _serve(
                                                 + response
                                             )
                                             selector.modify(
-                                                connection, selectors.EVENT_WRITE, "http"
+                                                connection,
+                                                selectors.EVENT_READ | selectors.EVENT_WRITE,
+                                                "http",
                                             )
                                 elif key.data == "child_stdout":
                                     pending.append(
