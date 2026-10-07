@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -136,7 +137,9 @@ class ClaudeFileSandboxTests(unittest.TestCase):
             with (
                 patch.object(sandbox_module, "_require_fd_bind_support"),
                 patch.object(sandbox_module.MountPins, "open", track),
-                assert_descriptor_cleanup(self, forbid_preexisting_close=True),
+                assert_descriptor_cleanup(
+                    self, forbid_preexisting_close=True, forbid_unattributed=True
+                ),
                 self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"),
                 config.wrap([str(self.executable)], {}, self.project),
             ):
@@ -235,7 +238,9 @@ class ClaudeFileSandboxTests(unittest.TestCase):
                             fd: (os.fstat(fd).st_dev, os.fstat(fd).st_ino) for fd in fds.values()
                         }
                         with (
-                            assert_descriptor_cleanup(self, forbid_preexisting_close=True),
+                            assert_descriptor_cleanup(
+                                self, forbid_preexisting_close=True, forbid_unattributed=True
+                            ),
                             self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"),
                         ):
                             self.config._namespace._validate(
@@ -406,7 +411,9 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
             with sandbox_module.MountPins() as pins:
                 descriptor = pins.open(root, directory=True)
                 with (
-                    assert_descriptor_cleanup(self, forbid_preexisting_close=True),
+                    assert_descriptor_cleanup(
+                        self, forbid_preexisting_close=True, forbid_unattributed=True
+                    ),
                     patch.object(sandbox_module, "_MAX_SCAN_DEPTH", 8),
                 ):
                     with self.assertRaisesRegex(FileToolSandboxError, "depth"):
@@ -432,7 +439,9 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
 
                     with (
                         patch.object(os, "open", side_effect=fail_entry),
-                        assert_descriptor_cleanup(self, forbid_preexisting_close=True),
+                        assert_descriptor_cleanup(
+                            self, forbid_preexisting_close=True, forbid_unattributed=True
+                        ),
                     ):
                         with self.assertRaisesRegex(FileToolSandboxError, message):
                             sandbox_module._scan_writable_tree(root, descriptor)
@@ -455,7 +464,9 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
             with sandbox_module.MountPins() as pins:
                 descriptor = pins.open(root, directory=True)
                 with (
-                    assert_descriptor_cleanup(self, forbid_preexisting_close=True),
+                    assert_descriptor_cleanup(
+                        self, forbid_preexisting_close=True, forbid_unattributed=True
+                    ),
                     patch.object(Path, "read_text", fail_entry),
                 ):
                     with self.assertRaisesRegex(
@@ -482,12 +493,33 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                         st_nlink=info.st_nlink,
                     )
 
-                with (
-                    assert_descriptor_cleanup(self, forbid_preexisting_close=True),
-                    patch.object(os, "fstat", side_effect=subvolume),
-                ):
-                    with self.assertRaisesRegex(FileToolSandboxError, "nested filesystem"):
-                        sandbox_module._scan_writable_tree(root, descriptor)
+                for inject_leak in (False, True):
+                    with self.subTest(inject_leak=inject_leak):
+                        leaked = -1
+                        try:
+                            expected = (
+                                self.assertRaisesRegex(AssertionError, "calling-thread descriptors")
+                                if inject_leak
+                                else nullcontext()
+                            )
+                            with (
+                                expected,
+                                patch.object(os, "fstat", side_effect=subvolume),
+                                assert_descriptor_cleanup(
+                                    self, forbid_preexisting_close=True, forbid_unattributed=True
+                                ),
+                            ):
+                                if inject_leak:
+                                    leaked = os.open(root / "entry", os.O_RDONLY | os.O_DIRECTORY)
+                                with self.assertRaisesRegex(
+                                    FileToolSandboxError, "nested filesystem"
+                                ):
+                                    sandbox_module._scan_writable_tree(root, descriptor)
+                            if inject_leak:
+                                os.fstat(leaked)  # The assertion never owns cleanup.
+                        finally:
+                            if leaked >= 0:
+                                os.close(leaked)
 
     def test_preexisting_private_hardlink_is_rejected(self) -> None:
         link = self.project / "linked-authority"
