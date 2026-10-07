@@ -77,6 +77,7 @@ with a new record.
 | Managed Codex profile continuity | Immutable selection snapshots and passive native confirmation preserve named profiles without claiming complete custody or enabling unsupported writers. | [ADR 0055](0055-managed-codex-profile-continuity.md) |
 | Provider-neutral process namespace | Shared pinned builder preserves the Claude facade and adds a provider-free read-only/private-network witness; advisor and installed custody remain open. | [ADR 0056](0056-provider-neutral-process-namespace.md) |
 | Sealed review material capsules | A trusted explicit text selection becomes bounded digest-bound kernel-sealed bytes; no durable authorization, provider route or review workflow is enabled. | [ADR 0057](0057-sealed-review-material-capsules.md) |
+| Bounded review pipe primitives | Finite byte framing and a host-created one-use fake attempt gate prepare private-network transport without productive wiring or durable authorization. | [ADR 0058](0058-bounded-review-pipe-primitives.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

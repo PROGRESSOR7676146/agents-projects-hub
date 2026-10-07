@@ -118,9 +118,12 @@ Inspect tracked, staged and untracked lane state before any post-merge cleanup.
 
 ## Offline native Claude transport follow-up
 
-Current state: implementation and publication/review gates in progress in lane
-`test/claude-native-transport-corpus`, based on clean `1c70d56`. Source owner:
-Hub maintainer. The optional corpus uses an explicitly supplied native CLI with
+Current state: published source candidate `535c0b8` in lane
+`test/claude-native-transport-corpus`, based on clean `1c70d56`; canonical
+publication passed with 2,175 tests and Pyright 0. Exact-candidate Claude Opus
+review has no remaining mandatory findings; Astra reviewed the production
+follow-up. Hosted checks remain a separate gate. Source owner: Hub maintainer.
+The optional corpus uses an explicitly supplied native CLI with
 synthetic credentials and an HTTP fixture inside private network/PID/IPC
 namespaces; host files and loopback have positive and negative controls.
 
@@ -132,13 +135,37 @@ plugin guard remains unchanged, required security policy mods remain untouched,
 and incomplete/contradictory HTTP-error evidence remains indeterminate. Verified
 rejection does not establish an absence of earlier effects or authorize replay.
 The process fixture additionally kills its owned group before reaping an exited
-leader, and refuses FIFO executable sources without blocking.
+leader, and refuses special-file executable sources before open. The final
+corpus inherits production start argv and checks its exact fictional session
+identity. Strict native execution pins local binary/version evidence and requires
+the exact 529 envelope, zero visible assistant messages on rejection and fully
+validated host diagnostics. All four cases passed with CLI 2.1.285; additional
+retry/output bounds belong only to the fixture.
 
-Next trigger: finish exact-revision native/focused checks, independent Astra and
-actual Claude Opus review, canonical publication and hosted checks. The
+Next trigger: confirm exact-revision hosted checks, then the bounded isolated
+transport below. The
 [testing guide](../testing/README.md#optional-offline-native-claude-transport)
 owns the procedure and evidence limits. This does not close subscription routing,
 CPA/no-paid-fallback, human file approvals, local transfer or Telegram acceptance.
+
+## Bounded review pipe primitives
+
+Current state: offline implementation in progress in lane
+`feat/advisor-inference-bridge`; last verified source baseline `535c0b8`.
+Source owner: Hub maintainer. The byte codec and host-created one-use fake
+attempt gate have focused coverage; publication and final independent review
+remain pending. Early Astra review identified capsule-type and preparse UUID
+bounds, both addressed with negative regressions. See
+[ADR 0058](../decisions/0058-bounded-review-pipe-primitives.md) for the selected
+ownership and evidence boundary.
+
+Next trigger: complete exact-revision gates/reviews, then explicit directional
+sequencing and bounded response pumping before the namespace supervisor witness.
+Closure remains open: no productive advisor, real upstream, durable role/material
+authorization, native body validator, worker wiring, deployment or live acceptance
+is enabled. The original project, host authority sockets and credentials remain
+outside this proposed child boundary. Inspect all lane state before post-merge
+cleanup; main merge and deployment remain owner actions.
 
 ## Planned final-response mode indicators
 
