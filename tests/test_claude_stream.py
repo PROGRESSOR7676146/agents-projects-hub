@@ -348,6 +348,98 @@ class ClaudeStreamTests(unittest.TestCase):
                 )
             self.assertEqual(raised.exception.code, code)
 
+    def test_native_success_variant_with_http_error_is_failure_not_success(self) -> None:
+        for status, code in (
+            (400, "claude_provider_failure"),
+            (401, "claude_authentication_failed"),
+            (429, "claude_quota_exhausted"),
+            (529, "claude_provider_overloaded"),
+            (503, "claude_provider_failure"),
+            (599, "claude_provider_failure"),
+        ):
+            with self.subTest(status=status), self.assertRaises(ClaudeTerminalFailure) as raised:
+                parse_claude_stream(
+                    output(
+                        {
+                            "type": "assistant",
+                            "session_id": SESSION,
+                            "error": "rate_limit",
+                        },
+                        result(
+                            is_error=True,
+                            api_error_status=status,
+                            result="fictional provider error",
+                        ),
+                    ),
+                    expected_session_id=SESSION,
+                    returncode=1,
+                )
+            self.assertEqual(raised.exception.code, code)
+            self.assertEqual(raised.exception.session_id, SESSION)
+            self.assertNotIn("fictional provider error", str(raised.exception))
+
+    def test_native_http_error_variant_requires_status_result_and_exact_terminality(self) -> None:
+        for changes in (
+            {},
+            {"api_error_status": None},
+            {"api_error_status": True},
+            {"api_error_status": "529"},
+            {"api_error_status": 399},
+            {"api_error_status": 600},
+            {"api_error_status": 529, "result": None},
+            {"api_error_status": 529, "result": {}},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ClaudeStreamError):
+                parse_claude_stream(
+                    output(result(is_error=True, **changes)), expected_session_id=SESSION
+                )
+        terminal = result(is_error=True, api_error_status=529)
+        for events in (
+            (terminal, terminal),
+            (result(is_error=False, api_error_status=529),),
+            (result(is_error=True, api_error_status=529, session_id=OTHER_SESSION),),
+            (terminal, {"type": "assistant", "session_id": SESSION}),
+            ({"type": "system", "subtype": "init", "session_id": OTHER_SESSION}, terminal),
+        ):
+            with self.subTest(events=events), self.assertRaises(ClaudeStreamError):
+                parse_claude_stream(output(*events), expected_session_id=SESSION)
+        missing_result = result(is_error=True, api_error_status=529)
+        missing_result.pop("result")
+        with self.assertRaises(ClaudeStreamError):
+            parse_claude_stream(output(missing_result), expected_session_id=SESSION)
+
+    def test_native_http_failure_status_cannot_be_overridden_by_assistant_error(self) -> None:
+        for status in (400, 500, 503):
+            with self.subTest(status=status), self.assertRaises(ClaudeTerminalFailure) as raised:
+                parse_claude_stream(
+                    output(
+                        {"type": "assistant", "session_id": SESSION, "error": "rate_limit"},
+                        result(is_error=True, api_error_status=status),
+                    ),
+                    expected_session_id=SESSION,
+                    returncode=1,
+                )
+            self.assertEqual(raised.exception.code, "claude_provider_failure")
+
+    def test_non_error_success_with_any_non_null_http_status_stays_uncertain(self) -> None:
+        for status in ("529", True, False, 600, 0, [], {}, 200, 529, 529.0):
+            with self.subTest(status=status), self.assertRaises(ClaudeStreamError):
+                parse_claude_stream(output(result(api_error_status=status)))
+        self.assertEqual(
+            parse_claude_stream(output(result(api_error_status=None))).text, "Visible answer"
+        )
+
+    def test_valid_native_http_terminal_failure_is_never_success_even_with_exit_zero(self) -> None:
+        for exit_code in (0, 1):
+            with (
+                self.subTest(exit_code=exit_code),
+                self.assertRaises(ClaudeTerminalFailure) as raised,
+            ):
+                parse_claude_stream(
+                    output(result(is_error=True, api_error_status=529)), returncode=exit_code
+                )
+            self.assertEqual(raised.exception.code, "claude_provider_overloaded")
+
     def test_protocol_ambiguity_never_becomes_terminal_failure(self) -> None:
         ambiguous = (
             "",
@@ -365,7 +457,7 @@ class ClaudeStreamTests(unittest.TestCase):
             output(result(subtype={}, is_error=True)),
             output(result(subtype="error_during_execution", is_error=False)),
             output(result(is_error="false")),
-            output(result(subtype="success", is_error=True, api_error_status=429)),
+            output(result(subtype="success", is_error=True)),
         )
         for stream in ambiguous:
             with self.subTest(stream=stream), self.assertRaises(ClaudeStreamError):

@@ -308,6 +308,12 @@ def _terminal_failure_code(terminal: dict[str, object], assistant_error: str | N
         return "claude_quota_exhausted"
     if type(status) is int and status == 401:
         return "claude_authentication_failed"
+    if type(status) is int and status == 529:
+        return "claude_provider_overloaded"
+    if subtype == "success":
+        # The reinterpreted native HTTP failure is proven by the exact status;
+        # assistant text must not turn another 4xx/5xx into quota evidence.
+        return "claude_provider_failure"
     error_codes = {
         "rate_limit": "claude_quota_exhausted",
         "authentication_failed": "claude_authentication_failed",
@@ -387,7 +393,22 @@ def parse_claude_stream(
         }
     ):
         raise ClaudeStreamError("claude returned an unknown terminal outcome")
-    if (subtype == "success" and is_error) or (subtype != "success" and not is_error):
+    # Native CLI uses the success result variant for a completed API-error
+    # message too. Accept only its explicit HTTP error/status and result shape
+    # here, always as failure; an absent/ambiguous status stays indeterminate.
+    status = terminal.get("api_error_status")
+    http_error_status = type(status) is int and 400 <= status <= 599
+    native_http_failure = (
+        subtype == "success"
+        and is_error
+        and http_error_status
+        and isinstance(terminal.get("result"), str)
+    )
+    if (
+        (subtype == "success" and is_error and not native_http_failure)
+        or (subtype == "success" and not is_error and status is not None)
+        or (subtype != "success" and not is_error)
+    ):
         raise ClaudeStreamError("claude returned a conflicting terminal outcome")
     if is_error:
         code = _terminal_failure_code(terminal, assistant_error)

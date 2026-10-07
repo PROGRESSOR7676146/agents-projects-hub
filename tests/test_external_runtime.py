@@ -753,6 +753,11 @@ class ExternalRuntimeTests(unittest.TestCase):
                 1,
                 ClaudeTerminalFailure,
             ),
+            (
+                f'{{"type":"result","subtype":"success","is_error":true,"session_id":"{session}","api_error_status":529,"result":"private"}}',
+                1,
+                ClaudeTerminalFailure,
+            ),
         )
         with (
             tempfile.TemporaryDirectory() as directory,
@@ -835,9 +840,19 @@ class ExternalRuntimeTests(unittest.TestCase):
         self.assertNotIn("private", started.text)
         self.assertIn("--strict-mcp-config", calls[0])
         self.assertIn("--safe-mode", calls[0])
-        self.assertEqual(
-            json.loads(calls[0][calls[0].index("--settings") + 1]), {"disableAllHooks": True}
-        )
+        for call in calls:
+            settings = json.loads(call[call.index("--settings") + 1])
+            self.assertIs(settings["disableAllHooks"], True)
+            self.assertEqual(
+                settings["enabledPlugins"],
+                {
+                    "cc-plugin-agents-md@builtin": False,
+                    "cc-plugin-diff@builtin": False,
+                    "cc-plugin-plugin-authoring@builtin": False,
+                    "cc-plugin-telemetry@builtin": False,
+                },
+            )
+            self.assertNotIn("cc-plugin-sec-default@builtin", settings["enabledPlugins"])
         self.assertEqual(calls[0][calls[0].index("--tools") + 1], "")
         self.assertEqual(calls[1][calls[1].index("--resume") + 1], session)
         for call, prompt in zip(calls, ("hello", "again")):

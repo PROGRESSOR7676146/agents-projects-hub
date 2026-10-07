@@ -48,7 +48,9 @@ requires a human callback.
 Hosted argv use restricted mode, empty setting sources, strict empty MCP,
 disabled skills, manual permissions and no prompt fallback. Safe mode is kept
 for the text-only default; hosted hooks use explicit settings in the restricted
-filesystem view. The known built-in AGENTS.md and telemetry plugins are explicitly disabled,
+filesystem view. Shared settings explicitly disable the known optional built-in
+AGENTS.md, diff, plugin-authoring and telemetry mods; safe mode alone does not.
+Required security policy mods are not disabled,
 and unexpected plugin/tool/permission metadata fails the stream guard.
 
 ## Ownership and consequences

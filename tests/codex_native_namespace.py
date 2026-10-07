@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from tests.native_runtime_mounts import native_runtime_mounts
+
 ACTOR_PATH = "/opt/example-native/actor.py"
 
 
@@ -21,31 +23,6 @@ def native_namespace_environment() -> dict[str, str]:
         "LC_ALL": "C.UTF-8",
         "RUST_LOG": "error",
     }
-
-
-def _runtime_mounts() -> list[str]:
-    argv: list[str] = []
-    for source in ("/usr/bin", "/usr/lib", "/usr/lib64"):
-        if Path(source).is_dir():
-            argv.extend(("--ro-bind", source, source))
-        elif source != "/usr/lib64":
-            raise RuntimeError("offline native system runtime is unavailable")
-    for source in ("/bin", "/lib", "/lib64"):
-        path = Path(source)
-        if path.is_symlink():
-            target = path.readlink()
-            resolved = path.resolve(strict=True)
-            if not any(
-                resolved.is_relative_to(root)
-                for root in (Path("/usr/bin"), Path("/usr/lib"), Path("/usr/lib64"))
-            ):
-                raise RuntimeError("offline native runtime link is unsupported")
-            argv.extend(("--symlink", str(target), source))
-        elif path.is_dir():
-            argv.extend(("--ro-bind", source, source))
-        elif source != "/lib64":
-            raise RuntimeError("offline native system runtime is unavailable")
-    return argv
 
 
 def native_namespace_argv(
@@ -70,7 +47,7 @@ def native_namespace_argv(
         "--unshare-net",
         "--unshare-pid",
         "--unshare-ipc",
-        *_runtime_mounts(),
+        *native_runtime_mounts(),
         "--tmpfs",
         "/tmp",
         *(

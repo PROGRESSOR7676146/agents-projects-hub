@@ -10,6 +10,7 @@ from typing import Any
 
 from .claude_file_sandbox import FileToolSandboxConfig
 from .claude_mount_pins import SandboxLaunch
+from .claude_native_settings import disabled_builtin_plugins
 from .claude_stream import ClaudeStreamError
 
 FILE_TOOL_NAMES = frozenset({"Read", "Glob", "Grep", "Write", "Edit"})
@@ -43,10 +44,7 @@ def file_tool_settings(python: Path) -> str:
     return json.dumps(
         {
             "disableAllHooks": False,
-            "enabledPlugins": {
-                "cc-plugin-agents-md@builtin": False,
-                "cc-plugin-telemetry@builtin": False,
-            },
+            "enabledPlugins": disabled_builtin_plugins(),
             "permissions": {
                 "allow": [],
                 "deny": ["Bash", "Agent", "Task", "WebFetch", "WebSearch"],
