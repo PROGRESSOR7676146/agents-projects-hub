@@ -40,7 +40,25 @@ location, retaining catch behavior and original exception causes. The error clas
 `NamespaceError`; no state or protocol relies on the former Python class name.
 
 Keep `claude_mount_pins.py` as the sole inode/type identity, descriptor
-adoption and final pin-recheck owner. Carry the later private-source hardening
+adoption and final pin-recheck owner. Its dependency-neutral `mount_lookup.py`
+guard requires explicit case-sensitive lookup evidence for the starting parent,
+every traversed directory and terminal directory pin, including missing-private
+anchors. Fresh final walks repeat that evidence. Dentry names alone cannot prove
+stored spelling: a cold casefold lookup can retain the caller's spelling.
+Reopen pinned `.` read-only for inspection and close the temporary descriptor;
+never reinterpret an unavailable ioctl as absence of casefolding.
+
+The supported inspection ABI is Linux LP64 x86-64/AArch64. Ext-family, tmpfs and
+btrfs directories require successful `FS_IOC_GETFLAGS` without `FS_CASEFOLD_FL`.
+XFS requires `XFS_IOC_FSGEOMETRY_V1` with its V1 response version `0` and without
+`DIRV2CI`. Every traversed ancestor must supply this evidence and permit the
+read-only inspection open. Unknown filesystems (including overlay), unsupported
+ABI, unavailable evidence and malformed responses refuse. Tmpfs acceptance
+depends on kernel flag-query support, including `CONFIG_TMPFS_XATTR` on kernels
+that condition its directory implementation on that option. Ordinary Unicode
+names on supported case-sensitive directories remain available.
+
+Carry the later private-source hardening
 into the core: one bounded LF/ASCII-space mount parser, validation-only private
 pins, filesystem/inode alias exclusion, fresh final provenance checks and
 single-link runtime/socket sources. Private validation descriptors close before
@@ -76,3 +94,8 @@ The filesystem allowlist is not a guarantee for every btrfs subvolume or bind
 layout: device/mount/kernel-path evidence must agree, otherwise launch refuses
 conservatively. Availability on those layouts remains unproven; no provenance
 check is relaxed to accommodate them.
+The shared lookup guard imposes additional availability restrictions even when
+the selected source itself is on a supported filesystem: an overlay ancestor or
+an unreadable ancestor refuses the whole walk. The fixtures exercise scripted
+filesystem evidence and ordinary real case-sensitive paths; they do not establish
+availability on every listed filesystem or a real casefold/cache-state witness.

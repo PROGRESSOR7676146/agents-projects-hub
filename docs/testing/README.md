@@ -287,7 +287,20 @@ provider, Telegram, live service or advisor activation.
 an explicitly selected [sealed text capsule](../decisions/0057-sealed-review-material-capsules.md)
 through owned stdin to an isolated parent and exec child, without mounting the
 original project or Git. Unit coverage checks exact digest/size, parser bounds,
-source replacement/mutation, kernel seals and failure cleanup. This is snapshot
+source replacement/mutation, kernel seals and failure cleanup.
+`tests.test_mount_lookup` and `tests.test_claude_mount_pins` cover the shared
+lookup guard with scripted flag/geometry evidence, targeted intermediate and
+terminal directories, repeated final walks, unavailable metadata, and ordinary
+real Unicode paths. They are not a real casefold/cache-state or XFS witness.
+All source ancestors must satisfy the supported lookup/read-access boundary in
+[ADR 0056](../decisions/0056-provider-neutral-process-namespace.md); overlay
+ancestors and tmpfs without working flag queries refuse conservatively. Such
+refusals must not be reclassified as absent private paths or ignored by fixtures.
+Descriptor assertions track calling-thread open/dup/dup2/pipe and the optional
+Python memfd allocator, without closing test resources; untracked snapshot
+differences remain diagnostics, not cleanup authority. Allocation-fault tests
+also check capsule descriptor closure explicitly.
+This is snapshot
 and fixture evidence; durable material authorization and productive review remain open.
 An executable-specific AppArmor
 profile permits bubblewrap user namespaces only on that disposable CI runner.

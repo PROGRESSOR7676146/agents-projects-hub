@@ -95,22 +95,37 @@ The scripted private-alias corpus also runs directly through the readonly core.
 The real bind fixture exercises the private guard; it is not an additional
 kernel witness of the complete core launch.
 
-Last verified clean integration: `eb241d7`, with the mandatory commit gate
-passing 2119 tests in 193 modules. Earlier focused strict evidence covers 94
+Last verified clean integration: `1b2723364e38b0c45c41785f047463117f053a09`,
+with the mandatory commit gate passing 2131 tests in 194 modules. Earlier focused strict evidence covers 94
 core/facade/parser/workflow checks and 40 capsule/permission/namespace checks
 without optional namespace skips. Its independent architecture review found a
 material-name alias gap and an unsupported-filesystem fixture using the wrong
-failure path. The follow-up requires exact kernel descriptor names before reads
-and after pin rechecks, and targets the actual mount-table reader. Three new
+failure path. The committed follow-up checks exact kernel descriptor names before
+reads and after pin rechecks, and targets the actual mount-table reader. Three new
 regression tests failed first, then all 12 capsule/namespace tests passed strictly.
-The source-review follow-up also refuses material roots within Git metadata,
+The source-review follow-up also refuses material roots with a `.git`-named component,
 checks the encoded size before memfd creation and verifies the final source-pin
 recheck independently of file timestamps. Descriptor assertions never close
 test resources; calling-thread tracking supports leak assertions while unknown
 snapshot changes are diagnostics, with explicit memfd-close checks at its
 allocation boundary. The final focused strict set passed 104 tests without
 namespace skips. The casefold regression is scripted, not a real casefold
-filesystem witness.
+filesystem witness. A subsequent actual Claude Opus review identified that cold
+casefold lookups can preserve requested dentry spelling; Astra confirmed this
+from public kernel source and withdrew the earlier closure. Publication remains
+pending while the working follow-up establishes explicit filesystem semantics
+in the shared pin owner, rather than approximating Unicode normalization.
+All parents and terminal directories, including final recheck walks, must provide
+supported case-sensitive evidence. Unknown/overlay ancestors, unreadable
+directories, unavailable flag queries and unsupported ABI refuse conservatively;
+ordinary Unicode names remain supported. See ADRs 0056 and 0057 for the precise
+boundary and availability limits. The expanded strict focused gate passed 119
+tests with no namespace skips; the sole skip was the Python 3.11 build's absent
+memfd wrapper. A Python 3.12 subset passed 60 tests, including the real Python
+memfd tracker and two later ABI/native-inspection refusal tests. Fresh full-gate
+evidence is still required. These are scripted metadata tests,
+not a real casefold or XFS acceptance result. Bare/separate Git directories remain
+the trusted caller's material-authorization responsibility.
 Canonical publication, exact final-revision independent security review and
 hosted gates remain pending. Next trigger: those combined gates, then establish
 native compatibility with an isolated fake inference endpoint before implementing

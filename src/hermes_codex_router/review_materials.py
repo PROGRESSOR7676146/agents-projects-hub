@@ -52,7 +52,7 @@ def _validate_selection(item: MaterialSelection) -> None:
         or not 1 <= len(name) <= 240
         or any(ord(char) < 32 or ord(char) == 127 for char in name)
         or "\\" in name
-        or any(part in ("", ".", "..", ".git") for part in name.split("/"))
+        or any(part in ("", ".", "..") or part.casefold() == ".git" for part in name.split("/"))
     ):
         raise ReviewMaterialError("material name must be a bounded relative file name")
     if type(item.size) is not int or not 0 <= item.size <= _MAX_FILE_BYTES:

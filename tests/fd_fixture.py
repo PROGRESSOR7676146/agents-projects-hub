@@ -7,7 +7,7 @@ import stat
 import threading
 import unittest
 import warnings
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from typing import Iterator
 from unittest.mock import patch
 
@@ -40,6 +40,8 @@ def assert_descriptor_cleanup(case: unittest.TestCase) -> Iterator[None]:
         os.dup2,
         os.close,
     )
+    original_pipe = os.pipe
+    original_memfd = getattr(os, "memfd_create", None)
 
     def record(fd: int) -> int:
         tracked.pop(fd, None)
@@ -58,6 +60,14 @@ def assert_descriptor_cleanup(case: unittest.TestCase) -> Iterator[None]:
     def track_dup2(fd: int, target: int, inheritable: bool = True) -> int:
         return record(original_dup2(fd, target, inheritable=inheritable))
 
+    def track_pipe() -> tuple[int, int]:
+        read_fd, write_fd = original_pipe()
+        return record(read_fd), record(write_fd)
+
+    def track_memfd(*args: object, **kwargs: object) -> int:
+        assert original_memfd is not None
+        return record(original_memfd(*args, **kwargs))
+
     def track_close(fd: int) -> None:
         original_close(fd)
         # Observe successful close/overwrite events across all threads.
@@ -66,12 +76,14 @@ def assert_descriptor_cleanup(case: unittest.TestCase) -> Iterator[None]:
 
     primary: BaseException | None = None
     try:
-        with (
-            patch("os.open", side_effect=track_open),
-            patch("os.dup", side_effect=track_dup),
-            patch("os.dup2", side_effect=track_dup2),
-            patch("os.close", side_effect=track_close),
-        ):
+        with ExitStack() as patches:
+            patches.enter_context(patch("os.open", side_effect=track_open))
+            patches.enter_context(patch("os.dup", side_effect=track_dup))
+            patches.enter_context(patch("os.dup2", side_effect=track_dup2))
+            patches.enter_context(patch("os.close", side_effect=track_close))
+            patches.enter_context(patch("os.pipe", side_effect=track_pipe))
+            if original_memfd is not None:
+                patches.enter_context(patch("os.memfd_create", side_effect=track_memfd))
             yield
     except BaseException as error:
         primary = error

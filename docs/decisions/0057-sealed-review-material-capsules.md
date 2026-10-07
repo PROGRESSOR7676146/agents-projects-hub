@@ -24,13 +24,19 @@ paths. Future durable workflow authorization remains a separate transaction.
 Pin no-follow sources, accept only regular single-link files on the supported
 root filesystem/mount, require the kernel descriptor path to equal the exact
 root/selected spelling before reading and after final pin rechecks, and recheck
-source metadata before completion. Casefold/other name aliases refuse
-conservatively rather than bypass the Git-metadata exclusion.
-Refuse roots within Git metadata, selected Git metadata, duplicates, escapes,
+source metadata before completion. The shared pinning guard requires supported
+case-sensitive semantics for all lookup parents and directory pins, as specified
+in [ADR 0056](0056-provider-neutral-process-namespace.md). Descriptor spelling
+alone is insufficient on a cold casefold lookup. Casefold directories, XFS
+ASCII-insensitive layouts and unavailable semantics refuse before content reads;
+ordinary Unicode names on supported case-sensitive directories remain available.
+Refuse roots with a `.git`-named component and selected `.git` components or
+their filesystem aliases, duplicates, escapes,
 symlinks, special files, unsupported mounts and changed/digest-mismatched input. Selected content must be UTF-8 text
 without NUL; project configuration, credentials and native transcripts are
 never included implicitly. The caller is responsible for authorizing content,
-including any sensitive text: filename checks are not a secret detector.
+including any sensitive text and bare or separate Git directories without a
+`.git`-named component: filename checks are not a secret or Git-directory detector.
 
 Capture at most 32 files, 64 KiB each and 256 KiB total source bytes. Canonical
 JSON contains one opaque binding and the sorted name/size/digest/text entries,

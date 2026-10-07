@@ -72,18 +72,15 @@ class ReviewMaterialsTests(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(ReviewMaterialError):
                 build_review_capsule(self.root, (self.selection(),), binding="example-result")
 
-    def test_casefold_git_metadata_alias_refuses_before_content_read(self) -> None:
-        git = self.root / ".git"
-        git.mkdir()
-        (git / "config").write_bytes(b"fictional Git metadata")
-        actual = self.selection(".git/config")
-        selected = MaterialSelection(".GIT/config", actual.size, actual.sha256)
+    def test_scripted_file_alias_refuses_before_content_read(self) -> None:
+        actual = self.selection()
+        selected = MaterialSelection("Visible.txt", actual.size, actual.sha256)
         open_relative = MountPins.open_relative
 
         def casefold_open(pins: MountPins, parent: int, name: str, **kwargs: object) -> int:
-            # Deterministic casefold resolution, not a real ext4 casefold witness.
-            self.assertEqual(name, ".GIT/config")
-            return open_relative(pins, parent, ".git/config", directory=False)
+            # Scripted name divergence, not casefold/cache-state evidence.
+            self.assertEqual(name, "Visible.txt")
+            return open_relative(pins, parent, "visible.txt", directory=False)
 
         with assert_descriptor_cleanup(self):
             with (
@@ -209,7 +206,15 @@ class ReviewMaterialsTests(unittest.TestCase):
 
     def test_invalid_selection_names_limits_and_bindings_refuse_before_file_reads(self) -> None:
         selected = self.selection()
-        for name in ("../visible.txt", "/visible.txt", "a/./b", "a//b", ".git/HEAD", "a\\b"):
+        for name in (
+            "../visible.txt",
+            "/visible.txt",
+            "a/./b",
+            "a//b",
+            ".git/HEAD",
+            ".GIT/config",
+            "a\\b",
+        ):
             with self.subTest(name=name), self.assertRaises(ReviewMaterialError):
                 build_review_capsule(
                     self.root, (MaterialSelection(name, 0, "0" * 64),), binding="example-result"

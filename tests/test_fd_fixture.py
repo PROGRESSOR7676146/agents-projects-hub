@@ -71,10 +71,10 @@ class DescriptorFixtureTests(unittest.TestCase):
             thread.join(2)
         self.assertFalse(thread.is_alive())
 
-    def test_untracked_pipe_difference_is_uncertainty_and_never_cleanup_authority(self) -> None:
+    def test_pipe_leaks_are_reported_and_never_closed(self) -> None:
         descriptors: tuple[int, int] | None = None
         try:
-            with self.assertWarnsRegex(ResourceWarning, "ownership unknown"):
+            with self.assertRaisesRegex(AssertionError, "calling-thread descriptors"):
                 with assert_descriptor_cleanup(self):
                     descriptors = os.pipe()
             for fd in descriptors:
@@ -83,6 +83,29 @@ class DescriptorFixtureTests(unittest.TestCase):
             if descriptors is not None:
                 for fd in descriptors:
                     os.close(fd)
+
+    @unittest.skipUnless(hasattr(os, "memfd_create"), "Python memfd allocator is unavailable")
+    def test_memfd_leak_is_reported_and_never_closed(self) -> None:
+        descriptor = -1
+        try:
+            with self.assertRaisesRegex(AssertionError, "calling-thread descriptors"):
+                with assert_descriptor_cleanup(self):
+                    descriptor = os.memfd_create("example-fixture", os.MFD_CLOEXEC)
+            os.fstat(descriptor)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+
+    def test_untracked_stream_difference_is_uncertainty_and_never_cleanup_authority(self) -> None:
+        stream = None
+        try:
+            with self.assertWarnsRegex(ResourceWarning, "ownership unknown"):
+                with assert_descriptor_cleanup(self):
+                    stream = open("/dev/null", "rb")
+            os.fstat(stream.fileno())
+        finally:
+            if stream is not None:
+                stream.close()
 
     def test_unobserved_same_inode_reuse_never_closes_replacement(self) -> None:
         replacement = None

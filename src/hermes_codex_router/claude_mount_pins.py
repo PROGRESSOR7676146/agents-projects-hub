@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 
+from .mount_lookup import LookupEvidenceError, require_case_sensitive_directory
+
 
 class MountPinError(ValueError):
     """A source cannot be pinned without following or replacing a path."""
@@ -54,6 +56,7 @@ class MountPins:
         """Use a fresh descriptor for each component; never resolve a link."""
         current = os.dup(parent)
         try:
+            require_case_sensitive_directory(current)
             for index, part in enumerate(parts):
                 flags = os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC
                 if index < len(parts) - 1 or directory is True:
@@ -61,8 +64,11 @@ class MountPins:
                 following = os.open(part, flags, dir_fd=current)
                 os.close(current)
                 current = following
-                if stat.S_ISLNK(os.fstat(current).st_mode):
+                info = os.fstat(current)
+                if stat.S_ISLNK(info.st_mode):
                     raise MountPinError("mount source contains a symlink")
+                if stat.S_ISDIR(info.st_mode):
+                    require_case_sensitive_directory(current)
             info = os.fstat(current)
             if directory is False and not stat.S_ISREG(info.st_mode):
                 raise MountPinError("mount source is not a regular file")
@@ -101,7 +107,7 @@ class MountPins:
         self._require_open()
         try:
             return self._adopt(self._open_absolute(path, directory), path)
-        except (OSError, AttributeError) as exc:
+        except (OSError, AttributeError, LookupEvidenceError) as exc:
             raise MountPinError("mount source cannot be pinned") from exc
 
     def open_relative(self, parent: int, name: str, *, directory: bool | None = None) -> int:
@@ -112,7 +118,7 @@ class MountPins:
         try:
             path = self._pins[parent].path / relative
             return self._adopt(self._walk(parent, relative.parts, directory), path)
-        except (OSError, KeyError) as exc:
+        except (OSError, KeyError, LookupEvidenceError) as exc:
             raise MountPinError("relative mount source cannot be pinned") from exc
 
     def recheck(self) -> None:
@@ -129,7 +135,7 @@ class MountPins:
                     or mount_id(fd) != pin.mount
                 ):
                     raise MountPinError("mount source identity changed")
-            except OSError as exc:
+            except (OSError, LookupEvidenceError) as exc:
                 raise MountPinError("mount source cannot be rechecked") from exc
             finally:
                 if candidate >= 0:

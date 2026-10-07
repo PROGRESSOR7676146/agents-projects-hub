@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import errno
 import os
+import struct
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import hermes_codex_router.claude_private_mounts as private_mounts
-from hermes_codex_router.claude_mount_pins import MountPins
+from hermes_codex_router.claude_mount_pins import MountPinError, MountPins
 from hermes_codex_router.claude_private_mounts import PrivateMountError, PrivateMountGuard
+from hermes_codex_router.mount_lookup import LookupEvidenceError
 from hermes_codex_router.process_namespace import NamespaceError as FileToolSandboxError
 from hermes_codex_router.process_namespace import _reject_nested_mounts
 from tests.fd_fixture import assert_descriptor_cleanup
@@ -283,6 +285,29 @@ class PrivateMountProvenanceTests(unittest.TestCase):
             with self.assertRaisesRegex(PrivateMountError, "anchor.*unavailable") as error:
                 self.check(self.private / "missing" / "key")
             self.assertIsInstance(error.exception.__cause__, OSError)
+
+    def test_missing_private_anchor_lookup_failure_is_not_treated_as_absence(self) -> None:
+        identity = self.private.stat()
+        for unavailable in (False, True):
+
+            def flags(fd: int, *_args: object) -> bytes:
+                info = os.fstat(fd)
+                if (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino):
+                    if unavailable:
+                        raise OSError(errno.ENOENT, "fictional missing lookup evidence")
+                    return struct.pack("=I", 0x40000000)
+                return struct.pack("=I", 0)
+
+            with self.subTest(unavailable=unavailable), assert_descriptor_cleanup(self):
+                with (
+                    patch("hermes_codex_router.mount_lookup._filesystem_type", return_value=0xEF53),
+                    patch("fcntl.ioctl", side_effect=flags),
+                    self.assertRaisesRegex(PrivateMountError, "cannot be pinned") as error,
+                ):
+                    self.check(self.private / "missing" / "key")
+                cause = error.exception.__cause__
+                self.assertIsInstance(cause, MountPinError)
+                self.assertIsInstance(cause.__cause__, LookupEvidenceError)
 
     def test_partial_private_pin_failure_closes_prior_validation_handles(self) -> None:
         (self.private / "file").write_text("fictional material", encoding="utf-8")
