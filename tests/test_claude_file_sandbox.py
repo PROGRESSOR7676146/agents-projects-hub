@@ -121,10 +121,21 @@ class ClaudeFileSandboxTests(unittest.TestCase):
         # project's readonly overlay, even with different pinned descriptors.
         original_mode = stat.S_IMODE(self.project.stat().st_mode)
         self.project.chmod(0o700)
+        borrowed_fd = self.sock.fileno()
+        borrowed_identity = os.fstat(borrowed_fd)
+        opened: list[int] = []
+        pin_open = sandbox_module.MountPins.open
+
+        def track(pins: sandbox_module.MountPins, *args: object, **kwargs: object) -> int:
+            fd = pin_open(pins, *args, **kwargs)  # type: ignore[arg-type]
+            opened.append(fd)
+            return fd
+
         try:
             config = dataclasses.replace(self.config, provider_home=self.project)
             with (
                 patch.object(sandbox_module, "_require_fd_bind_support"),
+                patch.object(sandbox_module.MountPins, "open", track),
                 assert_descriptor_cleanup(self),
                 self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"),
                 config.wrap([str(self.executable)], {}, self.project),
@@ -132,6 +143,15 @@ class ClaudeFileSandboxTests(unittest.TestCase):
                 self.fail("equal project and session-home sources were accepted")
         finally:
             self.project.chmod(original_mode)
+        current = os.fstat(borrowed_fd)
+        self.assertEqual(
+            (current.st_dev, current.st_ino), (borrowed_identity.st_dev, borrowed_identity.st_ino)
+        )
+        self.assertTrue(opened, "refusal must exercise real pin allocation")
+        for descriptor in set(opened):
+            with self.assertRaises(OSError) as error:
+                os.fstat(descriptor)
+            self.assertEqual(error.exception.errno, errno.EBADF)
 
     def test_distinct_home_path_cannot_alias_a_pinned_project_or_git_inode(self) -> None:
         # Model the descriptors of a top-level bind alias: names and mount IDs
