@@ -86,13 +86,13 @@ def assert_descriptor_cleanup(
             and _identity(fd) == preexisting[fd]
         )
 
-    def track_dup2(fd: int, target: int, inheritable: bool = True) -> int:
-        closes_preexisting = fd != target and foreign_close(target)
-        result = original_dup2(fd, target, inheritable=inheritable)
-        if fd == target:
+    def track_dup2(fd: int, fd2: int, inheritable: bool = True) -> int:
+        closes_preexisting = fd != fd2 and foreign_close(fd2)
+        result = original_dup2(fd, fd2, inheritable=inheritable)
+        if fd == fd2:
             return result
         if closes_preexisting:
-            closed_preexisting.add(target)
+            closed_preexisting.add(fd2)
         return record(result)
 
     def track_pipe() -> tuple[int, int]:
@@ -135,11 +135,18 @@ def assert_descriptor_cleanup(
             if identity is not None and identity == _identity(fd)
         }
         unrelated = {fd for fd, identity in tuple(foreign.items()) if identity == _identity(fd)}
-        unattributed = {fd for fd, _ in _snapshot() - before} - remaining - unrelated
+        try:
+            after = _snapshot()
+        except Exception:
+            if primary is None:
+                raise
+            primary.add_note("descriptor snapshot unavailable; cleanup remains caller-owned")
+            after = set()
+        unattributed = {fd for fd, _ in after - before} - remaining - unrelated
         detail = (
             f"tracked calling-thread descriptors remain open: {sorted(remaining)}; "
             f"unattributed new descriptors (ownership unknown): {sorted(unattributed)}"
-            f"; preexisting descriptors closed by calling-thread os.close: {sorted(closed_preexisting)}"
+            f"; preexisting descriptors closed by calling-thread os.close/dup2: {sorted(closed_preexisting)}"
         )
         if primary is not None:
             if remaining or unattributed or closed_preexisting:

@@ -498,7 +498,7 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                         leaked = -1
                         try:
                             expected = (
-                                self.assertRaisesRegex(AssertionError, "calling-thread descriptors")
+                                self.assertRaisesRegex(AssertionError, r"remain open: \[\d+\]")
                                 if inject_leak
                                 else nullcontext()
                             )

@@ -148,6 +148,9 @@ class DescriptorFixtureTests(unittest.TestCase):
             with os.fdopen(old, "rb"):
                 pass
             owned = os.open("/dev/zero", os.O_RDONLY)
+            os.dup2(owned, old)
+            if owned != old:
+                os.close(old)
             os.close(owned)
         with self.assertRaises(OSError):
             os.fstat(owned)
@@ -180,13 +183,12 @@ class DescriptorFixtureTests(unittest.TestCase):
                 with assert_descriptor_cleanup(self, forbid_preexisting_close=True):
                     os.dup2(source, target)
                     os.close(target)
+                    target = -1
             os.fstat(source)
         finally:
             os.close(source)
-            try:
+            if target >= 0:
                 os.close(target)
-            except OSError:
-                pass
 
     def test_dup2_noop_does_not_claim_a_borrowed_descriptor(self) -> None:
         descriptor = os.open("/dev/null", os.O_RDONLY)
@@ -229,3 +231,33 @@ class DescriptorFixtureTests(unittest.TestCase):
         finally:
             if stream is not None:
                 stream.close()
+
+    def test_dup2_accepts_native_keyword_names(self) -> None:
+        with assert_descriptor_cleanup(self):
+            source = os.open("/dev/null", os.O_RDONLY)
+            target = os.open("/dev/zero", os.O_RDONLY)
+            try:
+                self.assertEqual(os.dup2(fd=source, fd2=target), target)
+            finally:
+                os.close(source)
+                os.close(target)
+
+    def test_failed_final_snapshot_does_not_replace_a_primary_failure(self) -> None:
+        primary = RuntimeError("fictional primary")
+        from tests.fd_fixture import _LISTDIR
+
+        calls = 0
+
+        def snapshot(path):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return _LISTDIR(path)
+            raise OSError("fictional snapshot failure")
+
+        with patch("tests.fd_fixture._LISTDIR", side_effect=snapshot):
+            with self.assertRaises(RuntimeError) as raised:
+                with assert_descriptor_cleanup(self):
+                    raise primary
+        self.assertIs(raised.exception, primary)
+        self.assertTrue(any("snapshot unavailable" in note for note in primary.__notes__))
