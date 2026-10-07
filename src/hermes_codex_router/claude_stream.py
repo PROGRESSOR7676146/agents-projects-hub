@@ -310,6 +310,10 @@ def _terminal_failure_code(terminal: dict[str, object], assistant_error: str | N
         return "claude_authentication_failed"
     if type(status) is int and status == 529:
         return "claude_provider_overloaded"
+    if subtype == "success":
+        # The reinterpreted native HTTP failure is proven by the exact status;
+        # assistant text must not turn another 4xx/5xx into quota evidence.
+        return "claude_provider_failure"
     error_codes = {
         "rate_limit": "claude_quota_exhausted",
         "authentication_failed": "claude_authentication_failed",
@@ -402,7 +406,7 @@ def parse_claude_stream(
     )
     if (
         (subtype == "success" and is_error and not native_http_failure)
-        or (subtype == "success" and not is_error and http_error_status)
+        or (subtype == "success" and not is_error and status is not None)
         or (subtype != "success" and not is_error)
     ):
         raise ClaudeStreamError("claude returned a conflicting terminal outcome")

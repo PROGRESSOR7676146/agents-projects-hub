@@ -433,6 +433,12 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
     def test_native_http_error_envelope_is_failed_without_result_replay_or_raw_diagnosis(
         self,
     ) -> None:
+        self.assert_native_http_failure_not_replayed(returncode=1)
+
+    def test_exit_zero_does_not_make_native_http_failure_success_or_replayable(self) -> None:
+        self.assert_native_http_failure_not_replayed(returncode=0)
+
+    def assert_native_http_failure_not_replayed(self, *, returncode: int) -> None:
         job_id = self.enqueue(1)
         calls: list[tuple[str, ...]] = []
 
@@ -451,7 +457,7 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
                 },
             )
             return subprocess.CompletedProcess(
-                argv, 1, "\n".join(map(json.dumps, events)), "private stderr"
+                argv, returncode, "\n".join(map(json.dumps, events)), "private stderr"
             )
 
         worker = self.worker(cast(Any, ExternalCliAdapter("claude", run=fake_run)))
@@ -471,6 +477,38 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
         self.assertNotIn("private native error detail", notice.telegram_html)
         self.assertNotIn("private stderr", notice.telegram_html)
         self.assertNotIn("private", job.error_detail or "")
+
+    def test_non_error_success_with_malformed_status_retains_blocker_without_replay(self) -> None:
+        job_id = self.enqueue(1)
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            terminal = {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "session_id": argv[argv.index("--session-id") + 1],
+                "api_error_status": "529",
+                "result": "unproven answer",
+            }
+            return subprocess.CompletedProcess(argv, 0, json.dumps(terminal), "")
+
+        worker = self.worker(cast(Any, ExternalCliAdapter("claude", run=fake_run)))
+        with patch.dict(
+            "os.environ",
+            {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+            clear=True,
+        ):
+            self.assertTrue(worker.run_cycle())
+            self.assertFalse(worker.run_cycle())
+        job = worker.state.get_provider_job(job_id)
+        self.assertEqual(job.status, "indeterminate")
+        self.assert_no_result(worker.state, job_id)
+        self.assertEqual(len(calls), 1)
+        self.assertIsNotNone(
+            persistent_root_blocker(worker.state._connection, topic_id=job.topic_id)
+        )
 
     def test_terminal_failure_with_wrong_uuid_retains_uncertainty(self) -> None:
         job_id = self.enqueue(1)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import socket
 import stat
 import tempfile
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from hermes_codex_router import claude_native_settings, claude_stream
-from tests.claude_native_transport_actor import CASES, FAILURE_CATEGORIES, STAGES
+from tests.claude_native_transport_actor import CASES, FAILURE_CATEGORIES, MODEL, STAGES
 from tests.native_process_capture import NativeCaptureError, capture_owned_process
 from tests.native_runtime_mounts import native_runtime_mounts
 
@@ -23,6 +24,10 @@ class NativeTransportFixtureError(RuntimeError):
 
 def _copy_native_binary(source: Path, destination: Path) -> str:
     source = source.resolve(strict=True)
+    # Refuse special files before open: even a nonblocking device read may have
+    # side effects. Descriptor and named-file checks still own the copy race.
+    if not stat.S_ISREG(source.stat().st_mode):
+        raise NativeTransportFixtureError("explicit_standalone_native_binary_required")
     descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     try:
         before = os.fstat(descriptor)
@@ -58,6 +63,51 @@ def _copy_native_binary(source: Path, destination: Path) -> str:
         os.close(descriptor)
 
 
+def build_native_fixture_argv(cwd: Path) -> tuple[str, ...]:
+    from hermes_codex_router.external_runtime import ExternalCliAdapter
+
+    argv = list(
+        ExternalCliAdapter("claude", executable="/opt/example/claude").build_argv(
+            cwd=cwd, prompt="Return example-native-ok.", model=MODEL, effort="high"
+        )
+    )
+    settings_index = argv.index("--settings") + 1
+    settings = json.loads(argv[settings_index])
+    # Explicit fixture-only bounds. These are not production retry or billing
+    # guarantees; every production text-only flag/settings value is inherited.
+    settings.update(switchModelsOnFlag=False, fallbackModel=[])
+    argv[settings_index] = json.dumps(settings, separators=(",", ":"))
+    separator = argv.index("--")
+    argv[separator:separator] = [
+        "--no-session-persistence",
+        "--mcp-config",
+        '{"mcpServers":{}}',
+        "--setting-sources",
+        "",
+        "--max-turns",
+        "1",
+        "--system-prompt",
+        "Return the fixture marker.",
+    ]
+    return tuple(argv)
+
+
+def validate_native_identity(
+    digest: str, version: object, expected_sha256: str | None, expected_version: str | None
+) -> None:
+    if (
+        not re.fullmatch(r"[0-9a-f]{64}", digest)
+        or not isinstance(version, str)
+        or len(version) > 64
+        or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+ \(Claude Code\)", version)
+    ):
+        raise NativeTransportFixtureError("native_identity_shape_invalid")
+    if (expected_sha256 is not None and digest != expected_sha256) or (
+        expected_version is not None and version != expected_version
+    ):
+        raise NativeTransportFixtureError("native_identity_mismatch")
+
+
 def validate_transport_evidence(report: object, case: str) -> dict[str, Any]:
     if case not in CASES or not isinstance(report, dict):
         raise NativeTransportFixtureError("native_evidence_shape_invalid")
@@ -88,13 +138,29 @@ def validate_transport_evidence(report: object, case: str) -> dict[str, Any]:
         type(report.get(key)) is not bool for key in ("terminal_success", "terminal_failure")
     ):
         raise NativeTransportFixtureError("native_terminal_shape_invalid")
+    shape = report.get("terminal_shape")
+    if (
+        not isinstance(shape, dict)
+        or shape.get("subtype") != "success"
+        or shape.get("error_is_boolean") is not True
+        or shape.get("result_is_text") is not True
+        or shape.get("is_error") is not rejected
+        or shape.get("assistant_error_present") is not rejected
+        or type(report.get("visible_messages")) is not int
+        or report["visible_messages"] != (0 if rejected else 1)
+        or (
+            rejected
+            and (type(shape.get("api_error_status")) is not int or shape["api_error_status"] != 529)
+        )
+        or (not rejected and shape.get("api_error_status") is not None)
+    ):
+        raise NativeTransportFixtureError("native_terminal_shape_unproven")
     if rejected:
         valid = (
             report["exit_code"] != 0
             and report["terminal_failure"]
             and not report["terminal_success"]
-            and report.get("failure_code")
-            in {"claude_provider_overloaded", "claude_provider_failure"}
+            and report.get("failure_code") == "claude_provider_overloaded"
         )
     else:
         valid = (
@@ -108,7 +174,13 @@ def validate_transport_evidence(report: object, case: str) -> dict[str, Any]:
     return report
 
 
-def run_native_transport_case(executable: Path, case: str) -> dict[str, Any]:
+def run_native_transport_case(
+    executable: Path,
+    case: str,
+    *,
+    expected_sha256: str | None = None,
+    expected_version: str | None = None,
+) -> dict[str, Any]:
     if case not in CASES:
         raise NativeTransportFixtureError("native_case_invalid")
     bwrap = Path("/usr/bin/bwrap")
@@ -118,6 +190,8 @@ def run_native_transport_case(executable: Path, case: str) -> dict[str, Any]:
         base = Path(directory)
         binary = base / "example-claude"
         digest = _copy_native_binary(executable, binary)
+        if expected_sha256 is not None and digest != expected_sha256:
+            raise NativeTransportFixtureError("native_identity_mismatch")
         sentinel = base / "fictional-authority"
         sentinel.write_text("example-only", encoding="utf-8")
         sentinel.chmod(0o600)
@@ -200,6 +274,7 @@ def run_native_transport_case(executable: Path, case: str) -> dict[str, Any]:
                 str(port),
                 str(sentinel),
                 case,
+                json.dumps(build_native_fixture_argv(base)),
             ]
             try:
                 code, output = capture_owned_process(
@@ -234,5 +309,8 @@ def run_native_transport_case(executable: Path, case: str) -> dict[str, Any]:
             except (ValueError, RecursionError) as error:
                 raise NativeTransportFixtureError("native_evidence_shape_invalid") from error
             validated = validate_transport_evidence(report, case)
+            validate_native_identity(
+                digest, validated.get("native_version"), expected_sha256, expected_version
+            )
             validated["native_binary_sha256"] = digest
             return validated

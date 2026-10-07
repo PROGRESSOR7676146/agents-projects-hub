@@ -123,9 +123,12 @@ class FixtureServer(ThreadingHTTPServer):
         self.requests = self.heads = self.posts = self.connections = self.violations = 0
         self.messages_served = self.timeouts = 0
         self.case = case
-        super().__init__(("127.0.0.1", 0), Handler)
-        if self.server_port == host_port:
+        for _attempt in range(4):
+            super().__init__(("127.0.0.1", 0), Handler)
+            if self.server_port != host_port:
+                break
             self.server_close()
+        else:
             raise RuntimeError("fixture_port_collision")
 
     def get_request(self) -> tuple[socket.socket, tuple[str, int]]:
@@ -293,21 +296,80 @@ class Handler(BaseHTTPRequestHandler):
             self.fixture.messages_served += 1
 
 
+def update_terminal_shape(raw: bytes, shape: dict[str, object]) -> None:
+    """Retain only bounded diagnostic enums, booleans and exact status codes."""
+    text = raw.decode("utf-8").strip()
+    event = json.loads(text) if text else {}
+    if not isinstance(event, dict):
+        return
+    if event.get("type") == "assistant":
+        error = event.get("error")
+        shape["assistant_error_present"] = error is not None
+        shape["latest_assistant_error"] = (
+            None
+            if error is None
+            else error
+            if isinstance(error, str)
+            and error
+            in {
+                "overloaded",
+                "unknown",
+                "rate_limit",
+                "authentication_failed",
+                "billing_error",
+                "model_not_found",
+            }
+            else "other"
+        )
+    if event.get("type") == "result":
+        subtype = event.get("subtype")
+        shape["subtype"] = (
+            subtype
+            if isinstance(subtype, str)
+            and subtype
+            in {
+                "success",
+                "error_during_execution",
+                "error_max_turns",
+                "error_max_budget_usd",
+                "error_max_structured_output_retries",
+            }
+            else "other"
+        )
+        shape["is_error"] = event.get("is_error") is True
+        shape["error_is_boolean"] = type(event.get("is_error")) is bool
+        status = event.get("api_error_status")
+        shape["api_error_status"] = (
+            None
+            if status is None
+            else status
+            if type(status) is int and status in {401, 429, 529}
+            else "other"
+        )
+        shape["errors_is_list"] = isinstance(event.get("errors"), list)
+        shape["result_is_text"] = isinstance(event.get("result"), str)
+
+
 def main() -> None:
-    from hermes_codex_router.claude_native_settings import text_only_settings
     from hermes_codex_router.claude_stream import (
         MAX_CLAUDE_OUTPUT_BYTES,
         MAX_CLAUDE_STDERR_BYTES,
         ClaudeStreamError,
         ClaudeStreamReader,
         ClaudeTerminalFailure,
+        ClaudeVisibleAssistant,
         parse_claude_stream,
     )
     from tests.native_process_capture import NativeCaptureError, capture_owned_process
 
     global stage, policy_shape, transport_counts
+    if sys.version_info < (3, 11):
+        raise NativeCaptureError("native_fixture_runtime_unsupported")
     stage = "isolation"
     host_port, sentinel, case = int(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+    argv = json.loads(sys.argv[4])
+    if not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv):
+        raise NativeCaptureError("fixture_argv_invalid")
     if case not in CASES:
         raise NativeCaptureError("fixture_case_invalid")
     host_hidden = not sentinel.exists()
@@ -353,44 +415,12 @@ def main() -> None:
             stderr_limit=4096,
         )
         version_text = version.decode("ascii").strip()
-        if code != 0 or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+ \(Claude Code\)", version_text):
+        if (
+            code != 0
+            or len(version_text) > 64
+            or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+ \(Claude Code\)", version_text)
+        ):
             raise NativeCaptureError("native_fixture_version_invalid")
-        settings = json.loads(text_only_settings())
-        settings.update(switchModelsOnFlag=False, fallbackModel=[])
-        argv = [
-            "/opt/example/claude",
-            "--restricted",
-            "--safe-mode",
-            "--print",
-            "--verbose",
-            "--output-format",
-            "stream-json",
-            "--model",
-            MODEL,
-            "--effort",
-            "high",
-            "--permission-mode",
-            "dontAsk",
-            "--permission-prompts",
-            "none",
-            "--disable-slash-commands",
-            "--no-session-persistence",
-            "--strict-mcp-config",
-            "--mcp-config",
-            '{"mcpServers":{}}',
-            "--setting-sources",
-            "",
-            "--settings",
-            json.dumps(settings, separators=(",", ":")),
-            "--max-turns",
-            "1",
-            "--system-prompt",
-            "Return the fixture marker.",
-            "--tools",
-            "",
-            "--",
-            "Return example-native-ok.",
-        ]
         stage = "native_stream"
 
         class DiagnosticReader(ClaudeStreamReader):
@@ -404,46 +434,16 @@ def main() -> None:
                         policy_shape = rejected_policy_shape(raw)
                         raise NativeCaptureError(stream_policy_category(raw)) from error
                     raise
-                event = json.loads(raw) if raw.strip() else {}
-                if event.get("type") == "assistant":
-                    terminal_shape["latest_assistant_error"] = (
-                        event.get("error")
-                        if event.get("error")
-                        in {
-                            None,
-                            "overloaded",
-                            "unknown",
-                            "rate_limit",
-                            "authentication_failed",
-                            "billing_error",
-                            "model_not_found",
-                        }
-                        else "other"
-                    )
-                if event.get("type") == "result":
-                    subtype = event.get("subtype")
-                    terminal_shape["subtype"] = (
-                        subtype
-                        if subtype
-                        in {
-                            "success",
-                            "error_during_execution",
-                            "error_max_turns",
-                            "error_max_budget_usd",
-                            "error_max_structured_output_retries",
-                        }
-                        else "other"
-                    )
-                    terminal_shape["is_error"] = event.get("is_error") is True
-                    terminal_shape["error_is_boolean"] = type(event.get("is_error")) is bool
-                    status = event.get("api_error_status")
-                    terminal_shape["api_error_status"] = (
-                        status if type(status) is int and status in {401, 429, 529} else None
-                    )
-                    terminal_shape["errors_is_list"] = isinstance(event.get("errors"), list)
-                    terminal_shape["result_is_text"] = isinstance(event.get("result"), str)
+                update_terminal_shape(raw, terminal_shape)
 
-        reader = DiagnosticReader()
+        visible_messages = 0
+
+        def count_visible(_message: ClaudeVisibleAssistant) -> None:
+            nonlocal visible_messages
+            visible_messages += 1
+
+        terminal_shape["assistant_error_present"] = False
+        reader = DiagnosticReader(on_visible_assistant=count_visible)
         code, _ = capture_owned_process(
             argv,
             environment,
@@ -463,6 +463,9 @@ def main() -> None:
         report = {
             "case": case,
             "native_version": version_text,
+            "terminal_shape": dict(terminal_shape),
+            "visible_messages": visible_messages,
+            "parser_python_version": list(sys.version_info[:2]),
             "host_files_hidden": host_hidden,
             "host_loopback_blocked": host_blocked,
             "ports_distinct": server.server_port != host_port,

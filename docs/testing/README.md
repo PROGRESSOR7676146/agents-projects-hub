@@ -274,18 +274,33 @@ stream parser. Host HOME, project, credentials and service endpoints are absent.
 
 ```bash
 HUB_NATIVE_CLAUDE_FIXTURE_EXECUTABLE=/home/example/tools/claude-native \
+  HUB_NATIVE_CLAUDE_FIXTURE_SHA256='<locally-verified-sha256>' \
+  HUB_NATIVE_CLAUDE_FIXTURE_VERSION='2.1.285 (Claude Code)' \
   HUB_REQUIRE_NATIVE_CLAUDE_TRANSPORT_TESTS=1 \
   PYTHONPATH=src:. python -m unittest -v tests.test_claude_native_transport
 ```
 
-The bearer/API-key × SSE-success/HTTP-529 matrix uses identical restricted
-text-only flags, without bare mode. The fixture requires the chosen model/effort,
+The bearer/API-key × SSE-success/HTTP-529 matrix derives its base argv from the
+production text-only builder, without bare mode. A canonical regression checks
+every production argument and setting. Fixture-only additions empty setting
+sources/MCP, disable session persistence and model switching/fallback, limit the
+turn to one, and replace the system prompt. Fixture-only environment settings
+suppress retries and limit output tokens. Restricted mode already loads only
+managed and explicit settings according to the CLI contract; the extra empty
+source flag is a fixture bound. Production retry/fallback behavior is not proven
+by this corpus. The fixture requires the chosen model/effort,
 empty tools, 1,024 output tokens, exactly one served Messages POST, at most one
 optional HEAD and no unknown requests, empty connections, timeouts or retry POST.
 Host-side file reads and an actual loopback exchange establish positive controls;
 the namespace actor must prove both targets unreachable. Native stdout is bounded
 and passed through the real stream reader/parser; evidence contains only fixed
-categories, booleans and counts. FIFO sources refuse with nonblocking open;
+categories, booleans and counts, plus validated CLI version, copied binary SHA256
+and parser Python version. Required native runs pin the expected digest and
+version from private locally verified evidence; never put real binary identities
+in Git. Success requires exactly one visible message; HTTP 529 requires the native
+`success`/`is_error:true`/exact-529/string-result envelope, an overloaded failure,
+and zero visible assistant error messages. The actor requires Python 3.11 or later.
+Special-file sources refuse before open and regular files use nonblocking open;
 timeout, output-bound, callback failure and parent-exits-first regressions check
 owned group termination before leader reaping and pipe cleanup.
 
