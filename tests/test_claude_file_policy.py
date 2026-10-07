@@ -23,7 +23,16 @@ class FilePolicyTests(unittest.TestCase):
         settings = json.loads(file_tool_settings(Path("/opt/example-runtime/bin/python")))
         self.assertEqual(set(settings["hooks"]), {"PermissionRequest"})
         self.assertEqual(settings["permissions"]["allow"], [])
-        self.assertTrue(all(value is False for value in settings["enabledPlugins"].values()))
+        self.assertEqual(
+            settings["enabledPlugins"],
+            {
+                "cc-plugin-agents-md@builtin": False,
+                "cc-plugin-diff@builtin": False,
+                "cc-plugin-plugin-authoring@builtin": False,
+                "cc-plugin-telemetry@builtin": False,
+            },
+        )
+        self.assertNotIn("cc-plugin-sec-default@builtin", settings["enabledPlugins"])
         self.assertIn(" -I -m hermes_codex_router.claude_permission_hook", str(settings))
 
     def test_native_file_events_do_not_forward_tool_results_or_reasoning(self) -> None:

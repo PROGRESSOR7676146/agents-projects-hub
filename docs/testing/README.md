@@ -264,6 +264,55 @@ profile support in Hub nor establishes deployed custody or Telegram acceptance.
 The required CI namespace job also runs the outer wrapper witness without a
 Codex binary, proving absent source aliases and unwritable mounted scripts.
 
+## Optional offline native Claude transport
+
+`tests.test_claude_native_transport` uses an explicitly supplied standalone ELF
+Claude executable against a fictional HTTP endpoint inside a disposable empty-root
+network/PID/IPC namespace. It copies the bounded binary and supplies only readonly
+system runtime, the fixture actor, shared native settings and the production
+stream parser. Host HOME, project, credentials and service endpoints are absent.
+
+```bash
+HUB_NATIVE_CLAUDE_FIXTURE_EXECUTABLE=/home/example/tools/claude-native \
+  HUB_REQUIRE_NATIVE_CLAUDE_TRANSPORT_TESTS=1 \
+  PYTHONPATH=src:. python -m unittest -v tests.test_claude_native_transport
+```
+
+The bearer/API-key × SSE-success/HTTP-529 matrix uses identical restricted
+text-only flags, without bare mode. The fixture requires the chosen model/effort,
+empty tools, 1,024 output tokens, exactly one served Messages POST, at most one
+optional HEAD and no unknown requests, empty connections, timeouts or retry POST.
+Host-side file reads and an actual loopback exchange establish positive controls;
+the namespace actor must prove both targets unreachable. Native stdout is bounded
+and passed through the real stream reader/parser; evidence contains only fixed
+categories, booleans and counts. FIFO sources refuse with nonblocking open;
+timeout, output-bound, callback failure and parent-exits-first regressions check
+owned group termination before leader reaping and pipe cleanup.
+
+The corpus was rehearsed with CLI 2.1.285. It discovered that built-in mods are
+independent of safe mode; shared settings now disable the four known optional
+mods through documented `enabledPlugins`. The mandatory policy security mod is
+not disabled, and unknown/enabled plugin metadata still fails the strict guard.
+Disabling participation does not prove that the binary never imports/registers
+bundled modules. The native success result variant may also carry `is_error:true`:
+an exact integer 4xx/5xx status and string result prove only a terminated failed
+turn. Missing/malformed status/result, conflicting success, duplicate terminal,
+session drift and trailing events stay ambiguous. HTTP 529 is classified from
+that exact native status, without reading diagnostic text.
+
+No executable is downloaded or bundled. Without explicit opt-in, native cases
+skip; requiring them makes absence fail. Once opted in, namespace, protocol and
+compatibility failures fail without fallback. Ordinary canonical tests exercise
+the fixture evidence and failure cleanup without launching Claude. A fictional
+API-key path is compatibility evidence, not a paid-route authorization. No
+real account, CPA upstream, subscription billing, live provider inference,
+installed service, Telegram or human approval is exercised. Native file-tool
+permissions, saved-session/local transfer and productive custody remain separate.
+
+Primary references: [built-in mods](https://code.claude.com/docs/en/plugins/mods/overview#mods-built-into-claude-code),
+[plugin settings](https://code.claude.com/docs/en/settings-reference#enabledplugins)
+and [SDK result message](https://code.claude.com/docs/en/agent-sdk/typescript#sdkresultmessage).
+
 ## Live acceptance boundary
 
 The reusable validation workflow also runs a required Ubuntu 24.04 namespace

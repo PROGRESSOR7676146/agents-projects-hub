@@ -85,64 +85,60 @@ advisor, acceptance journal or accounting claim.
 
 ## Advisor foundations integration candidate
 
-Current state: local integration in lane `feat/advisor-foundations-integration`,
+Current state: published in lane `feat/advisor-foundations-integration`,
 base `dcc6507`, preserving the namespace/capsule histories at `fcc755f` and
-`cd8b604`. Source owner: Hub maintainer, sole integration writer. The neutral
-core carries the newer private-alias/parser/runtime protections for every access
-profile; private validation descriptors never join inherited launch pins.
-Socket hardlinks refuse, an empty mount-source label is supported with exact
-tail cardinality, and missing-anchor metadata failures preserve typed refusal.
-The scripted private-alias corpus also runs directly through the readonly core.
-The real bind fixture exercises the private guard; it is not an additional
-kernel witness of the complete core launch.
+`cd8b604`. Source owner: Hub maintainer, sole integration writer. Clean candidate
+`1c70d5639b59cfa97829bb56deaf3f95f577cb42` passed the commit and canonical
+publication gates (2,149 tests in 195 modules, zero typing errors, static and
+privacy/history checks), independent exact-head Astra and Claude Opus reviews,
+and all seven hosted checks including Python 3.11/3.12/3.13 and strict namespaces.
+The strict affected corpus passed 123 tests with no namespace skips; its sole
+skip was Python 3.11's absent memfd wrapper. The later Python 3.12 affected
+subset passed 33 tests.
 
-Last verified clean integration: `67f015f82ab2e64edd97d83773c2cdc979c5549b`,
-with the commit profile passing 2147 tests in 195 modules plus static and
-privacy/history checks. That profile excludes typing; the test-only follow-up
-also passed Pyright with zero errors. Canonical publication and the hosted
-Python 3.11/3.12/3.13 matrix for this integration lane remain pending. Earlier focused strict evidence covers 94
-core/facade/parser/workflow checks and 40 capsule/permission/namespace checks
-without optional namespace skips. Its independent architecture review found a
-material-name alias gap and an unsupported-filesystem fixture using the wrong
-failure path. The committed follow-up checks exact kernel descriptor names before
-reads and after pin rechecks, and targets the actual mount-table reader. Three new
-regression tests failed first, then all 12 capsule/namespace tests passed strictly.
-The source-review follow-up also refuses material roots with a `.git`-named component,
-checks the encoded size before memfd creation and verifies the final source-pin
-recheck independently of file timestamps. Descriptor assertions never close
-test resources; calling-thread tracking supports leak assertions while unknown
-snapshot changes are diagnostics, with explicit memfd-close checks at its
-allocation boundary. The final focused strict set passed 104 tests without
-namespace skips. The casefold regression is scripted, not a real casefold
-filesystem witness. A subsequent actual Claude Opus review identified that cold
-casefold lookups can preserve requested dentry spelling; Astra confirmed this
-from public kernel source and withdrew the earlier closure. Publication remains
-pending while the committed follow-up establishes explicit filesystem semantics
-in the shared pin owner, rather than approximating Unicode normalization.
-All parents and terminal directories, including final recheck walks, must provide
-supported case-sensitive evidence. Unknown/overlay ancestors, unreadable
-directories, unavailable flag queries and unsupported ABI refuse conservatively;
-ordinary Unicode names remain supported. See ADRs 0056 and 0057 for the precise
-boundary and availability limits. The expanded strict focused gate passed 123
-tests with no namespace skips; the sole skip was the Python 3.11 build's absent
-memfd wrapper. A Python 3.12 subset passed 60 tests, including the real Python
-memfd tracker and two later ABI/native-inspection refusal tests; the later affected
-33-test subset also passed. Fresh full-gate
-evidence is still required. These are scripted metadata tests,
-not a real casefold or XFS acceptance result. Bare/separate Git directories remain
-the trusted caller's material-authorization responsibility. The runtime Opus
-review found no blockers and two low-priority hardening/evidence findings; the
-working follow-up uses refusing ioctl sentinels and targets capsule refusals by
-inode, with an unrelated-inode positive control. The test-only review's broad
-assertion catch and evidence-wording lows are also addressed in that follow-up.
-Canonical publication, exact final-revision independent security review and
-hosted gates remain pending. Next trigger: those combined gates, then establish
-native compatibility with an isolated fake inference endpoint before implementing
-the authorized-material/workflow binding and bounded inference transport.
+The neutral core carries the private-alias/parser/runtime protections for every
+access profile; private validation descriptors never join inherited launch pins.
+Independent review found that cold casefold lookups can preserve requested
+spelling. The corrected shared pin owner therefore requires supported
+case-sensitive filesystem evidence at every parent and terminal directory,
+including final walks. Unknown/overlay ancestors, unreadable directories,
+unavailable metadata and unsupported ABI refuse. Refusing ioctl sentinels reject
+success without written evidence; exact inode-targeted capsule regressions and
+FD allocation tracking preserve cleanup evidence without closing tested resources.
+These are kernel-isolation and scripted metadata tests, not a real casefold/cache
+or XFS acceptance witness. Bare/separate Git directories remain the trusted
+caller's material-authorization responsibility. See ADRs 0056 and 0057.
+
+Next trigger: native compatibility with an isolated fake inference endpoint,
+then the authorized-material/workflow binding and bounded inference transport.
 Closure remains open: these primitives enable no productive advisor, role
-handover, owner assessment or installed custody. Private networking still blocks
-the existing loopback route. Inspect tracked, staged and untracked lane state
-before any post-merge cleanup.
+handover, owner assessment or installed custody. Private networking blocks the
+existing loopback route. Owner main merge and deployment remain separate.
+Inspect tracked, staged and untracked lane state before any post-merge cleanup.
+
+## Offline native Claude transport follow-up
+
+Current state: implementation and publication/review gates in progress in lane
+`test/claude-native-transport-corpus`, based on clean `1c70d56`. Source owner:
+Hub maintainer. The optional corpus uses an explicitly supplied native CLI with
+synthetic credentials and an HTTP fixture inside private network/PID/IPC
+namespaces; host files and loopback have positive and negative controls.
+
+The four bearer/API-key × SSE-success/HTTP-529 cases exposed two compatibility
+fixes: safe mode leaves optional built-in mods enabled, so both settings builders
+now explicitly disable the known optional IDs; native API rejection uses the
+success result variant with an error flag and explicit HTTP status. The strict
+plugin guard remains unchanged, required security policy mods remain untouched,
+and incomplete/contradictory HTTP-error evidence remains indeterminate. Verified
+rejection does not establish an absence of earlier effects or authorize replay.
+The process fixture additionally kills its owned group before reaping an exited
+leader, and refuses FIFO executable sources without blocking.
+
+Next trigger: finish exact-revision native/focused checks, independent Astra and
+actual Claude Opus review, canonical publication and hosted checks. The
+[testing guide](../testing/README.md#optional-offline-native-claude-transport)
+owns the procedure and evidence limits. This does not close subscription routing,
+CPA/no-paid-fallback, human file approvals, local transfer or Telegram acceptance.
 
 ## Planned final-response mode indicators
 

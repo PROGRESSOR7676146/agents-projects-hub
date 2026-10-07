@@ -430,6 +430,48 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
         self.assertFalse(worker.run_cycle())
         self.assertEqual(len(adapter.calls), 1)
 
+    def test_native_http_error_envelope_is_failed_without_result_replay_or_raw_diagnosis(
+        self,
+    ) -> None:
+        job_id = self.enqueue(1)
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            native = argv[argv.index("--session-id") + 1]
+            events = (
+                {"type": "assistant", "session_id": native, "error": "example_unrecognized"},
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": True,
+                    "session_id": native,
+                    "api_error_status": 529,
+                    "result": "private native error detail",
+                },
+            )
+            return subprocess.CompletedProcess(
+                argv, 1, "\n".join(map(json.dumps, events)), "private stderr"
+            )
+
+        worker = self.worker(cast(Any, ExternalCliAdapter("claude", run=fake_run)))
+        with patch.dict(
+            "os.environ",
+            {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+            clear=True,
+        ):
+            self.assertTrue(worker.run_cycle())
+            self.assertFalse(worker.run_cycle())
+        job = worker.state.get_provider_job(job_id)
+        self.assertEqual((job.status, job.error_code), ("failed", "claude_provider_overloaded"))
+        self.assert_no_result(worker.state, job_id)
+        self.assertEqual(len(calls), 1)
+        self.assertIsNone(persistent_root_blocker(worker.state._connection, topic_id=job.topic_id))
+        notice = worker.state.get_telegram_outbox_for_job(job_id)
+        self.assertNotIn("private native error detail", notice.telegram_html)
+        self.assertNotIn("private stderr", notice.telegram_html)
+        self.assertNotIn("private", job.error_detail or "")
+
     def test_terminal_failure_with_wrong_uuid_retains_uncertainty(self) -> None:
         job_id = self.enqueue(1)
         adapter = ObservingClaudeAdapter(self.path, outcome="mismatched_failure")

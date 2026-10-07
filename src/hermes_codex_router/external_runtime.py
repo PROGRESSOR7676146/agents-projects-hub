@@ -22,6 +22,7 @@ from .claude_cli_capabilities import (
 )
 from .claude_file_policy import file_tool_argv, require_file_tool_event, wrap_file_tool_argv
 from .claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
+from .claude_native_settings import text_only_settings
 from .claude_stream import (
     MAX_CLAUDE_STDERR_BYTES,
     ClaudeStreamError,
@@ -263,7 +264,7 @@ class ExternalCliAdapter:
                 "--restricted",
                 "--safe-mode",
                 "--settings",
-                '{"disableAllHooks":true}',
+                text_only_settings(),
                 "--strict-mcp-config",
                 "--disable-slash-commands",
                 "--permission-mode",
