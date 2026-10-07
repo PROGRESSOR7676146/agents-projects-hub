@@ -62,9 +62,12 @@ alone closes neither the repeated notification incident nor payload recovery.
 ## Read-only outcome projection candidate
 
 Current state: bounded offline implementation in lane
-`feat/outcome-journal-projection`, based on source `c69209b` after its full commit
-gate (2,062 tests in 188 modules); exact-head canonical publication and
-independent review are pending. The
+`feat/outcome-journal-projection`, based on source `93577e5`. Clean candidate
+`11647709fbe337fcf3b5a1738e856bdd10c7030b` passed canonical publication
+(2,084 tests in 189 modules, zero typing errors and privacy/history gates)
+and independent Astra and Claude Opus source reviews. The Opus review identified
+a Python-version-dependent test expectation; the test/documentation follow-up
+and its exact-revision publication checks remain pending. The
 [local diagnostic](OUTCOME_JOURNAL.md) projects one saved job without a migration,
 provider invocation or new writer/decision authority. Requested/stored/observed
 model provenance, result/delivery, direct lineage and source-bound time intervals

@@ -470,10 +470,37 @@ class OutcomeJournalTests(unittest.TestCase):
         ):
             code = main(["outcome-journal", "example-config.json", "example-job"])
         self.assertEqual(code, 2)
-        self.assertEqual(
+        self.assertIn(
             json.loads(output.getvalue()),
-            {"ok": False, "error": "outcome_projection_unavailable"},
+            (
+                {"ok": False, "error": "outcome_projection_unavailable"},
+                {"ok": False, "error": "state_unavailable"},
+            ),
         )
+        self.assertNotIn(str(loop), output.getvalue())
+        self.assertNotIn(loop.name, output.getvalue())
+
+    def test_cli_state_path_errors_are_sanitized_across_python_versions(self) -> None:
+        from types import SimpleNamespace
+
+        for kind, expected in (
+            (RuntimeError, "outcome_projection_unavailable"),
+            (OSError, "state_unavailable"),
+        ):
+            with self.subTest(kind=kind):
+                output = io.StringIO()
+                with (
+                    patch(
+                        "hermes_codex_router.outcome_cli.load_external_worker_config",
+                        return_value=SimpleNamespace(state_path=self.path),
+                    ),
+                    patch.object(Path, "resolve", side_effect=kind(self.poison)),
+                    redirect_stdout(output),
+                ):
+                    code = main(["outcome-journal", "example-config.json", "example-job"])
+                self.assertEqual(code, 2)
+                self.assertEqual(json.loads(output.getvalue()), {"ok": False, "error": expected})
+                self.assertNotIn(self.poison, output.getvalue())
 
     def test_cli_failed_output_never_attempts_a_second_error_write(self) -> None:
         from types import SimpleNamespace
