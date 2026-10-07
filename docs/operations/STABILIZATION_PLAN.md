@@ -122,7 +122,8 @@ Current state: published source candidate `535c0b8` in lane
 `test/claude-native-transport-corpus`, based on clean `1c70d56`; canonical
 publication passed with 2,175 tests and Pyright 0. Exact-candidate Claude Opus
 review has no remaining mandatory findings; Astra reviewed the production
-follow-up. Hosted checks remain a separate gate. Source owner: Hub maintainer.
+follow-up. All seven hosted checks passed at exact head `535c0b8`, including the
+Python 3.11/3.12/3.13 matrix and namespaces. Source owner: Hub maintainer.
 The optional corpus uses an explicitly supplied native CLI with
 synthetic credentials and an HTTP fixture inside private network/PID/IPC
 namespaces; host files and loopback have positive and negative controls.
@@ -150,17 +151,27 @@ CPA/no-paid-fallback, human file approvals, local transfer or Telegram acceptanc
 
 ## Bounded review pipe primitives
 
-Current state: offline implementation in progress in lane
-`feat/advisor-inference-bridge`; last verified source baseline `535c0b8`.
-Source owner: Hub maintainer. The byte codec and host-created one-use fake
-attempt gate have focused coverage; publication and final independent review
-remain pending. Early Astra review identified capsule-type and preparse UUID
-bounds, both addressed with negative regressions. See
+Current state: clean offline candidate `dd43ae6` in lane
+`feat/advisor-inference-bridge`, based on `535c0b8`. Source owner: Hub maintainer.
+The mandatory commit and canonical publication gates passed 2,204 tests in 198
+modules with zero typing errors and privacy/history checks. Exact-candidate
+Astra and Claude Opus reviews have no remaining mandatory findings; hosted
+checks remain a separate gate. Early capsule-type/UUID
+findings and Opus's exception-chain/request-byte findings are fixed with
+negative regressions. See
 [ADR 0058](../decisions/0058-bounded-review-pipe-primitives.md) for the selected
 ownership and evidence boundary.
 
-Next trigger: complete exact-revision gates/reviews, then explicit directional
-sequencing and bounded response pumping before the namespace supervisor witness.
+The next bounded offline candidate in lane `feat/advisor-pipe-sequencing` adds
+directional wire ordering and finite partial-write accounting on `dd43ae6`.
+It keeps distinct request observation, callback consumption, buffered bytes,
+caller-reported writes and native completion. Graceful wire cancellation drains
+and discards in-flight stdout; buffer abort instead requires channel closure if
+a frame was partially sent. It introduces no physical I/O or runtime enabling
+switch. Source owner: Hub maintainer; publication and independent review pending.
+
+Next trigger: exact-revision gates/reviews, then owned nonblocking I/O and the
+namespace supervisor witness with a fake endpoint before productive wiring.
 Closure remains open: no productive advisor, real upstream, durable role/material
 authorization, native body validator, worker wiring, deployment or live acceptance
 is enabled. The original project, host authority sockets and credentials remain
