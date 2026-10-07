@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import errno
 import os
 import re
 import shutil
@@ -142,6 +143,26 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
         with patch.object(sandbox, "_require_fd_bind_support"):
             return (config or self.config).wrap([str(self.executable)], {}, self.project)
 
+    @contextmanager
+    def assert_opened_descriptors_closed(self) -> Iterator[None]:
+        # Shared-process discovery may collect unrelated connections during the
+        # launch. Check the descriptors opened by this operation, not FD totals.
+        opened: set[int] = set()
+        actual_open = os.open
+
+        def track(*args: object, **kwargs: object) -> int:
+            descriptor = actual_open(*args, **kwargs)  # type: ignore[arg-type]
+            opened.add(descriptor)
+            return descriptor
+
+        with patch("os.open", side_effect=track):
+            yield
+        self.assertTrue(opened)
+        for descriptor in opened:
+            with self.subTest(descriptor=descriptor), self.assertRaises(OSError) as error:
+                os.fstat(descriptor)
+            self.assertEqual(error.exception.errno, errno.EBADF)
+
     def test_project_root_ancestor_and_subtree_private_aliases_are_refused(self) -> None:
         for destination, origin in (
             (self.project, self.private),
@@ -150,14 +171,12 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
             (self.project, self.private.parent),
         ):
             with self.subTest(destination=destination, origin=origin):
-                before = len(os.listdir("/proc/self/fd"))
-                with self.alias(destination, origin):
+                with self.assert_opened_descriptors_closed(), self.alias(destination, origin):
                     with self.assertRaisesRegex(
                         sandbox.FileToolSandboxError, "mount overlaps private authority"
                     ):
                         with self.wrap():
                             self.fail("private filesystem coordinate was exposed")
-                self.assertEqual(len(os.listdir("/proc/self/fd")), before)
 
     def test_home_readonly_runtime_and_hook_private_aliases_are_refused(self) -> None:
         for destination, origin in (
@@ -173,8 +192,7 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
                         self.fail("readonly or home alias disclosed authority")
 
     def test_same_filesystem_siblings_and_private_validation_fds_are_safe(self) -> None:
-        before = len(os.listdir("/proc/self/fd"))
-        with self.wrap() as launch:
+        with self.assert_opened_descriptors_closed(), self.wrap() as launch:
             private_info = self.private.stat()
             self.assertTrue(launch.pass_fds)
             for fd in launch.pass_fds:
@@ -183,7 +201,6 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
                     (info.st_dev, info.st_ino), (private_info.st_dev, private_info.st_ino)
                 )
             self.assertNotIn(str(self.private), launch.argv)
-        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
 
     def test_protected_socket_is_not_the_per_turn_permission_exception(self) -> None:
         config = dataclasses.replace(self.config, private_paths=(self.socket_path,))
@@ -228,30 +245,32 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
     def test_private_path_appearing_before_launch_is_refused_without_fd_leaks(self) -> None:
         future = self.base / "future"
         config = dataclasses.replace(self.config, private_paths=(future / "authority",))
-        before = len(os.listdir("/proc/self/fd"))
 
         def appear(_: Path) -> None:
             future.mkdir()
 
-        with patch.object(sandbox, "_require_fd_bind_support", side_effect=appear):
+        with (
+            self.assert_opened_descriptors_closed(),
+            patch.object(sandbox, "_require_fd_bind_support", side_effect=appear),
+        ):
             with self.assertRaisesRegex(sandbox.FileToolSandboxError, "private authority"):
                 with config.wrap([str(self.executable)], {}, self.project):
                     self.fail("a missing private component changed after validation")
-        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
 
     def test_private_ancestor_replacement_cannot_change_the_excluded_inode(self) -> None:
         original = self.base / "original-authority"
-        before = len(os.listdir("/proc/self/fd"))
 
         def replace(_: Path) -> None:
             self.private.rename(original)
             self.private.mkdir()
 
-        with patch.object(sandbox, "_require_fd_bind_support", side_effect=replace):
+        with (
+            self.assert_opened_descriptors_closed(),
+            patch.object(sandbox, "_require_fd_bind_support", side_effect=replace),
+        ):
             with self.assertRaises(sandbox.FileToolSandboxError):
                 with self.config.wrap([str(self.executable)], {}, self.project):
                     self.fail("private path replacement escaped its pinned identity")
-        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
 
     def test_independent_bind_coordinate_on_same_filesystem_is_allowed(self) -> None:
         with self.alias(self.project, self.base / "independent"):
