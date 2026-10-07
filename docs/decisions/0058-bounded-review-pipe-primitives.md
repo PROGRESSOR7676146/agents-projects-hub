@@ -95,7 +95,8 @@ no native HTTP schema, exit status, stream terminal or authorization is inferred
 
 Host CANCEL revokes later issue. Already in-flight child stdout may drain within
 its original budget, but the returned discard disposition prohibits publication.
-Child requests after cancellation refuse; child exit ends the drain. EOF closes
+Child requests after cancellation refuse, including an already in-flight request
+reported as a local ordering fault without submission; child exit ends the drain. EOF closes
 only its own direction. An exit before response END may close both pipes but
 retains incomplete-response and sticky request-observed evidence. Request seen
 is neither callback consumption nor provider acceptance; a late ordering fault
@@ -105,14 +106,17 @@ or closed pipes with completion.
 
 `review_bridge_write_buffer.py` owns finite immutable encoded frames, temporary
 capacity backpressure, cumulative admission bounds and one outstanding write
-offer. The caller reports an exact bounded advance; zero progress leaves it
+offer. The caller reports an exact bounded advance; even zero progress requires
+a nonempty outstanding offer, and leaves it
 unchanged. Backpressure refuses admission without spending either ledger. A
 bounded response constructor accepts exact fixture bytes, never an arbitrary
 iterator. There is no blocking writer, I/O callback, thread, clock or process.
 Enqueue attests buffer admission, advance only caller-reported bytes, never peer
-receipt. Buffer cancellation aborts permanently: after a partly sent frame, the
-future I/O owner must close the pipe rather than append a wire CANCEL to the
-truncated suffix. Graceful wire CANCEL instead requires preserving prior frames.
+receipt. After buffer cancellation or failure, the future I/O owner must close
+the pipe unconditionally and never reuse it. In particular, a wire CANCEL cannot
+be appended to a truncated frame suffix. Graceful wire CANCEL instead requires
+preserving prior frames. Missing frame attributes refuse through fixed errors,
+permanently retire the primitive and retain its earlier observation counters.
 
 Sequence and buffer remain separate primitives. A future serialized owner must
 coordinate admission and order before any physical write, abort on invalid order,

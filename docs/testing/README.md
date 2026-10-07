@@ -363,7 +363,9 @@ backpressure without cumulative admission, one stable outstanding offer and
 abort midway through headers/payloads. A serialized fake owner retries buffer
 admission without advancing sequence twice. A late sequence failure preserves
 one consumed fake callback and refuses resubmission. Buffer abort never permits
-appending CANCEL to a truncated frame; the future I/O owner must close that pipe.
+appending CANCEL to a truncated frame; after buffer abort or failure the future
+I/O owner must close the pipe unconditionally. Uninitialized frame objects retire
+both sequence and buffer through fixed diagnostics without exception chains.
 
 These are in-process fixtures. They do not prove an actual namespace pipe,
 HTTP/native compatibility, durable workflow deduplication, role authorization,

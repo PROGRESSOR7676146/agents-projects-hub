@@ -155,8 +155,8 @@ Current state: clean offline candidate `dd43ae6` in lane
 `feat/advisor-inference-bridge`, based on `535c0b8`. Source owner: Hub maintainer.
 The mandatory commit and canonical publication gates passed 2,204 tests in 198
 modules with zero typing errors and privacy/history checks. Exact-candidate
-Astra and Claude Opus reviews have no remaining mandatory findings; hosted
-checks remain a separate gate. Early capsule-type/UUID
+Astra and Claude Opus reviews have no remaining mandatory findings; all seven
+hosted checks passed at exact head `dd43ae6`. Early capsule-type/UUID
 findings and Opus's exception-chain/request-byte findings are fixed with
 negative regressions. See
 [ADR 0058](../decisions/0058-bounded-review-pipe-primitives.md) for the selected

@@ -56,8 +56,9 @@ class BridgeWriteBuffer:
     Admission is not a write; advance is not peer receipt or provider evidence.
     This has no writer/iterator/thread and cannot bound a blocking I/O operation.
     A future I/O owner must enforce nonblocking I/O, deadline and channel cleanup.
-    Cancel aborts the whole buffer; if a frame was partly sent, close the pipe.
+    After buffer cancellation or failure, close the pipe and never reuse it.
     Never append wire CANCEL or another frame to a truncated frame suffix.
+    Advance, including zero progress, requires a nonempty outstanding offer.
     """
 
     def __init__(
@@ -102,10 +103,16 @@ class BridgeWriteBuffer:
         self._open()
         if type(frame) is not BridgeFrame:
             self._fail("bridge_write_frame_invalid")
-        kind, payload = frame.kind, frame.payload
+        copied: BridgeFrame | None = None
+        try:
+            copied = BridgeFrame(frame.kind, frame.payload)
+        except AttributeError:
+            pass
+        if copied is None:
+            self._fail("bridge_write_frame_invalid")
         wire: bytes | None = None
         try:
-            wire = encode_bridge_frame(BridgeFrame(kind, payload))
+            wire = encode_bridge_frame(copied)
         except BridgeFrameError:
             pass
         if wire is None:

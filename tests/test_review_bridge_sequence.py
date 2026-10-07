@@ -291,3 +291,13 @@ class ReviewBridgeSequenceTests(unittest.TestCase):
         sequence.finish(HOST)
         with self.assertRaisesRegex(BridgeSequenceError, "closed"):
             sequence.observe(HOST, self.frame(BridgeFrameType.CANCEL))
+
+    def test_uninitialized_frame_refuses_with_no_exception_chain_and_sticky_request(self) -> None:
+        sequence = self.requested()
+        with self.assertRaisesRegex(BridgeSequenceError, "frame_invalid") as raised:
+            sequence.observe(HOST, BridgeFrame.__new__(BridgeFrame))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        self.assertTrue(sequence.observation.failed)
+        self.assertTrue(sequence.observation.request_seen)
+        self.assert_retired(sequence)

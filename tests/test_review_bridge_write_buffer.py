@@ -206,3 +206,19 @@ class ReviewBridgeWriteBufferTests(unittest.TestCase):
             buffer = BridgeWriteBuffer()
             with self.subTest(size=size), self.assertRaises(BridgeWriteError):
                 buffer.peek(max_bytes=size)
+
+    def test_uninitialized_frame_refuses_and_retires_without_attribute_exception_context(
+        self,
+    ) -> None:
+        buffer = BridgeWriteBuffer()
+        buffer.enqueue(self.frame())
+        buffer.advance(len(buffer.peek(max_bytes=3)))
+        with self.assertRaisesRegex(BridgeWriteError, "frame_invalid") as raised:
+            buffer.enqueue(BridgeFrame.__new__(BridgeFrame))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        self.assertTrue(buffer.observation.failed)
+        self.assertEqual(buffer.observation.pending_bytes, 0)
+        self.assertEqual(buffer.observation.advanced_bytes, 3)
+        with self.assertRaisesRegex(BridgeWriteError, "retired"):
+            buffer.peek()

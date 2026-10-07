@@ -102,7 +102,14 @@ class BridgeSequence:
         self._direction(direction)
         if type(frame) is not BridgeFrame:
             self._fail("bridge_sequence_frame_invalid")
-        kind, payload = frame.kind, frame.payload
+        copied: BridgeFrame | None = None
+        try:
+            copied = BridgeFrame(frame.kind, frame.payload)
+        except AttributeError:
+            pass
+        if copied is None:
+            self._fail("bridge_sequence_frame_invalid")
+        kind, payload = copied.kind, copied.payload
         valid = True
         try:
             validate_bridge_frame(BridgeFrame(kind, payload))
