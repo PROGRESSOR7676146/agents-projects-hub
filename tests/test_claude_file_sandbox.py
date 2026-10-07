@@ -136,7 +136,7 @@ class ClaudeFileSandboxTests(unittest.TestCase):
             with (
                 patch.object(sandbox_module, "_require_fd_bind_support"),
                 patch.object(sandbox_module.MountPins, "open", track),
-                assert_descriptor_cleanup(self),
+                assert_descriptor_cleanup(self, forbid_preexisting_close=True),
                 self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"),
                 config.wrap([str(self.executable)], {}, self.project),
             ):
@@ -235,7 +235,7 @@ class ClaudeFileSandboxTests(unittest.TestCase):
                             fd: (os.fstat(fd).st_dev, os.fstat(fd).st_ino) for fd in fds.values()
                         }
                         with (
-                            assert_descriptor_cleanup(self),
+                            assert_descriptor_cleanup(self, forbid_preexisting_close=True),
                             self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"),
                         ):
                             self.config._namespace._validate(
@@ -405,11 +405,12 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                 child.mkdir()
             with sandbox_module.MountPins() as pins:
                 descriptor = pins.open(root, directory=True)
-                count = len(os.listdir("/proc/self/fd"))
-                with patch.object(sandbox_module, "_MAX_SCAN_DEPTH", 8):
+                with (
+                    assert_descriptor_cleanup(self, forbid_preexisting_close=True),
+                    patch.object(sandbox_module, "_MAX_SCAN_DEPTH", 8),
+                ):
                     with self.assertRaisesRegex(FileToolSandboxError, "depth"):
                         sandbox_module._scan_writable_tree(root, descriptor)
-                self.assertEqual(len(os.listdir("/proc/self/fd")), count)
 
     def test_scan_io_failures_are_bounded_and_close_ancestor_handles(self) -> None:
         with tempfile.TemporaryDirectory(prefix="example-scan-errors-") as directory:
@@ -423,17 +424,18 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                     (errno.ENOENT, "writable tree changed"),
                     (errno.EMFILE, "writable tree descriptor limit"),
                 ):
-                    count = len(os.listdir("/proc/self/fd"))
 
                     def fail_entry(path: str, flags: int, **kwargs: object) -> int:
                         if path == "entry":
                             raise OSError(error, "example")
                         return actual_open(path, flags, **kwargs)  # type: ignore[arg-type]
 
-                    with patch.object(os, "open", side_effect=fail_entry):
+                    with (
+                        patch.object(os, "open", side_effect=fail_entry),
+                        assert_descriptor_cleanup(self, forbid_preexisting_close=True),
+                    ):
                         with self.assertRaisesRegex(FileToolSandboxError, message):
                             sandbox_module._scan_writable_tree(root, descriptor)
-                    self.assertEqual(len(os.listdir("/proc/self/fd")), count)
 
     def test_fdinfo_descriptor_exhaustion_has_scan_diagnostic_and_no_leak(self) -> None:
         with tempfile.TemporaryDirectory(prefix="example-fdinfo-errors-") as directory:
@@ -452,13 +454,14 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
 
             with sandbox_module.MountPins() as pins:
                 descriptor = pins.open(root, directory=True)
-                count = len(os.listdir("/proc/self/fd"))
-                with patch.object(Path, "read_text", fail_entry):
+                with (
+                    assert_descriptor_cleanup(self, forbid_preexisting_close=True),
+                    patch.object(Path, "read_text", fail_entry),
+                ):
                     with self.assertRaisesRegex(
                         FileToolSandboxError, "writable tree descriptor limit"
                     ):
                         sandbox_module._scan_writable_tree(root, descriptor)
-                self.assertEqual(len(os.listdir("/proc/self/fd")), count)
 
     def test_same_mount_with_different_device_is_refused(self) -> None:
         with tempfile.TemporaryDirectory(prefix="example-subvolume-") as directory:
@@ -467,7 +470,6 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
             actual_stat = os.fstat
             with sandbox_module.MountPins() as pins:
                 descriptor = pins.open(root, directory=True)
-                count = len(os.listdir("/proc/self/fd"))
 
                 def subvolume(fd: int) -> object:
                     info = actual_stat(fd)
@@ -480,10 +482,12 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                         st_nlink=info.st_nlink,
                     )
 
-                with patch.object(os, "fstat", side_effect=subvolume):
+                with (
+                    assert_descriptor_cleanup(self, forbid_preexisting_close=True),
+                    patch.object(os, "fstat", side_effect=subvolume),
+                ):
                     with self.assertRaisesRegex(FileToolSandboxError, "nested filesystem"):
                         sandbox_module._scan_writable_tree(root, descriptor)
-                self.assertEqual(len(os.listdir("/proc/self/fd")), count)
 
     def test_preexisting_private_hardlink_is_rejected(self) -> None:
         link = self.project / "linked-authority"

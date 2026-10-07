@@ -29,8 +29,18 @@ def _snapshot() -> set[tuple[int, tuple[int, int, int]]]:
 
 
 @contextmanager
-def assert_descriptor_cleanup(case: unittest.TestCase) -> Iterator[None]:
+def assert_descriptor_cleanup(
+    case: unittest.TestCase, *, forbid_preexisting_close: bool = False
+) -> Iterator[None]:
+    """Check allocations; strict mode also rejects intercepted foreign closes.
+
+    Only calling-thread os.close calls are attributed by the optional check;
+    C-level FileIO/socket finalizers remain outside interception. No cleanup
+    authority is inferred from either descriptor numbers or snapshots.
+    """
     before = _snapshot()
+    preexisting = {fd for fd, _ in before}
+    closed_preexisting: set[int] = set()
     tracked: dict[int, tuple[int, int, int] | None] = {}
     foreign: dict[int, tuple[int, int, int] | None] = {}
     caller = threading.get_ident()
@@ -69,7 +79,16 @@ def assert_descriptor_cleanup(case: unittest.TestCase) -> Iterator[None]:
         return record(original_memfd(*args, **kwargs))
 
     def track_close(fd: int) -> None:
+        foreign_close = (
+            forbid_preexisting_close
+            and threading.get_ident() == caller
+            and fd in preexisting
+            and fd not in tracked
+            and fd not in foreign
+        )
         original_close(fd)
+        if foreign_close:
+            closed_preexisting.add(fd)
         # Observe successful close/overwrite events across all threads.
         tracked.pop(fd, None)
         foreign.pop(fd, None)
@@ -101,13 +120,15 @@ def assert_descriptor_cleanup(case: unittest.TestCase) -> Iterator[None]:
         detail = (
             f"tracked calling-thread descriptors remain open: {sorted(remaining)}; "
             f"unattributed new descriptors (ownership unknown): {sorted(unattributed)}"
+            f"; preexisting descriptors closed by calling-thread os.close: {sorted(closed_preexisting)}"
         )
         if primary is not None:
-            if remaining or unattributed:
+            if remaining or unattributed or closed_preexisting:
                 primary.add_note(detail)
         else:
             if unattributed:
                 warnings.warn(detail, ResourceWarning, stacklevel=2)
             case.assertFalse(remaining, detail)
+            case.assertFalse(closed_preexisting, detail)
         # Never close here: neither interception nor snapshots prove current
         # cleanup authority. Regression tests explicitly clean their own FDs.

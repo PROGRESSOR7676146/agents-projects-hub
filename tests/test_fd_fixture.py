@@ -131,3 +131,20 @@ class DescriptorFixtureTests(unittest.TestCase):
             os.close(old)
             fd = os.open("/dev/zero", os.O_RDONLY)
             os.close(fd)
+
+    def test_strict_mode_rejects_successful_close_of_a_preexisting_descriptor(self) -> None:
+        old = os.open("/dev/null", os.O_RDONLY)
+        with self.assertRaisesRegex(AssertionError, "preexisting descriptors closed"):
+            with assert_descriptor_cleanup(self, forbid_preexisting_close=True):
+                os.close(old)
+        with self.assertRaises(OSError):
+            os.fstat(old)
+
+    def test_strict_mode_accepts_tracked_reuse_after_unrelated_fileio_close(self) -> None:
+        old = os.open("/dev/null", os.O_RDONLY)
+        with assert_descriptor_cleanup(self, forbid_preexisting_close=True):
+            with os.fdopen(old, "rb"):
+                pass
+            owned = os.open("/dev/zero", os.O_RDONLY)
+            self.assertEqual(owned, old)
+            os.close(owned)
