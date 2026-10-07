@@ -26,7 +26,7 @@ class NamespaceError(ValueError):
     """A confined process cannot safely start."""
 
 
-_SANDBOX_HOME = "/home/example"
+SANDBOX_HOME = "/home/example"
 _SANDBOX_SOCKET = "/run/hub-permission.sock"
 _SYSTEM_ALIASES = {"/bin": "/usr/bin", "/lib": "/usr/lib", "/lib64": "/usr/lib64"}
 _MAX_RUNTIME_ENTRIES = 100_000
@@ -272,7 +272,7 @@ def _validate_destinations(project: Path, roots: tuple[Path, ...], code_root: Pa
     for destination in destinations:
         if destination == Path("/tmp") or any(
             _within(destination, reserved) or _within(reserved, destination)
-            for reserved in map(Path, (_SANDBOX_HOME, "/proc", "/dev", "/run"))
+            for reserved in map(Path, (SANDBOX_HOME, "/proc", "/dev", "/run"))
         ):
             raise NamespaceError("mount destination overlaps a namespace-owned path")
     for alias in map(Path, _SYSTEM_ALIASES):
@@ -515,11 +515,11 @@ class ProcessNamespaceConfig:
             raise NamespaceError("invalid provider environment")
         child_env = dict(env)
         child_env.update(
-            HOME=_SANDBOX_HOME,
-            XDG_CONFIG_HOME=f"{_SANDBOX_HOME}/.config",
-            XDG_CACHE_HOME=f"{_SANDBOX_HOME}/.cache",
-            XDG_STATE_HOME=f"{_SANDBOX_HOME}/.local/state",
-            XDG_DATA_HOME=f"{_SANDBOX_HOME}/.local/share",
+            HOME=SANDBOX_HOME,
+            XDG_CONFIG_HOME=f"{SANDBOX_HOME}/.config",
+            XDG_CACHE_HOME=f"{SANDBOX_HOME}/.cache",
+            XDG_STATE_HOME=f"{SANDBOX_HOME}/.local/state",
+            XDG_DATA_HOME=f"{SANDBOX_HOME}/.local/share",
             TMPDIR="/tmp",
             PATH="/usr/bin:/bin",
         )
@@ -576,7 +576,7 @@ class ProcessNamespaceConfig:
                 str(project / ".git"),
                 "--bind-fd",
                 str(home_fd),
-                _SANDBOX_HOME,
+                SANDBOX_HOME,
             )
         )
         if sock is not None and sock_fd is not None:

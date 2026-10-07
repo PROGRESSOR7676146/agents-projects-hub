@@ -95,11 +95,26 @@ The scripted private-alias corpus also runs directly through the readonly core.
 The real bind fixture exercises the private guard; it is not an additional
 kernel witness of the complete core launch.
 
-Focused strict evidence: 94 core/facade/parser/workflow checks and 40
-capsule/permission/namespace checks passed without optional namespace skips.
-Integrated commit/publication, exact-revision independent security review and
-hosted gates remain pending. Next trigger: those combined gates, then design the
-authorized-material/workflow binding and supported bounded inference transport.
+Last verified clean integration: `eb241d7`, with the mandatory commit gate
+passing 2119 tests in 193 modules. Earlier focused strict evidence covers 94
+core/facade/parser/workflow checks and 40 capsule/permission/namespace checks
+without optional namespace skips. Its independent architecture review found a
+material-name alias gap and an unsupported-filesystem fixture using the wrong
+failure path. The follow-up requires exact kernel descriptor names before reads
+and after pin rechecks, and targets the actual mount-table reader. Three new
+regression tests failed first, then all 12 capsule/namespace tests passed strictly.
+The source-review follow-up also refuses material roots within Git metadata,
+checks the encoded size before memfd creation and verifies the final source-pin
+recheck independently of file timestamps. Descriptor assertions never close
+test resources; calling-thread tracking supports leak assertions while unknown
+snapshot changes are diagnostics, with explicit memfd-close checks at its
+allocation boundary. The final focused strict set passed 104 tests without
+namespace skips. The casefold regression is scripted, not a real casefold
+filesystem witness.
+Canonical publication, exact final-revision independent security review and
+hosted gates remain pending. Next trigger: those combined gates, then establish
+native compatibility with an isolated fake inference endpoint before implementing
+the authorized-material/workflow binding and bounded inference transport.
 Closure remains open: these primitives enable no productive advisor, role
 handover, owner assessment or installed custody. Private networking still blocks
 the existing loopback route. Inspect tracked, staged and untracked lane state

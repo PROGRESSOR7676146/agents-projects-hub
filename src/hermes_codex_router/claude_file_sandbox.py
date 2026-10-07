@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .claude_mount_pins import SandboxLaunch
+from .process_namespace import SANDBOX_HOME, NamespaceRuntime, ProcessNamespaceConfig
 from .process_namespace import NamespaceError as FileToolSandboxError
-from .process_namespace import NamespaceRuntime, ProcessNamespaceConfig
 
 _SAFE_ENV = frozenset(
     {
@@ -75,5 +75,5 @@ class FileToolSandboxConfig:
         if argv and argv[0] != str(self.claude_executable):
             raise FileToolSandboxError("provider executable differs from pinned Claude executable")
         child = dict(env)
-        child["CLAUDE_CONFIG_DIR"] = "/home/example/.claude"
+        child["CLAUDE_CONFIG_DIR"] = f"{SANDBOX_HOME}/.claude"
         return self._namespace.wrap(argv, child, cwd)

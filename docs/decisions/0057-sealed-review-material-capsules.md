@@ -22,16 +22,21 @@ The primitive grants no authorization, discovers no files, and accepts no chat
 paths. Future durable workflow authorization remains a separate transaction.
 
 Pin no-follow sources, accept only regular single-link files on the supported
-root filesystem/mount, and recheck names and source metadata before completion.
-Refuse Git metadata, duplicates, escapes, symlinks, special files, unsupported
-mounts and changed/digest-mismatched input. Selected content must be UTF-8 text
+root filesystem/mount, require the kernel descriptor path to equal the exact
+root/selected spelling before reading and after final pin rechecks, and recheck
+source metadata before completion. Casefold/other name aliases refuse
+conservatively rather than bypass the Git-metadata exclusion.
+Refuse roots within Git metadata, selected Git metadata, duplicates, escapes,
+symlinks, special files, unsupported mounts and changed/digest-mismatched input. Selected content must be UTF-8 text
 without NUL; project configuration, credentials and native transcripts are
 never included implicitly. The caller is responsible for authorizing content,
 including any sensitive text: filename checks are not a secret detector.
 
 Capture at most 32 files, 64 KiB each and 256 KiB total source bytes. Canonical
 JSON contains one opaque binding and the sorted name/size/digest/text entries,
-with a 1 MiB encoded limit. Strict decoding requires its exact capsule digest,
+with a 1 MiB encoded limit. That encoded limit also binds valid text whose JSON
+escaping exceeds the source-byte bounds; capture refuses explicitly before memfd
+creation. Strict decoding requires its exact capsule digest,
 schema, content digests, bounds and ordering; duplicate keys and corrupt or
 noncanonical input refuse. The capsule digest is the exact artifact reference;
 no Git revision or whole-project snapshot is attested.

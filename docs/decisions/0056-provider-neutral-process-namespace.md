@@ -29,9 +29,14 @@ constructor, public attributes and `wrap()` signature. It explicitly selects
 project read/write, readonly Git, shared networking for the existing loopback
 route, and the existing one-inode permission socket. Claude owns its environment
 allowlist and fixed config directory. The generic core validates explicit
-environment entries and fixes HOME, XDG, TMPDIR and PATH without inheriting host
-environment. Alias the neutral error at the old import location, retaining
-catch behavior and original exception causes. The error class name is now
+environment strings and fixes HOME, XDG, TMPDIR and PATH without inheriting host
+environment. The trusted caller must apply its own security allowlist before
+`wrap()`: those variables also reach bubblewrap before confinement, so loader
+or interpreter injection cannot be treated as confined by the child namespace.
+The Claude facade retains its narrow allowlist; a future productive consumer
+must establish its own before launch. The facade derives its config directory
+from the public core HOME constant. Alias the neutral error at the old import
+location, retaining catch behavior and original exception causes. The error class name is now
 `NamespaceError`; no state or protocol relies on the former Python class name.
 
 Keep `claude_mount_pins.py` as the sole inode/type identity, descriptor

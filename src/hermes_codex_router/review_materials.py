@@ -197,6 +197,13 @@ def _read_selected(source_fd: int, size: int) -> bytes:
         os.close(fd)
 
 
+def _require_descriptor_path(fd: int, expected: Path) -> None:
+    # Inode/mount identity alone permits casefold aliases to excluded names.
+    # Require the kernel's actual spelling, also refusing deleted/renamed pins.
+    if os.readlink(f"/proc/self/fd/{fd}") != str(expected):
+        raise ReviewMaterialError("selected material descriptor path differs")
+
+
 def _create_sealable_memfd() -> int:
     if hasattr(os, "memfd_create"):
         return os.memfd_create("review-materials", 0x0001 | 0x0002)
@@ -240,14 +247,20 @@ def build_review_capsule(
     try:
         root = _absolute_path(root, "authorized material root")
         _not_broad(root, "authorized material root")
+        if any(part.casefold() == ".git" for part in root.parts):
+            raise ReviewMaterialError("material root includes Git metadata")
         with MountPins() as pins:
             root_fd = pins.open(root, directory=True)
+            _require_descriptor_path(root_fd, root)
+            paths = {root_fd: root}
             root_device = os.fstat(root_fd).st_dev
             root_mount = pins.mount_id(root_fd)
             _reject_nested_mounts(root, mount_ids={root: root_mount})
             entries: list[dict[str, Any]] = []
             for item in sorted(selection, key=lambda entry: entry.name):
                 fd = pins.open_relative(root_fd, item.name, directory=False)
+                _require_descriptor_path(fd, root / item.name)
+                paths[fd] = root / item.name
                 before = os.fstat(fd)
                 if (
                     not stat.S_ISREG(before.st_mode)
@@ -277,7 +290,11 @@ def build_review_capsule(
                     {"name": item.name, "size": item.size, "sha256": item.sha256, "text": text}
                 )
             pins.recheck()
+            for fd, expected in paths.items():
+                _require_descriptor_path(fd, expected)
         data = _encode({"version": 1, "binding": binding, "files": entries})
+        if len(data) > _MAX_CAPSULE_BYTES:
+            raise ReviewMaterialError("material capsule encoding exceeds its bound")
         digest = hashlib.sha256(data).hexdigest()
         decode_review_capsule(data, digest)
         capsule_fd = _create_sealable_memfd()

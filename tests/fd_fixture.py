@@ -1,10 +1,12 @@
-"""Check owned descriptor cleanup while tolerating unrelated resource collection."""
+"""Check calling-thread descriptor tracking; cleanup always belongs to callers."""
 
 from __future__ import annotations
 
 import os
 import stat
+import threading
 import unittest
+import warnings
 from contextlib import contextmanager
 from typing import Iterator
 from unittest.mock import patch
@@ -29,28 +31,45 @@ def _snapshot() -> set[tuple[int, tuple[int, int, int]]]:
 @contextmanager
 def assert_descriptor_cleanup(case: unittest.TestCase) -> Iterator[None]:
     before = _snapshot()
-    owned: dict[int, tuple[int, int, int] | None] = {}
-    original_open, original_dup, original_close = os.open, os.dup, os.close
+    tracked: dict[int, tuple[int, int, int] | None] = {}
+    foreign: dict[int, tuple[int, int, int] | None] = {}
+    caller = threading.get_ident()
+    original_open, original_dup, original_dup2, original_close = (
+        os.open,
+        os.dup,
+        os.dup2,
+        os.close,
+    )
+
+    def record(fd: int) -> int:
+        tracked.pop(fd, None)
+        foreign.pop(fd, None)
+        target = tracked if threading.get_ident() == caller else foreign
+        target[fd] = _identity(fd)
+        return fd
 
     def track_open(*args: object, **kwargs: object) -> int:
         fd = original_open(*args, **kwargs)  # type: ignore[arg-type]
-        owned[fd] = _identity(fd)
-        return fd
+        return record(fd)
 
     def track_dup(fd: int) -> int:
-        copied = original_dup(fd)
-        owned[copied] = _identity(copied)
-        return copied
+        return record(original_dup(fd))
+
+    def track_dup2(fd: int, target: int, inheritable: bool = True) -> int:
+        return record(original_dup2(fd, target, inheritable=inheritable))
 
     def track_close(fd: int) -> None:
         original_close(fd)
-        owned.pop(fd, None)
+        # Observe successful close/overwrite events across all threads.
+        tracked.pop(fd, None)
+        foreign.pop(fd, None)
 
     primary: BaseException | None = None
     try:
         with (
             patch("os.open", side_effect=track_open),
             patch("os.dup", side_effect=track_dup),
+            patch("os.dup2", side_effect=track_dup2),
             patch("os.close", side_effect=track_close),
         ):
             yield
@@ -58,27 +77,25 @@ def assert_descriptor_cleanup(case: unittest.TestCase) -> Iterator[None]:
         primary = error
         raise
     finally:
-        # Track ownership through closes/reuse. The identity snapshot also
-        # catches APIs such as pipe/memfd allocation, ignoring unrelated closes.
-        owned_leaks = {
+        # Identity checks can detect tracked descriptors remaining open, but
+        # cannot establish ownership after an unobserved same-inode reuse.
+        remaining = {
             fd
-            for fd, identity in owned.items()
+            for fd, identity in tuple(tracked.items())
             if identity is not None and identity == _identity(fd)
         }
-        unattributed = {fd for fd, _ in _snapshot() - before} - owned_leaks
-        detail = f"owned descriptors remain open: {sorted(owned_leaks)}; unattributed new descriptors: {sorted(unattributed)}"
-        try:
-            if primary is not None:
-                if owned_leaks or unattributed:
-                    primary.add_note(detail)
-            else:
-                case.assertFalse(owned_leaks or unattributed, detail)
-        finally:
-            # Snapshot differences alone do not prove cleanup ownership.
-            for fd in owned_leaks:
-                if _identity(fd) != owned[fd]:
-                    continue
-                try:
-                    original_close(fd)
-                except OSError:
-                    pass
+        unrelated = {fd for fd, identity in tuple(foreign.items()) if identity == _identity(fd)}
+        unattributed = {fd for fd, _ in _snapshot() - before} - remaining - unrelated
+        detail = (
+            f"tracked calling-thread descriptors remain open: {sorted(remaining)}; "
+            f"unattributed new descriptors (ownership unknown): {sorted(unattributed)}"
+        )
+        if primary is not None:
+            if remaining or unattributed:
+                primary.add_note(detail)
+        else:
+            if unattributed:
+                warnings.warn(detail, ResourceWarning, stacklevel=2)
+            case.assertFalse(remaining, detail)
+        # Never close here: neither interception nor snapshots prove current
+        # cleanup authority. Regression tests explicitly clean their own FDs.
