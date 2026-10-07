@@ -107,6 +107,8 @@ def _assert_namespace_job(job: dict[str, Any]) -> None:
         ".venv/bin/python -m unittest -v "
         "tests.test_claude_file_sandbox.ClaudeFileSandboxTests."
         "test_namespace_denies_private_symlink_git_write_and_host_paths "
+        "tests.test_claude_private_mount_aliases.ClaudePrivateMountAliasTests."
+        "test_real_private_bind_alias_is_refused_before_any_provider_launch "
         "tests.test_claude_permission_host_roundtrip.PermissionHostRoundtripTests."
         "test_namespace_client_preserves_peer_gate_and_atomic_allow_deny "
         "tests.test_claude_custody_rehearsal.ClaudeCustodyRehearsalTests."
@@ -114,7 +116,7 @@ def _assert_namespace_job(job: dict[str, Any]) -> None:
         "tests.test_codex_native_namespace"
     ):
         raise AssertionError(
-            "namespace job must run all three real namespace scenarios and outer wrapper witness"
+            "namespace job must run all required real namespace scenarios and outer wrapper witness"
         )
 
 
@@ -309,7 +311,13 @@ class WorkflowContractTests(unittest.TestCase):
             _assert_ruleset_required_checks(script, WORKFLOWS)
 
     def test_contract_rejects_missing_or_bypassed_namespace_invocation(self) -> None:
-        for mutation in ("missing", "missing_custody", "wrong_command", "tolerate_failure"):
+        for mutation in (
+            "missing",
+            "missing_custody",
+            "missing_private_alias",
+            "wrong_command",
+            "tolerate_failure",
+        ):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
                 workflows = Path(directory) / "workflows"
                 shutil.copytree(WORKFLOWS, workflows)
@@ -320,6 +328,13 @@ class WorkflowContractTests(unittest.TestCase):
                     invocation["run"] = ""
                 elif mutation == "missing_custody":
                     invocation["run"] = invocation["run"].rstrip().rsplit(" ", 1)[0]
+                elif mutation == "missing_private_alias":
+                    selector = (
+                        "tests.test_claude_private_mount_aliases.ClaudePrivateMountAliasTests."
+                        "test_real_private_bind_alias_is_refused_before_any_provider_launch "
+                    )
+                    self.assertIn(selector, invocation["run"])
+                    invocation["run"] = invocation["run"].replace(selector, "")
                 elif mutation == "wrong_command":
                     invocation["run"] = "echo skipped"
                 else:

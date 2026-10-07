@@ -270,7 +270,7 @@ class ClaudeFileSandboxTests(unittest.TestCase):
                 unsafe.wrap([str(self.executable)], {}, self.project)
 
     def test_other_uid_group_writes_and_acl_do_not_establish_trusted_code(self) -> None:
-        info = SimpleNamespace(st_uid=0, st_gid=0, st_mode=stat.S_IFREG | 0o644)
+        info = SimpleNamespace(st_uid=0, st_gid=0, st_mode=stat.S_IFREG | 0o644, st_nlink=1)
         with (
             patch.object(Path, "stat", return_value=info),
             patch.object(os, "access", return_value=False),
@@ -285,6 +285,10 @@ class ClaudeFileSandboxTests(unittest.TestCase):
             with self.assertRaises(FileToolSandboxError):
                 sandbox_module._immutable_source(self.executable, "runtime", directory=False)
             info.st_mode = stat.S_IFREG | 0o644
+            info.st_nlink = 2
+            with self.assertRaisesRegex(FileToolSandboxError, "runtime hardlink"):
+                sandbox_module._immutable_source(self.executable, "runtime", directory=False)
+            info.st_nlink = 1
             attributes.return_value = ["system.posix_acl_access"]
             with self.assertRaises(FileToolSandboxError):
                 sandbox_module._immutable_source(self.executable, "runtime", directory=False)
@@ -304,7 +308,7 @@ class ClaudeFileSandboxTests(unittest.TestCase):
                     sandbox_module._scan_writable_tree(root, descriptor)
 
     def test_unsupported_acl_storage_is_safe_but_inspection_failure_refuses(self) -> None:
-        info = SimpleNamespace(st_uid=0, st_mode=stat.S_IFREG | 0o644)
+        info = SimpleNamespace(st_uid=0, st_mode=stat.S_IFREG | 0o644, st_nlink=1)
         with patch.object(os, "access", return_value=False):
             for error in (errno.ENOTSUP, errno.EOPNOTSUPP):
                 with patch.object(os, "listxattr", side_effect=OSError(error, "example")):
@@ -464,13 +468,17 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
 
     def test_nested_mount_is_rejected(self) -> None:
         mountinfo = f"1 2 0:1 / {self.project}/nested rw - tmpfs tmpfs rw\n"
-        with patch.object(Path, "read_text", return_value=mountinfo):
+        with patch(
+            "hermes_codex_router.claude_private_mounts._read_mountinfo", return_value=mountinfo
+        ):
             with self.assertRaisesRegex(FileToolSandboxError, "nested mount"):
                 _reject_nested_mounts(self.project)
 
     def test_stacked_mount_uses_descriptor_identity_and_rejects_ambiguity(self) -> None:
         mountinfo = "1 2 0:1 / / rw - 9p example rw\n2 3 0:2 / / rw - ext4 example rw\n"
-        with patch.object(Path, "read_text", return_value=mountinfo):
+        with patch(
+            "hermes_codex_router.claude_private_mounts._read_mountinfo", return_value=mountinfo
+        ):
             with self.assertRaises(FileToolSandboxError):
                 _reject_nested_mounts(self.project)
             _reject_nested_mounts(self.project, mount_ids={self.project: 2})
@@ -513,8 +521,13 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                 self.assertRaises(FileToolSandboxError) as failure,
             ):
                 self._wrap()
-            self.assertIsInstance(failure.exception.__cause__, sandbox_module.MountPinError)
-            self.assertIn("identity changed", str(failure.exception.__cause__))
+            self.assertIsInstance(
+                failure.exception.__cause__,
+                sandbox_module.PrivateMountError,
+            )
+            self.assertEqual(
+                str(failure.exception.__cause__), "mount source provenance does not match its pin"
+            )
             self.assertTrue(opened)
             for descriptor in set(opened):
                 with self.assertRaises(OSError):
@@ -527,11 +540,15 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
     def test_non_native_filesystems_and_broad_home_roots_are_refused(self) -> None:
         for filesystem in ("9p", "drvfs", "fuse", "ntfs", "vfat", "unknown"):
             mountinfo = f"1 2 0:1 / / rw - {filesystem} example rw\n"
-            with patch.object(Path, "read_text", return_value=mountinfo):
+            with patch(
+                "hermes_codex_router.claude_private_mounts._read_mountinfo", return_value=mountinfo
+            ):
                 with self.subTest(filesystem=filesystem), self.assertRaises(FileToolSandboxError):
                     _reject_nested_mounts(self.project)
         mountinfo = "1 2 0:1 / / rw - ext4 example rw\n"
-        with patch.object(Path, "read_text", return_value=mountinfo):
+        with patch(
+            "hermes_codex_router.claude_private_mounts._read_mountinfo", return_value=mountinfo
+        ):
             _reject_nested_mounts(self.project)
         with self.assertRaises(FileToolSandboxError):
             sandbox_module._not_broad(Path("/home/example"), "project root")

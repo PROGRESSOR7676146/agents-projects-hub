@@ -25,6 +25,7 @@ def _identity(info: os.stat_result) -> tuple[int, int, int]:
 class _Pin:
     path: Path
     identity: tuple[int, int, int]
+    mount: int
 
 
 class MountPins:
@@ -84,12 +85,13 @@ class MountPins:
     def _adopt(self, fd: int, path: Path) -> int:
         try:
             info = _identity(os.fstat(fd))
+            selected_mount = mount_id(fd)
             for existing, pin in self._pins.items():
                 if pin.path == path:
-                    if pin.identity != info:
+                    if pin.identity != info or pin.mount != selected_mount:
                         raise MountPinError("mount source identity changed")
                     return existing
-            self._pins[fd] = _Pin(path, info)
+            self._pins[fd] = _Pin(path, info, selected_mount)
             return fd
         finally:
             if fd not in self._pins:
@@ -123,6 +125,8 @@ class MountPins:
                 if (
                     _identity(os.fstat(candidate)) != pin.identity
                     or _identity(os.fstat(fd)) != pin.identity
+                    or mount_id(candidate) != pin.mount
+                    or mount_id(fd) != pin.mount
                 ):
                     raise MountPinError("mount source identity changed")
             except OSError as exc:

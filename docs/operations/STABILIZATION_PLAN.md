@@ -59,6 +59,24 @@ workflow and outcome journal, three-project/restart acceptance, Hermes incident
 and update plane, off-machine restore drill and release 0.8 remain open. Restart
 alone closes neither the repeated notification incident nor payload recovery.
 
+## Planned final-response mode indicators
+
+Owner-requested follow-up (2026-10-07), implementation pending: extend the compact
+final-response identity/telemetry footer with important active modes, initially
+goal execution (`/goal`) and fast/service-tier selection (`/fast`), and other
+supported modes that materially affect the owner's understanding of the turn.
+Keep the footer concise; use authoritative state bound to the exact completed
+turn, rather than interpreting prompt text or assuming that a requested mode was
+enabled. Distinguish active, paused and terminal goal states; show fast mode only
+when its actual provider setting is observable. Missing or unsupported evidence
+must not become an enabled-mode claim. Reading/formatting this metadata must not
+invoke a provider or change modes. Preserve the existing session, agent,
+model/effort, context and quota information. Before implementation, define the
+owning display contract and verify per-provider metadata, retries, provider/model
+switches and missing/stale state. Source owner: Hub maintainer; next trigger:
+the task-visibility follow-up after the current authority-isolation fix. This
+plan item neither enables these modes nor changes their resource policy.
+
 ## Why
 
 A read-only audit on 2026-09-27 found strong design and safety invariants but
