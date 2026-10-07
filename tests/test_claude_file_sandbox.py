@@ -18,12 +18,12 @@ from types import SimpleNamespace
 from typing import cast
 from unittest.mock import patch
 
-import hermes_codex_router.claude_file_sandbox as sandbox_module
+import hermes_codex_router.process_namespace as sandbox_module
 from hermes_codex_router.claude_file_sandbox import (
     FileToolSandboxConfig,
     FileToolSandboxError,
-    _reject_nested_mounts,
 )
+from hermes_codex_router.process_namespace import _reject_nested_mounts
 from tests.namespace_fixture import (
     namespace_permission_refused,
     namespace_unavailable,
@@ -157,7 +157,7 @@ class ClaudeFileSandboxTests(unittest.TestCase):
                         mount_ids[self.home] = max(mount_ids.values()) + 1
                         self.assertNotEqual(mount_ids[self.home], mount_ids[target])
                         with self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"):
-                            self.config._validate(mount_ids, fds)
+                            self.config._namespace._validate(mount_ids, fds)
                 finally:
                     target.chmod(original_mode)
 
@@ -213,7 +213,7 @@ class ClaudeFileSandboxTests(unittest.TestCase):
                         }
                         before_fds = len(list(Path("/proc/self/fd").iterdir()))
                         with self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"):
-                            self.config._validate(
+                            self.config._namespace._validate(
                                 {path: pins.mount_id(fd) for path, fd in fds.items()}, fds
                             )
                         self.assertEqual(len(list(Path("/proc/self/fd").iterdir())), before_fds)
@@ -247,7 +247,7 @@ class ClaudeFileSandboxTests(unittest.TestCase):
                 )
 
     def test_rejects_private_overlap_symlink_and_writable_hook(self) -> None:
-        with patch("hermes_codex_router.claude_file_sandbox._immutable_tree"):
+        with patch("hermes_codex_router.process_namespace._immutable_tree"):
             unsafe = dataclasses.replace(self.config, private_paths=(self.project / ".git",))
             with self.assertRaises(FileToolSandboxError):
                 unsafe.wrap([str(self.executable)], {}, self.project)
@@ -261,7 +261,7 @@ class ClaudeFileSandboxTests(unittest.TestCase):
                 unsafe.wrap([str(self.executable)], {}, link)
 
     def test_runtime_and_bwrap_must_be_immutable_to_worker(self) -> None:
-        with patch("hermes_codex_router.claude_file_sandbox._immutable_tree"):
+        with patch("hermes_codex_router.process_namespace._immutable_tree"):
             unsafe = dataclasses.replace(self.config, bwrap_executable=self.project / ".git")
             with self.assertRaises(FileToolSandboxError):
                 unsafe.wrap([str(self.executable)], {}, self.project)
@@ -325,7 +325,7 @@ class ClaudeFileSandboxTests(unittest.TestCase):
         source = """
 import json, os, resource, tempfile
 from pathlib import Path
-from hermes_codex_router.claude_file_sandbox import _scan_writable_tree, FileToolSandboxError
+from hermes_codex_router.process_namespace import _scan_writable_tree, NamespaceError as FileToolSandboxError
 from hermes_codex_router.claude_mount_pins import MountPins
 with tempfile.TemporaryDirectory(prefix="example-wide-scan-") as directory:
     project = Path(directory) / "project"

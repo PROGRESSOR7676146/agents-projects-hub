@@ -63,11 +63,13 @@ alone closes neither the repeated notification incident nor payload recovery.
 
 Current state: bounded offline implementation in lane
 `feat/outcome-journal-projection`, based on source `93577e5`. Clean candidate
-`11647709fbe337fcf3b5a1738e856bdd10c7030b` passed canonical publication
-(2,084 tests in 189 modules, zero typing errors and privacy/history gates)
-and independent Astra and Claude Opus source reviews. The Opus review identified
-a Python-version-dependent test expectation; the test/documentation follow-up
-and its exact-revision publication checks remain pending. The
+`dcc650794719a1be6c4143766bdb007265352471` passed the local canonical publication
+gate on Python 3.11 (2,085 tests in 189 modules, zero typing errors, and passed
+privacy/history gates). Astra and Claude Opus independently reviewed the runtime
+at `1164770`; Opus found a supported-Python-3.13 test-gate failure. The `dcc6507`
+test/documentation follow-up fixes it and received a separate Opus review with
+no blocker/high/medium finding. Exact-head hosted matrix evidence remains
+separate; local validation does not establish the supported-version matrix. The
 [local diagnostic](OUTCOME_JOURNAL.md) projects one saved job without a migration,
 provider invocation or new writer/decision authority. Requested/stored/observed
 model provenance, result/delivery, direct lineage and source-bound time intervals
@@ -79,6 +81,29 @@ then separately design authenticated immutable owner decisions and corrections.
 Inspect tracked, staged and untracked lane state before any post-merge cleanup.
 Closure remains open alongside the role/review workflow; there is no deployed
 advisor, acceptance journal or accounting claim.
+
+## Advisor foundations integration candidate
+
+Current state: local integration in lane `feat/advisor-foundations-integration`,
+base `dcc6507`, preserving the namespace/capsule histories at `fcc755f` and
+`cd8b604`. Source owner: Hub maintainer, sole integration writer. The neutral
+core carries the newer private-alias/parser/runtime protections for every access
+profile; private validation descriptors never join inherited launch pins.
+Socket hardlinks refuse, an empty mount-source label is supported with exact
+tail cardinality, and missing-anchor metadata failures preserve typed refusal.
+The scripted private-alias corpus also runs directly through the readonly core.
+The real bind fixture exercises the private guard; it is not an additional
+kernel witness of the complete core launch.
+
+Focused strict evidence: 94 core/facade/parser/workflow checks and 40
+capsule/permission/namespace checks passed without optional namespace skips.
+Integrated commit/publication, exact-revision independent security review and
+hosted gates remain pending. Next trigger: those combined gates, then design the
+authorized-material/workflow binding and supported bounded inference transport.
+Closure remains open: these primitives enable no productive advisor, role
+handover, owner assessment or installed custody. Private networking still blocks
+the existing loopback route. Inspect tracked, staged and untracked lane state
+before any post-merge cleanup.
 
 ## Planned final-response mode indicators
 

@@ -113,7 +113,9 @@ def _assert_namespace_job(job: dict[str, Any]) -> None:
         "test_namespace_client_preserves_peer_gate_and_atomic_allow_deny "
         "tests.test_claude_custody_rehearsal.ClaudeCustodyRehearsalTests."
         "test_namespace_blocks_authority_aliases_and_privilege_but_shares_network "
-        "tests.test_codex_native_namespace"
+        "tests.test_codex_native_namespace "
+        "tests.test_process_namespace_rehearsal "
+        "tests.test_review_materials_namespace"
     ):
         raise AssertionError(
             "namespace job must run all required real namespace scenarios and outer wrapper witness"
@@ -315,6 +317,8 @@ class WorkflowContractTests(unittest.TestCase):
             "missing",
             "missing_custody",
             "missing_private_alias",
+            "missing_private",
+            "missing_materials",
             "wrong_command",
             "tolerate_failure",
         ):
@@ -327,7 +331,12 @@ class WorkflowContractTests(unittest.TestCase):
                 if mutation == "missing":
                     invocation["run"] = ""
                 elif mutation == "missing_custody":
-                    invocation["run"] = invocation["run"].rstrip().rsplit(" ", 1)[0]
+                    selector = (
+                        "tests.test_claude_custody_rehearsal.ClaudeCustodyRehearsalTests."
+                        "test_namespace_blocks_authority_aliases_and_privilege_but_shares_network "
+                    )
+                    self.assertIn(selector, invocation["run"])
+                    invocation["run"] = invocation["run"].replace(selector, "")
                 elif mutation == "missing_private_alias":
                     selector = (
                         "tests.test_claude_private_mount_aliases.ClaudePrivateMountAliasTests."
@@ -335,6 +344,14 @@ class WorkflowContractTests(unittest.TestCase):
                     )
                     self.assertIn(selector, invocation["run"])
                     invocation["run"] = invocation["run"].replace(selector, "")
+                elif mutation == "missing_private":
+                    invocation["run"] = invocation["run"].replace(
+                        " tests.test_process_namespace_rehearsal", ""
+                    )
+                elif mutation == "missing_materials":
+                    invocation["run"] = invocation["run"].replace(
+                        " tests.test_review_materials_namespace", ""
+                    )
                 elif mutation == "wrong_command":
                     invocation["run"] = "echo skipped"
                 else:

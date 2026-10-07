@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-import errno
 import os
 import re
 import shutil
@@ -20,6 +19,8 @@ from unittest.mock import patch
 import hermes_codex_router.claude_file_sandbox as sandbox
 import hermes_codex_router.claude_mount_pins as mounts
 import hermes_codex_router.claude_private_mounts as private_mounts
+import hermes_codex_router.process_namespace as namespace
+from tests.fd_fixture import assert_descriptor_cleanup
 from tests.namespace_fixture import namespace_permission_refused, namespace_unavailable
 
 
@@ -43,7 +44,7 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
             self.sock.bind(str(self.socket_path))
         except PermissionError:
             self.socket_path.touch()
-            self.socket_patch = patch.object(sandbox.stat, "S_ISSOCK", return_value=True)
+            self.socket_patch = patch.object(namespace.stat, "S_ISSOCK", return_value=True)
             self.socket_patch.start()
             self.addCleanup(self.socket_patch.stop)
         self.socket_path.chmod(0o600)
@@ -57,14 +58,14 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
         # Alias metadata needs all fixture sources on one filesystem. Runtime
         # trust has separate tests; bypass only these local fictional sources.
         for name in ("_immutable_source", "_immutable_entry", "_runtime_location"):
-            original = getattr(sandbox, name)
+            original = getattr(namespace, name)
 
             def fixture_source(path: Path, *args: object, original=original, **kwargs: object):
                 if path == self.base or self.base in path.parents:
                     return None
                 return original(path, *args, **kwargs)
 
-            scoped = patch.object(sandbox, name, fixture_source)
+            scoped = patch.object(namespace, name, fixture_source)
             scoped.start()
             self.addCleanup(scoped.stop)
         self.config = sandbox.FileToolSandboxConfig(
@@ -135,33 +136,21 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
             patch.object(Path, "read_text", read),
             patch.object(private_mounts, "_read_mountinfo", return_value=table),
             patch.object(mounts, "mount_id", selected),
-            patch.object(sandbox, "mount_id", selected),
+            patch.object(namespace, "mount_id", selected),
         ):
             yield
 
     def wrap(self, config: sandbox.FileToolSandboxConfig | None = None) -> mounts.SandboxLaunch:
-        with patch.object(sandbox, "_require_fd_bind_support"):
-            return (config or self.config).wrap([str(self.executable)], {}, self.project)
+        with patch.object(namespace, "_require_fd_bind_support"):
+            return self.launch(config)
+
+    def launch(self, config: sandbox.FileToolSandboxConfig | None = None) -> mounts.SandboxLaunch:
+        return (config or self.config).wrap([str(self.executable)], {}, self.project)
 
     @contextmanager
     def assert_opened_descriptors_closed(self) -> Iterator[None]:
-        # Shared-process discovery may collect unrelated connections during the
-        # launch. Check the descriptors opened by this operation, not FD totals.
-        opened: set[int] = set()
-        actual_open = os.open
-
-        def track(*args: object, **kwargs: object) -> int:
-            descriptor = actual_open(*args, **kwargs)  # type: ignore[arg-type]
-            opened.add(descriptor)
-            return descriptor
-
-        with patch("os.open", side_effect=track):
+        with assert_descriptor_cleanup(self):
             yield
-        self.assertTrue(opened)
-        for descriptor in opened:
-            with self.subTest(descriptor=descriptor), self.assertRaises(OSError) as error:
-                os.fstat(descriptor)
-            self.assertEqual(error.exception.errno, errno.EBADF)
 
     def test_project_root_ancestor_and_subtree_private_aliases_are_refused(self) -> None:
         for destination, origin in (
@@ -194,8 +183,20 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
     def test_same_filesystem_siblings_and_private_validation_fds_are_safe(self) -> None:
         with self.assert_opened_descriptors_closed(), self.wrap() as launch:
             private_info = self.private.stat()
+            public_sources = {
+                str(path)
+                for path in (
+                    self.project,
+                    self.project / ".git",
+                    self.home,
+                    self.executable,
+                    self.config.hook_code_root,
+                    self.socket_path,
+                )
+            }
             self.assertTrue(launch.pass_fds)
             for fd in launch.pass_fds:
+                self.assertIn(os.readlink(f"/proc/self/fd/{fd}"), public_sources)
                 info = os.fstat(fd)
                 self.assertNotEqual(
                     (info.st_dev, info.st_ino), (private_info.st_dev, private_info.st_ino)
@@ -209,6 +210,23 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
         ):
             with self.wrap(config):
                 self.fail("a protected socket was exposed as the per-turn endpoint")
+
+    def test_permission_socket_bind_alias_of_private_endpoint_is_refused(self) -> None:
+        with self.alias(self.socket_path, self.private / "endpoint"):
+            with self.assertRaisesRegex(
+                sandbox.FileToolSandboxError, "mount overlaps private authority"
+            ):
+                with self.wrap():
+                    self.fail("private endpoint coordinate was exposed")
+
+    def test_hardlinked_permission_socket_is_refused(self) -> None:
+        os.link(self.socket_path, self.private / "endpoint")
+        with self.assert_opened_descriptors_closed():
+            with self.assertRaisesRegex(
+                sandbox.FileToolSandboxError, "permission socket.*hardlink"
+            ):
+                with self.wrap():
+                    self.fail("hardlinked private endpoint was exposed")
 
     def test_missing_private_suffix_does_not_protect_its_whole_existing_parent(self) -> None:
         config = dataclasses.replace(
@@ -251,10 +269,10 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
 
         with (
             self.assert_opened_descriptors_closed(),
-            patch.object(sandbox, "_require_fd_bind_support", side_effect=appear),
+            patch.object(namespace, "_require_fd_bind_support", side_effect=appear),
         ):
             with self.assertRaisesRegex(sandbox.FileToolSandboxError, "private authority"):
-                with config.wrap([str(self.executable)], {}, self.project):
+                with self.launch(config):
                     self.fail("a missing private component changed after validation")
 
     def test_private_ancestor_replacement_cannot_change_the_excluded_inode(self) -> None:
@@ -266,10 +284,10 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
 
         with (
             self.assert_opened_descriptors_closed(),
-            patch.object(sandbox, "_require_fd_bind_support", side_effect=replace),
+            patch.object(namespace, "_require_fd_bind_support", side_effect=replace),
         ):
             with self.assertRaises(sandbox.FileToolSandboxError):
-                with self.config.wrap([str(self.executable)], {}, self.project):
+                with self.launch():
                     self.fail("private path replacement escaped its pinned identity")
 
     def test_independent_bind_coordinate_on_same_filesystem_is_allowed(self) -> None:
@@ -369,3 +387,35 @@ print('real private bind alias refused')
                     namespace_unavailable(self, "kernel disallows user namespaces")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), "real private bind alias refused")
+
+
+class ReadonlyPrivateMountAliasTests(ClaudePrivateMountAliasTests):
+    """The same provenance corpus through the direct core, bypassing Claude.wrap."""
+
+    def launch(self, config: sandbox.FileToolSandboxConfig | None = None) -> mounts.SandboxLaunch:
+        selected = config or self.config
+        core = namespace.ProcessNamespaceConfig(
+            runtime=selected._namespace.runtime,
+            project_root=selected.project_root,
+            session_home=selected.provider_home,
+            private_paths=selected.private_paths,
+        )
+        return core.wrap([str(self.executable)], {}, self.project)
+
+    def assert_no_endpoint(self, config: sandbox.FileToolSandboxConfig | None = None) -> None:
+        with self.assert_opened_descriptors_closed(), self.wrap(config) as launch:
+            self.assertNotIn("--share-net", launch.argv)
+            self.assertNotIn("/run/hub-permission.sock", launch.argv)
+            for fd in launch.pass_fds:
+                self.assertNotEqual(os.readlink(f"/proc/self/fd/{fd}"), str(self.socket_path))
+
+    def test_protected_socket_is_not_the_per_turn_permission_exception(self) -> None:
+        self.assert_no_endpoint(dataclasses.replace(self.config, private_paths=(self.socket_path,)))
+
+    def test_permission_socket_bind_alias_of_private_endpoint_is_refused(self) -> None:
+        with self.alias(self.socket_path, self.private / "endpoint"):
+            self.assert_no_endpoint()
+
+    def test_hardlinked_permission_socket_is_refused(self) -> None:
+        os.link(self.socket_path, self.private / "endpoint")
+        self.assert_no_endpoint()

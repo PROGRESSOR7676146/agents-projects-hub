@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hermes_codex_router.claude_mount_pins import MountPinError, MountPins
+from tests.fd_fixture import assert_descriptor_cleanup
 
 
 class ClaudeMountPinsTests(unittest.TestCase):
@@ -133,8 +134,12 @@ class ClaudeMountPinsTests(unittest.TestCase):
             self.assertIs(type(mount_id), int)
             self.assertGreater(mount_id, 0)
             ids = {
-                int(line.split()[0])
-                for line in Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
+                int(line.split(" ")[0])
+                for line in Path("/proc/self/mountinfo")
+                .read_bytes()
+                .decode("utf-8")
+                .removesuffix("\n")
+                .split("\n")
             }
             self.assertIn(mount_id, ids)
             for raw in ("", "mnt_id:\t0\n", "mnt_id:\t1\nmnt_id:\t2\n", "mnt_id:\tx\n"):
@@ -158,14 +163,13 @@ class ClaudeMountPinsTests(unittest.TestCase):
     def test_same_inode_on_a_replaced_mount_is_refused(self) -> None:
         with MountPins() as pins:
             descriptor = pins.open(self.project, directory=True)
-            before = len(os.listdir("/proc/self/fd"))
-            original = pins.mount_id(descriptor)
+            with assert_descriptor_cleanup(self):
+                original = pins.mount_id(descriptor)
 
-            def changed(fd: int) -> int:
-                return original if fd == descriptor else original + 1
+                def changed(fd: int) -> int:
+                    return original if fd == descriptor else original + 1
 
-            with patch("hermes_codex_router.claude_mount_pins.mount_id", side_effect=changed):
-                with self.assertRaisesRegex(MountPinError, "identity changed"):
-                    pins.recheck()
-            self.assertEqual(os.fstat(descriptor).st_ino, self.project.stat().st_ino)
-            self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+                with patch("hermes_codex_router.claude_mount_pins.mount_id", side_effect=changed):
+                    with self.assertRaisesRegex(MountPinError, "identity changed"):
+                        pins.recheck()
+                self.assertEqual(os.fstat(descriptor).st_ino, self.project.stat().st_ino)
