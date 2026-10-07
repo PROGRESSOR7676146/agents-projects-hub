@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .claude_mount_pins import MountPinError, MountPins, SandboxLaunch, mount_id
+from .claude_private_mounts import PrivateMountError, PrivateMountGuard
 
 
 class FileToolSandboxError(ValueError):
@@ -115,6 +116,8 @@ def _immutable_source(path: Path, label: str, *, directory: bool | None = None) 
 def _immutable_entry(path: Path, label: str, info: os.stat_result) -> None:
     if info.st_uid != 0 or info.st_mode & 0o022 or os.access(path, os.W_OK, effective_ids=True):
         raise FileToolSandboxError(f"{label} must be immutable root-owned code")
+    if stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
+        raise FileToolSandboxError(f"{label} contains an unsupported runtime hardlink")
     try:
         if {"system.posix_acl_access", "system.posix_acl_default"}.intersection(
             os.listxattr(path, follow_symlinks=False)
@@ -330,7 +333,10 @@ class FileToolSandboxConfig:
         return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
 
     def _validate(
-        self, mount_ids: Mapping[Path, int], source_fds: Mapping[Path, int]
+        self,
+        mount_ids: Mapping[Path, int],
+        source_fds: Mapping[Path, int],
+        private_guard: PrivateMountGuard | None = None,
     ) -> tuple[Path, Path, Path, tuple[Path, ...], Path]:
         if sys.platform != "linux":
             raise FileToolSandboxError("Linux namespaces are required")
@@ -417,23 +423,42 @@ class FileToolSandboxConfig:
                 raise FileToolSandboxError("mount overlaps private authority")
         if any(_within(source, sock) or _within(sock, source) for source in sources):
             raise FileToolSandboxError("permission socket overlaps a broad mount")
+        exposed = {path: fd for path, fd in source_fds.items() if path != sock}
+        try:
+            if private_guard is None:
+                with PrivateMountGuard() as guard:
+                    guard.check(exposed, mount_ids, self.private_paths)
+                    guard.recheck()
+            else:
+                private_guard.check(exposed, mount_ids, self.private_paths)
+        except PrivateMountError as exc:
+            raise FileToolSandboxError(str(exc)) from exc
         return bwrap, project, home, roots, sock
 
     def wrap(self, argv: Sequence[str], env: Mapping[str, str], cwd: Path | str) -> SandboxLaunch:
         """Pin every mount before validation and transfer ownership to the caller."""
         pins = MountPins()
         try:
-            command, child = self._build(argv, env, cwd, pins)
-            pins.recheck()
+            with PrivateMountGuard() as private_guard:
+                command, child = self._build(argv, env, cwd, pins, private_guard)
+                pins.recheck()
+                private_guard.recheck()
             return SandboxLaunch(tuple(command), child, pins)
         except BaseException as exc:
             pins.close()
             if isinstance(exc, (MountPinError, OSError)):
                 raise FileToolSandboxError("mount sources could not be pinned") from exc
+            if isinstance(exc, PrivateMountError):
+                raise FileToolSandboxError(str(exc)) from exc
             raise
 
     def _build(
-        self, argv: Sequence[str], env: Mapping[str, str], cwd: Path | str, pins: MountPins
+        self,
+        argv: Sequence[str],
+        env: Mapping[str, str],
+        cwd: Path | str,
+        pins: MountPins,
+        private_guard: PrivateMountGuard,
     ) -> tuple[list[str], dict[str, str]]:
         """Build an argv-only launch using the exact descriptors being checked.
 
@@ -461,6 +486,7 @@ class FileToolSandboxConfig:
         bwrap, project, home, roots, sock = self._validate(
             {path: pins.mount_id(fd) for path, fd in source_fds.items()},
             source_fds,
+            private_guard,
         )
         _require_fd_bind_support(bwrap)
         workdir = _absolute_path(cwd, "working directory")

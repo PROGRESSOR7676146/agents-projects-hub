@@ -87,7 +87,9 @@ Paths are fictional and must be explicit canonical sources. The worker also
 excludes Hub state, registry, bot token files, the transport key file, tlive home and tlive
 socket. Review all additional private endpoints/authority roots. Namespace
 validation refuses symlinks, overlapping private mounts, writable trusted code,
-hardlinks/special files in writable trees and nested mounts. Runtime and hook
+hardlinks/special files in writable trees and nested mounts. Multiply linked
+regular runtime/hook files are also refused: readonly exposure is still a
+confidentiality boundary. Runtime and hook
 roots must also be free of submounts; choose narrower sources when a system
 runtime tree contains them. Nested btrfs subvolumes are refused by the device
 consistency check. Worktree roots
@@ -106,6 +108,20 @@ This does not freeze directory contents or attest to custody against an
 unconfined same-UID process, hostile administrator or concurrent host mount
 changes. The separate live isolation gate remains mandatory.
 
+Private authority exclusion also compares descriptor inode identities and
+filesystem coordinates derived from each selected kernel mount ID, device,
+mount root and relative source path. This excludes bind aliases at a source
+root, an ancestor or a protected subtree, including readonly runtime/hook mounts.
+Different sibling directories on one filesystem remain usable. Missing private
+paths use a separately pinned existing ancestor and the exact missing suffix;
+the missing component must still be absent at the final recheck. Validation-only
+private descriptors are closed before returning the launch and are never passed
+to bubblewrap. Rechecks include mount IDs and relevant provenance/topology.
+The initial boundary refuses private authority paths containing descendant
+mounts rather than omit their separate filesystems. Unavailable, ambiguous,
+malformed or mismatching mount provenance also refuses invocation. These checks
+do not freeze contents or remove the separate host-custody/live gates.
+
 ## Offline checks
 
 Run focused Python coverage through the normal validator:
@@ -119,6 +135,15 @@ python scripts/validate.py --profile focused \
   tests.test_claude_file_policy tests.test_external_runtime \
   tests.test_tlive_extension tests.test_claude_mount_pins tests.test_unix_peer
 ```
+
+Also select `tests.test_claude_private_mount_aliases` and
+`tests.test_claude_private_mount_provenance` after mount-boundary changes. Their
+scripted metadata fixtures reproduce alias, missing-path, replacement and
+descriptor-cleanup failures; the real ephemeral namespace fixture checks root,
+ancestor and subtree bind aliases using fictional data without a provider.
+`HUB_REQUIRE_NAMESPACE_TESTS=1` makes missing namespace support fail instead of
+skip, as in the required CI namespace profile. These are prelaunch source
+checks, not productive native/Telegram acceptance or whole-host custody.
 
 The roundtrip tests require a local environment that permits Unix-socket bind.
 They use temporary Git roots, SQLite and signed fictional Telegram receipts.
@@ -165,6 +190,10 @@ process visible in the namespace, including PID 1; no pinned host-source inode
 may remain accessible there. Record explicitly whether each process's fd table
 was readable or inaccessible. The executable's version or help flags alone do
 not establish this descriptor-closure property.
+Check separately that a project, provider home or runtime bind alias of a private authority
+root, ancestor or subtree refuses before provider invocation, while an unrelated
+same-filesystem project still starts. Private descendant mounts must refuse;
+missing authority prefixes that appear or change during preparation must refuse.
 Confirm no Stop hook, continuation or second writer, and no real model calls
 from monitoring. The worker process and the hook must have different visible
 authority: keys/state are available only to the worker and tlive.

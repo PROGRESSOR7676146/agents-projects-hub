@@ -270,7 +270,7 @@ class ClaudeFileSandboxTests(unittest.TestCase):
                 unsafe.wrap([str(self.executable)], {}, self.project)
 
     def test_other_uid_group_writes_and_acl_do_not_establish_trusted_code(self) -> None:
-        info = SimpleNamespace(st_uid=0, st_gid=0, st_mode=stat.S_IFREG | 0o644)
+        info = SimpleNamespace(st_uid=0, st_gid=0, st_mode=stat.S_IFREG | 0o644, st_nlink=1)
         with (
             patch.object(Path, "stat", return_value=info),
             patch.object(os, "access", return_value=False),
@@ -285,6 +285,10 @@ class ClaudeFileSandboxTests(unittest.TestCase):
             with self.assertRaises(FileToolSandboxError):
                 sandbox_module._immutable_source(self.executable, "runtime", directory=False)
             info.st_mode = stat.S_IFREG | 0o644
+            info.st_nlink = 2
+            with self.assertRaisesRegex(FileToolSandboxError, "runtime hardlink"):
+                sandbox_module._immutable_source(self.executable, "runtime", directory=False)
+            info.st_nlink = 1
             attributes.return_value = ["system.posix_acl_access"]
             with self.assertRaises(FileToolSandboxError):
                 sandbox_module._immutable_source(self.executable, "runtime", directory=False)
@@ -304,7 +308,7 @@ class ClaudeFileSandboxTests(unittest.TestCase):
                     sandbox_module._scan_writable_tree(root, descriptor)
 
     def test_unsupported_acl_storage_is_safe_but_inspection_failure_refuses(self) -> None:
-        info = SimpleNamespace(st_uid=0, st_mode=stat.S_IFREG | 0o644)
+        info = SimpleNamespace(st_uid=0, st_mode=stat.S_IFREG | 0o644, st_nlink=1)
         with patch.object(os, "access", return_value=False):
             for error in (errno.ENOTSUP, errno.EOPNOTSUPP):
                 with patch.object(os, "listxattr", side_effect=OSError(error, "example")):

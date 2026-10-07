@@ -154,3 +154,18 @@ class ClaudeMountPinsTests(unittest.TestCase):
             pins.recheck()
             self.assertEqual(os.fstat(project_fd).st_ino, self.project.stat().st_ino)
             self.assertEqual(os.fstat(git_fd).st_ino, (self.project / ".git").stat().st_ino)
+
+    def test_same_inode_on_a_replaced_mount_is_refused(self) -> None:
+        with MountPins() as pins:
+            descriptor = pins.open(self.project, directory=True)
+            before = len(os.listdir("/proc/self/fd"))
+            original = pins.mount_id(descriptor)
+
+            def changed(fd: int) -> int:
+                return original if fd == descriptor else original + 1
+
+            with patch("hermes_codex_router.claude_mount_pins.mount_id", side_effect=changed):
+                with self.assertRaisesRegex(MountPinError, "identity changed"):
+                    pins.recheck()
+            self.assertEqual(os.fstat(descriptor).st_ino, self.project.stat().st_ino)
+            self.assertEqual(len(os.listdir("/proc/self/fd")), before)

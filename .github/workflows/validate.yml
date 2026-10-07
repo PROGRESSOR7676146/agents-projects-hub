@@ -75,6 +75,7 @@ jobs:
         run: >-
           .venv/bin/python -m unittest -v
           tests.test_claude_file_sandbox.ClaudeFileSandboxTests.test_namespace_denies_private_symlink_git_write_and_host_paths
+          tests.test_claude_private_mount_aliases.ClaudePrivateMountAliasTests.test_real_private_bind_alias_is_refused_before_any_provider_launch
           tests.test_claude_permission_host_roundtrip.PermissionHostRoundtripTests.test_namespace_client_preserves_peer_gate_and_atomic_allow_deny
           tests.test_claude_custody_rehearsal.ClaudeCustodyRehearsalTests.test_namespace_blocks_authority_aliases_and_privilege_but_shares_network
           tests.test_codex_native_namespace
