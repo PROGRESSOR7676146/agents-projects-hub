@@ -332,6 +332,34 @@ Primary references: [built-in mods](https://code.claude.com/docs/en/plugins/mods
 [plugin settings](https://code.claude.com/docs/en/settings-reference#enabledplugins)
 and [SDK result message](https://code.claude.com/docs/en/agent-sdk/typescript#sdkresultmessage).
 
+## Offline review pipe primitives
+
+`tests.test_review_bridge_protocol` and `tests.test_review_bridge_attempt` exercise
+the [bounded pipe primitives](../decisions/0058-bounded-review-pipe-primitives.md)
+without a provider, socket, process launch, environment credentials or live route:
+
+```bash
+PYTHONPATH=src:. python scripts/validate.py --profile focused \
+  tests.test_review_bridge_protocol tests.test_review_bridge_attempt \
+  tests.test_review_materials
+```
+
+Codec tests cover fragmented/combined frames, declared payload limits before body
+accumulation, aggregate byte/frame budgets including headers and empty frames,
+invalid caller types and permanent retirement after failure/EOF. Gate tests use
+real sealed capsules and a recording fake callback: exact material binding and
+trusted request bytes, source changes after sealing, unsealed/closed material,
+forbidden frame directions, single-use concurrent/reentrant admission, safe
+callback diagnostics and cancellation/deadlines before and after claim. The host
+injected callback has no live upstream implementation; its return is not provider
+acceptance or completion. Deadline checks cannot interrupt that callback.
+
+These are in-process fixtures. They do not prove an actual namespace pipe,
+HTTP/native compatibility, durable workflow deduplication, role authorization,
+subscription/no-paid-fallback, deployed custody or Telegram acceptance. The
+ordinary suite must never create a real inference route. Directional sequencing,
+owned process/response pumping and the separate native witness remain next steps.
+
 ## Live acceptance boundary
 
 The reusable validation workflow also runs a required Ubuntu 24.04 namespace
