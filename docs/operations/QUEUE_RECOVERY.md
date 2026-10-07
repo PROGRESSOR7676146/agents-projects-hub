@@ -211,8 +211,16 @@ the legacy Unix JSONL transport does not enforce receive timeouts.
 A timeout after sending `turn/start` may hide native acceptance. External and
 embedded queues retain `indeterminate`, the prepared thread checkpoint and root
 exclusion when no exact accepted turn ID was saved. They never infer that no
-turn started from the missing ID or retry the submission automatically. An
-ordinary request-deadline error creates no saved-task preparation-retry authority.
+turn started from the missing ID or retry the submission automatically.
+Only the typed local RPC response-budget error, caught by the exact
+pre-submission preparation boundary, may create the existing saved-task retry
+ticket. The owner must Reply exactly `retry` to its delivered failure notice;
+the ticket retains the original payload and binding and grants no tool permission.
+Generic errors with identical wording, permission-profile refusals, unwrapped
+deadline errors and contradictory execution evidence create no such authority.
+This type does not attest an upstream timeout: the local response budget also
+includes the bounded response-channel fault drain. Missing saved context after
+thread replacement still refuses retry. No timeout creates automatic replay.
 Legacy inline execution retains its weaker dispatch/recovery boundary.
 
 ### Completed Codex socket connection retirement

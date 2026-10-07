@@ -29,8 +29,8 @@ from .codex_permissions import (
     verify_managed_selection,
 )
 from .codex_response_drain import CodexResponseDrain
+from .codex_rpc import RpcDeadlineError, RpcOutboundUnavailableError
 from .codex_rpc import RpcError as RpcError
-from .codex_rpc import RpcOutboundUnavailableError
 from .codex_rpc import RpcRejectedError as RpcRejectedError
 from .codex_transports import (
     StdioJsonLineTransport as StdioJsonLineTransport,
@@ -452,14 +452,14 @@ class CodexAppServerClient:
             deadline = time.monotonic() + DEFAULT_RPC_RESPONSE_SECONDS
         assert deadline is not None
         if self._response_remaining(deadline=deadline) <= 0:
-            raise RpcError("Codex request deadline exceeded")
+            raise RpcDeadlineError()
         request_id = self._next_request_id
         self._next_request_id += 1
         self._transport.send({"method": method, "id": request_id, "params": params})
         while True:
             remaining = self._response_remaining(deadline=deadline)
             if remaining <= 0:
-                raise RpcError("Codex request deadline exceeded")
+                raise RpcDeadlineError()
             # Foreign frames cannot renew the total response deadline. Keep
             # the existing quiet ceiling only for calls without an explicit
             # deadline; early human approvals use turn/start's longer budget.
@@ -467,7 +467,7 @@ class CodexAppServerClient:
                 timeout=min(remaining, DEFAULT_RPC_QUIET_SECONDS) if default_deadline else remaining
             )
             if self._response_remaining(deadline=deadline) <= 0:
-                raise RpcError("Codex request deadline exceeded")
+                raise RpcDeadlineError()
             if "method" in message and "id" in message:
                 # A companion client such as tlive owns remote approval. Do
                 # not answer from this headless bridge and never auto-allow.

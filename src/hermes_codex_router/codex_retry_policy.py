@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .codex_failure import CodexPreparationError
-from .codex_rpc import RpcError
+from .codex_rpc import RpcDeadlineError, RpcError
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,8 +22,12 @@ def preparation_retry_binding(
     if type(error) is not CodexPreparationError:
         return None
     cause = error.__cause__
-    if isinstance(cause, (EOFError, ConnectionError, TimeoutError)) or (
-        type(cause) is RpcError and str(cause) == "Codex notification buffer exceeded its bound"
+    if (
+        type(cause) is RpcDeadlineError
+        or isinstance(cause, (EOFError, ConnectionError, TimeoutError))
+        or (
+            type(cause) is RpcError and str(cause) == "Codex notification buffer exceeded its bound"
+        )
     ):
         try:
             canonical_root = root.resolve(strict=True)
