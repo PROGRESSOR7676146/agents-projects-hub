@@ -423,7 +423,7 @@ class FileToolSandboxConfig:
                 raise FileToolSandboxError("mount overlaps private authority")
         if any(_within(source, sock) or _within(sock, source) for source in sources):
             raise FileToolSandboxError("permission socket overlaps a broad mount")
-        exposed = {path: fd for path, fd in source_fds.items() if path != sock}
+        exposed = source_fds
         try:
             if private_guard is None:
                 with PrivateMountGuard() as guard:
@@ -431,7 +431,7 @@ class FileToolSandboxConfig:
                     guard.recheck()
             else:
                 private_guard.check(exposed, mount_ids, self.private_paths)
-        except PrivateMountError as exc:
+        except (PrivateMountError, MountPinError) as exc:
             raise FileToolSandboxError(str(exc)) from exc
         return bwrap, project, home, roots, sock
 

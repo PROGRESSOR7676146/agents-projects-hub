@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -45,7 +46,26 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
             self.socket_patch.start()
             self.addCleanup(self.socket_patch.stop)
         self.socket_path.chmod(0o600)
-        self.executable = Path("/usr/bin/true")
+        runtime = self.base / "runtime"
+        runtime.mkdir()
+        self.executable = runtime / "example-executable"
+        self.executable.write_text("fictional executable", encoding="utf-8")
+        self.executable.chmod(0o755)
+        hook = self.base / "hooks"
+        hook.mkdir()
+        # Alias metadata needs all fixture sources on one filesystem. Runtime
+        # trust has separate tests; bypass only these local fictional sources.
+        for name in ("_immutable_source", "_immutable_entry", "_runtime_location"):
+            original = getattr(sandbox, name)
+
+            def fixture_source(path: Path, *args: object, original=original, **kwargs: object):
+                if path == self.base or self.base in path.parents:
+                    return None
+                return original(path, *args, **kwargs)
+
+            scoped = patch.object(sandbox, name, fixture_source)
+            scoped.start()
+            self.addCleanup(scoped.stop)
         self.config = sandbox.FileToolSandboxConfig(
             bwrap_executable=Path(shutil.which("bwrap") or "/usr/bin/true"),
             project_root=self.project,
@@ -53,7 +73,7 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
             runtime_roots=(self.executable,),
             claude_executable=self.executable,
             python_executable=self.executable,
-            hook_code_root=Path("/usr/lib/locale"),
+            hook_code_root=hook,
             permission_socket=self.socket_path,
             private_paths=(self.private,),
         )
@@ -66,9 +86,26 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
         table = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
         identity = max(int(line.split()[0]) for line in table.splitlines()) + 1
         device = destination.stat().st_dev
+        anchor = filesystem_root
+        while not anchor.exists():
+            anchor = anchor.parent
+        self.assertEqual(device, anchor.stat().st_dev, "alias fixture must model origin device")
+        with mounts.MountPins() as pins:
+            origin_fd = pins.open(anchor)
+            origin_id = pins.mount_id(origin_fd)
+        selected_mount = next(
+            line.split() for line in table.splitlines() if line.split()[0] == str(origin_id)
+        )
+
+        def decode(raw: str) -> Path:
+            return Path(re.sub(r"\\(040|011|012|134)", lambda match: chr(int(match[1], 8)), raw))
+
+        coordinate = decode(selected_mount[3]) / filesystem_root.relative_to(
+            decode(selected_mount[4])
+        )
         table += (
             f"{identity} 1 {os.major(device)}:{os.minor(device)} "
-            f"{filesystem_root} {destination} rw - ext4 example rw\n"
+            f"{coordinate} {destination} rw - ext4 example rw\n"
         )
 
         def read(path: Path, *args: object, **kwargs: object) -> str:
@@ -136,6 +173,14 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
                 )
             self.assertNotIn(str(self.private), launch.argv)
         self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
+    def test_protected_socket_is_not_the_per_turn_permission_exception(self) -> None:
+        config = dataclasses.replace(self.config, private_paths=(self.socket_path,))
+        with self.assertRaisesRegex(
+            sandbox.FileToolSandboxError, "mount overlaps private authority"
+        ):
+            with self.wrap(config):
+                self.fail("a protected socket was exposed as the per-turn endpoint")
 
     def test_missing_private_suffix_does_not_protect_its_whole_existing_parent(self) -> None:
         config = dataclasses.replace(

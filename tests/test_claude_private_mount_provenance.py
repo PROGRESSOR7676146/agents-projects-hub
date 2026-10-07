@@ -86,6 +86,60 @@ class PrivateMountProvenanceTests(unittest.TestCase):
             with self.assertRaisesRegex(PrivateMountError, "does not match its pin"):
                 self.check()
 
+    def test_kernel_descriptor_path_divergence_refuses_sources_and_private_anchors(self) -> None:
+        (self.source / ".git").mkdir()
+        for path in (self.source, self.source / ".git", self.private, self.base):
+            for suffix in ("casefold", " (deleted)"):
+                with self.subTest(path=path, suffix=suffix):
+                    original = os.readlink
+                    before = len(os.listdir("/proc/self/fd"))
+
+                    def divergent(name: str, *args: object, **kwargs: object) -> str:
+                        value = original(name, *args, **kwargs)  # type: ignore[arg-type]
+                        if value != str(path):
+                            return value
+                        return (
+                            str(path.with_name(path.name.upper()))
+                            if suffix == "casefold"
+                            else value + suffix
+                        )
+
+                    with (
+                        MountPins() as pins,
+                        PrivateMountGuard() as guard,
+                        patch.object(os, "readlink", divergent),
+                    ):
+                        fds = {p: pins.open(p) for p in (self.source, self.source / ".git")}
+                        authority = (
+                            self.base / "missing" / "authority"
+                            if path == self.base
+                            else self.private
+                        )
+                        with self.assertRaisesRegex(PrivateMountError, "does not match its pin"):
+                            guard.check(
+                                fds, {p: pins.mount_id(fd) for p, fd in fds.items()}, (authority,)
+                            )
+                    self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
+    def test_kernel_path_recheck_divergence_and_unavailability_refuse(self) -> None:
+        for effect in ("casefold", "unavailable"):
+            with self.subTest(effect=effect), MountPins() as pins, PrivateMountGuard() as guard:
+                fd = pins.open(self.source)
+                guard.check({self.source: fd}, {self.source: pins.mount_id(fd)}, (self.private,))
+                original = os.readlink
+
+                def changed(name: str, *args: object, **kwargs: object) -> str:
+                    value = original(name, *args, **kwargs)  # type: ignore[arg-type]
+                    if value != str(self.private):
+                        return value
+                    if effect == "unavailable":
+                        raise PermissionError("fictional descriptor error")
+                    return str(self.private.with_name(self.private.name.upper()))
+
+                with patch.object(os, "readlink", changed):
+                    with self.assertRaises(PrivateMountError):
+                        guard.recheck()
+
     def test_equal_private_file_inode_is_refused_even_with_different_names(self) -> None:
         private_file = self.private / "key"
         private_file.write_text("fictional key", encoding="utf-8")

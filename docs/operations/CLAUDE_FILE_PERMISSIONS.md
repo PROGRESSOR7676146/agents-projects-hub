@@ -89,7 +89,8 @@ socket. Review all additional private endpoints/authority roots. Namespace
 validation refuses symlinks, overlapping private mounts, writable trusted code,
 hardlinks/special files in writable trees and nested mounts. Multiply linked
 regular runtime/hook files are also refused: readonly exposure is still a
-confidentiality boundary. Runtime and hook
+confidentiality boundary. Runtime distributions containing hardlinks require
+narrower compatible sources; immutability alone does not waive this check. Runtime and hook
 roots must also be free of submounts; choose narrower sources when a system
 runtime tree contains them. Nested btrfs subvolumes are refused by the device
 consistency check. Worktree roots
@@ -117,10 +118,17 @@ paths use a separately pinned existing ancestor and the exact missing suffix;
 the missing component must still be absent at the final recheck. Validation-only
 private descriptors are closed before returning the launch and are never passed
 to bubblewrap. Rechecks include mount IDs and relevant provenance/topology.
+The kernel descriptor path must match its configured source/anchor exactly;
+casefold name divergence, deleted paths and unavailable descriptor paths refuse.
+Mountinfo is a bounded read, not an atomic view under concurrent host mutation.
 The initial boundary refuses private authority paths containing descendant
 mounts rather than omit their separate filesystems. Unavailable, ambiguous,
 malformed or mismatching mount provenance also refuses invocation. These checks
 do not freeze contents or remove the separate host-custody/live gates.
+The fresh per-turn socket is also checked against private authority; it cannot
+substitute a protected transport endpoint. Strict provenance parsing can refuse
+unusual unrelated kernel mount records; such layouts require offline investigation,
+never an invocation outside the wrapper.
 
 ## Offline checks
 
@@ -141,6 +149,8 @@ Also select `tests.test_claude_private_mount_aliases` and
 scripted metadata fixtures reproduce alias, missing-path, replacement and
 descriptor-cleanup failures; the real ephemeral namespace fixture checks root,
 ancestor and subtree bind aliases using fictional data without a provider.
+Readonly runtime/home aliases and missing-prefix variations additionally have
+scripted metadata coverage; that is not a real-kernel invocation claim.
 `HUB_REQUIRE_NAMESPACE_TESTS=1` makes missing namespace support fail instead of
 skip, as in the required CI namespace profile. These are prelaunch source
 checks, not productive native/Telegram acceptance or whole-host custody.

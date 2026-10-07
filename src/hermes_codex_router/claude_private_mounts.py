@@ -105,9 +105,14 @@ class _Coordinate:
 
 def _coordinate(path: Path, fd: int, identity: int, table: Mapping[int, _Mount]) -> _Coordinate:
     mount = table.get(identity)
-    info = os.fstat(fd)
+    try:
+        info = os.fstat(fd)
+        kernel_path = os.readlink(f"/proc/self/fd/{fd}")
+    except OSError as exc:
+        raise PrivateMountError("private authority descriptor path is unavailable") from exc
     if (
-        mount is None
+        kernel_path != str(path)
+        or mount is None
         or mount.root is None
         or not _within(path, mount.point)
         or mount.device != (os.major(info.st_dev), os.minor(info.st_dev))

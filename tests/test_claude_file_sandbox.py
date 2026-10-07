@@ -517,8 +517,13 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                 self.assertRaises(FileToolSandboxError) as failure,
             ):
                 self._wrap()
-            self.assertIsInstance(failure.exception.__cause__, sandbox_module.MountPinError)
-            self.assertIn("identity changed", str(failure.exception.__cause__))
+            self.assertIsInstance(
+                failure.exception.__cause__,
+                (sandbox_module.MountPinError, sandbox_module.PrivateMountError),
+            )
+            self.assertRegex(
+                str(failure.exception.__cause__), "identity changed|does not match its pin"
+            )
             self.assertTrue(opened)
             for descriptor in set(opened):
                 with self.assertRaises(OSError):
