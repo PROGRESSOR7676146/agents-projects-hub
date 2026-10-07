@@ -34,6 +34,7 @@ from .state_delivery import (
 )
 from .state_errors import StateError
 from .state_incoming_materials import IncomingMaterialsStateFacade
+from .state_outcomes import OutcomeJournalStateFacade, ProviderJobOutcome
 from .state_provider_jobs import (
     ProviderChatActivity,
     ProviderJobRecord,
@@ -1607,6 +1608,11 @@ class HubState:
 
     def cancel_provider_job(self, job_id: str) -> ProviderJobRecord:
         return self._provider_job_state.cancel(job_id)
+
+    def provider_job_outcome(self, job_id: str) -> ProviderJobOutcome:
+        return OutcomeJournalStateFacade(self._connection, StateError, LATEST_SCHEMA_VERSION).read(
+            job_id
+        )
 
     def recover_stale_provider_jobs(
         self, *, agent_id: str | None = None, now: datetime | None = None

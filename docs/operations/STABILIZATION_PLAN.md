@@ -59,6 +59,27 @@ workflow and outcome journal, three-project/restart acceptance, Hermes incident
 and update plane, off-machine restore drill and release 0.8 remain open. Restart
 alone closes neither the repeated notification incident nor payload recovery.
 
+## Read-only outcome projection candidate
+
+Current state: bounded offline implementation in lane
+`feat/outcome-journal-projection`, based on source `93577e5`. Clean candidate
+`11647709fbe337fcf3b5a1738e856bdd10c7030b` passed canonical publication
+(2,084 tests in 189 modules, zero typing errors and privacy/history gates)
+and independent Astra and Claude Opus source reviews. The Opus review identified
+a Python-version-dependent test expectation; the test/documentation follow-up
+and its exact-revision publication checks remain pending. The
+[local diagnostic](OUTCOME_JOURNAL.md) projects one saved job without a migration,
+provider invocation or new writer/decision authority. Requested/stored/observed
+model provenance, result/delivery, direct lineage and source-bound time intervals
+remain distinct. Acceptance, native durations and per-job usage stay unknown
+where the existing records cannot establish them. This does not close
+[REQ-EVAL-010](../product/EVALUATION_AND_ALLOCATION.md).
+Source owner: Hub maintainer; next trigger: exact-revision review/publication,
+then separately design authenticated immutable owner decisions and corrections.
+Inspect tracked, staged and untracked lane state before any post-merge cleanup.
+Closure remains open alongside the role/review workflow; there is no deployed
+advisor, acceptance journal or accounting claim.
+
 ## Planned final-response mode indicators
 
 Owner-requested follow-up (2026-10-07), implementation pending: extend the compact
