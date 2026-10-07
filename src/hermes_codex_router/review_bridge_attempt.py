@@ -155,7 +155,7 @@ class BridgeAttemptGate:
             pass
         if data is None:
             raise BridgeAttemptError("bridge_attempt_material_invalid")
-        self._spec, self._capsule_bytes = spec, data
+        self._request_digest, self._capsule_bytes = spec.expected_request_sha256, data
         self._upstream, self._clock = upstream, clock
         self._deadline, self._last_clock = deadline, now
         self._lock = threading.Lock()
@@ -195,13 +195,18 @@ class BridgeAttemptGate:
             # Every refusal before claim retires the local attempt. Framing
             # cannot accept child SPEC/CAPSULE or a response as host authority.
             self._state = BridgeAttemptState.CLOSED
+            if type(frame) is not BridgeFrame:
+                raise BridgeAttemptError("bridge_attempt_request_invalid")
+            # A caller can bypass dataclass freeze. Validate, hash and pass
+            # the same immutable local bytes; never re-read the caller frame.
+            kind, payload = frame.kind, frame.payload
             try:
-                validate_bridge_frame(frame)
+                validate_bridge_frame(BridgeFrame(kind, payload))
             except BridgeFrameError:
                 raise BridgeAttemptError("bridge_attempt_request_invalid") from None
             if (
-                frame.kind is not BridgeFrameType.REQUEST
-                or hashlib.sha256(frame.payload).hexdigest() != self._spec.expected_request_sha256
+                kind is not BridgeFrameType.REQUEST
+                or hashlib.sha256(payload).hexdigest() != self._request_digest
             ):
                 raise BridgeAttemptError("bridge_attempt_request_invalid")
             self._check_time()
@@ -212,7 +217,7 @@ class BridgeAttemptGate:
         callback_failed = False
         response: object = None
         try:
-            response = self._upstream(frame.payload)
+            response = self._upstream(payload)
         except BaseException:
             callback_failed = True
         with self._lock:

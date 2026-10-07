@@ -51,6 +51,17 @@ class ReviewBridgeProtocolTests(unittest.TestCase):
                 with self.assertRaisesRegex(BridgeFrameError, "retired"):
                     decoder.feed(b"")
 
+    def test_wire_refusal_has_no_original_header_exception_chain(self) -> None:
+        for header in (
+            struct.pack(">4sBI", b"HB01", 255, 0),
+            struct.pack(">4sBI", b"BAD!", BridgeFrameType.REQUEST, 0),
+            struct.pack(">4sBI", b"HB01", BridgeFrameType.REQUEST, 0xFFFFFFFF),
+        ):
+            with self.subTest(header=header), self.assertRaises(BridgeFrameError) as raised:
+                BridgeFrameDecoder().feed(header)
+            self.assertIsNone(raised.exception.__cause__)
+            self.assertIsNone(raised.exception.__context__)
+
     def test_partial_header_and_body_fail_on_eof(self) -> None:
         wire = encode_bridge_frame(BridgeFrame(BridgeFrameType.REQUEST, b"example-body"))
         for length in (1, 8, 9, len(wire) - 1):

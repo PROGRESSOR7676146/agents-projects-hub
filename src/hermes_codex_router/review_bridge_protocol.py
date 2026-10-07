@@ -30,6 +30,7 @@ class BridgeFrameType(IntEnum):
     NATIVE_EXIT = 9
 
 
+_FRAME_TYPES = {int(kind): kind for kind in BridgeFrameType}
 _PAYLOAD_LIMITS = {
     BridgeFrameType.SPEC: 16 * 1024,
     BridgeFrameType.CAPSULE: 1024 * 1024,
@@ -121,9 +122,8 @@ class BridgeFrameDecoder:
                 magic, code, size = _HEADER.unpack_from(self._pending)
                 if magic != _MAGIC:
                     self._fail("bridge_protocol_header_invalid")
-                try:
-                    kind = BridgeFrameType(code)
-                except ValueError:
+                kind = _FRAME_TYPES.get(code)
+                if kind is None:
                     self._fail("bridge_protocol_frame_type")
                 if size > _PAYLOAD_LIMITS[kind]:
                     self._fail("bridge_protocol_payload_bound")

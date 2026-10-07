@@ -115,6 +115,33 @@ class ReviewBridgeAttemptTests(unittest.TestCase):
         self.assertEqual(gate.observation.state, BridgeAttemptState.CLOSED)
         self.assertFalse(gate.observation.attempted)
 
+    def test_callback_receives_the_same_bytes_hashed_before_host_frame_mutation(self) -> None:
+        frame = self.request()
+        clock_reads = 0
+
+        def nonconforming_host_clock() -> float:
+            nonlocal clock_reads
+            clock_reads += 1
+            if clock_reads == 2:
+                # Deliberately violate the trusted-clock contract to exercise
+                # byte pinning across a caller bypass of dataclass freeze.
+                object.__setattr__(frame, "payload", b"example-unchecked-substitution")
+            return self.now
+
+        gate = self.gate(clock=nonconforming_host_clock)
+        gate.submit(frame)
+        self.assertEqual(self.calls, [self.body])
+
+    def test_mutating_caller_spec_after_construction_cannot_replace_request_digest(self) -> None:
+        gate = self.gate()
+        changed = b"example-unchecked-substitution"
+        object.__setattr__(
+            self.spec, "expected_request_sha256", hashlib.sha256(changed).hexdigest()
+        )
+        with self.assertRaisesRegex(BridgeAttemptError, "request"):
+            gate.submit(self.request(changed))
+        self.assertEqual(self.calls, [])
+
     def test_unsealed_capsule_refuses_and_caller_retains_descriptor_ownership(self) -> None:
         data = self.capsule.read()
         descriptor = _create_sealable_memfd()
