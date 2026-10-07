@@ -166,12 +166,32 @@ The next bounded offline candidate in lane `feat/advisor-pipe-sequencing` adds
 directional wire ordering and finite partial-write accounting on `dd43ae6`.
 It keeps distinct request observation, callback consumption, buffered bytes,
 caller-reported writes and native completion. Graceful wire cancellation drains
-and discards in-flight stdout; buffer abort instead requires channel closure if
-a frame was partially sent. It introduces no physical I/O or runtime enabling
-switch. Source owner: Hub maintainer; publication and independent review pending.
+and discards in-flight stdout; buffer abort always requires channel closure.
+It introduces no physical I/O or runtime enabling switch. Source owner: Hub
+maintainer. The commit and canonical publication gates passed 2,231 tests in 200
+modules with zero typing errors and privacy/history checks at `cda15c3`.
+Exact-candidate Astra and actual Claude Opus 5.5/high reviews have no mandatory
+findings. All required hosted checks passed; the optional coverage job found a
+process-wide FD-count decrease without ownership attribution.
+The test-only correction at `c9b4bd5` tracks calling-thread allocations,
+preserves borrowed descriptor identities and explicitly checks that refused
+wrap pins were allocated and closed. Its 2,231-test commit gate passed;
+final canonical publication, independent follow-up and hosted checks are pending.
 
-Next trigger: exact-revision gates/reviews, then owned nonblocking I/O and the
-namespace supervisor witness with a fake endpoint before productive wiring.
+The test-only follow-up in lane `test/review-private-pipe-witness`, based on
+`c9b4bd5`, joins actual owned nonblocking pipes, a private namespace supervisor,
+one fictional HTTP POST and a recording fake callback. It reuses the owned
+process lifecycle of the native transport corpus, checks fresh client response
+receipt rather than END admission alone, and tests cleanup of escaped descendants.
+The ordinary pipe and required actual namespace witnesses passed 46 focused
+local tests (four separate opt-in native Claude cases skipped), with zero targeted
+typing errors. Dirty-candidate Astra review has no mandatory findings;
+canonical publication and independent exact-candidate review are pending.
+It uses fixed bounded source snapshots, not an installed supervisor, and adds no
+productive entry point or live upstream. Source owner: Hub maintainer.
+
+Next trigger: complete the pipe/HTTP witness gates, then exact native HTTP
+validation and immutable installed supervisor custody before productive wiring.
 Closure remains open: no productive advisor, real upstream, durable role/material
 authorization, native body validator, worker wiring, deployment or live acceptance
 is enabled. The original project, host authority sockets and credentials remain

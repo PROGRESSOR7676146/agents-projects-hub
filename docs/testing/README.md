@@ -367,12 +367,34 @@ appending CANCEL to a truncated frame; after buffer abort or failure the future
 I/O owner must close the pipe unconditionally. Uninitialized frame objects retire
 both sequence and buffer through fixed diagnostics without exception chains.
 
-These are in-process fixtures. They do not prove an actual namespace pipe,
-HTTP/native compatibility, durable workflow deduplication, role authorization,
-subscription/no-paid-fallback, deployed custody or Telegram acceptance. The
-ordinary suite must never create a real inference route. Owned nonblocking I/O,
-deadline enforcement, process cleanup and the namespace/native witness remain
-next steps; the partial-write buffer itself performs no physical writes.
+Those primitives are in-process fixtures; the buffer performs no physical writes.
+`tests.test_review_bridge_pipe` adds actual nonblocking pipes and a fictional HTTP
+peer. It covers partial writes/backpressure, exact capsule request binding, a fresh
+response digest receipt, cancellation before/after claim, duplicate requests,
+truncated frames, absolute deadlines during floods/held pipes, bounded HTTP
+headers/bodies and malformed requests. `tests.test_owned_fixture_process` covers
+kill-before-reap and closure of all owned streams; the existing native capture
+regressions reuse that lifecycle.
+
+`tests.test_review_bridge_namespace` adds the private namespace witness to the
+required strict CI job. Positive host controls precede parent/exec-child denial
+checks for original project/Git, authority paths, TCP/pathname/abstract sockets
+and inherited authority/capsule/mount-pin inodes. A setsid descendant holding the
+pipe must reach EOF after namespace teardown. Completion also requires drained
+writes, a client response receipt and valid EXIT/EOF after cleanup; END admission
+alone does not prove delivery. Run locally with:
+
+```bash
+HUB_REQUIRE_NAMESPACE_TESTS=1 PYTHONPATH=src:. python -m unittest -v \
+  tests.test_review_bridge_pipe tests.test_review_bridge_namespace \
+  tests.test_owned_fixture_process
+```
+
+These are actual kernel/fictional-HTTP fixtures. They do not prove native CLI
+compatibility, immutable installed supervisor custody, durable authorization or
+restart deduplication, subscription/no-paid-fallback, productive advisor,
+deployment or Telegram acceptance. Fixed source snapshots are fixture inputs,
+not an installed supervisor. The ordinary suite creates no real inference route.
 
 ## Live acceptance boundary
 
