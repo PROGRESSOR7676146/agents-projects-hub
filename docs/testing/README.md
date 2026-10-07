@@ -341,6 +341,7 @@ without a provider, socket, process launch, environment credentials or live rout
 ```bash
 PYTHONPATH=src:. python scripts/validate.py --profile focused \
   tests.test_review_bridge_protocol tests.test_review_bridge_attempt \
+  tests.test_review_bridge_sequence tests.test_review_bridge_write_buffer \
   tests.test_review_materials
 ```
 
@@ -354,11 +355,24 @@ callback diagnostics and cancellation/deadlines before and after claim. The host
 injected callback has no live upstream implementation; its return is not provider
 acceptance or completion. Deadline checks cannot interrupt that callback.
 
+Sequence and write-buffer tests add wrong direction/order, duplicate controls,
+stdout before request, graceful cancellation with bounded discarded in-flight
+stdout, early exit versus incomplete response, EOF in every unfinished phase,
+per-direction/stream budgets, partial writes and zero-progress would-block,
+backpressure without cumulative admission, one stable outstanding offer and
+abort midway through headers/payloads. A serialized fake owner retries buffer
+admission without advancing sequence twice. A late sequence failure preserves
+one consumed fake callback and refuses resubmission. Buffer abort never permits
+appending CANCEL to a truncated frame; after buffer abort or failure the future
+I/O owner must close the pipe unconditionally. Uninitialized frame objects retire
+both sequence and buffer through fixed diagnostics without exception chains.
+
 These are in-process fixtures. They do not prove an actual namespace pipe,
 HTTP/native compatibility, durable workflow deduplication, role authorization,
 subscription/no-paid-fallback, deployed custody or Telegram acceptance. The
-ordinary suite must never create a real inference route. Directional sequencing,
-owned process/response pumping and the separate native witness remain next steps.
+ordinary suite must never create a real inference route. Owned nonblocking I/O,
+deadline enforcement, process cleanup and the namespace/native witness remain
+next steps; the partial-write buffer itself performs no physical writes.
 
 ## Live acceptance boundary
 

@@ -83,8 +83,51 @@ a namespace, native inference, subscription routing, deployed custody or Telegra
 acceptance. The [testing guide](../testing/README.md#offline-review-pipe-primitives)
 owns the commands and evidence limits.
 
-Next add explicit directional sequencing and bounded response pumping, then an
-owned namespace supervisor/HTTP witness with a fake upstream. Productive wiring
+## Offline directional sequencing and partial-write buffer follow-up
+
+Add a separate single-owner `review_bridge_sequence.py` for wire ordering;
+leave the codec policy-free. Host initialization is SPEC then CAPSULE. The child
+may report bounded native stdout before its single REQUEST, and one NATIVE_EXIT.
+The host response is one HEADERS, bounded CHUNK frames, then END. Separate
+per-direction wire/frame budgets count headers and empty frames; response body
+and native stdout have independent aggregate limits. These payloads stay opaque:
+no native HTTP schema, exit status, stream terminal or authorization is inferred.
+
+Host CANCEL revokes later issue. Already in-flight child stdout may drain within
+its original budget, but the returned discard disposition prohibits publication.
+Child requests after cancellation refuse, including an already in-flight request
+reported as a local ordering fault without submission; child exit ends the drain. EOF closes
+only its own direction. An exit before response END may close both pipes but
+retains incomplete-response and sticky request-observed evidence. Request seen
+is neither callback consumption nor provider acceptance; a late ordering fault
+cannot reset an already consumed gate. Future workflow ownership must combine
+these distinct observations conservatively rather than equating callback return
+or closed pipes with completion.
+
+`review_bridge_write_buffer.py` owns finite immutable encoded frames, temporary
+capacity backpressure, cumulative admission bounds and one outstanding write
+offer. The caller reports an exact bounded advance; even zero progress requires
+a nonempty outstanding offer, and leaves it
+unchanged. Backpressure refuses admission without spending either ledger. A
+bounded response constructor accepts exact fixture bytes, never an arbitrary
+iterator. There is no blocking writer, I/O callback, thread, clock or process.
+Enqueue attests buffer admission, advance only caller-reported bytes, never peer
+receipt. After buffer cancellation or failure, the future I/O owner must close
+the pipe unconditionally and never reuse it. In particular, a wire CANCEL cannot
+be appended to a truncated frame suffix. Graceful wire CANCEL instead requires
+preserving prior frames. Missing frame attributes refuse through fixed errors,
+permanently retire the primitive and retain its earlier observation counters.
+
+Sequence and buffer remain separate primitives. A future serialized owner must
+coordinate admission and order before any physical write, abort on invalid order,
+and never advance sequence when buffer admission returns false. Fake-owner tests
+cover this backpressure boundary, partial headers/payloads, in-flight cancelled
+stdout, unfinished EOF phases and no callback replay after a late sequence fault.
+This is still in-process evidence, with no claim of interruptible transport.
+
+Next add an owned nonblocking pipe runner and namespace supervisor/HTTP witness
+with a fake upstream; independently enforce deadlines and descendant cleanup.
+Productive wiring
 still requires durable role/session/result/material/lease bindings, host-held
 route credentials, exact native request/response validation, process-tree stop
 and cleanup, independent review and separately authorized live acceptance.

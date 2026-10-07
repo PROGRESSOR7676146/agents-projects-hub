@@ -11,10 +11,13 @@ from contextlib import ExitStack, contextmanager
 from typing import Iterator
 from unittest.mock import patch
 
+_FSTAT = os.fstat
+_LISTDIR = os.listdir
+
 
 def _identity(fd: int) -> tuple[int, int, int] | None:
     try:
-        info = os.fstat(fd)
+        info = _FSTAT(fd)
     except OSError:
         return None
     return info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
@@ -23,14 +26,30 @@ def _identity(fd: int) -> tuple[int, int, int] | None:
 def _snapshot() -> set[tuple[int, tuple[int, int, int]]]:
     return {
         (fd, identity)
-        for name in os.listdir("/proc/self/fd")
+        for name in _LISTDIR("/proc/self/fd")
         if (identity := _identity(fd := int(name))) is not None
     }
 
 
 @contextmanager
-def assert_descriptor_cleanup(case: unittest.TestCase) -> Iterator[None]:
+def assert_descriptor_cleanup(
+    case: unittest.TestCase,
+    *,
+    forbid_preexisting_close: bool = False,
+    forbid_unattributed: bool = False,
+) -> Iterator[None]:
+    """Check allocations; strict mode also rejects intercepted foreign closes.
+
+    Only calling-thread os.close/dup2 calls are attributed by the optional check;
+    C-level FileIO/socket finalizers remain outside interception. No cleanup
+    authority is inferred from either descriptor numbers or snapshots. Strict
+    closure matching uses entry identity; unobserved same-inode reuse remains
+    ambiguous and is conservatively rejected. Identity reads use unpatched OS
+    functions so a test's fstat mock cannot demote a tracked leak to uncertainty.
+    """
     before = _snapshot()
+    preexisting = dict(before)
+    closed_preexisting: set[int] = set()
     tracked: dict[int, tuple[int, int, int] | None] = {}
     foreign: dict[int, tuple[int, int, int] | None] = {}
     caller = threading.get_ident()
@@ -57,8 +76,24 @@ def assert_descriptor_cleanup(case: unittest.TestCase) -> Iterator[None]:
     def track_dup(fd: int) -> int:
         return record(original_dup(fd))
 
-    def track_dup2(fd: int, target: int, inheritable: bool = True) -> int:
-        return record(original_dup2(fd, target, inheritable=inheritable))
+    def foreign_close(fd: int) -> bool:
+        return (
+            forbid_preexisting_close
+            and threading.get_ident() == caller
+            and fd in preexisting
+            and fd not in tracked
+            and fd not in foreign
+            and _identity(fd) == preexisting[fd]
+        )
+
+    def track_dup2(fd: int, fd2: int, inheritable: bool = True) -> int:
+        closes_preexisting = fd != fd2 and foreign_close(fd2)
+        result = original_dup2(fd, fd2, inheritable=inheritable)
+        if fd == fd2:
+            return result
+        if closes_preexisting:
+            closed_preexisting.add(fd2)
+        return record(result)
 
     def track_pipe() -> tuple[int, int]:
         read_fd, write_fd = original_pipe()
@@ -69,7 +104,10 @@ def assert_descriptor_cleanup(case: unittest.TestCase) -> Iterator[None]:
         return record(original_memfd(*args, **kwargs))
 
     def track_close(fd: int) -> None:
+        closes_preexisting = foreign_close(fd)
         original_close(fd)
+        if closes_preexisting:
+            closed_preexisting.add(fd)
         # Observe successful close/overwrite events across all threads.
         tracked.pop(fd, None)
         foreign.pop(fd, None)
@@ -97,17 +135,28 @@ def assert_descriptor_cleanup(case: unittest.TestCase) -> Iterator[None]:
             if identity is not None and identity == _identity(fd)
         }
         unrelated = {fd for fd, identity in tuple(foreign.items()) if identity == _identity(fd)}
-        unattributed = {fd for fd, _ in _snapshot() - before} - remaining - unrelated
+        try:
+            after = _snapshot()
+        except Exception:
+            if primary is None:
+                raise
+            primary.add_note("descriptor snapshot unavailable; cleanup remains caller-owned")
+            after = set()
+        unattributed = {fd for fd, _ in after - before} - remaining - unrelated
         detail = (
             f"tracked calling-thread descriptors remain open: {sorted(remaining)}; "
             f"unattributed new descriptors (ownership unknown): {sorted(unattributed)}"
+            f"; preexisting descriptors closed by calling-thread os.close/dup2: {sorted(closed_preexisting)}"
         )
         if primary is not None:
-            if remaining or unattributed:
+            if remaining or unattributed or closed_preexisting:
                 primary.add_note(detail)
         else:
             if unattributed:
                 warnings.warn(detail, ResourceWarning, stacklevel=2)
             case.assertFalse(remaining, detail)
+            case.assertFalse(closed_preexisting, detail)
+            if forbid_unattributed:
+                case.assertFalse(unattributed, detail)
         # Never close here: neither interception nor snapshots prove current
         # cleanup authority. Regression tests explicitly clean their own FDs.

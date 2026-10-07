@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -24,6 +25,7 @@ from hermes_codex_router.claude_file_sandbox import (
     FileToolSandboxError,
 )
 from hermes_codex_router.process_namespace import _reject_nested_mounts
+from tests.fd_fixture import assert_descriptor_cleanup
 from tests.namespace_fixture import (
     namespace_permission_refused,
     namespace_unavailable,
@@ -120,18 +122,39 @@ class ClaudeFileSandboxTests(unittest.TestCase):
         # project's readonly overlay, even with different pinned descriptors.
         original_mode = stat.S_IMODE(self.project.stat().st_mode)
         self.project.chmod(0o700)
-        before_fds = len(list(Path("/proc/self/fd").iterdir()))
+        borrowed_fd = self.sock.fileno()
+        borrowed_identity = os.fstat(borrowed_fd)
+        opened: list[int] = []
+        pin_open = sandbox_module.MountPins.open
+
+        def track(pins: sandbox_module.MountPins, *args: object, **kwargs: object) -> int:
+            fd = pin_open(pins, *args, **kwargs)  # type: ignore[arg-type]
+            opened.append(fd)
+            return fd
+
         try:
             config = dataclasses.replace(self.config, provider_home=self.project)
             with (
                 patch.object(sandbox_module, "_require_fd_bind_support"),
+                patch.object(sandbox_module.MountPins, "open", track),
+                assert_descriptor_cleanup(
+                    self, forbid_preexisting_close=True, forbid_unattributed=True
+                ),
                 self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"),
                 config.wrap([str(self.executable)], {}, self.project),
             ):
                 self.fail("equal project and session-home sources were accepted")
         finally:
             self.project.chmod(original_mode)
-        self.assertEqual(len(list(Path("/proc/self/fd").iterdir())), before_fds)
+        current = os.fstat(borrowed_fd)
+        self.assertEqual(
+            (current.st_dev, current.st_ino), (borrowed_identity.st_dev, borrowed_identity.st_ino)
+        )
+        self.assertTrue(opened, "refusal must exercise real pin allocation")
+        for descriptor in set(opened):
+            with self.assertRaises(OSError) as error:
+                os.fstat(descriptor)
+            self.assertEqual(error.exception.errno, errno.EBADF)
 
     def test_distinct_home_path_cannot_alias_a_pinned_project_or_git_inode(self) -> None:
         # Model the descriptors of a top-level bind alias: names and mount IDs
@@ -211,12 +234,22 @@ class ClaudeFileSandboxTests(unittest.TestCase):
                             self.executable: pins.open(self.executable),
                             self.config.hook_code_root: pins.open(self.config.hook_code_root),
                         }
-                        before_fds = len(list(Path("/proc/self/fd").iterdir()))
-                        with self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"):
+                        identities = {
+                            fd: (os.fstat(fd).st_dev, os.fstat(fd).st_ino) for fd in fds.values()
+                        }
+                        with (
+                            assert_descriptor_cleanup(
+                                self, forbid_preexisting_close=True, forbid_unattributed=True
+                            ),
+                            self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"),
+                        ):
                             self.config._namespace._validate(
                                 {path: pins.mount_id(fd) for path, fd in fds.items()}, fds
                             )
-                        self.assertEqual(len(list(Path("/proc/self/fd").iterdir())), before_fds)
+                        self.assertEqual(
+                            {fd: (os.fstat(fd).st_dev, os.fstat(fd).st_ino) for fd in fds.values()},
+                            identities,
+                        )
                 finally:
                     shutil.rmtree(target)
 
@@ -377,11 +410,14 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                 child.mkdir()
             with sandbox_module.MountPins() as pins:
                 descriptor = pins.open(root, directory=True)
-                count = len(os.listdir("/proc/self/fd"))
-                with patch.object(sandbox_module, "_MAX_SCAN_DEPTH", 8):
+                with (
+                    assert_descriptor_cleanup(
+                        self, forbid_preexisting_close=True, forbid_unattributed=True
+                    ),
+                    patch.object(sandbox_module, "_MAX_SCAN_DEPTH", 8),
+                ):
                     with self.assertRaisesRegex(FileToolSandboxError, "depth"):
                         sandbox_module._scan_writable_tree(root, descriptor)
-                self.assertEqual(len(os.listdir("/proc/self/fd")), count)
 
     def test_scan_io_failures_are_bounded_and_close_ancestor_handles(self) -> None:
         with tempfile.TemporaryDirectory(prefix="example-scan-errors-") as directory:
@@ -395,17 +431,20 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                     (errno.ENOENT, "writable tree changed"),
                     (errno.EMFILE, "writable tree descriptor limit"),
                 ):
-                    count = len(os.listdir("/proc/self/fd"))
 
                     def fail_entry(path: str, flags: int, **kwargs: object) -> int:
                         if path == "entry":
                             raise OSError(error, "example")
                         return actual_open(path, flags, **kwargs)  # type: ignore[arg-type]
 
-                    with patch.object(os, "open", side_effect=fail_entry):
+                    with (
+                        patch.object(os, "open", side_effect=fail_entry),
+                        assert_descriptor_cleanup(
+                            self, forbid_preexisting_close=True, forbid_unattributed=True
+                        ),
+                    ):
                         with self.assertRaisesRegex(FileToolSandboxError, message):
                             sandbox_module._scan_writable_tree(root, descriptor)
-                    self.assertEqual(len(os.listdir("/proc/self/fd")), count)
 
     def test_fdinfo_descriptor_exhaustion_has_scan_diagnostic_and_no_leak(self) -> None:
         with tempfile.TemporaryDirectory(prefix="example-fdinfo-errors-") as directory:
@@ -424,13 +463,16 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
 
             with sandbox_module.MountPins() as pins:
                 descriptor = pins.open(root, directory=True)
-                count = len(os.listdir("/proc/self/fd"))
-                with patch.object(Path, "read_text", fail_entry):
+                with (
+                    assert_descriptor_cleanup(
+                        self, forbid_preexisting_close=True, forbid_unattributed=True
+                    ),
+                    patch.object(Path, "read_text", fail_entry),
+                ):
                     with self.assertRaisesRegex(
                         FileToolSandboxError, "writable tree descriptor limit"
                     ):
                         sandbox_module._scan_writable_tree(root, descriptor)
-                self.assertEqual(len(os.listdir("/proc/self/fd")), count)
 
     def test_same_mount_with_different_device_is_refused(self) -> None:
         with tempfile.TemporaryDirectory(prefix="example-subvolume-") as directory:
@@ -439,7 +481,6 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
             actual_stat = os.fstat
             with sandbox_module.MountPins() as pins:
                 descriptor = pins.open(root, directory=True)
-                count = len(os.listdir("/proc/self/fd"))
 
                 def subvolume(fd: int) -> object:
                     info = actual_stat(fd)
@@ -452,10 +493,33 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                         st_nlink=info.st_nlink,
                     )
 
-                with patch.object(os, "fstat", side_effect=subvolume):
-                    with self.assertRaisesRegex(FileToolSandboxError, "nested filesystem"):
-                        sandbox_module._scan_writable_tree(root, descriptor)
-                self.assertEqual(len(os.listdir("/proc/self/fd")), count)
+                for inject_leak in (False, True):
+                    with self.subTest(inject_leak=inject_leak):
+                        leaked = -1
+                        try:
+                            expected = (
+                                self.assertRaisesRegex(AssertionError, r"remain open: \[\d+\]")
+                                if inject_leak
+                                else nullcontext()
+                            )
+                            with (
+                                expected,
+                                patch.object(os, "fstat", side_effect=subvolume),
+                                assert_descriptor_cleanup(
+                                    self, forbid_preexisting_close=True, forbid_unattributed=True
+                                ),
+                            ):
+                                if inject_leak:
+                                    leaked = os.open(root / "entry", os.O_RDONLY | os.O_DIRECTORY)
+                                with self.assertRaisesRegex(
+                                    FileToolSandboxError, "nested filesystem"
+                                ):
+                                    sandbox_module._scan_writable_tree(root, descriptor)
+                            if inject_leak:
+                                os.fstat(leaked)  # The assertion never owns cleanup.
+                        finally:
+                            if leaked >= 0:
+                                os.close(leaked)
 
     def test_preexisting_private_hardlink_is_rejected(self) -> None:
         link = self.project / "linked-authority"

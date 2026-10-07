@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import threading
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from tests.fd_fixture import assert_descriptor_cleanup
 
@@ -131,3 +133,131 @@ class DescriptorFixtureTests(unittest.TestCase):
             os.close(old)
             fd = os.open("/dev/zero", os.O_RDONLY)
             os.close(fd)
+
+    def test_strict_mode_rejects_successful_close_of_a_preexisting_descriptor(self) -> None:
+        old = os.open("/dev/null", os.O_RDONLY)
+        with self.assertRaisesRegex(AssertionError, "preexisting descriptors closed"):
+            with assert_descriptor_cleanup(self, forbid_preexisting_close=True):
+                os.close(old)
+        with self.assertRaises(OSError):
+            os.fstat(old)
+
+    def test_strict_mode_accepts_tracked_reuse_after_unrelated_fileio_close(self) -> None:
+        old = os.open("/dev/null", os.O_RDONLY)
+        with assert_descriptor_cleanup(self, forbid_preexisting_close=True):
+            with os.fdopen(old, "rb"):
+                pass
+            owned = os.open("/dev/zero", os.O_RDONLY)
+            os.dup2(owned, old)
+            if owned != old:
+                os.close(old)
+            os.close(owned)
+        with self.assertRaises(OSError):
+            os.fstat(owned)
+
+    def test_tracked_leak_survives_an_inner_fstat_identity_mock(self) -> None:
+        original = os.fstat
+        leaked = -1
+
+        def fictional_device(fd: int) -> object:
+            info = original(fd)
+            return SimpleNamespace(st_dev=info.st_dev + 1, st_ino=info.st_ino, st_mode=info.st_mode)
+
+        try:
+            with self.assertRaisesRegex(AssertionError, "calling-thread descriptors"):
+                with (
+                    assert_descriptor_cleanup(self),
+                    patch.object(os, "fstat", side_effect=fictional_device),
+                ):
+                    leaked = os.open("/dev/null", os.O_RDONLY)
+            os.fstat(leaked)
+        finally:
+            if leaked >= 0:
+                os.close(leaked)
+
+    def test_strict_mode_rejects_dup2_overwrite_of_a_preexisting_descriptor(self) -> None:
+        source = os.open("/dev/null", os.O_RDONLY)
+        target = os.open("/dev/zero", os.O_RDONLY)
+        try:
+            with self.assertRaisesRegex(AssertionError, "preexisting descriptors closed"):
+                with assert_descriptor_cleanup(self, forbid_preexisting_close=True):
+                    os.dup2(source, target)
+                    os.close(target)
+                    target = -1
+            os.fstat(source)
+        finally:
+            os.close(source)
+            if target >= 0:
+                os.close(target)
+
+    def test_dup2_noop_does_not_claim_a_borrowed_descriptor(self) -> None:
+        descriptor = os.open("/dev/null", os.O_RDONLY)
+        try:
+            with assert_descriptor_cleanup(self, forbid_preexisting_close=True):
+                self.assertEqual(os.dup2(descriptor, descriptor), descriptor)
+            os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def test_dup2_noop_cannot_hide_a_preexisting_close(self) -> None:
+        descriptor = os.open("/dev/null", os.O_RDONLY)
+        with self.assertRaisesRegex(AssertionError, "preexisting descriptors closed"):
+            with assert_descriptor_cleanup(self, forbid_preexisting_close=True):
+                os.dup2(descriptor, descriptor)
+                os.close(descriptor)
+
+    def test_changed_inode_reuse_does_not_claim_a_foreign_close(self) -> None:
+        old = os.open("/dev/null", os.O_RDONLY)
+        source = os.open("/dev/zero", os.O_RDONLY)
+        untracked_dup2 = os.dup2
+        try:
+            with assert_descriptor_cleanup(self, forbid_preexisting_close=True):
+                with os.fdopen(old, "rb"):
+                    pass
+                untracked_dup2(source, old)
+                os.close(old)
+        finally:
+            os.close(source)
+
+    def test_strict_new_descriptor_check_refuses_untracked_stream_without_closing_it(self) -> None:
+        stream = None
+        try:
+            with self.assertWarns(ResourceWarning):
+                with self.assertRaisesRegex(AssertionError, "ownership unknown"):
+                    with assert_descriptor_cleanup(self, forbid_unattributed=True):
+                        stream = open("/dev/null", "rb")
+            assert stream is not None
+            os.fstat(stream.fileno())
+        finally:
+            if stream is not None:
+                stream.close()
+
+    def test_dup2_accepts_native_keyword_names(self) -> None:
+        with assert_descriptor_cleanup(self):
+            source = os.open("/dev/null", os.O_RDONLY)
+            target = os.open("/dev/zero", os.O_RDONLY)
+            try:
+                self.assertEqual(os.dup2(fd=source, fd2=target), target)
+            finally:
+                os.close(source)
+                os.close(target)
+
+    def test_failed_final_snapshot_does_not_replace_a_primary_failure(self) -> None:
+        primary = RuntimeError("fictional primary")
+        from tests.fd_fixture import _LISTDIR
+
+        calls = 0
+
+        def snapshot(path):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return _LISTDIR(path)
+            raise OSError("fictional snapshot failure")
+
+        with patch("tests.fd_fixture._LISTDIR", side_effect=snapshot):
+            with self.assertRaises(RuntimeError) as raised:
+                with assert_descriptor_cleanup(self):
+                    raise primary
+        self.assertIs(raised.exception, primary)
+        self.assertTrue(any("snapshot unavailable" in note for note in primary.__notes__))
