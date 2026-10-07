@@ -24,6 +24,7 @@ from hermes_codex_router.claude_file_sandbox import (
     FileToolSandboxError,
 )
 from hermes_codex_router.process_namespace import _reject_nested_mounts
+from tests.fd_fixture import assert_descriptor_cleanup
 from tests.namespace_fixture import (
     namespace_permission_refused,
     namespace_unavailable,
@@ -120,18 +121,17 @@ class ClaudeFileSandboxTests(unittest.TestCase):
         # project's readonly overlay, even with different pinned descriptors.
         original_mode = stat.S_IMODE(self.project.stat().st_mode)
         self.project.chmod(0o700)
-        before_fds = len(list(Path("/proc/self/fd").iterdir()))
         try:
             config = dataclasses.replace(self.config, provider_home=self.project)
             with (
                 patch.object(sandbox_module, "_require_fd_bind_support"),
+                assert_descriptor_cleanup(self),
                 self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"),
                 config.wrap([str(self.executable)], {}, self.project),
             ):
                 self.fail("equal project and session-home sources were accepted")
         finally:
             self.project.chmod(original_mode)
-        self.assertEqual(len(list(Path("/proc/self/fd").iterdir())), before_fds)
 
     def test_distinct_home_path_cannot_alias_a_pinned_project_or_git_inode(self) -> None:
         # Model the descriptors of a top-level bind alias: names and mount IDs
@@ -211,12 +211,20 @@ class ClaudeFileSandboxTests(unittest.TestCase):
                             self.executable: pins.open(self.executable),
                             self.config.hook_code_root: pins.open(self.config.hook_code_root),
                         }
-                        before_fds = len(list(Path("/proc/self/fd").iterdir()))
-                        with self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"):
+                        identities = {
+                            fd: (os.fstat(fd).st_dev, os.fstat(fd).st_ino) for fd in fds.values()
+                        }
+                        with (
+                            assert_descriptor_cleanup(self),
+                            self.assertRaisesRegex(FileToolSandboxError, "mount roles overlap"),
+                        ):
                             self.config._namespace._validate(
                                 {path: pins.mount_id(fd) for path, fd in fds.items()}, fds
                             )
-                        self.assertEqual(len(list(Path("/proc/self/fd").iterdir())), before_fds)
+                        self.assertEqual(
+                            {fd: (os.fstat(fd).st_dev, os.fstat(fd).st_ino) for fd in fds.values()},
+                            identities,
+                        )
                 finally:
                     shutil.rmtree(target)
 
