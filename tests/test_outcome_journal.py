@@ -154,8 +154,13 @@ class OutcomeJournalTests(unittest.TestCase):
                     "UPDATE provider_jobs SET provider_started_at=? WHERE job_id=?",
                     (bad, job.job_id),
                 )
-            self.assertIsNone(
-                self.read(job.job_id)["timing"]["latest_worker_phase_to_result_commit"]["seconds"]
+            interval = self.read(job.job_id)["timing"]["latest_worker_phase_to_result_commit"]
+            self.assertIsNone(interval["seconds"])
+            self.assertEqual(
+                interval["unknown_reason"],
+                "reversed_endpoints"
+                if bad and bad.startswith("2099")
+                else "missing_or_invalid_endpoints",
             )
 
     def test_saved_empty_completion_and_native_terminal_evidence_are_separate(self) -> None:
@@ -220,6 +225,21 @@ class OutcomeJournalTests(unittest.TestCase):
         with self.assertRaises(StateError):
             HubState.open_read_only(old)
         self.assertEqual(old.read_bytes(), original)
+
+    def test_schema_change_after_open_refuses_projection_in_same_read_snapshot(self) -> None:
+        from hermes_codex_router.migrations import LATEST_SCHEMA_VERSION
+
+        job, _ = self.complete()
+        reader = HubState.open_read_only(self.path)
+        try:
+            with self.state._connection:
+                self.state._connection.execute(f"PRAGMA user_version={LATEST_SCHEMA_VERSION + 1}")
+            with self.assertRaisesRegex(StateError, "^state_schema_unsupported$"):
+                reader.provider_job_outcome(job.job_id)
+        finally:
+            reader.close()
+            with self.state._connection:
+                self.state._connection.execute(f"PRAGMA user_version={LATEST_SCHEMA_VERSION}")
 
     def test_artifacts_are_bounded_references_without_opening_or_disclosing_files(self) -> None:
         job, _ = self.complete()
@@ -331,7 +351,7 @@ class OutcomeJournalTests(unittest.TestCase):
         self.assertEqual(json.loads(output.getvalue())["participant"]["stored_model_label"], label)
 
     def test_cli_sanitizes_malformed_config_structure_errors(self) -> None:
-        for kind in (TypeError, KeyError, AttributeError, RecursionError):
+        for kind in (TypeError, KeyError, AttributeError, RecursionError, RuntimeError):
             with self.subTest(kind=kind):
                 output = io.StringIO()
                 with (
@@ -401,7 +421,7 @@ class OutcomeJournalTests(unittest.TestCase):
     def test_cli_close_and_projection_errors_emit_one_sanitized_json(self) -> None:
         from types import SimpleNamespace
 
-        for failure in ("close", "projection", "serialize"):
+        for failure in ("close", "projection", "serialize", "runtime"):
             with self.subTest(failure=failure):
                 state = Mock()
                 state.provider_job_outcome.return_value.as_dict.return_value = {"example": "ok"}
@@ -409,6 +429,8 @@ class OutcomeJournalTests(unittest.TestCase):
                     state.close.side_effect = OSError(self.poison)
                 elif failure == "projection":
                     state.provider_job_outcome.side_effect = sqlite3.OperationalError(self.poison)
+                elif failure == "runtime":
+                    state.provider_job_outcome.side_effect = RuntimeError(self.poison)
                 else:
                     state.provider_job_outcome.return_value.as_dict.return_value = {
                         "invalid": b"fictional-protected-content"
@@ -432,6 +454,51 @@ class OutcomeJournalTests(unittest.TestCase):
                     {"ok": False, "error": "outcome_projection_unavailable"},
                 )
                 state.close.assert_called_once()
+
+    def test_cli_cyclic_state_path_returns_fixed_error_without_path(self) -> None:
+        from types import SimpleNamespace
+
+        loop = Path(self.temp.name) / "example-state-loop"
+        loop.symlink_to(loop.name)
+        output = io.StringIO()
+        with (
+            patch(
+                "hermes_codex_router.outcome_cli.load_external_worker_config",
+                return_value=SimpleNamespace(state_path=loop),
+            ),
+            redirect_stdout(output),
+        ):
+            code = main(["outcome-journal", "example-config.json", "example-job"])
+        self.assertEqual(code, 2)
+        self.assertEqual(
+            json.loads(output.getvalue()),
+            {"ok": False, "error": "outcome_projection_unavailable"},
+        )
+
+    def test_cli_failed_output_never_attempts_a_second_error_write(self) -> None:
+        from types import SimpleNamespace
+
+        job, _ = self.complete()
+        for failure, kind in (
+            ("write", OSError),
+            ("flush", OSError),
+            ("write", ValueError),
+            ("flush", ValueError),
+        ):
+            with self.subTest(failure=failure, kind=kind):
+                output = Mock()
+                getattr(output, failure).side_effect = kind(self.poison)
+                with (
+                    patch(
+                        "hermes_codex_router.outcome_cli.load_external_worker_config",
+                        return_value=SimpleNamespace(state_path=self.path),
+                    ),
+                    patch("sys.stdout", output),
+                ):
+                    code = main(["outcome-journal", "example-config.json", job.job_id])
+                self.assertEqual(code, 2)
+                output.write.assert_called_once()
+                self.assertNotIn(self.poison, output.write.call_args.args[0])
 
     def test_cli_real_passive_loader_never_reads_credentials_or_invokes_provider(self) -> None:
         job, _ = self.complete()

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
+import sys
 from pathlib import Path
 
-from .hub_config import HubConfigError, load_external_worker_config
+from .hub_config import load_external_worker_config
 from .state import HubState, StateError
 
 
@@ -19,20 +19,21 @@ def add_outcome_parser(commands: argparse._SubParsersAction) -> None:
     command.add_argument("job_id")
 
 
+def _emit(encoded: str, code: int) -> int:
+    try:
+        sys.stdout.write(encoded + "\n")
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        # A partial or closed output cannot carry a second error document.
+        return 2
+    return code
+
+
 def outcome_command(args: argparse.Namespace) -> int:
     try:
         config = load_external_worker_config(args.config)
-    except (
-        HubConfigError,
-        OSError,
-        ValueError,
-        TypeError,
-        KeyError,
-        AttributeError,
-        RecursionError,
-    ):
-        print(json.dumps({"ok": False, "error": "outcome_config_unavailable"}))
-        return 2
+    except Exception:
+        return _emit(json.dumps({"ok": False, "error": "outcome_config_unavailable"}), 2)
     try:
         state = HubState.open_read_only(config.state_path)
         try:
@@ -40,15 +41,7 @@ def outcome_command(args: argparse.Namespace) -> int:
             encoded = json.dumps({"ok": True, **result.as_dict()}, indent=2)
         finally:
             state.close()
-    except (
-        StateError,
-        sqlite3.Error,
-        OSError,
-        ValueError,
-        TypeError,
-        RecursionError,
-        OverflowError,
-    ) as error:
+    except Exception as error:
         code = str(error) if isinstance(error, StateError) else "outcome_projection_unavailable"
         if code not in {
             "outcome_job_id_invalid",
@@ -58,7 +51,5 @@ def outcome_command(args: argparse.Namespace) -> int:
             "state_schema_unsupported",
         }:
             code = "outcome_projection_unavailable"
-        print(json.dumps({"ok": False, "error": code}))
-        return 2
-    print(encoded)
-    return 0
+        return _emit(json.dumps({"ok": False, "error": code}), 2)
+    return _emit(encoded, 0)

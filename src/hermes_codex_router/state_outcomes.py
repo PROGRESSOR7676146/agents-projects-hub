@@ -55,7 +55,7 @@ WITH target AS (
     UNION ALL SELECT 'retried_as', r.child_job_id
         FROM provider_preexecution_retries r JOIN target t ON r.source_job_id=t.job_id
 )
-SELECT t.*,
+SELECT t.*, (SELECT user_version FROM pragma_user_version) AS observed_schema,
     (SELECT COUNT(*) FROM telegram_outbox_parts p WHERE p.outbox_id=t.outbox_id)
         AS part_count,
     (SELECT COUNT(*) FROM telegram_outbox_parts p WHERE p.outbox_id=t.outbox_id
@@ -131,9 +131,12 @@ def _page(raw: str, total: int, keys: set[str], order: tuple[str, ...]) -> dict[
 class OutcomeJournalStateFacade:
     """One read statement on the HubState-owned connection; no new transactions."""
 
-    def __init__(self, connection: sqlite3.Connection, state_error: type[Exception]) -> None:
+    def __init__(
+        self, connection: sqlite3.Connection, state_error: type[Exception], expected_schema: int
+    ) -> None:
         self._connection = connection
         self._state_error = state_error
+        self._expected_schema = expected_schema
 
     def read(self, job_id: str) -> ProviderJobOutcome:
         if not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", job_id):
@@ -146,6 +149,8 @@ class OutcomeJournalStateFacade:
             raise self._state_error("outcome_projection_unavailable") from error
         if row is None:
             raise self._state_error("outcome_job_not_found")
+        if row["observed_schema"] != self._expected_schema:
+            raise self._state_error("state_schema_unsupported")
         try:
             return self._project(row)
         except (sqlite3.Error, ValueError, TypeError, OverflowError) as error:

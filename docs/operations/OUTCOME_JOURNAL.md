@@ -12,8 +12,9 @@ The command reads one existing job from a current-schema database. It prints a
 versioned JSON diagnostic to local stdout, without creating or migrating state,
 reading Telegram credentials, opening artifact files, invoking providers,
 publishing to Telegram, or authorizing replay. It creates no export file.
-SQLite may create its ordinary transient WAL coordination files when opening a
-quiescent WAL database; the command does not change database rows, schema or mode.
+SQLite may create its ordinary WAL coordination files when opening a quiescent
+WAL database, and those files may persist until a later writable connection
+cleans them up. The command does not change database rows, schema or mode.
 Treat this local output as private operator data. Unsupported state or SQLite
 JSON support returns a fixed error code; there is no writable fallback.
 
@@ -43,7 +44,9 @@ Non-ASCII output is JSON-escaped to prevent control-character display spoofing.
 
 No prompts, visible or partial response text, raw metadata, error detail, leases,
 native session IDs, roots, file paths or names, bot/account identities or notice
-contents enter this projection.
+contents enter this projection. The schema version is checked again within the
+projection's read snapshot. A failed or closed stdout returns nonzero without
+attempting a second error document; a partially written JSON cannot be retracted.
 
 Focused offline checks:
 
