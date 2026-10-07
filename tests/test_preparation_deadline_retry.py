@@ -11,7 +11,7 @@ from hermes_codex_router import codex_appserver as protocol
 from hermes_codex_router.codex_appserver import CodexAppServerClient
 from hermes_codex_router.codex_failure import CodexPreparationError
 from hermes_codex_router.codex_retry_policy import preparation_retry_binding
-from hermes_codex_router.codex_rpc import RpcError
+from hermes_codex_router.codex_rpc import RpcDeadlineError, RpcError
 from hermes_codex_router.preexecution_retry_state import PreexecutionRetryState
 from tests import test_codex_worker as external
 from tests import test_embedded_queue_service as embedded
@@ -31,8 +31,20 @@ class PreparationDeadlineRetryTests(unittest.TestCase):
                 self.clock.now = 0
                 transport = FloodTransport(self.clock)
                 client = CodexAppServerClient(transport, initialized=True)
+                deadline_errors: list[RpcError] = []
+                start_thread = client.start_thread
+
+                def observe_start_thread(**kwargs: Any):
+                    try:
+                        return start_thread(**kwargs)
+                    except RpcError as error:
+                        deadline_errors.append(error)
+                        raise
+
+                self.enterContext(patch.object(client, "start_thread", observe_start_thread))
                 if mode == "external":
                     fixture = external.CodexQueueWorkerTests()
+                    self.addCleanup(fixture.doCleanups)
                     fixture.setUp()
                     self.addCleanup(fixture.tearDown)
                     root = fixture.registry.require_project("example-project").root
@@ -48,6 +60,7 @@ class PreparationDeadlineRetryTests(unittest.TestCase):
                     state = worker.state
                 else:
                     fixture = embedded.EmbeddedQueueServiceTests()
+                    self.addCleanup(fixture.doCleanups)
                     fixture.setUp()
                     self.addCleanup(fixture.tearDown)
                     root = fixture.registry.require_project("example-project").root
@@ -65,6 +78,10 @@ class PreparationDeadlineRetryTests(unittest.TestCase):
                     state = service.state
                 job = state.get_provider_job(job_id)
                 self.assertEqual((job.status, job.error_class), ("failed", "pre_execution"))
+                self.assertEqual(len(deadline_errors), 1)
+                self.assertIs(type(deadline_errors[0]), RpcDeadlineError)
+                self.assertGreaterEqual(self.clock.now, protocol.DEFAULT_RPC_RESPONSE_SECONDS)
+                self.assertLessEqual(self.clock.now, protocol.DEFAULT_RPC_RESPONSE_SECONDS + 0.11)
                 self.assertGreater(len(transport.receive_timeouts), 1024)
                 self.assertEqual([entry["method"] for entry in transport.sent], ["thread/start"])
                 notice = state.get_telegram_outbox_for_job(job_id)
@@ -86,7 +103,7 @@ class PreparationDeadlineRetryTests(unittest.TestCase):
                     thread_id=topic.thread_id,
                     notice_message_id=notice.telegram_message_id,
                     reply_message_id=31,
-                    canonical_root=root,
+                    canonical_root=root.resolve(strict=True),
                     model_provider=None,
                     provider_runtime="codex",
                 )
@@ -94,10 +111,16 @@ class PreparationDeadlineRetryTests(unittest.TestCase):
                 self.assertEqual(child.payload_text, job.payload_text)
                 self.assertEqual(child.session_id, job.session_id)
                 self.assertEqual(child.session_generation, job.session_generation)
+                self.assertEqual(child.model, job.model)
+                self.assertEqual(child.effort, job.effort)
+                self.assertEqual(child.topic_id, job.topic_id)
+                self.assertEqual(child.chat_id, job.chat_id)
+                self.assertEqual(child.context_watermark, job.context_watermark)
                 self.assertEqual([entry["method"] for entry in transport.sent], ["thread/start"])
 
     def test_submission_expiry_and_matching_error_text_cannot_grant_retry(self) -> None:
         fixture = external.CodexQueueWorkerTests()
+        self.addCleanup(fixture.doCleanups)
         fixture.setUp()
         self.addCleanup(fixture.tearDown)
         root = fixture.registry.require_project("example-project").root
@@ -110,6 +133,8 @@ class PreparationDeadlineRetryTests(unittest.TestCase):
                 model="example-model",
                 effort="high",
             )
+        self.assertIs(type(caught.exception), RpcDeadlineError)
+        self.assertEqual(self.clock.now, protocol.TURN_START_RESPONSE_SECONDS)
         self.assertIsNone(
             preparation_retry_binding(caught.exception, root=root, model_provider=None)
         )
