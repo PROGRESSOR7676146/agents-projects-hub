@@ -121,6 +121,10 @@ to bubblewrap. Rechecks include mount IDs and relevant provenance/topology.
 The kernel descriptor path must match its configured source/anchor exactly;
 casefold name divergence, deleted paths and unavailable descriptor paths refuse.
 Mountinfo is a bounded read, not an atomic view under concurrent host mutation.
+Both source-topology and private-provenance checks share its strict parser:
+records use only LF and fields only ASCII space. Other Unicode/control whitespace
+is preserved as filename data; kernel path escapes are decoded once. Invalid
+UTF-8, empty interior records/tokens and unsupported tail shapes refuse invocation.
 The initial boundary refuses private authority paths containing descendant
 mounts rather than omit their separate filesystems. Unavailable, ambiguous,
 malformed or mismatching mount provenance also refuses invocation. These checks
@@ -129,6 +133,9 @@ The fresh per-turn socket is also checked against private authority; it cannot
 substitute a protected transport endpoint. Strict provenance parsing can refuse
 unusual unrelated kernel mount records; such layouts require offline investigation,
 never an invocation outside the wrapper.
+The host creates the endpoint in a fresh system temporary directory. That directory
+must be outside configured private authority paths; an overlapping temporary
+directory is refused rather than exempted from exclusion.
 
 ## Offline checks
 

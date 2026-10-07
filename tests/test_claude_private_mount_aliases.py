@@ -83,8 +83,8 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
         """Inject only kernel mount metadata, leaving actual fixture inodes intact."""
         original_read = Path.read_text
         original_id = mounts.mount_id
-        table = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
-        identity = max(int(line.split()[0]) for line in table.splitlines()) + 1
+        table = Path("/proc/self/mountinfo").read_bytes().decode("utf-8")
+        identity = max(int(line.split(" ")[0]) for line in table.removesuffix("\n").split("\n")) + 1
         device = destination.stat().st_dev
         anchor = filesystem_root
         while not anchor.exists():
@@ -94,7 +94,9 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
             origin_fd = pins.open(anchor)
             origin_id = pins.mount_id(origin_fd)
         selected_mount = next(
-            line.split() for line in table.splitlines() if line.split()[0] == str(origin_id)
+            line.split(" ")
+            for line in table.removesuffix("\n").split("\n")
+            if line.split(" ")[0] == str(origin_id)
         )
 
         def decode(raw: str) -> Path:
@@ -206,8 +208,8 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
 
     def test_private_mount_on_another_device_cannot_hide_below_its_root(self) -> None:
         original = Path.read_text
-        table = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
-        identity = max(int(line.split()[0]) for line in table.splitlines()) + 1
+        table = Path("/proc/self/mountinfo").read_bytes().decode("utf-8")
+        identity = max(int(line.split(" ")[0]) for line in table.removesuffix("\n").split("\n")) + 1
         table += f"{identity} 1 0:999 /secret {self.private}/nested rw - tmpfs example rw\n"
 
         def read(path: Path, *args: object, **kwargs: object) -> str:
@@ -268,6 +270,19 @@ class ClaudePrivateMountAliasTests(unittest.TestCase):
                     ):
                         with self.wrap():
                             self.fail("escaped private coordinate was not excluded")
+
+    def test_unescaped_bind_roots_preserve_private_containment(self) -> None:
+        for character in ("\u00a0", "\u3000", "\x1f", "\r", "\u2028", "\v", "\f", "\x85"):
+            with self.subTest(character=repr(character)):
+                with self.alias(self.project, self.base / f"sibling{character}/subtree"):
+                    with self.wrap():
+                        pass
+                with self.alias(self.project, self.private / f"child{character}/subtree"):
+                    with self.assertRaisesRegex(
+                        sandbox.FileToolSandboxError, "mount overlaps private authority"
+                    ):
+                        with self.wrap():
+                            self.fail("unescaped private subtree coordinate was not excluded")
 
     def test_real_private_bind_alias_is_refused_before_any_provider_launch(self) -> None:
         bwrap = shutil.which("bwrap")

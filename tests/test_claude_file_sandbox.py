@@ -468,13 +468,17 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
 
     def test_nested_mount_is_rejected(self) -> None:
         mountinfo = f"1 2 0:1 / {self.project}/nested rw - tmpfs tmpfs rw\n"
-        with patch.object(Path, "read_text", return_value=mountinfo):
+        with patch(
+            "hermes_codex_router.claude_private_mounts._read_mountinfo", return_value=mountinfo
+        ):
             with self.assertRaisesRegex(FileToolSandboxError, "nested mount"):
                 _reject_nested_mounts(self.project)
 
     def test_stacked_mount_uses_descriptor_identity_and_rejects_ambiguity(self) -> None:
         mountinfo = "1 2 0:1 / / rw - 9p example rw\n2 3 0:2 / / rw - ext4 example rw\n"
-        with patch.object(Path, "read_text", return_value=mountinfo):
+        with patch(
+            "hermes_codex_router.claude_private_mounts._read_mountinfo", return_value=mountinfo
+        ):
             with self.assertRaises(FileToolSandboxError):
                 _reject_nested_mounts(self.project)
             _reject_nested_mounts(self.project, mount_ids={self.project: 2})
@@ -519,10 +523,10 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
                 self._wrap()
             self.assertIsInstance(
                 failure.exception.__cause__,
-                (sandbox_module.MountPinError, sandbox_module.PrivateMountError),
+                sandbox_module.PrivateMountError,
             )
-            self.assertRegex(
-                str(failure.exception.__cause__), "identity changed|does not match its pin"
+            self.assertEqual(
+                str(failure.exception.__cause__), "mount source provenance does not match its pin"
             )
             self.assertTrue(opened)
             for descriptor in set(opened):
@@ -536,11 +540,15 @@ print(json.dumps({"wide_scan": "passed", "hardlink": "refused", "fds": "stable"}
     def test_non_native_filesystems_and_broad_home_roots_are_refused(self) -> None:
         for filesystem in ("9p", "drvfs", "fuse", "ntfs", "vfat", "unknown"):
             mountinfo = f"1 2 0:1 / / rw - {filesystem} example rw\n"
-            with patch.object(Path, "read_text", return_value=mountinfo):
+            with patch(
+                "hermes_codex_router.claude_private_mounts._read_mountinfo", return_value=mountinfo
+            ):
                 with self.subTest(filesystem=filesystem), self.assertRaises(FileToolSandboxError):
                     _reject_nested_mounts(self.project)
         mountinfo = "1 2 0:1 / / rw - ext4 example rw\n"
-        with patch.object(Path, "read_text", return_value=mountinfo):
+        with patch(
+            "hermes_codex_router.claude_private_mounts._read_mountinfo", return_value=mountinfo
+        ):
             _reject_nested_mounts(self.project)
         with self.assertRaises(FileToolSandboxError):
             sandbox_module._not_broad(Path("/home/example"), "project root")

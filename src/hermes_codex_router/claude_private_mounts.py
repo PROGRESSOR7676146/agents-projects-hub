@@ -57,21 +57,27 @@ def _read_mountinfo() -> str:
     return data.decode("utf-8")
 
 
-def _mount_table() -> dict[int, _Mount]:
+def read_mount_table() -> dict[int, _Mount]:
+    """Read fresh bounded mount evidence using only kernel record/field delimiters."""
     try:
         text = _read_mountinfo()
     except (OSError, UnicodeError) as exc:
         raise PrivateMountError("private authority mount provenance is unavailable") from exc
-    if len(text.encode("utf-8")) > _MAX_TABLE_BYTES or len(text.splitlines()) > _MAX_MOUNTS:
+    records = text.split("\n")
+    if records[-1] == "":
+        records.pop()  # Only the single final record terminator is optional.
+    if len(text.encode("utf-8")) > _MAX_TABLE_BYTES or len(records) > _MAX_MOUNTS:
         raise PrivateMountError("private authority mount provenance exceeds its bound")
     mounts: dict[int, _Mount] = {}
-    for line in text.splitlines():
+    for line in records:
         before, separator, after = line.partition(" - ")
-        fields, tail = before.split(), after.split()
+        fields, tail = before.split(" "), after.split(" ")
         if (
             not separator
+            or not all(fields)
+            or not all(tail)
             or len(fields) < 6
-            or len(tail) < 3
+            or len(tail) != 3
             or not re.fullmatch(r"[0-9]+", fields[0])
             or not re.fullmatch(r"[0-9]+", fields[1])
             or not re.fullmatch(r"[0-9]+:[0-9]+", fields[2])
@@ -103,13 +109,21 @@ class _Coordinate:
     inode: tuple[int, int]
 
 
-def _coordinate(path: Path, fd: int, identity: int, table: Mapping[int, _Mount]) -> _Coordinate:
+def _coordinate(
+    path: Path,
+    fd: int,
+    identity: int,
+    table: Mapping[int, _Mount],
+    *,
+    private_authority: bool = False,
+) -> _Coordinate:
     mount = table.get(identity)
+    label = "private authority" if private_authority else "mount source"
     try:
         info = os.fstat(fd)
         kernel_path = os.readlink(f"/proc/self/fd/{fd}")
     except OSError as exc:
-        raise PrivateMountError("private authority descriptor path is unavailable") from exc
+        raise PrivateMountError(f"{label} descriptor path is unavailable") from exc
     if (
         kernel_path != str(path)
         or mount is None
@@ -117,7 +131,7 @@ def _coordinate(path: Path, fd: int, identity: int, table: Mapping[int, _Mount])
         or not _within(path, mount.point)
         or mount.device != (os.major(info.st_dev), os.minor(info.st_dev))
     ):
-        raise PrivateMountError("private authority mount provenance does not match its pin")
+        raise PrivateMountError(f"{label} provenance does not match its pin")
     return _Coordinate(
         mount, mount.root / path.relative_to(mount.point), (info.st_dev, info.st_ino)
     )
@@ -201,7 +215,7 @@ class PrivateMountGuard:
         self._evidence = self._inspect()
 
     def _inspect(self) -> tuple[_Coordinate, ...]:
-        table = _mount_table()
+        table = read_mount_table()
         sources = [
             _coordinate(path, fd, identity, table) for path, (fd, identity) in self._sources.items()
         ]
@@ -209,7 +223,11 @@ class PrivateMountGuard:
         for private in self._private:
             self._missing_unchanged(private)
             coordinate = _coordinate(
-                private.anchor, private.fd, self._pins.mount_id(private.fd), table
+                private.anchor,
+                private.fd,
+                self._pins.mount_id(private.fd),
+                table,
+                private_authority=True,
             )
             authorities.append(
                 _Coordinate(

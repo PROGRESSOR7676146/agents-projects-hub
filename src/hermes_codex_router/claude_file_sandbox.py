@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .claude_mount_pins import MountPinError, MountPins, SandboxLaunch, mount_id
-from .claude_private_mounts import PrivateMountError, PrivateMountGuard
+from .claude_private_mounts import PrivateMountError, PrivateMountGuard, read_mount_table
 
 
 class FileToolSandboxError(ValueError):
@@ -250,17 +250,11 @@ def _scan_pinned_tree(source_fd: int) -> set[tuple[int, int]]:
 
 def _reject_nested_mounts(*roots: Path, mount_ids: Mapping[Path, int] | None = None) -> None:
     try:
-        mountinfo = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
-    except OSError as exc:
+        table = read_mount_table()
+    except PrivateMountError as exc:
         raise FileToolSandboxError("cannot inspect host mount table") from exc
-    filesystems: list[tuple[int, Path, str]] = []
-    for line in mountinfo.splitlines():
-        before, separator, after = line.partition(" - ")
-        fields = before.split()
-        if len(fields) < 5 or not fields[0].isdigit() or not separator or not after.split():
-            raise FileToolSandboxError("host mount table is malformed")
-        mountpoint = Path(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), fields[4]))
-        filesystems.append((int(fields[0]), mountpoint, after.split()[0]))
+    filesystems = [(mount.identity, mount.point, mount.filesystem) for mount in table.values()]
+    for _, mountpoint, _ in filesystems:
         for root in roots:
             if mountpoint != root and _within(mountpoint, root):
                 raise FileToolSandboxError("writable tree contains a nested mount")
@@ -293,8 +287,8 @@ class FileToolSandboxConfig:
     root-owned and not writable by the provider UID or other principals.
     ``provider_home`` is the one
     dedicated 0700 session store and must contain no Hub/tlive authority.
-    ``private_paths`` must enumerate those authority roots/files; the sole
-    exposed socket is an explicit per-turn exception, mounted as one inode.
+    ``private_paths`` must enumerate those authority roots/files. The sole
+    exposed socket is a fresh per-turn inode outside those authority paths.
     """
 
     bwrap_executable: Path
@@ -419,7 +413,9 @@ class FileToolSandboxConfig:
         for raw in self.private_paths:
             private = _absolute_path(raw, "private authority path", exists=False)
             _not_broad(private, "private authority path")
-            if any(_within(source, private) or _within(private, source) for source in sources):
+            if any(
+                _within(source, private) or _within(private, source) for source in (*sources, sock)
+            ):
                 raise FileToolSandboxError("mount overlaps private authority")
         if any(_within(source, sock) or _within(sock, source) for source in sources):
             raise FileToolSandboxError("permission socket overlaps a broad mount")

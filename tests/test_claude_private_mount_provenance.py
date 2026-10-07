@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import hermes_codex_router.claude_private_mounts as private_mounts
+from hermes_codex_router.claude_file_sandbox import FileToolSandboxError, _reject_nested_mounts
 from hermes_codex_router.claude_mount_pins import MountPins
 from hermes_codex_router.claude_private_mounts import PrivateMountError, PrivateMountGuard
 
@@ -63,13 +64,13 @@ class PrivateMountProvenanceTests(unittest.TestCase):
 
     def test_selected_mount_device_must_match_actual_descriptor(self) -> None:
         original = Path.read_text
-        table = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+        table = Path("/proc/self/mountinfo").read_bytes().decode("utf-8")
         with MountPins() as pins:
             fd = pins.open(self.source)
             identity = pins.mount_id(fd)
         rows = []
-        for line in table.splitlines():
-            fields = line.split()
+        for line in table.removesuffix("\n").split("\n"):
+            fields = line.split(" ")
             if fields[0] == str(identity):
                 fields[2] = "0:999"
             rows.append(" ".join(fields))
@@ -122,23 +123,35 @@ class PrivateMountProvenanceTests(unittest.TestCase):
                     self.assertEqual(len(os.listdir("/proc/self/fd")), before)
 
     def test_kernel_path_recheck_divergence_and_unavailability_refuse(self) -> None:
-        for effect in ("casefold", "unavailable"):
-            with self.subTest(effect=effect), MountPins() as pins, PrivateMountGuard() as guard:
-                fd = pins.open(self.source)
-                guard.check({self.source: fd}, {self.source: pins.mount_id(fd)}, (self.private,))
-                original = os.readlink
+        (self.source / ".git").mkdir()
+        for path in (self.source, self.source / ".git", self.private, self.base):
+            for effect in ("casefold", "unavailable"):
+                with self.subTest(path=path, effect=effect):
+                    before = len(os.listdir("/proc/self/fd"))
+                    with MountPins() as pins, PrivateMountGuard() as guard:
+                        fds = {p: pins.open(p) for p in (self.source, self.source / ".git")}
+                        authority = (
+                            self.base / "missing" / "authority"
+                            if path == self.base
+                            else self.private
+                        )
+                        guard.check(
+                            fds, {p: pins.mount_id(fd) for p, fd in fds.items()}, (authority,)
+                        )
+                        original = os.readlink
 
-                def changed(name: str, *args: object, **kwargs: object) -> str:
-                    value = original(name, *args, **kwargs)  # type: ignore[arg-type]
-                    if value != str(self.private):
-                        return value
-                    if effect == "unavailable":
-                        raise PermissionError("fictional descriptor error")
-                    return str(self.private.with_name(self.private.name.upper()))
+                        def changed(name: str, *args: object, **kwargs: object) -> str:
+                            value = original(name, *args, **kwargs)  # type: ignore[arg-type]
+                            if value != str(path):
+                                return value
+                            if effect == "unavailable":
+                                raise PermissionError("fictional descriptor error")
+                            return str(path.with_name(path.name.upper()))
 
-                with patch.object(os, "readlink", changed):
-                    with self.assertRaises(PrivateMountError):
-                        guard.recheck()
+                        with patch.object(os, "readlink", changed):
+                            with self.assertRaises(PrivateMountError):
+                                guard.recheck()
+                    self.assertEqual(len(os.listdir("/proc/self/fd")), before)
 
     def test_equal_private_file_inode_is_refused_even_with_different_names(self) -> None:
         private_file = self.private / "key"
@@ -153,8 +166,8 @@ class PrivateMountProvenanceTests(unittest.TestCase):
         self.assertEqual(len(os.listdir("/proc/self/fd")), before)
 
     def test_escaped_filesystem_coordinates_and_unrelated_nsfs_are_supported(self) -> None:
-        table = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
-        identity = max(int(line.split()[0]) for line in table.splitlines()) + 1
+        table = Path("/proc/self/mountinfo").read_bytes().decode("utf-8")
+        identity = max(int(line.split(" ")[0]) for line in table.removesuffix("\n").split("\n")) + 1
         device = self.source.stat().st_dev
         table += (
             f"{identity} 1 {os.major(device)}:{os.minor(device)} "
@@ -178,6 +191,62 @@ class PrivateMountProvenanceTests(unittest.TestCase):
         with patch.object(private_mounts, "_MAX_TABLE_BYTES", 1):
             with self.assertRaisesRegex(PrivateMountError, "exceeds its bound"):
                 self.check()
+
+    def test_unescaped_kernel_whitespace_remains_path_data(self) -> None:
+        for character in ("\u00a0", "\u3000", "\x1f", "\r", "\u2028", "\v", "\f", "\x85"):
+            with self.subTest(character=repr(character)):
+                root = Path(f"/example/source{character}/subtree")
+                point = Path(f"/example/view{character}/mount")
+                row = f"1 0 0:1 {root} {point} rw shared:2 master:3 - tmpfs example rw\n"
+                with patch.object(private_mounts, "_read_mountinfo", return_value=row):
+                    mount = private_mounts.read_mount_table()[1]
+                    self.assertEqual(mount.root, root)
+                    self.assertEqual(mount.point, point)
+
+    def test_unescaped_private_descendant_mount_is_not_lost_by_either_consumer(self) -> None:
+        table = Path("/proc/self/mountinfo").read_bytes().decode("utf-8")
+        identity = max(int(line.split(" ")[0]) for line in table.split("\n") if line) + 1
+        for character in ("\u00a0", "\u3000", "\x1f", "\r", "\u2028", "\v", "\f", "\x85"):
+            with self.subTest(character=repr(character)):
+                private = self.base / f"auth{character}ority"
+                private.mkdir()
+                nested = private / "creds"
+                nested.mkdir()
+                rows = table + f"{identity} 1 0:999 / {nested} rw - tmpfs example rw\n"
+                before = len(os.listdir("/proc/self/fd"))
+                original_read = Path.read_text
+
+                def read(path: Path, *args: object, **kwargs: object) -> str:
+                    if path == Path("/proc/self/mountinfo"):
+                        return rows
+                    return original_read(path, *args, **kwargs)  # type: ignore[arg-type]
+
+                with (
+                    patch.object(private_mounts, "_read_mountinfo", return_value=rows),
+                    patch.object(Path, "read_text", read),
+                ):
+                    with self.assertRaisesRegex(PrivateMountError, "unsupported nested mount"):
+                        self.check(private)
+                    with self.assertRaisesRegex(FileToolSandboxError, "nested mount"):
+                        _reject_nested_mounts(private)
+                self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
+    def test_mount_records_use_exact_delimiters_and_tail_cardinality(self) -> None:
+        row = "1 0 0:1 / /example rw - tmpfs example rw"
+        for malformed in (
+            "\n" + row,
+            row + "\n\n",
+            row + "\n\n2 1 0:1 / /another rw - tmpfs example rw",
+            row.replace("1 0", "1  0"),
+            row.replace("1 0", "1\t0"),
+            row.replace(" - ", "  - "),
+            row + " extra",
+            row + " ",
+        ):
+            with self.subTest(malformed=repr(malformed)):
+                with patch.object(private_mounts, "_read_mountinfo", return_value=malformed):
+                    with self.assertRaisesRegex(PrivateMountError, "malformed"):
+                        private_mounts.read_mount_table()
 
     def test_partial_private_pin_failure_closes_prior_validation_handles(self) -> None:
         (self.private / "file").write_text("fictional material", encoding="utf-8")
