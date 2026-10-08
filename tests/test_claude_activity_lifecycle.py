@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 import unittest
@@ -30,9 +31,14 @@ class ClaudeActivityLifecycleTests(unittest.TestCase):
             task_no_progress_seconds=1,
         )
         executable = fixture.root / "fictional-claude"
+        release = fixture.root / "example-process-release"
         executable.write_text(
-            f"#!{sys.executable}\nimport sys,json\n"
+            f"#!{sys.executable}\nimport sys,json,time,pathlib\n"
             f"if sys.argv[1:] == ['--help']:\n    print({HELP!r})\n    sys.exit(0)\n"
+            f"if {quiet_notice!r}:\n"
+            f"    release=pathlib.Path({str(release)!r}); deadline=time.monotonic()+10\n"
+            "    while not release.exists() and time.monotonic()<deadline: time.sleep(.01)\n"
+            "    if not release.exists(): sys.exit(2)\n"
             "native=sys.argv[sys.argv.index('--session-id')+1]\n"
             "print(json.dumps({'type':'result','subtype':'success','is_error':False,"
             "'session_id':native,'result':'Fictional final answer'}))\n",
@@ -75,11 +81,15 @@ class ClaudeActivityLifecycleTests(unittest.TestCase):
                     self.assertEqual(sender.state.get_provider_job(job_id).status, "executing")
                     self.assertEqual(len(bots["hub"].sent), 1)
                     self.assertEqual(bots["claude"].sent, [])
-                    delivered_notices.extend(bots["hub"].sent)
                     sender.run_cycle(now=kwargs["now"] + timedelta(seconds=3))
                     self.assertEqual(len(bots["hub"].sent), 1)
+                    self.assertIsNone(
+                        os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                    )
+                    delivered_notices.extend(bots["hub"].sent)
                 finally:
                     sender.close()
+                    release.write_text("example callback completed", encoding="utf-8")
             return result
 
         with (
