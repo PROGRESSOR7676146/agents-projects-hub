@@ -190,10 +190,12 @@ class CodexAppServerClient:
         model_provider: str | None = None,
         permission_profile: str | None = None,
         retire_completed_connection: bool = False,
+        transport_mode: Literal["socket", "stdio-fallback"] | None = None,
     ) -> None:
         if approval_policy not in {"on-request", "never"}:
             raise ValueError("unsupported Codex approval policy")
         self._transport = transport
+        self._transport_mode: Literal["socket", "stdio-fallback"] | None = transport_mode
         self._response_drain = CodexResponseDrain()
         self._initialized = initialized
         self._approval_policy = approval_policy
@@ -229,6 +231,11 @@ class CodexAppServerClient:
         self._activity_requests = self._activity_request_tracker.pending
         self._activity_retired = False
         self._activity_observed_notifications: set[int] = set()
+
+    @property
+    def transport_mode(self) -> Literal["socket", "stdio-fallback"] | None:
+        """The acquired connection's mechanism, independent of supervisor selection."""
+        return self._transport_mode
 
     def close(self) -> None:
         self._completed_connection.invalidate()

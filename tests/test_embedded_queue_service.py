@@ -45,6 +45,8 @@ class FakeTelegram:
 
 
 class QueueClient:
+    transport_mode = "socket"
+
     def __init__(
         self, *, block: bool = False, fail: bool = False, fail_limits: bool = False
     ) -> None:

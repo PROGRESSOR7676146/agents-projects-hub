@@ -254,6 +254,7 @@ class ProjectHubService:
                 permission_profile=self.config.codex_permission_profile,
             )
         self._codex_client: CodexAppServerClient | None = None
+        self._codex_transport_mode: str | None = None
         self.terminal = TerminalRuntime(
             socket_path=self.config.codex_socket_path,
             backend=self.config.terminal.backend,
@@ -457,6 +458,7 @@ class ProjectHubService:
             raise ServiceError("Codex RPC belongs to the external worker in this queue runtime")
         if self._codex_client is None:
             self._codex_client = supervisor.client()
+            self._codex_transport_mode = getattr(self._codex_client, "transport_mode", None)
         client = self._codex_client
         if client is None:
             raise ServiceError("Codex RPC client was not initialized")
@@ -947,6 +949,7 @@ class ProjectHubService:
         )
         heartbeat.start()
         prepared = None
+        codex_transport_mode: str | None = None
         retirement_target: tuple[CodexAppServerClient, str, str] | None = None
         try:
             target = revalidate_worker_execution_root(queue_state, target)
@@ -973,6 +976,7 @@ class ProjectHubService:
                 with codex_preparation():
                     self._require_legacy_codex_execution(queue_state)
                     client = self._client()
+                    codex_transport_mode = self._codex_transport_mode
                     thread = open_codex_provider_thread(
                         client,
                         executing,
@@ -1110,7 +1114,8 @@ class ProjectHubService:
             if failure.reconcile_codex:
                 supervisor = self.supervisor
                 assert supervisor is not None
-                control_available = supervisor.transport_mode != "stdio-fallback"
+                control_available = codex_transport_mode in {"socket", "managed-socket"}
+                saved_stdio = codex_transport_mode == "stdio-fallback"
                 try:
                     turn_status = reconcile_codex_completion(
                         queue_state,
@@ -1120,7 +1125,7 @@ class ProjectHubService:
                         lease_token=token,
                         agent_id=agent.agent_id,
                         client_factory=lambda: supervisor.client(
-                            allow_fallback=not control_available, deadline=time.monotonic() + 2
+                            allow_fallback=saved_stdio, deadline=time.monotonic() + 2
                         ),
                         execution_error=exc,
                         interrupt_active_on_failure=control_available,

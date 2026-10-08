@@ -104,10 +104,13 @@ class Supervisor(fixtures.WorkerSupervisor):
         self.stdio = stdio
         self.transport_mode = "stdio-fallback" if stdio else "socket"
         self.acquisitions = 0
+        self.mode_after_acquisition = None
 
     def client(self, *, allow_fallback=True, deadline=None) -> Any:
         self.acquisitions += 1
         if self.acquisitions == 1:
+            if self.mode_after_acquisition is not None:
+                self.transport_mode = self.mode_after_acquisition
             return self.client_value
         if self.stdio and not allow_fallback:
             raise RuntimeError("No owning shared socket in example stdio mode")
@@ -121,18 +124,64 @@ class ControlLossWorkerTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
 
-    def run_failure(self, after_interrupt="inProgress", *, stdio=False):
+    def run_failure(
+        self,
+        after_interrupt="inProgress",
+        *,
+        stdio=False,
+        failure_mode=None,
+        acquisition_mode=None,
+        unbound=False,
+    ):
         job_id = self.fixture.enqueue()
         provider = Provider(self.fixture.registry.projects[0].root, after_interrupt=after_interrupt)
         if stdio:
             provider.status = after_interrupt
-        client = CodexAppServerClient(Transport(provider, productive=True), initialized=True)
+        client = CodexAppServerClient(
+            Transport(provider, productive=True),
+            initialized=True,
+            transport_mode=None if unbound else "stdio-fallback" if stdio else "socket",
+        )
         worker = self.fixture.worker(client)  # type: ignore[arg-type]
         supervisor = Supervisor(provider, client, stdio=stdio)
+        supervisor.mode_after_acquisition = acquisition_mode
         worker.supervisor = supervisor  # type: ignore[assignment]
         self.addCleanup(worker.close)
-        self.assertTrue(worker.run_cycle())
+        original_wait = client.wait_for_turn
+
+        def wait_with_other_client_mode(*args, **kwargs):
+            if failure_mode is not None:
+                supervisor.transport_mode = failure_mode
+            return original_wait(*args, **kwargs)
+
+        with patch.object(client, "wait_for_turn", side_effect=wait_with_other_client_mode):
+            self.assertTrue(worker.run_cycle())
         return job_id, provider, worker, supervisor
+
+    def test_mode_change_before_acquisition_returns_cannot_retarget_socket_turn(self):
+        _, provider, _, supervisor = self.run_failure(acquisition_mode="stdio-fallback")
+        self.assertEqual(provider.interrupts, [("example-thread", "example-turn")])
+        self.assertFalse(supervisor.control_options[0][0])
+
+    def test_unknown_primary_transport_grants_no_protective_control_or_fallback(self):
+        job_id, provider, worker, supervisor = self.run_failure(unbound=True)
+        self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
+        self.assertEqual(provider.interrupts, [])
+        self.assertFalse(supervisor.control_options[0][0])
+
+    def test_other_client_fallback_cannot_change_socket_turn_recovery(self):
+        job_id, provider, worker, supervisor = self.run_failure(failure_mode="stdio-fallback")
+        self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
+        self.assertEqual(provider.interrupts, [("example-thread", "example-turn")])
+        self.assertFalse(supervisor.control_options[0][0])
+
+    def test_other_client_socket_restore_cannot_grant_stdio_turn_control(self):
+        job_id, provider, worker, supervisor = self.run_failure(
+            "completed", stdio=True, failure_mode="socket"
+        )
+        self.assertEqual(worker.state.get_provider_job(job_id).status, "result_ready")
+        self.assertEqual(provider.interrupts, [])
+        self.assertTrue(supervisor.control_options[0][0])
 
     def test_protective_send_and_ack_are_durable_and_notice_identifies_hub_stop(self):
         job_id, provider, worker, _ = self.run_failure()
@@ -271,22 +320,55 @@ class ControlLossWorkerTests(unittest.TestCase):
 
 
 class EmbeddedStdioRecoveryTests(unittest.TestCase):
-    def run_failure(self, status):
+    def run_failure(self, status, *, stdio=True, failure_mode=None, acquisition_mode=None):
         fixture = embedded.EmbeddedQueueServiceTests()
         fixture.setUp()
         self.addCleanup(fixture.tearDown)
         provider = Provider(fixture.registry.projects[0].root)
         provider.status = status
-        main = CodexAppServerClient(Transport(provider, productive=True), initialized=True)
+        main = CodexAppServerClient(
+            Transport(provider, productive=True),
+            initialized=True,
+            transport_mode="stdio-fallback" if stdio else "socket",
+        )
         service, _ = fixture.service(main)  # type: ignore[arg-type]
-        service.supervisor = Supervisor(provider, main, stdio=True)  # type: ignore[assignment]
+        supervisor = Supervisor(provider, main, stdio=stdio)
+        supervisor.mode_after_acquisition = acquisition_mode
+        service.supervisor = supervisor  # type: ignore[assignment]
         self.addCleanup(service.close)
         self.assertTrue(service.handle_update(embedded.update(1, "Example retained task")))
-        self.assertTrue(service.run_embedded_queue_cycle())
+        original_wait = main.wait_for_turn
+
+        def wait_with_other_client_mode(*args, **kwargs):
+            if failure_mode is not None:
+                supervisor.transport_mode = failure_mode
+            return original_wait(*args, **kwargs)
+
+        with patch.object(main, "wait_for_turn", side_effect=wait_with_other_client_mode):
+            self.assertTrue(service.run_embedded_queue_cycle())
         topic = service.state.find_topic(-1001234567890, 77)
         assert topic is not None
         job = service.state.provider_jobs_for_topic(topic.topic_id)[0]
         return job, provider, service
+
+    def test_mode_change_before_acquisition_returns_cannot_retarget_socket_turn(self):
+        job, provider, _ = self.run_failure(
+            "inProgress", stdio=False, acquisition_mode="stdio-fallback"
+        )
+        self.assertEqual(job.status, "indeterminate")
+        self.assertEqual(provider.interrupts, [("example-thread", "example-turn")])
+
+    def test_other_client_fallback_cannot_change_socket_turn_recovery(self):
+        job, provider, _ = self.run_failure(
+            "inProgress", stdio=False, failure_mode="stdio-fallback"
+        )
+        self.assertEqual(job.status, "indeterminate")
+        self.assertEqual(provider.interrupts, [("example-thread", "example-turn")])
+
+    def test_other_client_socket_restore_cannot_grant_stdio_turn_control(self):
+        job, provider, _ = self.run_failure("completed", failure_mode="socket")
+        self.assertEqual(job.status, "completed")
+        self.assertEqual(provider.interrupts, [])
 
     def test_stdio_saved_completion_survives_primary_loss_without_interrupt(self):
         job, provider, service = self.run_failure("completed")

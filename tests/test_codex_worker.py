@@ -41,6 +41,8 @@ from tests.test_codex_appserver import FakeTransport
 
 
 class WorkerClient:
+    transport_mode: str | None = "socket"
+
     def __init__(self, *, fail_after_start: bool = False) -> None:
         self.fail_after_start = fail_after_start
         self.turns = 0
@@ -78,6 +80,8 @@ class WorkerSupervisor:
         self.stopped = False
         self.started = False
         self.transport_mode = type(self).transport_mode
+        if isinstance(client, WorkerClient):
+            client.transport_mode = self.transport_mode
 
     def start(self) -> None:
         self.started = True
@@ -201,7 +205,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
                 },
             ]
         )
-        client = CodexAppServerClient(transport, initialized=True)
+        client = CodexAppServerClient(transport, initialized=True, transport_mode="socket")
 
         class Supervisor(WorkerSupervisor):
             transport_mode = "socket"
@@ -809,6 +813,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
                 self, *, allow_fallback: bool = True, deadline: float | None = None
             ) -> WorkerClient:
                 client: WorkerClient = Client() if not clients else WorkerClient()
+                client.transport_mode = self.transport_mode
                 clients.append(client)
                 return client
 

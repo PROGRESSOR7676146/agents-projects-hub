@@ -39,7 +39,9 @@ The single-interrupt limit in stage 1 is per protective helper invocation; an
 owner-stop path does not yet share it. Runtime events distinguish a prepared
 attempt from ACK and unknown outcome, retaining exact-job provenance without
 claiming terminality or durable deduplication. Notices and recovered completion
-races disclose that attempt. Already selected stdio fallback retains read-only
+races disclose that attempt. The primary client's selected transport mode is
+captured at acquisition and retained for that turn's recovery and live control;
+another client's fallback cannot retarget it. Already selected stdio fallback retains read-only
 saved-result recovery; it cannot interrupt through a non-owning process. Socket
 control failure cannot select that fallback. Caller-free passive item
 reads retain their separate 30-second allowance after paginated turn search;

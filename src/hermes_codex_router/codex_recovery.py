@@ -144,7 +144,7 @@ def reconcile_codex_completion(
         visible = text or "Codex completed the turn without visible text."
         if getattr(execution_error, "protective_interrupt_attempted", False) is True:
             visible += (
-                "\n\nHub attempted to interrupt this exact turn after losing its control stream. "
+                "\n\nHub attempted to interrupt this exact turn after its control path failed. "
                 "The independent read recovered completion; inspect the result and project changes."
             )
         if execution_error is not None and (

@@ -179,6 +179,7 @@ class ExternalQueueWorker:
         self.supervisor: CodexAppServerSupervisor | None = None
         self.adapter: ExternalCliAdapter | None = None
         self._codex_client: CodexAppServerClient | None = None
+        self._codex_transport_mode: str | None = None
         if self.agent.runtime == "codex":
             self.supervisor = supervisor or CodexAppServerSupervisor(
                 config.codex_socket_path,
@@ -211,6 +212,7 @@ class ExternalQueueWorker:
             raise ExternalQueueWorkerError("Codex client requested for a non-Codex worker")
         if self._codex_client is None:
             self._codex_client = self.supervisor.client()
+            self._codex_transport_mode = getattr(self._codex_client, "transport_mode", None)
         return self._codex_client
 
     def _discard_client(
@@ -638,7 +640,8 @@ class ExternalQueueWorker:
                 if failure.reconcile_codex:
                     supervisor = self.supervisor
                     assert supervisor is not None
-                    control_available = supervisor.transport_mode != "stdio-fallback"
+                    control_available = self._codex_transport_mode in {"socket", "managed-socket"}
+                    saved_stdio = self._codex_transport_mode == "stdio-fallback"
                     try:
                         turn_status = reconcile_codex_completion(
                             self.state,
@@ -648,7 +651,7 @@ class ExternalQueueWorker:
                             lease_token=token,
                             agent_id=self.agent.agent_id,
                             client_factory=lambda: supervisor.client(
-                                allow_fallback=not control_available, deadline=time.monotonic() + 2
+                                allow_fallback=saved_stdio, deadline=time.monotonic() + 2
                             ),
                             execution_error=exc,
                             interrupt_active_on_failure=control_available,
@@ -845,7 +848,7 @@ class ExternalQueueWorker:
                 job,
                 has_origin=origin is not None,
                 model_provider=self.config.codex_model_provider,
-                transport_mode=self.supervisor.transport_mode,
+                transport_mode=self._codex_transport_mode,
             )
             require_exact_retry_transport(job, fallback_transfer)
             turn_text = codex_turn_text(job, prepared)
@@ -918,7 +921,7 @@ class ExternalQueueWorker:
                 worker_id=self.worker_id,
                 thread_id=thread.thread_id,
                 turn_id=turn_id,
-                transport_mode=supervisor.transport_mode,
+                transport_mode=self._codex_transport_mode,
                 close_owned_turn_client=client.close,
             )
             with control.running():
