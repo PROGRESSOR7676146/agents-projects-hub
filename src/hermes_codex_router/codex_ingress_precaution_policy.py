@@ -1,7 +1,8 @@
 """Pure ingress policy prerequisite; no persistence, authority or provider I/O.
 
 Evidence comes from the fenced group-controller poll ledger, never runtime_health.
-Exact-target persistence and control integration remain pending (REQ-QUEUE-014).
+Exact-target persistence lives in codex_ingress_assessments; control integration
+remains pending (REQ-QUEUE-014).
 Episodes passed here must belong to the caller's exact accepted control target.
 """
 
@@ -49,7 +50,7 @@ def _aware(value: object) -> bool:
     )
 
 
-def _valid(evidence: IngressPollEvidence, now: datetime) -> bool:
+def valid_poll_evidence(evidence: IngressPollEvidence, now: datetime) -> bool:
     if (
         evidence.identity not in {"hub", "codex"}
         or type(evidence.epoch) is not int
@@ -116,7 +117,7 @@ def assess_ingress(
 ) -> IngressAssessment:
     """Classify poll uncertainty, without claiming exact-topic controllability.
 
-    A future state owner must retain the episode and recheck evidence/consent in
+    The state owner must retain the episode and recheck evidence/consent in
     the same transaction as the existing exact-turn send fence. This function
     alone cannot authorize an interrupt or clear an unknown delivery/sender.
     """
@@ -138,7 +139,9 @@ def assess_ingress(
             raise ValueError("invalid retained ingress confirmation")
         last_confirmed_poll_at = last_confirmed_poll_at.astimezone(timezone.utc)
     usable = (
-        evidence is not None and evidence.identity == expected_identity and _valid(evidence, now)
+        evidence is not None
+        and evidence.identity == expected_identity
+        and valid_poll_evidence(evidence, now)
     )
     if usable:
         assert evidence is not None

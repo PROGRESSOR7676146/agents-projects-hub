@@ -9,8 +9,13 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from .codex_ingress_precaution_policy import IngressIdentity, IngressPollEvidence
+from .codex_ingress_precaution_policy import (
+    IngressIdentity,
+    IngressPollEvidence,
+    valid_poll_evidence,
+)
 from .state_errors import StateError
+from .telegram_ingress_watermarks import PollCursor, TelegramIngressWatermarks
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +50,14 @@ def _integer(value: int, *, minimum: int = 0) -> None:
         raise StateError("invalid group ingress epoch or sequence")
 
 
+def _ledger_integers(row: sqlite3.Row) -> None:
+    _integer(row["epoch"], minimum=1)
+    _integer(row["poll_sequence"])
+    _integer(row["failure_streak"])
+    if row["failure_streak"] > 1000000:
+        raise StateError("invalid retained group ingress failure streak")
+
+
 def _identity(identity: str) -> IngressIdentity:
     if identity == "hub":
         return "hub"
@@ -68,12 +81,16 @@ class TelegramIngressLedger:
     ) -> None:
         self.db = connection
         self.transaction = transaction
+        self.watermarks = TelegramIngressWatermarks(connection)
 
     def current_epoch(self, identity: str) -> int:
         row = self.db.execute(
             "SELECT epoch FROM telegram_group_ingress WHERE identity=?", (_identity(identity),)
         ).fetchone()
-        return 0 if row is None else int(row[0])
+        if row is None:
+            return 0
+        _integer(row[0], minimum=1)
+        return row[0]
 
     def register(
         self, identity: str, *, instance_token: str, previous_epoch: int, now: datetime
@@ -91,6 +108,8 @@ class TelegramIngressLedger:
             row = self.db.execute(
                 "SELECT * FROM telegram_group_ingress WHERE identity=?", (identity,)
             ).fetchone()
+            if row is not None:
+                _ledger_integers(row)
             if row is not None and row["instance_token_hash"] == digest:
                 if row["epoch"] != previous_epoch + 1:
                     raise IngressOwnershipLost(
@@ -141,6 +160,7 @@ class TelegramIngressLedger:
             ).fetchone()
             if row is None or row["epoch"] != owner.epoch or row["instance_token_hash"] != digest:
                 return False
+            _ledger_integers(row)
             if sequence == row["poll_sequence"]:
                 if (
                     timestamp == row["last_poll_at"]
@@ -152,6 +172,11 @@ class TelegramIngressLedger:
                 row["last_poll_at"] or row["registered_at"]
             ):
                 raise PollSampleRefused("group ingress sample clock or sequence moved backwards")
+            previous = self.read(identity)
+            assert previous is not None
+            if not valid_poll_evidence(previous.evidence, observed_at):
+                raise StateError("incoherent retained group ingress evidence")
+            self.watermarks.read(identity, ledger=row, now=observed_at)
             streak = (
                 min(int(row["failure_streak"]) + 1, 1000000)
                 if sequence == row["poll_sequence"] + 1
@@ -178,6 +203,17 @@ class TelegramIngressLedger:
                     digest,
                 ),
             )
+            # A gap breaks a new streak, never an already witnessed failure.
+            # Adoption is sealed by this newly accepted poll, not an invented
+            # historical third-failure cursor. Registration/duplicates cannot adopt.
+            retained_threshold = row["failure_threshold_at"] or threshold
+            self.watermarks.record_in_transaction(
+                identity,
+                cursor=PollCursor(owner.epoch, sequence),
+                succeeded=succeeded,
+                observed_at=datetime.fromisoformat(timestamp),
+                threshold_at=retained_threshold,
+            )
             return True
 
     def read(self, identity: str) -> IngressPollSnapshot | None:
@@ -187,23 +223,33 @@ class TelegramIngressLedger:
         ).fetchone()
         if row is None:
             return None
+        _ledger_integers(row)
 
         def date(name: str) -> datetime | None:
             value = row[name]
-            return None if value is None else datetime.fromisoformat(value)
+            if value is None:
+                return None
+            try:
+                return datetime.fromisoformat(_clock(datetime.fromisoformat(value)))
+            except (TypeError, ValueError) as exc:
+                raise StateError("invalid retained group ingress clock") from exc
 
         registered = date("registered_at")
         assert registered is not None
+        polled = date("last_poll_at")
+        confirmed = date("last_confirmed_poll_at")
+        if confirmed is not None and confirmed > (polled or registered):
+            raise StateError("retained ingress confirmation is ahead of the ledger")
         return IngressPollSnapshot(
             IngressPollEvidence(
                 identity=identity,
                 epoch=int(row["epoch"]),
                 registered_at=registered,
-                heartbeat_at=date("last_poll_at") or registered,
-                last_poll_at=date("last_poll_at"),
+                heartbeat_at=polled or registered,
+                last_poll_at=polled,
                 last_success_at=date("last_success_at"),
                 failure_streak=int(row["failure_streak"]),
                 failure_threshold_at=date("failure_threshold_at"),
             ),
-            date("last_confirmed_poll_at"),
+            confirmed,
         )

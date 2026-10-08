@@ -1,6 +1,6 @@
 # ADR 0064: Preserve control of accepted Codex turns
 
-Status: accepted staged design; Stage2/schema49 source published, schema50 under validation
+Status: accepted staged design; schemas48–50 source published, schema51 under validation
 Date: 2026-10-08
 
 ## Context and decision
@@ -155,6 +155,27 @@ provider addressing or group-control semantics; unmatched private Replies keep
 their ordinary-input behavior under REQ-QUEUE-004.
 This prerequisite grants no precaution authority; persistent continuity/episodes,
 full-control consent/send-start and live/late integration remain the next stage.
+
+Schema51 separates the producer's retained causal watermark from the current
+consecutive streak. A newly accepted failed sample preserves an established
+threshold across gaps and epochs; its own cursor witnesses adoption of a
+coherent schema50 threshold. Registration, duplicate/refused samples and
+migration cannot capture that evidence. Restart before the first capture has
+the explicit pre-upgrade continuity limit in REQ-QUEUE-014.
+
+The exact-target reducer first compares retained success with the old cause's
+logical cursor and time cutoff, then selects the complete current cause. This
+avoids both equal-time false recovery and retaining an expired old deadline
+after an actual, unobserved recovery followed by new failures. Registration's
+zero sequence is causal evidence distinct from an absent ledger. Historical
+success can retire an old cause without proving that a new epoch is healthy.
+Earlier reclassification keeps its generation; genuine recovery opens a new
+generation even when episode values happen to compare equal. The state-domain
+facades share HubState's existing connection and transaction owner; no provider
+or sender dependencies, control budgets, permanent fences or automatic sends
+are added. The new additive DDL also refuses ledger and sidecar replacement and
+rowid collisions without relying on recursive DELETE triggers. Stage3 control
+and maintenance integration still await their own reviewed boundary.
 
 A failure streak already past its original deadline can make a newly accepted
 target immediately due; startup/stale grace does not reset that streak. Fresh

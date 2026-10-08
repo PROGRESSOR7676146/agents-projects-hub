@@ -27,6 +27,20 @@ def project_historical_database(source: Path, target: Path, version: int) -> Non
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )
         ]
+        original_objects = old.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY name"
+        ).fetchall()
+        # Historical projection is not a fresh runtime admission/acceptance.
+        # Suspend only those two recording guards while copying a previously
+        # coherent fixture, then restore their exact released DDL before commit,
+        # backup or migration evidence. All other guards and final FK checks stay.
+        recording_guards = old.execute(
+            "SELECT name,sql FROM sqlite_master WHERE name IN "
+            "('provider_job_telegram_ingress_new_only','codex_telegram_precaution_target_fresh_only')"
+        ).fetchall()
+        old.execute("BEGIN IMMEDIATE")
+        for name, definition in recording_guards:
+            old.execute(f'DROP TRIGGER "{name}"')
         for table in tables:
             names = [row[1] for row in old.execute(f'PRAGMA table_info("{table}")')]
             quoted = ",".join(f'"{name}"' for name in names)
@@ -36,6 +50,12 @@ def project_historical_database(source: Path, target: Path, version: int) -> Non
                     f'INSERT INTO "{table}" ({quoted}) VALUES ({",".join("?" for _ in names)})',
                     rows,
                 )
+        for name, definition in recording_guards:
+            old.execute(definition)
+        assert (
+            old.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name").fetchall()
+            == original_objects
+        )
         old.commit()
         assert old.execute("PRAGMA foreign_key_check").fetchall() == []
 
@@ -117,6 +137,8 @@ def legacy_selection_columns(path: Path):
 def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
     """Remove empty lifecycle/archive structures from fictional historical fixtures."""
     tables = (
+        "codex_telegram_ingress_assessments",
+        "telegram_ingress_watermarks",
         "codex_telegram_precaution_targets",
         "provider_job_telegram_ingress",
         "telegram_group_ingress",

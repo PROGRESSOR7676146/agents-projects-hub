@@ -134,6 +134,18 @@ Populated43-to44 backups and DDL faults preserve all existing evidence.
 No live inference, Telegram or service
 change occurs. This is offline source/fault evidence, not deployment acceptance.
 
+Ingress continuity fixtures (`tests.test_telegram_ingress_continuity`,
+`tests.test_codex_ingress_assessments` and
+`tests.test_ingress_assessment_migration`) exercise actual poll transactions and
+immutable exact targets with injected clocks. They cover threshold adoption,
+gaps, competing publishers, equal-time causal recovery, new generations,
+registration zero cursors, database reopen, malformed evidence, replacement and
+rowid refusal, atomic faults and genuine schema50 backup/DDL rollback. Native
+controls, sender budgets/fences, stops and delivery state remain unchanged.
+These fixtures prove storage and policy ordering only; automatic precaution,
+full-control consent and real loss of Telegram control still need separate
+integration and owner-authorized acceptance.
+
 Publication sequence with the installed hooks: focused checks → commit (the
 pre-commit gate) → push (one full canonical run on the clean commit) →
 independent exact-revision CI/CodeQL. Do not run the same full validator
