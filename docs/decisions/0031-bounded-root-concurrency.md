@@ -69,12 +69,17 @@ legacy topics; after an explicit archive, that could restore the historical
 lane root or refuse conflicting history instead of retaining the chosen base
 root. The local CLI now validates the current registered base Git root while
 holding the registry lock through the state transaction. Archive rechecks the
-project and exact source binding, requires both source and destination scopes
-idle, and atomically stores the canonical destination with archived metadata.
-Any still-legacy topic must also be idle: absent or conflicting root evidence
+project and exact source binding, requires the source's full binding guard and
+checks destination busy ownership, then atomically stores the canonical
+destination with archived metadata. Idle active/satellite provider identities
+on destination or legacy peer topics are retained and do not own execution;
+only the source binding is changed. Any still-legacy topic must have no busy
+ownership: absent or conflicting root evidence
 cannot prove that its busy ownership is independent of the destination. This
-temporarily blocks bound archive even for another project's busy legacy topic;
-existing trusted startup normalization restores canonical independent scopes.
+blocks bound archive even for another project's busy legacy topic; trusted
+startup normalization can establish canonical independent scopes when root
+evidence exists. A legacy local writer without root evidence must be reconciled
+locally before archive; age and restart cannot establish independence.
 Idle legacy metadata is not rewritten by archive, and busy canonical topics
 on an independent root remain unaffected.
 Historical roots remain unchanged. No schema migration or automatic repair of

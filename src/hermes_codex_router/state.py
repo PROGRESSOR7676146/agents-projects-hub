@@ -2839,13 +2839,15 @@ class HubState:
                     str(project_root), name="execution root", maximum=4096
                 )
                 self._require_execution_scope_idle_locked(f"root:{lane['worktree_path']}")
-                self._require_execution_scope_idle_locked(destination_scope)
+                self._require_execution_scope_idle_locked(destination_scope, binding_change=False)
                 legacy_topics = self._connection.execute(
                     """SELECT topic_id FROM topics WHERE execution_scope IS NULL
                        OR execution_scope = '' OR execution_scope = 'project:' || project_id"""
                 ).fetchall()
                 for legacy in legacy_topics:
-                    self._require_topic_execution_idle_locked(int(legacy["topic_id"]))
+                    self._require_topic_execution_idle_locked(
+                        int(legacy["topic_id"]), binding_change=False
+                    )
             cursor = self._connection.execute(
                 "UPDATE worktree_lanes SET status = 'archived', updated_at = ? WHERE lane_id = ?",
                 (_now(), lane_id),
@@ -2912,8 +2914,11 @@ class HubState:
             (f"root:{lane['worktree_path']}", now, topic_id),
         )
 
-    def _require_topic_execution_idle_locked(self, topic_id: int) -> None:
-        if (
+    def _require_topic_execution_idle_locked(
+        self, topic_id: int, *, binding_change: bool = True
+    ) -> None:
+        """Peer checks retain busy ownership; only relocation checks retained bindings."""
+        if binding_change and (
             self._connection.execute(
                 "SELECT 1 FROM telegram_delivery_hold_dispositions WHERE topic_id=? LIMIT 1",
                 (topic_id,),
@@ -2949,13 +2954,15 @@ class HubState:
         bound_session = self._connection.execute(
             """SELECT 1 FROM agent_sessions
                WHERE topic_id = ? AND status IN ('active', 'satellite')
-                 AND provider_session_id IS NOT NULL LIMIT 1""",
-            (topic_id,),
+                 AND provider_session_id IS NOT NULL AND ? LIMIT 1""",
+            (topic_id, binding_change),
         ).fetchone()
         if any(item is not None for item in (job, dispatch, writer, bound_session)):
             raise StateError("Telegram topic has active or unresolved execution")
 
-    def _require_execution_scope_idle_locked(self, execution_scope: str) -> None:
+    def _require_execution_scope_idle_locked(
+        self, execution_scope: str, *, binding_change: bool = True
+    ) -> None:
         job = self._connection.execute(
             """SELECT 1 FROM provider_jobs jobs
                JOIN topics ON topics.topic_id = jobs.topic_id
@@ -2992,8 +2999,8 @@ class HubState:
                JOIN topics ON topics.topic_id = sessions.topic_id
                WHERE COALESCE(topics.execution_scope, 'project:' || topics.project_id) = ?
                  AND sessions.status IN ('active', 'satellite')
-                 AND sessions.provider_session_id IS NOT NULL LIMIT 1""",
-            (execution_scope,),
+                 AND sessions.provider_session_id IS NOT NULL AND ? LIMIT 1""",
+            (execution_scope, binding_change),
         ).fetchone()
         if any(item is not None for item in (job, dispatch, writer, bound_session)):
             raise StateError("execution scope has active or unresolved execution")

@@ -298,13 +298,45 @@ class LaneArchiveBoundaryTests(unittest.TestCase):
                 self.assert_refused_unchanged()
                 self.state.set_writer_mode(session.session_id, "telegram")
 
-    def test_destination_active_and_satellite_provider_binding_block_archive(self) -> None:
+    def test_idle_destination_active_and_satellite_provider_bindings_survive_archive(self) -> None:
         peer, session = self.topic_session(78, self.root)
         self.state.bind_provider_session(session.session_id, "fictional-peer", None)
-        self.assert_refused_unchanged()
-        self.state.activate_agent(peer.topic_id, "opencode", "fictional", "high")
+        self.origin(session, self.root, "fictional-peer")
+        active = self.state.activate_agent(peer.topic_id, "opencode", "fictional", "high")
+        self.state.bind_provider_session(active.session_id, "fictional-active-peer", None)
+        peer = self.state.get_topic(peer.topic_id)
+        sessions = tuple(self.state._connection.execute("SELECT * FROM agent_sessions"))
+        origins = tuple(self.state._connection.execute("SELECT * FROM codex_session_origins"))
+        self.archive()
         self.assertEqual(self.state.get_session(session.session_id).status, "satellite")
+        self.assertEqual(self.state.get_topic(peer.topic_id), peer)
+        self.assertEqual(
+            tuple(self.state._connection.execute("SELECT * FROM agent_sessions")), sessions
+        )
+        self.assertEqual(
+            tuple(self.state._connection.execute("SELECT * FROM codex_session_origins")), origins
+        )
+
+    def test_source_provider_binding_still_blocks_archive(self) -> None:
+        self.state.bind_provider_session(self.session.session_id, "fictional-source", None)
         self.assert_refused_unchanged()
+
+    def test_idle_legacy_provider_bindings_survive_archive_in_all_legacy_forms(self) -> None:
+        peers = []
+        for thread, scope in ((78, "project:example-project"), (79, None), (80, "")):
+            peer, session = self.topic_session(thread, self.root)
+            self.state.bind_provider_session(session.session_id, f"fictional-peer-{thread}", None)
+            with self.state._connection:
+                self.state._connection.execute(
+                    "UPDATE topics SET execution_scope=? WHERE topic_id=?", (scope, peer.topic_id)
+                )
+            peers.append(
+                (self.state.get_topic(peer.topic_id), self.state.get_session(session.session_id))
+            )
+        self.archive()
+        for peer, session in peers:
+            self.assertEqual(self.state.get_topic(peer.topic_id), peer)
+            self.assertEqual(self.state.get_session(session.session_id), session)
 
     def test_destination_check_observes_other_connection_commit(self) -> None:
         peer, session = self.topic_session(78, self.root)
@@ -397,7 +429,9 @@ class LaneArchiveBoundaryTests(unittest.TestCase):
             title="Fictional idle legacy topic",
         )
         session = self.state.activate_agent(peer.topic_id, "opencode", "fictional", "high")
+        self.state.bind_provider_session(session.session_id, "fictional-idle-legacy", None)
         peer = self.state.get_topic(peer.topic_id)
+        session = self.state.get_session(session.session_id)
         self.archive()
         self.assertEqual(self.state.get_topic(peer.topic_id), peer)
         self.assertEqual(self.state.get_session(session.session_id), session)
