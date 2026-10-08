@@ -11,6 +11,7 @@ from .artifacts import (
     spool_staged_artifacts,
 )
 from .codex_appserver import CodexAppServerClient, CodexTurnError, RpcError
+from .codex_control_recovery import observe_after_control_loss
 from .codex_failure import CodexPreparationError, codex_failure_notice, codex_failure_reason
 from .diagnostic_log import survived
 from .execution_journal import ExecutionJournal
@@ -44,6 +45,7 @@ def reconcile_codex_completion(
     agent_id: str,
     client_factory: Callable[[], CodexAppServerClient],
     execution_error: BaseException | None = None,
+    interrupt_active_on_failure: bool = False,
 ) -> Literal["completed", "failed", "interrupted", "active", "unknown"]:
     """Reconcile one accepted turn by exact identity without productive work."""
     journal = ExecutionJournal(state)
@@ -63,9 +65,40 @@ def reconcile_codex_completion(
         client = client_factory()
         try:
             if hasattr(client, "read_turn_outcome"):
-                outcome = client.read_turn_outcome(
-                    thread_id=thread_id, turn_id=turn_id, cwd=canonical_root
-                )
+                if interrupt_active_on_failure:
+
+                    def may_interrupt() -> bool:
+                        topic = state.get_topic(state.get_provider_job(job_id).topic_id)
+                        current = resolve_project_context(
+                            config,
+                            state,
+                            chat_id=topic.chat_id,
+                            expected_project_id=topic.project_id,
+                        )
+                        if (
+                            resolve_topic_execution_root(state, current.registry, topic)
+                            != canonical_root
+                        ):
+                            return False
+                        return journal.can_control_accepted_turn(
+                            job_id,
+                            lease_token,
+                            thread_id=thread_id,
+                            turn_id=turn_id,
+                            root=canonical_root,
+                        )
+
+                    outcome = observe_after_control_loss(
+                        client,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                        root=canonical_root,
+                        may_interrupt=may_interrupt,
+                    )
+                else:
+                    outcome = client.read_turn_outcome(
+                        thread_id=thread_id, turn_id=turn_id, cwd=canonical_root
+                    )
                 outcome_status = outcome.status
                 result = outcome.result
             else:

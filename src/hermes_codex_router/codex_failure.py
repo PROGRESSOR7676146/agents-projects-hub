@@ -102,7 +102,7 @@ def codex_failure_notice(
         "timeout": "Hub timed out waiting for Codex to confirm completion.",
     }
     notice = "What happened: " + causes.get(
-        reason, "Codex stopped before Hub could confirm completion."
+        reason, "Hub could no longer follow the Codex turn before confirming completion."
     )
     if turn_status in {"failed", "interrupted"}:
         notice += (

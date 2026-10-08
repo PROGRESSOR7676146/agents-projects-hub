@@ -5,8 +5,10 @@ from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 from hermes_codex_router.codex_activity import CodexActivityEvent
+from hermes_codex_router.task_activity import TaskActivityState
 from hermes_codex_router.worker_activity import codex_activity_for_turn
 from tests import test_task_activity
 
@@ -108,3 +110,62 @@ class WorkerActivityTests(unittest.TestCase):
         self.assertEqual(
             self.fixture.db.execute("SELECT count(*) FROM task_lifecycle_notices").fetchone()[0], 0
         )
+
+    def test_retirement_supersedes_unattempted_wait_and_cannot_rebind(self):
+        with self.observe() as accepted:
+            accepted("thread", "turn")
+            self.client.on_activity(
+                CodexActivityEvent("approval_requested", "command", "thread", "turn", "item", 1)
+            )
+            self.assertEqual(
+                self.fixture.db.execute("SELECT status FROM task_lifecycle_notices").fetchone()[0],
+                "pending",
+            )
+            self.client.on_activity_unavailable()
+            self.assertIsNone(self.fixture.row())
+            self.assertIsNone(self.client.on_activity)
+            accepted("thread", "turn")
+            self.assertIsNone(self.fixture.row())
+            self.assertEqual(
+                self.fixture.db.execute("SELECT status FROM task_lifecycle_notices").fetchone()[0],
+                "superseded",
+            )
+            self.assertEqual(
+                self.fixture.db.execute(
+                    "SELECT provider_turn_id FROM provider_execution_checkpoints"
+                ).fetchone()[0],
+                "turn",
+            )
+        self.assertIsNone(self.client.on_activity_unavailable)
+
+    def test_retirement_preserves_unknown_notice_evidence(self):
+        with self.observe() as accepted:
+            accepted("thread", "turn")
+            self.client.on_activity(
+                CodexActivityEvent("approval_requested", "command", "thread", "turn", "item", 1)
+            )
+            with self.fixture.db:
+                self.fixture.db.execute(
+                    "UPDATE task_lifecycle_notices SET status='unknown',attempt_count=1,"
+                    "send_started_at='2026-01-01T00:00:01+00:00'"
+                )
+            before = tuple(
+                self.fixture.db.execute("SELECT * FROM task_lifecycle_notices").fetchone()
+            )
+            self.client.on_activity_unavailable()
+            self.assertEqual(
+                tuple(self.fixture.db.execute("SELECT * FROM task_lifecycle_notices").fetchone()),
+                before,
+            )
+
+    def test_retirement_store_fault_is_optional_and_retried_only_on_cleanup(self):
+        with patch.object(
+            TaskActivityState, "retire_observation", side_effect=OSError("Example storage fault")
+        ) as retire:
+            with self.observe() as accepted:
+                accepted("thread", "turn")
+                self.client.on_activity_unavailable()
+                self.assertIsNone(self.client.on_activity)
+                self.assertEqual(retire.call_count, 1)
+            self.assertEqual(retire.call_count, 2)
+        self.assertIsNone(self.client.on_activity_unavailable)

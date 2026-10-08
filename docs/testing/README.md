@@ -504,6 +504,38 @@ final events, approvals, visible progress and quota telemetry through delivery,
 plus two successive pre-execution failures retaining the exact task through
 notice-bound retries. No restart-only recovery counts as a permanent fix.
 
+## Optional offline native approval and control-loss witnesses
+
+The existing disposable native namespace fixture also exercises the real Hub
+RPC client against an explicitly supplied Codex binary:
+
+```bash
+HUB_NATIVE_CODEX_FIXTURE_EXECUTABLE=/home/example/tools/codex \
+  HUB_REQUIRE_NATIVE_CODEX_PROFILE_TESTS=1 HUB_REQUIRE_NAMESPACE_TESTS=1 \
+  PYTHONPATH=src:tests python -m unittest -v \
+  tests.test_codex_native_approval_sequence tests.test_codex_native_control_loss
+```
+
+The approval witness uses 129 sequential requested/resolved pairs in one exact
+turn, peak outstanding one, a deny-only synthetic companion and the retained
+completed final. A fixed compatibility case uses two approvals plus final,
+with a four-request Responses cap; the full sequence uses exactly 130 requests
+and a fixed cap of 130. One completed warmup precedes companion subscription
+and is accounted separately. Every request, including retries or unexpected
+calls, consumes the cap. Native output must identify the exact denied previous
+call, and the next response waits for primary resolution. No grants or approval
+authority are introduced. Fixture-plan unit tests cover these bounds and
+premature, repeated and mismatched output.
+
+The control-loss witness closes only the primary Hub connection while the
+native turn remains active. A fresh actual Hub client reads the exact target,
+interrupts it once and independently proves it interrupted, with one local
+Responses request and no start/resume/steer on that recovery connection.
+Both witnesses passed with Codex 0.159.2. These are offline native protocol
+observations, with no real auth, remote inference, installed service, Telegram
+or human approval. Late-stop maintenance, ingress-loss policy and live
+acceptance remain separate gates in the [control-loss runbook](../operations/CODEX_CONTROL_LOSS.md).
+
 ## Publication preflight
 
 Repository maintainers can install the versioned pre-commit and pre-push hooks

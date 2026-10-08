@@ -645,8 +645,11 @@ class ExternalQueueWorker:
                             job_id=executing.job_id,
                             lease_token=token,
                             agent_id=self.agent.agent_id,
-                            client_factory=self.supervisor.client,
+                            client_factory=lambda: self.supervisor.client(
+                                allow_fallback=False, deadline=time.monotonic() + 2
+                            ),
                             execution_error=exc,
+                            interrupt_active_on_failure=True,
                         )
                         recovered = turn_status == "completed"
                     except ProviderTurnStopped:  # won the recovery commit (R-021)

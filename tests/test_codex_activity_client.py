@@ -7,7 +7,12 @@ from dataclasses import asdict
 from pathlib import Path
 
 from hermes_codex_router.codex_activity import CodexActivityEvent
-from hermes_codex_router.codex_appserver import CodexAppServerClient, CodexTurnError, RpcError
+from hermes_codex_router.codex_appserver import (
+    CodexAppServerClient,
+    CodexTurnError,
+    RpcError,
+    TurnResult,
+)
 
 
 class Transport:
@@ -260,24 +265,126 @@ class CodexActivityClientTests(unittest.TestCase):
             [event.kind for event in events], ["approval_requested", "approval_resolved"]
         )
 
-    def test_request_identifier_collision_with_other_turn_fails_closed(self) -> None:
-        client, transport, events = self.client(
-            [approval(), approval(turn="other-turn"), started_response()]
+    def test_many_sequential_resolutions_release_pending_capacity_and_keep_dedup(self) -> None:
+        messages = [started_response()]
+        for request in range(400):
+            messages.extend([approval(request), resolved(request)])
+        # Delayed duplicates include the very first ID, not just a recent cache entry.
+        messages.extend([approval(0), resolved(0), approval("0"), resolved("0"), completed()])
+        client, transport, events = self.client(messages)
+        pending_sizes: list[int] = []
+
+        def observe(event: CodexActivityEvent) -> None:
+            events.append(event)
+            pending_sizes.append(len(client._activity_requests))
+
+        client.on_activity = observe
+        result = client.wait_for_turn(self.start(client))
+        self.assertEqual(result.text, "")
+        self.assertEqual(len(events), 802)
+        self.assertEqual(
+            [event.kind for event in events], ["approval_requested", "approval_resolved"] * 401
         )
-        with self.assertRaises(RpcError):
-            self.start(client)
+        self.assertLessEqual(max(pending_sizes), 1)
+        self.assertEqual(pending_sizes[-1], 0)
+        self.assertEqual([message["method"] for message in transport.sent], ["turn/start"])
+
+    def test_resolved_id_reuse_retires_observation_without_reopening_approval(self) -> None:
+        changed = approval(1)
+        changed["params"]["itemId"] = "other-item"
+        client, _, events = self.client(
+            [started_response(), approval(1), resolved(1), changed, completed()]
+        )
+        lost: list[bool] = []
+        client.on_activity_unavailable = lambda: lost.append(True)
+        client.wait_for_turn(self.start(client))
+        self.assertEqual(
+            [event.kind for event in events], ["approval_requested", "approval_resolved"]
+        )
+        self.assertEqual(lost, [True])
+
+    def test_tombstone_saturation_preserves_final_callbacks_and_telemetry(self) -> None:
+        messages = [started_response()]
+        for request in range(1800):
+            messages.extend([approval(request), resolved(request)])
+        messages.extend(
+            [
+                approval(0),
+                resolved(0),
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": "thread-example",
+                        "turnId": "turn-example",
+                        "item": {
+                            "id": "final-example",
+                            "type": "agentMessage",
+                            "phase": "final_answer",
+                            "text": "Saved final",
+                        },
+                    },
+                },
+                {
+                    "method": "thread/tokenUsage/updated",
+                    "params": {
+                        "threadId": "thread-example",
+                        "turnId": "turn-example",
+                        "tokenUsage": {"modelContextWindow": 1000, "last": {"totalTokens": 100}},
+                    },
+                },
+                completed(),
+            ]
+        )
+        client, transport, events = self.client(messages)
+        lost: list[bool] = []
+        completions: list[str] = []
+        client.on_activity_unavailable = lambda: lost.append(True)
+        client.on_completed = lambda result: completions.append(result.text)
+        result = client.wait_for_turn(self.start(client))
+        self.assertEqual(result.text, "Saved final")
+        self.assertEqual(result.context_tokens_used, 100)
+        self.assertEqual(result.context_window, 1000)
+        self.assertEqual(completions, ["Saved final"])
+        self.assertEqual(lost, [True])
+        self.assertEqual(len(events), 1025)
+        self.assertEqual([message["method"] for message in transport.sent], ["turn/start"])
+
+    def test_request_identifier_collision_retires_only_optional_observation(self) -> None:
+        client, transport, events = self.client(
+            [approval(), approval(turn="other-turn"), started_response(), completed()]
+        )
+        lost: list[bool] = []
+        client.on_activity_unavailable = lambda: lost.append(True)
+        client.wait_for_turn(self.start(client))
         self.assertEqual(events, [])
+        self.assertEqual(lost, [True])
         self.assertEqual(len(transport.sent), 1)
         self.assertEqual(list(client._pending_activity), [])
 
-    def test_pending_activity_overflow_fails_before_callback_and_clears(self) -> None:
-        messages = [approval(index) for index in range(200)]
+    def test_pending_activity_overflow_retires_observation_and_keeps_native_stream(self) -> None:
+        messages = [approval(index) for index in range(200)] + [started_response(), completed()]
         client, transport, events = self.client(messages)
-        with self.assertRaises(RpcError):
-            self.start(client)
+        lost: list[bool] = []
+        client.on_activity_unavailable = lambda: lost.append(True)
+        client.wait_for_turn(self.start(client))
         self.assertEqual(events, [])
+        self.assertEqual(lost, [True])
         self.assertEqual(len(transport.sent), 1)
         self.assertEqual(list(client._pending_activity), [])
+
+    def test_retirement_callback_failure_does_not_hide_final_or_completion_proof(self) -> None:
+        messages = [started_response()] + [approval(index) for index in range(129)] + [completed()]
+        client, transport, _ = self.client(messages)
+
+        def cleanup_failure() -> None:
+            raise OSError("Example optional retirement store failure")
+
+        client.on_activity_unavailable = cleanup_failure
+        saved: list[TurnResult] = []
+        client.on_completed = saved.append
+        result = client.wait_for_turn(self.start(client))
+        self.assertEqual(saved, [result])
+        self.assertEqual([message["method"] for message in transport.sent], ["turn/start"])
 
     def test_stdio_declines_before_activity_callback_and_never_allows(self) -> None:
         client, transport, events = self.client(

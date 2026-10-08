@@ -38,7 +38,15 @@ def usage(thread: str, turn: str) -> dict:
 
 
 class ScriptedTransport:
-    def __init__(self, *, name: str, root: Path, active: threading.Event, release: threading.Event):
+    def __init__(
+        self,
+        *,
+        name: str,
+        root: Path,
+        active: threading.Event,
+        release: threading.Event,
+        approval_count: int = 1,
+    ):
         self.name, self.root, self.active, self.release = name, root, active, release
         self.thread, self.turn = f"example-thread-{name}", f"example-turn-{name}"
         self.incoming: deque[dict] = deque()
@@ -46,6 +54,7 @@ class ScriptedTransport:
         self.completed_wait = False
         self.foreign_count = 0
         self.quota_used = 25 if name == "a" else 35
+        self.approval_count = approval_count
 
     def foreign(self) -> list[dict]:
         self.foreign_count += 1200
@@ -55,9 +64,17 @@ class ScriptedTransport:
         ]
 
     def own_completion(self) -> list[dict]:
+        approvals = []
+        for index in range(self.approval_count):
+            identifier = f"example-approval-{self.name}-{index}"
+            approvals.extend(
+                [
+                    approval(identifier, thread=self.thread, turn=self.turn),
+                    resolved(identifier, thread=self.thread),
+                ]
+            )
         return [
-            approval(f"example-approval-{self.name}", thread=self.thread, turn=self.turn),
-            resolved(f"example-approval-{self.name}", thread=self.thread),
+            *approvals,
             usage(self.thread, self.turn),
             {
                 "method": "account/rateLimits/updated",
@@ -100,8 +117,13 @@ class ScriptedTransport:
             if self.name == "b":
                 self.incoming.extend(self.foreign())
                 # A complete current turn can arrive before its RPC acknowledgement.
-                self.incoming.extend(self.own_completion())
+                if self.approval_count == 1:
+                    self.incoming.extend(self.own_completion())
             self.incoming.append({"id": identifier, "result": {"turn": {"id": self.turn}}})
+            if self.name == "b" and self.approval_count > 1:
+                # The sequence exercises the accepted-turn pending lifecycle,
+                # rather than saturating the separate preacceptance event queue.
+                self.incoming.extend(self.own_completion())
         elif method == "account/rateLimits/read":
             self.incoming.append({"id": identifier, "result": {"rateLimits": {}}})
         else:
@@ -167,7 +189,7 @@ class NotificationConservationTests(unittest.TestCase):
         )
         self.config.registry_path.write_text(json.dumps(document))
 
-    def run_pair(self, *, resume: bool):
+    def run_pair(self, *, resume: bool, approval_count: int = 1):
         observed = []
         original_record = TaskActivityState.record_activity
 
@@ -208,7 +230,13 @@ class NotificationConservationTests(unittest.TestCase):
             )
         active, release = threading.Event(), threading.Event()
         transports = [
-            ScriptedTransport(name=name, root=root, active=active, release=release)
+            ScriptedTransport(
+                name=name,
+                root=root,
+                active=active,
+                release=release,
+                approval_count=approval_count,
+            )
             for name, root in (("a", self.root_a), ("b", self.root_b))
         ]
         clients = [CodexAppServerClient(transport) for transport in transports]
@@ -279,11 +307,12 @@ class NotificationConservationTests(unittest.TestCase):
                 ).fetchall()
                 self.assertEqual(
                     [tuple(row) for row in activity],
-                    [("approval", "resolved"), ("message", "completed")],
+                    [("approval", "resolved")] * approval_count + [("message", "completed")],
                 )
                 self.assertEqual(
                     [kind for observed_job, kind in observed if observed_job == job_id],
-                    ["approval_requested", "approval_resolved", "visible_message_completed"],
+                    ["approval_requested", "approval_resolved"] * approval_count
+                    + ["visible_message_completed"],
                 )
         self.assertEqual(transports[1].foreign_count, 3600)
         for transport in transports:
@@ -310,6 +339,9 @@ class NotificationConservationTests(unittest.TestCase):
 
     def test_second_worker_resume_conserves_both_finals_approvals_and_telemetry(self):
         self.run_pair(resume=True)
+
+    def test_two_workers_conserve_129_sequential_approval_pairs_and_both_results(self):
+        self.run_pair(resume=True, approval_count=129)
 
     def test_old_unfiltered_retention_rule_reproduces_preparation_overflow(self):
         active, release = threading.Event(), threading.Event()

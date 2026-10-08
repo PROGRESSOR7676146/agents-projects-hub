@@ -58,6 +58,44 @@ class ExecutionJournal:
         ).fetchone()
         return dict(row) if row is not None else None
 
+    def can_control_accepted_turn(
+        self, job_id: str, token: str, *, thread_id: str, turn_id: str, root: Path
+    ) -> bool:
+        """Coherent read of the live owner/checkpoint; grants no new writer lease."""
+        with self.state._immediate_transaction():
+            try:
+                job = self._lease(job_id, token)
+            except StateError:
+                return False
+            session = self.state.retained_session(int(job["topic_id"]), str(job["agent_id"]))
+            topic = self.state.get_topic(int(job["topic_id"]))
+            saved = self.read(job_id)
+            return bool(
+                session is not None
+                and session.session_id == job["session_id"]
+                and session.generation == job["session_generation"]
+                and session.writer_mode == "telegram"
+                and session.provider_session_id == thread_id
+                and topic.chat_id == job["chat_id"]
+                and topic.execution_scope in (f"root:{root}", f"project:{topic.project_id}")
+                and saved is not None
+                and saved["provider_thread_id"] == thread_id
+                and saved["provider_turn_id"] == turn_id
+                and saved["project_root"] == str(root)
+                and saved["completed_text"] is None
+                and self.connection.execute(
+                    "SELECT 1 FROM provider_turn_terminal_evidence WHERE job_id=?", (job_id,)
+                ).fetchone()
+                is None
+                and self.connection.execute(
+                    "SELECT 1 FROM provider_job_resolutions WHERE job_id=?", (job_id,)
+                ).fetchone()
+                is None
+                and saved["codex_permission_profile"]
+                == job["codex_permission_profile"]
+                == session.codex_permission_profile
+            )
+
     def prepare_claude_session(self, job_id: str, token: str, cwd: Path) -> ClaudeSessionBinding:
         """Commit a native UUID before invocation without manufacturing turn evidence."""
         root = _bounded(str(cwd.resolve(strict=True)), 4096)

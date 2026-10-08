@@ -546,6 +546,14 @@ recreate unsaved provider context or a partially executed turn.
   Early request metadata MUST have a separate bound of 128 entries per scope.
   Payload-free event/tool/approval metadata MUST total at most 512 entries per
   job; an exhausted bound MUST NOT authorize execution, replay or approval.
+  The client MUST release a pending approval entry on an exact typed resolution.
+  Its separate payload-free resolved history MUST deduplicate delayed requests
+  without eviction or reopening. Exhausted optional observation bounds or
+  conflicting request identity MUST retire observation for that turn, preserve
+  accepted identity and mandatory event/result/context/quota consumption, and
+  suppress only never-attempted stale notices. Retirement cleanup faults MUST
+  remain observable without aborting the mandatory stream. These client limits
+  are separate from the durable per-job metadata bound.
   A separate Claude process-observation subset MAY use the ordinary threshold
   after an actual worker-owned process has been spawned. Prepared UUIDs,
   checkpoints, invocation timestamps, worker heartbeat and buffered test runners
@@ -575,6 +583,34 @@ recreate unsaved provider context or a partially executed turn.
   Only an explicit Telegram API rejection proves a delivery attempt retryable.
   A control-delivery failure MUST NOT change job, session or root ownership.
   Database deduplication MUST NOT be described as exactly-once Telegram delivery.
+- **REQ-QUEUE-014 (Accepted; staged implementation under validation):** Loss of
+  a mandatory execution or control path after exact Codex acceptance MUST wake
+  the owning worker rather than leave it waiting without control. Recovery MUST
+  use a fresh connection to the owning server with fallback disabled, bounded
+  exact observation, and at most one guarded interrupt of a proven active exact
+  turn. Completed output MUST remain recoverable; failed/interrupted proof MAY
+  release only native uncertainty. ACK, timeout, client closure, observation
+  exhaustion and unknown outcome MUST NOT prove terminality, release the root,
+  create an owner-stop receipt or authorize replay. Notices MUST distinguish
+  saved state from confirmed owner delivery and retain eligible partial output.
+  A late pending owner stop for an indeterminate turn MUST be serviced separately
+  from productive execution and read-only observation. A durable exact-target
+  journal MUST share a send-start fence across live, protective and late control,
+  retain covering-stop provenance, identity, attempts and bounded deadlines,
+  and revalidate registry/root, session/generation/writer and retained native
+  proof before control. Crash after send-start permits observation only, never
+  an automatic repeat interrupt; another stop cannot reset that target's budget.
+  Expired claims alone MUST NOT establish that the old control process ceased.
+  Durable control fencing and late-stop service remain pending in this slice.
+  Telegram ingress and egress loss MUST be distinguished from native stream
+  loss. Passive aggregate health, silence, typing, sender 429 or another topic's
+  success MUST NOT establish the exact topic's controllability. Any future
+  precautionary interruption on prolonged unconfirmed ingress requires an
+  explicit freshness/grace contract and tests for startup/restart; aggregate
+  egress presently remains diagnostic, not automatic interruption authority.
+  No monitor probe may invoke inference, and unavailable delivery cannot be
+  reported as an owner notification. The staged boundary is recorded in
+  [ADR 0064](../decisions/0064-codex-control-loss.md).
 - **REQ-QUEUE-011 (Accepted; implementation pending):** An explicitly enabled
   Claude Code/Codex review workflow MUST durably bind its request, permitted
   materials, exact artifact/revision reference, advisor result, lead decision,

@@ -26,6 +26,39 @@ class CodexLiveControlWorkerTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
 
+    def test_fatal_control_observer_failure_wakes_native_wait_before_failure_commit(self) -> None:
+        job_id = self.fixture.enqueue()
+        closed = threading.Event()
+        disconnected_before_wait_exit: list[bool] = []
+
+        class Client(CallbackClient):
+            def wait_for_turn(self, _turn_id: str) -> TurnResult:
+                disconnected_before_wait_exit.append(closed.wait(2))
+                raise EOFError("Example control stream became unavailable")
+
+            def close(self) -> None:
+                closed.set()
+
+        class BrokenControl(CodexLiveControl):
+            def __init__(self, **kwargs: Any) -> None:
+                def unavailable_state():
+                    raise OSError("Example permanent control-store failure")
+
+                kwargs["state_factory"] = unavailable_state
+                kwargs["poll_seconds"] = 0.01
+                super().__init__(**kwargs)
+
+        client = Client()
+        worker = self.fixture.worker(client)
+        try:
+            with patch.object(external_worker, "CodexLiveControl", BrokenControl):
+                self.assertTrue(worker.run_cycle())
+            self.assertEqual(disconnected_before_wait_exit, [True])
+            self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
+            self.assertEqual(client.turns, 1)
+        finally:
+            worker.close()
+
     def test_observer_start_failure_does_not_leave_native_callbacks_installed(self) -> None:
         job_id = self.fixture.enqueue()
         client = CallbackClient()

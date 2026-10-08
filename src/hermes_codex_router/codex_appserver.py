@@ -12,7 +12,11 @@ from typing import Any, Callable, Iterator, Literal, Protocol, Sequence, cast
 from .codex_activity import (
     CodexActivityEvent,
     normalize_codex_activity,
-    normalize_codex_approval_resolution,
+)
+from .codex_activity_requests import (
+    MAX_PENDING_ACTIVITY,
+    ActivityObservationUnavailable,
+    CodexActivityRequests,
 )
 from .codex_connection_completion import CompletedConnectionProof
 from .codex_failure import (
@@ -43,7 +47,6 @@ from .codex_transports import (
 )
 from .diagnostic_log import survived
 
-MAX_PENDING_ACTIVITY = 128
 DEFAULT_RPC_RESPONSE_SECONDS = 120.0
 DEFAULT_RPC_QUIET_SECONDS = 20.0
 TURN_START_RESPONSE_SECONDS = 300.0
@@ -216,13 +219,15 @@ class CodexAppServerClient:
         # Install before start_turn; callbacks begin only at accepted-turn wait.
         self.on_activity: Callable[[CodexActivityEvent], None] | None = None
         self.on_preacceptance_approval: Callable[[CodexActivityEvent], None] | None = None
+        self.on_activity_unavailable: Callable[[], None] | None = None
         self._turn_start_pending = False
         self._activity_thread_id: str | None = None
         self._activity_turn_id: str | None = None
         self._activity_ready = False
         self._pending_activity: deque[CodexActivityEvent] = deque()
-        self._activity_requests: dict[tuple[type, str | int], CodexActivityEvent] = {}
-        self._resolved_activity_requests: set[tuple[type, str | int]] = set()
+        self._activity_request_tracker = CodexActivityRequests()
+        self._activity_requests = self._activity_request_tracker.pending
+        self._activity_retired = False
         self._activity_observed_notifications: set[int] = set()
 
     def close(self) -> None:
@@ -239,11 +244,30 @@ class CodexAppServerClient:
         self._activity_thread_id = self._activity_turn_id = None
         self._activity_ready = False
         self._pending_activity.clear()
-        self._activity_requests.clear()
-        self._resolved_activity_requests.clear()
+        self._activity_request_tracker.clear()
+        self._activity_retired = False
         self._activity_observed_notifications.clear()
 
     def _observe_activity(self, message: dict[str, Any]) -> None:
+        if self._activity_retired:
+            return
+        try:
+            self._observe_available_activity(message)
+        except ActivityObservationUnavailable as error:
+            self._activity_retired = True
+            self._pending_activity.clear()
+            self._activity_request_tracker.clear()
+            self.on_activity = self.on_preacceptance_approval = None
+            # Accepted IDs also fence mandatory completion/connection proofs.
+            # Do not clear them when only passive observation becomes unavailable.
+            survived("codex_activity.retired", error)
+            if self.on_activity_unavailable is not None:
+                try:
+                    self.on_activity_unavailable()
+                except Exception as cleanup_error:
+                    survived("codex_activity.retirement_callback", cleanup_error)
+
+    def _observe_available_activity(self, message: dict[str, Any]) -> None:
         if (
             self.on_activity is None and self.on_preacceptance_approval is None
         ) or self._activity_thread_id is None:
@@ -253,17 +277,9 @@ class CodexAppServerClient:
             return
         event: CodexActivityEvent | None
         if message.get("method") == "serverRequest/resolved":
-            request_id = params.get("requestId")
-            if not isinstance(request_id, (str, int)) or isinstance(request_id, bool):
-                return
-            key = (type(request_id), request_id)
-            requested = self._activity_requests.get(key)
-            if requested is None or key in self._resolved_activity_requests:
-                return
-            event = normalize_codex_approval_resolution(message, requested=requested)
+            event = self._activity_request_tracker.resolve(message)
             if event is None:
                 return
-            self._resolved_activity_requests.add(key)
         else:
             turn_id = self._activity_turn_id or params.get("turnId")
             if not isinstance(turn_id, str):
@@ -278,15 +294,8 @@ class CodexAppServerClient:
                 # An unreachable human host must not be advertised as waiting.
                 return
             if event.kind == "approval_requested" and event.request_id is not None:
-                key = (type(event.request_id), event.request_id)
-                prior = self._activity_requests.get(key)
-                if prior is not None:
-                    if prior != event:
-                        raise RpcError("Codex activity request identity changed")
+                if not self._activity_request_tracker.request(event):
                     return
-                if len(self._activity_requests) >= MAX_PENDING_ACTIVITY:
-                    raise RpcError("Codex activity request buffer exceeded its bound")
-                self._activity_requests[key] = event
         if (
             self._turn_start_pending
             and event.kind in {"approval_requested", "approval_resolved"}
@@ -295,7 +304,7 @@ class CodexAppServerClient:
             self.on_preacceptance_approval(event)
         if not self._activity_ready:
             if len(self._pending_activity) >= MAX_PENDING_ACTIVITY:
-                raise RpcError("Codex pending activity buffer exceeded its bound")
+                raise ActivityObservationUnavailable("activity_pending_events_exhausted")
             self._pending_activity.append(event)
         elif event.turn_id == self._activity_turn_id and self.on_activity is not None:
             self.on_activity(event)
@@ -855,11 +864,15 @@ class CodexAppServerClient:
         self._activity_turn_id = turn_id
         return turn_id
 
-    def interrupt_turn(self, *, thread_id: str, turn_id: str) -> None:
+    def interrupt_turn(
+        self, *, thread_id: str, turn_id: str, deadline: float | None = None
+    ) -> None:
         result = self._request(
             "turn/interrupt",
             {"threadId": thread_id, "turnId": turn_id},
-            deadline=time.monotonic() + 10,
+            deadline=min(deadline, time.monotonic() + 10)
+            if deadline is not None
+            else time.monotonic() + 10,
         )
         if result is not None and not isinstance(result, dict):
             raise RpcError("turn/interrupt returned an invalid result")
@@ -1061,12 +1074,16 @@ class CodexAppServerClient:
                     "\n\n".join(answers),
                 )
 
-    def read_turn_outcome(self, *, thread_id: str, turn_id: str, cwd: Path) -> StoredTurnOutcome:
+    def read_turn_outcome(
+        self, *, thread_id: str, turn_id: str, cwd: Path, deadline: float | None = None
+    ) -> StoredTurnOutcome:
         """Read one exact persisted turn without resume, subscribe, or inference."""
         summary = self._request(
             "thread/read",
             {"threadId": thread_id, "includeTurns": False},
-            deadline=time.monotonic() + 10,
+            deadline=min(deadline, time.monotonic() + 10)
+            if deadline is not None
+            else time.monotonic() + 10,
         )
         thread = summary.get("thread") if isinstance(summary, dict) else None
         if not isinstance(thread, dict) or thread.get("id") != thread_id:
@@ -1078,10 +1095,14 @@ class CodexAppServerClient:
             raise RpcError("stored thread project root mismatch")
         history_mode = thread.get("historyMode", "legacy")
         if history_mode == "paginated":
-            return self._read_paginated_turn_outcome(thread_id=thread_id, turn_id=turn_id)
+            return self._read_paginated_turn_outcome(
+                thread_id=thread_id, turn_id=turn_id, deadline=deadline
+            )
         if history_mode != "legacy":
             raise RpcError("stored thread history mode is unsupported")
-        result = self._request("thread/read", {"threadId": thread_id, "includeTurns": True})
+        result = self._request(
+            "thread/read", {"threadId": thread_id, "includeTurns": True}, deadline=deadline
+        )
         thread = result.get("thread") if isinstance(result, dict) else None
         if not isinstance(thread, dict) or thread.get("id") != thread_id:
             raise RpcError("stored thread identity mismatch")
@@ -1123,10 +1144,14 @@ class CodexAppServerClient:
             raise RpcError("stored visible response exceeds recovery bound")
         return StoredTurnOutcome("completed", TurnResult(text, None, None))
 
-    def _read_paginated_turn_outcome(self, *, thread_id: str, turn_id: str) -> StoredTurnOutcome:
+    def _read_paginated_turn_outcome(
+        self, *, thread_id: str, turn_id: str, deadline: float | None = None
+    ) -> StoredTurnOutcome:
         cursor: str | None = None
         used_cursors: set[str] = set()
-        deadline = time.monotonic() + 15
+        deadline = (
+            min(deadline, time.monotonic() + 15) if deadline is not None else time.monotonic() + 15
+        )
         for _ in range(20):
             params: dict[str, Any] = {
                 "threadId": thread_id,
@@ -1155,7 +1180,11 @@ class CodexAppServerClient:
                     raise RpcError("stored turn status is unrecognized")
                 return StoredTurnOutcome(
                     "completed",
-                    TurnResult(self._read_paginated_visible_items(thread_id, turn_id), None, None),
+                    TurnResult(
+                        self._read_paginated_visible_items(thread_id, turn_id, deadline=deadline),
+                        None,
+                        None,
+                    ),
                 )
             next_cursor = response.get("nextCursor")
             if next_cursor is None:
@@ -1171,13 +1200,17 @@ class CodexAppServerClient:
             cursor = next_cursor
         raise RpcError("stored turn search exceeds recovery bound")
 
-    def _read_paginated_visible_items(self, thread_id: str, turn_id: str) -> str:
+    def _read_paginated_visible_items(
+        self, thread_id: str, turn_id: str, *, deadline: float | None = None
+    ) -> str:
         cursor: str | None = None
         used_cursors: set[str] = set()
         seen_items: set[str] = set()
         answers: list[tuple[str, str]] = []
         text_size = 0
-        deadline = time.monotonic() + 30
+        deadline = (
+            min(deadline, time.monotonic() + 30) if deadline is not None else time.monotonic() + 30
+        )
         for _ in range(100):
             params: dict[str, Any] = {"threadId": thread_id, "turnId": turn_id, "limit": 10}
             if cursor is not None:
