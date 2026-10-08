@@ -67,7 +67,7 @@ class WorkRetryState:
             "WHERE o.job_id=? AND o.status='unknown'",
             (row["job_id"],),
         ).fetchone()
-        if delivery is not None:
+        if delivery is not None and status == "result_ready":
             return (
                 "At retry time, Telegram delivery was unknown. "
                 + (

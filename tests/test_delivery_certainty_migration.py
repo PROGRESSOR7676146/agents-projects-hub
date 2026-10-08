@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+from contextlib import closing
 from dataclasses import replace
 from unittest.mock import patch
 
@@ -30,7 +31,7 @@ class DeliveryCertaintyMigrationTests(unittest.TestCase):
             progress.setUp()
         self.addCleanup(progress.tearDown)
         self.path = progress.config.state_path
-        with sqlite3.connect(self.path) as bridge, legacy_delivery_hold_schema(bridge):
+        with closing(sqlite3.connect(self.path)) as bridge, legacy_delivery_hold_schema(bridge):
             job_id, token, journal = progress.executing_job()
             journal.record_item(job_id, token, "example-progress", "Example progress", "commentary")
             progress.state.commit_provider_result(

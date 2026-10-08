@@ -8,6 +8,7 @@ import unittest
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
+from hermes_codex_router.outbox_sender import TelegramOutboxSender
 from hermes_codex_router.state import HubState, StateError
 from tests import test_outbox_sender as fixtures
 from tests.test_delivery_certainty import ReceiptBot
@@ -23,6 +24,7 @@ class DeliveryHoldTests(unittest.TestCase):
         self.sender = self.fixture.sender(opencode=self.bot, antigravity=fixtures.Bot())
         self.addCleanup(self.sender.close)
         self.state = self.sender.state
+        self.state.reconcile_legacy_execution_scopes({"example-project": self.fixture.base})
         self.sender._deliver_one("opencode")
         self.bot.receipt = None
         self.sender._deliver_one("opencode")
@@ -65,6 +67,7 @@ class DeliveryHoldTests(unittest.TestCase):
         self.assertEqual(preview.hold_status, "outstanding")
         self.assertEqual(preview.receipted_parts, 1)
         self.assertGreater(preview.part_count, 1)
+        self.assertIn("result_ready_remains_without_time_limit", preview.control_consequences)
         tables = (
             "provider_jobs",
             "provider_job_results",
@@ -305,8 +308,17 @@ class DeliveryHoldTests(unittest.TestCase):
             )
         with self.assertRaises(StateError):
             self.release(token=token)
-        self.release()
+        disposition = self.release()
+        with self.assertRaises(sqlite3.IntegrityError), self.state._connection:
+            self.state._connection.execute(
+                "UPDATE topics SET execution_scope='root:/home/example/another' WHERE topic_id=?",
+                (topic,),
+            )
+        # Simulate out-of-band damage, outside the trusted state/OS boundary.
         with self.state._connection:
+            self.state._connection.execute(
+                "DROP TRIGGER telegram_delivery_hold_topic_binding_guard"
+            )
             self.state._connection.execute(
                 "UPDATE topics SET execution_scope='root:/home/example/another' WHERE topic_id=?",
                 (topic,),
@@ -316,6 +328,153 @@ class DeliveryHoldTests(unittest.TestCase):
         self.assertEqual(preview.hold_status, "disposition_binding_changed")
         self.assertIsNotNone(preview.disposition_snapshot)
         self.assertNotEqual(preview.snapshot, preview.disposition_snapshot)
+        retried = self.release(token=disposition.snapshot)
+        self.assertEqual(retried.snapshot, disposition.snapshot)
+        self.assertEqual(retried.applied_at, disposition.applied_at)
+        self.assertEqual(retried.hold_status, "disposition_binding_changed")
+        self.assertEqual(
+            self.state.provider_job_outcome(self.job_id).as_dict()["result_delivery"][
+                "delivery_hold"
+            ],
+            "disposition_binding_changed",
+        )
+
+    def test_legacy_scope_refuses_and_recorded_binding_allows_only_noop_or_metadata_update(
+        self,
+    ) -> None:
+        topic = self.state.get_provider_job(self.job_id).topic_id
+        for scope in (None, "", "project:example-project"):
+            with self.state._connection:
+                self.state._connection.execute(
+                    "UPDATE topics SET execution_scope=? WHERE topic_id=?", (scope, topic)
+                )
+            with self.assertRaisesRegex(StateError, "established canonical execution scope"):
+                self.state.preview_delivery_hold(self.outbox.outbox_id)
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE topics SET execution_scope='root:/home/example/project' WHERE topic_id=?",
+                (topic,),
+            )
+        record = self.release()
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE topics SET title='Renamed',execution_scope=execution_scope WHERE topic_id=?",
+                (topic,),
+            )
+        for column, value in (
+            ("execution_scope", None),
+            ("execution_scope", "project:example-project"),
+            ("project_id", "another-project"),
+            ("chat_id", 42),
+            ("thread_id", 999),
+        ):
+            with (
+                self.subTest(column=column, value=value),
+                self.assertRaises(sqlite3.IntegrityError),
+                self.state._connection,
+            ):
+                self.state._connection.execute(
+                    f"UPDATE topics SET {column}=? WHERE topic_id=?", (value, topic)
+                )
+        self.assertEqual(self.release(token=record.snapshot), record)
+
+    def test_failed_notice_release_unblocks_only_delivery_and_lane_binding_is_retained(
+        self,
+    ) -> None:
+        self.release()
+        failed = self.enqueue_tail()
+        leased = self.state.lease_provider_job("opencode", "example-worker")
+        assert leased is not None and leased.lease_token is not None
+        self.state.terminate_provider_job_with_notice(
+            failed.job_id,
+            leased.lease_token,
+            status="failed",
+            expected_status="leased",
+            error_class="preparation",
+            error_code="example_failure",
+            sender_agent_id="opencode",
+            telegram_html="Example preparation failure",
+        )
+        self.bot.receipt = None
+        self.sender._deliver_one("opencode")
+        notice = self.state.get_telegram_outbox_for_job(failed.job_id)
+        self.assertEqual(notice.status, "unknown")
+        tail = self.enqueue_tail(83)
+        leased = self.state.lease_provider_job("opencode", "example-worker")
+        assert leased is not None and leased.lease_token is not None
+        self.state.mark_provider_job_executing(tail.job_id, leased.lease_token)
+        self.state.commit_provider_result(
+            tail.job_id,
+            leased.lease_token,
+            visible_response="Example tail",
+            sender_agent_id="opencode",
+            telegram_html="Example tail",
+        )
+        self.assertIsNone(self.state.lease_telegram_outbox("opencode", "example-sender"))
+        preview = self.state.preview_delivery_hold(notice.outbox_id)
+        self.assertIsNone(preview.result_id)
+        self.assertEqual(
+            preview.control_consequences, ("topic_binding_retained_for_disposition_lifetime",)
+        )
+        self.state.release_delivery_hold(
+            notice.outbox_id,
+            expected_snapshot=preview.snapshot,
+            continue_without_confirmed_delivery=True,
+        )
+        self.bot.receipt = 333
+        self.assertTrue(self.sender._deliver_one("opencode"))
+        self.assertEqual(self.state.get_telegram_outbox_for_job(failed.job_id).status, "unknown")
+        self.assertEqual(self.state.get_provider_job(failed.job_id).status, "failed")
+        self.assertEqual(self.state.get_provider_job(tail.job_id).status, "completed")
+        self.state.register_lane(
+            lane_id="example-lane",
+            project_id="example-project",
+            worktree_path=self.fixture.base,
+            branch_name="example-branch",
+        )
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE worktree_lanes SET topic_id=? WHERE lane_id='example-lane'",
+                (failed.topic_id,),
+            )
+        before = self.state.get_lane("example-lane")
+        with self.assertRaisesRegex(StateError, "retains the topic binding"):
+            self.state.archive_lane("example-lane")
+        self.assertEqual(self.state.get_lane("example-lane"), before)
+        topic = self.state.get_topic(failed.topic_id)
+        renamed = self.state.observe_topic(
+            project_id=topic.project_id,
+            chat_id=topic.chat_id,
+            thread_id=topic.thread_id,
+            title="Renamed",
+            execution_root=self.fixture.base,
+        )
+        self.assertEqual(renamed.execution_scope, topic.execution_scope)
+
+    def test_unknown_hub_stop_notice_is_independent_and_has_no_final_outbox(self) -> None:
+        config, stopped_job, request_id = self.fixture.stop_notice_fixture()
+        hub = ReceiptBot()
+        hub.receipt = None
+        provider = fixtures.Bot()
+        sender = TelegramOutboxSender(
+            config, telegram_bots={"hub": hub, "opencode": provider, "antigravity": fixtures.Bot()}
+        )
+        self.addCleanup(sender.close)
+        self.assertTrue(sender._deliver_task_notice_one())
+        self.assertEqual(
+            sender.state.task_notices.notices_for_stop(request_id)[0].status, "unknown"
+        )
+        with self.assertRaises(StateError):
+            sender.state.get_telegram_outbox_for_job(stopped_job)
+        tail = self.fixture.ready_outbox("opencode", 100)
+        self.assertEqual(
+            sender.state.get_provider_job(tail).topic_id,
+            sender.state.get_provider_job(stopped_job).topic_id,
+        )
+        self.assertTrue(sender._deliver_one("opencode"))
+        self.assertEqual(sender.state.get_provider_job(tail).status, "completed")
+        self.assertFalse(sender._deliver_task_notice_one())
+        self.assertEqual(len(hub.sent), 1)
 
     def test_unknown_with_missing_result_or_live_lease_refuses(self) -> None:
         token = self.state.preview_delivery_hold(self.outbox.outbox_id).snapshot

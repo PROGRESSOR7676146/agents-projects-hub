@@ -1,7 +1,7 @@
 """Remove post-v24 structures when constructing fictional older test databases."""
 
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from hermes_codex_router import migrations
@@ -38,6 +38,7 @@ def legacy_delivery_hold_schema(connection: sqlite3.Connection):
                     ).fetchone()[0]
                     == 0
                 )
+                connection.execute("DROP TRIGGER telegram_delivery_hold_topic_binding_guard")
                 connection.execute("DROP TABLE telegram_delivery_hold_dispositions")
 
 
@@ -49,13 +50,13 @@ def legacy_selection_columns(path: Path):
     fixture rows may use this bridge; real upgrades and backups see old DDL.
     """
     migrations.migrate_database(path, create_backup=False)
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         ensure_codex_permission_columns(connection)
     try:
-        with sqlite3.connect(path) as bridge, legacy_delivery_hold_schema(bridge):
+        with closing(sqlite3.connect(path)) as bridge, legacy_delivery_hold_schema(bridge):
             yield
     finally:
-        with sqlite3.connect(path) as connection:
+        with closing(sqlite3.connect(path)) as connection, connection:
             for table in PROFILE_TABLES:
                 assert (
                     connection.execute(
@@ -83,6 +84,7 @@ def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
     for table in tables:
         if table in existing:
             assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    connection.execute("DROP TRIGGER IF EXISTS telegram_delivery_hold_topic_binding_guard")
     for table in tables:
         if table in existing:
             connection.execute(f"DROP TABLE {table}")

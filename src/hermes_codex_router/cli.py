@@ -182,9 +182,9 @@ def _parser() -> argparse.ArgumentParser:
     release_dry_run.add_argument("--rollback-artifact", required=True, type=Path)
 
     migrate = commands.add_parser("migrate", help="migrate a state database safely")
-    delivery_hold_cli.add_parser(commands)
     migrate.add_argument("state", type=Path)
     migrate.add_argument("--no-backup", action="store_true")
+    delivery_hold_cli.add_parser(commands)
 
     backup = commands.add_parser("backup", help="create an SQLite-consistent state backup")
     backup.add_argument("state", type=Path)

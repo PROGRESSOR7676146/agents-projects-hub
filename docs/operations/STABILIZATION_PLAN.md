@@ -245,6 +245,14 @@ records its ownership and limits. Next trigger: exact-candidate review and
 publication, then separately authorized live rollout. The broader live backlog
 remains open.
 
+Delivery-hold follow-up: schema44 queue continuation retains indefinite
+`result_ready` session-control, scope-wide local transfer and agent-drain blockers,
+plus lifetime topic binding. Current source review base: `0669fa9`; review fixes
+are under validation. Hub maintainer owns the next separately reviewed full-control
+reconciliation decision before claiming complete operational acceptance. No
+timeout, restart, automatic resend or provider replay may clear these boundaries.
+See [ADR 0061](../decisions/0061-owner-delivery-hold-dispositions.md).
+
 ## Planned final-response mode indicators
 
 Owner-requested follow-up (2026-10-07), implementation pending: extend the compact

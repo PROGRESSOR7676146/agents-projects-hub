@@ -537,9 +537,9 @@ class ProviderJobsStateFacade:
 
         The result and failure commits call this first, inside their own write
         transaction, so each commit is the last stop check (R-021): a stop
-        recorded after the worker's final check still ends the job, whose
-        single outbox row stays free for the stop's Hub acknowledgement, and
-        the stops left without work complete with it. The cancellation takes
+        recorded after the worker's final check still ends the job without a
+        provider outbox. Its Hub acknowledgement uses independent task notices;
+        stops left without work complete with it. The cancellation takes
         its time here, under the write lock, so it is never earlier than the
         stop and the stop's notice can still choose the job. True when a stop
         has ended the job, now or earlier; False leaves the commit to proceed.

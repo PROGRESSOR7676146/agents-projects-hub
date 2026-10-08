@@ -382,6 +382,14 @@ recreate unsaved provider context or a partially executed turn.
   the disposition; an exact repeat returns the same decision and a stale or
   conflicting apply fails closed. Local OS authority MUST NOT be represented
   as Telegram-authenticated owner identity.
+  First apply MUST require an established canonical execution scope, refusing
+  empty or legacy project scopes. The disposition MUST retain its numeric topic
+  destination, project and execution-scope binding for its lifetime; no-op and
+  display-only updates remain permitted. Apply and exact retry MUST report both
+  the immutable decision and its current effect. Preview MUST explicitly disclose
+  the indefinite session-control, scope-wide local/terminal transfer and agent
+  drain restrictions retained for a released `result_ready` job. Queue continuation
+  MUST NOT be presented as complete control reconciliation.
   The outbox MUST remain unknown. Parts, receipts, spool, result, checkpoint,
   job state, owner holds, stop state and writer/session authority MUST remain
   unchanged. The disposition MAY remove only that exact earlier outbox's topic

@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import sqlite3
 import unittest
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from unittest.mock import patch
 
 from hermes_codex_router import migrations
@@ -22,7 +22,7 @@ class DeliveryHoldMigrationTests(unittest.TestCase):
         self.addCleanup(self.fixture.tearDown)
         self.job_id = self.fixture.ready_outbox("opencode", 91)
         self.path = self.fixture.config.state_path
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             self.outbox_id = db.execute(
                 "SELECT outbox_id FROM telegram_outbox WHERE job_id=?", (self.job_id,)
             ).fetchone()[0]
@@ -36,6 +36,8 @@ class DeliveryHoldMigrationTests(unittest.TestCase):
                 ],
                 0,
             )
+            db.execute("UPDATE topics SET execution_scope=?", ("root:" + str(self.fixture.base),))
+            db.execute("DROP TRIGGER telegram_delivery_hold_topic_binding_guard")
             db.execute("DROP TABLE telegram_delivery_hold_dispositions")
             db.execute("PRAGMA user_version=43")
 
@@ -150,6 +152,16 @@ class DeliveryHoldMigrationTests(unittest.TestCase):
             self.assertEqual(outputs[0], outputs[1])
             self.assertFalse(outputs[0]["automatic_resend"])
             self.assertFalse(outputs[0]["productive_replay_authorized"])
+            with closing(sqlite3.connect(self.path)) as damaged, damaged:
+                damaged.execute("DROP TRIGGER telegram_delivery_hold_topic_binding_guard")
+                damaged.execute("UPDATE topics SET execution_scope='root:/home/example/changed'")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(main(args), 0)
+            historical = json.loads(output.getvalue())
+            self.assertEqual(historical["hold_status"], "disposition_binding_changed")
+            self.assertIn("topic hold remains", historical["effect"])
+            self.assertNotIn("may proceed", historical["effect"])
             config.assert_not_called()
 
     def test_missing_state_is_never_created_and_apply_requires_explicit_controls(self) -> None:

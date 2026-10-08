@@ -26,6 +26,7 @@ WITH target AS (
            e.terminal_status, e.observed_at AS terminal_at,
            h.resolution, h.resolved_at,
            o.outbox_id, o.status AS delivery_status, o.delivered_at,
+           dh.outbox_id IS NOT NULL AS delivery_hold_recorded,
            {outbox_delivery_hold_released("o")} AS delivery_hold_released,
            (SELECT COUNT(*) FROM provider_visible_items v WHERE v.job_id=j.job_id)
                AS visible_item_count
@@ -38,6 +39,7 @@ WITH target AS (
     LEFT JOIN telegram_outbox o ON o.job_id=j.job_id
                                   AND o.sender_agent_id=j.agent_id
                                   AND o.chat_id=j.chat_id AND o.thread_id=topic.thread_id
+    LEFT JOIN telegram_delivery_hold_dispositions dh ON dh.outbox_id=o.outbox_id
     WHERE j.job_id=?
 ), artifacts AS (
     SELECT p.outbox_id, p.part_index, p.file_size, p.file_sha256,
@@ -185,6 +187,8 @@ class OutcomeJournalStateFacade:
                 "delivery_hold": (
                     "released_by_owner"
                     if row["delivery_hold_released"]
+                    else "disposition_binding_changed"
+                    if row["delivery_hold_recorded"] and row["delivery_status"] == "unknown"
                     else "outstanding"
                     if row["delivery_status"] == "unknown"
                     else None

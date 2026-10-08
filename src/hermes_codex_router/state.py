@@ -2859,6 +2859,14 @@ class HubState:
         )
 
     def _require_topic_execution_idle_locked(self, topic_id: int) -> None:
+        if (
+            self._connection.execute(
+                "SELECT 1 FROM telegram_delivery_hold_dispositions WHERE topic_id=? LIMIT 1",
+                (topic_id,),
+            ).fetchone()
+            is not None
+        ):
+            raise StateError("delivery hold disposition retains the topic binding")
         job = self._connection.execute(
             """SELECT 1 FROM provider_jobs jobs
                WHERE jobs.topic_id = ? AND (

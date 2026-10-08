@@ -26,4 +26,10 @@ BEGIN SELECT RAISE(ABORT, 'delivery hold dispositions are immutable'); END;
 CREATE TRIGGER telegram_delivery_hold_dispositions_no_delete
 BEFORE DELETE ON telegram_delivery_hold_dispositions
 BEGIN SELECT RAISE(ABORT, 'delivery hold dispositions are immutable'); END;
+CREATE TRIGGER telegram_delivery_hold_topic_binding_guard
+BEFORE UPDATE OF project_id,execution_scope,chat_id,thread_id ON topics
+WHEN (NEW.project_id IS NOT OLD.project_id OR NEW.execution_scope IS NOT OLD.execution_scope
+      OR NEW.chat_id IS NOT OLD.chat_id OR NEW.thread_id IS NOT OLD.thread_id)
+ AND EXISTS (SELECT 1 FROM telegram_delivery_hold_dispositions hold WHERE hold.topic_id=OLD.topic_id)
+BEGIN SELECT RAISE(ABORT, 'delivery hold disposition retains its topic binding'); END;
 """

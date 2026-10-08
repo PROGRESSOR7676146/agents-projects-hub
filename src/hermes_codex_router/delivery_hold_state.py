@@ -21,6 +21,7 @@ class DeliveryHoldDisposition:
     snapshot: str
     authority: str
     applied_at: str
+    hold_status: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +36,7 @@ class DeliveryHoldPreview:
     part_count: int
     receipted_parts: int
     disposition_snapshot: str | None = None
+    control_consequences: tuple[str, ...] = ()
     remaining_boundaries: tuple[str, ...] = (
         "native_execution_uncertainty",
         "root_writer_exclusion",
@@ -66,7 +68,8 @@ class DeliveryHoldState:
         job = self.db.execute(
             "SELECT * FROM provider_jobs WHERE job_id=?", (row["job_id"],)
         ).fetchone()
-        assert job is not None
+        if job is None:
+            raise self.error("delivery hold target job is unavailable")
         topic = self.db.execute(
             "SELECT * FROM topics WHERE topic_id=?", (job["topic_id"],)
         ).fetchone()
@@ -90,6 +93,10 @@ class DeliveryHoldState:
             or session["generation"] != job["session_generation"]
         ):
             raise self.error("delivery hold target binding or saved result is inconsistent")
+        if not isinstance(topic["execution_scope"], str) or not topic["execution_scope"].startswith(
+            "root:/"
+        ):
+            raise self.error("delivery hold requires an established canonical execution scope")
         binding = dict(
             outbox_id=outbox_id,
             job_id=job["job_id"],
@@ -97,7 +104,7 @@ class DeliveryHoldState:
             topic_id=topic["topic_id"],
             topic_sequence=job["topic_sequence"],
             project_id=topic["project_id"],
-            execution_scope=topic["execution_scope"] or "project:" + topic["project_id"],
+            execution_scope=topic["execution_scope"],
             session_id=job["session_id"],
             session_generation=job["session_generation"],
             sender_agent_id=outbox["sender_agent_id"],
@@ -160,6 +167,17 @@ class DeliveryHoldState:
             part_count=len(target["parts"]),
             receipted_parts=sum(p["telegram_message_id"] is not None for p in target["parts"]),
             disposition_snapshot=prior["snapshot"] if prior is not None else None,
+            control_consequences=("topic_binding_retained_for_disposition_lifetime",)
+            + (
+                (
+                    "result_ready_remains_without_time_limit",
+                    "topic_new_model_agent_local_return_remain_blocked",
+                    "scope_wide_local_terminal_transfer_remains_blocked",
+                    "agent_managed_externally_drain_remains_blocked",
+                )
+                if target["job"]["status"] == "result_ready"
+                else ()
+            ),
         )
 
     def release(
@@ -198,12 +216,24 @@ class DeliveryHoldState:
             f"INSERT INTO telegram_delivery_hold_dispositions ({','.join(values)}) VALUES ({','.join('?' for _ in values)})",
             tuple(values.values()),
         )
-        return DeliveryHoldDisposition(
-            outbox_id, binding["job_id"], expected_snapshot, "local_owner_cli", applied_at
-        )
+        row = self.db.execute(
+            "SELECT * FROM telegram_delivery_hold_dispositions WHERE outbox_id=?", (outbox_id,)
+        ).fetchone()
+        assert row is not None
+        return self._record(row)
 
-    @staticmethod
-    def _record(row: sqlite3.Row) -> DeliveryHoldDisposition:
+    def _record(self, row: sqlite3.Row) -> DeliveryHoldDisposition:
+        effect = self.db.execute(
+            f"SELECT {outbox_delivery_hold_released('o')} FROM telegram_outbox o WHERE o.outbox_id=?",
+            (row["outbox_id"],),
+        ).fetchone()
         return DeliveryHoldDisposition(
-            *(row[key] for key in ("outbox_id", "job_id", "snapshot", "authority", "applied_at"))
+            outbox_id=row["outbox_id"],
+            job_id=row["job_id"],
+            snapshot=row["snapshot"],
+            authority=row["authority"],
+            applied_at=row["applied_at"],
+            hold_status="released_by_owner"
+            if effect is not None and effect[0]
+            else "disposition_binding_changed",
         )

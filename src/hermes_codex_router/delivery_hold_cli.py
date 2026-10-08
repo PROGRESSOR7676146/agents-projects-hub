@@ -37,7 +37,11 @@ def run(args: argparse.Namespace) -> int:
             delivery_status="unknown",
             productive_replay_authorized=False,
             automatic_resend=False,
-            effect="Previously authorized queued work may proceed, subject to independent safety boundaries.",
+            effect=(
+                "Previously authorized queued work may proceed, subject to independent safety boundaries."
+                if disposition.hold_status == "released_by_owner"
+                else "The recorded permission no longer matches its binding. The topic hold remains; inspect a fresh preview."
+            ),
         )
     else:
         if args.snapshot is not None or args.continue_without_confirmed_delivery:

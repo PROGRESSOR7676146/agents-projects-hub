@@ -37,7 +37,18 @@ decision even after an uncertain commit; a conflicting token cannot overwrite it
 The full manifest is hashed without a reference-page cutoff. Output exposes only
 bounded target identity, counts, action and tokens, never content or paths.
 Preview distinguishes the fresh target token, the original disposition token
-and whether the recorded permission still matches the binding.
+and whether the recorded permission still matches the binding. Apply and exact
+retry also report its current effect; a recorded decision after out-of-band
+binding damage is not reported as permission for the new binding.
+
+First apply requires an already established `root:/` execution scope; NULL,
+empty and legacy `project:` scopes must be reconciled through the existing
+trusted runtime before preview/apply. A central NULL-safe schema44 topic trigger
+retains project, scope and numeric destination for the disposition's lifetime,
+including failed/cancelled/indeterminate notices. No-op and display updates remain
+possible. Lane binding/archive checks return a normal state refusal. This avoids
+an authorized scope rewrite invalidating an immutable decision with no replacement
+path, while retaining exact binding-matched FIFO predicates.
 
 Two dependency-neutral predicates own only topic delivery/FIFO exceptions:
 `outbox_delivery_hold_released` and `job_blocks_topic_fifo`. Sender leasing,
@@ -52,6 +63,15 @@ owner may continue already authorized queue work while the existing session and
 writer safety checks still apply. Passive totals preserve unknown; separate
 counts distinguish outstanding and released holds. Outcome/status/retry copy
 does not imply delivery, provider acceptance or product assessment.
+
+Consent explicitly retains indefinite control restrictions: a released
+`result_ready` job never expires or becomes completed, so `/new`, model/agent
+changes, `/local` and `/return` in that topic remain blocked. Local/terminal
+transfer in other topics on the same scope and drain for `managed_externally`
+also remain blocked. Connect/adoption and relocation retain their strict checks.
+Queue continuation is the only released authority. Hub maintainer owns a future
+separately reviewed control-reconciliation decision; age or restart cannot clear
+these boundaries. This source action is not full operational acceptance.
 
 ## Verification and limits
 

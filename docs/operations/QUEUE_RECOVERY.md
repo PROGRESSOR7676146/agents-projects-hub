@@ -93,12 +93,29 @@ the activated schema; an older binary is not a compatible sender recovery.
 
 On a reviewed schema44 release, preview one exact outbox locally:
 
+Find its opaque ID from the existing exact-job outcome diagnostic. If the job
+ID is unavailable, this bounded local read-only query lists only unknown target
+identities, never prompt/result text or credentials:
+
+```bash
+sqlite3 'file:/home/example/private/state.db?mode=ro' \
+  "SELECT outbox_id,job_id FROM telegram_outbox WHERE status='unknown' ORDER BY created_at,outbox_id LIMIT 100;"
+```
+
 ```bash
 agents-projects-hub delivery-hold /home/example/private/state.db EXAMPLE_OUTBOX_ID
 ```
 
 The preview opens existing state read-only. Inspect its saved-final/notice target,
 part and receipt counts, numeric destination, current hold status and snapshot.
+Inspect `control_consequences` before consenting. The topic binding is retained
+for the decision's lifetime. For a `result_ready` target, `/new`, model/agent
+changes and `/local`/`/return` remain blocked without a time limit; local/terminal
+transfer across the same scope and drain to `managed_externally` also remain
+blocked. This action only permits queue continuation. A future control
+reconciliation requires a separate reviewed decision owned by the Hub maintainer.
+First apply requires an established canonical scope. Legacy/empty scopes refuse;
+use the existing trusted runtime reconciliation first, never direct DB edits.
 If the owner chooses to let already authorized queued work continue without
 confirmed delivery, apply with the exact preview token:
 
@@ -113,6 +130,8 @@ also exposes `disposition_snapshot` separately from the fresh target snapshot.
 `disposition_binding_changed` means a historical decision exists but no longer
 matches the target; it cannot release a different binding or be replaced with a
 fresh decision. A stale first apply requires another preview.
+An exact apply retry reports the recorded decision and its current `hold_status`;
+it must not be read as a new permission after out-of-band binding damage.
 
 Check `unknown_delivery`, `outstanding_delivery_holds` and `released_delivery_holds`
 plus the [exact-job diagnostic](OUTCOME_JOURNAL.md). Its delivery remains unknown,
