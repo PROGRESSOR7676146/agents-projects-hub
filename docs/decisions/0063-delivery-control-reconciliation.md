@@ -1,6 +1,6 @@
 # ADR 0063: Exact delivery control reconciliation, staged prerequisite
 
-Status: accepted staged design; schema46 storage/preview under validation.
+Status: accepted staged design; schema46 prerequisite published, schema47 authority under validation.
 Date: 2026-10-08.
 Owner: Hub maintainer; product decision owner: repository owner.
 
@@ -14,11 +14,11 @@ The prior [decision](0061-owner-delivery-hold-dispositions.md) remains unchanged
 
 ## Staged decision
 
-First publish only an additive immutable ledger and coherent read-only preview.
-There is no public or hidden record/apply helper, consumer exemption, resend,
+Schema46 first publishes only an additive immutable ledger and coherent read-only preview.
+That prerequisite has no public or hidden record/apply helper, consumer exemption, resend,
 replay, fabricated receipt, new Reply authority or assessment authority. Output
-always declares `preview_only`, `apply_available=false`, `control_effect=not_enabled`.
-Seeded test rows are storage fixtures and confer no runtime authority.
+in schema46 always declares `preview_only`, `apply_available=false`, `control_effect=not_enabled`.
+Seeded test rows confer no runtime authority in that prerequisite revision.
 
 Schema46 adds `telegram_delivery_control_dispositions`. A separate decision ID,
 NULL-safe target branches and unique nullable foreign keys retain either an exact
@@ -54,12 +54,12 @@ hashing adds no preview timestamp. Fresh and recorded tokens stay separate.
 Private historical matching compares exact target/job/project/topic/destination/
 sender/session generation and final nullable result or progress item. It excludes
 live scope, current active session, session model/status and a later progress result.
-It is a diagnostic boolean, never a runtime SQL predicate.
+In schema46 it is a diagnostic boolean, never a runtime SQL predicate.
 
 ## Failed-notice retention prerequisite
 
 Late native reconciliation can legally archive/delete a failed indeterminate
-notice and create a replacement. A future first apply may pin that target only
+notice and create a replacement. First apply may pin that target only
 after independent exact terminal evidence or an existing owner resolution already
 excludes replacement. The preview checks this now. Evidence must match the retained
 checkpoint's job, thread, turn and canonical saved root, with terminal status
@@ -72,36 +72,55 @@ API is insert-once, without SQL immutability triggers. Full proof rows enter the
 snapshot. Unknown notice evidence-only recovery remains unchanged. Earlier consent
 for a replaceable failed notice would need a separate tombstone lifecycle slice.
 
-## Future full-control boundary
+## Coordinated schema47 full-control boundary
 
-Public apply, exact snapshot CAS and coordinated consumer changes remain Planned.
+Schema47 implements public apply, exact snapshot CAS and coordinated consumer changes.
+Activation refuses any pre-existing schema46 ledger row without deleting it;
+preview-only storage has no supported consent writer. The migration transaction
+rolls back completely, retaining the old schema and evidence for local inspection.
 One immediate HubState transaction must revalidate and insert only the disposition.
+Apply inserts only the ledger row, never a delivery/job/receipt mutation.
 An exact repeated token returns its original immutable decision and current effect;
 another token cannot replace it, and another target requires another consent.
 Legitimate later session/scope changes must preserve historical target effect.
-Every schema44 lifetime freeze requires individual exact full-control coverage;
-old consent is never rewritten. A later additive migration must own any trigger
-change; published schema46 DDL must not be retroactively edited.
+Every schema44 lifetime scope freeze requires individual exact full-control coverage;
+old consent is never rewritten. Frozen additive schema47 DDL owns the trigger
+change; published schema46 DDL remains unchanged. The new guard still refuses a
+prospective project or numeric destination change, even if historical full coverage
+exists. Runtime and frozen trigger both revalidate parked target, exact historical
+binding, admissible final job/result and retained failed-indeterminate prerequisite.
+Later legal session/model/agent/scope changes preserve the historical effect;
+unsupported job/result, project, destination or generation drift fails closed.
 
-The later slice must cover session/model/agent controls, writer/local transfer,
+This slice covers session/model/agent controls, writer/local transfer,
 connect/adoption, lane/source/destination scope, relocation, drain and compatibility
 consumers together. Raw unknown/failed totals stay visible, independent native
 uncertainty, owner holds, stop, writers, capacity and workflows retain their own
-guards. Task/control-notice delivery is not an eligible target. No predicate may
-learn the new permission before the complete surface and public apply are ready.
+guards. Adoption and relocation retain their existing owner-resolution-only
+indeterminate policy. Progress consent never releases a result-ready final wait.
+Task/control-notice delivery is not an eligible target. Partial activation is
+prohibited. Legacy queue-only preview/retry projects any separate full effect
+without relabelling its immutable permission. Status delivery counts share one
+SQL snapshot; raw aggregates and effective drain/alert counts remain separate.
+True final exhaustion uses the existing retry API and leaves the job failed with
+telegram_delivery classification, not a fictional result_ready state.
 
 ## Verification and activation
 
-Tests cover populated45-to46 migration/private backup/DDL rollback, immutable
+Tests cover populated45-to46 and46-to47 migration/private backup/DDL rollback, immutable
 NULL-safe branch/FK invariants, both parked types, exhaustion/leases/binding,
 indeterminate prerequisites and retention, all-part/provenance/artifact fingerprints,
-coherent concurrent reads, historical matching and lack of any control effect.
+coherent concurrent reads, historical matching, exact CAS, per-target coverage,
+consumer predicates and independent barriers. Schema46 prerequisite evidence is
+published at `357409b0d52a6796a3fe609f9f49c2b3bb918817`; its lack of authority
+does not substitute for the coordinated schema47 tests and exact review.
 Exact-source Astra and actual independent Claude review, mandatory canonical and
 hosted checks are publication gates. Custody remains a separate OS boundary:
 SQL triggers and local CLI access are not same-UID authentication or isolation.
 
-Schema45 binaries cannot open schema46. Deployment must first prove compatible
+Schema46 binaries cannot open schema47. Deployment must first prove compatible
 rollback artifacts; a pre-migration backup never authorizes destroying later
 accepted writes. Source publication, merge or schema number authorizes no live
-migration or activation. Full authority requires completed consumers/public CAS
-and separately owner-authorized deployment and acceptance on an exact revision.
+migration or activation. Full authority requires completed consumers/public CAS,
+independent exact-source review and separately owner-authorized deployment and
+acceptance on an exact revision.

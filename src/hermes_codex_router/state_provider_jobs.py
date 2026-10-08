@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Mapping, Sequence
 
+from .delivery_control_predicates import result_ready_control_reconciled
 from .delivery_hold_predicates import job_blocks_topic_fifo
 from .provider_queue_capacity import (
     PROVIDER_WORKER_FAIRNESS_FRESHNESS,
@@ -356,9 +357,10 @@ class ProviderJobsStateFacade:
 
     def topic_has_pending(self, topic_id: int) -> bool:
         row = self._connection.execute(
-            """SELECT 1 FROM provider_jobs
-               WHERE topic_id = ?
-                 AND status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+            f"""SELECT 1 FROM provider_jobs jobs
+               WHERE jobs.topic_id = ?
+                 AND jobs.status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                 AND NOT {result_ready_control_reconciled("jobs")}
                LIMIT 1""",
             (topic_id,),
         ).fetchone()
@@ -366,9 +368,10 @@ class ProviderJobsStateFacade:
 
     def topic_has_unheld(self, topic_id: int) -> bool:
         row = self._connection.execute(
-            """SELECT 1 FROM provider_jobs jobs
+            f"""SELECT 1 FROM provider_jobs jobs
                WHERE jobs.topic_id = ?
                  AND jobs.status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                 AND NOT {result_ready_control_reconciled("jobs")}
                  AND NOT EXISTS (
                    SELECT 1 FROM provider_job_holds holds WHERE holds.job_id = jobs.job_id
                      AND holds.decision = 'pending'
@@ -389,6 +392,24 @@ class ProviderJobsStateFacade:
                 WHERE agent_id IN ({placeholders})
                   AND status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
                 GROUP BY agent_id""",
+            bounded_ids,
+        ).fetchall()
+        return {str(row["agent_id"]): int(row["job_count"]) for row in rows}
+
+    def effective_nonterminal_counts(self, agent_ids: Sequence[str]) -> dict[str, int]:
+        """Runtime drain only; raw accepted-work totals remain separately observable."""
+        bounded_ids = tuple(
+            self._bounded(agent, name="agent id", maximum=64) for agent in agent_ids
+        )
+        if not bounded_ids:
+            return {}
+        placeholders = ",".join("?" for _ in bounded_ids)
+        rows = self._connection.execute(
+            f"""SELECT jobs.agent_id, COUNT(*) AS job_count FROM provider_jobs jobs
+                WHERE jobs.agent_id IN ({placeholders})
+                  AND jobs.status IN ('queued','leased','executing','retry_wait','result_ready')
+                  AND NOT {result_ready_control_reconciled("jobs")}
+                GROUP BY jobs.agent_id""",
             bounded_ids,
         ).fetchall()
         return {str(row["agent_id"]): int(row["job_count"]) for row in rows}

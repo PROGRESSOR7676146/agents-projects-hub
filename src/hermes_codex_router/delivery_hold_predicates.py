@@ -1,5 +1,7 @@
 """Dependency-neutral SQL for delivery FIFO only; never a general idle predicate."""
 
+from .delivery_control_predicates import result_ready_control_reconciled
+
 
 def outbox_delivery_hold_released(outbox: str) -> str:
     """Trusted internal SQL alias; match the immutable target and saved result."""
@@ -25,9 +27,9 @@ def outbox_delivery_hold_released(outbox: str) -> str:
 def job_blocks_topic_fifo(job: str) -> str:
     """Preserve nonterminal FIFO except an exact released saved-result delivery."""
     return f"""({job}.status NOT IN ('completed','failed','cancelled','indeterminate')
-        AND NOT ({job}.status='result_ready' AND EXISTS (
+        AND NOT ({result_ready_control_reconciled(job)} OR ({job}.status='result_ready' AND EXISTS (
             SELECT 1 FROM telegram_outbox released_outbox
             JOIN provider_job_results released_result ON released_result.job_id={job}.job_id
             WHERE released_outbox.job_id={job}.job_id
               AND {outbox_delivery_hold_released("released_outbox")}
-        )))"""
+        ))))"""

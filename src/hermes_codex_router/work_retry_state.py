@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .delivery_control_predicates import final_control_reconciled
 from .delivery_hold_predicates import outbox_delivery_hold_released
 from .task_activity_binding import ACTIVITY_BINDING, current_activity_binding
 from .task_lifecycle import TaskLifecycleNotice
@@ -63,7 +64,8 @@ class WorkRetryState:
             )
         status = row["status"]
         delivery = self.db.execute(
-            f"SELECT {outbox_delivery_hold_released('o')} AS released FROM telegram_outbox o "
+            f"SELECT {outbox_delivery_hold_released('o')} AS released, "
+            f"{final_control_reconciled('o')} AS reconciled FROM telegram_outbox o "
             "WHERE o.job_id=? AND o.status='unknown'",
             (row["job_id"],),
         ).fetchone()
@@ -71,7 +73,9 @@ class WorkRetryState:
             return (
                 "At retry time, Telegram delivery was unknown. "
                 + (
-                    "The owner allowed queue continuation without confirmed delivery. "
+                    "The owner reconciled this delivery wait without confirming receipt; independent control checks remain. "
+                    if delivery["reconciled"]
+                    else "The owner allowed queue continuation without confirmed delivery. "
                     if delivery["released"]
                     else "A delivery hold remains; inspect the local delivery-hold preview. "
                 )

@@ -210,7 +210,7 @@ class ProjectHubService:
             externally_managed = tuple(
                 candidate.agent_id for candidate in config.agents if candidate.managed_externally
             )
-            stranded = self.state.nonterminal_provider_job_counts(externally_managed)
+            stranded = self.state.effective_nonterminal_provider_job_counts(externally_managed)
             if stranded:
                 detail = ", ".join(
                     f"{agent_id}={count}" for agent_id, count in sorted(stranded.items())

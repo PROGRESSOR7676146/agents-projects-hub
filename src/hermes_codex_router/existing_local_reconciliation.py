@@ -14,6 +14,7 @@ from .codex_appserver import (
 )
 from .codex_permissions import MANAGED_LOCAL_REFUSAL
 from .codex_session_adoption import open_adoption_state
+from .delivery_control_predicates import result_ready_control_reconciled
 from .hub_config import HubConfig
 from .local_transfer import local_resume_command
 from .project_resolution import resolve_project_context
@@ -285,14 +286,15 @@ def _claim_exact_local(
             (old_job_id, now, "root:" + str(root), old_job_id),
         )
         conflict = state._connection.execute(
-            """SELECT 1 FROM provider_jobs jobs
+            f"""SELECT 1 FROM provider_jobs jobs
                JOIN topics ON topics.topic_id = jobs.topic_id
                WHERE topics.execution_scope = ? AND jobs.job_id != ? AND (
                  (jobs.status IN ('queued', 'retry_wait') AND NOT EXISTS (
                    SELECT 1 FROM provider_job_holds holds WHERE holds.job_id = jobs.job_id
                      AND holds.decision = 'pending'
                  ))
-                 OR jobs.status IN ('leased', 'executing', 'result_ready')
+                 OR (jobs.status IN ('leased', 'executing', 'result_ready')
+                     AND NOT {result_ready_control_reconciled("jobs")})
                  OR (jobs.status = 'indeterminate' AND NOT EXISTS (
                    SELECT 1 FROM provider_job_resolutions resolution
                    WHERE resolution.job_id = jobs.job_id

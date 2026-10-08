@@ -38,7 +38,9 @@ def run(args: argparse.Namespace) -> int:
             productive_replay_authorized=False,
             automatic_resend=False,
             effect=(
-                "Previously authorized queued work may proceed, subject to independent safety boundaries."
+                "A separate full-control owner decision reconciles this delivery wait; independent safety boundaries still apply."
+                if disposition.control_effect == "delivery_wait_reconciled"
+                else "Previously authorized queued work may proceed, subject to independent safety boundaries."
                 if disposition.hold_status == "released_by_owner"
                 else "The recorded permission no longer matches its binding. The topic hold remains; inspect a fresh preview."
             ),
@@ -55,7 +57,9 @@ def run(args: argparse.Namespace) -> int:
             if preview.hold_status == "outstanding"
             else None,
             effect=(
-                "Releases only topic delivery/FIFO holds; saved evidence and session/writer controls remain."
+                "A separate full-control owner decision reconciles this delivery wait; independent safety boundaries still apply."
+                if preview.control_effect == "delivery_wait_reconciled"
+                else "Releases only topic delivery/FIFO holds; saved evidence and session/writer controls remain."
                 if preview.hold_status == "outstanding"
                 else "Already released by a recorded owner decision; delivery remains unknown."
                 if preview.hold_status == "released_by_owner"

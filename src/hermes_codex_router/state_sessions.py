@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable, Mapping, TypedDict
 
+from .delivery_control_predicates import result_ready_control_reconciled
 from .state_errors import CodexPermissionSelectionChanged
 
 if TYPE_CHECKING:
@@ -224,14 +225,14 @@ class SessionsStateFacade:
                     (session_id, scope),
                 ).fetchone()
                 conflicting_job = self._connection.execute(
-                    """SELECT 1 FROM provider_jobs jobs
+                    f"""SELECT 1 FROM provider_jobs jobs
                        JOIN topics ON topics.topic_id = jobs.topic_id
                        WHERE COALESCE(topics.execution_scope,
                                       'project:' || topics.project_id) = ?
                          AND (
                            jobs.status IN (
                              'queued', 'leased', 'executing', 'retry_wait', 'result_ready'
-                           ) AND NOT EXISTS (
+                           ) AND NOT {result_ready_control_reconciled("jobs")} AND NOT EXISTS (
                              SELECT 1 FROM provider_job_holds holds
                              WHERE holds.job_id = jobs.job_id AND holds.decision = 'pending'
                            )
@@ -318,9 +319,10 @@ class SessionsStateFacade:
             ).fetchone()
             self._hold_scope_before_return(topic_id)
             pending_job = self._connection.execute(
-                """SELECT 1 FROM provider_jobs
+                f"""SELECT 1 FROM provider_jobs
                    WHERE topic_id = ? AND status IN
                      ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                     AND NOT {result_ready_control_reconciled("provider_jobs")}
                      AND NOT EXISTS (
                        SELECT 1 FROM provider_job_holds holds
                        WHERE holds.job_id = provider_jobs.job_id

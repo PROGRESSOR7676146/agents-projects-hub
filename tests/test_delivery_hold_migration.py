@@ -12,6 +12,7 @@ from hermes_codex_router import migrations
 from hermes_codex_router.cli import main
 from hermes_codex_router.state import HubState, StateError
 from tests import test_outbox_sender as fixtures
+from tests.schema_fixtures import legacy_delivery_hold_schema
 from tests.test_delivery_certainty_migration import snapshot
 
 
@@ -20,8 +21,13 @@ class DeliveryHoldMigrationTests(unittest.TestCase):
         self.fixture = fixtures.TelegramOutboxSenderTests()
         with patch.object(migrations, "LATEST_SCHEMA_VERSION", 44):
             self.fixture.setUp()
+            migrations.migrate_database(self.fixture.config.state_path, create_backup=False)
         self.addCleanup(self.fixture.tearDown)
-        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 44):
+        with (
+            patch.object(migrations, "LATEST_SCHEMA_VERSION", 44),
+            closing(sqlite3.connect(self.fixture.config.state_path)) as bridge,
+            legacy_delivery_hold_schema(bridge),
+        ):
             self.job_id = self.fixture.ready_outbox("opencode", 91)
         self.path = self.fixture.config.state_path
         with closing(sqlite3.connect(self.path)) as db, db:

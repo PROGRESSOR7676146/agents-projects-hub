@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .delivery_control_predicates import result_ready_control_reconciled
+
 if TYPE_CHECKING:
     from .state import HubState, ProviderJobRecord
 
@@ -144,10 +146,11 @@ class TurnContinuationState:
             ):
                 raise CodexPermissionSelectionChanged()
             conflict = self.connection.execute(
-                """SELECT 1 FROM provider_jobs jobs
+                f"""SELECT 1 FROM provider_jobs jobs
                    JOIN topics topics ON topics.topic_id = jobs.topic_id
                    WHERE topics.execution_scope = ? AND jobs.job_id != ? AND (
-                     jobs.status IN ('leased', 'executing', 'result_ready')
+                     (jobs.status IN ('leased', 'executing', 'result_ready')
+                      AND NOT {result_ready_control_reconciled("jobs")})
                      OR (jobs.status IN ('queued', 'retry_wait') AND NOT EXISTS (
                        SELECT 1 FROM provider_job_holds holds WHERE holds.job_id = jobs.job_id
                          AND holds.decision = 'pending'

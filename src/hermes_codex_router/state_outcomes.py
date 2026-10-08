@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from .delivery_control_predicates import final_control_reconciled
 from .delivery_hold_predicates import outbox_delivery_hold_released
 
 REFERENCE_LIMIT = 64
@@ -27,6 +28,8 @@ WITH target AS (
            h.resolution, h.resolved_at,
            o.outbox_id, o.status AS delivery_status, o.delivered_at,
            dh.outbox_id IS NOT NULL AS delivery_hold_recorded,
+           dc.disposition_id IS NOT NULL AS delivery_control_recorded,
+           {final_control_reconciled("o")} AS delivery_control_reconciled,
            a.decision AS owner_decision, a.reason AS owner_reason,
            a.disposition_id AS owner_disposition_id, a.revision AS owner_revision,
            a.owner_user_id, a.input_message_id AS owner_input_message_id,
@@ -48,6 +51,7 @@ WITH target AS (
                                   AND o.sender_agent_id=j.agent_id
                                   AND o.chat_id=j.chat_id AND o.thread_id=topic.thread_id
     LEFT JOIN telegram_delivery_hold_dispositions dh ON dh.outbox_id=o.outbox_id
+    LEFT JOIN telegram_delivery_control_dispositions dc ON dc.outbox_id=o.outbox_id
     WHERE j.job_id=?
 ), artifacts AS (
     SELECT p.outbox_id, p.part_index, p.file_size, p.file_sha256,
@@ -192,6 +196,13 @@ class OutcomeJournalStateFacade:
             delivery = {
                 "outbox_id": row["outbox_id"],
                 "status": row["delivery_status"],
+                "delivery_control": (
+                    "delivery_wait_reconciled"
+                    if row["delivery_control_reconciled"]
+                    else "disposition_binding_changed"
+                    if row["delivery_control_recorded"]
+                    else None
+                ),
                 "delivery_hold": (
                     "released_by_owner"
                     if row["delivery_hold_released"]

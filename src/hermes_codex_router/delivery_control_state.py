@@ -1,14 +1,17 @@
-"""Read-only snapshots on a caller-owned connection; deliberately no apply/predicates."""
+"""Delivery snapshots and exact local consent on a caller-owned transaction."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
+import uuid
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
+from .delivery_control_predicates import final_control_reconciled, progress_control_reconciled
 from .state_errors import StateError
 
 ACTION = "reconcile_delivery_control_wait"
@@ -34,9 +37,22 @@ class DeliveryControlPreview:
     receipted_parts: int
     disposition_snapshot: str | None
     binding_matches: bool
-    capability: str = "preview_only"
-    apply_available: bool = False
-    control_effect: str = "not_enabled"
+    capability: str = "local_owner_reconciliation"
+    apply_available: bool = True
+    control_effect: str = "outstanding"
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryControlDisposition:
+    disposition_id: str
+    target_kind: str
+    target_id: str
+    job_id: str
+    snapshot: str
+    authority: str
+    applied_at: str
+    delivery_status: str
+    control_effect: str
 
 
 def _canonical_root(value: Any) -> bool:
@@ -79,7 +95,7 @@ class DeliveryControlState:
             )
         )
 
-    def preview(self, kind: str, target_id: str) -> DeliveryControlPreview:
+    def _load_target(self, kind: str, target_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
         if not self.db.in_transaction:
             raise StateError("delivery control preview requires a state-owned transaction")
         if (
@@ -208,27 +224,129 @@ class DeliveryControlState:
             resolution=resolution,
             origin=dict(origin) if origin is not None else None,
         )
+        return binding, snapshot
+
+    @staticmethod
+    def _digest(snapshot: dict[str, Any]) -> str:
+        return hashlib.sha256(
+            json.dumps(snapshot, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    def preview(self, kind: str, target_id: str) -> DeliveryControlPreview:
+        binding, snapshot = self._load_target(kind, target_id)
+        key = TARGETS[kind][1]
         prior = self.db.execute(
             f"SELECT * FROM telegram_delivery_control_dispositions WHERE {key}=?", (target_id,)
         ).fetchone()
-        # Historical identity only: no current scope/status/model/result predicate
-        # for progress, and never consumed by FIFO, drain or sender guards.
         binding_matches = prior is not None and all(prior[k] == v for k, v in binding.items())
         return DeliveryControlPreview(
             target_kind=kind,
             target_id=target_id,
-            job_id=job["job_id"],
+            job_id=binding["job_id"],
             result_id=binding["result_id"],
-            chat_id=target["chat_id"],
-            thread_id=target["thread_id"],
-            delivery_status=target["status"],
-            snapshot=hashlib.sha256(
-                json.dumps(
-                    snapshot, sort_keys=True, ensure_ascii=False, separators=(",", ":")
-                ).encode()
-            ).hexdigest(),
-            part_count=len(parts),
-            receipted_parts=sum(p["telegram_message_id"] is not None for p in parts),
+            chat_id=binding["chat_id"],
+            thread_id=binding["thread_id"],
+            delivery_status=snapshot["target"]["status"],
+            snapshot=self._digest(snapshot),
+            part_count=len(snapshot["parts"]),
+            receipted_parts=sum(p["telegram_message_id"] is not None for p in snapshot["parts"]),
             disposition_snapshot=prior["snapshot"] if prior is not None else None,
             binding_matches=binding_matches,
+            control_effect=self._record(prior).control_effect
+            if prior is not None
+            else "outstanding",
+        )
+
+    def apply_in_transaction(
+        self, kind: str, target_id: str, expected_snapshot: str, consent: bool, applied_at: str
+    ) -> DeliveryControlDisposition:
+        if not self.db.in_transaction:
+            raise StateError("delivery control apply requires a state-owned transaction")
+        if consent is not True:
+            raise StateError("explicit agreement to accept unconfirmed delivery is required")
+        if (
+            not isinstance(expected_snapshot, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_snapshot) is None
+        ):
+            raise StateError("exact delivery control preview snapshot is required")
+        if (
+            not isinstance(kind, str)
+            or kind not in TARGETS
+            or not isinstance(target_id, str)
+            or not 1 <= len(target_id) <= 128
+        ):
+            raise StateError("invalid delivery control target")
+        key = TARGETS[kind][1]
+        prior = self.db.execute(
+            f"SELECT * FROM telegram_delivery_control_dispositions WHERE {key}=?", (target_id,)
+        ).fetchone()
+        if prior is not None:
+            if prior["snapshot"] != expected_snapshot:
+                raise StateError("delivery control already has a different immutable disposition")
+            return self._record(prior)
+        binding, snapshot = self._load_target(kind, target_id)
+        if self._digest(snapshot) != expected_snapshot:
+            raise StateError("delivery control preview is stale; inspect a fresh preview")
+        terminal = resolution = None
+        if (
+            kind == "final_outbox"
+            and snapshot["target"]["status"] == "failed"
+            and snapshot["job"]["status"] == "indeterminate"
+        ):
+            proof = snapshot["resolution"]
+            if proof is not None and proof["resolution"] in (
+                "acknowledged",
+                "superseded",
+                "externally_completed",
+            ):
+                resolution = binding["job_id"]
+            else:
+                terminal = binding["job_id"]
+        values = dict(
+            disposition_id=str(uuid.uuid4()),
+            **binding,
+            execution_scope_at_consent=snapshot["execution_scope_at_preview"],
+            delivery_status_at_consent=snapshot["target"]["status"],
+            action=ACTION,
+            snapshot_version=1,
+            snapshot=expected_snapshot,
+            authority="local_owner_cli",
+            applied_at=applied_at,
+            terminal_evidence_job_id=terminal,
+            resolution_job_id=resolution,
+        )
+        self.db.execute(
+            f"INSERT INTO telegram_delivery_control_dispositions ({','.join(values)}) "
+            f"VALUES ({','.join('?' for _ in values)})",
+            tuple(values.values()),
+        )
+        row = self.db.execute(
+            "SELECT * FROM telegram_delivery_control_dispositions WHERE disposition_id=?",
+            (values["disposition_id"],),
+        ).fetchone()
+        assert row is not None
+        return self._record(row)
+
+    def _record(self, row: sqlite3.Row) -> DeliveryControlDisposition:
+        kind = row["target_kind"]
+        table, key = TARGETS[kind]
+        predicate = (
+            final_control_reconciled if kind == "final_outbox" else progress_control_reconciled
+        )
+        target = self.db.execute(
+            f"SELECT status,{predicate('target')} AS reconciled FROM {table} target WHERE {key}=?",
+            (row[key],),
+        ).fetchone()
+        return DeliveryControlDisposition(
+            disposition_id=row["disposition_id"],
+            target_kind=kind,
+            target_id=row[key],
+            job_id=row["job_id"],
+            snapshot=row["snapshot"],
+            authority=row["authority"],
+            applied_at=row["applied_at"],
+            delivery_status=target["status"] if target is not None else "missing",
+            control_effect="delivery_wait_reconciled"
+            if target is not None and target["reconciled"]
+            else "disposition_binding_changed",
         )

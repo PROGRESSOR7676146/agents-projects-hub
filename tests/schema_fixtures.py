@@ -13,7 +13,7 @@ from hermes_codex_router.schema_codex_permissions import (
 
 @contextmanager
 def legacy_delivery_hold_schema(connection: sqlite3.Connection):
-    """Current FIFO queries need an empty schema44 table during old fixture seeding.
+    """Current FIFO queries need empty delivery ledgers during old fixture seeding.
 
     Only a temporary, fictional compatibility bridge; remove before migration or
     backup assertions. It never licenses dropping retained owner evidence.
@@ -27,9 +27,27 @@ def legacy_delivery_hold_schema(connection: sqlite3.Connection):
     if created:
         with connection:
             migrations._execute_migration_script(connection, migrations.MIGRATION_44)
+    control_created = (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='telegram_delivery_control_dispositions'"
+        ).fetchone()
+        is None
+    )
+    if control_created:
+        with connection:
+            migrations._execute_migration_script(connection, migrations.MIGRATION_46)
     try:
         yield
     finally:
+        if control_created:
+            with connection:
+                assert (
+                    connection.execute(
+                        "SELECT COUNT(*) FROM telegram_delivery_control_dispositions"
+                    ).fetchone()[0]
+                    == 0
+                )
+                connection.execute("DROP TABLE telegram_delivery_control_dispositions")
         if created:
             with connection:
                 assert (

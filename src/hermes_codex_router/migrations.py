@@ -21,6 +21,7 @@ from .schema_codex_permissions import (
 from .schema_compatibility import TARGET_SCHEMA_VERSION
 from .schema_delivery_certainty import DELIVERY_CERTAINTY_SCHEMA as MIGRATION_43
 from .schema_delivery_control import DELIVERY_CONTROL_SCHEMA as MIGRATION_46
+from .schema_delivery_control_activation import DELIVERY_CONTROL_ACTIVATION_SCHEMA as MIGRATION_47
 from .schema_delivery_holds import DELIVERY_HOLD_SCHEMA as MIGRATION_44
 from .schema_outcome_assessments import OUTCOME_ASSESSMENT_SCHEMA as MIGRATION_45
 from .schema_preacceptance_approvals import PREACCEPTANCE_APPROVAL_SCHEMA as MIGRATION_40
@@ -1502,6 +1503,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_44,
         MIGRATION_45,
         MIGRATION_46,
+        MIGRATION_47,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:
@@ -1517,6 +1519,14 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
                     _ensure_hold_decision_columns(connection)
                 if version == 39:
                     ensure_codex_permission_columns(connection)
+                if (
+                    version == 47
+                    and connection.execute(
+                        "SELECT 1 FROM telegram_delivery_control_dispositions LIMIT 1"
+                    ).fetchone()
+                    is not None
+                ):
+                    raise RuntimeError("schema46 control ledger must be empty before activation")
                 _execute_migration_script(connection, script)
                 if version == 1:
                     _ensure_legacy_columns(connection)

@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Sequence
 
+from .delivery_control_predicates import result_ready_control_reconciled
 from .incoming_materials import IncomingMaterialDraft
 from .provider_queue_capacity import QueueCapacityConfig
 from .root_blockers import persistent_root_blocker
@@ -298,9 +299,10 @@ class ProviderAdmissionState:
                 raise StateError("local writer transfer requires a validated snapshot")
             self.state._require_writer_transfer_snapshot(expected_transfer)
             pending_job = self.state._connection.execute(
-                """SELECT 1 FROM provider_jobs
+                f"""SELECT 1 FROM provider_jobs
                    WHERE topic_id = ? AND status IN
                      ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                     AND NOT {result_ready_control_reconciled("provider_jobs")}
                    LIMIT 1""",
                 (topic_id,),
             ).fetchone()
