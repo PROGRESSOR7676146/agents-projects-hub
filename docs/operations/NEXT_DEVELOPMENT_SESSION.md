@@ -39,8 +39,10 @@ publication gates after an interrupted agent turn.
 Stage3's schema49 fenced group-poll ledger and pure freshness/grace policy are
 published at `7af0204a117e2b1a23c0a364f44249c12de14fa4`, with canonical
 2,628 tests in 237 modules, Pyright zero errors and seven hosted checks.
-Schema50 immutable admission/accepted-target ingress provenance is under source
-validation. Automatic precautions are not activated. Next is durable continuity/episodes, exact
+Schema50 immutable admission/accepted-target ingress provenance is published at
+`4727241b3906c27ab4556cd4abd8eb6157e0c4f6`; its exact-revision gates are recorded
+below. Schema51 durable continuity/episodes are under source validation.
+Automatic precautions are not activated. Next is exact
 commentary unknown delivery and full-control consent checked in the send-fence
 transaction, then shared live/independent maintenance regression coverage.
 Use immutable job-ingress sidecars and fresh-acceptance target rows; do not infer
@@ -263,6 +265,27 @@ Prepare bounded live scenarios with exact candidate/rollback revisions, commands
 temporary root/topic, provider calls, expected effects and cleanup before asking
 permission. Request provider acceptance, any restart and deployment separately.
 Update private handoff whenever plan, pending decisions or deployment state changes.
+
+## Exact Telegram control provenance and continuity
+
+Source owner: Hub maintainer; sole writer. Schema50 source at clean
+`4727241b3906c27ab4556cd4abd8eb6157e0c4f6`, lane
+`feat/codex-telegram-provenance`, passed canonical 2,654 tests in 239 modules,
+Pyright zero, privacy/history, independent Astra and actual Claude Opus 5.5/high
+reviews and all seven exact-head hosted checks. It retains fresh immutable
+admission/acceptance provenance and first-input/control fences; no automatic
+precaution is enabled. Owner merge and live acceptance remain separate.
+
+The next persistence-only slice is schema51 in lane `feat/codex-ingress-episodes`,
+based on that revision. Root owns implementation; Astra reviewed causal ordering
+and DDL boundaries. Producer continuity and exact-target assessments are under
+offline validation; publication and independent exact-source review remain open.
+Next trigger: complete those gates, then design atomic full-control consent and
+exact commentary egress inside the existing shared send fence. The three-cycle
+budget, root uncertainty and no-replay policy remain unchanged. Closure is open
+until live/maintenance integration and separately authorized channel-loss
+acceptance pass; neither restart nor this storage prerequisite is acceptance.
+Inspect tracked, staged and untracked lane state before any post-merge cleanup.
 
 ## Current evidence and source pointers
 

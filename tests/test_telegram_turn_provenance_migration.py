@@ -41,7 +41,8 @@ class TelegramTurnProvenanceMigrationTests(unittest.TestCase):
             self.old_objects = objects(old)
 
     def test_upgrade_preserves_history_polling_and_unknown_sender_with_empty_sidecars(self):
-        result = migrations.migrate_database(self.path)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 50):
+            result = migrations.migrate_database(self.path)
         self.assertEqual((result.previous_version, result.current_version), (49, 50))
         assert result.backup_path is not None
         self.assertEqual(result.backup_path.stat().st_mode & 0o777, 0o600)
@@ -55,7 +56,8 @@ class TelegramTurnProvenanceMigrationTests(unittest.TestCase):
                 self.assertEqual(upgraded.execute(f"SELECT * FROM {name}").fetchall(), [])
             self.assertEqual(upgraded.execute("PRAGMA foreign_key_check").fetchall(), [])
             self.assertEqual(upgraded.execute("PRAGMA integrity_check").fetchone()[0], "ok")
-        self.assertIsNone(migrations.migrate_database(self.path).backup_path)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 50):
+            self.assertIsNone(migrations.migrate_database(self.path).backup_path)
 
     def test_ddl_failure_rolls_back_all_schema_objects_and_existing_evidence(self):
         with (

@@ -556,8 +556,32 @@ This normative module is part of the
   Replies MUST preserve the first child's binding. SQL identity, first-input
   closure and retained control fences MUST survive INSERT/UPDATE OR REPLACE,
   including implicit deletion when recursive triggers are disabled.
-  Exact-target continuity/episodes, atomic full-control consent/send-start and
-  live/maintenance remain pending; aggregate egress is diagnostic.
+  Schema51 MUST retain successful poll cursors and unresolved failure witnesses
+  atomically with newly accepted producer samples. A gap breaks the ledger's
+  current streak, never an established unresolved failure. Registration and
+  duplicate/refused samples MUST NOT enrich continuity. The first new failed
+  sample MAY seal a coherent pre-upgrade threshold even across a gap, using its
+  own witness cursor; migration MUST create empty sidecars and MUST NOT invent
+  historical cursors. A restart before such capture cannot recover an erased
+  pre-upgrade failure. An actual success retires older unresolved failure.
+  Exact-target assessments MUST read the immutable target, accepted control,
+  ledger, watermark and prior assessment in one HubState-owned transaction,
+  without caller-selected evidence or native identity. Recovery MUST first use
+  the old cause's fixed cursor and time cutoff. A strictly later successful
+  cursor with time at or after that cutoff MAY retire it; historical recovery
+  MUST NOT establish current-epoch polling health. A new failure after that
+  recovery creates a new generation and deadline even at equal timestamps.
+  An unrecovered episode MUST retain the complete earlier-deadline cause;
+  reclassification alone MUST NOT increment its generation or extend its deadline.
+  Watermark failure uses its witness as both recovery and source cursor; legacy
+  current failure and missing/stale/startup use the actual read cursor, including
+  a registration's `(epoch,0)`. Genuine absence is a distinct baseline. Naive,
+  incoherent, future-observed or regressing evidence MUST refuse without mutation.
+  Confirmation, cause bundle and assessment revision MUST commit together.
+  SQL replacement and rowid collisions MUST NOT reset either sidecar or ledger.
+  These assessments grant no control, delivery, approval, replay or release
+  authority. Atomic full-control consent/send-start and live/maintenance
+  integration remain pending; aggregate egress is diagnostic.
   Monitoring invokes no inference; unavailable delivery is no owner receipt. See
   [ADR 0064](../decisions/0064-codex-control-loss.md).
 - **REQ-QUEUE-011 (Accepted; implementation pending):** An explicitly enabled

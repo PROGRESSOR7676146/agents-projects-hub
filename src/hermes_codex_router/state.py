@@ -12,6 +12,7 @@ from typing import Iterator, Literal, Mapping, Sequence
 from .artifacts import ValidatedArtifact
 from .assessment_inputs import OutcomeAssessmentInput
 from .codex_control_predicates import control_owner_for_topic
+from .codex_ingress_assessments import CodexIngressAssessments
 from .codex_permission_refusals import CodexPermissionInputState, PermissionInputDisposition
 from .codex_permissions import (
     MISSING_PERMISSION_CONTEXT,
@@ -152,6 +153,9 @@ class HubState:
         self.telegram_turn_provenance = TelegramTurnProvenance(connection)
         self.telegram_ingress = TelegramIngressLedger(
             connection, transaction=self._immediate_transaction
+        )
+        self.telegram_ingress_assessments = CodexIngressAssessments(
+            connection, transaction=self._immediate_transaction, ledger=self.telegram_ingress
         )
         self._incoming_material_state = IncomingMaterialsStateFacade(
             connection,
