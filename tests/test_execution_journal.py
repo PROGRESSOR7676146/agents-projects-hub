@@ -564,6 +564,7 @@ class ExecutionJournalTests(unittest.TestCase):
                         "schema_claude_activity.py",
                         "schema_delivery_certainty.py",
                         "schema_delivery_holds.py",
+                        "schema_delivery_control.py",
                         "schema_outcome_assessments.py",
                         "schema_codex_permissions.py",
                         "schema_preacceptance_approvals.py",
@@ -577,14 +578,18 @@ class ExecutionJournalTests(unittest.TestCase):
             self.assertEqual(report.schema_after_rollout, LATEST_SCHEMA_VERSION)
             self.assertEqual(report.schema_after_rollback, LATEST_SCHEMA_VERSION)
             self.assertTrue(report.durable_work_preserved)
-            old = _wheel(
-                base / "agents_projects_hub-0.5.0-py3-none-any.whl",
-                version="0.5.0",
-                git_sha="c" * 40,
-                schema_max=21,
-            )
-            with self.assertRaises(DeploymentManifestError):
-                run_release_dry_run(artifacts[0], old)
+            for old_schema in (21, 45):
+                old = _wheel(
+                    base / f"example-old-schema-{old_schema}.whl",
+                    version="0.5.0",
+                    git_sha="c" * 40,
+                    schema_max=old_schema,
+                )
+                with (
+                    self.subTest(old_schema=old_schema),
+                    self.assertRaises(DeploymentManifestError),
+                ):
+                    run_release_dry_run(artifacts[0], old)
 
     def test_checkpoint_lease_identity_and_visible_only_guards(self) -> None:
         from hermes_codex_router.execution_journal import ExecutionJournal

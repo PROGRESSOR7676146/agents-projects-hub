@@ -7,7 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Callable, Sequence
 
-from . import delivery_hold_cli
+from . import delivery_control_cli, delivery_hold_cli
 from .acceptance_actor import (
     AcceptanceActorError,
     load_acceptance_actor_config,
@@ -185,6 +185,7 @@ def _parser() -> argparse.ArgumentParser:
     migrate.add_argument("state", type=Path)
     migrate.add_argument("--no-backup", action="store_true")
     delivery_hold_cli.add_parser(commands)
+    delivery_control_cli.add_parser(commands)
 
     backup = commands.add_parser("backup", help="create an SQLite-consistent state backup")
     backup.add_argument("state", type=Path)
@@ -864,6 +865,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "release-dry-run": _release_dry_run_command,
     "migrate": _migrate_command,
     "delivery-hold": delivery_hold_cli.run,
+    "delivery-control": delivery_control_cli.run,
     "backup": _backup_command,
     "monitor": _monitor_command,
     "telegram-commands": _telegram_commands_command,

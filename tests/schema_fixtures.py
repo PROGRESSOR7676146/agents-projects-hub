@@ -70,6 +70,7 @@ def legacy_selection_columns(path: Path):
 def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
     """Remove empty lifecycle/archive structures from fictional historical fixtures."""
     tables = (
+        "telegram_delivery_control_dispositions",
         "telegram_delivery_hold_dispositions",
         "provider_recovery_notice_parts",
         "task_lifecycle_legacy_stop_links",

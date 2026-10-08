@@ -18,6 +18,7 @@ from .codex_permissions import (
     validate_permission_profile_id,
 )
 from .codex_retry_policy import PreparationRetryBinding
+from .delivery_control_state import DeliveryControlPreview, DeliveryControlState
 from .delivery_hold_state import DeliveryHoldDisposition, DeliveryHoldPreview, DeliveryHoldState
 from .incoming_materials import (
     IncomingMaterialDraft,
@@ -1865,6 +1866,19 @@ class HubState:
         self._connection.execute("BEGIN")
         try:
             preview = DeliveryHoldState(self._connection, StateError).preview(outbox_id)
+            self._connection.commit()
+            return preview
+        except BaseException:
+            self._connection.rollback()
+            raise
+
+    def preview_delivery_control(self, target_kind: str, target_id: str) -> DeliveryControlPreview:
+        """Coherent preview only; the storage prerequisite grants no control authority."""
+        if self._connection.in_transaction:
+            raise StateError("cannot nest a delivery control preview transaction")
+        self._connection.execute("BEGIN")
+        try:
+            preview = DeliveryControlState(self._connection).preview(target_kind, target_id)
             self._connection.commit()
             return preview
         except BaseException:

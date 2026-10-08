@@ -24,6 +24,7 @@ owning modules.
 | Participant evaluation and allocation | Accepted foundation; not implemented | — | [Requirements](../product/EVALUATION_AND_ALLOCATION.md), [ADR 0037](../decisions/0037-evidence-based-task-allocation.md) |
 | Stop certainty and independent notices (schema 36) | Implemented; canonical checks and independent review at `d3be874` | Pending | [REQ-QUEUE-005/013](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md) |
 | Final/progress send certainty (schema 43) | Source implementation under validation; exact publication gates pending | Pending | [REQ-QUEUE-005](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0060](../decisions/0060-final-and-progress-delivery-certainty.md) |
+| Exact delivery control (schema 46) | Storage/read-only preview prerequisite under validation; full-control authority unavailable | Activation pending | [REQ-QUEUE-005](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0063](../decisions/0063-delivery-control-reconciliation.md) |
 | Queue snapshots and accepted Codex activity (schema 37) | Implemented slice; focused offline validation, final canonical evidence and required review pending | Pending | [REQ-QUEUE-012](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md) |
 | Codex approvals observed before acceptance (schema 40) | Separate fenced observation slice under validation; accepted execution authority is unchanged | Pending | [REQ-QUEUE-012/013](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md) |
 | Claude process observations (schema 42) | Ordinary quiet notices implemented; offline candidate under publication validation | Pending | [REQ-QUEUE-012](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0059](../decisions/0059-claude-process-observation-notices.md) |
@@ -81,11 +82,9 @@ automated scoring and parallel writers are deferred. Full provider integration,
 role enforcement and live acceptance remain pending; see
 [ADR 0040](../decisions/0040-bounded-claude-codex-lead-advisor.md).
 
-Schema 35 durable root-blocker admission, held-job owner decisions and Hub
-notices are in repository implementation; live Telegram/provider acceptance
-and immutable deployment remain separate. Offline evidence covers refusal,
-retained queue work, explicit decision, sender retry and same-root exclusion;
-see [REQ-WRITER-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md) and
+Schema35 root-blocker admission is implemented offline; deployment/live
+acceptance remain pending under
+[REQ-WRITER-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md) and
 [ADR 0036](../decisions/0036-durable-local-root-blockers.md).
 
 Schema 34 Codex recovery and exact already-open local reconciliation are in
