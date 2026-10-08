@@ -439,7 +439,9 @@ class DeliveryHoldTests(unittest.TestCase):
             )
         before = self.state.get_lane("example-lane")
         with self.assertRaisesRegex(StateError, "retains the topic binding"):
-            self.state.archive_lane("example-lane")
+            self.state.archive_lane(
+                "example-lane", project_id="example-project", project_root=self.fixture.base
+            )
         self.assertEqual(self.state.get_lane("example-lane"), before)
         topic = self.state.get_topic(failed.topic_id)
         renamed = self.state.observe_topic(

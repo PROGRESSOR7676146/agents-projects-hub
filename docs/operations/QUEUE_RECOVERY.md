@@ -563,6 +563,15 @@ local-writer-owned, or provider-bound topics. Start a fresh unbound session
 before changing its root; archive first, then clean up. A lane is never
 selected from Telegram input, and a worker refuses a path that is not the exact
 derived, allowlisted and currently registered Git worktree.
+Bound archival also validates the current registered base Git root and checks
+that destination scope has no busy ownership before committing. Idle peer
+provider sessions remain attached; only the source needs a fresh unbound session.
+Busy legacy topics in any project also block archive until their root is proven
+by trusted startup normalization or their ownership is reconciled locally.
+Restart or age alone does not clear a legacy local writer with no root evidence.
+An unavailable, disabled or invalid registration must be corrected locally before
+retrying archive. See the
+[archive correction](../decisions/0031-bounded-root-concurrency.md#archive-correction-2026-10-08).
 
 ## Changing provider ownership
 

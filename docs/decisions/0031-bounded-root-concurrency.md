@@ -61,6 +61,32 @@ Archive restores a conservative project-ID fallback; the next registry-aware
 topic observation upgrades it to the canonical base root. Cleanup remains a
 separate explicit local operation.
 
+### Archive correction, 2026-10-08
+
+The project-ID fallback above is superseded for new bound-lane archives. Startup
+normalization correctly prefers retained native origins/checkpoints for genuine
+legacy topics; after an explicit archive, that could restore the historical
+lane root or refuse conflicting history instead of retaining the chosen base
+root. The local CLI now validates the current registered base Git root while
+holding the registry lock through the state transaction. Archive rechecks the
+project and exact source binding, requires the source's full binding guard and
+checks destination busy ownership, then atomically stores the canonical
+destination with archived metadata. Idle active/satellite provider identities
+on destination or legacy peer topics are retained and do not own execution;
+only the source binding is changed. Any still-legacy topic must have no busy
+ownership: absent or conflicting root evidence
+cannot prove that its busy ownership is independent of the destination. This
+blocks bound archive even for another project's busy legacy topic; trusted
+startup normalization can establish canonical independent scopes when root
+evidence exists. A legacy local writer without root evidence must be reconciled
+locally before archive; age and restart cannot establish independence.
+Idle legacy metadata is not rewritten by archive, and busy canonical topics
+on an independent root remain unaffected.
+Historical roots remain unchanged. No schema migration or automatic repair of
+earlier ambiguous archives is added; legacy normalization and schema-44 lifetime
+binding restrictions retain their existing authority. Unbound lanes still need
+no destination. Cleanup remains separately explicit.
+
 Cache-only status reports configured capacity, occupied/available totals,
 bounded worker instance/agent/phase owners, and an aggregate unresolved-scope
 count. It exposes no project root, topic, prompt, provider session, output, or

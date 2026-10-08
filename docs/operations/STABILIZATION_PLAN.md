@@ -256,20 +256,40 @@ See [ADR 0061](../decisions/0061-owner-delivery-hold-dispositions.md).
 
 ## Owner outcome assessments
 
-Status: schema45 implementation under validation. Last verified source base:
-`aac70181d21a00a51104ebbfe459f2e987fc4128`; source owner: Hub maintainer,
+Status: source publication complete in PR #158 at
+`bc7a2ab29fe0ad699eb39ee22b85a7143a5f3c16`; source owner: Hub maintainer,
 root is the sole writer. Worktree purpose: bounded human outcome journal,
 base branch `feat/delivery-hold-reconciliation`. Design and transaction/batch
 ownership were independently reviewed by GPT Astra.
 [ADR 0062](../decisions/0062-owner-outcome-assessments.md) records the decision;
 the [runbook](OUTCOME_JOURNAL.md#owner-decision-procedure) owns the procedure.
-Next trigger: close the independent review's malformed-input and migration/consumer
-verification follow-ups, then exact-candidate reviews and canonical/privacy/hosted
-gates. Scope does not include productive
+Closure: malformed-input and migration/consumer/recovery follow-ups passed
+focused checks; exact GPT Astra and actual Claude Opus 5.5/high reviews have no
+remaining mandatory findings. Mandatory pre-commit and clean-commit canonical
+pre-push passed 2,372 tests in 215 modules, Pyright 0 and privacy/history; all
+seven exact-head hosted checks passed. PR #158 is ready and unmerged.
+Next trigger: owner integration, then independently authorized custody and
+Telegram acceptance. Scope does not include productive
 collaboration, usage provenance, scoring or judges. Deployment, journal custody
 and Telegram acceptance remain independent gates. After owner integration,
 inspect all tracked/staged/untracked worktree state before cleanup. Closure is
-open until source publication gates pass; the broader goal remains open.
+complete for source publication; the broader goal remains open.
+
+## Canonical lane archive correction
+
+Status: bounded implementation under validation on source base
+`bc7a2ab29fe0ad699eb39ee22b85a7143a5f3c16`; owner: Hub maintainer, sole writer.
+Worktree purpose: repair canonical-root persistence after archive/restart;
+base branch `feat/owner-outcome-assessments`. GPT Astra reviewed the minimal
+root-validation and transaction design. The old-code regression reproduced
+historical-root normalization after CLI archive. The
+[dated ADR correction](../decisions/0031-bounded-root-concurrency.md#archive-correction-2026-10-08)
+records the restored boundary. Legacy evidence protections, schema-44 consent
+limits and cleanup remain unchanged. Next trigger: exact-candidate independent
+review and canonical/hosted publication checks, then full control reconciliation
+as a separately designed slice. After owner integration inspect tracked, staged
+and untracked work before cleanup. Closure remains open until publication gates
+pass; no deployment or earlier-topic repair is authorized here.
 
 ## Planned final-response mode indicators
 

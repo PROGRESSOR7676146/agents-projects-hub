@@ -900,7 +900,7 @@ class BoundedConcurrencyTests(unittest.TestCase):
             worker.close()
         self.assertEqual(adapter.cwds, [lane_root])
 
-    def test_archiving_idle_lane_returns_topic_to_project_scope(self) -> None:
+    def test_archiving_idle_lane_returns_topic_to_canonical_project_root(self) -> None:
         lane_root, branch = create_worktree(self.harness.registry.projects[0], "temporary")
         topic, _ = self.topic_session(
             project_id="example-project",
@@ -916,10 +916,10 @@ class BoundedConcurrencyTests(unittest.TestCase):
         )
         self.state.bind_lane("temporary", topic.topic_id)
 
-        self.state.archive_lane("temporary")
+        self.state.archive_lane("temporary", project_id="example-project", project_root=self.root)
 
         archived = self.state.get_topic(topic.topic_id)
-        self.assertEqual(archived.execution_scope, "project:example-project")
+        self.assertEqual(archived.execution_scope, f"root:{self.root}")
 
     def test_lane_scope_changes_refuse_pending_provider_work(self) -> None:
         lane_root, branch = create_worktree(self.harness.registry.projects[0], "busy")
@@ -958,7 +958,9 @@ class BoundedConcurrencyTests(unittest.TestCase):
         self.enqueue(topic, session, 818)
 
         with self.assertRaisesRegex(RuntimeError, "active or unresolved"):
-            self.state.archive_lane("archive-busy")
+            self.state.archive_lane(
+                "archive-busy", project_id="example-project", project_root=self.root
+            )
 
         self.assertEqual(self.state.get_lane("archive-busy")["status"], "active")
         self.assertEqual(
