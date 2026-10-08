@@ -724,7 +724,11 @@ class TelegramBotApi:
         if disable_notification:
             params["disable_notification"] = "true"
         result = self.call("sendMessage", **params)
-        if not isinstance(result, dict) or not isinstance(result.get("message_id"), int):
+        if (
+            not isinstance(result, dict)
+            or type(result.get("message_id")) is not int
+            or result["message_id"] <= 0
+        ):
             raise TelegramError(
                 "sendMessage returned an invalid result",
                 operation="send_message",
@@ -911,7 +915,11 @@ class TelegramBotApi:
         result = self._call_multipart(
             "sendDocument", fields=fields, files=files, request_timeout=60.0
         )
-        if not isinstance(result, dict) or not isinstance(result.get("message_id"), int):
+        if (
+            not isinstance(result, dict)
+            or type(result.get("message_id")) is not int
+            or result["message_id"] <= 0
+        ):
             raise TelegramError(
                 "sendDocument returned an invalid result",
                 operation="send_document",

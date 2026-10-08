@@ -14,6 +14,7 @@ from hermes_codex_router.provider_catalog import ProviderModel
 from hermes_codex_router.state import StateError
 from tests import test_codex_worker as external
 from tests import test_embedded_queue_service as embedded
+from tests.delivery_fixture import complete_final_delivery
 
 
 class ResultLifecycleTests(unittest.TestCase):
@@ -66,8 +67,8 @@ class ResultLifecycleTests(unittest.TestCase):
         old = worker.state.get_provider_job(job_id)
         delivery = worker.state.lease_telegram_outbox("codex", "example-sender")
         assert delivery is not None and delivery.lease_token is not None
-        worker.state.mark_telegram_outbox_delivered(
-            delivery.outbox_id, delivery.lease_token, telegram_message_id=101
+        complete_final_delivery(
+            worker.state, delivery.outbox_id, delivery.lease_token, telegram_message_id=101
         )
         session = worker.state.get_session(old.session_id)
         child, _ = worker.state.enqueue_provider_job(

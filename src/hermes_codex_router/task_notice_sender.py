@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
 
-from .delivery_retry import delivery_retry_delay
+from .delivery_retry import delivery_retry_delay, proven_delivery_rejection
 from .task_lifecycle import TaskLifecycleState
 from .telegram import TelegramError
 
@@ -26,19 +26,6 @@ class TaskNoticeDeliveryResult:
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _proven_rejection(error: Exception) -> bool:
-    if not isinstance(error, TelegramError):
-        return False
-    if error.failure_class == "api_http":
-        return error.status_code == 429
-    return (
-        error.failure_class == "api_rejection"
-        and error.status_code is not None
-        and 400 <= error.status_code < 500
-        and error.status_code != 408
-    )
 
 
 def deliver_task_notice(
@@ -73,7 +60,7 @@ def deliver_task_notice(
         )
     except Exception as exc:
         timestamp = current_time()
-        if _proven_rejection(exc):
+        if proven_delivery_rejection(exc):
             assert isinstance(exc, TelegramError)
             state.retry_rejected(
                 notice.notice_id,

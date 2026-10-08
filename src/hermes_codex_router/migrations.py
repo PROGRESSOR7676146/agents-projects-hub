@@ -19,6 +19,7 @@ from .schema_codex_permissions import (
     ensure_codex_permission_columns,
 )
 from .schema_compatibility import TARGET_SCHEMA_VERSION
+from .schema_delivery_certainty import DELIVERY_CERTAINTY_SCHEMA as MIGRATION_43
 from .schema_preacceptance_approvals import PREACCEPTANCE_APPROVAL_SCHEMA as MIGRATION_40
 from .schema_preexecution_retry import PREEXECUTION_RETRY_SCHEMA as MIGRATION_41
 from .schema_task_activity import TASK_ACTIVITY_SCHEMA as MIGRATION_37
@@ -1494,6 +1495,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_40,
         MIGRATION_41,
         MIGRATION_42,
+        MIGRATION_43,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:
@@ -1516,6 +1518,8 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
             check = connection.execute("PRAGMA integrity_check").fetchone()
             if check is None or check[0] != "ok":
                 raise RuntimeError("SQLite integrity check failed during migration")
+            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise RuntimeError("SQLite foreign key check failed during migration")
             connection.commit()
         except Exception:
             connection.rollback()

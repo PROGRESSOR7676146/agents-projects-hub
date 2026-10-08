@@ -58,6 +58,26 @@ Interpret the components independently:
 - Hermes or tlive down: the other channels remain independent; no timeout is an
   approval.
 
+
+## Unknown final or progress delivery
+
+In schema43, inspect `unknown_delivery` and `unknown_progress_delivery` separately
+from pending retry counts. The corresponding passive alerts mean an attempted
+Telegram send lacks a trusted committed receipt; restarting the sender does not
+authorize resend. Use the [exact-job diagnostic](OUTCOME_JOURNAL.md) to inspect
+delivery status, part receipts and provenance locally. Preserve the saved result,
+earlier receipts and artifact spool. Never retry provider execution to repair
+delivery, replace an unknown notice or hand-edit a delivery status.
+
+A late exact Codex terminal observation may record terminal proof and completion
+text while retaining unknown/attempted notice delivery and the indeterminate job.
+`notice_delivery` is separate from `result_delivery`; the former cannot prove
+that the recovered final result reached Telegram. No new artifact snapshots are
+claimed as retained in that evidence-only branch. Reconciliation requires a
+separately reviewed explicit action. Migrated legacy sends stay unknown and
+legacy receipt provenance stays unverified. A runtime rollback must support
+schema43; an older binary is not a compatible sender recovery.
+
 ## Component restart boundaries
 
 After inspecting the failed unit and preserving its logs privately, restart

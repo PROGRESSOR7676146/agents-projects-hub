@@ -37,7 +37,7 @@ class RecordingBot:
             raise TelegramError(
                 "rate limited",
                 operation="send_message",
-                failure_class="rate_limit",
+                failure_class="api_rejection",
                 status_code=429,
                 retry_after=retry_after,
             )

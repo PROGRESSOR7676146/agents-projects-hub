@@ -15,6 +15,7 @@ from hermes_codex_router.codex_rpc import RpcDeadlineError, RpcError
 from hermes_codex_router.preexecution_retry_state import PreexecutionRetryState
 from tests import test_codex_worker as external
 from tests import test_embedded_queue_service as embedded
+from tests.delivery_fixture import complete_final_delivery
 from tests.test_codex_rpc_deadlines import Clock, FloodTransport, SubmissionTransport
 
 
@@ -90,8 +91,8 @@ class PreparationDeadlineRetryTests(unittest.TestCase):
                 if notice.telegram_message_id is None:
                     delivery = state.lease_telegram_outbox("codex", "example-sender")
                     assert delivery is not None and delivery.lease_token is not None
-                    state.mark_telegram_outbox_delivered(
-                        delivery.outbox_id, delivery.lease_token, telegram_message_id=101
+                    complete_final_delivery(
+                        state, delivery.outbox_id, delivery.lease_token, telegram_message_id=101
                     )
                     notice = state.get_telegram_outbox_for_job(job_id)
                     assert notice is not None

@@ -23,6 +23,7 @@ from hermes_codex_router.codex_failure import MAX_PARTIAL_TEXT, codex_failure_no
 from hermes_codex_router.delivery_retry import delivery_retry_delay
 from hermes_codex_router.state import HubState
 from hermes_codex_router.telegram import TelegramError
+from tests.delivery_fixture import complete_final_delivery
 
 WorkerClient = worker_fixtures.WorkerClient
 Bot = sender_fixtures.Bot
@@ -87,8 +88,8 @@ class ResultReliabilityTests(unittest.TestCase):
                     "SELECT 1 FROM provider_turn_terminal_evidence WHERE job_id = ?", (old_id,)
                 ).fetchone()
             )
-            worker.state.mark_telegram_outbox_delivered(
-                sending.outbox_id, sending.lease_token, telegram_message_id=101
+            complete_final_delivery(
+                worker.state, sending.outbox_id, sending.lease_token, telegram_message_id=101
             )
             with worker.state._immediate_transaction():
                 worker.state._connection.execute(
@@ -163,8 +164,11 @@ class ResultReliabilityTests(unittest.TestCase):
                     first = worker.state.get_telegram_outbox_for_job(old_id)
                     delivery = worker.state.lease_telegram_outbox("codex", "sender")
                     assert delivery is not None and delivery.lease_token is not None
-                    worker.state.mark_telegram_outbox_delivered(
-                        delivery.outbox_id, delivery.lease_token, telegram_message_id=101
+                    complete_final_delivery(
+                        worker.state,
+                        delivery.outbox_id,
+                        delivery.lease_token,
+                        telegram_message_id=101,
                     )
                     client.observed = final_status
                     reopened = HubState.open(
@@ -402,8 +406,8 @@ class ResultReliabilityTests(unittest.TestCase):
             self.assertEqual(client.turns, 1)
             delivery = worker.state.lease_telegram_outbox("codex", "fictional-sender")
             assert delivery is not None and delivery.lease_token is not None
-            worker.state.mark_telegram_outbox_delivered(
-                delivery.outbox_id, delivery.lease_token, telegram_message_id=101
+            complete_final_delivery(
+                worker.state, delivery.outbox_id, delivery.lease_token, telegram_message_id=101
             )
             from hermes_codex_router.turn_continuation_state import TurnContinuationState
 
@@ -530,7 +534,8 @@ class ResultReliabilityTests(unittest.TestCase):
             self.assertEqual(worker.state.telegram_contract_version(job.session_id), 0)
             lease = worker.state.lease_telegram_outbox("codex", "fictional-sender")
             assert lease is not None and lease.lease_token is not None
-            worker.state.mark_telegram_outbox_delivered(
+            complete_final_delivery(
+                worker.state,
                 lease.outbox_id,
                 lease.lease_token,
                 telegram_message_id=1,
@@ -620,8 +625,8 @@ class ResultReliabilityTests(unittest.TestCase):
             worker.run_cycle()
             outbox = worker.state.lease_telegram_outbox("codex", "sender")
             assert outbox is not None and outbox.lease_token is not None
-            worker.state.mark_telegram_outbox_delivered(
-                outbox.outbox_id, outbox.lease_token, telegram_message_id=1
+            complete_final_delivery(
+                worker.state, outbox.outbox_id, outbox.lease_token, telegram_message_id=1
             )
             fixture.enqueue(2)
 
@@ -774,7 +779,12 @@ class ResultReliabilityTests(unittest.TestCase):
             with patch.object(
                 bot,
                 "send_html",
-                side_effect=TelegramError("Fictional cooldown", retry_after=60, status_code=429),
+                side_effect=TelegramError(
+                    "Fictional cooldown",
+                    failure_class="api_rejection",
+                    retry_after=60,
+                    status_code=429,
+                ),
             ):
                 service._deliver_embedded_outbox(state, "opencode")
             notice = state.get_telegram_outbox_for_job(job_id)
@@ -839,6 +849,7 @@ class ResultReliabilityTests(unittest.TestCase):
                 raise TelegramError(
                     "Fictional rate limit",
                     operation="send_message",
+                    failure_class="api_rejection",
                     status_code=429,
                     retry_after=60,
                 )

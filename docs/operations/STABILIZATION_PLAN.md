@@ -176,8 +176,16 @@ and discards in-flight stdout; buffer abort requires channel closure after a
 partial frame. It introduces no physical I/O or runtime switch.
 Source owner: Hub maintainer.
 
-Next trigger: final owned nonblocking I/O/private namespace witness publication
-and native request validation before productive wiring.
+The separate owned nonblocking I/O/private namespace witness is published in
+PR #154 at `cc976f6828554104b7326770f1e3a67b6e2de6ef`, based on the
+sequencing prerequisite. Canonical publication passed 2,264 tests in 203 modules,
+types and privacy/history; exact GPT Astra and actual Claude Opus 5.5/high reviews
+found no mandatory findings. All seven exact-head hosted checks passed. These
+fictional peer/HTTP and kernel namespace fixtures do not establish productive
+advisor integration or a real upstream route.
+
+Next trigger: owner integration of these separate lanes and native request
+validation before productive wiring.
 Closure remains open: no productive advisor, real upstream, durable role/material
 authorization, native body validator, worker wiring, deployment or live acceptance
 is enabled. The original project, host authority sockets and credentials remain
@@ -186,15 +194,17 @@ cleanup; main merge and deployment remain owner actions.
 
 ## Claude process observations
 
-Current state: offline implementation candidate in lane
-`feat/claude-process-observations`, based on the last verified prerequisite
+Current state: source published in PR #155 at clean
+`a542b2054250dcd7e60ad7df0969ca7462e4054b`, based on prerequisite
 `e563dd4ca51b5d4884227681782d4a7fce275b2e`. Source owner: Hub maintainer.
 [ADR 0059](../decisions/0059-claude-process-observation-notices.md) records the
 separate process/permission evidence boundary. Focused actual-process, SQLite
-and migration fixtures are under validation; canonical publication, exact clean
-independent source review and hosted checks remain pending.
+and migration fixtures passed. Canonical publication passed 2,277 tests in
+204 modules, full Pyright and privacy/history; exact clean GPT Astra and actual
+Claude Opus 5.5/high reviews found no remaining blockers. All seven hosted checks
+passed at that exact head. These are source/offline and hosted checks.
 
-Next trigger: close those publication gates, then separately authorized native
+Next trigger: owner integration and separately authorized native
 and Telegram acceptance alongside the remaining Claude parity work. This lane
 is bounded to optional passive ordinary quiet notices; productive advisor
 wiring, tool/build activity, local transfer, saved-session connection and billing
@@ -203,6 +213,23 @@ worktree owner is Hub maintainer; its purpose is schema-42 observation and
 worker/sender integration, with base `feat/advisor-pipe-sequencing`. Post-merge,
 inspect tracked, staged and untracked state before worktree cleanup. Closure is
 open; no deployed or live acceptance is claimed.
+
+## Final/progress delivery certainty prerequisite
+
+Status: schema43 source implementation under validation. Base verified revision:
+`a542b2054250dcd7e60ad7df0969ca7462e4054b`; exact candidate publication remains
+pending. Root is the sole writer; Hub maintainer owns this worktree. Its purpose
+is durable send fencing, shared final-part policy, provenance and preservation
+of late native proof. Base branch: `feat/claude-process-observations`. After owner
+integration, inspect tracked/staged/untracked work before any cleanup.
+
+The [owning contract](../product/PERSISTENCE_AND_RECOVERY.md) and
+[ADR 0060](../decisions/0060-final-and-progress-delivery-certainty.md) define the
+change. Next trigger: exact-candidate source reviews, canonical/privacy and
+hosted gates, then the bounded owner-assessment slice. Deployment, Telegram
+acceptance and unknown-delivery reconciliation remain separate; no provider
+replay, writer change, service change or assessment command is enabled here.
+Closure: open until exact source publication gates pass; live backlog stays open.
 
 ## Planned final-response mode indicators
 

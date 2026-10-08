@@ -10,13 +10,7 @@ import time
 import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-from .artifacts import (
-    artifact_spool_root,
-    remove_spooled_artifact,
-    verify_spooled_artifact,
-)
 from .catalog_refresh import native_codex_catalog_source
 from .claude_catalog import configured_claude_snapshot
 from .codex_appserver import (
@@ -56,6 +50,7 @@ from .diagnostic_log import survived
 from .execution_journal import ExecutionJournal
 from .external_runtime import ProviderUnavailableError
 from .external_service import ExternalAgentService
+from .final_delivery import deliver_final_part
 from .hub_config import HubConfig, ProjectBinding, read_telegram_token
 from .incoming_materials import (
     ALBUM_DOWNLOAD_HOLD_MILLISECONDS,
@@ -1222,44 +1217,11 @@ class ProjectHubService:
             return False
         sender = getattr(self, "external_services", {}).get(agent_id)
         telegram = sender.telegram if sender is not None else self._provider_telegram(agent_id)
-        try:
-            part = queue_state.next_telegram_outbox_part(outbox.outbox_id, outbox.lease_token)
-            delivered_file = None
-            if part.part_type == "document":
-                if part.file_path is None or part.file_size is None or part.file_sha256 is None:
-                    raise ServiceError("document outbox part is incomplete")
-                file_path = Path(part.file_path)
-                spool_root = artifact_spool_root(self.config.state_path)
-                verify_spooled_artifact(
-                    file_path,
-                    spool_root,
-                    expected_size=part.file_size,
-                    expected_sha256=part.file_sha256,
-                )
-                message_id = telegram.send_document(
-                    outbox.chat_id,
-                    outbox.thread_id,
-                    file_path,
-                    caption=part.telegram_html or None,
-                    file_name=part.file_name,
-                )
-                delivered_file = file_path
-            else:
-                message_id = telegram.send_html(
-                    outbox.chat_id, outbox.thread_id, part.telegram_html
-                )
-            queue_state.mark_telegram_outbox_delivered(
-                outbox.outbox_id, outbox.lease_token, telegram_message_id=message_id or 1
-            )
-            if delivered_file is not None:
-                remove_spooled_artifact(delivered_file, artifact_spool_root(self.config.state_path))
-        except Exception as exc:
-            queue_state.retry_telegram_outbox(
-                outbox.outbox_id,
-                outbox.lease_token,
-                error_code=type(exc).__name__,
-                delay_seconds=delivery_retry_delay(exc, outbox.attempt_count),
-            )
+        result = deliver_final_part(
+            queue_state.delivery, telegram, outbox, state_path=self.config.state_path
+        )
+        if result.cleanup_error is not None:
+            survived("service.artifact_cleanup", result.cleanup_error)
         return True
 
     def _topic(self, message: TopicMessage, project_id: str) -> TopicRecord:

@@ -19,8 +19,9 @@ This normative module is part of the
   final results, partial outcomes, uncertain executions and recovered results,
   plus pending queue/final-delivery/progress-delivery counts and ages. These
   aggregates MUST contain no prompt, response, provider-session, project, topic
-  or account identity. The
-  passive alert evaluator MUST report provider work with an expired execution
+  or account identity. Final/progress unknown-delivery counts MUST remain separate
+  from pending delivery/retry counts and trigger passive alerts without
+  authorizing resend. The passive alert evaluator MUST report provider work with an expired execution
   lease, or due and unblocked queued work waiting over 15 minutes without an
   active worker lease. A healthy long-running execution MUST NOT alert solely
   because its original queue timestamp is old. The evaluator MUST also report
@@ -339,6 +340,29 @@ recreate unsaved provider context or a partially executed turn.
   MUST retain normal notification behavior. Telegram clients may still display
   a silent notification, so the flag alone does not prove the absence of screen
   or tray alerts.
+  Final and progress sends MUST commit an exact current-lease send-start fence
+  immediately before transport. A final fence MUST bind the first unreceipted
+  part. Receipts MUST be positive integers, excluding booleans; no missing or
+  malformed receipt may be replaced by a fabricated ID. Only a proven transport
+  rejection permits a begun send to retry. Network ambiguity, malformed success
+  and receipt-commit faults MUST retain unknown delivery without changing provider
+  certainty, releasing native/root uncertainty or discarding saved results,
+  multipart prefix receipts and artifact references. Expired unattempted leases
+  MAY requeue; expired attempted sends MUST become unknown. Cleanup after a
+  committed receipt MUST NOT trigger resend. Both external and embedded senders
+  share this policy. Legacy in-flight sends migrate conservatively to unknown
+  without inventing a start timestamp. Legacy receipts remain historical with
+  unverified provenance; only a strict post-fence receipt transaction sets the
+  per-part validation version. Whole-result receipt provenance requires every
+  part; historical positive IDs alone cannot establish that provenance.
+  Later independent exact terminal proof MUST preserve an unknown or attempted
+  notice and its parts. It MAY record native terminal evidence and bounded exact
+  completion text in the existing checkpoint while keeping the indeterminate job
+  and without publishing a substitute result. Such a retained notice MUST remain
+  diagnostically distinct from final-result delivery. New recovered artifact
+  snapshots are not retained without a durable reference; existing referenced
+  artifacts remain intact. Any later delivery reconciliation requires explicit
+  inspection rather than automatic resend or provider replay.
 - **REQ-QUEUE-006 (Implemented for the additive schema and global compatibility gate; per-provider rollout Planned):** Queue migration and per-provider rollout MUST be
   additive, feature-gated, recoverable through the existing backup discipline,
   and retain safe rollback without destroying accepted jobs. Changing an agent

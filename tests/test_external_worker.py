@@ -33,6 +33,7 @@ from hermes_codex_router.root_blockers import persistent_root_blocker
 from hermes_codex_router.service import ProjectHubService, QueueAcceptanceError, ServiceError
 from hermes_codex_router.state import HubState
 from hermes_codex_router.telegram import TopicMessage
+from tests.delivery_fixture import complete_final_delivery
 from tests.git_fixtures import init_git_root
 from tests.stop_fixtures import pending_stop
 
@@ -641,8 +642,8 @@ class ExternalQueueWorkerTests(unittest.TestCase):
 
             outbox = worker.state.lease_telegram_outbox("opencode", "sender")
             assert outbox is not None and outbox.lease_token is not None
-            worker.state.mark_telegram_outbox_delivered(
-                outbox.outbox_id, outbox.lease_token, telegram_message_id=400
+            complete_final_delivery(
+                worker.state, outbox.outbox_id, outbox.lease_token, telegram_message_id=400
             )
             session = worker.state.get_session(job.session_id)
             second, _ = worker.state.enqueue_provider_job(
@@ -677,7 +678,8 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             self.assertIn("current network location", outbox.telegram_html)
             leased = worker.state.lease_telegram_outbox("antigravity", "test-sender")
             assert leased is not None and leased.lease_token is not None
-            worker.state.mark_telegram_outbox_delivered(
+            complete_final_delivery(
+                worker.state,
                 leased.outbox_id,
                 leased.lease_token,
                 telegram_message_id=123,

@@ -12,6 +12,7 @@ from hermes_codex_router.codex_live_control import CodexLiveControl, CodexLiveCo
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.state import StateError
 from tests import test_codex_worker as fixtures
+from tests.delivery_fixture import complete_final_delivery
 
 
 class CallbackClient(fixtures.WorkerClient):
@@ -192,8 +193,8 @@ class CodexLiveControlWorkerTests(unittest.TestCase):
             self.assertFalse(worker.run_cycle())
             outbox = worker.state.lease_telegram_outbox("codex", "example-sender")
             assert outbox is not None and outbox.lease_token is not None
-            worker.state.mark_telegram_outbox_delivered(
-                outbox.outbox_id, outbox.lease_token, telegram_message_id=901
+            complete_final_delivery(
+                worker.state, outbox.outbox_id, outbox.lease_token, telegram_message_id=901
             )
             self.assertTrue(worker.run_cycle())
             self.assertEqual(worker.state.get_provider_job(child_id).status, "result_ready")

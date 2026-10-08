@@ -725,7 +725,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
         finally:
             sender.close()
 
-    def test_transport_failure_retries_only_outbox_and_never_provider_work(self) -> None:
+    def test_transport_failure_parks_outbox_and_never_repeats_provider_work(self) -> None:
         job_id = self.ready_outbox("opencode", 10)
         sender = self.sender(opencode=Bot(fail=True), antigravity=Bot())
         try:
@@ -733,7 +733,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             job = sender.state.get_provider_job(job_id)
             outbox = sender.state.get_telegram_outbox_for_job(job_id)
             self.assertEqual(job.status, "result_ready")
-            self.assertEqual(outbox.status, "pending")
+            self.assertEqual(outbox.status, "unknown")
             self.assertEqual(outbox.attempt_count, 1)
             health = sender.state.get_runtime_health("sender", "test-sender")
             assert health is not None
@@ -744,7 +744,11 @@ class TelegramOutboxSenderTests(unittest.TestCase):
 
     def test_transport_health_threshold_recovers_after_outbox_retry(self) -> None:
         job_id = self.ready_outbox("opencode", 14)
-        bot = TransportFailBot(fail=True)
+        bot = Bot(
+            send_error=TelegramError(
+                "rejected", operation="send_message", failure_class="api_rejection", status_code=429
+            )
+        )
         sender = self.sender(opencode=bot, antigravity=Bot())
         try:
             clock = datetime.now(timezone.utc)
@@ -766,9 +770,9 @@ class TelegramOutboxSenderTests(unittest.TestCase):
 
             failed = sender.state.get_runtime_health("sender", "test-sender")
             assert failed is not None
-            self.assertEqual(failed.error_code, "telegram_send_message_network_timeout")
+            self.assertEqual(failed.error_code, "telegram_send_message_api_rejection")
             self.assertEqual(failed.transport_operation, "send_message")
-            self.assertEqual(failed.transport_failure_class, "network_timeout")
+            self.assertEqual(failed.transport_failure_class, "api_rejection")
             self.assertEqual(failed.transport_consecutive_failures, 3)
             self.assertEqual(
                 sender.state.runtime_health_status("sender", "test-sender", now=clock).status,
@@ -783,7 +787,7 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             ]
             self.assertEqual(len(transport_events), 1)
 
-            bot.fail = False
+            bot.send_error = None
             # The third failed attempt now persists a four-second backoff.
             clock += timedelta(seconds=4)
             self.assertTrue(sender.run_cycle(now=clock))
@@ -831,14 +835,16 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             self.assertIsNotNone(parts[0].telegram_message_id)
             self.assertIsNone(parts[1].telegram_message_id)
 
-            bot.fail = True
+            bot.send_error = TelegramError(
+                "rejected", failure_class="api_rejection", status_code=400
+            )
             clock += timedelta(seconds=1)
             self.assertTrue(sender.run_cycle(now=clock))
             after_failure = sender.state.get_telegram_outbox_for_job(job_id)
             self.assertEqual(after_failure.status, "pending")
             self.assertEqual(len(bot.sent), 2)
 
-            bot.fail = False
+            bot.send_error = None
             while sender.state.get_provider_job(job_id).status != "completed":
                 clock += timedelta(seconds=2)
                 self.assertTrue(sender.run_cycle(now=clock))

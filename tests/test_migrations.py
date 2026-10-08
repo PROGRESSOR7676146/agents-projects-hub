@@ -564,6 +564,7 @@ class MigrationTests(unittest.TestCase):
                         "created_at",
                         "updated_at",
                         "delivered_at",
+                        "send_started_at",
                     },
                 )
                 self.assertEqual(migrated.execute("PRAGMA integrity_check").fetchone()[0], "ok")
@@ -1148,13 +1149,12 @@ class MigrationTests(unittest.TestCase):
     def test_version_14_repairs_early_version_13_database(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
-            migrate_database(path, create_backup=False)
+            with mock.patch.object(migrations_module, "LATEST_SCHEMA_VERSION", 13):
+                migrate_database(path, create_backup=False)
             connection = sqlite3.connect(path)
             try:
-                remove_adoption_schema(connection)
                 connection.executescript(
-                    """DROP TABLE telegram_outbox_parts;
-                       DROP TABLE provider_job_absorptions;
+                    """DROP TABLE provider_job_absorptions;
                        DROP TABLE provider_stop_requests;
                        PRAGMA user_version = 13;"""
                 )

@@ -276,11 +276,11 @@ class TaskNoticeMigrationTests(unittest.TestCase):
             self.assertEqual(after[table], expected)
         self.assertEqual(
             after["telegram_outbox"],
-            [row for row in self.before["telegram_outbox"] if row[0] == "provider"],
+            [(*row, None) for row in self.before["telegram_outbox"] if row[0] == "provider"],
         )
         self.assertEqual(
             after["telegram_outbox_parts"],
-            [row for row in self.before["telegram_outbox_parts"] if row[0] == "provider"],
+            [(*row, 0) for row in self.before["telegram_outbox_parts"] if row[0] == "provider"],
         )
         self.assertEqual(self._upgrade().previous_version, migration.LATEST_SCHEMA_VERSION)
 

@@ -25,6 +25,7 @@ from .codex_failure import codex_failure_notice
 from .diagnostic_log import survived
 from .execution_journal import ExecutionJournal
 from .hub_config import HubConfig
+from .observed_delivery import retain_delivery_terminal_evidence
 from .project_resolution import resolve_project_context
 from .state import RECOVERED_RESULT_METADATA_JSON, HubState, StateError
 from .topic_execution import resolve_topic_execution_root
@@ -190,7 +191,13 @@ class TurnObservation:
         else:
             artifacts: tuple[ValidatedArtifact, ...] = ()
             rejected: list[str] = []
-            if outcome.status == "completed":
+            prior_delivery = self.db.execute(
+                "SELECT status, send_started_at FROM telegram_outbox WHERE job_id=?", (job_id,)
+            ).fetchone()
+            # Only parked unknown is stable outside the transaction. A sending
+            # lease may commit its receipt before _commit_terminal rereads it.
+            preserve_delivery = prior_delivery is not None and prior_delivery["status"] == "unknown"
+            if outcome.status == "completed" and not preserve_delivery:
                 try:
                     artifacts = spool_staged_artifacts(
                         root,
@@ -302,7 +309,10 @@ class TurnObservation:
             ).fetchone()
             if outbox is None:
                 raise StateError("uncertain job lost its notice")
-            if outbox["status"] == "sending":
+            preserve_delivery = outbox["status"] == "unknown" or (
+                outbox["status"] == "sending" and outbox["send_started_at"] is not None
+            )
+            if outbox["status"] == "sending" and not preserve_delivery:
                 self.db.execute(
                     """UPDATE provider_turn_observations SET attempt_count = attempt_count - 1,
                        next_check_at = ?, updated_at = ? WHERE job_id = ?""",
@@ -322,6 +332,22 @@ class TurnObservation:
                     "SELECT COUNT(*) FROM provider_job_holds WHERE cause_job_id = ?", (job_id,)
                 ).fetchone()[0]
             )
+            if preserve_delivery:
+                retain_delivery_terminal_evidence(
+                    self.db,
+                    job_id=job_id,
+                    status=outcome.status,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    root=str(root),
+                    timestamp=now,
+                    completed_text=outcome.result.text
+                    if outcome.status == "completed" and outcome.result is not None
+                    else None,
+                )
+                self.state._provider_job_state.complete_finished_stops(int(row["topic_id"]), now)
+                self.db.execute("DELETE FROM provider_turn_observations WHERE job_id=?", (job_id,))
+                return True
             stopped_completion = (
                 outcome.status == "completed"
                 and self.state.pending_emergency_stop_for_job(job_id) is not None

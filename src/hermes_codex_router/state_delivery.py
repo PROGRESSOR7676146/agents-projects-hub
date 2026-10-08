@@ -37,6 +37,7 @@ class TelegramOutboxRecord:
     created_at: str
     updated_at: str
     delivered_at: str | None
+    send_started_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,7 @@ class TelegramOutboxPartRecord:
     file_sha256: str | None = None
     telegram_message_id: int | None = None
     delivered_at: str | None = None
+    receipt_validation_version: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +75,7 @@ class ProgressDeliveryRecord:
     created_at: str
     updated_at: str
     delivered_at: str | None
+    send_started_at: str | None = None
 
 
 StateErrorFactory = Callable[[str], Exception]
@@ -145,6 +148,7 @@ class DeliveryStateFacade:
             created_at=str(row["created_at"]),
             updated_at=str(row["updated_at"]),
             delivered_at=row["delivered_at"],
+            send_started_at=row["send_started_at"],
         )
 
     @staticmethod
@@ -177,6 +181,7 @@ class DeliveryStateFacade:
             ),
             telegram_message_id=row["telegram_message_id"],
             delivered_at=row["delivered_at"],
+            receipt_validation_version=int(row["receipt_validation_version"]),
         )
 
     @staticmethod
@@ -302,7 +307,7 @@ class DeliveryStateFacade:
                 """UPDATE telegram_outbox
                    SET status = 'sending', attempt_count = attempt_count + 1,
                        lease_owner = ?, lease_token = ?, lease_expires_at = ?,
-                       error_code = NULL, updated_at = ?
+                       error_code = NULL, send_started_at = NULL, updated_at = ?
                    WHERE outbox_id = ? AND status = 'pending'""",
                 (worker, token, expires_at, timestamp, row["outbox_id"]),
             )
@@ -347,7 +352,8 @@ class DeliveryStateFacade:
                    SET status = 'pending', attempt_count = MAX(attempt_count - 1, 0),
                        lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
                        error_code = NULL, available_at = ?, updated_at = ?
-                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?""",
+                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
+                     AND send_started_at IS NULL""",
                 (timestamp, timestamp, outbox_id, lease_token),
             )
         if cursor.rowcount != 1:
@@ -381,7 +387,7 @@ class DeliveryStateFacade:
                 """UPDATE telegram_outbox
                    SET status = CASE WHEN attempt_count >= 20 THEN 'failed' ELSE 'pending' END,
                        available_at = ?, lease_owner = NULL, lease_token = NULL,
-                       lease_expires_at = NULL, error_code = ?, updated_at = ?
+                       lease_expires_at = NULL, send_started_at = NULL, error_code = ?, updated_at = ?
                    WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
                      AND lease_expires_at > ?""",
                 (available_at, code, timestamp, outbox_id, lease_token, timestamp),
@@ -404,16 +410,17 @@ class DeliveryStateFacade:
         lease_token: str,
         *,
         telegram_message_id: int,
+        part_index: int | None = None,
         now: datetime | None = None,
     ) -> TelegramOutboxRecord:
-        if telegram_message_id <= 0:
+        if type(telegram_message_id) is not int or telegram_message_id <= 0:
             raise self._state_error("invalid Telegram message id")
         timestamp = self._timestamp(now)
         with self._transaction():
             row = self._connection.execute(
                 """SELECT job_id, sender_agent_id FROM telegram_outbox
                    WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
-                     AND lease_expires_at > ?""",
+                     AND lease_expires_at > ? AND send_started_at IS NOT NULL""",
                 (outbox_id, lease_token, timestamp),
             ).fetchone()
             if row is None:
@@ -426,9 +433,11 @@ class DeliveryStateFacade:
             ).fetchone()
             if part is None:
                 raise self._state_error("Telegram outbox has no undelivered part")
+            if part_index is not None and part_index != part["part_index"]:
+                raise self._state_error("Telegram outbox part changed")
             self._connection.execute(
                 """UPDATE telegram_outbox_parts
-                   SET telegram_message_id = ?, delivered_at = ?
+                   SET telegram_message_id = ?, delivered_at = ?, receipt_validation_version = 1
                    WHERE outbox_id = ? AND part_index = ? AND telegram_message_id IS NULL""",
                 (telegram_message_id, timestamp, outbox_id, part["part_index"]),
             )
@@ -443,6 +452,7 @@ class DeliveryStateFacade:
                        SET status = 'pending', attempt_count = MAX(attempt_count - 1, 0),
                            available_at = ?, lease_owner = NULL,
                            lease_token = NULL, lease_expires_at = NULL, error_code = NULL,
+                           send_started_at = NULL,
                            updated_at = ? WHERE outbox_id = ? AND status = 'sending'
                              AND lease_token = ? AND lease_expires_at > ?""",
                     (timestamp, timestamp, outbox_id, lease_token, timestamp),
@@ -486,6 +496,46 @@ class DeliveryStateFacade:
             result = self.outbox_record(delivered)
         return result
 
+    def begin_outbox_send(
+        self, outbox_id: str, lease_token: str, part_index: int, *, now: datetime | None = None
+    ) -> None:
+        timestamp = self._timestamp(now)
+        with self._transaction():
+            cursor = self._connection.execute(
+                """UPDATE telegram_outbox SET send_started_at = ?, updated_at = ?
+                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
+                     AND lease_expires_at > ? AND send_started_at IS NULL
+                     AND ? = (SELECT MIN(part_index) FROM telegram_outbox_parts
+                              WHERE outbox_id = ? AND telegram_message_id IS NULL)""",
+                (timestamp, timestamp, outbox_id, lease_token, timestamp, part_index, outbox_id),
+            )
+            if cursor.rowcount != 1:
+                raise self._state_error("Telegram send fence or expected part changed")
+
+    def mark_outbox_unknown(
+        self,
+        outbox_id: str,
+        lease_token: str,
+        part_index: int,
+        *,
+        error_code: str,
+        now: datetime | None = None,
+    ) -> bool:
+        code = self._bounded(error_code, name="error code", maximum=128)
+        timestamp = self._timestamp(now)
+        with self._transaction():
+            cursor = self._connection.execute(
+                """UPDATE telegram_outbox SET status = 'unknown',
+                       lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+                       error_code = ?, updated_at = ?
+                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
+                     AND send_started_at IS NOT NULL
+                     AND ? = (SELECT MIN(part_index) FROM telegram_outbox_parts
+                              WHERE outbox_id = ? AND telegram_message_id IS NULL)""",
+                (code, timestamp, outbox_id, lease_token, part_index, outbox_id),
+            )
+            return cursor.rowcount == 1
+
     def recover_stale_outbox(
         self,
         *,
@@ -503,32 +553,23 @@ class DeliveryStateFacade:
             parameters = (timestamp, *sender_agent_ids)
         with self._transaction():
             rows = self._connection.execute(
-                f"""SELECT outbox_id, job_id, attempt_count FROM telegram_outbox
+                f"""SELECT outbox_id FROM telegram_outbox
                    WHERE status = 'sending' AND lease_expires_at <= ?{agent_filter}
                    ORDER BY outbox_id""",
                 parameters,
             ).fetchall()
             self._connection.execute(
                 f"""UPDATE telegram_outbox
-                   SET status = CASE WHEN attempt_count >= 20 THEN 'failed' ELSE 'pending' END,
+                   SET status = CASE WHEN send_started_at IS NULL THEN 'pending' ELSE 'unknown' END,
+                       attempt_count = CASE WHEN send_started_at IS NULL
+                           THEN MAX(attempt_count - 1, 0) ELSE attempt_count END,
                        lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
-                       error_code = 'stale_sender_lease', available_at = ?, updated_at = ?
+                       error_code = CASE WHEN send_started_at IS NULL
+                           THEN 'stale_sender_lease' ELSE 'send_attempt_unknown' END,
+                       available_at = ?, updated_at = ?
                    WHERE status = 'sending' AND lease_expires_at <= ?{agent_filter}""",
                 (timestamp, timestamp, timestamp, *parameters[1:]),
             )
-            terminal_job_ids = [
-                str(row["job_id"]) for row in rows if int(row["attempt_count"]) >= 20
-            ]
-            if terminal_job_ids:
-                placeholders = ", ".join("?" for _ in terminal_job_ids)
-                self._connection.execute(
-                    f"""UPDATE provider_jobs
-                        SET status = 'failed', error_class = 'telegram_delivery',
-                            error_code = 'stale_sender_lease', error_detail = NULL,
-                            updated_at = ?
-                        WHERE status = 'result_ready' AND job_id IN ({placeholders})""",
-                    (timestamp, *terminal_job_ids),
-                )
         return tuple(str(row["outbox_id"]) for row in rows)
 
     def get_progress(self, progress_id: str) -> ProgressDeliveryRecord:
@@ -546,6 +587,14 @@ class DeliveryStateFacade:
             (job_id,),
         ).fetchall()
         return tuple(self.progress_record(row) for row in rows)
+
+    def uncertain_counts(self) -> dict[str, int]:
+        """Passive aggregate only; uncertainty is distinct from pending retries."""
+        row = self._connection.execute(
+            """SELECT (SELECT COUNT(*) FROM telegram_outbox WHERE status='unknown'),
+                      (SELECT COUNT(*) FROM provider_progress_deliveries WHERE status='unknown')"""
+        ).fetchone()
+        return {"unknown_delivery": int(row[0]), "unknown_progress_delivery": int(row[1])}
 
     def enqueue_progress(
         self,
@@ -647,11 +696,15 @@ class DeliveryStateFacade:
         with self._transaction():
             changed = self._connection.execute(
                 f"UPDATE provider_progress_deliveries SET "
-                "status = CASE WHEN attempt_count >= ? THEN 'failed' ELSE 'pending' END, "
+                "status = CASE WHEN send_started_at IS NULL THEN 'pending' ELSE 'unknown' END, "
+                "attempt_count = CASE WHEN send_started_at IS NULL "
+                "THEN MAX(attempt_count - 1, 0) ELSE attempt_count END, "
+                "error_code = CASE WHEN send_started_at IS NULL "
+                "THEN 'stale_sender_lease' ELSE 'send_attempt_unknown' END, "
                 "lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = ? "
                 f"WHERE sender_agent_id IN ({placeholders}) AND status = 'sending' "
                 "AND lease_expires_at <= ?",
-                (MAX_PROGRESS_ATTEMPTS, current, *sender_agent_ids, current),
+                (current, *sender_agent_ids, current),
             )
             return changed.rowcount
 
@@ -702,7 +755,7 @@ class DeliveryStateFacade:
             self._connection.execute(
                 "UPDATE provider_progress_deliveries SET status = 'sending', "
                 "attempt_count = attempt_count + 1, lease_owner = ?, lease_token = ?, "
-                "lease_expires_at = ?, updated_at = ? WHERE progress_id = ?",
+                "lease_expires_at = ?, send_started_at = NULL, updated_at = ? WHERE progress_id = ?",
                 (
                     lease_owner,
                     token,
@@ -722,7 +775,8 @@ class DeliveryStateFacade:
                 "UPDATE provider_progress_deliveries SET status = 'pending', "
                 "attempt_count = attempt_count - 1, lease_owner = NULL, lease_token = NULL, "
                 "lease_expires_at = NULL, updated_at = ? "
-                "WHERE progress_id = ? AND status = 'sending' AND lease_token = ?",
+                "WHERE progress_id = ? AND status = 'sending' AND lease_token = ? "
+                "AND send_started_at IS NULL",
                 (current, progress_id, lease_token),
             )
             if changed.rowcount != 1:
@@ -744,8 +798,9 @@ class DeliveryStateFacade:
         with self._transaction():
             row = self._connection.execute(
                 "SELECT attempt_count FROM provider_progress_deliveries "
-                "WHERE progress_id = ? AND status = 'sending' AND lease_token = ?",
-                (progress_id, lease_token),
+                "WHERE progress_id = ? AND status = 'sending' AND lease_token = ? "
+                "AND lease_expires_at > ?",
+                (progress_id, lease_token, current),
             ).fetchone()
             if row is None:
                 raise self._state_error("progress delivery lease changed")
@@ -753,7 +808,7 @@ class DeliveryStateFacade:
             self._connection.execute(
                 "UPDATE provider_progress_deliveries SET status = ?, available_at = ?, "
                 "lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, "
-                "error_code = ?, updated_at = ? WHERE progress_id = ?",
+                "send_started_at = NULL, error_code = ?, updated_at = ? WHERE progress_id = ?",
                 (
                     "failed" if terminal else "pending",
                     (current_dt + timedelta(seconds=delay_seconds)).isoformat(),
@@ -771,7 +826,7 @@ class DeliveryStateFacade:
         telegram_message_id: int,
         now: datetime | None = None,
     ) -> None:
-        if telegram_message_id <= 0:
+        if type(telegram_message_id) is not int or telegram_message_id <= 0:
             raise self._state_error("progress Telegram message id must be positive")
         current = self._utc_now(now).isoformat()
         with self._transaction():
@@ -779,8 +834,39 @@ class DeliveryStateFacade:
                 "UPDATE provider_progress_deliveries SET status = 'delivered', "
                 "telegram_message_id = ?, delivered_at = ?, updated_at = ?, "
                 "lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, error_code = NULL "
-                "WHERE progress_id = ? AND status = 'sending' AND lease_token = ?",
-                (telegram_message_id, current, current, progress_id, lease_token),
+                "WHERE progress_id = ? AND status = 'sending' AND lease_token = ? "
+                "AND lease_expires_at > ? AND send_started_at IS NOT NULL",
+                (telegram_message_id, current, current, progress_id, lease_token, current),
             )
             if changed.rowcount != 1:
                 raise self._state_error("progress delivery lease changed")
+
+    def begin_progress_send(
+        self, progress_id: str, lease_token: str, *, now: datetime | None = None
+    ) -> None:
+        current = self._timestamp(now)
+        with self._transaction():
+            cursor = self._connection.execute(
+                """UPDATE provider_progress_deliveries SET send_started_at = ?, updated_at = ?
+                   WHERE progress_id = ? AND status = 'sending' AND lease_token = ?
+                     AND lease_expires_at > ? AND send_started_at IS NULL""",
+                (current, current, progress_id, lease_token, current),
+            )
+            if cursor.rowcount != 1:
+                raise self._state_error("progress send fence changed")
+
+    def mark_progress_unknown(
+        self, progress_id: str, lease_token: str, *, error_code: str, now: datetime | None = None
+    ) -> bool:
+        code = self._bounded(error_code, name="error code", maximum=128)
+        current = self._timestamp(now)
+        with self._transaction():
+            cursor = self._connection.execute(
+                """UPDATE provider_progress_deliveries SET status = 'unknown',
+                       lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+                       error_code = ?, updated_at = ?
+                   WHERE progress_id = ? AND status = 'sending' AND lease_token = ?
+                     AND send_started_at IS NOT NULL""",
+                (code, current, progress_id, lease_token),
+            )
+            return cursor.rowcount == 1

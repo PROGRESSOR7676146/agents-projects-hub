@@ -23,7 +23,8 @@ class ClaudeActivityMigrationTests(unittest.TestCase):
     def test_additive_upgrade_preserves_rows_and_private_consistent_backup(self) -> None:
         with sqlite3.connect(self.path) as old:
             before = self.snapshot(old)
-        result = migrations.migrate_database(self.path)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 42):
+            result = migrations.migrate_database(self.path)
         self.assertEqual((result.previous_version, result.current_version), (41, 42))
         assert result.backup_path is not None
         self.assertEqual(result.backup_path.stat().st_mode & 0o777, 0o600)
@@ -37,7 +38,8 @@ class ClaudeActivityMigrationTests(unittest.TestCase):
                 self.assertEqual(after[table], rows, table)
             self.assertEqual(upgraded.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             self.assertEqual(upgraded.execute("PRAGMA foreign_key_check").fetchall(), [])
-        repeated = migrations.migrate_database(self.path)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 42):
+            repeated = migrations.migrate_database(self.path)
         self.assertEqual((repeated.previous_version, repeated.current_version), (42, 42))
         self.assertIsNone(repeated.backup_path)
 
