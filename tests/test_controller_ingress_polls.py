@@ -72,6 +72,14 @@ class ControllerIngressPollTests(unittest.TestCase):
         assert current is not None
         self.assertIsNotNone(current.evidence.last_success_at)
 
+    def test_unsupported_group_identity_keeps_polling_without_an_ingress_collector(self):
+        service = self.service(identity="opencode")
+        service.agent = SimpleNamespace(agent_id="opencode")
+        self.run_empty_poll(service)
+        self.assertIsNone(service._group_ingress_polls)
+        self.assertIsNone(self.state.telegram_ingress.read("hub"))
+        self.assertIsNone(self.state.telegram_ingress.read("codex"))
+
     def test_success_commits_before_optional_recovery_diagnostic_failure(self):
         service = self.service()
         service._group_ingress_polls = ControllerIngressPolls(self.state.telegram_ingress, "hub")
@@ -189,9 +197,22 @@ class ControllerIngressPollTests(unittest.TestCase):
                 ):
                     polls = ControllerIngressPolls(self.state.telegram_ingress, "hub")
                 token = polls.instance_token
-                polls.record(succeeded=True, observed_at=datetime.now(timezone.utc))
+                observed_at = datetime.now(timezone.utc)
+                with patch("hermes_codex_router.controller_ingress_polls.datetime") as clock:
+                    clock.now.return_value = observed_at + timedelta(seconds=1)
+                    polls.record(succeeded=True, observed_at=observed_at)
                 self.assertIsNotNone(polls.owner)
                 self.assertEqual(polls.instance_token, token)
+                current = self.state.telegram_ingress.read("hub")
+                assert current is not None
+                self.assertEqual(current.evidence.last_poll_at, observed_at)
+                self.assertEqual(current.evidence.last_success_at, observed_at)
+                self.assertEqual(
+                    self.state._connection.execute(
+                        "SELECT poll_sequence FROM telegram_group_ingress WHERE identity='hub'"
+                    ).fetchone()[0],
+                    1,
+                )
 
     def test_first_successful_epoch_snapshot_defines_initial_startup_claim(self):
         with patch.object(
@@ -237,12 +258,16 @@ class ControllerIngressPollTests(unittest.TestCase):
             self.assertTrue(polls.registration_pending)
             self.assertEqual(polls.previous_epoch, 1)
             token = polls.instance_token
-            clock.now.return_value = self.now + timedelta(seconds=12)
+            clock.now.return_value = self.now + timedelta(seconds=13)
             polls.record(succeeded=True, observed_at=self.now + timedelta(seconds=12))
         self.assertIsNotNone(polls.owner)
         self.assertFalse(polls.registration_pending)
         self.assertEqual((polls.previous_epoch, polls.instance_token), (1, token))
         self.assertEqual(self.state.telegram_ingress.current_epoch("hub"), 2)
+        current = self.state.telegram_ingress.read("hub")
+        assert current is not None
+        self.assertEqual(current.evidence.last_poll_at, self.now + timedelta(seconds=12))
+        self.assertEqual(current.last_confirmed_poll_at, self.now + timedelta(seconds=12))
 
     def test_real_nested_transaction_guard_skips_sample_and_recovers(self):
         polls = ControllerIngressPolls(self.state.telegram_ingress, "hub")

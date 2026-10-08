@@ -606,8 +606,8 @@ recreate unsaved provider context or a partially executed turn.
   proof before control. Crash after send-start permits observation only, never
   an automatic repeat interrupt; another stop cannot reset that target's budget.
   Expired claims alone MUST NOT establish that the old control process ceased.
-  Schema48 MUST create fresh control authority atomically with first coherent
-  exact acceptance. Refused coherence MUST
+  Schema48 MUST create fresh control authority atomically with
+  the first coherent exact accepted checkpoint. Refused control coherence MUST
   retain the returned native turn identity without granting authority; another
   job or repeated recording MUST NOT upgrade that retained target.
   Historical checkpoints MUST remain

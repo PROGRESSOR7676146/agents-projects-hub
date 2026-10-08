@@ -3641,7 +3641,8 @@ class ProjectHubService:
         if not hasattr(self, "_group_ingress_polls"):
             self._group_ingress_polls = (
                 ControllerIngressPolls(self.state.telegram_ingress, ingress_identity)
-                if getattr(self, "_publishes_controller_health", True)
+                if ingress_identity in {"hub", "codex"}
+                and getattr(self, "_publishes_controller_health", True)
                 and not getattr(self, "direct_messages_only", False)
                 else None
             )

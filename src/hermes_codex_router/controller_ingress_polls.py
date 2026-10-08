@@ -26,7 +26,7 @@ class ControllerIngressPolls:
         self.registration_pending = True
         self._register_startup()
 
-    def _register_startup(self) -> None:
+    def _register_startup(self, *, observed_at: datetime | None = None) -> None:
         try:
             if self.previous_epoch is None:
                 self.previous_epoch = self.ledger.current_epoch(self.identity)
@@ -34,7 +34,7 @@ class ControllerIngressPolls:
                 self.identity,
                 instance_token=self.instance_token,
                 previous_epoch=self.previous_epoch,
-                now=datetime.now(timezone.utc),
+                now=observed_at if observed_at is not None else datetime.now(timezone.utc),
             )
             self.registration_pending = False
         except sqlite3.Error as error:
@@ -48,7 +48,7 @@ class ControllerIngressPolls:
     def record(self, *, succeeded: bool, observed_at: datetime) -> None:
         self.sequence += 1
         if self.registration_pending:
-            self._register_startup()
+            self._register_startup(observed_at=observed_at)
         if self.owner is None:
             return
         try:
