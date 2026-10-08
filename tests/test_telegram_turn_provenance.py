@@ -7,13 +7,35 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any, TypedDict, cast
+from unittest.mock import patch
 
 from hermes_codex_router.codex_retry_policy import PreparationRetryBinding
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.state import StateError
+from hermes_codex_router.state_provider_jobs import ProviderJobRecord
 from hermes_codex_router.telegram import parse_topic_message
 from tests.delivery_fixture import complete_final_delivery
 from tests.hub_service_harness import CHAT_ID, CODEX, OWNER_ID, HubHarness, text_update
+
+
+class AdmissionOptions(TypedDict):
+    idempotency_key: str
+    chat_id: int
+    message_id: int
+    topic_id: int
+    agent_id: str
+    session_id: str
+    session_generation: int
+    model: str
+    effort: str
+    payload_text: str
+    telegram_ingress_identity: str | None
+
+
+def row_values(row: sqlite3.Row | None) -> dict[str, Any]:
+    assert row is not None
+    return {key: row[key] for key in row.keys()}
 
 
 class TelegramTurnProvenanceTests(unittest.TestCase):
@@ -27,14 +49,18 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
         self.topic = self.harness.topic()
         self.next_message = 20
 
-    def enqueue(self, ingress=None, *, message=None, batch=False, **extra):
+    def enqueue(
+        self,
+        ingress: str | None = None,
+        *,
+        message: int | None = None,
+        batch: bool = False,
+        available_at: datetime | None = None,
+    ) -> tuple[ProviderJobRecord, bool]:
         if message is None:
             message = self.next_message
             self.next_message += 1
-        method = (
-            self.state.enqueue_or_append_provider_job if batch else self.state.enqueue_provider_job
-        )
-        options = dict(
+        options = AdmissionOptions(
             idempotency_key=f"example-input:{message}",
             chat_id=CHAT_ID,
             message_id=message,
@@ -48,11 +74,13 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
             telegram_ingress_identity=ingress,
         )
         if batch:
-            options.update(
-                appended_user_text=f"Example follow-up {message}", quiet_ms=10000, max_ms=20000
+            return self.state.enqueue_or_append_provider_job(
+                **options,
+                appended_user_text=f"Example follow-up {message}",
+                quiet_ms=10000,
+                max_ms=20000,
             )
-        options.update(extra)
-        return method(**options)
+        return self.state.enqueue_provider_job(**options, available_at=available_at)
 
     def test_explicit_ingress_is_distinct_from_provider_and_observer(self):
         known, _ = self.enqueue("hub")
@@ -132,6 +160,7 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
                             )
                         token = "example-bypass"
                     else:
+                        assert lease.lease_token is not None
                         token = lease.lease_token
                     started = state.start_steer_followup(
                         child.job_id, token, parent_job_id=parent.job_id
@@ -176,8 +205,10 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
         for identity in (None, "hub", "codex", "claude"):
             for dm in (False, True):
                 for owns_group in (False, True):
-                    with self.subTest(identity=identity, dm=dm, owner=owns_group):
-                        service.ingress_identity = identity
+                    with (
+                        self.subTest(identity=identity, dm=dm, owner=owns_group),
+                        patch.object(service, "ingress_identity", identity, create=True),
+                    ):
                         service.direct_messages_only = dm
                         service._publishes_controller_health = owns_group
                         self.assertEqual(
@@ -198,8 +229,8 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
         service.ingress_identity = "codex"
         self.assertFalse(service.handle_update(text_update(20, "Example task")))
         self.assertEqual(self.state.telegram_turn_provenance.identity(job.job_id), "hub")
-        service.ingress_identity = None
-        self.assertTrue(service.handle_update(text_update(21, "Example next task")))
+        with patch.object(service, "ingress_identity", None):
+            self.assertTrue(service.handle_update(text_update(21, "Example next task")))
         jobs = self.state.provider_jobs_for_topic(self.topic.topic_id)
         self.assertEqual(len(jobs), 2)
         self.assertIsNone(self.state.telegram_turn_provenance.identity(jobs[1].job_id))
@@ -220,7 +251,7 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
         service._publishes_controller_health = True
         service.direct_messages_only = False
         update = text_update(20, "retry")
-        message = update["message"]
+        message = cast(dict[str, Any], update["message"])
         message["chat"] = {"id": OWNER_ID, "type": "private"}
         message.pop("is_topic_message")
         message.pop("message_thread_id")
@@ -246,7 +277,7 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
 
         def private_update(message_id, text, *, reply=None):
             update = text_update(message_id, text)
-            message = update["message"]
+            message = cast(dict[str, Any], update["message"])
             message["chat"] = {"id": OWNER_ID, "type": "private"}
             message.pop("is_topic_message")
             message.pop("message_thread_id")
@@ -315,7 +346,9 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
             )
         with self.assertRaises(StateError):
             journal.record_turn(job.job_id, lease.lease_token, "example-turn")
-        self.assertEqual(journal.read(job.job_id)["provider_turn_id"], "example-turn")
+        checkpoint = journal.read(job.job_id)
+        assert checkpoint is not None
+        self.assertEqual(checkpoint["provider_turn_id"], "example-turn")
         self.assertIsNone(self.state.codex_controls.read(job.job_id))
         self.assertIsNone(self.state.telegram_turn_provenance.target(job.job_id))
         with self.state._immediate_transaction():
@@ -346,7 +379,9 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
         assert control is not None
         self.assertIsNone(control["send_started_at"])
         journal.record_turn(job.job_id, token, "example-turn")
-        self.assertEqual(dict(self.state.telegram_turn_provenance.target(job.job_id)), dict(target))
+        self.assertEqual(
+            row_values(self.state.telegram_turn_provenance.target(job.job_id)), dict(target)
+        )
 
     def test_unknown_ingress_keeps_stage2_acceptance_without_telegram_target(self):
         job, _ = self.enqueue()
@@ -557,7 +592,7 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
                     (datetime.now(timezone.utc).isoformat(), "a" * 64, job.job_id),
                 )
                 db.commit()
-                control = dict(fixture.state.codex_controls.read(job.job_id))
+                control = row_values(fixture.state.codex_controls.read(job.job_id))
                 for changed in (
                     control | dict(provider_turn_id="example-substitute-turn"),
                     control
@@ -576,7 +611,9 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
                             tuple(changed.values()),
                         )
                     db.rollback()
-                    self.assertEqual(dict(fixture.state.codex_controls.read(job.job_id)), control)
+                    self.assertEqual(
+                        row_values(fixture.state.codex_controls.read(job.job_id)), control
+                    )
                     self.assertEqual(
                         fixture.state.telegram_turn_provenance.identity(job.job_id), ingress
                     )
@@ -628,7 +665,9 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
         with self.state._immediate_transaction():
             self.state.telegram_turn_provenance.record_new_job_in_transaction(donor_id, "codex")
 
-        checkpoint = dict(ExecutionJournal(self.state).read(victim.job_id))
+        saved_checkpoint = ExecutionJournal(self.state).read(victim.job_id)
+        assert saved_checkpoint is not None
+        checkpoint = dict(saved_checkpoint)
         checkpoint.update(job_id=donor_id, provider_turn_id=None)
         insert("provider_execution_checkpoints", checkpoint)
         db.commit()
@@ -638,7 +677,7 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
             (datetime.now(timezone.utc).isoformat(), "a" * 64, victim.job_id),
         )
         db.commit()
-        original = dict(self.state.codex_controls.read(victim.job_id))
+        original = row_values(self.state.codex_controls.read(victim.job_id))
         control_rowid = db.execute(
             "SELECT rowid FROM codex_turn_controls WHERE job_id=?", (victim.job_id,)
         ).fetchone()[0]
@@ -650,7 +689,7 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
             with self.assertRaisesRegex(sqlite3.IntegrityError, "Retained control target"):
                 insert("codex_turn_controls", replacement, replace=True)
             db.rollback()
-            self.assertEqual(dict(self.state.codex_controls.read(victim.job_id)), original)
+            self.assertEqual(row_values(self.state.codex_controls.read(victim.job_id)), original)
 
         insert(
             "codex_turn_controls",
@@ -669,7 +708,9 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
                         (value, donor_id),
                     )
                 db.rollback()
-                self.assertEqual(dict(self.state.codex_controls.read(victim.job_id)), original)
+                self.assertEqual(
+                    row_values(self.state.codex_controls.read(victim.job_id)), original
+                )
         target_rowid = db.execute(
             "SELECT rowid FROM codex_telegram_precaution_targets WHERE job_id=?", (victim.job_id,)
         ).fetchone()[0]
@@ -681,9 +722,9 @@ class TelegramTurnProvenanceTests(unittest.TestCase):
             )
         db.rollback()
         self.assertEqual(self.state.telegram_turn_provenance.identity(victim.job_id), "hub")
-        self.assertEqual(
-            self.state.telegram_turn_provenance.target(victim.job_id)["ingress_identity"], "hub"
-        )
+        target = self.state.telegram_turn_provenance.target(victim.job_id)
+        assert target is not None
+        self.assertEqual(target["ingress_identity"], "hub")
 
 
 if __name__ == "__main__":
