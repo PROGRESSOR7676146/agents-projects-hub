@@ -98,15 +98,7 @@ class NativePeer:
                     turn = params.get("id", turn)
                 self.counts[(self.phase, classification + ":" + label, thread, turn)] += 1
                 if "id" in message:
-                    await self.websocket.send_json(
-                        {
-                            "id": message["id"],
-                            "error": {
-                                "code": -32601,
-                                "message": "offline attribution fixture denies requests",
-                            },
-                        }
-                    )
+                    await self.respond_to_request(message)
                 async with self.condition:
                     self.condition.notify_all()
         except (
@@ -125,6 +117,14 @@ class NativePeer:
                     future.set_exception(NotificationOriginError("native_reader_stopped"))
             async with self.condition:
                 self.condition.notify_all()
+
+    async def respond_to_request(self, message: dict) -> None:
+        await self.websocket.send_json(
+            {
+                "id": message["id"],
+                "error": {"code": -32601, "message": "offline attribution fixture denies requests"},
+            }
+        )
 
     async def rpc(self, method: str, params: dict) -> dict:
         self.assert_healthy()

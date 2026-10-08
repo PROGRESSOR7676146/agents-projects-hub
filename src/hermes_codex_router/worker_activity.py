@@ -163,10 +163,12 @@ def codex_activity_for_turn(
 
     client.on_activity = observe if observing else None
     client.on_preacceptance_approval = observe_early if observing and early is not None else None
+    client.on_activity_unavailable = disable
     try:
         yield accepted
     finally:
         client.on_activity = None
         client.on_preacceptance_approval = None
+        client.on_activity_unavailable = None
         retire_activity()
         retire_scope()

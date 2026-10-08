@@ -947,6 +947,7 @@ class ProjectHubService:
         )
         heartbeat.start()
         prepared = None
+        codex_transport_mode: str | None = None
         retirement_target: tuple[CodexAppServerClient, str, str] | None = None
         try:
             target = revalidate_worker_execution_root(queue_state, target)
@@ -973,6 +974,7 @@ class ProjectHubService:
                 with codex_preparation():
                     self._require_legacy_codex_execution(queue_state)
                     client = self._client()
+                    codex_transport_mode = getattr(client, "transport_mode", None)
                     thread = open_codex_provider_thread(
                         client,
                         executing,
@@ -1108,7 +1110,10 @@ class ProjectHubService:
             recovered = False
             turn_status = "unknown"
             if failure.reconcile_codex:
-                assert self.supervisor is not None
+                supervisor = self.supervisor
+                assert supervisor is not None
+                control_available = codex_transport_mode in {"socket", "managed-socket"}
+                saved_stdio = codex_transport_mode == "stdio-fallback"
                 try:
                     turn_status = reconcile_codex_completion(
                         queue_state,
@@ -1117,8 +1122,11 @@ class ProjectHubService:
                         job_id=executing.job_id,
                         lease_token=token,
                         agent_id=agent.agent_id,
-                        client_factory=self.supervisor.client,
+                        client_factory=lambda: supervisor.client(
+                            allow_fallback=saved_stdio, deadline=time.monotonic() + 2
+                        ),
                         execution_error=exc,
+                        interrupt_active_on_failure=control_available,
                     )
                     recovered = turn_status == "completed"
                 except Exception as recovery_error:  # a stop may win the commit (R-021)

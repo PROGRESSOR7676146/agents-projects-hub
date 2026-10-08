@@ -37,6 +37,60 @@ class CodexAppServerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
+    def test_paginated_items_keep_fresh_budget_without_a_caller_deadline(self) -> None:
+        for caller_deadline in (None, 16.0):
+            with self.subTest(deadline=caller_deadline):
+                ticks = [0.0]
+
+                class SlowPageTransport(FakeTransport):
+                    def receive(self, *, timeout=None):
+                        method = self.sent[-1]["method"]
+                        if method == "thread/turns/list":
+                            ticks[0] += 14
+                            result = {"data": [{"id": "example-turn", "status": "completed"}]}
+                        elif method == "thread/items/list":
+                            ticks[0] += 16
+                            result = {
+                                "data": [
+                                    {
+                                        "turnId": "example-turn",
+                                        "item": {
+                                            "type": "agentMessage",
+                                            "id": "example-final",
+                                            "phase": "final_answer",
+                                            "text": "Retained final",
+                                        },
+                                    }
+                                ]
+                            }
+                        else:
+                            result = {
+                                "thread": {
+                                    "id": "example-thread",
+                                    "cwd": str(self_root),
+                                    "historyMode": "paginated",
+                                }
+                            }
+                        return {"id": self.sent[-1]["id"], "result": result}
+
+                self_root = self.cwd
+                client = CodexAppServerClient(SlowPageTransport([]), initialized=True)
+                with patch("hermes_codex_router.codex_appserver.time.monotonic", lambda: ticks[0]):
+                    if caller_deadline is None:
+                        outcome = client.read_turn_outcome(
+                            thread_id="example-thread", turn_id="example-turn", cwd=self.cwd
+                        )
+                        assert outcome.result is not None
+                        self.assertEqual(outcome.result.text, "Retained final")
+                    else:
+                        with self.assertRaisesRegex(RpcError, "deadline exceeded"):
+                            client.read_turn_outcome(
+                                thread_id="example-thread",
+                                turn_id="example-turn",
+                                cwd=self.cwd,
+                                deadline=caller_deadline,
+                            )
+
     def test_control_rpc_deadlines_are_total_even_with_endless_unrelated_notifications(
         self,
     ) -> None:

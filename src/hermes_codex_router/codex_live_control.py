@@ -174,6 +174,14 @@ class CodexLiveControl:
         except BaseException as error:
             self._failure = error
             survived("codex_live_control.failure", error)
+            # The worker may otherwise remain blocked for hours waiting for
+            # the native result after its independent control observer died.
+            # Wake only this job's owned client; worker recovery determines
+            # the exact native outcome and may target that accepted turn.
+            try:
+                self.close_owned_turn_client()
+            except Exception as close_error:
+                survived("codex_live_control.turn_client_close", close_error)
         finally:
             if state is not None:
                 try:

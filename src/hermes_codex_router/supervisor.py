@@ -5,7 +5,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Literal
 
 from .codex_appserver import (
     CodexAppServerClient,
@@ -142,6 +142,7 @@ class CodexAppServerSupervisor:
         self,
         transport: MessageTransport,
         *,
+        transport_mode: Literal["socket", "stdio-fallback"],
         approval_policy: str = "on-request",
         deadline: float | None = None,
         retire_completed_connection: bool = False,
@@ -154,6 +155,7 @@ class CodexAppServerSupervisor:
                 model_provider=self.model_provider,
                 permission_profile=self.permission_profile,
                 retire_completed_connection=retire_completed_connection,
+                transport_mode=transport_mode,
             )
             if deadline is None:
                 client.initialize()
@@ -186,6 +188,7 @@ class CodexAppServerSupervisor:
             assert self.stdio_executable is not None
             return self._initialized_client(
                 StdioJsonLineTransport.start(str(self.stdio_executable)),
+                transport_mode="stdio-fallback",
                 approval_policy="never",
                 deadline=deadline,
             )
@@ -204,7 +207,10 @@ class CodexAppServerSupervisor:
                 )
             )
             return self._initialized_client(
-                transport, deadline=deadline, retire_completed_connection=True
+                transport,
+                transport_mode="socket",
+                deadline=deadline,
+                retire_completed_connection=True,
             )
         except Exception:
             if (
@@ -216,6 +222,7 @@ class CodexAppServerSupervisor:
             self.transport_mode = "stdio-fallback"
             return self._initialized_client(
                 StdioJsonLineTransport.start(str(self.stdio_executable)),
+                transport_mode="stdio-fallback",
                 approval_policy="never",
                 deadline=deadline,
             )
@@ -254,6 +261,7 @@ class CodexAppServerSupervisor:
         try:
             probe = self._initialized_client(
                 UnixWebSocketTransport(self.socket_path, timeout=2.0),
+                transport_mode="socket",
                 deadline=time.monotonic() + 2.0,
             )
             probe.close()

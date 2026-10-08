@@ -52,12 +52,12 @@ class CountedTransport:
 
 
 @asynccontextmanager
-async def hub_client(fixture):
+async def hub_client(fixture, *, approval_policy="never"):
     with pinned_listener(fixture.project, fixture.listener_directory) as socket:
         transport = CountedTransport(await asyncio.to_thread(UnixWebSocketTransport, socket))
         client = CodexAppServerClient(
             transport,
-            approval_policy="never",
+            approval_policy=approval_policy,
             model_provider="example-offline",
             permission_profile=PROFILE_ID,
             retire_completed_connection=True,

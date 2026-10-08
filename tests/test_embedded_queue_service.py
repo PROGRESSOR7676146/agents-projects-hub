@@ -45,6 +45,8 @@ class FakeTelegram:
 
 
 class QueueClient:
+    transport_mode = "socket"
+
     def __init__(
         self, *, block: bool = False, fail: bool = False, fail_limits: bool = False
     ) -> None:
@@ -90,10 +92,12 @@ class QueueClient:
 
 
 class FakeSupervisor:
+    transport_mode = "socket"
+
     def __init__(self, client: QueueClient) -> None:
         self.client_value = client
 
-    def client(self) -> QueueClient:
+    def client(self, *, allow_fallback: bool = True, deadline: float | None = None) -> QueueClient:
         return self.client_value
 
     def start(self) -> None:

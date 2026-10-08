@@ -1250,6 +1250,7 @@ class PreexecutionRetryTests(unittest.TestCase):
         client = worker_fixtures.WorkerClient()
         supervisor = worker_fixtures.WorkerSupervisor(client)
         supervisor.transport_mode = "stdio-fallback"
+        client.transport_mode = "stdio-fallback"
         worker = worker_fixtures.CodexQueueWorker(
             fixture.config, registry=fixture.registry, supervisor=cast(Any, supervisor)
         )

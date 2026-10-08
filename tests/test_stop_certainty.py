@@ -123,7 +123,10 @@ class StopCertaintyTests(unittest.TestCase):
                         self.assertTrue(worker.run_cycle())
                         self.assertTrue(interrupted.is_set())
                         self.assertEqual(
-                            reads,
+                            [
+                                {key: value for key, value in read.items() if key != "deadline"}
+                                for read in reads
+                            ],
                             [
                                 {
                                     "thread_id": "thread-1",
@@ -131,6 +134,9 @@ class StopCertaintyTests(unittest.TestCase):
                                     "cwd": fixture.registry.projects[0].root,
                                 }
                             ],
+                        )
+                        self.assertTrue(
+                            all(isinstance(read.get("deadline"), float) for read in reads)
                         )
                         self.assertEqual(
                             worker.state.get_provider_job(job_id).status, "indeterminate"

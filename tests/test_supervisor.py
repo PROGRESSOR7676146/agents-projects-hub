@@ -97,6 +97,11 @@ class SupervisorFallbackTests(unittest.TestCase):
                 ):
                     client = supervisor.client()
                 supervisor.transport_mode = "stdio-fallback" if path == "socket" else "socket"
+                self.assertEqual(
+                    client.transport_mode, "socket" if path == "socket" else "stdio-fallback"
+                )
+                with self.assertRaises(AttributeError):
+                    setattr(client, "transport_mode", supervisor.transport_mode)
                 client.start_turn(
                     thread_id="example-thread",
                     cwd=self.base,

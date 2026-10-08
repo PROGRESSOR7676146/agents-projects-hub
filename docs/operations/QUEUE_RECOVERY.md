@@ -180,7 +180,10 @@ and preserves exact-current-turn final items and context updates, including thos
 received before the `turn/start` acknowledgement. An active owning connection must
 still receive its final events. The synthetic two-worker regression demonstrates
 this conservation; it does not prove the source or fan-out of native broadcasts.
-Useful-result and optional-activity limits remain fail-closed guards.
+Useful-result limits retain execution uncertainty. Optional activity exhaustion
+retires observation while mandatory consumption continues; see
+[accepted-turn control loss](CODEX_CONTROL_LOSS.md) for the remaining control
+handler and native/Telegram acceptance gates.
 
 Before an owner-authorized temporary worker restart, take a SQLite-consistent
 backup and verify that the exact affected worker has no active or uncertain

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import queue
 import socket
@@ -53,9 +54,22 @@ class UnixJsonLineTransport:
         return message
 
     def close(self) -> None:
-        self._reader.close()
-        self._writer.close()
-        self._connection.close()
+        # Wake the owned socket's blocked reader/writer before taking TextIO
+        # locks. Closing this connection never stops the shared listener.
+        try:
+            self._connection.shutdown(socket.SHUT_RDWR)
+        except OSError as error:
+            if error.errno not in (errno.EBADF, errno.ENOTCONN):
+                # A refused shutdown cannot establish that a blocked stream
+                # has woken. Report it instead of entering an unbounded close.
+                raise
+        try:
+            self._reader.close()
+        finally:
+            try:
+                self._writer.close()
+            finally:
+                self._connection.close()
 
 
 class StdioJsonLineTransport:

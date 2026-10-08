@@ -39,10 +39,14 @@ class ResponsePlan:
     emitted: bool = False
     kind: str = "command"
     nonce: str | None = None
+    resolved: int = 0
+    finished: bool = False
+    started_at: float = 0
 
 
 plan = ResponsePlan()
 lock = threading.Lock()
+resolution_changed = threading.Condition(lock)
 write_lock = threading.Lock()
 total_requests = 0
 mcp_fixture: dict[str, Any] | None = None
@@ -76,37 +80,147 @@ def select_tool(tools: list[dict], kind: str, server: str | None) -> tuple[dict,
     return matches[0]
 
 
+def approval_budget(kind: str) -> tuple[int, int]:
+    if kind == "approval_compatibility":
+        return 2, 4
+    if kind == "approval_sequence":
+        return 129, 130
+    raise ValueError("unknown fixed approval fixture mode")
+
+
+def approval_output(selected: ResponsePlan, data: dict) -> dict:
+    calls, cap = approval_budget(selected.kind)
+    number = selected.requests
+    if not 1 <= number <= cap or number > calls + 1 or selected.finished:
+        raise ValueError("approval fixture request budget exhausted")
+    if selected.resolved != number - 1:
+        raise ValueError("primary approval resolution missing")
+    if number > 1:
+        previous = f"call_{selected.case}_{number - 1}"
+        outputs = [
+            item
+            for item in data.get("input", [])
+            if item.get("type") == "function_call_output" and item.get("call_id") == previous
+        ]
+        if (
+            len(outputs) != 1
+            or not isinstance(outputs[0].get("output"), str)
+            or len(outputs[0]["output"]) > 4096
+            or "rejected by user" not in outputs[0]["output"].lower()
+        ):
+            raise ValueError("matching synthetic deny output missing")
+    if number == calls + 1:
+        selected.finished = True
+        return {
+            "type": "message",
+            "id": f"msg_{selected.case}",
+            "status": "completed",
+            "role": "assistant",
+            "phase": "final_answer",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Example approval sequence complete.",
+                    "annotations": [],
+                }
+            ],
+        }
+    tool, namespace = select_tool(data.get("tools", []), "command", None)
+    if namespace is not None:
+        raise ValueError("unknown approval execution namespace")
+    properties = tool.get("parameters", {}).get("properties", {})
+    if "sandbox_permissions" not in properties or "justification" not in properties:
+        raise ValueError("native escalation tool schema unsupported")
+    if "cmd" in properties:
+        arguments: dict[str, Any] = {"cmd": "/usr/bin/true", "max_output_tokens": 100}
+    elif "command" in properties:
+        arguments = {
+            "command": ["/usr/bin/true"]
+            if properties["command"].get("type") == "array"
+            else "/usr/bin/true"
+        }
+    else:
+        raise ValueError("native command schema unsupported")
+    if "login" in properties:
+        arguments["login"] = False
+    arguments.update(
+        sandbox_permissions="require_escalated",
+        justification="Deny this fictional offline fixture request.",
+    )
+    return {
+        "type": "function_call",
+        "id": f"fc_{selected.case}_{number}",
+        "call_id": f"call_{selected.case}_{number}",
+        "name": tool["name"],
+        "arguments": json.dumps(arguments),
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         pass
 
     def do_POST(self) -> None:
         global total_requests
-        length = int(self.headers.get("Content-Length", "0"))
+        # Count rejected/malformed attempts too: success evidence must not
+        # hide native retries merely because they never produced a response.
+        with lock:
+            selected = plan
+            selected.requests += 1
+            total_requests += 1
+            number, case = selected.requests, selected.case
+            approval_case = selected.kind in ("approval_compatibility", "approval_sequence")
+            cap = approval_budget(selected.kind)[1] if approval_case else 4
+            if selected.kind == "notifications":
+                cap = 1
+        if number > cap:
+            self.send_error(409)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.send_error(400)
+            return
         if self.path != "/v1/responses" or not 0 < length <= 2_000_000:
             self.send_error(400)
             return
-        data = json.loads(self.rfile.read(length))
-        if plan.kind == "notifications":
+        try:
+            data = json.loads(self.rfile.read(length))
+        except (ValueError, UnicodeError):
+            self.send_error(400)
+            return
+        if not isinstance(data, dict):
+            self.send_error(400)
+            return
+        if selected.kind == "notifications":
             with lock:
-                plan.requests += 1
-                total_requests += 1
-                if plan.requests != 1 or data.get("model") != "example-offline":
+                if plan is not selected or number != 1 or data.get("model") != "example-offline":
                     self.send_error(409)
                     return
-                case = plan.case
             self.send_notifications(case)
             return
         with lock:
-            plan.requests += 1
-            total_requests += 1
-            number = plan.requests
-            case = plan.case
-            if number > 4 or data.get("model") != "example-offline":
+            if (
+                plan is not selected
+                or number != plan.requests
+                or data.get("model") != "example-offline"
+            ):
                 self.send_error(409)
                 return
             emit({"fixture_event": "stub_request", "case": case, "sequence": number})
-            if not plan.emitted:
+            if approval_case:
+                if time.monotonic() - plan.started_at > 300:
+                    self.send_error(409)
+                    return
+                if number > 1:
+                    resolution_changed.wait_for(lambda: plan.resolved >= number - 1, timeout=5)
+                try:
+                    output = approval_output(plan, data)
+                except ValueError:
+                    emit({"fixture_error": "approval_sequence_invalid"})
+                    self.send_error(409)
+                    return
+            elif not plan.emitted:
                 try:
                     tool, namespace = select_tool(
                         data.get("tools", []),
@@ -453,10 +567,24 @@ def main() -> None:
                 if not isinstance(case, str) or re.fullmatch(r"example-case-[0-9]+", case) is None:
                     raise RuntimeError("invalid offline case")
                 with lock:
+                    if (
+                        plan.kind in ("approval_compatibility", "approval_sequence")
+                        and plan.requests
+                        and not plan.finished
+                    ):
+                        raise RuntimeError("cannot reset an active approval fixture")
                     plan.case, plan.requests, plan.emitted = case, 0, False
+                    plan.resolved, plan.finished, plan.started_at = 0, False, time.monotonic()
                     plan.kind = message.get("fixture_kind", "command")
                     plan.nonce = message.get("fixture_nonce")
-                    if plan.kind not in ("command", "mcp", "custody_command", "notifications") or (
+                    if plan.kind not in (
+                        "command",
+                        "mcp",
+                        "custody_command",
+                        "notifications",
+                        "approval_compatibility",
+                        "approval_sequence",
+                    ) or (
                         plan.kind == "mcp"
                         and (mcp_fixture is None or not mcp_fixture["valid_nonce"](plan.nonce))
                     ):
@@ -468,6 +596,19 @@ def main() -> None:
                     notification_burst.clear()
                     notification_finish.clear()
                 emit({"fixture_event": "case_selected", "case": case})
+            elif "fixture_approval_resolved" in message:
+                with resolution_changed:
+                    count = message["fixture_approval_resolved"]
+                    if (
+                        plan.kind not in ("approval_compatibility", "approval_sequence")
+                        or type(count) is not int
+                        or count != plan.resolved + 1
+                        or count > plan.requests
+                        or count > approval_budget(plan.kind)[0]
+                    ):
+                        raise RuntimeError("invalid primary resolution sequence")
+                    plan.resolved = count
+                    resolution_changed.notify_all()
             elif message.get("fixture_burst") is True and listener is not None:
                 notification_burst.set()
             elif message.get("fixture_finish") is True and listener is not None:
