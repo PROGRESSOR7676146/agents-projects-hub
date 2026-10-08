@@ -436,6 +436,7 @@ def invoke_external_provider_turn(
     staging_dir: Path,
     claude_session_binding: ClaudeSessionBinding | None = None,
     on_visible_assistant: VisibleAssistantCallback | None = None,
+    on_claude_process_started: Callable[[], None] | None = None,
     claude_sandbox: FileToolSandboxConfig | None = None,
 ) -> ExternalTurnResult:
     """Invoke one external CLI turn from an immutable job snapshot."""
@@ -459,6 +460,7 @@ def invoke_external_provider_turn(
                 interrupt_prepared=interrupt_prepared,
                 staging_dir=staging_dir,
                 on_visible_assistant=on_visible_assistant,
+                on_claude_process_started=on_claude_process_started,
                 claude_sandbox=claude_sandbox,
             )
         except ClaudeTerminalFailure as exc:

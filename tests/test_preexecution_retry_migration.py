@@ -14,6 +14,7 @@ class PreexecutionRetryMigrationTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         self.path = fixture.path
+        self.enterContext(patch.object(migrations, "LATEST_SCHEMA_VERSION", 41))
         with patch.object(migrations, "LATEST_SCHEMA_VERSION", 40):
             migrations.migrate_database(self.path, create_backup=False)
 

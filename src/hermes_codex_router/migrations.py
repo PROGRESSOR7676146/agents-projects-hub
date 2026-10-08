@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Iterator
 
 from .migration_sql import _execute_migration_script
+from .schema_claude_activity import CLAUDE_ACTIVITY_SCHEMA as MIGRATION_42
 from .schema_claude_permissions import CLAUDE_PERMISSIONS_SCHEMA as MIGRATION_38
 from .schema_codex_permissions import (
     CODEX_PERMISSIONS_SCHEMA as MIGRATION_39,
@@ -1492,6 +1493,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_39,
         MIGRATION_40,
         MIGRATION_41,
+        MIGRATION_42,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
+from .claude_activity_binding import claude_activity_notice_is_current
 from .claude_permission_binding import permission_notice_is_current
 from .preacceptance_binding import preacceptance_notice_is_current
 from .task_activity_binding import activity_notice_is_current
@@ -237,9 +238,20 @@ class TaskLifecycleState:
                 "approval_wait": {"executing"},
                 "no_progress": {"executing"},
                 "claude_permission_wait": {"executing"},
+                "claude_no_progress": {"executing"},
             }.get(notice.kind)
             obsolete = False
             if notice.attempt_count == 0 and notice.stop_request_id is None:
+                if notice.kind == "claude_no_progress":
+                    obsolete = not claude_activity_notice_is_current(
+                        self.db,
+                        job_id=notice.job_id,
+                        event_key=notice.event_key,
+                        chat_id=notice.chat_id,
+                        thread_id=notice.thread_id,
+                        created_at=notice.created_at,
+                        timestamp=timestamp,
+                    )
                 if notice.kind == "claude_permission_wait":
                     obsolete = not permission_notice_is_current(
                         self.db,

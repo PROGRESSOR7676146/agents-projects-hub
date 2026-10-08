@@ -162,21 +162,47 @@ negative regressions. See
 [ADR 0058](../decisions/0058-bounded-review-pipe-primitives.md) for the selected
 ownership and evidence boundary.
 
-The next bounded offline candidate in lane `feat/advisor-pipe-sequencing` adds
-directional wire ordering and finite partial-write accounting on `dd43ae6`.
+The published clean candidate `e563dd4ca51b5d4884227681782d4a7fce275b2e`
+in lane `feat/advisor-pipe-sequencing` adds directional wire ordering and finite
+partial-write accounting on `dd43ae6`. Commit/canonical gates passed 2,241 tests
+in 200 modules, types and privacy/history; Astra and actual Claude Opus 5.5/high
+source reviews have no mandatory findings. All seven exact-head hosted checks
+passed, including coverage. The process-wide FD-count failure at its earlier
+candidate has unknown allocation/close attribution; the replacement fixture
+tracks identity-bound allocations without taking cleanup authority.
 It keeps distinct request observation, callback consumption, buffered bytes,
 caller-reported writes and native completion. Graceful wire cancellation drains
-and discards in-flight stdout; buffer abort instead requires channel closure if
-a frame was partially sent. It introduces no physical I/O or runtime enabling
-switch. Source owner: Hub maintainer; publication and independent review pending.
+and discards in-flight stdout; buffer abort requires channel closure after a
+partial frame. It introduces no physical I/O or runtime switch.
+Source owner: Hub maintainer.
 
-Next trigger: exact-revision gates/reviews, then owned nonblocking I/O and the
-namespace supervisor witness with a fake endpoint before productive wiring.
+Next trigger: final owned nonblocking I/O/private namespace witness publication
+and native request validation before productive wiring.
 Closure remains open: no productive advisor, real upstream, durable role/material
 authorization, native body validator, worker wiring, deployment or live acceptance
 is enabled. The original project, host authority sockets and credentials remain
 outside this proposed child boundary. Inspect all lane state before post-merge
 cleanup; main merge and deployment remain owner actions.
+
+## Claude process observations
+
+Current state: offline implementation candidate in lane
+`feat/claude-process-observations`, based on the last verified prerequisite
+`e563dd4ca51b5d4884227681782d4a7fce275b2e`. Source owner: Hub maintainer.
+[ADR 0059](../decisions/0059-claude-process-observation-notices.md) records the
+separate process/permission evidence boundary. Focused actual-process, SQLite
+and migration fixtures are under validation; canonical publication, exact clean
+independent source review and hosted checks remain pending.
+
+Next trigger: close those publication gates, then separately authorized native
+and Telegram acceptance alongside the remaining Claude parity work. This lane
+is bounded to optional passive ordinary quiet notices; productive advisor
+wiring, tool/build activity, local transfer, saved-session connection and billing
+route acceptance remain open. Root is the sole implementation writer. The
+worktree owner is Hub maintainer; its purpose is schema-42 observation and
+worker/sender integration, with base `feat/advisor-pipe-sequencing`. Post-merge,
+inspect tracked, staged and untracked state before worktree cleanup. Closure is
+open; no deployed or live acceptance is claimed.
 
 ## Planned final-response mode indicators
 
