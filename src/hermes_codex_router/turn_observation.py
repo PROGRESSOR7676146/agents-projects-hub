@@ -25,7 +25,7 @@ from .codex_failure import codex_failure_notice
 from .diagnostic_log import survived
 from .execution_journal import ExecutionJournal
 from .hub_config import HubConfig
-from .observed_delivery import retain_delivery_terminal_evidence
+from .observed_delivery import archive_recovery_notice, retain_delivery_terminal_evidence
 from .project_resolution import resolve_project_context
 from .state import RECOVERED_RESULT_METADATA_JSON, HubState, StateError
 from .topic_execution import resolve_topic_execution_root
@@ -124,7 +124,7 @@ class TurnObservation:
         claimed = self._claim()
         if claimed is None:
             return False
-        self._observe(claimed, client_factory)
+        self._observe(claimed, client_factory, refund_deferred_attempt=True)
         return True
 
     def observe_topic(
@@ -164,6 +164,8 @@ class TurnObservation:
         self,
         claimed: tuple[str, str, str, Path],
         client_factory: Callable[[], CodexAppServerClient],
+        *,
+        refund_deferred_attempt: bool = False,
     ) -> None:
         job_id, thread_id, turn_id, root = claimed
         try:
@@ -216,6 +218,7 @@ class TurnObservation:
                     outcome,
                     artifacts=artifacts,
                     artifacts_rejected=bool(rejected),
+                    refund_deferred_attempt=refund_deferred_attempt,
                 )
             except BaseException:
                 self._remove_unused_artifacts(artifacts)
@@ -253,6 +256,7 @@ class TurnObservation:
         *,
         artifacts: tuple[ValidatedArtifact, ...] = (),
         artifacts_rejected: bool = False,
+        refund_deferred_attempt: bool = False,
     ) -> bool:
         now = _now()
         with self.state._immediate_transaction():
@@ -309,14 +313,17 @@ class TurnObservation:
             ).fetchone()
             if outbox is None:
                 raise StateError("uncertain job lost its notice")
-            preserve_delivery = outbox["status"] == "unknown" or (
-                outbox["status"] == "sending" and outbox["send_started_at"] is not None
-            )
-            if outbox["status"] == "sending" and not preserve_delivery:
+            preserve_delivery = outbox["status"] == "unknown"
+            if outbox["status"] == "sending":
                 self.db.execute(
-                    """UPDATE provider_turn_observations SET attempt_count = attempt_count - 1,
+                    """UPDATE provider_turn_observations SET attempt_count = MAX(attempt_count - ?, 0),
                        next_check_at = ?, updated_at = ? WHERE job_id = ?""",
-                    ((datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(), now, job_id),
+                    (
+                        int(refund_deferred_attempt),
+                        (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
+                        now,
+                        job_id,
+                    ),
                 )
                 return False
             self.db.execute(
@@ -367,18 +374,8 @@ class TurnObservation:
                 notice = codex_failure_notice(error, turn_status=outcome.status, held_count=held)
             if len(notice) > 200_000:
                 raise StateError("recovered notice exceeds delivery bound")
-            self.db.execute(
-                """INSERT INTO provider_recovery_notices
-                   (job_id, outbox_id, telegram_html, delivery_status,
-                    telegram_message_id, saved_at) VALUES (?, ?, ?, ?, ?, ?)""",
-                (
-                    job_id,
-                    outbox["outbox_id"],
-                    outbox["telegram_html"],
-                    outbox["status"],
-                    outbox["telegram_message_id"],
-                    now,
-                ),
+            archive_recovery_notice(
+                self.db, job_id=job_id, outbox_id=outbox["outbox_id"], timestamp=now
             )
             self.db.execute(
                 "DELETE FROM telegram_outbox_parts WHERE outbox_id = ?", (outbox["outbox_id"],)

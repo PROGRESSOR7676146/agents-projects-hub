@@ -564,6 +564,76 @@ class ProjectEditingTests(unittest.TestCase):
 
         self.assertEqual(load_registry(self.registry_path).require_project("example").root, target)
 
+    def test_unknown_final_or_progress_blocks_relocation_after_terminal_execution(self) -> None:
+        for kind in ("final", "progress"):
+            with self.subTest(kind=kind):
+                fixture = ProjectEditingTests()
+                fixture.setUp()
+                try:
+                    state = fixture.state
+                    topic_id = fixture._topic()
+                    session = state.activate_agent(topic_id, "codex", "model", "high")
+                    job, _ = state.enqueue_provider_job(
+                        idempotency_key="telegram:-1001234567890:91",
+                        chat_id=-1001234567890,
+                        message_id=91,
+                        topic_id=topic_id,
+                        agent_id="codex",
+                        session_id=session.session_id,
+                        session_generation=session.generation,
+                        provider_session_id=None,
+                        model="model",
+                        effort="high",
+                        payload_text="Example terminal task",
+                        context_watermark=None,
+                        handoff_id=None,
+                    )
+                    now = "2026-01-01T00:00:00+00:00"
+                    with state._connection:
+                        state._connection.execute(
+                            "UPDATE provider_jobs SET status='failed' WHERE job_id=?", (job.job_id,)
+                        )
+                        if kind == "final":
+                            state._connection.execute(
+                                """INSERT INTO telegram_outbox
+                                   (outbox_id,job_id,sender_agent_id,chat_id,thread_id,telegram_html,status,
+                                    available_at,created_at,updated_at)
+                                   VALUES ('example-unknown-final',?,'codex',-1001234567890,7,'Example notice',
+                                           'unknown',?,?,?)""",
+                                (job.job_id, now, now, now),
+                            )
+                        else:
+                            state._connection.execute(
+                                """INSERT INTO provider_execution_checkpoints (job_id,provider_thread_id,project_root,updated_at)
+                                   VALUES (?,'example-thread',?,?)""",
+                                (job.job_id, str(fixture.old_root), now),
+                            )
+                            item = state._connection.execute(
+                                "INSERT INTO provider_visible_items (job_id,item_id,phase,visible_text,created_at) VALUES (?,'example-item','commentary','Example progress',?)",
+                                (job.job_id, now),
+                            )
+                            state._connection.execute(
+                                """INSERT INTO provider_progress_deliveries
+                                   (progress_id,item_sequence,job_id,sender_agent_id,chat_id,thread_id,telegram_html,
+                                    status,available_at,created_at,updated_at)
+                                   VALUES ('example-unknown-progress',?,?,'codex',-1001234567890,7,'Example progress',
+                                           'unknown',?,?,?)""",
+                                (item.lastrowid, job.job_id, now, now, now),
+                            )
+                    target = fixture.allowed_b / "prepared"
+                    target.mkdir()
+                    subprocess.run(("git", "init", "-q", str(target)), check=True)
+                    store, workflow_id = fixture._relocation_ready(target)
+                    store.confirm(42, workflow_id)
+                    with self.assertRaisesRegex(Exception, "pending_delivery"):
+                        store.apply(workflow_id)
+                    self.assertEqual(
+                        load_registry(fixture.registry_path).require_project("example").root,
+                        fixture.old_root,
+                    )
+                finally:
+                    fixture.doCleanups()
+
     def test_crash_after_registry_commit_is_recovered_without_second_root_or_rebind(self) -> None:
         self._dynamic_binding()
         target = self.allowed_b / "example"

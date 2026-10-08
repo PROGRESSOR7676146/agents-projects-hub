@@ -77,6 +77,13 @@ class DeliveryCertaintyMigrationTests(unittest.TestCase):
                 """UPDATE provider_progress_deliveries SET status='sending', lease_owner='example-sender',
                    lease_token='example-progress-token', lease_expires_at='2026-01-01T00:00:00+00:00'"""
             )
+            old.execute(
+                """INSERT INTO provider_recovery_notices
+                   (job_id,outbox_id,telegram_html,delivery_status,telegram_message_id,saved_at)
+                   VALUES (?,'example-historical-outbox','Example historical notice','delivered',91,
+                           '2026-01-01T00:00:00+00:00')""",
+                (self.delivered_job,),
+            )
 
     def test_upgrade_preserves_parts_jobs_receipts_and_backup_without_invented_provenance(
         self,
@@ -92,6 +99,7 @@ class DeliveryCertaintyMigrationTests(unittest.TestCase):
             self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 42)
         with sqlite3.connect(self.path) as upgraded:
             after = snapshot(upgraded)
+            self.assertEqual(after["provider_recovery_notice_parts"], [])
             for table, rows in before.items():
                 if table not in (
                     "telegram_outbox",

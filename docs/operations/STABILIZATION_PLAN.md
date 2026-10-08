@@ -231,6 +231,17 @@ acceptance and unknown-delivery reconciliation remain separate; no provider
 replay, writer change, service change or assessment command is enabled here.
 Closure: open until exact source publication gates pass; live backlog stays open.
 
+Schema43 activation gate: unknown final/notice delivery currently blocks later
+topic deliveries, and result-ready heads block new productive work. Before any
+activation, implement and independently review an explicit owner reconciliation
+action that retains parts/results/spool, never fabricates delivery or replays
+provider execution, and safely resolves the topic hold. Source publication of
+this prerequisite does not waive that gate. Review also requires populated-copy
+foreign-key/orphan-part preflight before the migration. Source owner: Hub
+maintainer; decision owner: repository owner; next trigger: delivery-prerequisite
+publication, then reconciliation before live rollout. The broader live backlog
+remains open.
+
 ## Planned final-response mode indicators
 
 Owner-requested follow-up (2026-10-07), implementation pending: extend the compact

@@ -604,7 +604,7 @@ class ProjectEditStore:
             (
                 """SELECT 1 FROM telegram_outbox o JOIN provider_jobs j ON j.job_id=o.job_id
                    JOIN topics t ON t.topic_id=j.topic_id WHERE t.project_id=?
-                   AND o.status IN ('pending','sending') LIMIT 1""",
+                   AND o.status IN ('pending','sending','unknown') LIMIT 1""",
                 "pending_delivery",
             ),
             (
@@ -622,7 +622,7 @@ class ProjectEditStore:
                 """SELECT 1 FROM provider_progress_deliveries o
                    JOIN provider_jobs j ON j.job_id=o.job_id
                    JOIN topics t ON t.topic_id=j.topic_id WHERE t.project_id=?
-                   AND o.status IN ('pending','sending') LIMIT 1""",
+                   AND o.status IN ('pending','sending','unknown') LIMIT 1""",
                 "pending_delivery",
             ),
             (

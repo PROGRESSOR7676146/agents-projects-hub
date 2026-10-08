@@ -5,6 +5,30 @@ from __future__ import annotations
 import sqlite3
 
 
+def archive_recovery_notice(
+    connection: sqlite3.Connection, *, job_id: str, outbox_id: str, timestamp: str
+) -> None:
+    """Snapshot the replaced notice and every part within the caller's transaction."""
+    if not connection.in_transaction:
+        raise RuntimeError("notice archival requires an existing transaction")
+    connection.execute(
+        """INSERT INTO provider_recovery_notices
+           (job_id, outbox_id, telegram_html, delivery_status, telegram_message_id, saved_at)
+           SELECT job_id, outbox_id, telegram_html, status, telegram_message_id, ?
+           FROM telegram_outbox WHERE job_id=? AND outbox_id=?""",
+        (timestamp, job_id, outbox_id),
+    )
+    connection.execute(
+        """INSERT INTO provider_recovery_notice_parts
+           (job_id,outbox_id,part_index,telegram_html,telegram_message_id,delivered_at,
+            part_type,file_path,file_name,file_size,file_sha256,receipt_validation_version)
+           SELECT ?,outbox_id,part_index,telegram_html,telegram_message_id,delivered_at,
+                  part_type,file_path,file_name,file_size,file_sha256,receipt_validation_version
+           FROM telegram_outbox_parts WHERE outbox_id=?""",
+        (job_id, outbox_id),
+    )
+
+
 def retain_delivery_terminal_evidence(
     connection: sqlite3.Connection,
     *,

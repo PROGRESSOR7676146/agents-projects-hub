@@ -117,7 +117,14 @@ Telegram receipts. They cover malformed/bool IDs, external/embedded/document
 paths, post-HTTP expiry, receipt-commit faults, prefix preservation, cleanup,
 pre/post-fence recovery, populated schema42 backups and trigger/FK/DDL rollback.
 Late exact native proof preserves uncertain notice parts and old referenced
-artifacts without a substitute send. No live inference, Telegram or service
+artifacts without a substitute send. A sending notice defers reconciliation until
+receipt, proven rejection or unknown recovery settles it; normal replacement
+archives every original part atomically, including after a receipted prefix.
+Opener-level form/multipart rejection tests cover real HTTP400/403, malformed or
+conflicting bodies, HTTP408/5xx and incomplete HTTP200 responses. Unknown-head
+fixtures prove same-topic execution/delivery remain blocked while another topic
+can deliver. The explicit reconciliation deployment gate remains open.
+No live inference, Telegram or service
 change occurs. This is offline source/fault evidence, not deployment acceptance.
 
 Publication sequence with the installed hooks: focused checks → commit (the

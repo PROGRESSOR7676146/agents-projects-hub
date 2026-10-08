@@ -14,6 +14,11 @@ class ReliabilityAlertTests(unittest.TestCase):
             {alert.code for alert in alerts}, {"unknown_delivery", "unknown_progress_delivery"}
         )
         self.assertTrue(all("before any resend" in alert.message for alert in alerts))
+        final = next(alert for alert in alerts if alert.code == "unknown_delivery")
+        progress = next(alert for alert in alerts if alert.code == "unknown_progress_delivery")
+        self.assertIn("topic are blocked", final.message)
+        self.assertIn("owner reconciliation", final.message)
+        self.assertNotIn("topic are blocked", progress.message)
 
     def test_alerts_on_stale_queue_delivery_and_new_unresolved_work(self) -> None:
         alerts = evaluate_reliability_alerts(

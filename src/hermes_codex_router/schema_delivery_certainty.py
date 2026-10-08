@@ -1,6 +1,21 @@
 """Schema 43: rebuild delivery tables without disabling foreign keys."""
 
 DELIVERY_CERTAINTY_SCHEMA = """
+CREATE TABLE provider_recovery_notice_parts (
+    job_id TEXT NOT NULL REFERENCES provider_recovery_notices(job_id),
+    outbox_id TEXT NOT NULL,
+    part_index INTEGER NOT NULL CHECK(part_index > 0),
+    telegram_html TEXT NOT NULL,
+    telegram_message_id INTEGER CHECK(telegram_message_id IS NULL OR telegram_message_id > 0),
+    delivered_at TEXT,
+    part_type TEXT NOT NULL,
+    file_path TEXT,
+    file_name TEXT,
+    file_size INTEGER,
+    file_sha256 TEXT,
+    receipt_validation_version INTEGER NOT NULL CHECK(receipt_validation_version IN (0,1)),
+    PRIMARY KEY(job_id,part_index)
+);
 CREATE TABLE telegram_outbox_m43 (
     outbox_id TEXT PRIMARY KEY CHECK(length(outbox_id) BETWEEN 1 AND 128),
     job_id TEXT NOT NULL UNIQUE REFERENCES provider_jobs(job_id),

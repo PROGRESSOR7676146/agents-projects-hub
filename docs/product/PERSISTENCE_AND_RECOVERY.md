@@ -355,14 +355,23 @@ recreate unsaved provider context or a partially executed turn.
   unverified provenance; only a strict post-fence receipt transaction sets the
   per-part validation version. Whole-result receipt provenance requires every
   part; historical positive IDs alone cannot establish that provenance.
-  Later independent exact terminal proof MUST preserve an unknown or attempted
+  A sending notice MUST defer late terminal reconciliation until its current
+  send settles, without consuming the observation or replacing its parts.
+  Later independent exact terminal proof MUST preserve a parked unknown
   notice and its parts. It MAY record native terminal evidence and bounded exact
   completion text in the existing checkpoint while keeping the indeterminate job
   and without publishing a substitute result. Such a retained notice MUST remain
   diagnostically distinct from final-result delivery. New recovered artifact
   snapshots are not retained without a durable reference; existing referenced
-  artifacts remain intact. Any later delivery reconciliation requires explicit
-  inspection rather than automatic resend or provider replay.
+  artifacts remain intact. Normal replacement of a certain notice MUST archive
+  all its parts, receipt provenance and artifact references atomically with the
+  replacement. Historical missing parts MUST NOT be reconstructed as evidence.
+  An unknown final/notice outbox blocks later outboxes in its numeric topic;
+  a result-ready head also blocks later productive work there. Restart and age
+  MUST NOT release these holds. Schema-43 activation MUST wait for a separately
+  reviewed owner reconciliation action that preserves delivery evidence and
+  never replays provider work or blindly resends. This source prerequisite has
+  no such action yet; source publication alone MUST NOT authorize activation.
 - **REQ-QUEUE-006 (Implemented for the additive schema and global compatibility gate; per-provider rollout Planned):** Queue migration and per-provider rollout MUST be
   additive, feature-gated, recoverable through the existing backup discipline,
   and retain safe rollback without destroying accepted jobs. Changing an agent

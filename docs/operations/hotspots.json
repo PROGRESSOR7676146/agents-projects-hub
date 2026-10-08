@@ -115,8 +115,8 @@
     },
     {
       "target": "src/hermes_codex_router/turn_observation.py::TurnObservation._commit_terminal",
-      "max_lines": 216,
-      "rationale": "Bounded schema43 evidence-only reconciliation, reviewed by GPT Astra. This transaction orchestrator already owns exact binding checks, tail holds, result/notice disposition and stop completion. The new branch prevents replacement of attempted/unknown delivery; observed_delivery owns bounded checkpoint/terminal SQL without opening a transaction. Retain one immediate transaction across validation and disposition. Next extraction should move full terminal disposition together, not split SQL to satisfy a metric.",
+      "max_lines": 210,
+      "rationale": "Bounded schema43 evidence-only reconciliation, reviewed by GPT Astra and corrected after independent Claude review. This transaction orchestrator already owns exact binding checks, tail holds, result/notice disposition and stop completion. Every sending notice defers until settled; only parked unknown consumes evidence-only observation. observed_delivery owns bounded checkpoint/terminal SQL and complete recovery-notice/part archival without opening a transaction. Extracting archival reduces the orchestrator's responsibility while retaining one immediate transaction across validation and disposition. Next extraction should move full terminal disposition together, not split SQL to satisfy a metric.",
       "owner": "Hub maintainer",
       "next_review": "2026-11-06",
       "reopen_event": "Any further branch/growth, new terminal/delivery reconciliation authority, or full terminal-disposition extraction."

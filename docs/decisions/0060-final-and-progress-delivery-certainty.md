@@ -43,7 +43,10 @@ The migration runner retains its backup/BEGIN IMMEDIATE/rollback ownership and
 checks both integrity and foreign keys before commit. Historical migrations are
 unchanged. Runtime rollback requires a schema43-compatible artifact.
 
-Late native observation takes an evidence-only branch for unknown/attempted
+Late native observation defers every sending notice, including a begun send,
+until receipt, proven rejection or stale recovery settles it. It does not consume
+the observation or write terminal evidence while the send remains in flight.
+Only parked unknown takes an evidence-only branch for retained
 notice delivery. It validates the existing exact binding, retains old delivery
 rows/spool, saves independent terminal proof and exact completed checkpoint text,
 holds queued tails, finishes applicable stop certainty and removes the observation
@@ -54,14 +57,33 @@ Outcome diagnostics expose notice delivery separately from result delivery and
 show per-part provenance completeness. Passive unknown counters/alerts contain
 no content or project identity. They do not authorize an action.
 
+Normal replacement of a certain notice archives every part under the existing
+recovery-notice parent in the same transaction. The archive retains exact part
+identity, receipt/timestamp, validation version, HTML and artifact references;
+it has no foreign key to the deleted live outbox. Preexisting historical recovery
+parents receive no invented parts. Failed archival rolls back replacement too.
+
+Unknown final/notice delivery blocks later outboxes in that topic. If its job
+remains result_ready, subsequent productive work also remains blocked. No current
+control releases this delivery hold. Schema43 is a source prerequisite only:
+activation is gated on a separately reviewed explicit owner reconciliation action.
+This gate prevents turning a transport timeout into an irrecoverably stalled
+deployed topic. Such an action must retain evidence without resend or provider
+replay; converting unknown to delivered/failed is not a substitute.
+
 ## Verification and limits
 
 Focused tests cover malformed/bool receipts, external/embedded/document/progress,
 pre/post-fence expiry, commit faults, committed multipart prefix, cleanup faults,
 deadline clocks, exact terminal observation, and populated schema42 migration
 with triggers, deferred-FK failure and DDL rollback after old-child deletion.
-Canonical validation, exact-candidate independent reviews and hosted checks are
+Opener-level form/multipart tests distinguish strict Telegram HTTP400/403/429
+rejections from proxy/malformed/conflicting bodies, HTTP408/5xx and incomplete
+HTTP200 responses. Canonical validation, exact-candidate independent reviews and hosted checks are
 required before publication completion. Telegram/native deployment acceptance is
 separately authorized. This prerequisite supplies delivery evidence for future
 owner assessment; it implements no assessment command, judge, scoring or advisor
 workflow. Unknown delivery reconciliation remains explicit, never blind resend.
+Before activation, a copy of the live database must pass foreign_key_check and
+orphan-part inspection as well as the candidate migration gate. Existing FK
+violations fail the upgrade closed and retain its consistent backup.

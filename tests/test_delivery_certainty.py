@@ -182,6 +182,58 @@ class DeliveryCertaintyTests(unittest.TestCase):
             self.assertFalse(service._deliver_embedded_outbox(state, "opencode"))
         self.assertEqual(len(bot.sent), 1)
 
+    def test_unknown_head_blocks_same_topic_delivery_and_execution_but_not_another_topic(
+        self,
+    ) -> None:
+        head_id = self.fixture.ready_outbox("opencode", 21)
+        later_id = self.fixture.ready_outbox("opencode", 22)
+        independent_id = self.fixture.ready_outbox("opencode", 23)
+        bot = ReceiptBot()
+        sender = self.fixture.sender(opencode=bot, antigravity=fixtures.Bot())
+        try:
+            state = sender.state
+            head = state.get_provider_job(head_id)
+            session = state.get_session(head.session_id)
+            # Persisted fixtures also exercise defensive FIFO over already prepared results.
+            with state._connection:
+                state._connection.execute(
+                    "UPDATE provider_jobs SET topic_id=?,topic_sequence=2 WHERE job_id=?",
+                    (head.topic_id, later_id),
+                )
+                state._connection.execute(
+                    "UPDATE topic_queue_counters SET next_sequence=3 WHERE topic_id=?",
+                    (head.topic_id,),
+                )
+            tail, _ = state.enqueue_provider_job(
+                idempotency_key="telegram:-1001234567890:24",
+                chat_id=-1001234567890,
+                message_id=24,
+                topic_id=head.topic_id,
+                agent_id="opencode",
+                session_id=session.session_id,
+                session_generation=session.generation,
+                provider_session_id=session.provider_session_id,
+                model=session.model,
+                effort=session.effort,
+                payload_text="Example queued successor",
+                context_watermark=None,
+                handoff_id=None,
+            )
+            bot.receipt = None
+            self.assertTrue(sender._deliver_one("opencode"))
+            self.assertEqual(state.get_telegram_outbox_for_job(head_id).status, "unknown")
+            bot.receipt = 73
+            self.assertTrue(sender._deliver_one("opencode"))
+            self.assertEqual(state.get_telegram_outbox_for_job(independent_id).status, "delivered")
+            self.assertFalse(sender._deliver_one("opencode"))
+            self.assertIsNone(state.lease_provider_job("opencode", "example-worker"))
+            self.assertEqual(state.get_telegram_outbox_for_job(later_id).status, "pending")
+            self.assertEqual(state.get_provider_job(tail.job_id).status, "queued")
+            self.assertEqual(state.get_provider_job(head_id).status, "result_ready")
+            self.assertEqual(len(bot.sent), 2)
+        finally:
+            sender.close()
+
     def test_transport_error_is_unknown_unless_rejection_is_proven(self) -> None:
         cases = (
             (RuntimeError("fictional timeout"), "unknown"),

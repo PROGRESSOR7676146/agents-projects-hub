@@ -134,6 +134,26 @@ def _retry_after(document: object) -> int | None:
     )
 
 
+def _rejection_status(document: object) -> int | None:
+    if not isinstance(document, dict) or document.get("ok") is not False:
+        return None
+    status = document.get("error_code")
+    return status if type(status) is int and 400 <= status <= 599 else None
+
+
+def _api_result(method: str, document: object) -> Any:
+    if isinstance(document, dict) and document.get("ok") is True:
+        return document.get("result")
+    status = _rejection_status(document)
+    raise TelegramError(
+        "Telegram API did not return a successful result",
+        operation=_operation(method),
+        failure_class="api_rejection" if status is not None else "invalid_response",
+        status_code=status,
+        retry_after=_retry_after(document),
+    )
+
+
 def _transport_error(method: str, exc: Exception) -> TelegramError:
     operation = _operation(method)
     status_code: int | None = None
@@ -145,7 +165,15 @@ def _transport_error(method: str, exc: Exception) -> TelegramError:
         except Exception:
             document = None
         retry_after = _retry_after(document)
-        failure_class = "api_http"
+        rejected = _rejection_status(document)
+        failure_class = (
+            "api_rejection"
+            if rejected == status_code
+            and rejected is not None
+            and rejected < 500
+            and rejected != 408
+            else "api_http"
+        )
     elif isinstance(exc, urllib.error.URLError):
         reason = exc.reason
         if isinstance(reason, (TimeoutError, socket.timeout)):
@@ -668,16 +696,7 @@ class TelegramBotApi:
             # The original urllib exception may contain the token-bearing URL.
             # Preserve only the explicitly bounded classification above.
             raise _transport_error(method, exc) from None
-        if not isinstance(document, dict) or not document.get("ok"):
-            status = document.get("error_code") if isinstance(document, dict) else None
-            raise TelegramError(
-                "Telegram API rejected the request",
-                operation=_operation(method),
-                failure_class="api_rejection" if isinstance(document, dict) else "invalid_response",
-                status_code=status if isinstance(status, int) and 100 <= status <= 599 else None,
-                retry_after=_retry_after(document),
-            )
-        return document.get("result")
+        return _api_result(method, document)
 
     def updates(self, *, offset: int | None, timeout: int = 50) -> list[dict[str, Any]]:
         params: dict[str, Any] = {
@@ -845,16 +864,7 @@ class TelegramBotApi:
                 document = json.load(response)
         except Exception as exc:
             raise _transport_error(method, exc) from None
-        if not isinstance(document, dict) or not document.get("ok"):
-            status = document.get("error_code") if isinstance(document, dict) else None
-            raise TelegramError(
-                "Telegram API rejected the request",
-                operation=_operation(method),
-                failure_class="api_rejection" if isinstance(document, dict) else "invalid_response",
-                status_code=status if isinstance(status, int) and 100 <= status <= 599 else None,
-                retry_after=_retry_after(document),
-            )
-        return document.get("result")
+        return _api_result(method, document)
 
     def send_document(
         self,
