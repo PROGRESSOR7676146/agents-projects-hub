@@ -318,22 +318,29 @@ and untracked state before any cleanup. No deployment or restart is authorized.
 
 ## Delivery control storage and preview prerequisite
 
-Status: schema46 source prerequisite under validation; full-control authority
-unavailable and activation pending. Source owner: Hub maintainer, root sole writer.
-Base and last verified revision: `61657f24592c43c5e57cd551d9484fd672bc5512`
-in `refactor/lane-state-facade`. Worktree purpose: additive per-target ledger and
-read-only preview; source branch `feat/delivery-control-preview`. GPT Astra reviewed
-the staged design and narrow facade/registration exceptions.
-[ADR 0063](../decisions/0063-delivery-control-reconciliation.md) owns the decision;
-the [runbook](DELIVERY_CONTROL.md) owns preview procedure. HubState retains the
-coherent read transaction and the neutral helper owns passive checks/snapshot.
-There is no apply API or consumer exception; schema44 consent/lifetime guards and
-all runtime controls remain intact. Native uncertainty and delivery remain separate.
-Next trigger: exact candidate independent reviews and canonical/hosted gates, then
-coordinated consumer predicates and historical semantics before public consent/CAS
-apply. Closure remains open. After owner integration inspect tracked/staged/untracked
-state before cleanup. Deployment, compatible rollback, authority custody and live
-acceptance are independent gates; this source slice authorizes no migration/restart.
+Status: schema46 source published at `357409b0d52a6796a3fe609f9f49c2b3bb918817`;
+PR #161 ready/open/unmerged, full-control authority unavailable in that revision.
+Owner: Hub maintainer, root sole writer. Branch `feat/delivery-control-preview`
+owns additive ledger/read-only preview; base `61657f24592c43c5e57cd551d9484fd672bc5512`.
+Exact Astra and actual Opus 5.5/high source reviews have no mandatory findings.
+Commit/canonical: 2,422 tests/219 modules, Pyright 0, privacy/history and seven
+hosted checks passed. [ADR 0063](../decisions/0063-delivery-control-reconciliation.md)
+owns the boundary. Next trigger: coordinated authority below. Closure remains open
+until owner integration; inspect tracked/staged/untracked state before cleanup.
+Source publication grants no migration, deployment, restart or live acceptance.
+
+## Coordinated delivery control authority
+
+Status: schema47 implementation under validation. Owner: Hub maintainer, root sole
+writer. Branch `feat/delivery-control-authority` owns coordinated public CAS and
+consumers; base/last verified source `357409b0d52a6796a3fe609f9f49c2b3bb918817`.
+GPT Astra reviewed design, dirty-source consumer and retention inventory. Three
+findings were repaired: coherent status, separate legacy/full effect and final
+job/result fail-closed parity. [ADR 0063](../decisions/0063-delivery-control-reconciliation.md)
+and [runbook](DELIVERY_CONTROL.md) own design/procedure. Next trigger: complete
+consumer/race/retention/migration tests, canonical gates, exact independent review
+and hosted publication. Closure open; owner integration and private live gates
+remain separate. Inspect tracked/staged/untracked state before post-merge cleanup.
 
 ## Planned final-response mode indicators
 

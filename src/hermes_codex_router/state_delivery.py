@@ -10,6 +10,7 @@ from html import escape
 from typing import Callable, Sequence
 
 from .artifacts import ValidatedArtifact
+from .delivery_control_predicates import final_control_reconciled, progress_control_reconciled
 from .delivery_hold_predicates import outbox_delivery_hold_released
 from .telegram_multipart import split_telegram_html
 
@@ -297,7 +298,8 @@ class DeliveryStateFacade:
                        WHERE earlier_job.topic_id = job.topic_id
                          AND earlier_job.topic_sequence < job.topic_sequence
                          AND earlier_outbox.status NOT IN ('delivered', 'failed')
-                         AND NOT {outbox_delivery_hold_released("earlier_outbox")}
+                         AND NOT ({outbox_delivery_hold_released("earlier_outbox")}
+                                  OR {final_control_reconciled("earlier_outbox")})
                      )
                    ORDER BY outbox.created_at, outbox.outbox_id LIMIT 1""",
                 (sender, timestamp),
@@ -596,23 +598,56 @@ class DeliveryStateFacade:
             f"""SELECT (SELECT COUNT(*) FROM telegram_outbox WHERE status='unknown'),
                       (SELECT COUNT(*) FROM provider_progress_deliveries WHERE status='unknown'),
                       (SELECT COUNT(*) FROM telegram_outbox o WHERE o.status='unknown'
-                       AND {outbox_delivery_hold_released("o")})"""
+                       AND ({outbox_delivery_hold_released("o")} OR {final_control_reconciled("o")})),
+                      (SELECT COUNT(*) FROM telegram_outbox o WHERE {final_control_reconciled("o")}),
+                      (SELECT COUNT(*) FROM provider_progress_deliveries p WHERE {progress_control_reconciled("p")}),
+                      (SELECT COUNT(*) FROM provider_progress_deliveries p WHERE p.status='unknown'
+                       AND {progress_control_reconciled("p")}),
+                      (SELECT COUNT(*) FROM telegram_outbox WHERE status='failed'),
+                      (SELECT COUNT(*) FROM provider_progress_deliveries WHERE status='failed')"""
         ).fetchone()
         return {
             "unknown_delivery": int(row[0]),
             "unknown_progress_delivery": int(row[1]),
             "outstanding_delivery_holds": int(row[0]) - int(row[2]),
             "released_delivery_holds": int(row[2]),
+            "reconciled_final_controls": int(row[3]),
+            "reconciled_progress_controls": int(row[4]),
+            "outstanding_progress_holds": int(row[1]) - int(row[5]),
+            "failed_delivery": int(row[6]),
+            "failed_progress_delivery": int(row[7]),
         }
 
     def topic_delivery_holds(self, topic_id: int) -> dict[str, int]:
+        snapshot = self.topic_delivery_controls(topic_id)
+        return {key: snapshot[key] for key in ("outstanding", "released")}
+
+    def topic_delivery_controls(self, topic_id: int) -> dict[str, int]:
         row = self._connection.execute(
-            f"""SELECT COUNT(*), COALESCE(SUM({outbox_delivery_hold_released("o")}),0)
-                FROM telegram_outbox o JOIN provider_jobs j ON j.job_id=o.job_id
-                WHERE j.topic_id=? AND o.status='unknown'""",
-            (topic_id,),
+            f"""SELECT
+                (SELECT COUNT(*) FROM telegram_outbox o JOIN provider_jobs j ON j.job_id=o.job_id
+                 WHERE j.topic_id=? AND {final_control_reconciled("o")}),
+                (SELECT COUNT(*) FROM provider_progress_deliveries p JOIN provider_jobs j ON j.job_id=p.job_id
+                 WHERE j.topic_id=? AND {progress_control_reconciled("p")}),
+                (SELECT COUNT(*) FROM telegram_outbox o JOIN provider_jobs j ON j.job_id=o.job_id
+                 WHERE j.topic_id=? AND o.status='unknown' AND {final_control_reconciled("o")}),
+                (SELECT COUNT(*) FROM telegram_outbox o JOIN provider_jobs j ON j.job_id=o.job_id
+                 WHERE j.topic_id=? AND o.status='unknown'),
+                (SELECT COUNT(*) FROM telegram_outbox o JOIN provider_jobs j ON j.job_id=o.job_id
+                 WHERE j.topic_id=? AND o.status='unknown'
+                 AND ({outbox_delivery_hold_released("o")} OR {final_control_reconciled("o")}))""",
+            (topic_id,) * 5,
         ).fetchone()
-        return {"outstanding": int(row[0]) - int(row[1]), "released": int(row[1])}
+        # One SELECT pins every delivery count to the same SQLite snapshot.
+        return {
+            "final_reconciled": int(row[0]),
+            "progress_reconciled": int(row[1]),
+            "unknown_final_reconciled": int(row[2]),
+            "unknown_final": int(row[3]),
+            "outstanding": int(row[3]) - int(row[4]),
+            "released": int(row[4]),
+            "queue_only": int(row[4]) - int(row[2]),
+        }
 
     def enqueue_progress(
         self,

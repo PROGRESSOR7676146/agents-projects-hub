@@ -9,6 +9,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from .delivery_control_predicates import final_control_reconciled
 from .delivery_hold_predicates import outbox_delivery_hold_released
 
 ACTION = "continue_without_confirmed_delivery"
@@ -22,6 +23,7 @@ class DeliveryHoldDisposition:
     authority: str
     applied_at: str
     hold_status: str
+    control_effect: str = "outstanding"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +37,7 @@ class DeliveryHoldPreview:
     hold_status: str
     part_count: int
     receipted_parts: int
+    control_effect: str = "outstanding"
     disposition_snapshot: str | None = None
     control_consequences: tuple[str, ...] = ()
     remaining_boundaries: tuple[str, ...] = (
@@ -150,6 +153,12 @@ class DeliveryHoldState:
                 (outbox_id,),
             ).fetchone()[0]
         )
+        reconciled = bool(
+            self.db.execute(
+                f"SELECT {final_control_reconciled('o')} FROM telegram_outbox o WHERE o.outbox_id=?",
+                (outbox_id,),
+            ).fetchone()[0]
+        )
         return DeliveryHoldPreview(
             outbox_id=outbox_id,
             job_id=binding["job_id"],
@@ -167,7 +176,10 @@ class DeliveryHoldState:
             part_count=len(target["parts"]),
             receipted_parts=sum(p["telegram_message_id"] is not None for p in target["parts"]),
             disposition_snapshot=prior["snapshot"] if prior is not None else None,
-            control_consequences=("topic_binding_retained_for_disposition_lifetime",)
+            control_effect="delivery_wait_reconciled" if reconciled else "outstanding",
+            control_consequences=("delivery_wait_reconciled_by_separate_owner_decision",)
+            if reconciled
+            else ("topic_binding_retained_for_disposition_lifetime",)
             + (
                 (
                     "result_ready_remains_without_time_limit",
@@ -224,7 +236,8 @@ class DeliveryHoldState:
 
     def _record(self, row: sqlite3.Row) -> DeliveryHoldDisposition:
         effect = self.db.execute(
-            f"SELECT {outbox_delivery_hold_released('o')} FROM telegram_outbox o WHERE o.outbox_id=?",
+            f"SELECT {outbox_delivery_hold_released('o')}, {final_control_reconciled('o')} "
+            "FROM telegram_outbox o WHERE o.outbox_id=?",
             (row["outbox_id"],),
         ).fetchone()
         return DeliveryHoldDisposition(
@@ -236,4 +249,7 @@ class DeliveryHoldState:
             hold_status="released_by_owner"
             if effect is not None and effect[0]
             else "disposition_binding_changed",
+            control_effect="delivery_wait_reconciled"
+            if effect is not None and effect[1]
+            else "outstanding",
         )

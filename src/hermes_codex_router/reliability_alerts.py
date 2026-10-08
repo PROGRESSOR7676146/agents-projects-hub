@@ -60,8 +60,13 @@ def evaluate_reliability_alerts(
         ("unknown_delivery", "error", "final result"),
         ("unknown_progress_delivery", "warning", "progress"),
     ):
-        known_holds = key == "unknown_delivery" and "outstanding_delivery_holds" in telemetry
-        count = _positive_int(telemetry.get("outstanding_delivery_holds" if known_holds else key))
+        effective_key = (
+            "outstanding_delivery_holds"
+            if key == "unknown_delivery"
+            else "outstanding_progress_holds"
+        )
+        known_holds = effective_key in telemetry
+        count = _positive_int(telemetry.get(effective_key if known_holds else key))
         if count is not None:
             alerts.append(
                 OperationalAlert(
@@ -69,7 +74,7 @@ def evaluate_reliability_alerts(
                     key,
                     severity,
                     (
-                        f"Hub has {count} outstanding unknown Telegram final delivery hold(s); "
+                        f"Hub has {count} outstanding unknown Telegram {'final' if key == 'unknown_delivery' else label} delivery hold(s); "
                         if known_holds
                         else f"Hub has {count} unknown Telegram {label} delivery outcome(s); "
                     )
@@ -78,7 +83,7 @@ def evaluate_reliability_alerts(
                         " Later deliveries in the affected topic are blocked; a result-ready "
                         "head also blocks new execution there. Inspect the local delivery-hold preview for owner reconciliation "
                         "before deciding whether to continue without confirmed delivery."
-                        if known_holds
+                        if known_holds and key == "unknown_delivery"
                         else ""
                     ),
                 )

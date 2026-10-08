@@ -384,11 +384,14 @@ recreate unsaved provider context or a partially executed turn.
   as Telegram-authenticated owner identity.
   First apply MUST require an established canonical execution scope, refusing
   empty or legacy project scopes. The disposition MUST retain its numeric topic
-  destination, project and execution-scope binding for its lifetime; no-op and
-  display-only updates remain permitted. Apply and exact retry MUST report both
+  destination and project binding for its lifetime. Its execution-scope freeze
+  MAY be lifted only by separate exact full-control consent covering every
+  retained schema44 decision; no-op and display-only updates remain permitted.
+  Apply and exact retry MUST report both
   the immutable decision and its current effect. Preview MUST explicitly disclose
   the indefinite session-control, scope-wide local/terminal transfer and agent
-  drain restrictions retained for a released `result_ready` job. Queue continuation
+  drain restrictions retained for a released `result_ready` job unless an
+  independently effective full-control decision removes its delivery wait. Queue continuation
   MUST NOT be presented as complete control reconciliation.
   The outbox MUST remain unknown. Parts, receipts, spool, result, checkpoint,
   job state, owner holds, stop state and writer/session authority MUST remain
@@ -404,19 +407,23 @@ recreate unsaved provider context or a partially executed turn.
   Schema-43/44 activation MUST wait for independent exact-candidate review of
   both the delivery prerequisite and this action. Source publication alone
   MUST NOT authorize activation, provider replay or automatic resend.
-  A separate staged full-control reconciliation MAY record local-owner consent
+  A separate full-control reconciliation MAY record local-owner consent
   for one exact parked final or commentary-progress target, without confirming
-  Telegram delivery. Its schema-46 storage and read-only preview prerequisite
-  MUST NOT expose apply or change any existing runtime blocker. Full-control
-  authority remains Planned until explicit snapshot-CAS consent and every
-  affected control consumer are independently reviewed and implemented.
+  Telegram delivery. Schema46 remains the immutable storage/preview prerequisite;
+  schema47 coordinates public snapshot-CAS consent with every affected control
+  consumer. Partial consumer activation MUST NOT occur. No schema44 permission
+  may be reinterpreted as full-control authority.
   Preview MUST accept only unknown or delivery-policy-exhausted failed targets
   without a sender lease, bind historical job/session/project/numeric destination
   and result or commentary-item identity, and hash every ordered part,
   receipt/artifact metadata and relevant retained native/owner proof. It MUST
   open existing current-schema state without migration, configuration,
-  credentials, transport or inference. Output MUST explicitly mark preview-only,
-  apply unavailable and control effect not enabled, exposing no content or paths.
+  credentials, transport or inference. Preview MUST remain read-only by default;
+  apply MUST require the exact preview snapshot and explicit agreement to accept
+  unconfirmed delivery. One HubState-owned immediate transaction MUST revalidate
+  and insert only the immutable decision. Exact repeated consent MUST return
+  its original decision and current effect; another snapshot MUST NOT replace
+  it. Output MUST expose no content or paths.
   A failed indeterminate final notice MUST require pre-existing exact terminal
   evidence matching the retained checkpoint or an existing exact owner resolution;
   otherwise late native recovery could replace the pinned target. Storage MUST
@@ -425,9 +432,24 @@ recreate unsaved provider context or a partially executed turn.
   active-session pointer, live scope and a later progress result; another target
   of the same job MUST require separate consent. Schema44 consent MUST remain
   unchanged and MUST NOT inherit a full-control exception. Native uncertainty,
-  owner holds, stop, writers and capacity remain independent. Source publication
-  and schema migration alone MUST NOT enable this authority. The staged decision
-  and future activation boundary are recorded in
+  owner holds, stop, writers, dispatches, workflows, origin/root and capacity
+  remain independent. Exact full-control final consent MAY reconcile delivery
+  and saved-result FIFO clauses in session/model/agent, native transfer,
+  connect/adoption, source/destination/legacy lane scope, relocation and drain
+  controls; progress consent MUST NOT release a saved-result final wait. Existing
+  adoption and relocation owner-resolution requirements for indeterminate work
+  MUST remain unchanged. Later legitimate session/model/agent/scope changes MUST
+  preserve historical consent; project, numeric destination, target/job and
+  historical generation mismatches MUST make its effect fail closed. Every
+  retained schema44 hold needs its own full consent before a scope move; the
+  prospective destination/project guard remains mandatory. Raw unknown/failed
+  evidence and separate effective counts MUST remain visible in status, retry,
+  outcome, alerts and drain views. Apply MUST NOT mutate delivery, parts,
+  receipts, artifacts, native evidence, jobs, writers, stops or owner holds, nor
+  authorize resend, provider replay, Reply or outcome-assessment authority.
+  Source publication does not authorize live migration or activation; deployment
+  requires separate exact-revision owner authorization and compatible rollback.
+  The staged decision and activation boundary are recorded in
   [ADR 0063](../decisions/0063-delivery-control-reconciliation.md).
 - **REQ-QUEUE-006 (Implemented for the additive schema and global compatibility gate; per-provider rollout Planned):** Queue migration and per-provider rollout MUST be
   additive, feature-gated, recoverable through the existing backup discipline,

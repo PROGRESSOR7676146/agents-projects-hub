@@ -1,4 +1,4 @@
-"""Preview-only delivery control prerequisite, using fictional state and no traffic."""
+"""Coherent read-only delivery control previews, using fictional state and no traffic."""
 
 from __future__ import annotations
 
@@ -103,9 +103,9 @@ class DeliveryControlPreviewTests(unittest.TestCase):
         preview = self.preview()
         self.assertEqual(self.db.serialize(), before)
         self.assertFalse(self.db.in_transaction)
-        self.assertEqual(preview.capability, "preview_only")
-        self.assertFalse(preview.apply_available)
-        self.assertEqual(preview.control_effect, "not_enabled")
+        self.assertEqual(preview.capability, "local_owner_reconciliation")
+        self.assertTrue(preview.apply_available)
+        self.assertEqual(preview.control_effect, "outstanding")
         self.assertRegex(preview.snapshot, r"^[0-9a-f]{64}$")
         self.assertIsNone(preview.disposition_snapshot)
         self.assertFalse(preview.binding_matches)
@@ -311,7 +311,7 @@ class DeliveryControlPreviewTests(unittest.TestCase):
             preview = self.preview(kind, target)
             self.assertTrue(preview.binding_matches)
             self.assertEqual(preview.disposition_snapshot, "a" * 64)
-            self.assertEqual(preview.control_effect, "not_enabled")
+            self.assertEqual(preview.control_effect, "delivery_wait_reconciled")
         other = self.progress("example-other-progress", "example-other-item")
         self.assertFalse(self.preview("progress_delivery", other).binding_matches)
 
@@ -383,10 +383,9 @@ class DeliveryControlPreviewTests(unittest.TestCase):
             self.assertTrue(changed)
         self.assertNotEqual(self.preview().snapshot, original)
 
-    def test_seeded_disposition_does_not_unlock_session_or_fifo_or_old_lifetime_binding(
+    def test_preview_without_consent_does_not_unlock_session_or_fifo_or_old_lifetime_binding(
         self,
     ) -> None:
-        self.seed()
         tail, created = self.state.enqueue_provider_job(
             idempotency_key="example-control-preview-tail",
             chat_id=self.job.chat_id,
@@ -441,7 +440,7 @@ class DeliveryControlPreviewTests(unittest.TestCase):
             )
         self.assertTrue(self.preview("progress_delivery", progress).binding_matches)
 
-    def test_cli_is_preview_only_and_reads_no_configuration_or_content(self) -> None:
+    def test_cli_defaults_to_read_only_and_reads_no_configuration_or_content(self) -> None:
         with patch(
             "hermes_codex_router.cli.load_hub_config", side_effect=AssertionError("no config")
         ) as config:
@@ -459,20 +458,23 @@ class DeliveryControlPreviewTests(unittest.TestCase):
                     0,
                 )
             result = json.loads(output.getvalue())
-            self.assertFalse(result["apply_available"])
-            self.assertEqual(result["control_effect"], "not_enabled")
+            self.assertTrue(result["apply_available"])
+            self.assertEqual(result["control_effect"], "outstanding")
             for value in ("durable task", "opencode result", "/home/example/"):
                 self.assertNotIn(value, output.getvalue())
             config.assert_not_called()
-        with self.assertRaises(SystemExit), redirect_stdout(io.StringIO()):
-            main(
-                [
-                    "delivery-control",
-                    str(self.fixture.config.state_path),
-                    "final_outbox",
-                    self.outbox.outbox_id,
-                    "--apply",
-                ]
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(
+                main(
+                    [
+                        "delivery-control",
+                        str(self.fixture.config.state_path),
+                        "final_outbox",
+                        self.outbox.outbox_id,
+                        "--apply",
+                    ]
+                ),
+                2,
             )
 
     def test_missing_or_old_state_refused_without_creation_or_migration(self) -> None:

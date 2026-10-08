@@ -10,6 +10,7 @@ from unittest.mock import patch
 from hermes_codex_router import migrations
 from hermes_codex_router.state import HubState
 from tests import test_outbox_sender as fixtures
+from tests.schema_fixtures import legacy_delivery_hold_schema
 from tests.test_delivery_certainty_migration import snapshot
 
 
@@ -18,12 +19,18 @@ class DeliveryControlMigrationTests(unittest.TestCase):
         self.fixture = fixtures.TelegramOutboxSenderTests()
         with patch.object(migrations, "LATEST_SCHEMA_VERSION", 45):
             self.fixture.setUp()
+            migrations.migrate_database(self.fixture.config.state_path, create_backup=False)
             self.addCleanup(self.fixture.tearDown)
-            self.job_id = self.fixture.ready_outbox("opencode", 161)
+            with (
+                closing(sqlite3.connect(self.fixture.config.state_path)) as bridge,
+                legacy_delivery_hold_schema(bridge),
+            ):
+                self.job_id = self.fixture.ready_outbox("opencode", 161)
         self.path = self.fixture.config.state_path
         with (
             patch.object(migrations, "LATEST_SCHEMA_VERSION", 45),
             closing(HubState.open(self.path, codex_permission_profile=None)) as state,
+            legacy_delivery_hold_schema(state._connection),
         ):
             db = state._connection
             with db:
@@ -84,7 +91,8 @@ class DeliveryControlMigrationTests(unittest.TestCase):
             objects = old.execute(
                 "SELECT type,name,sql FROM sqlite_master ORDER BY name"
             ).fetchall()
-        result = migrations.migrate_database(self.path)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 46):
+            result = migrations.migrate_database(self.path)
         self.assertEqual((result.previous_version, result.current_version), (45, 46))
         assert result.backup_path is not None
         self.assertEqual(result.backup_path.stat().st_mode & 0o777, 0o600)
@@ -103,7 +111,8 @@ class DeliveryControlMigrationTests(unittest.TestCase):
             for obj in objects:
                 self.assertIn(obj, new_objects)
             self.assertEqual(upgraded.execute("PRAGMA foreign_key_check").fetchall(), [])
-        self.assertIsNone(migrations.migrate_database(self.path).backup_path)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 46):
+            self.assertIsNone(migrations.migrate_database(self.path).backup_path)
 
     def test_ddl_fault_rolls_back_schema_version_rows_and_all_objects(self) -> None:
         with closing(sqlite3.connect(self.path)) as old:

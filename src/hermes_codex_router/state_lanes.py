@@ -3,6 +3,10 @@ from __future__ import annotations
 import sqlite3
 from pathlib import PurePath
 
+from .delivery_control_predicates import (
+    legacy_hold_has_full_control,
+    result_ready_control_reconciled,
+)
 from .state_errors import StateError
 from .state_values import _bounded, _now
 
@@ -156,16 +160,18 @@ class LaneState:
         """Peer checks retain busy ownership; only relocation checks retained bindings."""
         if binding_change and (
             self._connection.execute(
-                "SELECT 1 FROM telegram_delivery_hold_dispositions WHERE topic_id=? LIMIT 1",
+                f"SELECT 1 FROM telegram_delivery_hold_dispositions hold WHERE topic_id=? "
+                f"AND NOT {legacy_hold_has_full_control('hold')} LIMIT 1",
                 (topic_id,),
             ).fetchone()
             is not None
         ):
             raise StateError("delivery hold disposition retains the topic binding")
         job = self._connection.execute(
-            """SELECT 1 FROM provider_jobs jobs
+            f"""SELECT 1 FROM provider_jobs jobs
                WHERE jobs.topic_id = ? AND (
-                 jobs.status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                 (jobs.status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                  AND NOT {result_ready_control_reconciled("jobs")})
                  OR (jobs.status = 'indeterminate' AND NOT EXISTS (
                    SELECT 1 FROM provider_job_resolutions resolutions
                    WHERE resolutions.job_id = jobs.job_id
@@ -200,11 +206,12 @@ class LaneState:
         self, execution_scope: str, *, binding_change: bool = True
     ) -> None:
         job = self._connection.execute(
-            """SELECT 1 FROM provider_jobs jobs
+            f"""SELECT 1 FROM provider_jobs jobs
                JOIN topics ON topics.topic_id = jobs.topic_id
                WHERE COALESCE(topics.execution_scope, 'project:' || topics.project_id) = ?
                  AND (
-                   jobs.status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                   (jobs.status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                    AND NOT {result_ready_control_reconciled("jobs")})
                    OR (jobs.status = 'indeterminate' AND NOT EXISTS (
                      SELECT 1 FROM provider_job_resolutions resolutions
                      WHERE resolutions.job_id = jobs.job_id

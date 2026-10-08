@@ -18,7 +18,12 @@ from .codex_permissions import (
     validate_permission_profile_id,
 )
 from .codex_retry_policy import PreparationRetryBinding
-from .delivery_control_state import DeliveryControlPreview, DeliveryControlState
+from .delivery_control_predicates import result_ready_control_reconciled
+from .delivery_control_state import (
+    DeliveryControlDisposition,
+    DeliveryControlPreview,
+    DeliveryControlState,
+)
 from .delivery_hold_state import DeliveryHoldDisposition, DeliveryHoldPreview, DeliveryHoldState
 from .incoming_materials import (
     IncomingMaterialDraft,
@@ -603,12 +608,13 @@ class HubState:
                     )
                 if expected is None:
                     active = self._connection.execute(
-                        """SELECT 1 FROM agent_sessions
+                        f"""SELECT 1 FROM agent_sessions
                                WHERE topic_id = ? AND status IN ('active', 'satellite')
                                  AND writer_mode != 'telegram'
                                UNION SELECT 1 FROM provider_jobs
                                WHERE topic_id = ? AND (
-                                 status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                                 (status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                                  AND NOT {result_ready_control_reconciled("provider_jobs")})
                                  OR (status = 'indeterminate' AND NOT EXISTS (
                                    SELECT 1 FROM provider_job_resolutions resolutions
                                    WHERE resolutions.job_id = provider_jobs.job_id
@@ -764,8 +770,12 @@ class HubState:
         return self._provider_job_state.topic_has_unheld(topic_id)
 
     def nonterminal_provider_job_counts(self, agent_ids: Sequence[str]) -> dict[str, int]:
-        """Count accepted work that must be drained before runtime ownership changes."""
+        """Raw accepted nonterminal work, including historical result-ready delivery."""
         return self._provider_job_state.nonterminal_counts(agent_ids)
+
+    def effective_nonterminal_provider_job_counts(self, agent_ids: Sequence[str]) -> dict[str, int]:
+        """Runtime-drain blockers after exact full-control delivery consent only."""
+        return self._provider_job_state.effective_nonterminal_counts(agent_ids)
 
     def provider_chat_activities(
         self, agent_ids: Sequence[str]
@@ -1873,7 +1883,7 @@ class HubState:
             raise
 
     def preview_delivery_control(self, target_kind: str, target_id: str) -> DeliveryControlPreview:
-        """Coherent preview only; the storage prerequisite grants no control authority."""
+        """Coherent local preview without migration, transport or invocation."""
         if self._connection.in_transaction:
             raise StateError("cannot nest a delivery control preview transaction")
         self._connection.execute("BEGIN")
@@ -1884,6 +1894,28 @@ class HubState:
         except BaseException:
             self._connection.rollback()
             raise
+
+    def reconcile_delivery_control(
+        self,
+        target_kind: str,
+        target_id: str,
+        *,
+        expected_snapshot: str,
+        accept_unconfirmed_delivery: bool,
+        now: datetime | None = None,
+    ) -> DeliveryControlDisposition:
+        """Local-owner CAS inserts only consent; each consumer retains its other guards."""
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            raise StateError("delivery control time must be timezone-aware")
+        with self._immediate_transaction():
+            return DeliveryControlState(self._connection).apply_in_transaction(
+                target_kind,
+                target_id,
+                expected_snapshot,
+                accept_unconfirmed_delivery,
+                current.isoformat(),
+            )
 
     def release_delivery_hold(
         self,
