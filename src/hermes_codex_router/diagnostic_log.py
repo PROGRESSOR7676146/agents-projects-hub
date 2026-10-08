@@ -86,6 +86,7 @@ SITES = frozenset(
         "telegram_activity.message_draft",
         "telegram_activity.refresh",
         "turn_observation.artifact_cleanup",
+        "service.artifact_cleanup",
     }
 )
 # The only class names a record can carry, as (module, qualified name): every

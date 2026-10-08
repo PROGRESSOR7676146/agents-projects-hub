@@ -144,7 +144,18 @@ def sender_actor(harness: FaultMatrixHarness, mode: str, arguments: list[str]) -
     )
     sender = harness.sender(opencode=bot, antigravity=bot, codex=bot)
     try:
-        if not sender.run_cycle(now=now):
+        if mode == "sender-block-before-send":
+            lease = sender.state.lease_telegram_outbox("opencode", sender.sender_id, now=now)
+            if lease is None:
+                raise RuntimeError("fictional sender found no outbox to lease")
+            marker.write_text("leased-before-send", encoding="utf-8")
+            threading.Event().wait()
+        delivered = sender.run_cycle(now=now)
+        if mode == "sender-idle":
+            if delivered:
+                raise RuntimeError("fictional sender unexpectedly retried unknown delivery")
+            marker.write_text("idle", encoding="utf-8")
+        elif not delivered:
             raise RuntimeError("fictional sender found no prepared outbox")
     finally:
         sender.close()

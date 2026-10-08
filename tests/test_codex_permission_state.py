@@ -16,6 +16,7 @@ from hermes_codex_router.session_connect import ConnectCandidate, SessionConnect
 from hermes_codex_router.state import HubState, StateError
 from hermes_codex_router.turn_continuation_state import TurnContinuationState
 from tests import test_outbox_sender as sender_fixtures
+from tests.delivery_fixture import complete_final_delivery
 
 PROFILE = "example-project-policy"
 
@@ -463,8 +464,8 @@ class CodexPermissionStateTests(unittest.TestCase):
             )
         delivery = self.state.lease_telegram_outbox("codex", "example-sender")
         assert delivery is not None and delivery.lease_token is not None
-        self.state.mark_telegram_outbox_delivered(
-            delivery.outbox_id, delivery.lease_token, telegram_message_id=101
+        complete_final_delivery(
+            self.state, delivery.outbox_id, delivery.lease_token, telegram_message_id=101
         )
         arguments: dict[str, Any] = dict(
             source_job_id=job.job_id,

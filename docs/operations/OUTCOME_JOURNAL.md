@@ -30,6 +30,13 @@ terminal observations, delivery and historical indeterminate-work resolution are
 separate facts; none establishes owner acceptance. Usage and monetary cost remain
 unknown because existing durable job records do not prove them.
 
+Schema43 additionally reports validated receipt counts and whole-part provenance.
+Positive legacy IDs remain historical receipts with unverified provenance.
+Resultless failure/uncertainty notices have a separate `notice_delivery` object;
+even after independent native terminal proof they cannot establish final-result
+delivery. Unknown delivery remains visible and authorizes neither resend nor
+provider replay.
+
 Timing endpoints identify their source columns. Admission-to-result-commit and
 latest-worker-phase-to-result-commit are wall-clock observations: preparation is
 included, and recovery can delay result persistence. They are not native execution,

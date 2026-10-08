@@ -1835,6 +1835,11 @@ class HubState:
     def get_telegram_outbox_parts(self, outbox_id: str) -> tuple[TelegramOutboxPartRecord, ...]:
         return self._delivery_state.get_outbox_parts(outbox_id)
 
+    @property
+    def delivery(self) -> DeliveryStateFacade:
+        """Delivery domain on this connection, retaining HubState transaction ownership."""
+        return self._delivery_state
+
     def next_telegram_outbox_part(
         self,
         outbox_id: str,
@@ -2516,6 +2521,7 @@ class HubState:
             "stalled_provider_work": stalled_provider_work,
             "pending_delivery": pending_delivery,
             "pending_progress_delivery": pending_progress_delivery,
+            **self._delivery_state.uncertain_counts(),
             "oldest_queue_age_seconds": age_seconds(oldest_queue),
             "oldest_delivery_age_seconds": age_seconds(oldest_delivery),
             "oldest_progress_delivery_age_seconds": age_seconds(oldest_progress_delivery),

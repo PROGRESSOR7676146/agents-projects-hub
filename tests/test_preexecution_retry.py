@@ -37,6 +37,7 @@ from hermes_codex_router.worker_execution import (
 from hermes_codex_router.worker_failure_notice import commit_worker_failure_notice
 from tests import test_codex_worker as worker_fixtures
 from tests import test_embedded_queue_service as embedded_fixtures
+from tests.delivery_fixture import complete_final_delivery
 from tests.hub_service_harness import CHAT_ID, CODEX, THREAD_ID, HubHarness, text_update
 
 
@@ -87,7 +88,8 @@ class PreexecutionRetryTests(unittest.TestCase):
         )
         delivery = self.state.lease_telegram_outbox("codex", "example-sender")
         assert delivery is not None and delivery.lease_token is not None
-        self.state.mark_telegram_outbox_delivered(
+        complete_final_delivery(
+            self.state,
             delivery.outbox_id,
             delivery.lease_token,
             telegram_message_id=notice_id,
@@ -285,8 +287,8 @@ class PreexecutionRetryTests(unittest.TestCase):
         )
         delivery = self.state.lease_telegram_outbox(job.agent_id, "example-sender")
         assert delivery is not None and delivery.lease_token is not None
-        self.state.mark_telegram_outbox_delivered(
-            delivery.outbox_id, delivery.lease_token, telegram_message_id=102
+        complete_final_delivery(
+            self.state, delivery.outbox_id, delivery.lease_token, telegram_message_id=102
         )
         update = text_update(30, "retry")
         cast(dict[str, Any], update["message"])["reply_to_message"] = {"message_id": 102}
@@ -1214,7 +1216,8 @@ class PreexecutionRetryTests(unittest.TestCase):
             delivery = worker.state.lease_telegram_outbox("codex", "example-sender")
             assert delivery is not None and delivery.lease_token is not None
             notice_id = 101 + attempt
-            worker.state.mark_telegram_outbox_delivered(
+            complete_final_delivery(
+                worker.state,
                 delivery.outbox_id,
                 delivery.lease_token,
                 telegram_message_id=notice_id,
@@ -1286,8 +1289,8 @@ class PreexecutionRetryTests(unittest.TestCase):
         assert delivery is not None and delivery.lease_token is not None
         self.assertIn("no saved context snapshot", delivery.telegram_html)
         self.assertNotIn("Reply exactly retry", delivery.telegram_html)
-        state.mark_telegram_outbox_delivered(
-            delivery.outbox_id, delivery.lease_token, telegram_message_id=101
+        complete_final_delivery(
+            state, delivery.outbox_id, delivery.lease_token, telegram_message_id=101
         )
         state.record_visible_turn(
             original.topic_id,

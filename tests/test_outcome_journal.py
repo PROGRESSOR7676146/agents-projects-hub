@@ -14,6 +14,7 @@ from unittest.mock import Mock, patch
 
 from hermes_codex_router.cli import main
 from hermes_codex_router.state import HubState, StateError
+from tests.delivery_fixture import complete_final_delivery
 
 
 class OutcomeJournalTests(unittest.TestCase):
@@ -100,6 +101,35 @@ class OutcomeJournalTests(unittest.TestCase):
             )
         self.assertEqual(self.read(job.job_id), before)
 
+    def test_whole_result_provenance_requires_every_part_strictly_validated(self) -> None:
+        job, _ = self.complete()
+        outbox = self.state.get_telegram_outbox_for_job(job.job_id)
+        with self.state._connection:
+            self.state._connection.execute(
+                "INSERT INTO telegram_outbox_parts (outbox_id,part_index,telegram_html) VALUES (?,2,'Example')",
+                (outbox.outbox_id,),
+            )
+        for validated in (0, 1, 2):
+            with self.subTest(validated=validated), self.state._connection:
+                self.state._connection.execute(
+                    """UPDATE telegram_outbox_parts SET telegram_message_id=part_index+100,
+                       receipt_validation_version=CASE WHEN part_index<=? THEN 1 ELSE 0 END
+                       WHERE outbox_id=?""",
+                    (validated, outbox.outbox_id),
+                )
+            delivery = self.read(job.job_id)["result_delivery"]
+            self.assertTrue(delivery["receipts_complete"])
+            self.assertEqual(delivery["parts_receipts_validated"], validated)
+            self.assertEqual(delivery["receipt_provenance_complete"], validated == 2)
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE telegram_outbox_parts SET telegram_message_id=NULL WHERE outbox_id=? AND part_index=2",
+                (outbox.outbox_id,),
+            )
+        delivery = self.read(job.job_id)["result_delivery"]
+        self.assertFalse(delivery["receipts_complete"])
+        self.assertFalse(delivery["receipt_provenance_complete"])
+
     def test_delivered_failure_notice_is_not_a_result_delivery(self) -> None:
         job = self.enqueue()
         lease = self.state.lease_provider_job("codex", "example-worker")
@@ -117,12 +147,14 @@ class OutcomeJournalTests(unittest.TestCase):
         )
         outbox = self.state.lease_telegram_outbox("codex", "example-sender")
         assert outbox is not None and outbox.lease_token is not None
-        self.state.mark_telegram_outbox_delivered(
-            outbox.outbox_id, outbox.lease_token, telegram_message_id=100
+        complete_final_delivery(
+            self.state, outbox.outbox_id, outbox.lease_token, telegram_message_id=100
         )
         outcome = self.read(job.job_id)
         self.assertIsNone(outcome["result"])
         self.assertIsNone(outcome["result_delivery"])
+        self.assertEqual(outcome["notice_delivery"]["status"], "delivered")
+        self.assertTrue(outcome["notice_delivery"]["receipt_provenance_complete"])
         self.assertEqual(outcome["acceptance"]["decision"], "unknown")
         self.assertNotIn(self.poison, json.dumps(outcome))
 
@@ -280,8 +312,8 @@ class OutcomeJournalTests(unittest.TestCase):
         job, _ = self.complete()
         outbox = self.state.lease_telegram_outbox("codex", "example-sender")
         assert outbox is not None and outbox.lease_token is not None
-        self.state.mark_telegram_outbox_delivered(
-            outbox.outbox_id, outbox.lease_token, telegram_message_id=100
+        complete_final_delivery(
+            self.state, outbox.outbox_id, outbox.lease_token, telegram_message_id=100
         )
         complete = self.read(job.job_id)
         self.assertTrue(complete["result_delivery"]["receipts_complete"])

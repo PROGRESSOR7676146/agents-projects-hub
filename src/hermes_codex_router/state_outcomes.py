@@ -32,7 +32,7 @@ WITH target AS (
     LEFT JOIN provider_execution_checkpoints c ON c.job_id=j.job_id
     LEFT JOIN provider_turn_terminal_evidence e ON e.job_id=j.job_id
     LEFT JOIN provider_job_resolutions h ON h.job_id=j.job_id
-    LEFT JOIN telegram_outbox o ON o.job_id=j.job_id AND r.result_id IS NOT NULL
+    LEFT JOIN telegram_outbox o ON o.job_id=j.job_id
                                   AND o.sender_agent_id=j.agent_id
                                   AND o.chat_id=j.chat_id AND o.thread_id=topic.thread_id
     WHERE j.job_id=?
@@ -60,6 +60,8 @@ SELECT t.*, (SELECT user_version FROM pragma_user_version) AS observed_schema,
         AS part_count,
     (SELECT COUNT(*) FROM telegram_outbox_parts p WHERE p.outbox_id=t.outbox_id
         AND p.telegram_message_id>0) AS receipt_count,
+    (SELECT COUNT(*) FROM telegram_outbox_parts p WHERE p.outbox_id=t.outbox_id
+        AND p.telegram_message_id>0 AND p.receipt_validation_version=1) AS validated_receipt_count,
     (SELECT COUNT(*) FROM artifacts) AS artifact_count,
     (SELECT json_group_array(json_object(
         'outbox_id', outbox_id, 'part_index', part_index, 'size', file_size,
@@ -171,13 +173,18 @@ class OutcomeJournalStateFacade:
         if row["outbox_id"] is not None:
             receipts_complete = row["part_count"] > 0 and row["part_count"] == row["receipt_count"]
             delivered = row["delivery_status"] == "delivered" and receipts_complete
-            delivery_time = row["delivered_at"] if delivered else None
+            delivery_time = (
+                row["delivered_at"] if delivered and row["result_id"] is not None else None
+            )
             delivery = {
                 "outbox_id": row["outbox_id"],
                 "status": row["delivery_status"],
                 "parts_total": row["part_count"],
                 "parts_receipted": row["receipt_count"],
                 "receipts_complete": receipts_complete,
+                "parts_receipts_validated": row["validated_receipt_count"],
+                "receipt_provenance_complete": receipts_complete
+                and row["part_count"] == row["validated_receipt_count"],
             }
         return ProviderJobOutcome(
             {
@@ -207,7 +214,8 @@ class OutcomeJournalStateFacade:
                 "result": {"result_id": row["result_id"], "job_id": row["job_id"]}
                 if row["result_id"] is not None
                 else None,
-                "result_delivery": delivery,
+                "result_delivery": delivery if row["result_id"] is not None else None,
+                "notice_delivery": delivery if row["result_id"] is None else None,
                 "inconsistencies": ["result_delivery_missing_or_mismatched"]
                 if row["result_id"] is not None and delivery is None
                 else [],

@@ -58,6 +58,37 @@ Interpret the components independently:
 - Hermes or tlive down: the other channels remain independent; no timeout is an
   approval.
 
+
+## Unknown final or progress delivery
+
+In schema43, inspect `unknown_delivery` and `unknown_progress_delivery` separately
+from pending retry counts. The corresponding passive alerts mean an attempted
+Telegram send lacks a trusted committed receipt; restarting the sender does not
+authorize resend. Use the [exact-job diagnostic](OUTCOME_JOURNAL.md) to inspect
+delivery status, part receipts and provenance locally. Preserve the saved result,
+earlier receipts and artifact spool. Never retry provider execution to repair
+delivery, replace an unknown notice or hand-edit a delivery status.
+
+An unknown final/notice outbox blocks later deliveries in the same numeric topic.
+When its job is result_ready, later productive jobs in that topic remain blocked
+too. There is currently no reconciliation control that releases this delivery
+hold. Do not activate schema43 until the separately reviewed owner action exists;
+source publication is insufficient. Restart, retry exhaustion or age cannot
+resolve unknown. Before an authorized activation, check foreign keys and orphan
+parts on a consistent disposable copy, then run the candidate migration gate.
+
+A late exact Codex terminal observation may record terminal proof and completion
+text while retaining unknown/attempted notice delivery and the indeterminate job.
+Any sending notice first defers observation until the sender settles it. A strict
+receipt or proven rejection then permits normal reconciliation, which archives
+every original part and its receipt/artifact metadata before replacement.
+`notice_delivery` is separate from `result_delivery`; the former cannot prove
+that the recovered final result reached Telegram. No new artifact snapshots are
+claimed as retained in that evidence-only branch. Reconciliation requires a
+separately reviewed explicit action. Migrated legacy sends stay unknown and
+legacy receipt provenance stays unverified. A runtime rollback must support
+schema43; an older binary is not a compatible sender recovery.
+
 ## Component restart boundaries
 
 After inspecting the failed unit and preserving its logs privately, restart
@@ -505,11 +536,9 @@ gateway and a local worker as competing consumers for the same provider.
   present. The consecutive count describes the current episode and resets only
   after a successful Telegram request. Runtime events are edge-triggered, so
   one recorded error can represent many retries.
-- An expired `sending` lease returns to `pending` through sender-scoped stale
-  recovery. The provider result is not recomputed.
-- Telegram may have accepted a message immediately before sender loss. A retry
-  may therefore publish one bounded duplicate; this is safer than repeating a
-  model turn or file-changing action.
+- Sender-scoped stale recovery returns an expired unattempted `sending` lease
+  to pending. A begun send becomes unknown; no automatic resend follows even
+  when Telegram may have accepted it immediately before sender loss.
 - Retry exhaustion leaves the outbox and provider result terminally `failed`.
   Preserve both records for diagnosis. The current product has no remote or
   automatic force-resend command; recovery requires a reviewed future tool or

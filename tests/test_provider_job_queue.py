@@ -13,6 +13,7 @@ from hermes_codex_router import state_stop as state_stop_module
 from hermes_codex_router.root_blockers import persistent_root_blocker
 from hermes_codex_router.state import HubState, StateError
 from hermes_codex_router.task_lifecycle import TaskLifecycleNotice
+from tests.delivery_fixture import complete_final_delivery
 from tests.stop_fixtures import pending_stop
 
 
@@ -1413,8 +1414,8 @@ class ProviderJobQueueTests(unittest.TestCase):
         self.assertEqual(outbox.status, "pending")
         sending = self.state.lease_telegram_outbox("codex", "sender-one")
         assert sending is not None and sending.lease_token is not None
-        self.state.mark_telegram_outbox_delivered(
-            sending.outbox_id, sending.lease_token, telegram_message_id=9001
+        complete_final_delivery(
+            self.state, sending.outbox_id, sending.lease_token, telegram_message_id=9001
         )
         self.assertEqual(self.state.get_provider_job(queued.job_id).status, "completed")
         self.assertEqual(
@@ -1621,8 +1622,12 @@ class ProviderJobQueueTests(unittest.TestCase):
                 now=expired,
             )
         with self.assertRaisesRegex(StateError, "lease"):
-            self.state.mark_telegram_outbox_delivered(
-                outbox.outbox_id, outbox.lease_token, telegram_message_id=9002, now=expired
+            complete_final_delivery(
+                self.state,
+                outbox.outbox_id,
+                outbox.lease_token,
+                telegram_message_id=9002,
+                now=expired,
             )
 
     def test_terminal_outbox_failure_unblocks_fifo_without_replaying_provider(self) -> None:

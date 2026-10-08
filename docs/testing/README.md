@@ -110,6 +110,23 @@ process-start evidence. These checks do not establish native turn acceptance,
 tool timing, subscription routing or deployed Telegram behavior. The owning
 subset and limits are [REQ-QUEUE-012](../product/PERSISTENCE_AND_RECOVERY.md).
 
+Delivery-certainty fixtures (`tests.test_delivery_certainty`,
+`tests.test_progress_certainty`, `tests.test_delivery_certainty_migration` and
+`tests.test_observed_delivery_preservation`) exercise SQLite fences and fictional
+Telegram receipts. They cover malformed/bool IDs, external/embedded/document
+paths, post-HTTP expiry, receipt-commit faults, prefix preservation, cleanup,
+pre/post-fence recovery, populated schema42 backups and trigger/FK/DDL rollback.
+Late exact native proof preserves uncertain notice parts and old referenced
+artifacts without a substitute send. A sending notice defers reconciliation until
+receipt, proven rejection or unknown recovery settles it; normal replacement
+archives every original part atomically, including after a receipted prefix.
+Opener-level form/multipart rejection tests cover real HTTP400/403, malformed or
+conflicting bodies, HTTP408/5xx and incomplete HTTP200 responses. Unknown-head
+fixtures prove same-topic execution/delivery remain blocked while another topic
+can deliver. The explicit reconciliation deployment gate remains open.
+No live inference, Telegram or service
+change occurs. This is offline source/fault evidence, not deployment acceptance.
+
 Publication sequence with the installed hooks: focused checks → commit (the
 pre-commit gate) → push (one full canonical run on the clean commit) →
 independent exact-revision CI/CodeQL. Do not run the same full validator

@@ -56,6 +56,27 @@ def evaluate_reliability_alerts(
             )
         )
     unresolved = _positive_int(telemetry.get("unresolved_uncertain_execution"))
+    for key, severity, label in (
+        ("unknown_delivery", "error", "final result"),
+        ("unknown_progress_delivery", "warning", "progress"),
+    ):
+        count = _positive_int(telemetry.get(key))
+        if count is not None:
+            alerts.append(
+                OperationalAlert(
+                    f"reliability:{key}",
+                    key,
+                    severity,
+                    f"Hub has {count} unknown Telegram {label} delivery outcome(s); "
+                    "inspect saved receipts before any resend. Provider work is unchanged."
+                    + (
+                        " Later deliveries in the affected topic are blocked; a result-ready "
+                        "head also blocks new execution there. Explicit owner reconciliation is required."
+                        if key == "unknown_delivery"
+                        else ""
+                    ),
+                )
+            )
     if unresolved is not None:
         alerts.append(
             OperationalAlert(
