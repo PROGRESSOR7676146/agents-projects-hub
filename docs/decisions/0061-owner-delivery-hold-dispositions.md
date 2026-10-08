@@ -72,6 +72,8 @@ also remain blocked. Connect/adoption and relocation retain their strict checks.
 Queue continuation is the only released authority. Hub maintainer owns a future
 separately reviewed control-reconciliation decision; age or restart cannot clear
 these boundaries. This source action is not full operational acceptance.
+The separate [staged full-control prerequisite](0063-delivery-control-reconciliation.md)
+does not extend this consent or change its lifetime guards.
 
 ## Verification and limits
 

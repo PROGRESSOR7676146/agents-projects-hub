@@ -91,7 +91,8 @@ class OutcomeAssessmentMigrationTests(unittest.TestCase):
             }
 
     def test_populated_upgrade_preserves_all_notice_states_links_and_private_backup(self) -> None:
-        result = migrations.migrate_database(self.path)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 45):
+            result = migrations.migrate_database(self.path)
         self.assertEqual((result.previous_version, result.current_version), (44, 45))
         assert result.backup_path is not None
         self.assertEqual(result.backup_path.stat().st_mode & 0o777, 0o600)
@@ -121,7 +122,8 @@ class OutcomeAssessmentMigrationTests(unittest.TestCase):
                 ).fetchone()[2],
                 "task_lifecycle_notices",
             )
-        self.assertIsNone(migrations.migrate_database(self.path).backup_path)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 45):
+            self.assertIsNone(migrations.migrate_database(self.path).backup_path)
 
     def test_rebuild_fault_rolls_back_rows_objects_and_schema_in_place(self) -> None:
         with (
@@ -145,7 +147,8 @@ class OutcomeAssessmentMigrationTests(unittest.TestCase):
     def test_notice_rebuild_preserves_exact_existing_objects_constraints_and_incoming_fks(
         self,
     ) -> None:
-        migrations.migrate_database(self.path, create_backup=False)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 45):
+            migrations.migrate_database(self.path, create_backup=False)
         with closing(sqlite3.connect(self.path)) as upgraded:
             after_objects = {
                 name: (kind, canonical_sql(sql))

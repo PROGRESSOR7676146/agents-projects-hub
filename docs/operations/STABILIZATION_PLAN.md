@@ -277,8 +277,8 @@ complete for source publication; the broader goal remains open.
 
 ## Canonical lane archive correction
 
-Status: source published in PR #159 at
-`07fb1cfe088e0ac9e013acb7c46e60aab52ab685`; hosted gates remain pending.
+Status: source publication complete in PR #159 at
+`07fb1cfe088e0ac9e013acb7c46e60aab52ab685`; seven exact-head hosted checks passed.
 Owner: Hub maintainer, sole writer.
 Worktree purpose: repair canonical-root persistence after archive/restart;
 base branch `feat/owner-outcome-assessments`. GPT Astra reviewed the minimal
@@ -286,10 +286,10 @@ root-validation and transaction design. The old-code regression reproduced
 historical-root normalization after CLI archive. The
 [dated ADR correction](../decisions/0031-bounded-root-concurrency.md#archive-correction-2026-10-08)
 records the restored boundary. Legacy evidence protections, schema-44 consent
-limits and cleanup remain unchanged. Next trigger: exact-head hosted publication
-checks, then the lane-domain extraction and separately designed full-control
+limits and cleanup remain unchanged. Next trigger: owner integration and the
+lane-domain extraction and separately designed full-control
 reconciliation. After owner integration inspect tracked, staged and untracked
-work before cleanup. Closure remains open until hosted gates pass; no deployment
+work before cleanup. Source publication closure is complete; no deployment
 or earlier-topic repair is authorized here.
 Exact GPT Astra and actual Claude Opus 5.5/high reviews have no remaining
 mandatory findings after correcting the over-broad idle-peer guard. Commit and
@@ -298,8 +298,8 @@ errors. These checks do not establish deployment or live acceptance.
 
 ## Lane-state domain extraction
 
-Status: neutral source extraction under validation; source owner: Hub maintainer,
-root sole writer. Base and last verified revision:
+Status: neutral source publication complete in PR #160; source owner: Hub maintainer,
+root sole writer. Base revision:
 `07fb1cfe088e0ac9e013acb7c46e60aab52ab685` in `fix/canonical-lane-archive`.
 Worktree purpose: move cohesive lane queries, binding/archive policy and cleanup
 SQL to a dependency-neutral domain before full-control delivery reconciliation.
@@ -309,10 +309,32 @@ validation, topic observation, legacy normalization and session policy remain
 with their existing owners. No schema or observable control exception is added.
 New characterization checks cover register/bind rollback and real cleanup commit
 contention; existing archive/history/peer/source restrictions remain required.
-Next trigger: exact-candidate independent reviews and canonical/hosted gates,
-then the separately reviewed full-control contract and ledger. Closure is open
-until those source gates pass. After owner integration, inspect tracked, staged
+Source publication complete at `61657f24592c43c5e57cd551d9484fd672bc5512`:
+commit/canonical 2,405 tests in 217 modules, Pyright 0, privacy/history and all
+seven exact-head hosted checks passed. GPT Astra and actual Claude Opus 5.5/high
+source reviews have no mandatory findings. PR #160 is open and unmerged.
+Next: the separately reviewed full-control contract and ledger. After owner
+integration, inspect tracked, staged
 and untracked state before any cleanup. No deployment or restart is authorized.
+
+## Delivery control storage and preview prerequisite
+
+Status: schema46 source prerequisite under validation; full-control authority
+unavailable and activation pending. Source owner: Hub maintainer, root sole writer.
+Base and last verified revision: `61657f24592c43c5e57cd551d9484fd672bc5512`
+in `refactor/lane-state-facade`. Worktree purpose: additive per-target ledger and
+read-only preview; source branch `feat/delivery-control-preview`. GPT Astra reviewed
+the staged design and narrow facade/registration exceptions.
+[ADR 0063](../decisions/0063-delivery-control-reconciliation.md) owns the decision;
+the [runbook](DELIVERY_CONTROL.md) owns preview procedure. HubState retains the
+coherent read transaction and the neutral helper owns passive checks/snapshot.
+There is no apply API or consumer exception; schema44 consent/lifetime guards and
+all runtime controls remain intact. Native uncertainty and delivery remain separate.
+Next trigger: exact candidate independent reviews and canonical/hosted gates, then
+coordinated consumer predicates and historical semantics before public consent/CAS
+apply. Closure remains open. After owner integration inspect tracked/staged/untracked
+state before cleanup. Deployment, compatible rollback, authority custody and live
+acceptance are independent gates; this source slice authorizes no migration/restart.
 
 ## Planned final-response mode indicators
 

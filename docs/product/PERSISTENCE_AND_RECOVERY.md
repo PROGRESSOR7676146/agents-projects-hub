@@ -404,6 +404,31 @@ recreate unsaved provider context or a partially executed turn.
   Schema-43/44 activation MUST wait for independent exact-candidate review of
   both the delivery prerequisite and this action. Source publication alone
   MUST NOT authorize activation, provider replay or automatic resend.
+  A separate staged full-control reconciliation MAY record local-owner consent
+  for one exact parked final or commentary-progress target, without confirming
+  Telegram delivery. Its schema-46 storage and read-only preview prerequisite
+  MUST NOT expose apply or change any existing runtime blocker. Full-control
+  authority remains Planned until explicit snapshot-CAS consent and every
+  affected control consumer are independently reviewed and implemented.
+  Preview MUST accept only unknown or delivery-policy-exhausted failed targets
+  without a sender lease, bind historical job/session/project/numeric destination
+  and result or commentary-item identity, and hash every ordered part,
+  receipt/artifact metadata and relevant retained native/owner proof. It MUST
+  open existing current-schema state without migration, configuration,
+  credentials, transport or inference. Output MUST explicitly mark preview-only,
+  apply unavailable and control effect not enabled, exposing no content or paths.
+  A failed indeterminate final notice MUST require pre-existing exact terminal
+  evidence matching the retained checkpoint or an existing exact owner resolution;
+  otherwise late native recovery could replace the pinned target. Storage MUST
+  retain target and selected prerequisite references without cascade, and reject
+  disposition update/deletion. Historical binding matching MUST exclude today's
+  active-session pointer, live scope and a later progress result; another target
+  of the same job MUST require separate consent. Schema44 consent MUST remain
+  unchanged and MUST NOT inherit a full-control exception. Native uncertainty,
+  owner holds, stop, writers and capacity remain independent. Source publication
+  and schema migration alone MUST NOT enable this authority. The staged decision
+  and future activation boundary are recorded in
+  [ADR 0063](../decisions/0063-delivery-control-reconciliation.md).
 - **REQ-QUEUE-006 (Implemented for the additive schema and global compatibility gate; per-provider rollout Planned):** Queue migration and per-provider rollout MUST be
   additive, feature-gated, recoverable through the existing backup discipline,
   and retain safe rollback without destroying accepted jobs. Changing an agent
