@@ -112,9 +112,9 @@ class Supervisor(fixtures.WorkerSupervisor):
             if self.mode_after_acquisition is not None:
                 self.transport_mode = self.mode_after_acquisition
             return self.client_value
-        if self.stdio and not allow_fallback:
-            raise RuntimeError("No owning shared socket in example stdio mode")
         self.control_options.append((allow_fallback, deadline))
+        if (self.stdio or self.transport_mode == "stdio-fallback") and not allow_fallback:
+            raise RuntimeError("No owning shared socket in example stdio mode")
         return CodexAppServerClient(Transport(self.provider, productive=False), initialized=True)
 
 
@@ -159,8 +159,9 @@ class ControlLossWorkerTests(unittest.TestCase):
         return job_id, provider, worker, supervisor
 
     def test_mode_change_before_acquisition_returns_cannot_retarget_socket_turn(self):
-        _, provider, _, supervisor = self.run_failure(acquisition_mode="stdio-fallback")
-        self.assertEqual(provider.interrupts, [("example-thread", "example-turn")])
+        job_id, provider, worker, supervisor = self.run_failure(acquisition_mode="stdio-fallback")
+        self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
+        self.assertEqual(provider.interrupts, [])
         self.assertFalse(supervisor.control_options[0][0])
 
     def test_unknown_primary_transport_grants_no_protective_control_or_fallback(self):
@@ -172,7 +173,7 @@ class ControlLossWorkerTests(unittest.TestCase):
     def test_other_client_fallback_cannot_change_socket_turn_recovery(self):
         job_id, provider, worker, supervisor = self.run_failure(failure_mode="stdio-fallback")
         self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
-        self.assertEqual(provider.interrupts, [("example-thread", "example-turn")])
+        self.assertEqual(provider.interrupts, [])
         self.assertFalse(supervisor.control_options[0][0])
 
     def test_other_client_socket_restore_cannot_grant_stdio_turn_control(self):
@@ -356,14 +357,14 @@ class EmbeddedStdioRecoveryTests(unittest.TestCase):
             "inProgress", stdio=False, acquisition_mode="stdio-fallback"
         )
         self.assertEqual(job.status, "indeterminate")
-        self.assertEqual(provider.interrupts, [("example-thread", "example-turn")])
+        self.assertEqual(provider.interrupts, [])
 
     def test_other_client_fallback_cannot_change_socket_turn_recovery(self):
         job, provider, _ = self.run_failure(
             "inProgress", stdio=False, failure_mode="stdio-fallback"
         )
         self.assertEqual(job.status, "indeterminate")
-        self.assertEqual(provider.interrupts, [("example-thread", "example-turn")])
+        self.assertEqual(provider.interrupts, [])
 
     def test_other_client_socket_restore_cannot_grant_stdio_turn_control(self):
         job, provider, _ = self.run_failure("completed", failure_mode="socket")
