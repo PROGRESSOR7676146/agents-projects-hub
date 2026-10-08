@@ -513,15 +513,14 @@ acceptance.
 - **Accepted-turn control loss:** Stage 1 published at
   `fe7bb51ffa8dc491a33c624614dcff57ab40208d`; schema48 Stage 2 published at
   `b9822a797572ee6edab0d3b3c515516e38a68148`, unmerged,
-  owned by the lead agent. Resolved IDs free pending capacity; bounded typed
-  history prevents reopening, and optional exhaustion preserves mandatory
-  consumption. Fatal control-observer failure wakes the owning worker for exact
-  recovery. Offline native 129-pair/final and control-loss witnesses passed.
-  Stage 2 adds shared durable fencing and independent late pending-stop service;
-  with canonical/review and seven hosted checks passed. Stage3 starts with a
-  fenced poll ledger/pure policy; exact episodes and precaution integration
-  remain pending. Full incident closure and
-  deployment remain open; see [acceptance/runbook](CODEX_CONTROL_LOSS.md) and
+  owned by the lead agent, with canonical/review and seven hosted checks passed.
+  Offline native 129-pair/final and control-loss witnesses passed. Stage3's schema49
+  fenced poll ledger/pure policy is published at
+  `7af0204a117e2b1a23c0a364f44249c12de14fa4` with independent review and
+  seven hosted checks. Schema50 immutable admission/accepted-target ingress
+  is under source validation; exact episodes and precaution integration
+  remain pending. Incident closure and deployment remain open; see
+  [acceptance/runbook](CODEX_CONTROL_LOSS.md) and
   [ADR 0064](../decisions/0064-codex-control-loss.md). No automatic replay.
   Lead also owns a future unknown-sender reconciliation boundary: independently
   prove the send path ended; neither terminal proof nor expiry may reset it.

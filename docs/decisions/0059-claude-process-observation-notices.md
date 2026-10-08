@@ -7,7 +7,7 @@ Date: 2026-10-08
 
 Claude's prepared session UUID and stream message UUIDs do not establish a native
 turn acceptance or commentary phase. The owning contract is the Claude subset of
-[REQ-QUEUE-012](../product/PERSISTENCE_AND_RECOVERY.md#implemented-queue-compatibility-and-local-provider-worker-isolation).
+[REQ-QUEUE-012](../product/DURABLE_QUEUE_AND_CONTROL.md#implemented-queue-compatibility-and-local-provider-worker-isolation).
 Keep its observations separate from Codex accepted-turn activity and progress
 delivery. Reuse the existing SQLite journal, control outbox and passive sender;
 introduce no polling service, provider query or new approval path.

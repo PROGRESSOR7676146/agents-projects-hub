@@ -18,8 +18,8 @@ class PreacceptanceMigrationTests(unittest.TestCase):
         self.path = Path(self.enterContext(tempfile.TemporaryDirectory())) / "state.db"
         source = self.path.with_name("example-current-seed.db")
         self.now = datetime.now(timezone.utc)
-        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
-            state = HubState.open(source, codex_permission_profile=None)
+        # Current builders seed current DDL; projection below owns genuine39.
+        state = HubState.open(source, codex_permission_profile=None)
         try:
             with state._connection:
                 topic = state.observe_topic(
@@ -100,6 +100,32 @@ class PreacceptanceMigrationTests(unittest.TestCase):
         finally:
             state.close()
         project_historical_database(source, self.path, 39)
+        with sqlite3.connect(self.path) as old:
+            self.assertEqual(
+                old.execute(
+                    """SELECT event_key,status,attempt_count,send_started_at,
+                              telegram_message_id,lease_token IS NOT NULL,job_id
+                       FROM task_lifecycle_notices ORDER BY event_key"""
+                ).fetchall(),
+                [
+                    ("example-notice-0", "delivered", 1, self.now.isoformat(), 101, 0, job.job_id),
+                    ("example-notice-1", "unknown", 1, self.now.isoformat(), None, 0, job.job_id),
+                    ("example-notice-2", "leased", 1, self.now.isoformat(), None, 1, job.job_id),
+                ],
+            )
+            self.assertEqual(
+                old.execute(
+                    "SELECT idempotency_key,status FROM provider_jobs ORDER BY idempotency_key"
+                ).fetchall(),
+                [("example-input", "executing"), ("example-queued-tail", "queued")],
+            )
+            self.assertEqual(
+                old.execute(
+                    """SELECT job_id,provider_thread_id,provider_turn_id
+                       FROM provider_execution_checkpoints"""
+                ).fetchall(),
+                [(job.job_id, "example-thread", "example-turn")],
+            )
 
     def snapshot(self, connection):
         return {

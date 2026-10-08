@@ -108,7 +108,7 @@ retirement and restart episodes, attempted/unknown/rejected send preservation,
 and additive schema-42 backup/DDL rollback. Buffered runners do not establish
 process-start evidence. These checks do not establish native turn acceptance,
 tool timing, subscription routing or deployed Telegram behavior. The owning
-subset and limits are [REQ-QUEUE-012](../product/PERSISTENCE_AND_RECOVERY.md).
+subset and limits are [REQ-QUEUE-012](../product/DURABLE_QUEUE_AND_CONTROL.md).
 
 Delivery-certainty fixtures (`tests.test_delivery_certainty`,
 `tests.test_progress_certainty`, `tests.test_delivery_certainty_migration` and

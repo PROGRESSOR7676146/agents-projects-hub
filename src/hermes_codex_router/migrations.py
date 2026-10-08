@@ -30,6 +30,7 @@ from .schema_preexecution_retry import PREEXECUTION_RETRY_SCHEMA as MIGRATION_41
 from .schema_task_activity import TASK_ACTIVITY_SCHEMA as MIGRATION_37
 from .schema_task_lifecycle import MIGRATION_36
 from .schema_telegram_ingress import TELEGRAM_INGRESS_SCHEMA as MIGRATION_49
+from .schema_telegram_turn_provenance import TELEGRAM_TURN_PROVENANCE_SCHEMA as MIGRATION_50
 
 LATEST_SCHEMA_VERSION = TARGET_SCHEMA_VERSION
 
@@ -1508,6 +1509,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_47,
         MIGRATION_48,
         MIGRATION_49,
+        MIGRATION_50,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:

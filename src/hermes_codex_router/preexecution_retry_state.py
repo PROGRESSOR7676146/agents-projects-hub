@@ -290,6 +290,7 @@ class PreexecutionRetryState:
         canonical_root: Path,
         model_provider: str | None,
         provider_runtime: str,
+        telegram_ingress_identity: str | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
         with self.state._immediate_transaction():
             if (
@@ -335,6 +336,7 @@ class PreexecutionRetryState:
                 prepare_task_notices=True,
                 control_input="retry",
                 attach_forwarded_materials=False,
+                telegram_ingress_identity=telegram_ingress_identity,
             )
             if not created:
                 raise StateError("preparation retry child lacks its committed provenance")

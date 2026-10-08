@@ -13,7 +13,7 @@ queue, provider event stream and Telegram sender already own these boundaries.
 
 ## Decision
 
-The owning contract remains [REQ-QUEUE-012/013](../product/PERSISTENCE_AND_RECOVERY.md#implemented-queue-compatibility-and-local-provider-worker-isolation).
+The owning contract remains [REQ-QUEUE-012/013](../product/DURABLE_QUEUE_AND_CONTROL.md#implemented-queue-compatibility-and-local-provider-worker-isolation).
 Admission records acceptance and the current queue blocker in its existing
 transaction. Duplicate input and batched continuation preserve the original
 job and notices. Queue categories are immutable snapshots, at most once per

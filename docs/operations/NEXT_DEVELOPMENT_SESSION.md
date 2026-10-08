@@ -36,9 +36,11 @@ in 233 modules, Pyright zero errors, independent Astra/actual Opus sign-off and
 seven exact-revision hosted checks. Its actual native offline control-loss
 witness passed; none of this is deployment evidence. Do not repeat completed
 publication gates after an interrupted agent turn.
-Stage3 begins with a schema49 fenced group-poll ledger and pure freshness/grace
-policy, under source review. Automatic precautions are not activated. Next is
-exact accepted-target ingress provenance, durable continuity/episodes, exact
+Stage3's schema49 fenced group-poll ledger and pure freshness/grace policy are
+published at `7af0204a117e2b1a23c0a364f44249c12de14fa4`, with canonical
+2,628 tests in 237 modules, Pyright zero errors and seven hosted checks.
+Schema50 immutable admission/accepted-target ingress provenance is under source
+validation. Automatic precautions are not activated. Next is durable continuity/episodes, exact
 commentary unknown delivery and full-control consent checked in the send-fence
 transaction, then shared live/independent maintenance regression coverage.
 Use immutable job-ingress sidecars and fresh-acceptance target rows; do not infer
@@ -46,8 +48,8 @@ authority from legacy jobs or observer labels. Retry children bind their current
 Reply ingress; mixed/unknown provenance must not batch or steer into a proven
 target. Late precautions share the existing three-read budget and permanent
 fence without synthetic stop receipts. Stop binding must never move the next
-late-read deadline backward. Split the near-limit persistence requirements module
-by ownership before further contract growth; preserve IDs and reviewed sections.
+late-read deadline backward. Queue/control clauses now have one owning module,
+[section 22](../product/DURABLE_QUEUE_AND_CONTROL.md); their IDs are retained.
 The remaining Claude/operations goal stays open. See
 [control-loss acceptance](CODEX_CONTROL_LOSS.md) and the
 [stabilization plan](STABILIZATION_PLAN.md). No live activation is authorized.

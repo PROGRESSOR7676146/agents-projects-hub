@@ -24,6 +24,7 @@ from .state import (
 )
 from .state_errors import CodexPermissionSelectionChanged
 from .telegram import TelegramError, TopicMessage
+from .telegram_turn_provenance import validate_ingress_identity
 
 AdmissionRejection = Literal[
     "input_too_long",
@@ -87,6 +88,7 @@ class DurableProviderAdmission:
         message_batch_max_ms: int,
         prepare_task_notices: bool = False,
         queue_capacity: QueueCapacityConfig | None = None,
+        telegram_ingress_identity: str | None = None,
     ) -> None:
         self.state = state
         self.telegram = telegram
@@ -96,6 +98,7 @@ class DurableProviderAdmission:
         self.message_batch_max_ms = message_batch_max_ms
         self.prepare_task_notices = prepare_task_notices
         self.queue_capacity = queue_capacity
+        self.telegram_ingress_identity = validate_ingress_identity(telegram_ingress_identity)
 
     def admit(
         self,
@@ -197,6 +200,7 @@ class DurableProviderAdmission:
                     input_group_key=group_key,
                     prepare_task_notices=self.prepare_task_notices,
                     queue_capacity=self.queue_capacity,
+                    telegram_ingress_identity=self.telegram_ingress_identity,
                     quiet_ms=(
                         ALBUM_QUIET_MILLISECONDS
                         if group_key is not None
@@ -229,6 +233,7 @@ class DurableProviderAdmission:
                     expected_transfer=expected_transfer,
                     prepare_task_notices=self.prepare_task_notices,
                     queue_capacity=self.queue_capacity,
+                    telegram_ingress_identity=self.telegram_ingress_identity,
                 )
         except CodexPermissionSelectionChanged as exc:
             return self._permission_refusal(request) or DurableAdmissionFailure(

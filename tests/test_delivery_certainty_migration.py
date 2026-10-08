@@ -24,14 +24,16 @@ def snapshot(connection: sqlite3.Connection) -> dict[str, list[tuple]]:
 
 class DeliveryCertaintyMigrationTests(unittest.TestCase):
     def setUp(self) -> None:
+        current_schema_version = migrations.LATEST_SCHEMA_VERSION
         self.enterContext(patch.object(migrations, "LATEST_SCHEMA_VERSION", 43))
         progress = progress_fixtures.DurableProgressDeliveryTests()
-        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", current_schema_version):
             progress.setUp()
+        self.addCleanup(progress.doCleanups)
         self.addCleanup(progress.tearDown)
         source_path = progress.config.state_path
         self.path = source_path.with_name("example-historical.db")
-        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", current_schema_version):
             job_id, token, journal = progress.executing_job()
             journal.record_item(job_id, token, "example-progress", "Example progress", "commentary")
             progress.state.commit_provider_result(
@@ -44,33 +46,49 @@ class DeliveryCertaintyMigrationTests(unittest.TestCase):
             progress.state.close()
             fixture = outbox_fixtures.TelegramOutboxSenderTests()
             fixture.setUp()
+            self.addCleanup(fixture.doCleanups)
             self.addCleanup(fixture.tearDown)
             fixture.config = replace(fixture.config, state_path=source_path)
-            with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
+            with patch.object(migrations, "LATEST_SCHEMA_VERSION", current_schema_version):
                 self.sending_job = fixture.ready_outbox("opencode", 81)
                 self.delivered_job = fixture.ready_outbox("opencode", 82)
                 self.failed_job = fixture.ready_outbox("opencode", 83)
         project_historical_database(source_path, self.path, 42)
         with sqlite3.connect(self.path) as old:
-            old.execute(
+            self.assertEqual(old.execute("SELECT COUNT(*) FROM provider_jobs").fetchone()[0], 4)
+            self.assertEqual(old.execute("SELECT COUNT(*) FROM telegram_outbox").fetchone()[0], 4)
+            self.assertEqual(
+                old.execute("SELECT COUNT(*) FROM telegram_outbox_parts").fetchone()[0], 4
+            )
+            self.assertEqual(
+                old.execute(
+                    "SELECT job_id,item_sequence FROM provider_progress_deliveries"
+                ).fetchall(),
+                [(job_id, 1)],
+            )
+            sending = old.execute(
                 """UPDATE telegram_outbox SET status='sending', lease_owner='example-sender',
                    lease_token='example-token', lease_expires_at='2026-01-01T00:00:00+00:00'
                    WHERE job_id=?""",
                 (self.sending_job,),
             )
-            old.execute(
+            self.assertEqual(sending.rowcount, 1)
+            delivered = old.execute(
                 "UPDATE telegram_outbox SET status='delivered', telegram_message_id=101 WHERE job_id=?",
                 (self.delivered_job,),
             )
-            old.execute(
+            self.assertEqual(delivered.rowcount, 1)
+            delivered_part = old.execute(
                 """UPDATE telegram_outbox_parts SET telegram_message_id=101
                    WHERE outbox_id=(SELECT outbox_id FROM telegram_outbox WHERE job_id=?)""",
                 (self.delivered_job,),
             )
-            old.execute(
+            self.assertEqual(delivered_part.rowcount, 1)
+            failed = old.execute(
                 "UPDATE telegram_outbox SET status='failed' WHERE job_id=?", (self.failed_job,)
             )
-            old.execute(
+            self.assertEqual(failed.rowcount, 1)
+            document = old.execute(
                 """INSERT INTO telegram_outbox_parts
                    (outbox_id,part_index,telegram_html,part_type,file_path,file_name,file_size,file_sha256)
                    SELECT outbox_id,2,'Example artifact','document',
@@ -78,17 +96,22 @@ class DeliveryCertaintyMigrationTests(unittest.TestCase):
                    FROM telegram_outbox WHERE job_id=?""",
                 ("a" * 64, self.sending_job),
             )
-            old.execute(
+            self.assertEqual(document.rowcount, 1)
+            progress_delivery = old.execute(
                 """UPDATE provider_progress_deliveries SET status='sending', lease_owner='example-sender',
-                   lease_token='example-progress-token', lease_expires_at='2026-01-01T00:00:00+00:00'"""
+                   lease_token='example-progress-token', lease_expires_at='2026-01-01T00:00:00+00:00'
+                   WHERE job_id=?""",
+                (job_id,),
             )
-            old.execute(
+            self.assertEqual(progress_delivery.rowcount, 1)
+            recovery_notice = old.execute(
                 """INSERT INTO provider_recovery_notices
                    (job_id,outbox_id,telegram_html,delivery_status,telegram_message_id,saved_at)
                    VALUES (?,'example-historical-outbox','Example historical notice','delivered',91,
                            '2026-01-01T00:00:00+00:00')""",
                 (self.delivered_job,),
             )
+            self.assertEqual(recovery_notice.rowcount, 1)
 
     def test_upgrade_preserves_parts_jobs_receipts_and_backup_without_invented_provenance(
         self,

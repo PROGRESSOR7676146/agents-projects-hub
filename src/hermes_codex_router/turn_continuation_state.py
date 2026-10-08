@@ -79,6 +79,7 @@ class TurnContinuationState:
         notice_message_id: int,
         reply_message_id: int,
         canonical_root: Path,
+        telegram_ingress_identity: str | None = None,
     ) -> tuple[ProviderJobRecord, bool, int]:
         from .state import StateError
         from .state_errors import CodexPermissionSelectionChanged
@@ -231,6 +232,9 @@ class TurnContinuationState:
                     now,
                     now,
                 ),
+            )
+            self.state.telegram_turn_provenance.record_new_job_in_transaction(
+                job_id, telegram_ingress_identity
             )
             self.connection.execute(
                 "UPDATE topic_queue_counters SET next_sequence = next_sequence + 1, "

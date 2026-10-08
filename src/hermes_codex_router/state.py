@@ -68,6 +68,7 @@ from .state_stop import StopState
 from .state_values import _bounded, _now, _optional_bounded, _timestamp
 from .task_lifecycle import TaskLifecycleState
 from .telegram_ingress_ledger import TelegramIngressLedger
+from .telegram_turn_provenance import TelegramTurnProvenance, validate_ingress_identity
 
 MAX_PROVIDER_RESPONSE_LENGTH = 200_000
 RECOVERED_RESULT_METADATA_JSON = '{"hub_recovered":true}'
@@ -148,6 +149,7 @@ class HubState:
             connection, self._immediate_transaction, StateError
         )
         self.codex_controls = CodexTurnControls(connection, transaction=self._immediate_transaction)
+        self.telegram_turn_provenance = TelegramTurnProvenance(connection)
         self.telegram_ingress = TelegramIngressLedger(
             connection, transaction=self._immediate_transaction
         )
@@ -898,6 +900,7 @@ class HubState:
         expected_transfer: WriterTransferSnapshot | None = None,
         prepare_task_notices: bool = False,
         queue_capacity: QueueCapacityConfig | None = None,
+        telegram_ingress_identity: str | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
         """Atomically accept one provider input and its receipt/notices."""
         from .provider_admission_state import ProviderAdmissionState
@@ -925,6 +928,7 @@ class HubState:
                 expected_transfer=expected_transfer,
                 prepare_task_notices=prepare_task_notices,
                 queue_capacity=queue_capacity,
+                telegram_ingress_identity=telegram_ingress_identity,
             )
 
     def enqueue_or_append_provider_job(
@@ -950,6 +954,7 @@ class HubState:
         max_ms: int,
         prepare_task_notices: bool = False,
         queue_capacity: QueueCapacityConfig | None = None,
+        telegram_ingress_identity: str | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
         """Durably collect one compatible Telegram burst into one queued turn.
 
@@ -960,6 +965,7 @@ class HubState:
         """
         from .session_adoption_state import CodexSessionOrigins
 
+        ingress = validate_ingress_identity(telegram_ingress_identity)
         if quiet_ms <= 0:
             return self.enqueue_provider_job(
                 idempotency_key=idempotency_key,
@@ -979,6 +985,7 @@ class HubState:
                 input_group_key=input_group_key,
                 prepare_task_notices=prepare_task_notices,
                 queue_capacity=queue_capacity,
+                telegram_ingress_identity=ingress,
             )
         user_text = _bounded(appended_user_text, name="batch input", maximum=20000)
         group_key = _optional_bounded(input_group_key, name="input group key", maximum=256)
@@ -1022,6 +1029,8 @@ class HubState:
                      AND session_generation = ? AND model = ? AND effort = ?
                      AND input_group_key IS ?
                      AND codex_permission_profile IS ?
+                     AND (SELECT ingress_identity FROM provider_job_telegram_ingress ingress
+                          WHERE ingress.job_id=provider_jobs.job_id) IS ?
                      AND status = 'queued' AND next_attempt_at > ?
                      AND created_at >= ?
                      AND topic_sequence = (
@@ -1038,6 +1047,7 @@ class HubState:
                     effort,
                     group_key,
                     session.codex_permission_profile,
+                    ingress,
                     timestamp,
                     absolute_floor,
                 ),
@@ -1117,6 +1127,7 @@ class HubState:
             materials=materials,
             input_group_key=group_key,
             available_at=quiet_until,
+            telegram_ingress_identity=ingress,
             prepare_task_notices=prepare_task_notices,
             queue_capacity=queue_capacity,
         )

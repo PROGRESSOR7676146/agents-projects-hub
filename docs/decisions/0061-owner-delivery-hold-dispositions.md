@@ -11,7 +11,7 @@ Unknown final/notice delivery conservatively parks a begun Telegram send. The
 therefore cannot be activated without a bounded way for the owner to let the
 topic continue. Changing unknown to delivered or failed would invent certainty
 or hide evidence. This decision implements the owning
-[REQ-QUEUE-005](../product/PERSISTENCE_AND_RECOVERY.md), without another sender,
+[REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONTROL.md), without another sender,
 job state, role workflow or outcome assessment.
 
 ## Decision and ownership

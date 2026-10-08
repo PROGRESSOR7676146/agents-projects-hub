@@ -49,6 +49,12 @@ may be new; numbered normative section text must remain hash-identical.
 
 ## Rollback and stop conditions
 
+2026-10-08 follow-on ownership split for schema50: the complete queue/control subsection
+moves from section13 to section22 in `DURABLE_QUEUE_AND_CONTROL.md`. All IDs
+and complete existing clauses are retained; the schema50 provenance addition is
+reviewed separately in that owning module. The manifest records the affected
+section13 and22 hashes without weakening inventory, link or privacy validation.
+
 The migration is one documentation-only commit after the guardrail commit. A
 normal Git revert restores the monolith; no schema, runtime, deployment, or
 external state changes are involved.

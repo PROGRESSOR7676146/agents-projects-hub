@@ -12,7 +12,7 @@ timeout could therefore resend an accepted message. Stale leases had no durable
 distinction between preparation and an attempted send. Later Codex terminal
 observation could replace an unknown notice and erase its multipart evidence.
 
-The owning contract is [REQ-QUEUE-005](../product/PERSISTENCE_AND_RECOVERY.md).
+The owning contract is [REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONTROL.md).
 Control notices already have a send-start fence; this change applies the same
 certainty policy to final/progress paths without another queue or sender.
 

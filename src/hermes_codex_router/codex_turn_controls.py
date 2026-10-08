@@ -379,6 +379,9 @@ class CodexTurnControls:
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
+        from .telegram_turn_provenance import TelegramTurnProvenance
+
+        TelegramTurnProvenance(self.db).record_fresh_target_in_transaction(str(job["job_id"]))
         self.bind_covering_stops_in_transaction()
         return True
 

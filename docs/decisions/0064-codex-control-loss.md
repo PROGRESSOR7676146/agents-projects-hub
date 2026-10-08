@@ -1,6 +1,6 @@
 # ADR 0064: Preserve control of accepted Codex turns
 
-Status: accepted staged design; Stage2 source published, Stage3 prerequisite under review
+Status: accepted staged design; Stage2/schema49 source published, schema50 under validation
 Date: 2026-10-08
 
 ## Context and decision
@@ -8,7 +8,7 @@ Date: 2026-10-08
 Resolved approval IDs previously consumed the pending allowance of 128 until turn
 end. The resulting optional observation exception could terminate Hub's worker
 path while the native turn continued. The owning contract is
-[REQ-QUEUE-014](../product/PERSISTENCE_AND_RECOVERY.md); approval authority and
+[REQ-QUEUE-014](../product/DURABLE_QUEUE_AND_CONTROL.md); approval authority and
 delivery uncertainty remain governed by REQ-SEC-002 and REQ-QUEUE-013.
 
 Stage 1 restores optional observation isolation from ADR 0051. Pending requests
@@ -138,6 +138,23 @@ Unknown exact commentary delivery needs its own target-bound episode; idle,
 429 and unrelated success are not its substitutes. Existing late owner-stop
 claims do not yet authorize due Telegram precautions. No precautionary interrupt
 or new owner-stop receipt is introduced by schema49.
+
+Schema50 adds immutable admission-ingress and fresh-acceptance target sidecars.
+HubState owns the admission/checkpoint transactions; the domain facade has no
+provider or transport dependency. Logical ingress comes only from the actual
+group Controller, separately from the selected provider and observer. Historical
+jobs and checkpoints are never backfilled. Retry and continuation children bind
+their current Reply; duplicates cannot enrich or rebind. Batch and steer compare
+provenance and preserve mixed input as FIFO work; the pre-RPC transaction rechecks
+it. SQL collision guards retain first-input closure and all existing control
+fences, including unknown ingress, without depending on recursive DELETE triggers.
+The owning contract is [section 22](../product/DURABLE_QUEUE_AND_CONTROL.md).
+The private-chat regression exposed missing numeric Reply metadata. The narrow
+parser correction supports exact saved-notice recovery without adding private
+provider addressing or group-control semantics; unmatched private Replies keep
+their ordinary-input behavior under REQ-QUEUE-004.
+This prerequisite grants no precaution authority; persistent continuity/episodes,
+full-control consent/send-start and live/late integration remain the next stage.
 
 A failure streak already past its original deadline can make a newly accepted
 target immediately due; startup/stale grace does not reset that streak. Fresh

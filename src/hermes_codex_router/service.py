@@ -130,6 +130,7 @@ from .telegram_interaction import (
     telegram_contract_version,
     telegram_developer_instructions,
 )
+from .telegram_turn_provenance import group_ingress_identity
 from .terminal import terminal_session_name
 from .terminal_runtime import TerminalRuntime
 from .topic_execution import require_inline_topic, resolve_topic_execution_root
@@ -561,6 +562,14 @@ class ProjectHubService:
     def _uses_external_outbox_sender(self) -> bool:
         return getattr(self.config, "outbox_runtime", "controller") == "external"
 
+    def _telegram_group_ingress(self, message: TopicMessage):
+        return group_ingress_identity(
+            getattr(self, "ingress_identity", None),
+            group_controller=getattr(self, "_publishes_controller_health", False)
+            and not getattr(self, "direct_messages_only", False)
+            and message.chat_id != message.sender_id,
+        )
+
     def _enqueue_provider_turn(
         self,
         *,
@@ -584,6 +593,7 @@ class ProjectHubService:
             telegram=self.telegram,
             state_path=self.config.state_path,
             observer_agent_id=self.agent.agent_id,
+            telegram_ingress_identity=self._telegram_group_ingress(message),
             message_batch_quiet_ms=self.config.message_batch_quiet_ms,
             message_batch_max_ms=self.config.message_batch_max_ms,
             queue_capacity=QueueCapacityConfig(
@@ -2779,7 +2789,11 @@ class ProjectHubService:
         from .controller_retry import ControllerRetryOrchestrator
 
         retry = ControllerRetryOrchestrator(
-            self.config, self.state, self.registry, ingress_identity
+            self.config,
+            self.state,
+            self.registry,
+            ingress_identity,
+            telegram_ingress_identity=self._telegram_group_ingress(message),
         ).handle(message, topic)
         if retry is not None:
             if retry.error is not None:

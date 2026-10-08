@@ -3,9 +3,11 @@
 Status: staged source fix; full control-loss acceptance pending
 Owner: lead development agent. Last verified Stage 1 revision: `fe7bb51ffa8dc491a33c624614dcff57ab40208d`.
 Stage 2 source published at `b9822a797572ee6edab0d3b3c515516e38a68148`;
-no deployment acceptance. Stage3 prerequisite remains under source review.
+no deployment acceptance. Stage3's schema49 prerequisite is source-published at
+`7af0204a117e2b1a23c0a364f44249c12de14fa4`; schema50 provenance remains
+under source validation.
 
-Follow [REQ-QUEUE-014](../product/PERSISTENCE_AND_RECOVERY.md) and
+Follow [REQ-QUEUE-014](../product/DURABLE_QUEUE_AND_CONTROL.md) and
 [ADR 0064](../decisions/0064-codex-control-loss.md). A worker marked idle or a
 delivered failure notice does not establish that the exact native turn stopped.
 
@@ -125,7 +127,15 @@ and policy checks. Item5's exact-target persistent episodes, full-control consen
 race, native work surviving Telegram loss and shared protective send integration
 remain open; neither ledger nor policy interrupts work or notifies the owner.
 
-Schema49 activation requires a distinct schema49-compatible runtime rollback;
+Schema50 provenance fixtures must additionally cover current Reply retry chains,
+continuation duplicates, batching/steering's nine identity pairs, direct steering
+recheck and stop precedence, refused/repeated acceptance, atomic storage faults,
+and SQL REPLACE collisions with recursive triggers disabled. The additive
+migration retains every schema49 row/object and unknown sender fence, creates
+empty sidecars, and rolls back a DDL fault. These bindings do not detect loss or
+authorize control; item5's durable episodes and send-start integration stay open.
+
+Schema50 activation requires a distinct schema50-compatible runtime rollback;
 the schema48 Stage2 runtime is incompatible. Roll back the executable against
 retained current state. Never restore the pre-migration database over later
 work, checkpoints or send fences to accommodate an older runtime.

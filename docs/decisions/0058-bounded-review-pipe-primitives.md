@@ -13,7 +13,7 @@ explicitly selected bytes. Restoring shared networking, mounting a host socket
 or passing arbitrary descriptors would undermine that isolation. The initial
 advisor still requires durable role/material authorization under
 [REQ-WRITER-013](../product/ACCOUNTS_CONTROL_AND_SECURITY.md) and
-[REQ-QUEUE-011](../product/PERSISTENCE_AND_RECOVERY.md).
+[REQ-QUEUE-011](../product/DURABLE_QUEUE_AND_CONTROL.md).
 
 ## Decision
 

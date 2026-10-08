@@ -117,6 +117,8 @@ def legacy_selection_columns(path: Path):
 def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
     """Remove empty lifecycle/archive structures from fictional historical fixtures."""
     tables = (
+        "codex_telegram_precaution_targets",
+        "provider_job_telegram_ingress",
         "telegram_group_ingress",
         "codex_turn_controls",
         "telegram_delivery_control_dispositions",
@@ -135,6 +137,16 @@ def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
     for table in tables:
         if table in existing:
             assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    for trigger in (
+        "provider_job_telegram_identity_fence",
+        "provider_job_telegram_no_replace",
+        "provider_job_telegram_no_update_replace",
+        "provider_job_first_input_no_delete",
+        "provider_job_first_input_identity_fence",
+        "provider_job_first_input_no_replace",
+        "provider_job_first_input_no_update_replace",
+    ):
+        connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
     if "codex_turn_controls" in existing:
         connection.execute("ALTER TABLE hub_blocker_outbox DROP COLUMN control_scope_error")
         for table in ("hub_blocker_outbox", "provider_job_holds"):
