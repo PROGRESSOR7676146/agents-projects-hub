@@ -16,6 +16,7 @@ from .artifacts import (
     verify_spooled_artifact,
 )
 from .blocker_notice_sender import deliver_root_blocker_notice
+from .claude_activity import ClaudeActivityState
 from .command_menu import GROUP_COMMANDS
 from .delivery_retry import delivery_retry_delay
 from .diagnostic_log import survived
@@ -141,6 +142,13 @@ class TelegramOutboxSender:
             notices_enabled=config.hub_bot is not None,
         )
         self._cursor = 0
+        self.claude_activity = ClaudeActivityState(
+            self.state._connection,
+            transaction=self.state._immediate_transaction,
+            state_error=StateError,
+            notices=self.state.task_notices,
+            notices_enabled=config.hub_bot is not None,
+        )
         self._delivery_class_cursor = 0
         self._progress_cursor = 0
         self._stop = threading.Event()
@@ -346,6 +354,13 @@ class TelegramOutboxSender:
             ordinary_seconds=self.config.task_no_progress_seconds,
             tool_seconds=self.config.task_tool_no_progress_seconds,
         )
+        try:
+            self.claude_activity.evaluate(
+                now=now if now is not None else datetime.now(timezone.utc),
+                ordinary_seconds=self.config.task_no_progress_seconds,
+            )
+        except Exception as error:
+            survived("outbox_sender.claude_activity", error)
         if (
             self._final_deliveries_since_command_scope >= 10
             and self._sync_onboarded_project_commands()

@@ -98,6 +98,18 @@ to OpenCode or Antigravity in each queue consumer. Dispatch and material
 preparation must remain untouched; the saved payload and truthful pre-execution
 notice survive without another retry ticket or execution checkpoint.
 
+Claude process-observation fixtures (`tests.test_claude_process_observation`,
+`tests.test_claude_activity`, `tests.test_claude_activity_lifecycle` and
+`tests.test_claude_activity_migration`) use owned fictional processes and private
+temporary state. They prove post-Popen worker callback propagation, optional
+open/retire/evaluator failure isolation, exact first-send fencing, committed
+visible-message races, permission pending/roundtrip/expiry/revocation/bounds,
+retirement and restart episodes, attempted/unknown/rejected send preservation,
+and additive schema-42 backup/DDL rollback. Buffered runners do not establish
+process-start evidence. These checks do not establish native turn acceptance,
+tool timing, subscription routing or deployed Telegram behavior. The owning
+subset and limits are [REQ-QUEUE-012](../product/PERSISTENCE_AND_RECOVERY.md).
+
 Publication sequence with the installed hooks: focused checks → commit (the
 pre-commit gate) → push (one full canonical run on the clean commit) →
 independent exact-revision CI/CodeQL. Do not run the same full validator

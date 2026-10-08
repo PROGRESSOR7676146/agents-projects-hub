@@ -1,0 +1,187 @@
+"""Actual worker and sender failures cannot turn optional visibility into authority."""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+import sys
+import unittest
+from dataclasses import replace
+from datetime import timedelta
+from typing import Any, cast
+from unittest.mock import patch
+
+from hermes_codex_router.claude_activity import ClaudeActivityState
+from hermes_codex_router.external_runtime import ExternalCliAdapter
+from hermes_codex_router.hub_config import HubTelegramBot
+from hermes_codex_router.outbox_sender import TelegramOutboxSender
+from tests import test_claude_native_worker as worker_fixtures
+from tests import test_outbox_sender as sender_fixtures
+from tests.test_claude_cli_capabilities import HELP
+
+
+class ClaudeActivityLifecycleTests(unittest.TestCase):
+    def owned_worker(self, failure: str | None = None, *, quiet_notice: bool = False) -> None:
+        fixture = worker_fixtures.ClaudeNativeWorkerTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.fixture.config = replace(
+            fixture.fixture.config,
+            hub_bot=HubTelegramBot("example_hub_bot", fixture.root / "unused-token"),
+            task_no_progress_seconds=1,
+        )
+        executable = fixture.root / "fictional-claude"
+        release = fixture.root / "example-process-release"
+        executable.write_text(
+            f"#!{sys.executable}\nimport sys,json,time,pathlib\n"
+            f"if sys.argv[1:] == ['--help']:\n    print({HELP!r})\n    sys.exit(0)\n"
+            f"if {quiet_notice!r}:\n"
+            f"    release=pathlib.Path({str(release)!r}); deadline=time.monotonic()+10\n"
+            "    while not release.exists() and time.monotonic()<deadline: time.sleep(.01)\n"
+            "    if not release.exists(): sys.exit(2)\n"
+            "native=sys.argv[sys.argv.index('--session-id')+1]\n"
+            "print(json.dumps({'type':'result','subtype':'success','is_error':False,"
+            "'session_id':native,'result':'Fictional final answer'}))\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o700)
+        adapter = ExternalCliAdapter("claude", executable=str(executable))
+        worker = fixture.worker(cast(Any, adapter))
+        job_id = fixture.enqueue(1)
+        processes = []
+        observed_rows = []
+        delivered_notices = []
+        original_open = ClaudeActivityState.open_process_observation
+
+        def observe(observer, *args, **kwargs):
+            process = adapter._active_process
+            assert process is not None
+            processes.append(process)
+            if failure == "open":
+                raise RuntimeError("fictional optional failure")
+            result = original_open(observer, *args, **kwargs)
+            with sqlite3.connect(fixture.path) as independent:
+                observed_rows.extend(
+                    independent.execute(
+                        "SELECT job_id,native_session_id,retired_at FROM claude_activity_observations"
+                    ).fetchall()
+                )
+            if quiet_notice:
+                bots = {"claude": sender_fixtures.Bot(), "hub": sender_fixtures.Bot()}
+                sender = TelegramOutboxSender(fixture.fixture.config, telegram_bots=cast(Any, bots))
+                try:
+                    sender.run_cycle(now=kwargs["now"] + timedelta(seconds=2))
+                    notice = sender.state._connection.execute(
+                        "SELECT status,telegram_message_id FROM task_lifecycle_notices "
+                        "WHERE job_id=? AND kind='claude_no_progress'",
+                        (job_id,),
+                    ).fetchone()
+                    self.assertIsNotNone(notice)
+                    self.assertEqual(tuple(notice), ("delivered", 1))
+                    self.assertEqual(sender.state.get_provider_job(job_id).status, "executing")
+                    self.assertEqual(len(bots["hub"].sent), 1)
+                    self.assertEqual(bots["claude"].sent, [])
+                    sender.run_cycle(now=kwargs["now"] + timedelta(seconds=3))
+                    self.assertEqual(len(bots["hub"].sent), 1)
+                    self.assertIsNone(
+                        os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                    )
+                    delivered_notices.extend(bots["hub"].sent)
+                finally:
+                    sender.close()
+                    release.write_text("example callback completed", encoding="utf-8")
+            return result
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                    "ANTHROPIC_AUTH_TOKEN": "example",
+                },
+                clear=True,
+            ),
+            patch.object(ClaudeActivityState, "open_process_observation", observe),
+        ):
+            if failure == "retire":
+                with patch.object(
+                    ClaudeActivityState, "retire", side_effect=RuntimeError("fictional")
+                ):
+                    self.assertTrue(worker.run_cycle())
+            else:
+                self.assertTrue(worker.run_cycle())
+        self.assertEqual(len(processes), 1)
+        self.assertEqual(processes[0].returncode, 0)
+        self.assertTrue(processes[0].stdout.closed)
+        self.assertTrue(processes[0].stderr.closed)
+        self.assertIsNone(adapter._active_process)
+        self.assertEqual(worker.state.get_provider_job(job_id).status, "result_ready")
+        self.assertEqual(
+            worker.state.get_provider_result(job_id).visible_response, "Fictional final answer"
+        )
+        if quiet_notice:
+            self.assertEqual(len(delivered_notices), 1)
+            self.assertIn("not confirmed", delivered_notices[0][2])
+            self.assertEqual(
+                worker.state._connection.execute(
+                    "SELECT status FROM task_lifecycle_notices "
+                    "WHERE job_id=? AND kind='claude_no_progress'",
+                    (job_id,),
+                ).fetchone()[0],
+                "delivered",
+            )
+        if failure != "open":
+            self.assertEqual(observed_rows, [(job_id, adapter_native(worker, job_id), None)])
+            retired = worker.state._connection.execute(
+                "SELECT retired_at FROM claude_activity_observations WHERE job_id=?", (job_id,)
+            ).fetchone()[0]
+            self.assertEqual(retired is None, failure == "retire")
+        else:
+            self.assertEqual(observed_rows, [])
+
+    def test_worker_callback_observes_actual_owned_process_and_committed_row(self) -> None:
+        self.owned_worker()
+
+    def test_observer_open_failure_preserves_result_and_owned_cleanup(self) -> None:
+        self.owned_worker("open")
+
+    def test_observer_retire_failure_preserves_result_and_owned_cleanup(self) -> None:
+        self.owned_worker("retire")
+
+    def test_sender_delivers_one_quiet_notice_while_owned_process_is_active(self) -> None:
+        self.owned_worker(quiet_notice=True)
+
+    def test_sender_observer_failure_cannot_block_ready_final_delivery(self) -> None:
+        fixture = sender_fixtures.TelegramOutboxSenderTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        job_id = fixture.ready_outbox("opencode", 501)
+        bots = {"opencode": sender_fixtures.Bot(), "antigravity": sender_fixtures.Bot()}
+        sender = TelegramOutboxSender(fixture.config, telegram_bots=cast(Any, bots))
+        self.addCleanup(sender.close)
+        with (
+            patch.object(
+                sender.claude_activity,
+                "evaluate",
+                side_effect=RuntimeError("fictional private detail"),
+            ),
+            patch("hermes_codex_router.outbox_sender.survived") as diagnostic,
+        ):
+            for _ in range(3):
+                sender.run_cycle()
+        self.assertEqual(len(bots["opencode"].sent), 1)
+        self.assertEqual(sender.state.get_telegram_outbox_for_job(job_id).status, "delivered")
+        self.assertTrue(
+            all(
+                call.args[0] == "outbox_sender.claude_activity"
+                for call in diagnostic.call_args_list
+            )
+        )
+        self.assertNotIn("private", bots["opencode"].sent[0][2])
+
+
+def adapter_native(worker, job_id: str) -> str:
+    checkpoint = worker.state._connection.execute(
+        "SELECT provider_thread_id FROM provider_execution_checkpoints WHERE job_id=?", (job_id,)
+    ).fetchone()
+    return checkpoint[0]

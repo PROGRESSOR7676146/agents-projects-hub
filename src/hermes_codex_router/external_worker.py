@@ -1066,17 +1066,29 @@ class ExternalQueueWorker:
         monitor.start()
         try:
             from .claude_permission_host import hosted_claude_launch
+            from .worker_claude_activity import claude_process_observation_for_turn
 
-            with hosted_claude_launch(
-                self.config,
-                self.state,
-                self.agent,
-                job,
-                token,
-                claude_session_binding.session_id if claude_session_binding else None,
-                Path(project.root),
-                is_new=bool(claude_session_binding and claude_session_binding.is_new),
-            ) as hosted:
+            with (
+                hosted_claude_launch(
+                    self.config,
+                    self.state,
+                    self.agent,
+                    job,
+                    token,
+                    claude_session_binding.session_id if claude_session_binding else None,
+                    Path(project.root),
+                    is_new=bool(claude_session_binding and claude_session_binding.is_new),
+                ) as hosted,
+                claude_process_observation_for_turn(
+                    self.state,
+                    job.job_id,
+                    token,
+                    claude_session_binding,
+                    str(project.root),
+                    enabled=self.config.hub_bot is not None
+                    and self.config.outbox_runtime == "external",
+                ) as on_claude_process_started,
+            ):
                 result = invoke_external_provider_turn(
                     adapter,
                     job,
@@ -1092,6 +1104,7 @@ class ExternalQueueWorker:
                     staging_dir=staging_dir,
                     claude_session_binding=claude_session_binding,
                     on_visible_assistant=on_visible_assistant,
+                    on_claude_process_started=on_claude_process_started,
                     claude_sandbox=hosted.sandbox if hosted else None,
                 )
             if claude_journal is not None and claude_session_binding is not None:

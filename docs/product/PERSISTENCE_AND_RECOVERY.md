@@ -430,6 +430,26 @@ recreate unsaved provider context or a partially executed turn.
   Early request metadata MUST have a separate bound of 128 entries per scope.
   Payload-free event/tool/approval metadata MUST total at most 512 entries per
   job; an exhausted bound MUST NOT authorize execution, replay or approval.
+  A separate Claude process-observation subset MAY use the ordinary threshold
+  after an actual worker-owned process has been spawned. Prepared UUIDs,
+  checkpoints, invocation timestamps, worker heartbeat and buffered test runners
+  MUST NOT establish process-start evidence or native turn acceptance. Observation
+  and first unattempted delivery MUST bind the exact current lease,
+  project/scope, numeric destination, session agent/generation, Telegram writer,
+  native UUID and checkpoint root, with no completion or covering stop. Completed
+  visible messages advance quiet time only from the committed journal cursor;
+  unknown native phase MUST NOT be relabeled commentary or tool activity.
+  Existing exact-bound Claude permission requests suppress quiet notices.
+  A bounded payload-free permission fingerprint MUST invalidate an unattempted
+  notice even when a request begins and resolves between evaluation and send.
+  Resolution, revocation or expiry MAY grant one new ordinary quiet interval;
+  this is observation grace, not provider progress. Missing, changed or closed
+  file-tool launches and more than 128 permission rows MUST fail observation
+  closed. Retired observations MUST NOT reopen. Optional observation failures
+  MUST NOT abort mandatory journal writes, provider result handling, process
+  cleanup or final delivery. Attempted/unknown notices and proven-rejection
+  retries retain REQ-QUEUE-013 semantics. This subset does not establish native
+  acceptance, tool/build timing, progress-message parity or replay authority.
 - **REQ-QUEUE-013 (Accepted; implementation in progress):** Control delivery
   MUST persist episode identity, immutable numeric destination, retry deadlines
   and positive Telegram receipts separately from provider execution. A sender

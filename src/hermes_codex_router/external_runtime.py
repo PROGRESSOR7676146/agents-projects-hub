@@ -30,6 +30,7 @@ from .claude_stream import (
     VisibleAssistantCallback,
     parse_claude_stream,
 )
+from .diagnostic_log import survived
 from .owned_process_exit import peek_exit_code
 from .provider_limits import ProviderLimit, parse_antigravity_limit, parse_opencode_limit
 
@@ -319,6 +320,7 @@ class ExternalCliAdapter:
         staging_dir: Path | None = None,
         new_session_id: str | None = None,
         on_visible_assistant: VisibleAssistantCallback | None = None,
+        on_claude_process_started: Callable[[], None] | None = None,
         claude_sandbox: FileToolSandboxConfig | None = None,
     ) -> ExternalTurnResult:
         argv = self.build_argv(
@@ -358,6 +360,7 @@ class ExternalCliAdapter:
                 timeout=timeout,
                 expected_session_id=session_id if session_id is not None else new_session_id,
                 on_visible_assistant=on_visible_assistant,
+                on_process_started=on_claude_process_started,
                 sandbox=claude_sandbox,
             )
         elif self._uses_default_runner:
@@ -508,6 +511,7 @@ class ExternalCliAdapter:
         timeout: float,
         expected_session_id: str | None,
         on_visible_assistant: VisibleAssistantCallback | None,
+        on_process_started: Callable[[], None] | None,
         sandbox: FileToolSandboxConfig | None,
     ) -> subprocess.CompletedProcess[str]:
         """Own mount descriptors across every productive invocation exit path."""
@@ -520,6 +524,7 @@ class ExternalCliAdapter:
                 timeout=timeout,
                 expected_session_id=expected_session_id,
                 on_visible_assistant=on_visible_assistant,
+                on_process_started=on_process_started,
             )
         try:
             argv = (str(sandbox.claude_executable), *argv[1:])
@@ -545,6 +550,7 @@ class ExternalCliAdapter:
                 timeout=timeout,
                 expected_session_id=expected_session_id,
                 on_visible_assistant=on_visible_assistant,
+                on_process_started=on_process_started,
                 event_policy=require_file_tool_event,
                 pass_fds=launch.pass_fds,
             )
@@ -590,6 +596,7 @@ class ExternalCliAdapter:
         timeout: float,
         expected_session_id: str | None,
         on_visible_assistant: VisibleAssistantCallback | None,
+        on_process_started: Callable[[], None] | None = None,
         event_policy: Callable[[dict[str, object]], None] | None = None,
         pass_fds: tuple[int, ...] = (),
     ) -> subprocess.CompletedProcess[str]:
@@ -623,6 +630,11 @@ class ExternalCliAdapter:
         deadline = time.monotonic() + timeout
         diagnostic_bytes = 0
         try:
+            if on_process_started is not None:
+                try:
+                    on_process_started()
+                except Exception as error:
+                    survived("external_runtime.claude_process_observer", error)
             assert process.stdout is not None and process.stderr is not None
             with selectors.DefaultSelector() as selector:
                 for pipe in (process.stdout, process.stderr):
