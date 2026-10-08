@@ -29,6 +29,19 @@ continue advisor isolation and remaining visibility work. Do not enable tools
 from a CLI flag or an unqualified tlive `allow` alone.
 The current owner instruction caps helpers at GPT-6 Sol with reasoning `high`, using standard service without priority.
 
+Current control-loss continuation: Stage 1 is published at
+`fe7bb51ffa8dc491a33c624614dcff57ab40208d`; the schema48 Stage 2 candidate
+remains under publication validation. Completed runtime review identified
+shutdown/settlement races, accepted-identity retention, unresolved-scope sender
+isolation and no-send stop stream loss. Fixes retain primary progress/final on
+no-send, durably refuse admission races and avoid idle maintenance write locks.
+Focused regressions pass; final full gates and independent sign-off remain
+required. Continue in the existing private handoff lane,
+without replaying earlier test/review processes. Stage 3 Telegram precautions and
+the remaining Claude/operations goal are open. See
+[control-loss acceptance](CODEX_CONTROL_LOSS.md) and the
+[stabilization plan](STABILIZATION_PLAN.md). No live activation is authorized.
+
 The Codex compatibility candidate now refuses unsupported active permission
 profiles reported by `thread/start` or `thread/resume` before productive
 `turn/start`, with a bounded durable queue notice. Absent/null profiles remain

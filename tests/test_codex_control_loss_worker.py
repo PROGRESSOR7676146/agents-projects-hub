@@ -7,7 +7,7 @@ import unittest
 from collections import deque
 from contextlib import closing
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 from hermes_codex_router.codex_appserver import CodexAppServerClient
@@ -353,18 +353,20 @@ class EmbeddedStdioRecoveryTests(unittest.TestCase):
         return job, provider, service
 
     def test_mode_change_before_acquisition_returns_cannot_retarget_socket_turn(self):
-        job, provider, _ = self.run_failure(
+        job, provider, service = self.run_failure(
             "inProgress", stdio=False, acquisition_mode="stdio-fallback"
         )
         self.assertEqual(job.status, "indeterminate")
         self.assertEqual(provider.interrupts, [])
+        self.assertFalse(cast(Supervisor, service.supervisor).control_options[0][0])
 
     def test_other_client_fallback_cannot_change_socket_turn_recovery(self):
-        job, provider, _ = self.run_failure(
+        job, provider, service = self.run_failure(
             "inProgress", stdio=False, failure_mode="stdio-fallback"
         )
         self.assertEqual(job.status, "indeterminate")
         self.assertEqual(provider.interrupts, [])
+        self.assertFalse(cast(Supervisor, service.supervisor).control_options[0][0])
 
     def test_other_client_socket_restore_cannot_grant_stdio_turn_control(self):
         job, provider, _ = self.run_failure("completed", failure_mode="socket")

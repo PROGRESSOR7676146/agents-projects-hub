@@ -8,6 +8,7 @@ from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from typing import Callable
 
+from .codex_turn_controls import CodexTurnControls
 from .state_provider_jobs import ProviderJobsStateFacade
 from .task_lifecycle import TaskLifecycleState
 
@@ -57,6 +58,9 @@ class StopState:
                     raise self.error("stop receipt topic mismatch")
                 if prepare_notice:
                     self._notice(str(duplicate["request_id"]), None, now)
+                CodexTurnControls(
+                    self.db, transaction=self.transaction
+                ).bind_covering_stops_in_transaction()
                 return (
                     str(duplicate["request_id"]),
                     int(duplicate["cancelled_queued_count"]),
@@ -98,6 +102,9 @@ class StopState:
                     None if pending else timestamp,
                 ),
             )
+            CodexTurnControls(
+                self.db, transaction=self.transaction
+            ).bind_covering_stops_in_transaction()
             self.jobs.complete_finished_stops(topic_id, timestamp)
             if prepare_notice and (pending or cancelled):
                 self._notice(request_id, None, now)

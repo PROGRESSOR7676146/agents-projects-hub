@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import sqlite3
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from hermes_codex_router.codex_appserver import StoredTurnOutcome, TurnResult
+from hermes_codex_router.codex_appserver import RpcRejectedError, StoredTurnOutcome, TurnResult
 from hermes_codex_router.codex_control_recovery import observe_after_control_loss
 
 
@@ -21,18 +23,140 @@ class Client:
             raise result
         return result
 
+    def close(self):
+        pass
+
     def interrupt_turn(self, *, thread_id, turn_id, deadline=None):
         self.calls.append(("interrupt", thread_id, turn_id))
 
 
 class ControlRecoveryTests(unittest.TestCase):
+    def test_matched_reply_settlement_retries_only_contention_not_rpc(self):
+        client = Client([StoredTurnOutcome("active"), StoredTurnOutcome("interrupted")])
+        attempts = []
+
+        def finish(owner, outcome):
+            attempts.append((owner, outcome))
+            if len(attempts) < 3:
+                error = sqlite3.OperationalError("Example contention")
+                error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+                raise error
+
+        result = observe_after_control_loss(
+            client,
+            thread_id="example-thread",
+            turn_id="example-turn",
+            root=Path("/home/example/project"),
+            begin_interrupt=lambda proof, deadline: "example-owner",
+            finish_interrupt=finish,
+        )
+        self.assertEqual(result.status, "interrupted")
+        self.assertEqual(attempts, [("example-owner", "matched_ack")] * 3)
+        self.assertEqual([call[0] for call in client.calls], ["read", "interrupt", "read"])
+
+    def test_busy_guard_propagates_before_any_send_or_settlement(self):
+        client = Client([StoredTurnOutcome("active")])
+        error = sqlite3.OperationalError("Example contention")
+        error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+
+        def begin(proof, deadline):
+            raise error
+
+        with self.assertRaises(sqlite3.OperationalError):
+            observe_after_control_loss(
+                client,
+                thread_id="example-thread",
+                turn_id="example-turn",
+                root=Path("/home/example/project"),
+                begin_interrupt=begin,
+                finish_interrupt=lambda owner, outcome: self.fail("No send owner exists"),
+            )
+        self.assertEqual([call[0] for call in client.calls], ["read"])
+
+    def test_guard_exhausting_rpc_budget_never_sends_late_interrupt(self):
+        clock = [0.0]
+        settlements = []
+        client = Client([StoredTurnOutcome("active")])
+
+        def slow_guard(proof, deadline):
+            self.assertEqual(deadline, 15.0)
+            clock[0] = 16.0
+            return "example-persisted-owner"
+
+        with patch(
+            "hermes_codex_router.codex_control_recovery.time.monotonic",
+            side_effect=lambda: clock[0],
+        ):
+            observe_after_control_loss(
+                client,
+                thread_id="example-thread",
+                turn_id="example-turn",
+                root=Path("/home/example/project"),
+                begin_interrupt=slow_guard,
+                finish_interrupt=lambda owner, outcome: settlements.append((owner, outcome)),
+            )
+        self.assertEqual(client.calls, [("read", "example-thread", "example-turn")])
+        self.assertEqual(settlements, [("example-persisted-owner", "not_sent")])
+
+    def test_shared_authority_records_matched_reply_and_refuses_second_send(self):
+        owners = []
+        settlements = []
+
+        def begin(proof, deadline):
+            self.assertEqual((proof.thread_id, proof.turn_id), ("example-thread", "example-turn"))
+            if owners:
+                return None
+            owners.append("example-owner")
+            return owners[-1]
+
+        for after in ("active", "interrupted"):
+            client = Client([StoredTurnOutcome("active"), StoredTurnOutcome(after)])
+            observe_after_control_loss(
+                client,
+                thread_id="example-thread",
+                turn_id="example-turn",
+                root=Path("/home/example/project"),
+                begin_interrupt=begin,
+                finish_interrupt=lambda owner, outcome: settlements.append((owner, outcome)),
+            )
+            self.assertEqual(
+                [call[0] for call in client.calls],
+                ["read", "interrupt", "read"] if after == "active" else ["read"],
+            )
+        self.assertEqual(settlements, [("example-owner", "matched_ack")])
+
+    def test_explicit_rejection_and_transport_loss_keep_distinct_sender_evidence(self):
+        for error, expected in (
+            (RpcRejectedError("Example rejected"), "matched_rejection"),
+            (EOFError("Example lost response"), "unknown"),
+        ):
+            with self.subTest(outcome=expected):
+                client = Client([StoredTurnOutcome("active"), StoredTurnOutcome("interrupted")])
+                settlements = []
+
+                def interrupt(**kwargs):
+                    raise error
+
+                client.interrupt_turn = interrupt
+                outcome = observe_after_control_loss(
+                    client,
+                    thread_id="example-thread",
+                    turn_id="example-turn",
+                    root=Path("/home/example/project"),
+                    begin_interrupt=lambda proof, deadline: "example-owner",
+                    finish_interrupt=lambda owner, outcome: settlements.append(outcome),
+                )
+                self.assertEqual(outcome.status, "interrupted")
+                self.assertEqual(settlements, [expected])
+
     def observe(self, client, *, authorize=lambda: True):
         return observe_after_control_loss(
             client,
             thread_id="example-thread",
             turn_id="example-turn",
             root=Path("/home/example/project"),
-            may_interrupt=authorize,
+            begin_interrupt=lambda proof, deadline: "example-owner" if authorize() else None,
+            finish_interrupt=lambda owner, outcome: None,
         )
 
     def test_active_is_interrupted_once_and_ack_is_not_terminality(self):
@@ -71,14 +195,15 @@ class ControlRecoveryTests(unittest.TestCase):
             thread_id="example-thread",
             turn_id="example-turn",
             root=Path("/home/example/project"),
-            may_interrupt=guard,
+            begin_interrupt=lambda proof, deadline: guard(),
+            finish_interrupt=lambda owner, outcome: None,
             on_interrupt_event=events.append,
         )
         self.assertEqual(outcome.status, "active")
         self.assertEqual(events, [])
         self.assertEqual([call[0] for call in client.calls], ["read"])
 
-    def test_event_failure_before_send_refuses_and_after_ack_preserves_terminal_read(self):
+    def test_optional_event_failure_preserves_fenced_control_and_terminal_read(self):
         for failed_event in ("attempted", "acknowledged"):
             with self.subTest(event=failed_event):
                 client = Client([StoredTurnOutcome("active"), StoredTurnOutcome("interrupted")])
@@ -92,15 +217,14 @@ class ControlRecoveryTests(unittest.TestCase):
                     thread_id="example-thread",
                     turn_id="example-turn",
                     root=Path("/home/example/project"),
-                    may_interrupt=lambda: True,
+                    begin_interrupt=lambda proof, deadline: "example-owner",
+                    finish_interrupt=lambda owner, outcome: None,
                     on_interrupt_event=record,
                 )
-                self.assertEqual(
-                    outcome.status, "active" if failed_event == "attempted" else "interrupted"
-                )
+                self.assertEqual(outcome.status, "interrupted")
                 self.assertEqual(
                     [call[0] for call in client.calls],
-                    ["read"] if failed_event == "attempted" else ["read", "interrupt", "read"],
+                    ["read", "interrupt", "read"],
                 )
 
     def test_terminal_after_interrupt_has_exact_identity_without_replay(self):

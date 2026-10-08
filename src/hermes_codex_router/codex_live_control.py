@@ -3,19 +3,31 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, Protocol
 
-from .codex_appserver import RpcRejectedError
+from .codex_appserver import RpcRejectedError, StoredTurnOutcome
+from .codex_control_authority import begin_codex_interrupt
+from .codex_control_connection import ControlSendPath
+from .codex_control_recovery import observe_after_control_loss
 from .diagnostic_log import survived
+from .execution_journal import ExecutionJournal
+from .hub_config import HubConfig
 from .sqlite_contention import is_sqlite_contention
 from .state import HubState, ProviderJobRecord
 
 
 class ControlClient(Protocol):
-    def interrupt_turn(self, *, thread_id: str, turn_id: str) -> None: ...
+    def read_turn_outcome(
+        self, *, thread_id: str, turn_id: str, cwd: Path, deadline: float | None = None
+    ) -> StoredTurnOutcome: ...
+    def interrupt_turn(
+        self, *, thread_id: str, turn_id: str, deadline: float | None = None
+    ) -> None: ...
     def steer_turn(
         self, *, thread_id: str, turn_id: str, text: str, client_user_message_id: str
     ) -> str: ...
@@ -39,6 +51,7 @@ class CodexLiveControl:
         self,
         *,
         state_factory: Callable[[], HubState],
+        config: HubConfig,
         client_factory: Callable[[], ControlClient],
         job: ProviderJobRecord,
         worker_id: str,
@@ -47,8 +60,10 @@ class CodexLiveControl:
         transport_mode: str | None,
         close_owned_turn_client: Callable[[], None],
         poll_seconds: float = 0.2,
+        stop_retry_seconds: float = 5,
     ) -> None:
         self.state_factory = state_factory
+        self.config = config
         self.client_factory = client_factory
         self.job = job
         self.worker_id = worker_id
@@ -57,16 +72,20 @@ class CodexLiveControl:
         self.transport_mode = transport_mode
         self.close_owned_turn_client = close_owned_turn_client
         self.poll_seconds = poll_seconds
+        self.stop_retry_seconds = stop_retry_seconds
         self.confirmed_interrupt_request: str | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._client_lock = threading.Lock()
         self._active_client: ControlClient | None = None
+        self._active_send_path: ControlSendPath | None = None
         self._failure: BaseException | None = None
         self._contention_episode = False
         self._steering_rejected = False
         self._pending: PendingStateOperation | None = None
         self._deferred_failure: Exception | None = None
+        self._stop_no_send_attempts = 0
+        self._next_stop_attempt = 0.0
 
     def start(self) -> None:
         if self._thread is not None:
@@ -88,11 +107,14 @@ class CodexLiveControl:
         else:
             self.stop_and_join()
 
-    def stop_and_join(self, *, timeout: float = 10) -> None:
+    def stop_and_join(self, *, timeout: float = 20) -> None:
         self._stop.set()
         with self._client_lock:
             client, self._active_client = self._active_client, None
-        if client is not None:
+            path, self._active_send_path = self._active_send_path, None
+        if path is not None:
+            path.request_close()
+        elif client is not None:
             self._close_client(client)
         if self._thread is not None:
             self._thread.join(timeout)
@@ -127,6 +149,7 @@ class CodexLiveControl:
             stopped = self._stop.is_set()
             if not stopped:
                 self._active_client = client
+                self._active_send_path = ControlSendPath(lambda: self._close_client(client))
         if stopped:
             self._close_client(client)
             return None
@@ -137,8 +160,14 @@ class CodexLiveControl:
             owned = self._active_client is client
             if owned:
                 self._active_client = None
+                path, self._active_send_path = self._active_send_path, None
+            else:
+                path = None
         if owned:
-            self._close_client(client)
+            if path is not None:
+                path.request_close()
+            else:
+                self._close_client(client)
 
     def _observe_contention(self, error: BaseException) -> None:
         if not self._contention_episode:
@@ -156,8 +185,15 @@ class CodexLiveControl:
                         return
                     request_id = state.pending_emergency_stop_for_job(self.job.job_id)
                     if request_id is not None:
-                        self._interrupt(request_id)
-                        return
+                        if time.monotonic() < self._next_stop_attempt:
+                            continue
+                        if self._interrupt(state, request_id):
+                            return
+                        self._stop_no_send_attempts += 1
+                        if self._stop_no_send_attempts >= 3:
+                            return
+                        self._next_stop_attempt = time.monotonic() + self.stop_retry_seconds
+                        continue
                     if self.transport_mode != "stdio-fallback":
                         try:
                             self._steer(state)
@@ -198,25 +234,86 @@ class CodexLiveControl:
                 except Exception as error:
                     survived("codex_live_control.state_close", error)
 
-    def _interrupt(self, request_id: str) -> None:
+    def _interrupt(self, state: HubState, request_id: str) -> bool:
+        """End retries on a send fence/terminal proof; keep no-send streams alive."""
         client = None
+        wake_primary = False
+        fenced = False
+
+        def observe_event(event: str) -> None:
+            nonlocal wake_primary
+            if event == "attempted":
+                wake_primary = True
+
         try:
             if self._stop.is_set():
-                return
+                return True
             if self.transport_mode == "stdio-fallback":
-                self.close_owned_turn_client()
+                wake_primary = True
             else:
+                target = state.codex_controls.read(self.job.job_id)
+                if target is None or self.job.lease_token is None:
+                    return True
+                if target["send_started_at"] is not None:
+                    return True
                 client = self._acquire_client()
                 if client is None or self._stop.is_set():
-                    return
-                client.interrupt_turn(thread_id=self.thread_id, turn_id=self.turn_id)
+                    return self._stop.is_set()
+                with self._client_lock:
+                    path = self._active_send_path if self._active_client is client else None
+                if path is None:
+                    return True
+                outcome = observe_after_control_loss(
+                    client,
+                    thread_id=self.thread_id,
+                    turn_id=self.turn_id,
+                    root=Path(target["project_root"]),
+                    send_scope=path.sending_scope,
+                    begin_interrupt=lambda proof, deadline: begin_codex_interrupt(
+                        state,
+                        self.config,
+                        job_id=self.job.job_id,
+                        source="live",
+                        proof=proof,
+                        deadline=deadline,
+                        invocation_token=self.job.lease_token,
+                    ),
+                    finish_interrupt=lambda owner, result: state.codex_controls.finish_interrupt(
+                        self.job.job_id,
+                        owner,
+                        outcome=result,
+                        send_path_quiesced=result != "unknown",
+                    ),
+                    on_interrupt_event=observe_event,
+                )
+                if outcome.status in {"completed", "failed", "interrupted"}:
+                    wake_primary = True
+                if outcome.result is not None:
+                    ExecutionJournal(state).record_completion(
+                        self.job.job_id, self.job.lease_token, outcome.result.text
+                    )
+                target = state.codex_controls.read(self.job.job_id)
+                fenced = target is not None and target["send_started_at"] is not None
+                if target is not None and target["interrupt_outcome"] == "matched_ack":
+                    self.confirmed_interrupt_request = request_id
         except Exception as error:
+            if is_sqlite_contention(error):
+                # Pre-send contention keeps the productive stream intact.
+                # A post-send completion write may also contend; the local
+                # attempted flag still wakes recovery without repeating RPC.
+                raise
             survived("codex_live_control.interrupt_unconfirmed", error)
-        else:
-            self.confirmed_interrupt_request = request_id
         finally:
             if client is not None:
                 self._release_client(client)
+            # A sent interrupt must wake the primary even if native work ignores
+            # ACK. Without a send, keep consuming progress and the saved final.
+            if wake_primary:
+                try:
+                    self.close_owned_turn_client()
+                except Exception as error:
+                    survived("codex_live_control.turn_client_close", error)
+        return wake_primary or fenced
 
     def _steer(self, state: HubState) -> None:
         if self._stop.is_set():

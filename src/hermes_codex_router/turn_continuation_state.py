@@ -138,6 +138,9 @@ class TurnContinuationState:
             ).fetchone()
             if prior is not None:
                 return self.state.get_provider_job(str(prior["continuation_job_id"])), False, 0
+            from .codex_control_predicates import require_control_scope_clear
+
+            require_control_scope_clear(self.connection, "root:" + str(root))
             session = self.state.get_session(str(old["session_id"]))
             if not (
                 old["codex_permission_profile"]

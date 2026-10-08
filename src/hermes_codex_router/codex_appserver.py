@@ -394,19 +394,8 @@ class CodexAppServerClient:
     def _refuse_permission_drift(self, turn_id: str, partial: str) -> None:
         if not self._permission_drifted:
             return
-        try:
-            self._request(
-                "turn/interrupt",
-                {
-                    "threadId": self._permission_binding.thread_id
-                    if self._permission_binding
-                    else self._activity_thread_id,
-                    "turnId": turn_id,
-                },
-                deadline=time.monotonic() + 5.0,
-            )
-        except Exception as error:
-            survived("codex_permissions.interrupt", error)
+        # Only the worker's durable exact-target fence may authorize interruption.
+        # Wake recovery immediately rather than issuing an unfenced client RPC.
         raise CodexTurnError(CodexPermissionPolicyDriftError(), partial)
 
     def _handle_server_request(self, message: dict[str, Any]) -> bool:

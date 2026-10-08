@@ -383,6 +383,7 @@ def _lane_command(args: argparse.Namespace) -> int:
                 raise WorktreeError("lane worktree was already cleaned")
             registry = load_registry(config.registry_path)
             project = registry.require_project(str(lane["project_id"]))
+            state.require_lane_cleanup(args.lane)
             cleanup_worktree(
                 project,
                 args.lane,

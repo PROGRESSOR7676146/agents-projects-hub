@@ -20,6 +20,7 @@ from hermes_codex_router.codex_appserver import (
     CodexTurnError,
     RateLimits,
     RpcRejectedError,
+    StoredTurnOutcome,
     TurnResult,
 )
 from hermes_codex_router.codex_permissions import CodexPermissionPolicyDriftError
@@ -46,6 +47,7 @@ class WorkerClient:
     def __init__(self, *, fail_after_start: bool = False) -> None:
         self.fail_after_start = fail_after_start
         self.turns = 0
+        self.turn_id_offset = 0
 
     def start_thread(self, **kwargs: object) -> CodexThread:
         return CodexThread("thread-1", Path(str(kwargs["cwd"])), "gpt-5.6-sol", "openai")
@@ -57,7 +59,7 @@ class WorkerClient:
         self.turns += 1
         if self.fail_after_start:
             raise RuntimeError("provider may have accepted the turn")
-        return "turn-1"
+        return f"turn-{self.turn_id_offset + self.turns}"
 
     def wait_for_turn(self, _turn_id: str) -> TurnResult:
         return TurnResult("Visible answer", 1000, 100)
@@ -542,6 +544,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
                 steered.append(str(kwargs["text"]))
                 return str(kwargs["turn_id"])
 
+            def read_turn_outcome(self, **_kwargs: object) -> StoredTurnOutcome:
+                return StoredTurnOutcome("active")
+
             def interrupt_turn(self, **_kwargs: object) -> None:
                 interrupted.set()
                 release.set()
@@ -725,6 +730,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
                 raise RuntimeError("interrupted transport")
 
         class ControlClient:
+            def read_turn_outcome(self, **_kwargs: object) -> StoredTurnOutcome:
+                return StoredTurnOutcome("active")
+
             def interrupt_turn(self, **_kwargs: object) -> None:
                 interrupted.set()
                 release.set()

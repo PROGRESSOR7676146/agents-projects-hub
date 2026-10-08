@@ -8,7 +8,7 @@ from typing import Any
 from unittest import mock
 
 from schema_fixtures import (
-    legacy_selection_columns,
+    project_historical_database,
     remove_adoption_schema,
     remove_task_lifecycle_schema,
 )
@@ -29,11 +29,9 @@ class MigrationTests(unittest.TestCase):
     def test_schema_34_hold_evidence_survives_schema_35_upgrade(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
-            with (
-                mock.patch.object(migrations_module, "LATEST_SCHEMA_VERSION", 34),
-                legacy_selection_columns(path),
-            ):
-                state = HubState.open(path, codex_permission_profile=None)
+            source_path = path.with_name("example-current-seed.db")
+            with mock.patch.object(migrations_module, "LATEST_SCHEMA_VERSION", 48):
+                state = HubState.open(source_path, codex_permission_profile=None)
                 try:
                     topic = state.observe_topic(
                         project_id="example-project",
@@ -73,6 +71,7 @@ class MigrationTests(unittest.TestCase):
                         )
                 finally:
                     state.close()
+            project_historical_database(source_path, path, 34)
             result = migrate_database(path, create_backup=False)
             self.assertEqual(
                 (result.previous_version, result.current_version), (34, LATEST_SCHEMA_VERSION)

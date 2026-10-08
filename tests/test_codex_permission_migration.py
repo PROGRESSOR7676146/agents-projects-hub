@@ -9,13 +9,14 @@ from unittest.mock import patch
 from hermes_codex_router import migrations
 from hermes_codex_router.schema_codex_permissions import PROFILE_TABLES
 from hermes_codex_router.state import HubState
-from tests.schema_fixtures import legacy_selection_columns
+from tests.schema_fixtures import project_historical_database
 
 
 class CodexPermissionMigrationTests(unittest.TestCase):
     def create_v38(self, path: Path):
-        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 38), legacy_selection_columns(path):
-            state = HubState.open(path, codex_permission_profile=None)
+        source = path.with_name("example-current-seed.db")
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
+            state = HubState.open(source, codex_permission_profile=None)
             try:
                 topic = state.observe_topic(
                     project_id="example-project",
@@ -38,6 +39,7 @@ class CodexPermissionMigrationTests(unittest.TestCase):
                 )
             finally:
                 state.close()
+        project_historical_database(source, path, 38)
         return session, job
 
     def snapshot(self, connection):

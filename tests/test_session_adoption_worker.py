@@ -114,6 +114,7 @@ class SessionAdoptionWorkerTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 job = self.enqueue(11 + index)
                 client = self.client()
+                client.turn_id_offset = index
                 self.run_worker(client, mode)
                 self.assertEqual(
                     client.calls,

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .codex_appserver import validate_codex_thread_id
+from .codex_control_predicates import require_control_scope_clear
 from .delivery_control_predicates import (
     final_control_reconciled,
     progress_control_reconciled,
@@ -140,6 +141,7 @@ class CodexSessionOrigins:
         if topic is None or topic.project_id != request.project_id:
             raise StateError("topic_mismatch")
         requested_scope = f"root:{request.canonical_root}"
+        require_control_scope_clear(self.connection, requested_scope)
         if topic.execution_scope.startswith("root:") and topic.execution_scope != requested_scope:
             raise StateError("project_root_changed")
         if self._exists(

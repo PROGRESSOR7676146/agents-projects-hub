@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Sequence
 
+from .codex_control_predicates import control_owner_for_topic
 from .delivery_control_predicates import result_ready_control_reconciled
 from .incoming_materials import IncomingMaterialDraft
 from .provider_queue_capacity import QueueCapacityConfig
@@ -262,6 +263,11 @@ class ProviderAdmissionState:
         self.state._sessions_state.require_codex_selection(SessionsStateFacade.record(session))
         CodexSessionOrigins(self.state).require_admission(target_session, message_id)
         expected_writer = "local" if take_local_writer else "telegram"
+        if (
+            take_local_writer
+            and control_owner_for_topic(self.state._connection, topic_id) is not None
+        ):
+            raise StateError("native control operation has not confirmed quiescence")
         if str(session["writer_mode"]) != expected_writer:
             raise StateError(f"provider job session writer is not {expected_writer}")
         if (

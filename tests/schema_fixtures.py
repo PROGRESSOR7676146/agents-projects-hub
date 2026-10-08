@@ -3,12 +3,41 @@
 import sqlite3
 from contextlib import closing, contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from hermes_codex_router import migrations
 from hermes_codex_router.schema_codex_permissions import (
     PROFILE_TABLES,
     ensure_codex_permission_columns,
 )
+
+
+def project_historical_database(source: Path, target: Path, version: int) -> None:
+    """Build a separate genuine old-schema fixture; retain the source authority.
+
+    Test data only. This is neither a runtime downgrade nor a recovery operation.
+    """
+    assert not target.exists()
+    with patch.object(migrations, "LATEST_SCHEMA_VERSION", version):
+        migrations.migrate_database(target, create_backup=False)
+    with closing(sqlite3.connect(source)) as current, closing(sqlite3.connect(target)) as old:
+        tables = [
+            row[0]
+            for row in old.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+        ]
+        for table in tables:
+            names = [row[1] for row in old.execute(f'PRAGMA table_info("{table}")')]
+            quoted = ",".join(f'"{name}"' for name in names)
+            rows = current.execute(f'SELECT {quoted} FROM "{table}"').fetchall()
+            if rows:
+                old.executemany(
+                    f'INSERT INTO "{table}" ({quoted}) VALUES ({",".join("?" for _ in names)})',
+                    rows,
+                )
+        old.commit()
+        assert old.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 @contextmanager
@@ -88,6 +117,7 @@ def legacy_selection_columns(path: Path):
 def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
     """Remove empty lifecycle/archive structures from fictional historical fixtures."""
     tables = (
+        "codex_turn_controls",
         "telegram_delivery_control_dispositions",
         "telegram_delivery_hold_dispositions",
         "provider_recovery_notice_parts",
@@ -104,6 +134,10 @@ def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
     for table in tables:
         if table in existing:
             assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    if "codex_turn_controls" in existing:
+        connection.execute("ALTER TABLE hub_blocker_outbox DROP COLUMN control_scope_error")
+        for table in ("hub_blocker_outbox", "provider_job_holds"):
+            connection.execute(f"ALTER TABLE {table} DROP COLUMN control_job_id")
     connection.execute("DROP TRIGGER IF EXISTS telegram_delivery_hold_topic_binding_guard")
     for table in tables:
         if table in existing:

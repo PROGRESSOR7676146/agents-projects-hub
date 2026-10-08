@@ -11,8 +11,10 @@ from .artifacts import (
     spool_staged_artifacts,
 )
 from .codex_appserver import CodexAppServerClient, CodexTurnError, RpcError
+from .codex_control_authority import begin_codex_interrupt
 from .codex_control_recovery import observe_after_control_loss
 from .codex_failure import CodexPreparationError, codex_failure_notice, codex_failure_reason
+from .codex_turn_controls import ActiveTurnProof, InterruptOutcome
 from .diagnostic_log import survived
 from .execution_journal import ExecutionJournal
 from .hub_config import HubConfig
@@ -72,25 +74,26 @@ def reconcile_codex_completion(
             if hasattr(client, "read_turn_outcome"):
                 if interrupt_active_on_failure:
 
-                    def may_interrupt() -> bool:
-                        topic = state.get_topic(state.get_provider_job(job_id).topic_id)
-                        current = resolve_project_context(
-                            config,
+                    def begin_interrupt(proof: ActiveTurnProof, deadline: float) -> str | None:
+                        return begin_codex_interrupt(
                             state,
-                            chat_id=topic.chat_id,
-                            expected_project_id=topic.project_id,
+                            config,
+                            job_id=job_id,
+                            source="permission_drift"
+                            if getattr(execution_error, "failure_reason", None)
+                            == "permission_policy_changed"
+                            else "protective",
+                            proof=proof,
+                            deadline=deadline,
+                            invocation_token=lease_token,
                         )
-                        if (
-                            resolve_topic_execution_root(state, current.registry, topic)
-                            != canonical_root
-                        ):
-                            return False
-                        return journal.can_control_accepted_turn(
+
+                    def finish_interrupt(owner: str, outcome: InterruptOutcome) -> None:
+                        state.codex_controls.finish_interrupt(
                             job_id,
-                            lease_token,
-                            thread_id=thread_id,
-                            turn_id=turn_id,
-                            root=canonical_root,
+                            owner,
+                            outcome=outcome,
+                            send_path_quiesced=outcome != "unknown",
                         )
 
                     def record_interrupt(
@@ -107,7 +110,8 @@ def reconcile_codex_completion(
                         thread_id=thread_id,
                         turn_id=turn_id,
                         root=canonical_root,
-                        may_interrupt=may_interrupt,
+                        begin_interrupt=begin_interrupt,
+                        finish_interrupt=finish_interrupt,
                         on_interrupt_event=record_interrupt,
                     )
                 else:
@@ -153,7 +157,7 @@ def reconcile_codex_completion(
         ):
             visible += (
                 "\n\nWarning: Codex permission selection changed during this turn; "
-                "Hub requested interruption. The exact turn completed. "
+                "The exact turn completed. "
                 "Review the recovered result and project changes before continuing."
             )
         if rejections:
@@ -249,6 +253,7 @@ def recover_codex_job(
             status="indeterminate",
             error_class="ambiguous_execution",
             error_code="recovery_unconfirmed",
+            provider_runtime="codex",
             sender_agent_id=agent_id,
             telegram_html=notice,
             terminal_turn_status=terminal_status,

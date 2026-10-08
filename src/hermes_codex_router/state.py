@@ -11,6 +11,7 @@ from typing import Iterator, Literal, Mapping, Sequence
 
 from .artifacts import ValidatedArtifact
 from .assessment_inputs import OutcomeAssessmentInput
+from .codex_control_predicates import control_owner_for_topic
 from .codex_permission_refusals import CodexPermissionInputState, PermissionInputDisposition
 from .codex_permissions import (
     MISSING_PERMISSION_CONTEXT,
@@ -18,6 +19,7 @@ from .codex_permissions import (
     validate_permission_profile_id,
 )
 from .codex_retry_policy import PreparationRetryBinding
+from .codex_turn_controls import CodexTurnControls
 from .delivery_control_predicates import result_ready_control_reconciled
 from .delivery_control_state import (
     DeliveryControlDisposition,
@@ -144,6 +146,7 @@ class HubState:
         self._root_blocker_state = RootBlockerState(
             connection, self._immediate_transaction, StateError
         )
+        self.codex_controls = CodexTurnControls(connection, transaction=self._immediate_transaction)
         self._incoming_material_state = IncomingMaterialsStateFacade(
             connection,
             state_path,
@@ -592,8 +595,10 @@ class HubState:
                                FROM provider_jobs jobs
                                JOIN provider_execution_checkpoints checkpoints
                                  ON checkpoints.job_id = jobs.job_id
-                               WHERE jobs.topic_id = ?""",
-                        (row["topic_id"], row["topic_id"]),
+                               WHERE jobs.topic_id = ?
+                               UNION SELECT controls.project_root AS root
+                               FROM codex_turn_controls controls WHERE controls.topic_id = ?""",
+                        (row["topic_id"], row["topic_id"], row["topic_id"]),
                     ).fetchall()
                 }
                 if len(evidence) > 1:
@@ -1608,7 +1613,11 @@ class HubState:
                 job_id, now=datetime.fromisoformat(timestamp)
             )
             self._provider_job_state.complete_finished_stops(int(row["topic_id"]), timestamp)
-            if status == "indeterminate" and terminal_turn_status is None and sender == "codex":
+            if (
+                status == "indeterminate"
+                and terminal_turn_status is None
+                and (provider_runtime or sender) == "codex"
+            ):
                 accepted_turn = self._connection.execute(
                     "SELECT provider_turn_id FROM provider_execution_checkpoints WHERE job_id = ?",
                     (job_id,),
@@ -2646,7 +2655,9 @@ class HubState:
     ) -> str:
         dispatch_id = str(uuid.uuid4())
         now = _now()
-        with self._connection:
+        with self._immediate_transaction():
+            if control_owner_for_topic(self._connection, topic_id) is not None:
+                raise StateError("native control operation has not confirmed quiescence")
             self._connection.execute(
                 """INSERT INTO turn_dispatches
                    (dispatch_id, chat_id, message_id, topic_id, agent_id, status,
@@ -2858,8 +2869,12 @@ class HubState:
                 lane_id, project_id=project_id, project_root=project_root
             )
 
+    def require_lane_cleanup(self, lane_id: str) -> None:
+        with self._immediate_transaction():
+            self._lane_state.require_cleanup(lane_id)
+
     def mark_lane_cleaned(self, lane_id: str) -> None:
-        with self._connection_transaction():
+        with self._immediate_transaction():
             changed = self._lane_state.mark_cleaned(lane_id)
         if changed != 1:
             raise StateError(f"lane is unknown, active, or already cleaned: {lane_id}")

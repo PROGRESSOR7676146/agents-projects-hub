@@ -8,7 +8,7 @@ from unittest import mock
 
 from hermes_codex_router import migrations as migration
 from hermes_codex_router import schema_task_lifecycle as lifecycle
-from hermes_codex_router.root_blockers import persistent_root_blocker
+from hermes_codex_router.root_blockers import RootBlocker, persistent_root_blocker
 
 
 class TaskNoticeMigrationTests(unittest.TestCase):
@@ -390,7 +390,14 @@ class TaskNoticeMigrationTests(unittest.TestCase):
                 "SELECT topic_id FROM provider_jobs WHERE job_id=?", (unknown_job,)
             ).fetchone()[0]
             connection.row_factory = sqlite3.Row
-            blocker_before = persistent_root_blocker(connection, topic_id=topic)
+            # Current facades require current schema; historical native-uncertainty
+            # expectation comes from the literal fixture, without runtime bridging.
+            destination = connection.execute(
+                "SELECT chat_id,thread_id FROM topics WHERE topic_id=?", (topic,)
+            ).fetchone()
+            blocker_before = RootBlocker(
+                "uncertain", topic, destination[0], destination[1], None, None, unknown_job
+            )
             evidence_before = [
                 tuple(row)
                 for row in connection.execute("SELECT * FROM provider_turn_terminal_evidence")

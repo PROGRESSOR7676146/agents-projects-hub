@@ -232,15 +232,20 @@ class ExecutionJournal:
     def record_turn(self, job_id: str, token: str, turn_id: str) -> None:
         turn_id = _bounded(turn_id, 256)
         with self.state._immediate_transaction():
-            self._lease(job_id, token)
+            job = self._lease(job_id, token)
             checkpoint = self.read(job_id)
             if checkpoint is None or checkpoint["provider_turn_id"] not in (None, turn_id):
                 raise StateError("execution turn binding is missing or immutable")
+            authorized = self.state.codex_controls.accept_in_transaction(job, checkpoint, turn_id)
             self.connection.execute(
                 "UPDATE provider_execution_checkpoints SET provider_turn_id = ?, updated_at = ? "
                 "WHERE job_id = ?",
                 (turn_id, datetime.now(timezone.utc).isoformat(), job_id),
             )
+        if not authorized:
+            # The provider already accepted this exact turn. Preserve its
+            # mandatory identity before waking recovery; grant no send authority.
+            raise StateError("accepted native identity retained without coherent control authority")
 
     def record_item(self, job_id: str, token: str, item_id: str, text: str, phase: str) -> None:
         item_id = _bounded(item_id, 256)

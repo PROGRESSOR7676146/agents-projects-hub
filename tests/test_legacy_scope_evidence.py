@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from schema_fixtures import remove_task_lifecycle_schema
+from schema_fixtures import project_historical_database, remove_task_lifecycle_schema
 
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.external_service import ExternalAgentService
@@ -267,6 +267,9 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
             }
             state.close()
             if schema == 30:
+                historical_path = harness.config.state_path.with_name("example-historical47.db")
+                project_historical_database(harness.config.state_path, historical_path, 47)
+                harness.config = replace(harness.config, state_path=historical_path)
                 connection = sqlite3.connect(harness.config.state_path)
                 with connection:
                     remove_task_lifecycle_schema(connection)

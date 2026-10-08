@@ -18,6 +18,7 @@ from .schema_codex_permissions import (
 from .schema_codex_permissions import (
     ensure_codex_permission_columns,
 )
+from .schema_codex_turn_controls import CODEX_TURN_CONTROLS_SCHEMA as MIGRATION_48
 from .schema_compatibility import TARGET_SCHEMA_VERSION
 from .schema_delivery_certainty import DELIVERY_CERTAINTY_SCHEMA as MIGRATION_43
 from .schema_delivery_control import DELIVERY_CONTROL_SCHEMA as MIGRATION_46
@@ -1504,6 +1505,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_45,
         MIGRATION_46,
         MIGRATION_47,
+        MIGRATION_48,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:

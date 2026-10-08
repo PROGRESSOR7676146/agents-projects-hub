@@ -6,12 +6,47 @@ import asyncio
 import os
 import time
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from hermes_codex_router.codex_control_recovery import observe_after_control_loss
+from hermes_codex_router.execution_journal import ExecutionJournal
+from hermes_codex_router.state import HubState
 from tests.codex_native_notification_origin import peer
 from tests.codex_native_profile_fixture import NativeProfileFixture
 from tests.test_codex_native_completed_connection import hub_client
+
+
+def accepted_journal(path, root, thread, turn):
+    with closing(HubState.open(path, codex_permission_profile=None)) as state:
+        topic = state.observe_topic(
+            project_id="example-project",
+            chat_id=-1001234567890,
+            thread_id=77,
+            title="Example native fixture",
+            execution_root=root,
+        )
+        session = state.activate_agent(topic.topic_id, "codex", "example-offline", "high")
+        state.bind_provider_session(session.session_id, thread, None)
+        job, _ = state.enqueue_provider_job(
+            idempotency_key="example-native",
+            chat_id=topic.chat_id,
+            message_id=1,
+            topic_id=topic.topic_id,
+            agent_id="codex",
+            session_id=session.session_id,
+            session_generation=session.generation,
+            model=session.model,
+            effort=session.effort,
+            payload_text="Example offline control-loss fixture.",
+        )
+        lease = state.lease_provider_job("codex", "example-worker")
+        assert lease is not None and lease.lease_token is not None
+        state.mark_provider_job_executing(job.job_id, lease.lease_token)
+        journal = ExecutionJournal(state)
+        journal.record_thread(job.job_id, lease.lease_token, thread, root)
+        journal.record_turn(job.job_id, lease.lease_token, turn)
+        return job.job_id, lease.lease_token
 
 
 async def control_after_disconnect(fixture):
@@ -36,6 +71,28 @@ async def control_after_disconnect(fixture):
                 effort="high",
             )
             waiting = asyncio.create_task(asyncio.to_thread(primary.wait_for_turn, turn))
+            path = fixture.base / "example-control.db"
+            job_id, invocation_token = await asyncio.to_thread(
+                accepted_journal, path, fixture.project, thread, turn
+            )
+
+            def begin(proof, deadline):
+                with closing(HubState.open_existing(path, codex_permission_profile=None)) as state:
+                    return state.codex_controls.begin_interrupt(
+                        job_id=job_id,
+                        source="protective",
+                        proof=proof,
+                        validated_root=str(fixture.project),
+                        invocation_token=invocation_token,
+                        send_deadline=deadline,
+                    )
+
+            def finish(owner, outcome):
+                with closing(HubState.open_existing(path, codex_permission_profile=None)) as state:
+                    state.codex_controls.finish_interrupt(
+                        job_id, owner, outcome=outcome, send_path_quiesced=outcome != "unknown"
+                    )
+
             try:
                 active_deadline = time.monotonic() + 10
                 while primary_wire.methods[(thread, "item/agentMessage/delta")] == 0:
@@ -71,7 +128,8 @@ async def control_after_disconnect(fixture):
                         thread_id=thread,
                         turn_id=turn,
                         root=fixture.project,
-                        may_interrupt=lambda: True,
+                        begin_interrupt=begin,
+                        finish_interrupt=finish,
                     )
                     if outcome.status not in {"active", "interrupted"}:
                         raise AssertionError("fictional production reread has no exact outcome")
@@ -89,6 +147,18 @@ async def control_after_disconnect(fixture):
                         )
                     if outcome.status != "interrupted":
                         raise AssertionError("fictional exact native interruption not proven")
+                    with closing(
+                        HubState.open_existing(path, codex_permission_profile=None)
+                    ) as state:
+                        retained = state.codex_controls.read(job_id)
+                        if (
+                            retained is None
+                            or retained["interrupt_outcome"] != "matched_ack"
+                            or retained["owner_quiesced_at"] is None
+                        ):
+                            raise AssertionError(
+                                "native matched response lost its durable sender fence"
+                            )
                     if wire.closed:
                         raise AssertionError("fictional fresh control connection was lost")
                     if calls.count("turn/interrupt") != 1 or any(

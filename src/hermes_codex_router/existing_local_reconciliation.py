@@ -12,6 +12,7 @@ from .codex_appserver import (
     StoredTurnOutcome,
     UnixWebSocketTransport,
 )
+from .codex_control_predicates import require_control_scope_clear
 from .codex_permissions import MANAGED_LOCAL_REFUSAL
 from .codex_session_adoption import open_adoption_state
 from .delivery_control_predicates import result_ready_control_reconciled
@@ -231,6 +232,7 @@ def _claim_exact_local(
 ) -> bool:
     now = datetime.now(timezone.utc).isoformat()
     with state._immediate_transaction():
+        require_control_scope_clear(state._connection, "root:" + str(root))
         row = state._connection.execute(
             """SELECT sessions.session_id, sessions.status, sessions.agent_id,
                       sessions.generation, sessions.writer_mode,

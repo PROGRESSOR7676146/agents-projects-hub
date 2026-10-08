@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable, Mapping, TypedDict
 
+from .codex_control_predicates import control_owner_for_topic
 from .delivery_control_predicates import result_ready_control_reconciled
 from .state_errors import CodexPermissionSelectionChanged
 
@@ -145,7 +146,13 @@ class SessionsStateFacade:
     ) -> SessionRecord:
         if not provider_session_id.strip():
             raise self._state_error("provider session id is empty")
-        with self._write_transaction():
+        with self._transaction():
+            prior = self.get_session(session_id)
+            if (
+                prior.provider_session_id != provider_session_id
+                and control_owner_for_topic(self._connection, prior.topic_id) is not None
+            ):
+                raise self._state_error("native control operation has not confirmed quiescence")
             cursor = self._connection.execute(
                 "UPDATE agent_sessions SET provider_session_id = ?, terminal_name = ?, "
                 "updated_at = ? WHERE session_id = ?",
@@ -170,6 +177,8 @@ class SessionsStateFacade:
         return None if lane is None else tuple(sorted(lane.items()))
 
     def _require_writer_transfer_snapshot(self, snapshot: WriterTransferSnapshot) -> None:
+        if control_owner_for_topic(self._connection, snapshot.topic.topic_id) is not None:
+            raise self._state_error("native control operation has not confirmed quiescence")
         if (
             snapshot.session.topic_id != snapshot.topic.topic_id
             or self._get_topic(snapshot.topic.topic_id) != snapshot.topic
@@ -213,6 +222,8 @@ class SessionsStateFacade:
                 raise self._state_error(f"unknown session_id: {session_id}")
             if writer_mode != "telegram" and session["writer_mode"] == "telegram":
                 scope = str(session["execution_scope"])
+                if control_owner_for_topic(self._connection, int(session["topic_id"])) is not None:
+                    raise self._state_error("native control operation has not confirmed quiescence")
                 conflicting_writer = self._connection.execute(
                     """SELECT 1 FROM agent_sessions other
                        JOIN topics ON topics.topic_id = other.topic_id
@@ -447,6 +458,8 @@ class SessionsStateFacade:
         return self.get_session(session_id)
 
     def _require_control_snapshot(self, topic_id: int, expected_session_id: str | None) -> None:
+        if control_owner_for_topic(self._connection, topic_id) is not None:
+            raise self._state_error("native control operation has not confirmed quiescence")
         if expected_session_id is not None:
             current = self.active_session(topic_id)
             if (current.session_id if current else "") != expected_session_id:

@@ -19,8 +19,9 @@ from .claude_stream import (
 from .codex_appserver import (
     CodexAppServerClient,
 )
+from .codex_execution_control import wait_for_controlled_codex_turn
 from .codex_failure import codex_preparation, uncertain_provider_notice
-from .codex_live_control import CodexLiveControl
+from .codex_late_control import CodexControlMaintenance
 from .codex_recovery import (
     reconcile_codex_completion,
     recover_codex_job,
@@ -84,7 +85,6 @@ from .worker_execution import (
     should_transfer_legacy_fallback,
     start_codex_provider_turn,
     validate_provider_worker_binding,
-    wait_for_codex_provider_turn,
     worker_needs_full_telegram_contract,
 )
 from .worker_failure_notice import commit_worker_failure_notice
@@ -301,7 +301,26 @@ class ExternalQueueWorker:
         if self.supervisor is not None:
             self.supervisor.start()
         connect_thread: threading.Thread | None = None
+        control_thread: threading.Thread | None = None
+        maintenance: CodexControlMaintenance | None = None
         if self.agent.runtime == "codex":
+            assert self.supervisor is not None
+            supervisor = self.supervisor
+            maintenance = CodexControlMaintenance(
+                self.config,
+                worker_id=self.worker_id,
+                agent_id=self.agent.agent_id,
+                client_factory=lambda deadline: supervisor.client(
+                    allow_fallback=False, deadline=deadline
+                ),
+                stop=self._stop,
+            )
+            control_thread = threading.Thread(
+                target=maintenance.run_forever,
+                name=f"{self.worker_id}-control",
+                daemon=True,
+            )
+            control_thread.start()
             connect_thread = threading.Thread(
                 target=self._run_connect_forever,
                 name=f"{self.worker_id}-connect",
@@ -320,6 +339,14 @@ class ExternalQueueWorker:
             return
         finally:
             self._stop.set()
+            if maintenance is not None:
+                maintenance.close_client()
+            if control_thread is not None:
+                control_thread.join(timeout=20)
+                if control_thread.is_alive():
+                    self._record_event(
+                        "error", "codex_control_shutdown_unconfirmed", self.agent.agent_id
+                    )
             if connect_thread is not None:
                 connect_thread.join(timeout=40)
 
@@ -908,41 +935,20 @@ class ExternalQueueWorker:
             journal.record_turn(job.job_id, token, turn_id)
             accepted_activity(thread.thread_id, turn_id)
             supervisor = self.supervisor
-            control = CodexLiveControl(
-                state_factory=lambda: HubState.open_existing(
-                    self.config.state_path,
-                    codex_permission_profile=self.config.codex_permission_profile,
-                    contention_timeout_seconds=0.1,
-                ),
-                client_factory=lambda: supervisor.client(
-                    allow_fallback=False, deadline=time.monotonic() + 2
-                ),
+            result = wait_for_controlled_codex_turn(
+                client,
+                self.state,
+                self.config,
+                journal=journal,
                 job=job,
                 worker_id=self.worker_id,
                 thread_id=thread.thread_id,
                 turn_id=turn_id,
                 transport_mode=self._codex_transport_mode,
-                close_owned_turn_client=client.close,
+                client_factory=lambda: supervisor.client(
+                    allow_fallback=False, deadline=time.monotonic() + 2
+                ),
             )
-            with control.running():
-                client.on_visible_item = lambda item_id, text, phase: journal.record_item(
-                    job.job_id, token, item_id, text, phase
-                )
-                client.on_completed = lambda result: journal.record_completion(
-                    job.job_id, token, result.text
-                )
-                try:
-                    result = wait_for_codex_provider_turn(client, turn_id)
-                    journal.record_completion(job.job_id, token, result.text)
-                finally:
-                    client.on_visible_item = None
-                    client.on_completed = None
-        if control.confirmed_interrupt_request is not None:
-            raise ProviderTurnStopped(control.confirmed_interrupt_request)
-        late_request = self.state.pending_emergency_stop_for_job(job.job_id)
-        if late_request is not None:
-            raise ProviderTurnStopped(late_request)
-        control.raise_deferred_failure()
         post_completion_context(self.state, job.session_id, result)
         limits = post_completion_limits(client)
         artifacts = prepare_worker_artifacts(

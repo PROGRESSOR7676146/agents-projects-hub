@@ -10,17 +10,18 @@ from unittest.mock import patch
 from hermes_codex_router import migrations
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.state import HubState
-from tests.schema_fixtures import legacy_delivery_hold_schema
+from tests.schema_fixtures import project_historical_database
 
 
 class PreacceptanceMigrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.path = Path(self.enterContext(tempfile.TemporaryDirectory())) / "state.db"
+        source = self.path.with_name("example-current-seed.db")
         self.now = datetime.now(timezone.utc)
-        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 39):
-            state = HubState.open(self.path, codex_permission_profile=None)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
+            state = HubState.open(source, codex_permission_profile=None)
         try:
-            with legacy_delivery_hold_schema(state._connection):
+            with state._connection:
                 topic = state.observe_topic(
                     project_id="example-project",
                     chat_id=-1001234567890,
@@ -98,6 +99,7 @@ class PreacceptanceMigrationTests(unittest.TestCase):
                 journal.record_turn(job.job_id, executing.lease_token, "example-turn")
         finally:
             state.close()
+        project_historical_database(source, self.path, 39)
 
     def snapshot(self, connection):
         return {
