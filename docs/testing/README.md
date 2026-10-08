@@ -372,10 +372,14 @@ Those primitives are in-process fixtures; the buffer performs no physical writes
 peer. It covers recorded kernel short writes (8-KiB offers into a 4-KiB pipe),
 fragmentation/backpressure, exact capsule request binding, a fresh
 response digest receipt, cancellation before/after claim, duplicate requests,
-truncated frames, absolute deadlines during floods/held pipes, bounded HTTP
+truncated frames, stream-budget refusal under floods, absolute deadlines under
+trickled activity/held pipes, bounded HTTP
 headers/bodies and malformed requests. Extra-byte cases require an explicit
 rejection diagnostic, including a byte delivered during response transmission;
-an actor timeout is insufficient. Deterministic would-block offer conservation
+EOF and an actor timeout are insufficient. The descriptor scan requires readable
+FD tables for self, parent and PID1 and fails closed on PermissionError; mocks
+cover incomplete directory/descriptor scans. Cancellation is sampled before
+unconditional gate cleanup, and success is a non-revoked positive control. Deterministic would-block offer conservation
 remains in the fake-owner tests. `tests.test_owned_fixture_process` covers
 kill-before-reap and closure of all owned streams; the existing native capture
 regressions reuse that lifecycle.

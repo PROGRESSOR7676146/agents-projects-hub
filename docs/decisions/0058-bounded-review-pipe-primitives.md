@@ -157,7 +157,12 @@ Absolute deadlines are independent of traffic, queues/output are finite, and
 actual kernel short writes preserve offers: an 8-KiB offer into a 4-KiB pipe must
 produce a positive recorded short-write count. Would-block accounting exists,
 but its deterministic zero-progress proof remains in the fake-owner tests.
-Cancellation before/after claim retains the distinct zero/one-call observations.
+Cancellation before/after claim retains the distinct zero/one-call observations
+sampled before unconditional gate close. Floods hit the stream budget; a separate
+trickle peer proves that continued activity cannot extend the host deadline.
+Descriptor scans fail closed when a table or descriptor is unreadable and require
+self, parent and PID1 inspection. Late request bytes have a diagnostic distinct
+from peer EOF.
 The callback is synchronous and intentionally bounded fixture code; this is no
 claim of an interruptible provider call.
 

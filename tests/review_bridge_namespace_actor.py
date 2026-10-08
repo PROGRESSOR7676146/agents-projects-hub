@@ -31,14 +31,19 @@ def verify(inputs,role):
         try: pathlib.Path(target).read_bytes()
         except OSError: pass
         else: raise ValueError('example_hidden_path_reachable')
+    inspected=set()
     for process in pathlib.Path('/proc').iterdir():
         if not process.name.isdigit(): continue
         try: descriptors=list(process.joinpath('fd').iterdir())
-        except (PermissionError,FileNotFoundError): continue
+        except (FileNotFoundError,ProcessLookupError): continue
+        except PermissionError: raise ValueError('example_descriptor_scan_incomplete')
         for descriptor in descriptors:
             try: info=descriptor.stat()
-            except (PermissionError,FileNotFoundError): continue
+            except (FileNotFoundError,ProcessLookupError): continue
+            except PermissionError: raise ValueError('example_descriptor_scan_incomplete')
             if (info.st_dev,info.st_ino) in denied: raise ValueError('example_descriptor_leak')
+        inspected.add(int(process.name))
+    if not {os.getpid(),os.getppid(),1} <= inspected: raise ValueError('example_descriptor_scan_incomplete')
     for family, endpoint in ((socket.AF_INET,('127.0.0.1',inputs['host_port'])),(socket.AF_UNIX,inputs['pathname']),(socket.AF_UNIX,'\0'+inputs['abstract'])):
         with socket.socket(family) as probe:
             probe.settimeout(.3)
@@ -232,6 +237,14 @@ def main(_sources: object) -> None:
         while time.monotonic() < deadline:
             _write_raw(wire, deadline)
         return
+    if scenario == "trickle":
+        wire = encode_bridge_frame(BridgeFrame(BridgeFrameType.NATIVE_STDOUT, b"x"))
+        # Deliberately outlive the host deadline while staying under all stream
+        # budgets. The host owns bounded termination of this fictional peer.
+        while time.monotonic() < started + 10:
+            _write_raw(wire, started + 10)
+            time.sleep(0.01)
+        return
     inputs = incoming["inputs"]
     assert isinstance(inputs, dict)
     namespace: dict[str, object] = {}
@@ -366,8 +379,10 @@ def _serve(
                                     except BlockingIOError:
                                         chunk = None
                                     if chunk is not None:
-                                        if not chunk or requested:
-                                            raise ValueError("example_http_repeat_or_eof")
+                                        if not chunk:
+                                            raise ValueError("example_http_eof")
+                                        if requested:
+                                            raise ValueError("example_http_late_bytes")
                                         request.extend(chunk)
                                         if len(request) > 1048576 + 8196:
                                             raise ValueError("example_http_bound")

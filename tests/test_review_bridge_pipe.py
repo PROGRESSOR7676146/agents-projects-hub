@@ -70,6 +70,7 @@ class ReviewBridgePipeTests(unittest.TestCase):
                         in (
                             "no_read",
                             "flood",
+                            "trickle",
                             "held_pipe",
                             "response_no_read",
                             "slow_header",
@@ -93,6 +94,7 @@ class ReviewBridgePipeTests(unittest.TestCase):
     def test_fragmentation_backpressure_and_delivered_fresh_response(self) -> None:
         result = self.run_case(write_quantum=7, pipe_capacity=4096)
         self.assertTrue(result.success, result.error)
+        self.assertFalse(result.revoked)
 
     def test_real_pipe_short_writes_preserve_the_response(self) -> None:
         result = self.run_case(write_quantum=8192, pipe_capacity=4096)
@@ -158,7 +160,7 @@ class ReviewBridgePipeTests(unittest.TestCase):
         self.assertTrue(result.cleanup_eof)
         self.assertTrue(
             b"example_http_extra_bytes" in result.stderr
-            or b"example_http_repeat_or_eof" in result.stderr,
+            or b"example_http_late_bytes" in result.stderr,
             result.stderr,
         )
         self.assertNotIn(b"example_actor_deadline", result.stderr)
@@ -167,7 +169,8 @@ class ReviewBridgePipeTests(unittest.TestCase):
         result = self.run_case("delayed_extra_request")
         self.assertFalse(result.success)
         self.assertTrue(result.attempted)
-        self.assertIn(b"example_http_repeat_or_eof", result.stderr)
+        self.assertIn(b"example_http_late_bytes", result.stderr)
+        self.assertNotIn(b"example_http_eof", result.stderr)
         self.assertNotIn(b"example_actor_deadline", result.stderr)
         self.assertTrue(result.cleanup_eof)
         # Whether TCP delivers the extra bytes before or after the exact body
@@ -188,13 +191,23 @@ class ReviewBridgePipeTests(unittest.TestCase):
                 self.assertEqual(result.attempted, expected)
                 self.assertTrue(result.revoked)
 
-    def test_deadline_is_not_extended_by_flood_or_held_pipe(self) -> None:
-        for scenario in ("no_read", "flood", "held_pipe"):
+    def test_stream_budget_and_deadline_have_distinct_failure_evidence(self) -> None:
+        for scenario in ("no_read", "flood", "held_pipe", "trickle"):
             with self.subTest(scenario=scenario):
                 result = self.run_case(scenario)
                 self.assertFalse(result.success)
+                self.assertEqual(
+                    result.error,
+                    "bridge_sequence_stream_budget"
+                    if scenario == "flood"
+                    else "example_pipe_deadline",
+                )
                 self.assertLess(result.elapsed, 8)
                 self.assertLessEqual(result.stdout_bytes, 256 * 1024)
+                self.assertTrue(result.cleanup_eof)
+                if scenario == "trickle":
+                    self.assertGreater(result.stdout_bytes, 1)
+                    self.assertLess(result.stdout_bytes, 1024)
 
     def test_http_invalid_or_slow_headers_never_claim(self) -> None:
         for scenario in (

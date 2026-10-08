@@ -280,6 +280,7 @@ def run_pipe_fixture(
     except OSError:
         result.error = "example_pipe_io"
     finally:
+        result.attempted, result.revoked = gate.observation.attempted, gate.observation.revoked
         gate.close()
         buffer.cancel()
         if witness_descriptor >= 0:
@@ -300,7 +301,6 @@ def run_pipe_fixture(
             finally:
                 os.close(witness_descriptor)
     observation = sequence.observation
-    result.attempted, result.revoked = gate.observation.attempted, gate.observation.revoked
     result.request_seen, result.response_ended = (
         observation.request_seen,
         observation.response_ended,

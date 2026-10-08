@@ -9,6 +9,7 @@ import socket
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 from hermes_codex_router.process_namespace import (
@@ -24,7 +25,41 @@ from tests.namespace_fixture import (
     namespace_unavailable,
     require_namespace_runtime,
 )
+from tests.review_bridge_namespace_actor import _ISOLATION
 from tests.review_bridge_pipe_fixture import PipeFixtureResult, actor_argv, run_pipe_fixture
+
+
+class ReviewBridgeIsolationScanTests(unittest.TestCase):
+    def verify(self, pids, *, unreadable: str | None = None):
+        namespace = {}
+        exec(_ISOLATION, namespace)
+        actual = namespace["verify"]
+
+        def entries(path):
+            if path == Path("/proc"):
+                return iter(Path("/proc") / str(pid) for pid in pids)
+            if unreadable == "directory":
+                raise PermissionError("fictional fd directory")
+            return iter((path / "0",)) if unreadable == "descriptor" else iter(())
+
+        with patch.object(Path, "iterdir", autospec=True, side_effect=entries):
+            if unreadable == "descriptor":
+                with patch.object(Path, "stat", side_effect=PermissionError("fictional fd")):
+                    actual({"denied_inodes": [], "hidden": []}, "parent")
+            else:
+                actual({"denied_inodes": [], "hidden": []}, "parent")
+
+    def test_unreadable_fd_directory_or_descriptor_cannot_prove_isolation(self) -> None:
+        for scope in ("directory", "descriptor"):
+            with (
+                self.subTest(scope=scope),
+                self.assertRaisesRegex(ValueError, "example_descriptor_scan_incomplete"),
+            ):
+                self.verify((os.getpid(), os.getppid(), 1), unreadable=scope)
+
+    def test_missing_required_process_cannot_prove_isolation(self) -> None:
+        with self.assertRaisesRegex(ValueError, "example_descriptor_scan_incomplete"):
+            self.verify((os.getpid(), os.getppid()))
 
 
 class ReviewBridgeNamespaceTests(unittest.TestCase):
