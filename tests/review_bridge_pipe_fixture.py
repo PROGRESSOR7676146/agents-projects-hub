@@ -124,6 +124,7 @@ def run_pipe_fixture(
     response_size = 0
     exit_payload: bytes | None = None
     witness_descriptor = -1
+    diagnostic_descriptor = -1
     try:
         with owned_fixture_process(
             argv, environment, stdin=subprocess.PIPE, pass_fds=pass_fds
@@ -156,6 +157,7 @@ def run_pipe_fixture(
                 gate.cancel()
                 pending.append(BridgeFrame(BridgeFrameType.CANCEL, b""))
             witness_descriptor = os.dup(process.stdout.fileno())
+            diagnostic_descriptor = os.dup(process.stderr.fileno())
             for stream in (process.stdin, process.stdout, process.stderr):
                 os.set_blocking(stream.fileno(), False)
             fcntl.fcntl(process.stdin, fcntl.F_SETPIPE_SZ, pipe_capacity)
@@ -285,21 +287,40 @@ def run_pipe_fixture(
         buffer.cancel()
         if witness_descriptor >= 0:
             try:
-                os.set_blocking(witness_descriptor, False)
                 cleanup_deadline = time.monotonic() + 1
                 drained_bytes = 0
                 with selectors.DefaultSelector() as witness:
-                    witness.register(witness_descriptor, selectors.EVENT_READ)
-                    while time.monotonic() < cleanup_deadline and drained_bytes <= 256 * 1024:
-                        if not witness.select(0.05):
-                            continue
-                        chunk = os.read(witness_descriptor, 8192)
-                        if not chunk:
-                            result.cleanup_eof = True
-                            break
-                        drained_bytes += len(chunk)
+                    for descriptor, role in (
+                        (witness_descriptor, "stdout"),
+                        (diagnostic_descriptor, "stderr"),
+                    ):
+                        if descriptor >= 0:
+                            os.set_blocking(descriptor, False)
+                            witness.register(descriptor, selectors.EVENT_READ, role)
+                    while witness.get_map() and time.monotonic() < cleanup_deadline:
+                        for key, _ in witness.select(0.05):
+                            try:
+                                chunk = os.read(key.fd, 8192)
+                            except BlockingIOError:
+                                continue
+                            if not chunk:
+                                witness.unregister(key.fd)
+                                if key.data == "stdout":
+                                    result.cleanup_eof = True
+                            elif key.data == "stderr":
+                                if len(diagnostics) + len(chunk) > 16384:
+                                    result.error = result.error or "example_stderr_bound"
+                                    witness.unregister(key.fd)
+                                else:
+                                    diagnostics.extend(chunk)
+                            else:
+                                drained_bytes += len(chunk)
+                                if drained_bytes > 256 * 1024:
+                                    witness.unregister(key.fd)
             finally:
                 os.close(witness_descriptor)
+                if diagnostic_descriptor >= 0:
+                    os.close(diagnostic_descriptor)
     observation = sequence.observation
     result.request_seen, result.response_ended = (
         observation.request_seen,

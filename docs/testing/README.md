@@ -373,16 +373,19 @@ peer. It covers recorded kernel short writes (8-KiB offers into a 4-KiB pipe),
 fragmentation/backpressure, exact capsule request binding, a fresh
 response digest receipt, cancellation before/after claim, duplicate requests,
 truncated frames, stream-budget refusal under floods, absolute deadlines under
-trickled activity/held pipes, bounded HTTP
-headers/bodies and malformed requests. Extra-byte cases require an explicit
+trickled activity/held pipes, bounded HTTP headers/bodies and malformed requests.
+Extra-byte cases require an explicit
 rejection diagnostic, including a byte delivered during response transmission;
 EOF and an actor timeout are insufficient. The descriptor scan requires readable
 FD tables for self, parent and PID1 and fails closed on PermissionError; mocks
 cover incomplete directory/descriptor scans. Cancellation is sampled before
-unconditional gate cleanup, and success is a non-revoked positive control. Deterministic would-block offer conservation
-remains in the fake-owner tests. `tests.test_owned_fixture_process` covers
+unconditional gate cleanup, and success is a non-revoked positive control.
+Deterministic would-block offer conservation remains in the fake-owner tests.
+`tests.test_owned_fixture_process` covers
 kill-before-reap and closure of all owned streams; the existing native capture
-regressions reuse that lifecycle.
+regressions reuse that lifecycle. Pipe cleanup drains buffered stderr and stdout
+under one finite deadline; a forced stdout-first failure checks that the explicit
+late-byte diagnostic survives cleanup.
 
 `tests.test_review_bridge_namespace` adds the private namespace witness to the
 required strict CI job. Positive host controls precede parent/exec-child denial

@@ -38,11 +38,19 @@ class ReviewBridgeIsolationScanTests(unittest.TestCase):
         def entries(path):
             if path == Path("/proc"):
                 return iter(Path("/proc") / str(pid) for pid in pids)
-            if unreadable == "directory":
+            if path == Path("/proc/4999/fd") and unreadable == "directory":
                 raise PermissionError("fictional fd directory")
-            return iter((path / "0",)) if unreadable == "descriptor" else iter(())
+            return (
+                iter((path / "0",))
+                if path == Path("/proc/4999/fd") and unreadable == "descriptor"
+                else iter(())
+            )
 
-        with patch.object(Path, "iterdir", autospec=True, side_effect=entries):
+        with (
+            patch.object(Path, "iterdir", autospec=True, side_effect=entries),
+            patch("os.getpid", return_value=4242),
+            patch("os.getppid", return_value=4241),
+        ):
             if unreadable == "descriptor":
                 with patch.object(Path, "stat", side_effect=PermissionError("fictional fd")):
                     actual({"denied_inodes": [], "hidden": []}, "parent")
@@ -55,11 +63,17 @@ class ReviewBridgeIsolationScanTests(unittest.TestCase):
                 self.subTest(scope=scope),
                 self.assertRaisesRegex(ValueError, "example_descriptor_scan_incomplete"),
             ):
-                self.verify((os.getpid(), os.getppid(), 1), unreadable=scope)
+                # Required processes stay readable. Only an unrelated process
+                # refuses inspection, so the missing-PID guard cannot mask it.
+                self.verify((4242, 4241, 1, 4999), unreadable=scope)
 
     def test_missing_required_process_cannot_prove_isolation(self) -> None:
-        with self.assertRaisesRegex(ValueError, "example_descriptor_scan_incomplete"):
-            self.verify((os.getpid(), os.getppid()))
+        for missing in (4242, 4241, 1):
+            with (
+                self.subTest(missing=missing),
+                self.assertRaisesRegex(ValueError, "example_descriptor_scan_incomplete"),
+            ):
+                self.verify(tuple(pid for pid in (4242, 4241, 1) if pid != missing))
 
 
 class ReviewBridgeNamespaceTests(unittest.TestCase):

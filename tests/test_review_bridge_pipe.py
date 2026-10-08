@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+import selectors
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from hermes_codex_router.review_bridge_attempt import BridgeAttemptGate, BridgeAttemptSpec
 from hermes_codex_router.review_materials import MaterialSelection, build_review_capsule
@@ -182,6 +184,27 @@ class ReviewBridgePipeTests(unittest.TestCase):
                 result = self.run_case(scenario)
                 self.assertFalse(result.success)
                 self.assertFalse(result.attempted)
+
+    def test_incomplete_stdout_preserves_buffered_stderr_during_cleanup(self) -> None:
+        select = selectors.DefaultSelector.select
+
+        def defer_diagnostics(selector, timeout=None):
+            # Force stdout failure before the ordinary stderr reader runs.
+            # Cleanup owns duplicate integer descriptors and must drain them.
+            return [
+                (key, mask)
+                for key, mask in select(selector, timeout)
+                if key.data != "stderr" or isinstance(key.fileobj, int)
+            ]
+
+        with patch.object(selectors.DefaultSelector, "select", defer_diagnostics):
+            result = self.run_case("delayed_extra_request")
+        self.assertFalse(result.success)
+        self.assertEqual(result.error, "bridge_sequence_eof_incomplete")
+        self.assertIn(b"example_http_late_bytes", result.stderr)
+        self.assertNotIn(b"example_http_eof", result.stderr)
+        self.assertTrue(result.cleanup_eof)
+        self.assertLessEqual(len(result.stderr), 16384)
 
     def test_cancel_before_claim_and_after_claim_keep_consumption_distinct(self) -> None:
         for stage, expected in (("before_claim", False), ("after_claim", True)):
