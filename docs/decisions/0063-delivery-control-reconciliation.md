@@ -9,7 +9,7 @@ Owner: Hub maintainer; product decision owner: repository owner.
 Schema44 permits queue continuation past one unknown final delivery while
 retaining indefinite control and topic-binding restrictions. Operational recovery
 needs a separately explicit decision, rather than silently expanding that consent.
-[REQ-QUEUE-005](../product/PERSISTENCE_AND_RECOVERY.md) owns this boundary.
+[REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONTROL.md) owns this boundary.
 The prior [decision](0061-owner-delivery-hold-dispositions.md) remains unchanged.
 
 ## Staged decision

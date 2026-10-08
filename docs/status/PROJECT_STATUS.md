@@ -17,22 +17,22 @@ owning modules.
 
 | Capability | Repository state | Live acceptance | Contract |
 | --- | --- | --- | --- |
-| Multiple Codex worker slots | Implemented | Pending (three projects) | [REQ-QUEUE-002](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md) |
+| Multiple Codex worker slots | Implemented | Pending (three projects) | [REQ-QUEUE-002](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md) |
 | Claude Code CPA worker | Text-only default; protected file-tool permission boundary implemented offline (schema 38) | Pending; advisor isolation and full parity remain open | [REQ-AUTH-009/SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0052](../decisions/0052-protected-claude-file-permissions.md) |
 | Managed Codex permission-profile continuity | External queue slice and immutable schema-39 snapshots; native offline adapter coverage | Pending; custody and local/advisor boundaries remain open | [REQ-SEC-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0055](../decisions/0055-managed-codex-profile-continuity.md) |
 | Claude/Codex lead and advisor | Accepted plan; not implemented | — | [REQ-COLLAB-001](../product/IDENTITY_AND_INTERACTION.md), [ADR 0040](../decisions/0040-bounded-claude-codex-lead-advisor.md) |
 | Participant evaluation and allocation | Accepted foundation; not implemented | — | [Requirements](../product/EVALUATION_AND_ALLOCATION.md), [ADR 0037](../decisions/0037-evidence-based-task-allocation.md) |
-| Stop certainty and independent notices (schema 36) | Implemented; canonical checks and independent review at `d3be874` | Pending | [REQ-QUEUE-005/013](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md) |
-| Final/progress send certainty (schema 43) | Source implementation under validation; exact publication gates pending | Pending | [REQ-QUEUE-005](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0060](../decisions/0060-final-and-progress-delivery-certainty.md) |
-| Exact delivery control (schema 47) | Coordinated explicit consent and consumer implementation under validation; schema46 prerequisite published at `357409b` | Activation pending | [REQ-QUEUE-005](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0063](../decisions/0063-delivery-control-reconciliation.md) |
-| Queue snapshots and accepted Codex activity (schema 37) | Implemented slice; focused offline validation, final canonical evidence and required review pending | Pending | [REQ-QUEUE-012](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md) |
-| Codex approvals observed before acceptance (schema 40) | Separate fenced observation slice under validation; accepted execution authority is unchanged | Pending | [REQ-QUEUE-012/013](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md) |
-| Claude process observations (schema 42) | Ordinary quiet notices implemented; offline candidate under publication validation | Pending | [REQ-QUEUE-012](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0059](../decisions/0059-claude-process-observation-notices.md) |
+| Stop certainty and independent notices (schema 36) | Implemented; canonical checks and independent review at `d3be874` | Pending | [REQ-QUEUE-005/013](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md) |
+| Final/progress send certainty (schema 43) | Source implementation under validation; exact publication gates pending | Pending | [REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0060](../decisions/0060-final-and-progress-delivery-certainty.md) |
+| Exact delivery control (schema 47) | Coordinated explicit consent and consumer implementation under validation; schema46 prerequisite published at `357409b` | Activation pending | [REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0063](../decisions/0063-delivery-control-reconciliation.md) |
+| Queue snapshots and accepted Codex activity (schema 37) | Implemented slice; focused offline validation, final canonical evidence and required review pending | Pending | [REQ-QUEUE-012](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md) |
+| Codex approvals observed before acceptance (schema 40) | Separate fenced observation slice under validation; accepted execution authority is unchanged | Pending | [REQ-QUEUE-012/013](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md) |
+| Claude process observations (schema 42) | Ordinary quiet notices implemented; offline candidate under publication validation | Pending | [REQ-QUEUE-012](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0059](../decisions/0059-claude-process-observation-notices.md) |
 | Durable local-root blockers (schema 35) | Implemented | Pending | [REQ-WRITER-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0036](../decisions/0036-durable-local-root-blockers.md) |
-| Exact Codex turn recovery (schema 34) | Implemented | Pending | [REQ-QUEUE-004](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0035](../decisions/0035-exact-terminal-turn-reconciliation.md) |
+| Exact Codex turn recovery (schema 34) | Implemented | Pending | [REQ-QUEUE-004](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0035](../decisions/0035-exact-terminal-turn-reconciliation.md) |
 | Inbound Telegram materials (schema 33) | Implemented | Pending | [REQ-UX-009](../product/IDENTITY_AND_INTERACTION.md), [ADR 0032](../decisions/0032-durable-inbound-telegram-materials.md) |
 | Context and quota telemetry | Implemented | Pending | [REQ-CMD-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0033](../decisions/0033-truthful-context-and-quota-telemetry.md) |
-| Root exclusion, bounded concurrency, worktree lanes (schemas 31–32) | Implemented | Pending | [REQ-QUEUE-003](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0031](../decisions/0031-bounded-root-concurrency.md) |
+| Root exclusion, bounded concurrency, worktree lanes (schemas 31–32) | Implemented | Pending | [REQ-QUEUE-003](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0031](../decisions/0031-bounded-root-concurrency.md) |
 | Saved Codex session connect | Implemented | Pending | [REQ-CMD-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0023](../decisions/0023-deterministic-session-connect.md) |
 | CLI session adoption and replacement | Implemented | Pending | [REQ-WRITER-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0022](../decisions/0022-explicit-codex-session-adoption.md) |
 | Explicit Codex provider routing | Implemented | Pending | [ADR 0028](../decisions/0028-explicit-codex-provider-routing.md) |
@@ -49,7 +49,7 @@ owning modules.
 Multiple Codex worker slots are implemented behind external queue configuration;
 offline admission, root exclusion, fairness and health checks are covered.
 Deployment and live three-project acceptance remain pending. See
-[REQ-QUEUE-002](../product/PERSISTENCE_AND_RECOVERY.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
+[REQ-QUEUE-002](../product/DURABLE_QUEUE_AND_CONTROL.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
 and [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md).
 
 Claude Code has a text-only external worker with native identity preparation,
@@ -91,7 +91,7 @@ Schema 34 Codex recovery and exact already-open local reconciliation are in
 repository implementation, pending immutable deployment and live Telegram /
 provider acceptance. Offline tests exercise exact terminal evidence,
 inspection-first continuation, paused queue work and ownership checks; see
-[REQ-QUEUE-004](../product/PERSISTENCE_AND_RECOVERY.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
+[REQ-QUEUE-004](../product/DURABLE_QUEUE_AND_CONTROL.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
 and [ADR 0035](../decisions/0035-exact-terminal-turn-reconciliation.md).
 
 The integrated development baseline retains released schemas 26–30 unchanged,
@@ -117,7 +117,7 @@ Inbound materials are repository-complete at schema 33. Offline parser,
 actual-provider-input, migration, album arrival, deduplication, forwarding,
 native-image RPC and tamper regressions cover
 [REQ-UX-009](../product/IDENTITY_AND_INTERACTION.md#telegram-interaction-contract)
-and [REQ-QUEUE-010](../product/PERSISTENCE_AND_RECOVERY.md#implemented-queue-compatibility-and-local-provider-worker-isolation).
+and [REQ-QUEUE-010](../product/DURABLE_QUEUE_AND_CONTROL.md#implemented-queue-compatibility-and-local-provider-worker-isolation).
 Deployment and live Telegram/provider acceptance remain separate; see
 [ADR 0032](../decisions/0032-durable-inbound-telegram-materials.md).
 

@@ -39,7 +39,7 @@ required for this milestone.
 
 The observable contracts live in [REQ-COLLAB-001..002](../product/IDENTITY_AND_INTERACTION.md#explicit-claude-codecodex-collaboration),
 [REQ-WRITER-013](../product/ACCOUNTS_CONTROL_AND_SECURITY.md#11-frontends-writer-lease-and-local-transfer),
-[REQ-QUEUE-011](../product/PERSISTENCE_AND_RECOVERY.md#implemented-queue-compatibility-and-local-provider-worker-isolation),
+[REQ-QUEUE-011](../product/DURABLE_QUEUE_AND_CONTROL.md#implemented-queue-compatibility-and-local-provider-worker-isolation),
 and [REQ-EVAL-010](../product/EVALUATION_AND_ALLOCATION.md#21-evaluation-and-resource-aware-task-allocation).
 The [implementation plan](../operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md) owns
 sequencing and open capability checks, not another normative contract.

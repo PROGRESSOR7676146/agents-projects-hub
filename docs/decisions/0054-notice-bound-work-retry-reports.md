@@ -5,7 +5,7 @@ Date: 2026-10-05
 
 ## Context
 
-[REQ-QUEUE-012/013](../product/PERSISTENCE_AND_RECOVERY.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
+[REQ-QUEUE-012/013](../product/DURABLE_QUEUE_AND_CONTROL.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
 requires active-work retries to report or join the existing work without another
 invocation. An exact Reply `retry` that was not a confirmed-terminal Codex failure
 notice previously reached ordinary productive admission and created another job.

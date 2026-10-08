@@ -153,7 +153,7 @@ An outbox sender, separate from provider execution, delivers the prepared
 message and advances `result_ready` to `completed`. Telegram failure retries
 only outbox delivery; it MUST NOT invoke the provider again. An attempted send
 without a trusted committed receipt remains unknown under
-[REQ-QUEUE-005](../product/PERSISTENCE_AND_RECOVERY.md) and
+[REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONTROL.md) and
 [ADR 0060](0060-final-and-progress-delivery-certainty.md). It cannot be resent
 blindly. The owner may separately release its topic delivery/FIFO hold under
 [ADR 0061](0061-owner-delivery-hold-dispositions.md), without converting delivery

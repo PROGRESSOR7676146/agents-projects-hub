@@ -140,7 +140,7 @@ block the topic. The command changes no execution, held-request decision, stop,
 writer, session or artifact state. Apply may allow authorized tail jobs to start
 immediately under ordinary scheduling; it never resends the old message or calls
 the provider itself. Existing session/writer, connect/adoption and relocation
-checks remain independent. See [REQ-QUEUE-005](../product/PERSISTENCE_AND_RECOVERY.md).
+checks remain independent. See [REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONTROL.md).
 
 ## Component restart boundaries
 
@@ -402,7 +402,7 @@ an explicit Reply to its own new notice; repeating the older notice cannot
 create another child. Inspect the child payload/context and exact session
 binding before calling the task recovered. Materials, missing legacy tickets,
 changed bindings and contradictory execution evidence cause refusal. Follow
-[REQ-QUEUE-004](../product/PERSISTENCE_AND_RECOVERY.md) for the safety contract;
+[REQ-QUEUE-004](../product/DURABLE_QUEUE_AND_CONTROL.md) for the safety contract;
 never grant or replay native tool permissions from task authorization text.
 
 This is a new owner input in FIFO arrival order. Later work already queued or

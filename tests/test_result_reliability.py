@@ -425,9 +425,14 @@ class ResultReliabilityTests(unittest.TestCase):
                 notice_message_id=101,
                 reply_message_id=102,
                 canonical_root=fixture.registry.projects[0].root,
+                telegram_ingress_identity="hub",
             )
             self.assertTrue(created)
             self.assertEqual(held_count, 1)
+            self.assertIsNone(worker.state.telegram_turn_provenance.identity(old_job_id))
+            self.assertEqual(
+                worker.state.telegram_turn_provenance.identity(continued.job_id), "hub"
+            )
             self.assertEqual(worker.state.get_provider_job(tail.job_id).status, "queued")
             self.assertEqual(continued.provider_session_id, "thread-1")
             self.assertNotEqual(continued.payload_text, "Original fictional task")
@@ -439,9 +444,13 @@ class ResultReliabilityTests(unittest.TestCase):
                 notice_message_id=101,
                 reply_message_id=103,
                 canonical_root=fixture.registry.projects[0].root,
+                telegram_ingress_identity="codex",
             )
             self.assertFalse(created)
             self.assertEqual(duplicate.job_id, continued.job_id)
+            self.assertEqual(
+                worker.state.telegram_turn_provenance.identity(continued.job_id), "hub"
+            )
             self.assertEqual(worker.state.get_provider_job(old_job_id).status, "indeterminate")
             self.assertEqual(client.turns, 1)
             lease = worker.state.lease_provider_job("codex", "fictional-worker")

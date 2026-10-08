@@ -16,6 +16,7 @@ from .state_errors import StateError
 from .state_provider_jobs import ProviderJobRecord
 from .state_sessions import SessionsStateFacade, WriterTransferSnapshot
 from .state_values import _bounded, _now, _optional_bounded, _timestamp
+from .telegram_turn_provenance import validate_ingress_identity
 
 if TYPE_CHECKING:
     from .state import HubState
@@ -51,10 +52,12 @@ class ProviderAdmissionState:
         queue_capacity: QueueCapacityConfig | None = None,
         control_input: str | None = None,
         attach_forwarded_materials: bool = True,
+        telegram_ingress_identity: str | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
         """Admit one input without committing or opening a nested transaction."""
 
         key = _bounded(idempotency_key, name="idempotency key", maximum=256)
+        ingress = validate_ingress_identity(telegram_ingress_identity)
         target_agent = _bounded(agent_id, name="agent id", maximum=64)
         target_session = _bounded(session_id, name="session id", maximum=128)
         selected_model = _bounded(model, name="model", maximum=200)
@@ -176,6 +179,7 @@ class ProviderAdmissionState:
             if str(duplicate["idempotency_key"]) != key:
                 raise StateError("Telegram message already has another provider job") from exc
             return self.state._provider_job(duplicate), False
+        self.state.telegram_turn_provenance.record_new_job_in_transaction(job_id, ingress)
         self.state._connection.execute(
             """INSERT INTO provider_job_inputs (
                    job_id, chat_id, message_id, part_index, input_text, received_at

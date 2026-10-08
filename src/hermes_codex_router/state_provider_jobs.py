@@ -20,6 +20,7 @@ from .provider_queue_capacity import (
 )
 from .queue_visibility import QueueVisibilityState
 from .stop_coverage import STOP_COVERS_JOB_SQL, pending_stop_for_job, stop_covers
+from .telegram_turn_provenance import TelegramTurnProvenance
 
 # A stop is complete once none of its covered work can still start or run: a
 # follow-up that is leased, or that a rejected steering call returned to the
@@ -923,6 +924,9 @@ class ProviderJobsStateFacade:
                 return None
             if str(candidate["status"]) != "queued":
                 return None
+            provenance = TelegramTurnProvenance(self._connection)
+            if provenance.identity(str(candidate["job_id"])) != provenance.identity(parent_job_id):
+                return None
             if (
                 self._connection.execute(
                     "SELECT 1 FROM provider_preexecution_retries WHERE child_job_id=?",
@@ -1090,6 +1094,8 @@ class ProviderJobsStateFacade:
                 "SELECT status FROM provider_jobs WHERE job_id = ?", (parent_job_id,)
             ).fetchone()
             parent_running = parent is not None and str(parent["status"]) == "executing"
+            provenance = TelegramTurnProvenance(self._connection)
+            matching_ingress = provenance.identity(job_id) == provenance.identity(parent_job_id)
             if self.pending_stop_for_job(job_id) is not None:
                 changed = self._cancel_stopped(
                     job_id,
@@ -1099,7 +1105,11 @@ class ProviderJobsStateFacade:
                     complete_stops=True,
                     timestamp=timestamp,
                 )
-            elif not parent_running or self.pending_stop_for_job(parent_job_id) is not None:
+            elif (
+                not parent_running
+                or not matching_ingress
+                or self.pending_stop_for_job(parent_job_id) is not None
+            ):
                 changed = (
                     self._connection.execute(
                         """UPDATE provider_jobs

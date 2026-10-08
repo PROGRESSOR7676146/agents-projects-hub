@@ -95,7 +95,7 @@ class PreexecutionRetryTests(unittest.TestCase):
             telegram_message_id=notice_id,
         )
 
-    def retry(self, source: str, notice_id: int, reply_id: int = 30):
+    def retry(self, source: str, notice_id: int, reply_id: int = 30, *, ingress=None):
         return PreexecutionRetryState(self.state).retry_from_notice(
             source_job_id=source,
             chat_id=CHAT_ID,
@@ -105,6 +105,7 @@ class PreexecutionRetryTests(unittest.TestCase):
             canonical_root=self.harness.root,
             model_provider=None,
             provider_runtime="codex",
+            telegram_ingress_identity=ingress,
         )
 
     def test_unavailable_root_cannot_abort_failure_binding_construction(self) -> None:
@@ -229,9 +230,15 @@ class PreexecutionRetryTests(unittest.TestCase):
 
     def test_exact_saved_task_survives_two_preparation_failures(self) -> None:
         self.preparation_failure(self.job.job_id, 101)
-        child, created = self.retry(self.job.job_id, 101)
+        child, created = self.retry(self.job.job_id, 101, ingress="hub")
         self.assertTrue(created)
         self.assertEqual(child.payload_text, self.payload)
+        self.assertIsNone(self.state.telegram_turn_provenance.identity(self.job.job_id))
+        self.assertEqual(self.state.telegram_turn_provenance.identity(child.job_id), "hub")
+        duplicate, created = self.retry(self.job.job_id, 101, 32, ingress="codex")
+        self.assertFalse(created)
+        self.assertEqual(duplicate.job_id, child.job_id)
+        self.assertEqual(self.state.telegram_turn_provenance.identity(child.job_id), "hub")
         self.assertEqual(
             tuple(
                 row[0]
@@ -242,9 +249,11 @@ class PreexecutionRetryTests(unittest.TestCase):
             ("retry",),
         )
         self.preparation_failure(child.job_id, 102)
-        next_child, created = self.retry(child.job_id, 102, 31)
+        next_child, created = self.retry(child.job_id, 102, 31, ingress="codex")
         self.assertTrue(created)
         self.assertEqual(next_child.payload_text, self.payload)
+        self.assertEqual(self.state.telegram_turn_provenance.identity(next_child.job_id), "codex")
+        self.assertEqual(self.state.telegram_turn_provenance.identity(child.job_id), "hub")
         self.assertEqual(self.state.get_provider_job(self.job.job_id).payload_text, self.payload)
         self.assertIsNone(self.sql("SELECT 1 FROM provider_job_continuations LIMIT 1").fetchone())
 

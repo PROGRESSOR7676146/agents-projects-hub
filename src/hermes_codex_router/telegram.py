@@ -365,6 +365,27 @@ def _selected_quote(message: dict[str, Any]) -> str | None:
     return text.strip()[:4000]
 
 
+def _reply_address(
+    message: dict[str, Any], *, topic_anchor: object = None
+) -> tuple[str | None, int | None]:
+    """Plain Reply addressing; selected quotes and forum roots stay context."""
+    reply = message.get("reply_to_message")
+    if not isinstance(reply, dict) or isinstance(message.get("quote"), dict):
+        return None, None
+    message_id = reply.get("message_id")
+    if type(message_id) is not int or message_id <= 0 or message_id == topic_anchor:
+        return None, None
+    author = reply.get("from")
+    username = (
+        author["username"]
+        if isinstance(author, dict)
+        and author.get("is_bot") is True
+        and isinstance(author.get("username"), str)
+        else None
+    )
+    return username, message_id
+
+
 def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
     message = update.get("message")
     if not isinstance(message, dict) or message.get("from", {}).get("is_bot"):
@@ -374,8 +395,7 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
     attachments, unavailable_materials = _incoming_materials(message)
     parsed_text = _message_text(message, has_material=bool(attachments or unavailable_materials))
     raw_thread_id = message.get("message_thread_id")
-    reply_to_username = None
-    reply_to_message_id = None
+    reply_to_username, reply_to_message_id = _reply_address(message, topic_anchor=raw_thread_id)
     is_forwarded = isinstance(message.get("forward_origin"), dict) or any(
         key in message
         for key in (
@@ -385,23 +405,6 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
             "forward_date",
         )
     )
-    reply = message.get("reply_to_message")
-    # A manually selected Telegram quote is commentary for the active agent,
-    # while a plain Reply is direct addressing of the original bot author.
-    if (
-        isinstance(reply, dict)
-        and not isinstance(message.get("quote"), dict)
-        and reply.get("message_id") != raw_thread_id
-    ):
-        if isinstance(reply.get("message_id"), int):
-            reply_to_message_id = int(reply["message_id"])
-        reply_author = reply.get("from")
-        if (
-            isinstance(reply_author, dict)
-            and reply_author.get("is_bot") is True
-            and isinstance(reply_author.get("username"), str)
-        ):
-            reply_to_username = str(reply_author["username"])
     # Telegram omits message_thread_id for the General forum topic. Keep a
     # stable local numeric identity without pretending it is an API thread id.
     thread_id = raw_thread_id if isinstance(raw_thread_id, int) else 1
@@ -457,6 +460,9 @@ def parse_direct_message(update: dict[str, Any]) -> TopicMessage | None:
     ):
         return None
     raw_thread_id = message.get("message_thread_id")
+    # Private Reply IDs support exact saved notices, without changing provider
+    # addressing. An explicit private-topic root remains only an anchor.
+    _, reply_to_message_id = _reply_address(message, topic_anchor=raw_thread_id)
     return TopicMessage(
         update_id=int(update["update_id"]),
         message_id=int(message["message_id"]),
@@ -465,6 +471,8 @@ def parse_direct_message(update: dict[str, Any]) -> TopicMessage | None:
         chat_title="Direct",
         sender_id=int(sender["id"]),
         text=parsed_text[0],
+        reply_to_username=None,
+        reply_to_message_id=reply_to_message_id,
         is_forwarded=isinstance(message.get("forward_origin"), dict)
         or any(
             key in message

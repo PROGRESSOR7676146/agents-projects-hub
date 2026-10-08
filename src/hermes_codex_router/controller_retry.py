@@ -12,6 +12,7 @@ from .preexecution_retry_state import PreexecutionRetryState, PreparationRetryRe
 from .state import HubState, StateError, TopicRecord
 from .state_errors import CodexPermissionSelectionChanged
 from .telegram import TopicMessage
+from .telegram_turn_provenance import validate_ingress_identity
 from .topic_execution import ExecutionRootError, resolve_topic_execution_root
 from .turn_continuation_state import TurnContinuationState
 from .work_retry_state import WorkRetryState
@@ -27,10 +28,17 @@ class RetryControlDecision:
 
 class ControllerRetryOrchestrator:
     def __init__(
-        self, config: HubConfig, state: HubState, registry: ProjectRegistry, ingress_identity: str
+        self,
+        config: HubConfig,
+        state: HubState,
+        registry: ProjectRegistry,
+        ingress_identity: str,
+        *,
+        telegram_ingress_identity: str | None = None,
     ) -> None:
         self.config, self.state, self.registry = config, state, registry
         self.ingress_identity = ingress_identity
+        self.telegram_ingress_identity = validate_ingress_identity(telegram_ingress_identity)
 
     def _reject(self, message: TopicMessage, text: str) -> RetryControlDecision:
         created = self.state.claim_message(
@@ -63,6 +71,10 @@ class ControllerRetryOrchestrator:
             thread_id=message.thread_id,
             notice_message_id=message.reply_to_message_id,
         )
+        if message.chat_id == message.sender_id and source is None and preparation_source is None:
+            # Private replies become controls only for exact retained notices;
+            # ordinary private "retry" input keeps its productive semantics.
+            return None
         try:
             root = resolve_topic_execution_root(self.state, self.registry, topic)
             if preparation_source is not None:
@@ -76,6 +88,7 @@ class ControllerRetryOrchestrator:
                     canonical_root=root,
                     model_provider=self.config.codex_model_provider,
                     provider_runtime=self.config.require_agent(job.agent_id).runtime,
+                    telegram_ingress_identity=self.telegram_ingress_identity,
                 )
                 return RetryControlDecision(
                     True,
@@ -91,6 +104,7 @@ class ControllerRetryOrchestrator:
                     notice_message_id=message.reply_to_message_id,
                     reply_message_id=message.message_id,
                     canonical_root=root,
+                    telegram_ingress_identity=self.telegram_ingress_identity,
                 )
                 text = "Continuation accepted in the same Codex session. Codex will first inspect current project state and prior changes."
                 if held_count:
