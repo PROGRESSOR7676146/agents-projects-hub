@@ -508,6 +508,12 @@ class DeliveryHoldTests(unittest.TestCase):
         self.assertEqual(outcome["result_delivery"]["status"], "unknown")
         self.assertEqual(outcome["result_delivery"]["delivery_hold"], "released_by_owner")
         self.assertFalse(outcome["productive_replay_authorized"])
+        mixed = dict(
+            after, unknown_delivery=3, outstanding_delivery_holds=1, released_delivery_holds=2
+        )
+        alert = next(a for a in evaluate_reliability_alerts(mixed) if a.code == "unknown_delivery")
+        self.assertIn("1 outstanding unknown Telegram final delivery hold", alert.message)
+        self.assertEqual(mixed["unknown_delivery"], 3)
 
     def test_fifo_diagnostics_skip_released_head_but_strict_busy_guards_remain(self) -> None:
         tail = self.enqueue_tail()

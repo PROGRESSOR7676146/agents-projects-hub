@@ -152,6 +152,12 @@ class DeliveryHoldMigrationTests(unittest.TestCase):
             self.assertEqual(outputs[0], outputs[1])
             self.assertFalse(outputs[0]["automatic_resend"])
             self.assertFalse(outputs[0]["productive_replay_authorized"])
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(main(["delivery-hold", str(self.path), self.outbox_id]), 0)
+            released = json.loads(output.getvalue())
+            self.assertIsNone(released["action"])
+            self.assertIn("Already released", released["effect"])
             with closing(sqlite3.connect(self.path)) as damaged, damaged:
                 damaged.execute("DROP TRIGGER telegram_delivery_hold_topic_binding_guard")
                 damaged.execute("UPDATE topics SET execution_scope='root:/home/example/changed'")
@@ -162,6 +168,13 @@ class DeliveryHoldMigrationTests(unittest.TestCase):
             self.assertEqual(historical["hold_status"], "disposition_binding_changed")
             self.assertIn("topic hold remains", historical["effect"])
             self.assertNotIn("may proceed", historical["effect"])
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(main(["delivery-hold", str(self.path), self.outbox_id]), 0)
+            changed = json.loads(output.getvalue())
+            self.assertIsNone(changed["action"])
+            self.assertIn("hold remains", changed["effect"])
+            self.assertIn("no new decision can replace it", changed["effect"])
             config.assert_not_called()
 
     def test_missing_state_is_never_created_and_apply_requires_explicit_controls(self) -> None:

@@ -72,8 +72,12 @@ def evaluate_reliability_alerts(
                     f"reliability:{key}",
                     key,
                     severity,
-                    f"Hub has {count} unknown Telegram {label} delivery outcome(s); "
-                    "inspect saved receipts before any resend. Provider work is unchanged."
+                    (
+                        f"Hub has {count} outstanding unknown Telegram final delivery hold(s); "
+                        if key == "unknown_delivery"
+                        else f"Hub has {count} unknown Telegram {label} delivery outcome(s); "
+                    )
+                    + "inspect saved receipts before any resend. Provider work is unchanged."
                     + (
                         " Later deliveries in the affected topic are blocked; a result-ready "
                         "head also blocks new execution there. Inspect the local delivery-hold preview for owner reconciliation "

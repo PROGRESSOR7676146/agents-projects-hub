@@ -51,8 +51,16 @@ def run(args: argparse.Namespace) -> int:
         result = dict(
             asdict(preview),
             delivery_status="unknown",
-            action="continue_without_confirmed_delivery",
-            effect="Releases only topic delivery/FIFO holds; saved evidence and session/writer controls remain.",
+            action="continue_without_confirmed_delivery"
+            if preview.hold_status == "outstanding"
+            else None,
+            effect=(
+                "Releases only topic delivery/FIFO holds; saved evidence and session/writer controls remain."
+                if preview.hold_status == "outstanding"
+                else "Already released by a recorded owner decision; delivery remains unknown."
+                if preview.hold_status == "released_by_owner"
+                else "A recorded decision no longer matches this binding; the hold remains and no new decision can replace it."
+            ),
         )
     print(json.dumps(result, indent=2))
     return 0
