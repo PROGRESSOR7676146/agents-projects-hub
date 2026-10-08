@@ -60,7 +60,12 @@ def evaluate_reliability_alerts(
         ("unknown_delivery", "error", "final result"),
         ("unknown_progress_delivery", "warning", "progress"),
     ):
-        count = _positive_int(telemetry.get(key))
+        count = _positive_int(
+            telemetry.get(
+                "outstanding_delivery_holds" if key == "unknown_delivery" else key,
+                telemetry.get(key),
+            )
+        )
         if count is not None:
             alerts.append(
                 OperationalAlert(
@@ -71,7 +76,8 @@ def evaluate_reliability_alerts(
                     "inspect saved receipts before any resend. Provider work is unchanged."
                     + (
                         " Later deliveries in the affected topic are blocked; a result-ready "
-                        "head also blocks new execution there. Explicit owner reconciliation is required."
+                        "head also blocks new execution there. Inspect the local delivery-hold preview for owner reconciliation "
+                        "before deciding whether to continue without confirmed delivery."
                         if key == "unknown_delivery"
                         else ""
                     ),

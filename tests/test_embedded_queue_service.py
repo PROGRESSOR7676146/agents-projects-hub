@@ -594,7 +594,8 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         rejected = service.state.active_session(topic.topic_id)
         assert rejected is not None
         self.assertEqual(rejected.writer_mode, "local")
-        self.assertIn("pending or being delivered", telegram.sent[-1])
+        self.assertIn("Provider work or retained result delivery blocks /return", telegram.sent[-1])
+        self.assertIn("inspect /status", telegram.sent[-1])
         self.assertEqual(len(client.turn_threads), 1)
         service.close()
 

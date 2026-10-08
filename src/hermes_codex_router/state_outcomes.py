@@ -10,9 +10,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from .delivery_hold_predicates import outbox_delivery_hold_released
+
 REFERENCE_LIMIT = 64
 
-_PROJECTION = """
+_PROJECTION = f"""
 WITH target AS (
     SELECT j.job_id, j.topic_id, j.session_id, j.session_generation,
            j.agent_id, j.model, j.effort, j.status, j.attempt_count,
@@ -24,6 +26,7 @@ WITH target AS (
            e.terminal_status, e.observed_at AS terminal_at,
            h.resolution, h.resolved_at,
            o.outbox_id, o.status AS delivery_status, o.delivered_at,
+           {outbox_delivery_hold_released("o")} AS delivery_hold_released,
            (SELECT COUNT(*) FROM provider_visible_items v WHERE v.job_id=j.job_id)
                AS visible_item_count
     FROM provider_jobs j
@@ -179,6 +182,13 @@ class OutcomeJournalStateFacade:
             delivery = {
                 "outbox_id": row["outbox_id"],
                 "status": row["delivery_status"],
+                "delivery_hold": (
+                    "released_by_owner"
+                    if row["delivery_hold_released"]
+                    else "outstanding"
+                    if row["delivery_status"] == "unknown"
+                    else None
+                ),
                 "parts_total": row["part_count"],
                 "parts_receipted": row["receipt_count"],
                 "receipts_complete": receipts_complete,

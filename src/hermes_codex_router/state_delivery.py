@@ -10,6 +10,7 @@ from html import escape
 from typing import Callable, Sequence
 
 from .artifacts import ValidatedArtifact
+from .delivery_hold_predicates import outbox_delivery_hold_released
 from .telegram_multipart import split_telegram_html
 
 MAX_PROGRESS_ATTEMPTS = 20
@@ -285,7 +286,7 @@ class DeliveryStateFacade:
         expires_at = self._timestamp(current + timedelta(seconds=lease_seconds))
         with self._transaction():
             row = self._connection.execute(
-                """SELECT outbox.* FROM telegram_outbox outbox
+                f"""SELECT outbox.* FROM telegram_outbox outbox
                    JOIN provider_jobs job ON job.job_id = outbox.job_id
                    WHERE outbox.sender_agent_id = ? AND outbox.status = 'pending'
                      AND outbox.available_at <= ? AND outbox.attempt_count < 20
@@ -296,6 +297,7 @@ class DeliveryStateFacade:
                        WHERE earlier_job.topic_id = job.topic_id
                          AND earlier_job.topic_sequence < job.topic_sequence
                          AND earlier_outbox.status NOT IN ('delivered', 'failed')
+                         AND NOT {outbox_delivery_hold_released("earlier_outbox")}
                      )
                    ORDER BY outbox.created_at, outbox.outbox_id LIMIT 1""",
                 (sender, timestamp),
@@ -591,10 +593,26 @@ class DeliveryStateFacade:
     def uncertain_counts(self) -> dict[str, int]:
         """Passive aggregate only; uncertainty is distinct from pending retries."""
         row = self._connection.execute(
-            """SELECT (SELECT COUNT(*) FROM telegram_outbox WHERE status='unknown'),
-                      (SELECT COUNT(*) FROM provider_progress_deliveries WHERE status='unknown')"""
+            f"""SELECT (SELECT COUNT(*) FROM telegram_outbox WHERE status='unknown'),
+                      (SELECT COUNT(*) FROM provider_progress_deliveries WHERE status='unknown'),
+                      (SELECT COUNT(*) FROM telegram_outbox o WHERE o.status='unknown'
+                       AND {outbox_delivery_hold_released("o")})"""
         ).fetchone()
-        return {"unknown_delivery": int(row[0]), "unknown_progress_delivery": int(row[1])}
+        return {
+            "unknown_delivery": int(row[0]),
+            "unknown_progress_delivery": int(row[1]),
+            "outstanding_delivery_holds": int(row[0]) - int(row[2]),
+            "released_delivery_holds": int(row[2]),
+        }
+
+    def topic_delivery_holds(self, topic_id: int) -> dict[str, int]:
+        row = self._connection.execute(
+            f"""SELECT COUNT(*), COALESCE(SUM({outbox_delivery_hold_released("o")}),0)
+                FROM telegram_outbox o JOIN provider_jobs j ON j.job_id=o.job_id
+                WHERE j.topic_id=? AND o.status='unknown'""",
+            (topic_id,),
+        ).fetchone()
+        return {"outstanding": int(row[0]) - int(row[1]), "released": int(row[1])}
 
     def enqueue_progress(
         self,

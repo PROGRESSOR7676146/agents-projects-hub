@@ -17,6 +17,7 @@ from .codex_permissions import (
     validate_permission_profile_id,
 )
 from .codex_retry_policy import PreparationRetryBinding
+from .delivery_hold_state import DeliveryHoldDisposition, DeliveryHoldPreview, DeliveryHoldState
 from .incoming_materials import (
     IncomingMaterialDraft,
     IncomingMaterialRecord,
@@ -1828,6 +1829,39 @@ class HubState:
 
     def get_telegram_outbox(self, outbox_id: str) -> TelegramOutboxRecord:
         return self._delivery_state.get_outbox(outbox_id)
+
+    def preview_delivery_hold(self, outbox_id: str) -> DeliveryHoldPreview:
+        """One coherent read-only snapshot; no implicit initialization or migration."""
+        if self._connection.in_transaction:
+            raise StateError("cannot nest a delivery hold preview transaction")
+        self._connection.execute("BEGIN")
+        try:
+            preview = DeliveryHoldState(self._connection, StateError).preview(outbox_id)
+            self._connection.commit()
+            return preview
+        except BaseException:
+            self._connection.rollback()
+            raise
+
+    def release_delivery_hold(
+        self,
+        outbox_id: str,
+        *,
+        expected_snapshot: str,
+        continue_without_confirmed_delivery: bool,
+        now: datetime | None = None,
+    ) -> DeliveryHoldDisposition:
+        """Local owner action, serialized CAS; inserts only an immutable disposition."""
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            raise StateError("delivery hold time must be timezone-aware")
+        with self._immediate_transaction():
+            return DeliveryHoldState(self._connection, StateError).release(
+                outbox_id,
+                expected_snapshot,
+                continue_without_confirmed_delivery,
+                current.astimezone(timezone.utc).isoformat(),
+            )
 
     def get_telegram_outbox_for_job(self, job_id: str) -> TelegramOutboxRecord:
         return self._delivery_state.get_outbox_for_job(job_id)

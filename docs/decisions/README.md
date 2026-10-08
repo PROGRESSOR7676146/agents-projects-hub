@@ -79,6 +79,7 @@ with a new record.
 | Sealed review material capsules | A trusted explicit text selection becomes bounded digest-bound kernel-sealed bytes; no durable authorization, provider route or review workflow is enabled. | [ADR 0057](0057-sealed-review-material-capsules.md) |
 | Bounded review pipe primitives | Finite byte framing and a host-created one-use fake attempt gate prepare private-network transport without productive wiring or durable authorization. | [ADR 0058](0058-bounded-review-pipe-primitives.md) |
 | Final/progress delivery certainty | Schema43 fences sends, preserves unknown outcomes and multipart receipts, and separates late native proof from delivery replacement. | [ADR 0060](0060-final-and-progress-delivery-certainty.md) |
+| Local owner delivery holds | Schema44 records exact immutable permission to continue past unknown delivery, preserving receipts, results and independent safety boundaries. | [ADR 0061](0061-owner-delivery-hold-dispositions.md) |
 
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or

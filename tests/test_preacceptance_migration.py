@@ -10,6 +10,7 @@ from unittest.mock import patch
 from hermes_codex_router import migrations
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.state import HubState
+from tests.schema_fixtures import legacy_delivery_hold_schema
 
 
 class PreacceptanceMigrationTests(unittest.TestCase):
@@ -19,73 +20,82 @@ class PreacceptanceMigrationTests(unittest.TestCase):
         with patch.object(migrations, "LATEST_SCHEMA_VERSION", 39):
             state = HubState.open(self.path, codex_permission_profile=None)
         try:
-            topic = state.observe_topic(
-                project_id="example-project", chat_id=-1001234567890, thread_id=77, title="Example"
-            )
-            session = state.activate_agent(topic.topic_id, "codex", "example-model", "high")
-            job, _ = state.enqueue_provider_job(
-                idempotency_key="example-input",
-                chat_id=topic.chat_id,
-                message_id=1,
-                topic_id=topic.topic_id,
-                agent_id="codex",
-                session_id=session.session_id,
-                session_generation=session.generation,
-                model=session.model,
-                effort=session.effort,
-                payload_text="Example task",
-            )
-            for index, status in enumerate(("delivered", "unknown", "attempted")):
-                with state._immediate_transaction():
-                    notice, _ = state.task_notices.prepare_notice_in_transaction(
-                        event_key=f"example-notice-{index}",
-                        kind="accepted",
-                        job_id=job.job_id,
-                        chat_id=topic.chat_id,
-                        thread_id=topic.thread_id,
-                        telegram_html="Example notice",
-                        now=self.now,
+            with legacy_delivery_hold_schema(state._connection):
+                topic = state.observe_topic(
+                    project_id="example-project",
+                    chat_id=-1001234567890,
+                    thread_id=77,
+                    title="Example",
+                )
+                session = state.activate_agent(topic.topic_id, "codex", "example-model", "high")
+                job, _ = state.enqueue_provider_job(
+                    idempotency_key="example-input",
+                    chat_id=topic.chat_id,
+                    message_id=1,
+                    topic_id=topic.topic_id,
+                    agent_id="codex",
+                    session_id=session.session_id,
+                    session_generation=session.generation,
+                    model=session.model,
+                    effort=session.effort,
+                    payload_text="Example task",
+                )
+                for index, status in enumerate(("delivered", "unknown", "attempted")):
+                    with state._immediate_transaction():
+                        notice, _ = state.task_notices.prepare_notice_in_transaction(
+                            event_key=f"example-notice-{index}",
+                            kind="accepted",
+                            job_id=job.job_id,
+                            chat_id=topic.chat_id,
+                            thread_id=topic.thread_id,
+                            telegram_html="Example notice",
+                            now=self.now,
+                        )
+                    leased = state.task_notices.lease_notice("example-sender", now=self.now)
+                    assert leased is not None and leased.lease_token is not None
+                    self.assertEqual(leased.notice_id, notice.notice_id)
+                    state.task_notices.begin_send(
+                        leased.notice_id, leased.lease_token, now=self.now
                     )
-                leased = state.task_notices.lease_notice("example-sender", now=self.now)
-                assert leased is not None and leased.lease_token is not None
-                self.assertEqual(leased.notice_id, notice.notice_id)
-                state.task_notices.begin_send(leased.notice_id, leased.lease_token, now=self.now)
-                if status == "delivered":
-                    state.task_notices.complete_send(
-                        leased.notice_id, leased.lease_token, telegram_message_id=101, now=self.now
-                    )
-                elif status == "unknown":
-                    state.task_notices.mark_send_unknown(
-                        leased.notice_id,
-                        leased.lease_token,
-                        error_code="example_timeout",
-                        now=self.now,
-                    )
-            state.enqueue_provider_job(
-                idempotency_key="example-queued-tail",
-                chat_id=topic.chat_id,
-                message_id=2,
-                topic_id=topic.topic_id,
-                agent_id="codex",
-                session_id=session.session_id,
-                session_generation=session.generation,
-                model=session.model,
-                effort=session.effort,
-                payload_text="Example queued tail",
-            )
-            executing = state.lease_provider_job("codex", "example-worker", now=self.now)
-            assert executing is not None and executing.lease_token is not None
-            self.assertEqual(executing.job_id, job.job_id)
-            state.mark_provider_job_executing(job.job_id, executing.lease_token)
-            journal = ExecutionJournal(state)
-            journal.record_thread(
-                job.job_id,
-                executing.lease_token,
-                "example-thread",
-                self.path.parent,
-                codex_permission_profile=None,
-            )
-            journal.record_turn(job.job_id, executing.lease_token, "example-turn")
+                    if status == "delivered":
+                        state.task_notices.complete_send(
+                            leased.notice_id,
+                            leased.lease_token,
+                            telegram_message_id=101,
+                            now=self.now,
+                        )
+                    elif status == "unknown":
+                        state.task_notices.mark_send_unknown(
+                            leased.notice_id,
+                            leased.lease_token,
+                            error_code="example_timeout",
+                            now=self.now,
+                        )
+                state.enqueue_provider_job(
+                    idempotency_key="example-queued-tail",
+                    chat_id=topic.chat_id,
+                    message_id=2,
+                    topic_id=topic.topic_id,
+                    agent_id="codex",
+                    session_id=session.session_id,
+                    session_generation=session.generation,
+                    model=session.model,
+                    effort=session.effort,
+                    payload_text="Example queued tail",
+                )
+                executing = state.lease_provider_job("codex", "example-worker", now=self.now)
+                assert executing is not None and executing.lease_token is not None
+                self.assertEqual(executing.job_id, job.job_id)
+                state.mark_provider_job_executing(job.job_id, executing.lease_token)
+                journal = ExecutionJournal(state)
+                journal.record_thread(
+                    job.job_id,
+                    executing.lease_token,
+                    "example-thread",
+                    self.path.parent,
+                    codex_permission_profile=None,
+                )
+                journal.record_turn(job.job_id, executing.lease_token, "example-turn")
         finally:
             state.close()
 

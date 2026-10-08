@@ -124,6 +124,13 @@ Opener-level form/multipart rejection tests cover real HTTP400/403, malformed or
 conflicting bodies, HTTP408/5xx and incomplete HTTP200 responses. Unknown-head
 fixtures prove same-topic execution/delivery remain blocked while another topic
 can deliver. The explicit reconciliation deployment gate remains open.
+Schema44 delivery-hold fixtures (`tests.test_delivery_hold` and
+`tests.test_delivery_hold_migration`) additionally cover full-manifest stale
+tokens beyond 64 parts, receipt provenance, competing connections, immutable
+exact retries, transaction faults, both released FIFO barriers and retained
+native/writer/owner-hold/stop boundaries. Preview/apply use only fictional local
+state; missing/older schemas are refused without migration or credentials.
+Populated43-to44 backups and DDL faults preserve all existing evidence.
 No live inference, Telegram or service
 change occurs. This is offline source/fault evidence, not deployment acceptance.
 

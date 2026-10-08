@@ -71,9 +71,9 @@ delivery, replace an unknown notice or hand-edit a delivery status.
 
 An unknown final/notice outbox blocks later deliveries in the same numeric topic.
 When its job is result_ready, later productive jobs in that topic remain blocked
-too. There is currently no reconciliation control that releases this delivery
-hold. Do not activate schema43 until the separately reviewed owner action exists;
-source publication is insufficient. Restart, retry exhaustion or age cannot
+too. The schema44 local-owner control is described below; activation still
+requires independent exact-candidate review of it and the delivery prerequisite.
+Source publication is insufficient. Restart, retry exhaustion or age cannot
 resolve unknown. Before an authorized activation, check foreign keys and orphan
 parts on a consistent disposable copy, then run the candidate migration gate.
 
@@ -87,7 +87,41 @@ that the recovered final result reached Telegram. No new artifact snapshots are
 claimed as retained in that evidence-only branch. Reconciliation requires a
 separately reviewed explicit action. Migrated legacy sends stay unknown and
 legacy receipt provenance stays unverified. A runtime rollback must support
-schema43; an older binary is not a compatible sender recovery.
+the activated schema; an older binary is not a compatible sender recovery.
+
+### Local owner release of a delivery hold
+
+On a reviewed schema44 release, preview one exact outbox locally:
+
+```bash
+agents-projects-hub delivery-hold /home/example/private/state.db EXAMPLE_OUTBOX_ID
+```
+
+The preview opens existing state read-only. Inspect its saved-final/notice target,
+part and receipt counts, numeric destination, current hold status and snapshot.
+If the owner chooses to let already authorized queued work continue without
+confirmed delivery, apply with the exact preview token:
+
+```bash
+agents-projects-hub delivery-hold /home/example/private/state.db EXAMPLE_OUTBOX_ID \
+  --apply --snapshot EXAMPLE_PREVIEW_SHA256 \
+  --continue-without-confirmed-delivery
+```
+
+For the same uncertain-commit retry, retain the original command/token; preview
+also exposes `disposition_snapshot` separately from the fresh target snapshot.
+`disposition_binding_changed` means a historical decision exists but no longer
+matches the target; it cannot release a different binding or be replaced with a
+fresh decision. A stale first apply requires another preview.
+
+Check `unknown_delivery`, `outstanding_delivery_holds` and `released_delivery_holds`
+plus the [exact-job diagnostic](OUTCOME_JOURNAL.md). Its delivery remains unknown,
+with unchanged parts, provenance and artifacts. Another unreleased hold can still
+block the topic. The command changes no execution, held-request decision, stop,
+writer, session or artifact state. Apply may allow authorized tail jobs to start
+immediately under ordinary scheduling; it never resends the old message or calls
+the provider itself. Existing session/writer, connect/adoption and relocation
+checks remain independent. See [REQ-QUEUE-005](../product/PERSISTENCE_AND_RECOVERY.md).
 
 ## Component restart boundaries
 

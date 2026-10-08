@@ -563,6 +563,7 @@ class ExecutionJournalTests(unittest.TestCase):
                         "schema_claude_permissions.py",
                         "schema_claude_activity.py",
                         "schema_delivery_certainty.py",
+                        "schema_delivery_holds.py",
                         "schema_codex_permissions.py",
                         "schema_preacceptance_approvals.py",
                         "schema_preexecution_retry.py",

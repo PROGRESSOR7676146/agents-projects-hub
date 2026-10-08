@@ -151,10 +151,13 @@ job was leased or began executing.
 
 An outbox sender, separate from provider execution, delivers the prepared
 message and advances `result_ready` to `completed`. Telegram failure retries
-only outbox delivery; it MUST NOT invoke the provider again. If Telegram
-accepts a request but the sender dies before persisting its message identifier,
-an occasional duplicate publication is possible. The system must prefer that
-bounded transport duplicate over repeating a productive provider turn.
+only outbox delivery; it MUST NOT invoke the provider again. An attempted send
+without a trusted committed receipt remains unknown under
+[REQ-QUEUE-005](../product/PERSISTENCE_AND_RECOVERY.md) and
+[ADR 0060](0060-final-and-progress-delivery-certainty.md). It cannot be resent
+blindly. The owner may separately release its topic delivery/FIFO hold under
+[ADR 0061](0061-owner-delivery-hold-dispositions.md), without converting delivery
+or provider execution evidence.
 After the bounded outbox retry limit is exhausted, the outbox and its job become
 terminally `failed` with a delivery error. This releases strict topic FIFO while
 retaining the committed provider result for diagnosis and manual recovery.
