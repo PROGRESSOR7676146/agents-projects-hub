@@ -59,7 +59,11 @@ without new authority; neither repeat recording nor another job can upgrade it.
 Ordinary `/stop` cannot create missing authority; use a separately authorized
 exact native stop or an independent recovery channel. A socket stop that sends
 no interrupt leaves the primary consuming progress and the private saved final;
-the pending stop still withholds publication. Idle late-control polling takes
+the live invocation allows three fresh no-send cycles five seconds apart. A
+send fence or exact terminal proof ends those retries. This in-memory count is
+not the persisted late-cycle budget. If all cycles fail, native work may continue
+until natural completion; the pending stop still withholds publication and no
+stopped outcome is inferred. Idle late-control polling takes
 no write lock until a due claim or an unbound covering stop is observed.
 An unresolved topic receives its own truthful refusal/hold, without blocking
 unrelated deliveries or asserting a relationship to another sender.

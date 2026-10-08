@@ -149,6 +149,83 @@ class CodexLiveControlTests(unittest.TestCase):
                 assert target is not None
                 self.assertIsNone(target["send_started_at"])
 
+    def test_no_send_stop_retries_fresh_connection_then_sends_once(self) -> None:
+        self.stop_request()
+        attempts = []
+        closed = []
+
+        def acquire():
+            attempts.append(True)
+            if len(attempts) < 3:
+                raise OSError("Example temporary control connection failure")
+            return self.client
+
+        control = self.control(
+            client_factory=acquire,
+            close_owned_turn_client=lambda: closed.append(True),
+            stop_retry_seconds=0,
+        )
+        self.assertTrue(self.client.interrupted.wait(2))
+        control.stop_and_join()
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual(len(self.client.interrupts), 1)
+        self.assertEqual(closed, [True])
+
+    def test_no_send_stop_exhaustion_keeps_primary_and_has_no_send_fence(self) -> None:
+        self.stop_request()
+        exhausted = threading.Event()
+        attempts = []
+        closed = []
+
+        def acquire():
+            attempts.append(True)
+            if len(attempts) == 3:
+                exhausted.set()
+            raise OSError("Example continuing control connection failure")
+
+        control = self.control(
+            client_factory=acquire,
+            close_owned_turn_client=lambda: closed.append(True),
+            stop_retry_seconds=0,
+        )
+        self.assertTrue(exhausted.wait(2))
+        control.stop_and_join()
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual(closed, [])
+        target = self.state.codex_controls.read(self.job.job_id)
+        assert target is not None
+        self.assertIsNone(target["send_started_at"])
+
+    def test_exact_completion_ends_live_stop_without_rpc_and_wakes_saved_recovery(self) -> None:
+        from hermes_codex_router.codex_appserver import TurnResult
+
+        request = self.stop_request()
+        closed = []
+        control = CodexLiveControl(
+            config=self.fixture.config,
+            state_factory=lambda: self.state,
+            client_factory=lambda: self.client,
+            job=self.job,
+            worker_id="example-worker",
+            thread_id="thread-1",
+            turn_id="turn-1",
+            transport_mode="socket",
+            close_owned_turn_client=lambda: closed.append(True),
+        )
+        with patch.object(
+            self.client,
+            "read_turn_outcome",
+            return_value=StoredTurnOutcome(
+                "completed", TurnResult("Example exact final", None, None)
+            ),
+        ):
+            self.assertTrue(control._interrupt(self.state, request))
+        self.assertEqual(self.client.interrupts, [])
+        self.assertEqual(closed, [True])
+        saved = self.journal.read(self.job.job_id)
+        assert saved is not None
+        self.assertEqual(saved["completed_text"], "Example exact final")
+
     def test_post_send_completion_contention_still_wakes_primary_without_second_rpc(self) -> None:
         request = self.stop_request()
         closed = []

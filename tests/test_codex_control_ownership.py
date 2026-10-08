@@ -149,7 +149,13 @@ class CodexControlOwnershipTests(unittest.TestCase):
     def test_unresolved_scope_appearing_after_preflight_has_durable_input_refusal(self) -> None:
         self.assert_admission_race_refused(legacy=True)
 
-    def assert_admission_race_refused(self, *, legacy: bool) -> None:
+    def test_batched_control_owner_race_has_durable_input_refusal(self) -> None:
+        self.assert_admission_race_refused(legacy=False, batched=True)
+
+    def test_batched_unresolved_scope_race_has_durable_input_refusal(self) -> None:
+        self.assert_admission_race_refused(legacy=True, batched=True)
+
+    def assert_admission_race_refused(self, *, legacy: bool, batched: bool = False) -> None:
         topic, session = self.peer(legacy=legacy)
         admission = DurableProviderAdmission(
             state=self.state,
@@ -172,14 +178,16 @@ class CodexControlOwnershipTests(unittest.TestCase):
             topic=topic,
             session=session,
             prompt="Example blocked request",
+            batchable_user_text="Example blocked request" if batched else None,
         )
-        original = self.state.enqueue_provider_job
+        method = "enqueue_or_append_provider_job" if batched else "enqueue_provider_job"
+        original = getattr(self.state, method)
 
         def race(**kwargs):
             self.owner_with_terminal_job()
             return original(**kwargs)
 
-        with patch.object(self.state, "enqueue_provider_job", side_effect=race):
+        with patch.object(self.state, method, side_effect=race):
             result = admission.admit(request)
         self.assertEqual(result, RejectedAdmission("persistent_root_blocker"))
         self.assertTrue(self.state.message_already_observed(topic.chat_id, 77))
@@ -199,6 +207,16 @@ class CodexControlOwnershipTests(unittest.TestCase):
             independent.topic_id, "codex", "fictional", "high"
         )
         self.assertIsNotNone(self.enqueue(independent, other_session, message_id=78))
+
+    def test_held_control_notice_names_observation_without_writer_release(self) -> None:
+        topic, session = self.peer()
+        self.enqueue(topic, session)
+        self.owner_with_terminal_job()
+        self.assertEqual(self.state.materialize_held_provider_jobs(), 1)
+        notice = self.state.lease_root_blocker_notice("example-sender")
+        assert notice is not None
+        self.assertIn("управления", notice.telegram_html)
+        self.assertNotIn("Освободить проект", str(notice.reply_markup))
 
     def test_unresolved_queued_scope_is_held_without_aborting_unrelated_sender_work(self) -> None:
         topic, session = self.peer(legacy=True)

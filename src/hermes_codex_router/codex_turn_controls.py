@@ -83,11 +83,12 @@ class CodexTurnControls:
         # claim consumption still require the unchanged locked recheck below.
         if self.db.execute(selection, (agent_id, timestamp, timestamp)).fetchone() is None:
             unbound = self.db.execute(
-                f"""SELECT 1 FROM codex_turn_controls control
-                    JOIN provider_jobs job ON job.job_id=control.job_id
-                    JOIN provider_stop_requests stop ON {STOP_COVERS_JOB_SQL}
-                    WHERE control.agent_id=? AND control.stop_request_id IS NULL
-                      AND stop.status='pending' LIMIT 1""",
+                f"""SELECT 1 FROM provider_stop_requests stop
+                    WHERE stop.status='pending' AND EXISTS (
+                        SELECT 1 FROM codex_turn_controls control
+                        JOIN provider_jobs job ON job.job_id=control.job_id
+                        WHERE control.agent_id=? AND control.stop_request_id IS NULL
+                          AND {STOP_COVERS_JOB_SQL}) LIMIT 1""",
                 (agent_id,),
             ).fetchone()
             if unbound is None:

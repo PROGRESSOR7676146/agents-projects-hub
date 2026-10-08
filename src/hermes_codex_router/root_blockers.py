@@ -445,12 +445,14 @@ class RootBlockerState:
             (
                 "Запрос сохранён, но не начат: точный корень проекта этой темы не подтверждён. "
                 if blocker.kind == "scope_unconfirmed"
+                else f"Запрос сохранён, но не начат: отправитель операции управления в {owner} ещё не подтверждён. "
+                if blocker.kind == "control"
                 else f"Запрос сохранён, но не начат: прежний ход в {owner} оставил очередь на паузе. "
                 if blocker.kind == "uncertain"
                 else f"Запрос сохранён, но не начат: проект удерживает {owner}. "
             )
-            + "Он не запустится автоматически после освобождения проекта. "
-            "Отмените этот запрос или явно подтвердите его запуск после освобождения."
+            + "Он не запустится автоматически после снятия ограничения. "
+            "Отмените этот запрос или явно подтвердите его запуск после проверки."
         )
         markup: dict[str, object] = {
             "inline_keyboard": [
@@ -461,7 +463,12 @@ class RootBlockerState:
             ]
         }
         if link and blocker.kind != "scope_unconfirmed":
-            markup["inline_keyboard"].append([{"text": "Освободить проект", "url": link}])  # type: ignore[union-attr]
+            label = (
+                "Открыть тему-владельца"
+                if blocker.kind in {"control", "uncertain"}
+                else "Освободить проект"
+            )
+            markup["inline_keyboard"].append([{"text": label, "url": link}])  # type: ignore[union-attr]
         notice = self.db.execute(
             """INSERT OR IGNORE INTO hub_blocker_outbox
                (outbox_id,event_key,kind,chat_id,thread_id,reply_to_message_id,
@@ -704,6 +711,10 @@ class RootBlockerState:
                 if blocker is not None and blocker.kind == "control":
                     raise self.state_error(
                         "native control sender is unconfirmed; verify its quiescence first"
+                    )
+                if blocker is not None and blocker.kind == "uncertain":
+                    raise self.state_error(
+                        "previous native turn outcome is unconfirmed; verify its exact outcome first"
                     )
                 if blocker is not None:
                     raise self.state_error("project is still held; release its writer first")
