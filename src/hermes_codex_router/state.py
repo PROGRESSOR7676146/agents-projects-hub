@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Iterator, Literal, Mapping, Sequence
 
 from .artifacts import ValidatedArtifact
+from .assessment_inputs import OutcomeAssessmentInput
 from .codex_permission_refusals import CodexPermissionInputState, PermissionInputDisposition
 from .codex_permissions import (
     MISSING_PERMISSION_CONTEXT,
@@ -23,6 +24,7 @@ from .incoming_materials import (
     IncomingMaterialRecord,
 )
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
+from .outcome_assessment_state import OutcomeAssessmentDisposition, record_assessment
 from .provider_queue_capacity import QueueCapacityConfig
 from .queue_visibility import QueueVisibilityState
 from .release_identity import CURRENT_RELEASE, ReleaseIdentity
@@ -1829,6 +1831,30 @@ class HubState:
 
     def get_telegram_outbox(self, outbox_id: str) -> TelegramOutboxRecord:
         return self._delivery_state.get_outbox(outbox_id)
+
+    def record_outcome_assessment(
+        self,
+        request: OutcomeAssessmentInput,
+        *,
+        project_id: str,
+        owner_user_ids: Sequence[int],
+        now: datetime | None = None,
+    ) -> tuple[OutcomeAssessmentDisposition, bool]:
+        with self._immediate_transaction():
+            disposition, created = record_assessment(
+                self._connection,
+                self.task_notices,
+                request,
+                project_id=project_id,
+                owner_user_ids=owner_user_ids,
+                now=now or datetime.now(timezone.utc),
+                state_error=StateError,
+            )
+            if created and disposition.topic_id is not None:
+                self._provider_job_state.flush_batch_in_transaction(
+                    disposition.topic_id, disposition.created_at
+                )
+            return disposition, created
 
     def preview_delivery_hold(self, outbox_id: str) -> DeliveryHoldPreview:
         """One coherent read-only snapshot; no implicit initialization or migration."""

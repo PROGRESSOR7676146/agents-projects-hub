@@ -76,6 +76,7 @@ def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
         "task_lifecycle_legacy_parts",
         "task_lifecycle_legacy_outbox",
         "task_lifecycle_notices",
+        "outcome_assessment_dispositions",
     )
     existing = {
         row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
