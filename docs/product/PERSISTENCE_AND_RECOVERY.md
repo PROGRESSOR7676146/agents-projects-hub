@@ -596,7 +596,7 @@ recreate unsaved provider context or a partially executed turn.
   saved state from confirmed owner delivery and retain eligible partial output.
   An already selected stdio fallback MAY recover a saved completed result through
   read-only observation in a fresh process; it MUST NOT interrupt, start, resume,
-  steer or answer approvals. A failed owning-socket control path MUST NOT select
+  steer or grant approvals. A failed owning-socket control path MUST NOT select
   stdio fallback for recovery.
   A late pending owner stop for an indeterminate turn MUST be serviced separately
   from productive execution and read-only observation. A durable exact-target
