@@ -30,15 +30,25 @@ from a CLI flag or an unqualified tlive `allow` alone.
 The current owner instruction caps helpers at GPT-6 Sol with reasoning `high`, using standard service without priority.
 
 Current control-loss continuation: Stage 1 is published at
-`fe7bb51ffa8dc491a33c624614dcff57ab40208d`; the schema48 Stage 2 candidate
-remains under publication validation. Completed runtime review identified
-shutdown/settlement races, accepted-identity retention, unresolved-scope sender
-isolation and no-send stop stream loss. Fixes retain primary progress/final on
-no-send, durably refuse admission races and avoid idle maintenance write locks.
-Focused regressions pass; final full gates and independent sign-off remain
-required. Continue in the existing private handoff lane,
-without replaying earlier test/review processes. Stage 3 Telegram precautions and
-the remaining Claude/operations goal are open. See
+`fe7bb51ffa8dc491a33c624614dcff57ab40208d`; schema48 Stage 2 is published at
+`b9822a797572ee6edab0d3b3c515516e38a68148`, unmerged, with canonical 2,581 tests
+in 233 modules, Pyright zero errors, independent Astra/actual Opus sign-off and
+seven exact-revision hosted checks. Its actual native offline control-loss
+witness passed; none of this is deployment evidence. Do not repeat completed
+publication gates after an interrupted agent turn.
+Stage3 begins with a schema49 fenced group-poll ledger and pure freshness/grace
+policy, under source review. Automatic precautions are not activated. Next is
+exact accepted-target ingress provenance, durable continuity/episodes, exact
+commentary unknown delivery and full-control consent checked in the send-fence
+transaction, then shared live/independent maintenance regression coverage.
+Use immutable job-ingress sidecars and fresh-acceptance target rows; do not infer
+authority from legacy jobs or observer labels. Retry children bind their current
+Reply ingress; mixed/unknown provenance must not batch or steer into a proven
+target. Late precautions share the existing three-read budget and permanent
+fence without synthetic stop receipts. Stop binding must never move the next
+late-read deadline backward. Split the near-limit persistence requirements module
+by ownership before further contract growth; preserve IDs and reviewed sections.
+The remaining Claude/operations goal stays open. See
 [control-loss acceptance](CODEX_CONTROL_LOSS.md) and the
 [stabilization plan](STABILIZATION_PLAN.md). No live activation is authorized.
 

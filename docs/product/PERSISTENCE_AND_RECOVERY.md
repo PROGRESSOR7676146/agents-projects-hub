@@ -606,7 +606,7 @@ recreate unsaved provider context or a partially executed turn.
   proof before control. Crash after send-start permits observation only, never
   an automatic repeat interrupt; another stop cannot reset that target's budget.
   Expired claims alone MUST NOT establish that the old control process ceased.
-  The schema48 candidate MUST create fresh control authority atomically with
+  Schema48 MUST create fresh control authority atomically with
   the first coherent exact accepted checkpoint. Refused control coherence MUST
   retain the returned native turn identity without granting authority; another
   job or repeated recording MUST NOT upgrade that retained target.
@@ -638,11 +638,26 @@ recreate unsaved provider context or a partially executed turn.
   Telegram ingress and egress loss MUST be distinguished from native stream
   loss. Passive aggregate health, silence, typing, sender 429 or another topic's
   success MUST NOT establish the exact topic's controllability. Any future
-  precautionary interruption on prolonged unconfirmed ingress requires an
-  explicit freshness/grace contract and tests for startup/restart; aggregate
-  egress presently remains diagnostic, not automatic interruption authority.
-  No monitor probe may invoke inference, and unavailable delivery cannot be
-  reported as an owner notification. The staged boundary is recorded in
+  precautionary interruption awaits Stage3 integration. Schema49 MUST record only
+  group polls (`hub`/`codex`), including empty success, never DM/health/send data.
+  Startup MUST claim one captured previous-epoch CAS/token; exact repeats
+  preserve epoch, stale publishers retire without reacquiring. Samples MUST fence
+  identity/epoch/token/increasing sequence: repeats idempotent, stale or
+  conflicting writes refused, gaps break failure streaks. Startup MUST clear
+  current success, retain history; migration MUST NOT import
+  health. Pure policy requires coherent aware clocks, future skew ≤5 seconds,
+  heartbeat/poll/success age ≤60 and failures <3 prove only recent global polling.
+  Three fresh failures anchor 30 seconds at the original third, even before
+  acceptance. Missing/stale/
+  startup grace: max(acceptance, retained confirmation +60) +120 seconds;
+  never-confirmed: acceptance +120. Restart/reclassification MUST NOT extend
+  deadlines; healthy states retain confirmation without an episode. Fresh matching
+  success after the uncertainty cutoff MAY clear unsent episodes, even due; cutoff
+  MUST differ from a future deadline anchor. No interrupt/receipt/approval/replay/
+  root-release authority is granted. Exact-target provenance/continuity/episodes,
+  atomic full-control consent/send-start and live/maintenance remain
+  pending; aggregate egress is diagnostic.
+  Monitoring invokes no inference; unavailable delivery is no owner receipt. See
   [ADR 0064](../decisions/0064-codex-control-loss.md).
 - **REQ-QUEUE-011 (Accepted; implementation pending):** An explicitly enabled
   Claude Code/Codex review workflow MUST durably bind its request, permitted

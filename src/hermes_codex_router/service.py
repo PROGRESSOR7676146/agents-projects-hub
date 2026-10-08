@@ -43,6 +43,7 @@ from .controller_commands import (
     HtmlCommandDecision,
     TextCommandDecision,
 )
+from .controller_ingress_polls import ControllerIngressPolls
 from .controller_result_publication import (
     PreparedResultPublication,
     PreparedResultPublisher,
@@ -368,6 +369,9 @@ class ProjectHubService:
 
     def _record_telegram_poll_success(self, ingress_identity: str) -> None:
         observed_at = datetime.now(timezone.utc)
+        polls = getattr(self, "_group_ingress_polls", None)
+        if polls is not None:
+            polls.record(succeeded=True, observed_at=observed_at)
         # A few bounded fault actors construct the service around a real state
         # boundary without running the provider-heavy initializer. Treat their
         # first successful poll like a clean process start.
@@ -388,6 +392,9 @@ class ProjectHubService:
         self._health_last_error_code = None
 
     def _record_telegram_poll_failure(self, ingress_identity: str, error: TelegramError) -> None:
+        polls = getattr(self, "_group_ingress_polls", None)
+        if polls is not None:
+            polls.record(succeeded=False, observed_at=datetime.now(timezone.utc))
         self._health_transport_consecutive_failures = (
             getattr(self, "_health_transport_consecutive_failures", 0) + 1
         )
@@ -3631,6 +3638,14 @@ class ProjectHubService:
         ingress_identity = getattr(self, "ingress_identity", None)
         if ingress_identity is None:
             ingress_identity = self.agent.agent_id
+        if not hasattr(self, "_group_ingress_polls"):
+            self._group_ingress_polls = (
+                ControllerIngressPolls(self.state.telegram_ingress, ingress_identity)
+                if ingress_identity in {"hub", "codex"}
+                and getattr(self, "_publishes_controller_health", True)
+                and not getattr(self, "direct_messages_only", False)
+                else None
+            )
         self.state.record_runtime_event(ingress_identity, "info", "service_started", "polling")
         offset = self.state.get_bot_offset(ingress_identity)
         while not stop.is_set():

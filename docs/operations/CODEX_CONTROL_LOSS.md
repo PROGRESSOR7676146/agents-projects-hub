@@ -2,7 +2,8 @@
 
 Status: staged source fix; full control-loss acceptance pending
 Owner: lead development agent. Last verified Stage 1 revision: `fe7bb51ffa8dc491a33c624614dcff57ab40208d`.
-Schema48 Stage 2 candidate remains under validation; no deployment acceptance.
+Stage 2 source published at `b9822a797572ee6edab0d3b3c515516e38a68148`;
+no deployment acceptance. Stage3 prerequisite remains under source review.
 
 Follow [REQ-QUEUE-014](../product/PERSISTENCE_AND_RECOVERY.md) and
 [ADR 0064](../decisions/0064-codex-control-loss.md). A worker marked idle or a
@@ -28,6 +29,8 @@ installed clean revision and all required component revisions. Distinguish:
 | Active/unknown exact turn | Root remains held; no retry, reset or replacement writer |
 | Prepared notice | Saved for delivery; owner receipt is not established |
 | Aggregate Telegram transport failures | Diagnose ingress/egress separately; exact-topic loss is unproved |
+| Fenced successful group poll | Recent global ingress; exact topic control is unproved |
+| New ingress epoch with historical success only | Startup uncertainty; no current poll or automatic control |
 
 Do not resolve uncertainty merely to unblock a root, restart an active worker,
 stop the shared server or reset queue rows. Use a separately authorized exact
@@ -102,8 +105,8 @@ telemetry with 129 pairs per turn and 3,600 foreign frames. Schema48 tests cover
 late claims, competing send owners, replaced claims, terminality without sender
 quiescence, withheld completion retention and embedded parity. Its native
 witness uses the real Hub journal for send-start and matched ACK; this is offline
-evidence. Final publication gates, item 5 and live
-two-worker acceptance remain open; source tests must not be presented as
+evidence. Stage2 publication gates passed; item5 and live
+two-worker acceptance remain open. Source tests must not be presented as
 installed Telegram acceptance. Live runs need a separately
 approved exact candidate, rollback and bounded harmless scenario. Retain all
 attempts, results and unknown delivery; never compensate by productive replay.
@@ -111,3 +114,18 @@ attempts, results and unknown delivery; never compensate by productive replay.
 The native control-loss helper's immediate reread may still show active work.
 The witness separately polls to prove eventual interruption; it does not prove
 production's single reread always establishes terminality.
+
+Schema49 prerequisite fixtures cover group-only actual polls, startup CAS,
+idempotent repeats, stale/competing publishers, sequence gaps, diagnostic and
+commit faults, separate historical confirmation, and additive migration with
+retained schema48 unknown-sender fences. The pure policy covers long healthy
+turns followed by restart, immediate new-epoch recovery, original third-failure
+deadlines, stale/missing samples and malformed clocks. These are offline state
+and policy checks. Item5's exact-target persistent episodes, full-control consent
+race, native work surviving Telegram loss and shared protective send integration
+remain open; neither ledger nor policy interrupts work or notifies the owner.
+
+Schema49 activation requires a distinct schema49-compatible runtime rollback;
+the schema48 Stage2 runtime is incompatible. Roll back the executable against
+retained current state. Never restore the pre-migration database over later
+work, checkpoints or send fences to accommodate an older runtime.

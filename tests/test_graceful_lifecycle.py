@@ -159,6 +159,8 @@ class GracefulLifecycleTests(unittest.TestCase):
         controller.supervisor = None
         controller.agent = Agent()
         controller.state = State()
+        # Real poll-ledger lifecycle is covered by test_controller_ingress_polls.
+        controller._group_ingress_polls = None
         controller.telegram = Telegram(controller)
         controller._start_embedded_queue_consumer = lambda: None
         controller._start_controller_outbox_delivery = lambda: None

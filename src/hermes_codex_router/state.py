@@ -67,6 +67,7 @@ from .state_sessions import (
 from .state_stop import StopState
 from .state_values import _bounded, _now, _optional_bounded, _timestamp
 from .task_lifecycle import TaskLifecycleState
+from .telegram_ingress_ledger import TelegramIngressLedger
 
 MAX_PROVIDER_RESPONSE_LENGTH = 200_000
 RECOVERED_RESULT_METADATA_JSON = '{"hub_recovered":true}'
@@ -147,6 +148,9 @@ class HubState:
             connection, self._immediate_transaction, StateError
         )
         self.codex_controls = CodexTurnControls(connection, transaction=self._immediate_transaction)
+        self.telegram_ingress = TelegramIngressLedger(
+            connection, transaction=self._immediate_transaction
+        )
         self._incoming_material_state = IncomingMaterialsStateFacade(
             connection,
             state_path,
