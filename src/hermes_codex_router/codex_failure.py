@@ -64,7 +64,11 @@ def codex_failure_reason(error: BaseException) -> str:
 
 
 def codex_failure_notice(
-    error: BaseException, *, turn_status: str = "unknown", held_count: int = 0
+    error: BaseException,
+    *,
+    turn_status: str = "unknown",
+    held_count: int = 0,
+    protective_interrupt_attempted: bool = False,
 ) -> str:
     """Only fixed causes and explicitly visible assistant text reach Telegram."""
     if isinstance(error, CodexRetryBindingError):
@@ -101,9 +105,16 @@ def codex_failure_notice(
         "connection_lost": "Hub lost the connection to Codex before confirming completion.",
         "timeout": "Hub timed out waiting for Codex to confirm completion.",
     }
-    notice = "What happened: " + causes.get(
-        reason, "Hub could no longer follow the Codex turn before confirming completion."
+    default_cause = (
+        "Codex ended with a provider error."
+        if turn_status == "failed"
+        else "Hub could no longer follow the Codex turn before confirming completion."
     )
+    notice = "What happened: " + causes.get(reason, default_cause)
+    if protective_interrupt_attempted:
+        notice += (
+            " Hub attempted to interrupt this exact turn; its request does not prove termination."
+        )
     if turn_status in {"failed", "interrupted"}:
         notice += (
             "\n\nSaved: The exact Codex turn has stopped with a terminal error. "

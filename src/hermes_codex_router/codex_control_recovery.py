@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from .codex_appserver import StoredTurnOutcome
 from .diagnostic_log import survived
@@ -27,6 +27,8 @@ def observe_after_control_loss(
     turn_id: str,
     root: Path,
     may_interrupt: Callable[[], bool],
+    on_interrupt_event: Callable[[Literal["attempted", "acknowledged", "unconfirmed"]], None]
+    | None = None,
 ) -> StoredTurnOutcome:
     """Read, interrupt only proven active work once, then read independently.
 
@@ -52,13 +54,30 @@ def observe_after_control_loss(
     try:
         if not may_interrupt():
             return before
+    except Exception as error:
+        survived("codex_control_recovery.guard_unconfirmed", error)
+        return before
+    try:
+        if on_interrupt_event is not None:
+            on_interrupt_event("attempted")
+    except Exception as error:
+        survived("codex_control_recovery.event_unconfirmed", error)
+        return before
+    event: Literal["acknowledged", "unconfirmed"] = "acknowledged"
+    try:
         client.interrupt_turn(
             thread_id=thread_id,
             turn_id=turn_id,
             deadline=min(deadline, time.monotonic() + 5),
         )
     except Exception as error:
+        event = "unconfirmed"
         survived("codex_control_recovery.interrupt_unconfirmed", error)
+    try:
+        if on_interrupt_event is not None:
+            on_interrupt_event(event)
+    except Exception as error:
+        survived("codex_control_recovery.event_unconfirmed", error)
     try:
         return client.read_turn_outcome(
             thread_id=thread_id,

@@ -17,6 +17,9 @@ installed clean revision and all required component revisions. Distinguish:
 | --- | --- |
 | Observation bound exhausted | Optional visibility may retire; mandatory consumption must continue |
 | Lost native stream/control observer | Exact-turn recovery is required; client closure is not termination |
+| `codex_protective_interrupt_attempted` event | Prepared exact-job attempt; native receipt is unproved |
+| `codex_protective_interrupt_acknowledged` event | RPC response received; native terminality is still unproved |
+| `codex_protective_interrupt_unconfirmed` event | Attempt outcome unknown; independently read the exact target |
 | Interrupt ACK | Request acknowledged; independently read exact terminal state |
 | Active/unknown exact turn | Root remains held; no retry, reset or replacement writer |
 | Prepared notice | Saved for delivery; owner receipt is not established |
@@ -27,6 +30,13 @@ stop the shared server or reset queue rows. Use a separately authorized exact
 native stop or independent recovery channel when the late-stop handler is not
 available. Recheck terminal state before any new same-root work. Restart alone
 cannot close the buffer/control incident.
+
+These runtime events retain exact-job provenance in private state but are
+retention-limited diagnostics, not a durable send fence. Failure notices and
+recovered completion races identify the protective attempt. A failed event write
+before invocation refuses control; a failed post-RPC write cannot discard the
+independent terminal read. An already selected stdio fallback permits only
+saved-result reads from a fresh process, without native interrupt or replay.
 
 ## Required acceptance matrix
 
@@ -59,3 +69,7 @@ two-worker acceptance remain open; source tests must not be presented as
 installed Telegram acceptance. Live runs need a separately
 approved exact candidate, rollback and bounded harmless scenario. Retain all
 attempts, results and unknown delivery; never compensate by productive replay.
+
+The native control-loss helper's immediate reread may still show active work.
+The witness separately polls to prove eventual interruption; it does not prove
+production's single reread always establishes terminality.

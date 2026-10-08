@@ -90,6 +90,8 @@ class QueueClient:
 
 
 class FakeSupervisor:
+    transport_mode = "socket"
+
     def __init__(self, client: QueueClient) -> None:
         self.client_value = client
 

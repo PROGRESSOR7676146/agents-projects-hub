@@ -1149,7 +1149,7 @@ class CodexAppServerClient:
     ) -> StoredTurnOutcome:
         cursor: str | None = None
         used_cursors: set[str] = set()
-        deadline = (
+        search_deadline = (
             min(deadline, time.monotonic() + 15) if deadline is not None else time.monotonic() + 15
         )
         for _ in range(20):
@@ -1161,7 +1161,7 @@ class CodexAppServerClient:
             }
             if cursor is not None:
                 params["cursor"] = cursor
-            response = self._request("thread/turns/list", params, deadline=deadline)
+            response = self._request("thread/turns/list", params, deadline=search_deadline)
             data = response.get("data") if isinstance(response, dict) else None
             if not isinstance(data, list) or len(data) > 20:
                 raise RpcError("stored turn page has an invalid shape")

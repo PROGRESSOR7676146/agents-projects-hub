@@ -14,6 +14,7 @@ from hermes_codex_router.codex_appserver import CodexAppServerClient
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.state import HubState, StateError
 from tests import test_codex_worker as fixtures
+from tests import test_embedded_queue_service as embedded
 from tests.git_fixtures import init_git_root
 
 
@@ -96,14 +97,20 @@ class Transport:
 
 
 class Supervisor(fixtures.WorkerSupervisor):
-    def __init__(self, provider: Provider, main: CodexAppServerClient) -> None:
+    def __init__(self, provider: Provider, main: CodexAppServerClient, *, stdio=False) -> None:
         super().__init__(main)  # type: ignore[arg-type]
         self.provider = provider
         self.control_options: list[tuple[bool, float | None]] = []
+        self.stdio = stdio
+        self.transport_mode = "stdio-fallback" if stdio else "socket"
+        self.acquisitions = 0
 
-    def client(self, *, allow_fallback=True, deadline=None):
-        if allow_fallback:
+    def client(self, *, allow_fallback=True, deadline=None) -> Any:
+        self.acquisitions += 1
+        if self.acquisitions == 1:
             return self.client_value
+        if self.stdio and not allow_fallback:
+            raise RuntimeError("No owning shared socket in example stdio mode")
         self.control_options.append((allow_fallback, deadline))
         return CodexAppServerClient(Transport(self.provider, productive=False), initialized=True)
 
@@ -114,16 +121,54 @@ class ControlLossWorkerTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
 
-    def run_failure(self, after_interrupt="inProgress"):
+    def run_failure(self, after_interrupt="inProgress", *, stdio=False):
         job_id = self.fixture.enqueue()
         provider = Provider(self.fixture.registry.projects[0].root, after_interrupt=after_interrupt)
+        if stdio:
+            provider.status = after_interrupt
         client = CodexAppServerClient(Transport(provider, productive=True), initialized=True)
         worker = self.fixture.worker(client)  # type: ignore[arg-type]
-        supervisor = Supervisor(provider, client)
+        supervisor = Supervisor(provider, client, stdio=stdio)
         worker.supervisor = supervisor  # type: ignore[assignment]
         self.addCleanup(worker.close)
         self.assertTrue(worker.run_cycle())
         return job_id, provider, worker, supervisor
+
+    def test_protective_send_and_ack_are_durable_and_notice_identifies_hub_stop(self):
+        job_id, provider, worker, _ = self.run_failure()
+        events = worker.state._connection.execute(
+            "SELECT code, detail FROM runtime_events WHERE code LIKE 'codex_protective_interrupt%'"
+        ).fetchall()
+        self.assertEqual(
+            [row["code"] for row in events],
+            ["codex_protective_interrupt_attempted", "codex_protective_interrupt_acknowledged"],
+        )
+        self.assertTrue(all(row["detail"] == job_id for row in events))
+        notice = worker.state.lease_telegram_outbox("codex", "example-sender")
+        assert notice is not None
+        self.assertIn("Hub attempted to interrupt this exact turn", notice.telegram_html)
+        self.assertEqual(provider.status, "inProgress")
+
+    def test_stdio_completed_final_recovers_read_only_without_owning_socket(self):
+        job_id, provider, worker, supervisor = self.run_failure("completed", stdio=True)
+        self.assertEqual(worker.state.get_provider_job(job_id).status, "result_ready")
+        self.assertEqual(provider.interrupts, [])
+        self.assertEqual(provider.calls.count("turn/start"), 1)
+        self.assertNotIn("thread/resume", provider.calls)
+        self.assertTrue(supervisor.control_options[0][0])
+
+    def test_stdio_active_keeps_root_and_never_interrupts_a_nonowning_process(self):
+        job_id, provider, worker, _ = self.run_failure("inProgress", stdio=True)
+        self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
+        self.assertEqual(provider.interrupts, [])
+        with self.assertRaises(StateError):
+            self.fixture.enqueue(2, "Example held root")
+
+    def test_stdio_unknown_does_not_replay_or_interrupt(self):
+        job_id, provider, worker, _ = self.run_failure("unknown", stdio=True)
+        self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
+        self.assertEqual(provider.interrupts, [])
+        self.assertEqual(provider.calls.count("turn/start"), 1)
 
     def test_provider_continues_after_lost_stream_and_ack_root_remains_held(self):
         job_id, provider, worker, supervisor = self.run_failure()
@@ -170,6 +215,9 @@ class ControlLossWorkerTests(unittest.TestCase):
         assert checkpoint is not None
         self.assertEqual(checkpoint["completed_text"], "Saved exact final")
         self.assertEqual(provider.calls.count("turn/start"), 1)
+        notice = worker.state.lease_telegram_outbox("codex", "example-sender")
+        assert notice is not None
+        self.assertIn("Hub attempted to interrupt this exact turn", notice.telegram_html)
 
     def test_configured_profile_drift_does_not_disable_protective_interrupt(self):
         original_guard = ExecutionJournal.can_control_accepted_turn
@@ -220,3 +268,44 @@ class ControlLossWorkerTests(unittest.TestCase):
                 "SELECT 1 FROM provider_turn_terminal_evidence WHERE job_id=?", (job_id,)
             ).fetchone()
         )
+
+
+class EmbeddedStdioRecoveryTests(unittest.TestCase):
+    def run_failure(self, status):
+        fixture = embedded.EmbeddedQueueServiceTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        provider = Provider(fixture.registry.projects[0].root)
+        provider.status = status
+        main = CodexAppServerClient(Transport(provider, productive=True), initialized=True)
+        service, _ = fixture.service(main)  # type: ignore[arg-type]
+        service.supervisor = Supervisor(provider, main, stdio=True)  # type: ignore[assignment]
+        self.addCleanup(service.close)
+        self.assertTrue(service.handle_update(embedded.update(1, "Example retained task")))
+        self.assertTrue(service.run_embedded_queue_cycle())
+        topic = service.state.find_topic(-1001234567890, 77)
+        assert topic is not None
+        job = service.state.provider_jobs_for_topic(topic.topic_id)[0]
+        return job, provider, service
+
+    def test_stdio_saved_completion_survives_primary_loss_without_interrupt(self):
+        job, provider, service = self.run_failure("completed")
+        self.assertEqual(job.status, "completed")
+        checkpoint = ExecutionJournal(service.state).read(job.job_id)
+        assert checkpoint is not None
+        self.assertEqual(checkpoint["completed_text"], "Saved exact final")
+        self.assertEqual(provider.interrupts, [])
+        self.assertEqual(provider.calls.count("turn/start"), 1)
+        self.assertNotIn("thread/resume", provider.calls)
+
+    def test_stdio_active_keeps_uncertainty_without_interrupt(self):
+        job, provider, _ = self.run_failure("inProgress")
+        self.assertEqual(job.status, "indeterminate")
+        self.assertEqual(provider.interrupts, [])
+        self.assertEqual(provider.calls.count("turn/start"), 1)
+
+    def test_stdio_unknown_keeps_uncertainty_without_replay(self):
+        job, provider, _ = self.run_failure("unknown")
+        self.assertEqual(job.status, "indeterminate")
+        self.assertEqual(provider.interrupts, [])
+        self.assertEqual(provider.calls.count("turn/start"), 1)

@@ -23,7 +23,7 @@ from tests.test_codex_native_completed_connection import complete_hub_turn, hub_
 class SyntheticDenyPeer(NativePeer):
     def __init__(self, websocket, thread, limit):
         self.thread = thread
-        self.turn = None
+        self.turn: str | None = None
         self.limit = limit
         self.accepted = asyncio.Event()
         self.declined = set()
@@ -31,6 +31,8 @@ class SyntheticDenyPeer(NativePeer):
 
     async def respond_to_request(self, message):
         await asyncio.wait_for(self.accepted.wait(), 5)
+        if self.turn is None:
+            raise NotificationOriginError("synthetic_deny_turn_missing")
         event = normalize_codex_activity(
             message, expected_thread_id=self.thread, expected_turn_id=self.turn
         )

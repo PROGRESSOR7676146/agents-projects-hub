@@ -73,6 +73,8 @@ async def control_after_disconnect(fixture):
                         root=fixture.project,
                         may_interrupt=lambda: True,
                     )
+                    if outcome.status not in {"active", "interrupted"}:
+                        raise AssertionError("fictional production reread has no exact outcome")
                     # A separate bounded read can observe a terminal transition
                     # after ACK; it never submits another interrupt or new turn.
                     deadline = time.monotonic() + 5

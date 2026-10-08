@@ -1108,7 +1108,9 @@ class ProjectHubService:
             recovered = False
             turn_status = "unknown"
             if failure.reconcile_codex:
-                assert self.supervisor is not None
+                supervisor = self.supervisor
+                assert supervisor is not None
+                control_available = supervisor.transport_mode != "stdio-fallback"
                 try:
                     turn_status = reconcile_codex_completion(
                         queue_state,
@@ -1117,11 +1119,11 @@ class ProjectHubService:
                         job_id=executing.job_id,
                         lease_token=token,
                         agent_id=agent.agent_id,
-                        client_factory=lambda: self.supervisor.client(
-                            allow_fallback=False, deadline=time.monotonic() + 2
+                        client_factory=lambda: supervisor.client(
+                            allow_fallback=not control_available, deadline=time.monotonic() + 2
                         ),
                         execution_error=exc,
-                        interrupt_active_on_failure=True,
+                        interrupt_active_on_failure=control_available,
                     )
                     recovered = turn_status == "completed"
                 except Exception as recovery_error:  # a stop may win the commit (R-021)

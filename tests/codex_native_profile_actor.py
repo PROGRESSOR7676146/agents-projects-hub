@@ -132,7 +132,7 @@ def approval_output(selected: ResponsePlan, data: dict) -> dict:
     if "sandbox_permissions" not in properties or "justification" not in properties:
         raise ValueError("native escalation tool schema unsupported")
     if "cmd" in properties:
-        arguments = {"cmd": "/usr/bin/true", "max_output_tokens": 100}
+        arguments: dict[str, Any] = {"cmd": "/usr/bin/true", "max_output_tokens": 100}
     elif "command" in properties:
         arguments = {
             "command": ["/usr/bin/true"]

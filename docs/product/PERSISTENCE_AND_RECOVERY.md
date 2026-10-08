@@ -585,14 +585,19 @@ recreate unsaved provider context or a partially executed turn.
   Database deduplication MUST NOT be described as exactly-once Telegram delivery.
 - **REQ-QUEUE-014 (Accepted; staged implementation under validation):** Loss of
   a mandatory execution or control path after exact Codex acceptance MUST wake
-  the owning worker rather than leave it waiting without control. Recovery MUST
-  use a fresh connection to the owning server with fallback disabled, bounded
+  the owning worker rather than leave it waiting without control. Protective
+  control MUST use a fresh connection to the owning server with fallback disabled,
+  bounded
   exact observation, and at most one guarded interrupt of a proven active exact
   turn. Completed output MUST remain recoverable; failed/interrupted proof MAY
   release only native uncertainty. ACK, timeout, client closure, observation
   exhaustion and unknown outcome MUST NOT prove terminality, release the root,
   create an owner-stop receipt or authorize replay. Notices MUST distinguish
   saved state from confirmed owner delivery and retain eligible partial output.
+  An already selected stdio fallback MAY recover a saved completed result through
+  read-only observation in a fresh process; it MUST NOT interrupt, start, resume,
+  steer or answer approvals. A failed owning-socket control path MUST NOT select
+  stdio fallback for recovery.
   A late pending owner stop for an indeterminate turn MUST be serviced separately
   from productive execution and read-only observation. A durable exact-target
   journal MUST share a send-start fence across live, protective and late control,

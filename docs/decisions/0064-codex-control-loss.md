@@ -23,8 +23,9 @@ final state-only attempt.
 A fatal independent live-control observer closes only the owning primary client
 to wake its native wait. Shared listeners and other turns are untouched. Socket
 shutdown precedes TextIO locks; a refused shutdown is reported before locks.
-The worker's mandatory-path failure recovery opens a fresh owning WebSocket
-client without fallback: exact read, one guarded interrupt if active, then exact
+The worker's protective control path opens a fresh owning WebSocket
+client without fallback: exact read, one guarded interrupt per helper invocation
+if active, then exact
 read, with a 15-second RPC deadline budget and separate 2-second connection/
 initialization deadline. Registry/SQLite guards and cleanup, including bounded
 transport joins, are outside those RPC deadlines; this is not a total wall-clock
@@ -33,6 +34,16 @@ uses existing checkpoint/result recovery; otherwise uncertainty and partial
 output remain. Current configuration drift cannot disable an interrupt of a
 coherent immutable accepted permission snapshot. The guard is a coherent
 snapshot, not a durable network fence.
+
+The single-interrupt limit in stage 1 is per protective helper invocation; an
+owner-stop path does not yet share it. Runtime events distinguish a prepared
+attempt from ACK and unknown outcome, retaining exact-job provenance without
+claiming terminality or durable deduplication. Notices and recovered completion
+races disclose that attempt. Already selected stdio fallback retains read-only
+saved-result recovery; it cannot interrupt through a non-owning process. Socket
+control failure cannot select that fallback. Caller-free passive item
+reads retain their separate 30-second allowance after paginated turn search;
+explicit protective deadlines still bound both phases.
 
 ## Remaining control stages
 

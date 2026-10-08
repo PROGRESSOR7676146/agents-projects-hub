@@ -32,7 +32,12 @@ def checkpoint_failure_notice(
     retained = CodexTurnError(error, partial)
     if isinstance(error, CodexTurnError):
         retained.failure_reason = error.failure_reason
-    return codex_failure_notice(retained, turn_status=turn_status)
+    return codex_failure_notice(
+        retained,
+        turn_status=turn_status,
+        protective_interrupt_attempted=getattr(error, "protective_interrupt_attempted", False)
+        is True,
+    )
 
 
 def reconcile_codex_completion(
@@ -88,12 +93,22 @@ def reconcile_codex_completion(
                             root=canonical_root,
                         )
 
+                    def record_interrupt(
+                        event: Literal["attempted", "acknowledged", "unconfirmed"],
+                    ) -> None:
+                        state.record_runtime_event(
+                            agent_id, "warning", "codex_protective_interrupt_" + event, job_id
+                        )
+                        if event == "attempted" and execution_error is not None:
+                            setattr(execution_error, "protective_interrupt_attempted", True)
+
                     outcome = observe_after_control_loss(
                         client,
                         thread_id=thread_id,
                         turn_id=turn_id,
                         root=canonical_root,
                         may_interrupt=may_interrupt,
+                        on_interrupt_event=record_interrupt,
                     )
                 else:
                     outcome = client.read_turn_outcome(
@@ -127,6 +142,11 @@ def reconcile_codex_completion(
             rejection_sink=rejections,
         )
         visible = text or "Codex completed the turn without visible text."
+        if getattr(execution_error, "protective_interrupt_attempted", False) is True:
+            visible += (
+                "\n\nHub attempted to interrupt this exact turn after losing its control stream. "
+                "The independent read recovered completion; inspect the result and project changes."
+            )
         if execution_error is not None and (
             getattr(execution_error, "failure_reason", codex_failure_reason(execution_error))
             == "permission_policy_changed"

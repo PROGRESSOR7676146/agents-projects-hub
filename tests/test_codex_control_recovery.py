@@ -14,14 +14,14 @@ class Client:
         self.outcomes = iter(outcomes)
         self.calls: list[tuple[str, str, str]] = []
 
-    def read_turn_outcome(self, *, thread_id, turn_id, cwd, deadline):
+    def read_turn_outcome(self, *, thread_id, turn_id, cwd, deadline=None):
         self.calls.append(("read", thread_id, turn_id))
         result = next(self.outcomes)
         if isinstance(result, Exception):
             raise result
         return result
 
-    def interrupt_turn(self, *, thread_id, turn_id, deadline):
+    def interrupt_turn(self, *, thread_id, turn_id, deadline=None):
         self.calls.append(("interrupt", thread_id, turn_id))
 
 
@@ -58,6 +58,50 @@ class ControlRecoveryTests(unittest.TestCase):
         client = Client([StoredTurnOutcome("active")])
         self.assertEqual(self.observe(client, authorize=lambda: False).status, "active")
         self.assertEqual([call[0] for call in client.calls], ["read"])
+
+    def test_guard_exception_never_records_an_interrupt_attempt(self):
+        client = Client([StoredTurnOutcome("active")])
+        events = []
+
+        def guard():
+            raise OSError("Example invalid binding")
+
+        outcome = observe_after_control_loss(
+            client,
+            thread_id="example-thread",
+            turn_id="example-turn",
+            root=Path("/home/example/project"),
+            may_interrupt=guard,
+            on_interrupt_event=events.append,
+        )
+        self.assertEqual(outcome.status, "active")
+        self.assertEqual(events, [])
+        self.assertEqual([call[0] for call in client.calls], ["read"])
+
+    def test_event_failure_before_send_refuses_and_after_ack_preserves_terminal_read(self):
+        for failed_event in ("attempted", "acknowledged"):
+            with self.subTest(event=failed_event):
+                client = Client([StoredTurnOutcome("active"), StoredTurnOutcome("interrupted")])
+
+                def record(event):
+                    if event == failed_event:
+                        raise OSError("Example unavailable event journal")
+
+                outcome = observe_after_control_loss(
+                    client,
+                    thread_id="example-thread",
+                    turn_id="example-turn",
+                    root=Path("/home/example/project"),
+                    may_interrupt=lambda: True,
+                    on_interrupt_event=record,
+                )
+                self.assertEqual(
+                    outcome.status, "active" if failed_event == "attempted" else "interrupted"
+                )
+                self.assertEqual(
+                    [call[0] for call in client.calls],
+                    ["read"] if failed_event == "attempted" else ["read", "interrupt", "read"],
+                )
 
     def test_terminal_after_interrupt_has_exact_identity_without_replay(self):
         client = Client([StoredTurnOutcome("active"), StoredTurnOutcome("interrupted")])

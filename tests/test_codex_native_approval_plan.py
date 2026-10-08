@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import unittest
+from http.client import HTTPMessage
 from unittest.mock import Mock, patch
 
 from tests import codex_native_profile_actor as actor
@@ -106,7 +107,8 @@ class NativeApprovalPlanTests(unittest.TestCase):
                     ):
                         handler = object.__new__(actor.Handler)
                         handler.path = path
-                        handler.headers = {"Content-Length": length}
+                        handler.headers = HTTPMessage()
+                        handler.headers["Content-Length"] = length
                         handler.rfile = io.BytesIO(body)
                         handler.send_error = Mock()
                         handler.send_response = Mock()
