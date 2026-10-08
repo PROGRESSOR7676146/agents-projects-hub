@@ -30,8 +30,9 @@ instead of installing another visible-message callback. This avoids a lost
 commit-to-callback interval. Permission evidence uses the existing session mode,
 exact active launch and at most 128 payload-free request rows. Its digest excludes
 the evaluation clock; pending expiry changes waiting state once. A resolved
-roundtrip still changes the digest before first send. Launch/binding loss retires
-observation rather than interpreting missing evidence as an idle human boundary.
+roundtrip still changes the digest before first send. Permission launch/binding
+loss retires observation rather than interpreting missing evidence as an idle
+human boundary. Changed execution bindings suppress evaluation and first send.
 
 No-progress notice creation, episode update and supersession share one transaction.
 First unattempted delivery checks live binding, visible cursor and permission
@@ -40,6 +41,10 @@ only never-attempted notices. Attempted/unknown delivery and proven-rejection
 retry remain owned by `TaskLifecycleState`; copy is immutable. Optional observer
 errors emit bounded closed-site diagnostics and cannot replace strict journal
 errors, block result persistence or interrupt owned cleanup/final delivery.
+Evaluation deliberately rolls back its bounded batch on an observation error,
+including notice creation and episode changes, and emits a bounded diagnostic.
+It does not manufacture progress or retire a row whose evidence could not be
+evaluated; later cycles may retry observation. Final delivery remains independent.
 
 ## Migration, evidence and remaining scope
 

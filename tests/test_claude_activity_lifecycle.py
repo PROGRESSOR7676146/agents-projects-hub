@@ -6,6 +6,7 @@ import sqlite3
 import sys
 import unittest
 from dataclasses import replace
+from datetime import timedelta
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -19,13 +20,14 @@ from tests.test_claude_cli_capabilities import HELP
 
 
 class ClaudeActivityLifecycleTests(unittest.TestCase):
-    def owned_worker(self, failure: str | None = None) -> None:
+    def owned_worker(self, failure: str | None = None, *, quiet_notice: bool = False) -> None:
         fixture = worker_fixtures.ClaudeNativeWorkerTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         fixture.fixture.config = replace(
             fixture.fixture.config,
             hub_bot=HubTelegramBot("example_hub_bot", fixture.root / "unused-token"),
+            task_no_progress_seconds=1,
         )
         executable = fixture.root / "fictional-claude"
         executable.write_text(
@@ -42,6 +44,7 @@ class ClaudeActivityLifecycleTests(unittest.TestCase):
         job_id = fixture.enqueue(1)
         processes = []
         observed_rows = []
+        delivered_notices = []
         original_open = ClaudeActivityState.open_process_observation
 
         def observe(observer, *args, **kwargs):
@@ -57,6 +60,26 @@ class ClaudeActivityLifecycleTests(unittest.TestCase):
                         "SELECT job_id,native_session_id,retired_at FROM claude_activity_observations"
                     ).fetchall()
                 )
+            if quiet_notice:
+                bots = {"claude": sender_fixtures.Bot(), "hub": sender_fixtures.Bot()}
+                sender = TelegramOutboxSender(fixture.fixture.config, telegram_bots=cast(Any, bots))
+                try:
+                    sender.run_cycle(now=kwargs["now"] + timedelta(seconds=2))
+                    notice = sender.state._connection.execute(
+                        "SELECT status,telegram_message_id FROM task_lifecycle_notices "
+                        "WHERE job_id=? AND kind='claude_no_progress'",
+                        (job_id,),
+                    ).fetchone()
+                    self.assertIsNotNone(notice)
+                    self.assertEqual(tuple(notice), ("delivered", 1))
+                    self.assertEqual(sender.state.get_provider_job(job_id).status, "executing")
+                    self.assertEqual(len(bots["hub"].sent), 1)
+                    self.assertEqual(bots["claude"].sent, [])
+                    delivered_notices.extend(bots["hub"].sent)
+                    sender.run_cycle(now=kwargs["now"] + timedelta(seconds=3))
+                    self.assertEqual(len(bots["hub"].sent), 1)
+                finally:
+                    sender.close()
             return result
 
         with (
@@ -86,6 +109,17 @@ class ClaudeActivityLifecycleTests(unittest.TestCase):
         self.assertEqual(
             worker.state.get_provider_result(job_id).visible_response, "Fictional final answer"
         )
+        if quiet_notice:
+            self.assertEqual(len(delivered_notices), 1)
+            self.assertIn("not confirmed", delivered_notices[0][2])
+            self.assertEqual(
+                worker.state._connection.execute(
+                    "SELECT status FROM task_lifecycle_notices "
+                    "WHERE job_id=? AND kind='claude_no_progress'",
+                    (job_id,),
+                ).fetchone()[0],
+                "delivered",
+            )
         if failure != "open":
             self.assertEqual(observed_rows, [(job_id, adapter_native(worker, job_id), None)])
             retired = worker.state._connection.execute(
@@ -103,6 +137,9 @@ class ClaudeActivityLifecycleTests(unittest.TestCase):
 
     def test_observer_retire_failure_preserves_result_and_owned_cleanup(self) -> None:
         self.owned_worker("retire")
+
+    def test_sender_delivers_one_quiet_notice_while_owned_process_is_active(self) -> None:
+        self.owned_worker(quiet_notice=True)
 
     def test_sender_observer_failure_cannot_block_ready_final_delivery(self) -> None:
         fixture = sender_fixtures.TelegramOutboxSenderTests()

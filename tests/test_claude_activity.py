@@ -135,6 +135,48 @@ class ClaudeActivityTests(unittest.TestCase):
         self.item(301)
         self.assertEqual(self.begin(notice, 302).status, "superseded")
 
+    def test_retirement_clears_unattempted_sender_lease_across_connections(self) -> None:
+        self.open()
+        notice = self.evaluate(300)[0]
+        leased = self.state.task_notices.lease_notice(
+            "example-sender", now=self.now + timedelta(seconds=301)
+        )
+        assert leased is not None and leased.lease_token is not None
+        worker = HubState.open(self.fixture.path, codex_permission_profile=None)
+        try:
+            observer = ClaudeActivityState(
+                worker._connection,
+                transaction=worker._immediate_transaction,
+                state_error=StateError,
+                notices=worker.task_notices,
+                notices_enabled=True,
+            )
+            observer.retire(self.job.job_id, self.token, now=self.now + timedelta(seconds=302))
+        finally:
+            worker.close()
+        self.assert_superseded_lease(notice, leased)
+
+    def test_visible_progress_clears_unattempted_sender_lease(self) -> None:
+        self.open()
+        notice = self.evaluate(300)[0]
+        leased = self.state.task_notices.lease_notice(
+            "example-sender", now=self.now + timedelta(seconds=301)
+        )
+        assert leased is not None and leased.lease_token is not None
+        self.item(302)
+        self.assertEqual(self.evaluate(303), ())
+        self.assert_superseded_lease(notice, leased)
+
+    def assert_superseded_lease(self, notice, leased) -> None:
+        kept = self.state.task_notices.get_notice(notice.notice_id)
+        self.assertEqual((kept.status, kept.attempt_count), ("superseded", 0))
+        self.assertIsNone(kept.send_started_at)
+        self.assertEqual((kept.lease_token, kept.lease_owner, kept.lease_expires_at), (None,) * 3)
+        stale = self.state.task_notices.begin_send(
+            notice.notice_id, leased.lease_token, now=self.now + timedelta(seconds=304)
+        )
+        self.assertEqual(stale, kept)
+
     def test_binding_completion_and_lease_drift_cannot_retarget_notice(self) -> None:
         self.open()
         for statement, restore, values in (

@@ -99,7 +99,8 @@ class ClaudeActivityState:
 
     def _supersede(self, job_id: str, timestamp: str) -> None:
         self.db.execute(
-            "UPDATE task_lifecycle_notices SET status='superseded',updated_at=? "
+            "UPDATE task_lifecycle_notices SET status='superseded',"
+            "lease_token=NULL,lease_owner=NULL,lease_expires_at=NULL,updated_at=? "
             "WHERE job_id=? AND kind='claude_no_progress' AND status IN ('pending','leased') "
             "AND attempt_count=0 AND send_started_at IS NULL",
             (timestamp, job_id),
