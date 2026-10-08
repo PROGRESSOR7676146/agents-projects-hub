@@ -116,7 +116,8 @@ receipt. After buffer cancellation or failure, the future I/O owner must close
 the pipe unconditionally and never reuse it. In particular, a wire CANCEL cannot
 be appended to a truncated frame suffix. Graceful wire CANCEL instead requires
 preserving prior frames. Missing frame attributes refuse through fixed errors,
-permanently retire the primitive and retain its earlier observation counters.
+permanently retire the primitive and retain its admitted/advanced counters;
+pending bytes are discarded.
 
 Sequence and buffer remain separate primitives. A future serialized owner must
 coordinate admission and order before any physical write, abort on invalid order,
@@ -125,8 +126,66 @@ cover this backpressure boundary, partial headers/payloads, in-flight cancelled
 stdout, unfinished EOF phases and no callback replay after a late sequence fault.
 This is still in-process evidence, with no claim of interruptible transport.
 
-Next add an owned nonblocking pipe runner and namespace supervisor/HTTP witness
-with a fake upstream; independently enforce deadlines and descendant cleanup.
+## Actual offline pipe and private HTTP witness
+
+The test-only fixture joins the codec, sequence, buffer and fake attempt gate
+over owned nonblocking stdin/stdout pipes. A fixed Python supervisor opens one
+loopback HTTP listener inside the existing private network/PID namespace and
+launches a fictional Python client. The POST body is the exact sealed capsule
+bytes; the host gate binds those bytes by digest before its bounded recording
+callback. The fake response is fresh random bytes, supplied only over the pipe
+and HTTP socket. Completion requires a matching client digest/size receipt,
+drained writes, valid EXIT/EOF, process reaping and pipe EOF after cleanup.
+Admission of END alone cannot establish response delivery.
+
+The host supplies only fixed allowlisted source snapshots, bounded individually
+and in aggregate, through a Python isolated-mode bootstrap. Capsule, HTTP body
+and response never enter argv or writable session files. There is no checkout
+mount or host capsule descriptor inheritance. Only the namespace builder's
+mount pins are passed; parent and exec-child FD-table checks exclude their
+inode identities after launch, alongside synthetic authority/capsule/socket
+controls. An empty read-only project skeleton, private session HOME and private
+network reuse ADR 0056 without changing its policy.
+
+The fixture accepts only its fixed POST path and canonical bounded Content-Length;
+duplicate lengths, transfer encoding, alternate methods/absolute URLs and extra
+request bytes refuse. No redirects, retries or forwarding route exist. A repeat
+detected after the original request was already claimed cannot erase that claim;
+all late faults retain consumption. Reads remain observed while a response is
+sent; a deliberately delayed extra byte is rejected after the first claim.
+Absolute deadlines are independent of traffic, queues/output are finite, and
+actual kernel short writes preserve offers: an 8-KiB offer into a 4-KiB pipe must
+produce a positive recorded short-write count. Would-block accounting exists,
+but its deterministic zero-progress proof remains in the fake-owner tests.
+Cancellation before/after claim retains the distinct zero/one-call observations
+sampled before unconditional gate close. Floods hit the stream budget; a separate
+trickle peer proves that continued activity cannot extend the host deadline.
+Descriptor scans fail closed when a table or descriptor is unreadable and require
+self, parent and PID1 inspection. Late request bytes have a diagnostic distinct
+from peer EOF.
+The callback is synchronous and intentionally bounded fixture code; this is no
+claim of an interruptible provider call.
+
+`owned_fixture_process` extracts only the existing test process lifecycle:
+close_fds, explicit stdin/pass_fds, a new owned process group, kill before first
+reap, bounded wait and closure of every owned stream. Both native capture and
+the pipe runner use it. Completion is observed with waitid(WNOWAIT), preserving
+the leader PID until group cleanup. The actual namespace teardown witness checks
+EOF from a TERM-ignoring descendant that escaped the group with setsid; group killing alone
+does not establish that property. The strict required namespace CI job includes
+the private pipe/HTTP witness and its workflow contract rejects omission.
+An intentional denied-inode control uses the already inherited stdin pipe;
+it must trigger the same namespace FD-table detector before any fake callback.
+This gives the detector a positive control without adding an arbitrary inherited
+descriptor or relaxing the namespace builder.
+
+This is actual kernel/fictional-HTTP evidence, not native CLI compatibility,
+installed immutable supervisor custody, productive advisor authorization,
+durable restart deduplication, subscription routing, deployment or Telegram
+acceptance. Fixed source execution proves only the snapshots under test.
+
+Next add exact native HTTP validation and independently verified immutable
+installed supervisor custody before productive integration.
 Productive wiring
 still requires durable role/session/result/material/lease bindings, host-held
 route credentials, exact native request/response validation, process-tree stop
