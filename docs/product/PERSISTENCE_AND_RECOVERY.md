@@ -443,8 +443,12 @@ recreate unsaved provider context or a partially executed turn.
   historical generation mismatches MUST make its effect fail closed. Every
   retained schema44 hold needs its own full consent before a scope move; the
   prospective destination/project guard remains mandatory. Raw unknown/failed
-  evidence and separate effective counts MUST remain visible in status, retry,
-  outcome, alerts and drain views. Apply MUST NOT mutate delivery, parts,
+  evidence and aggregate counts MUST remain separate from effective blockers.
+  Status, retry and outcome views MUST distinguish historical delivery from
+  current consent effect; alerts and drain MUST use effective blockers.
+  Schema47 activation MUST refuse a nonempty schema46 control ledger, preserving
+  its rows and old schema: the preview-only prerequisite has no consent writer.
+  Apply MUST NOT mutate delivery, parts,
   receipts, artifacts, native evidence, jobs, writers, stops or owner holds, nor
   authorize resend, provider replay, Reply or outcome-assessment authority.
   Source publication does not authorize live migration or activation; deployment

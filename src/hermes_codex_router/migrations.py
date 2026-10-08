@@ -1519,6 +1519,14 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
                     _ensure_hold_decision_columns(connection)
                 if version == 39:
                     ensure_codex_permission_columns(connection)
+                if (
+                    version == 47
+                    and connection.execute(
+                        "SELECT 1 FROM telegram_delivery_control_dispositions LIMIT 1"
+                    ).fetchone()
+                    is not None
+                ):
+                    raise RuntimeError("schema46 control ledger must be empty before activation")
                 _execute_migration_script(connection, script)
                 if version == 1:
                     _ensure_legacy_columns(connection)

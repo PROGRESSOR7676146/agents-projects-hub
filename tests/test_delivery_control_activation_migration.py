@@ -32,9 +32,8 @@ class DeliveryControlActivationMigrationTests(unittest.TestCase):
             expected_snapshot=old.snapshot,
             continue_without_confirmed_delivery=True,
         )
-        # A storage-only row, as supported by schema46. Its old topic guard is
-        # restored literally; this is a historical fixture, never a downgrade.
-        self.fixture.seed()
+        # Restore the literal old topic guard. Schema46 has no supported consent
+        # writer; an empty control ledger is required for authority activation.
         self.fixture.progress()
         with db:
             db.execute("DROP TRIGGER telegram_delivery_hold_topic_binding_guard")
@@ -68,13 +67,26 @@ class DeliveryControlActivationMigrationTests(unittest.TestCase):
             for obj in old_objects:
                 if obj[1] != "telegram_delivery_hold_topic_binding_guard":
                     self.assertIn(obj, objects(upgraded))
-            with upgraded:
+            with self.assertRaises(sqlite3.IntegrityError), upgraded:
                 upgraded.execute("UPDATE topics SET execution_scope='root:/home/example/other'")
             with self.assertRaises(sqlite3.IntegrityError), upgraded:
                 upgraded.execute("UPDATE topics SET thread_id=999")
             self.assertEqual(upgraded.execute("PRAGMA foreign_key_check").fetchall(), [])
             self.assertEqual(upgraded.execute("PRAGMA integrity_check").fetchone()[0], "ok")
         self.assertIsNone(migrations.migrate_database(self.path).backup_path)
+
+    def test_preexisting_control_rows_refuse_activation_without_mutation(self) -> None:
+        with closing(sqlite3.connect(self.path)) as old:
+            self.fixture.db = old
+            self.fixture.seed()
+            before = snapshot(old)
+            before_objects = objects(old)
+        with self.assertRaisesRegex(RuntimeError, "schema46 control ledger must be empty"):
+            migrations.migrate_database(self.path)
+        with closing(sqlite3.connect(self.path)) as old:
+            self.assertEqual(snapshot(old), before)
+            self.assertEqual(objects(old), before_objects)
+            self.assertEqual(old.execute("PRAGMA user_version").fetchone()[0], 46)
 
     def test_ddl_fault_preserves_every_row_object_and_version(self) -> None:
         with closing(sqlite3.connect(self.path)) as old:

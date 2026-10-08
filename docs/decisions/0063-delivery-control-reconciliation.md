@@ -75,6 +75,9 @@ for a replaceable failed notice would need a separate tombstone lifecycle slice.
 ## Coordinated schema47 full-control boundary
 
 Schema47 implements public apply, exact snapshot CAS and coordinated consumer changes.
+Activation refuses any pre-existing schema46 ledger row without deleting it;
+preview-only storage has no supported consent writer. The migration transaction
+rolls back completely, retaining the old schema and evidence for local inspection.
 One immediate HubState transaction must revalidate and insert only the disposition.
 Apply inserts only the ledger row, never a delivery/job/receipt mutation.
 An exact repeated token returns its original immutable decision and current effect;
