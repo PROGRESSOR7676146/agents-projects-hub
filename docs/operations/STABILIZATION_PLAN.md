@@ -286,8 +286,7 @@ root-validation and transaction design. The old-code regression reproduced
 historical-root normalization after CLI archive. The
 [dated ADR correction](../decisions/0031-bounded-root-concurrency.md#archive-correction-2026-10-08)
 records the restored boundary. Legacy evidence protections, schema-44 consent
-limits and cleanup remain unchanged. Next trigger: owner integration and the
-lane-domain extraction and separately designed full-control
+limits and cleanup remain unchanged. Next trigger: owner integration and separately designed full-control
 reconciliation. After owner integration inspect tracked, staged and untracked
 work before cleanup. Source publication closure is complete; no deployment
 or earlier-topic repair is authorized here.
