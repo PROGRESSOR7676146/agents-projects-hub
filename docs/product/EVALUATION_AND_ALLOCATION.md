@@ -112,6 +112,44 @@ the first collaboration release.
   accepted/rework/unknown decision with a short reason, and observable elapsed
   time and usage. Unknown usage MUST remain unknown. It MUST NOT require an
   automatic score, model judge, comparative trial, or learned dispatcher.
+  The bounded owner-decision slice MUST reserve non-forwarded `/assess
+  accepted|rework|unknown REASON` at authorized central Hub ingress before
+  Reply/mention routing, session preparation, material handling or productive
+  invocation. Only configured owners MAY record it in a registered project
+  topic with external queue and outbox ownership. Captions, selected quotes,
+  materials, malformed commands and unavailable targets MUST receive a durable
+  refusal without productive fallback. Forwarded commands remain passive context.
+  A first assessment MUST Reply to any positively receipted part of exactly one
+  saved final in that same numeric destination; every final part, including
+  documents, MUST have strict version-1 receipt provenance. Progress, controls,
+  resultless notices, incomplete/unknown delivery and legacy receipts MUST NOT
+  establish a result target. Historical completed session generations MAY be
+  assessed without retargeting their execution.
+  Applied and refused dispositions MUST be append-only, deduplicated by full
+  assessment-input fingerprint before bounded parsing, including a canonical
+  digest of the original Telegram message before quote/material normalization
+  and excluding `update_id`. Semantically irrelevant source differences MAY
+  conservatively conflict; they MUST NOT reparse or replace a disposition.
+  A correction MUST Reply to the
+  latest applied human command, rather than a bot acknowledgement; competing
+  first decisions or corrections MUST have at most one applied successor.
+  Fingerprint conflicts MUST preserve the prior disposition without productive
+  fallback or endless input retry. HubState MUST atomically commit disposition,
+  input consumption, independent Hub acknowledgement and the existing command
+  boundary that advances queued future deadlines in that topic. This boundary
+  MUST preserve holds, job status, routing, root exclusion and capacity; exact
+  duplicates MUST NOT close a later batch. Failed commits MUST leave all four
+  effects retryable through control-only ingress.
+  Acknowledgement delivery MUST retain the independent control-notice fence,
+  strict receipt and unknown-send/no-blind-resend rules. Unsupported owning
+  endpoints and scoped acceptance actors MAY receive one best-effort refusal;
+  noncentral group pollers MUST NOT consume the shared input receipt. Private
+  controls MUST NOT enter onboarding/edit/connect free-text workflows.
+  Assessments are journal evidence only: `rework` MUST NOT enqueue execution,
+  `accepted` MUST NOT grant tools or release uncertainty, and `unknown` MUST NOT
+  overwrite usage, model or timing evidence. Source publication MUST NOT claim
+  deployed authority-data custody from Telegram authentication or SQL triggers;
+  untrusted model access to this journal remains an independent OS-boundary gate.
 
 ### Acceptance boundaries
 

@@ -18,9 +18,11 @@ from tests.test_delivery_certainty_migration import snapshot
 class DeliveryHoldMigrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fixture = fixtures.TelegramOutboxSenderTests()
-        self.fixture.setUp()
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 44):
+            self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
-        self.job_id = self.fixture.ready_outbox("opencode", 91)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 44):
+            self.job_id = self.fixture.ready_outbox("opencode", 91)
         self.path = self.fixture.config.state_path
         with closing(sqlite3.connect(self.path)) as db, db:
             self.outbox_id = db.execute(
@@ -44,7 +46,8 @@ class DeliveryHoldMigrationTests(unittest.TestCase):
     def test_populated_additive_upgrade_consistent_private_backup_and_idempotence(self) -> None:
         with sqlite3.connect(self.path) as old:
             before = snapshot(old)
-        result = migrations.migrate_database(self.path)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 44):
+            result = migrations.migrate_database(self.path)
         self.assertEqual((result.previous_version, result.current_version), (43, 44))
         assert result.backup_path is not None
         self.assertEqual(result.backup_path.stat().st_mode & 0o777, 0o600)
@@ -59,7 +62,8 @@ class DeliveryHoldMigrationTests(unittest.TestCase):
                 self.assertEqual(after[table], before[table], table)
             self.assertEqual(upgraded.execute("PRAGMA foreign_key_check").fetchall(), [])
             self.assertEqual(upgraded.execute("PRAGMA integrity_check").fetchone()[0], "ok")
-        self.assertIsNone(migrations.migrate_database(self.path).backup_path)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 44):
+            self.assertIsNone(migrations.migrate_database(self.path).backup_path)
 
     def test_ddl_fault_restores_version_rows_and_objects(self) -> None:
         with sqlite3.connect(self.path) as old:

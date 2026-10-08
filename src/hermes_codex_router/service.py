@@ -2613,7 +2613,9 @@ class ProjectHubService:
             return False
         if message.is_forwarded or is_emergency_stop(message.text):
             return False
-        if parse_command(message.text) is not None:
+        from .assessment_inputs import is_assessment_command
+
+        if parse_command(message.text) is not None and not is_assessment_command(message.text):
             return False
         try:
             self.config.project_for_chat(message.chat_id)
@@ -2669,6 +2671,17 @@ class ProjectHubService:
             return False
         if not self.config.is_authorized(message.sender_id, message.chat_id, message.thread_id):
             return False
+        from .assessment_inputs import is_assessment_command
+        from .controller_assessment import ControllerAssessmentOrchestrator
+
+        assessment = None
+        if not message.is_forwarded and is_assessment_command(message.text):
+            assessment = ControllerAssessmentOrchestrator(self.config, self.state, ingress_identity)
+            refusal = assessment.preflight(message)
+            if refusal is not None:
+                if refusal.text is not None:
+                    self._send_text(message, refusal.text)
+                return refusal.created
         if ingress_identity == "hub" and message.chat_id == message.sender_id:
             return self._handle_hub_direct(message)
         try:
@@ -2691,6 +2704,15 @@ class ProjectHubService:
         except ServiceError:
             self._send_text(message, "Project group binding is invalid; verify it locally.")
             return True
+        if assessment is not None:
+            try:
+                return assessment.record(
+                    message, binding.project_id, raw_message=update["message"]
+                ).created
+            except (sqlite3.Error, StateError) as error:
+                raise QueueAcceptanceError(
+                    "outcome assessment has no durable disposition"
+                ) from error
         topic = self._topic(message, binding.project_id)
         self._discard_pending_materials(
             topic,

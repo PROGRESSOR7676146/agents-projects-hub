@@ -27,12 +27,20 @@ WITH target AS (
            h.resolution, h.resolved_at,
            o.outbox_id, o.status AS delivery_status, o.delivered_at,
            dh.outbox_id IS NOT NULL AS delivery_hold_recorded,
+           a.decision AS owner_decision, a.reason AS owner_reason,
+           a.disposition_id AS owner_disposition_id, a.revision AS owner_revision,
+           a.owner_user_id, a.input_message_id AS owner_input_message_id,
+           a.created_at AS owner_assessed_at,
            {outbox_delivery_hold_released("o")} AS delivery_hold_released,
            (SELECT COUNT(*) FROM provider_visible_items v WHERE v.job_id=j.job_id)
                AS visible_item_count
     FROM provider_jobs j
     JOIN topics topic ON topic.topic_id=j.topic_id
     LEFT JOIN provider_job_results r ON r.job_id=j.job_id
+    LEFT JOIN outcome_assessment_dispositions a ON a.result_id=r.result_id
+        AND a.disposition='applied' AND a.revision=(
+            SELECT MAX(latest.revision) FROM outcome_assessment_dispositions latest
+            WHERE latest.result_id=r.result_id AND latest.disposition='applied')
     LEFT JOIN provider_execution_checkpoints c ON c.job_id=j.job_id
     LEFT JOIN provider_turn_terminal_evidence e ON e.job_id=j.job_id
     LEFT JOIN provider_job_resolutions h ON h.job_id=j.job_id
@@ -251,6 +259,17 @@ class OutcomeJournalStateFacade:
                     ("kind", "job_id"),
                 ),
                 "acceptance": {
+                    "decision": row["owner_decision"],
+                    "reason": row["owner_reason"],
+                    "source": "owner",
+                    "disposition_id": row["owner_disposition_id"],
+                    "revision": row["owner_revision"],
+                    "owner_user_id": row["owner_user_id"],
+                    "input_message_id": row["owner_input_message_id"],
+                    "recorded_at": _timestamp(row["owner_assessed_at"]),
+                }
+                if row["owner_decision"] is not None
+                else {
                     "decision": "unknown",
                     "reason": "no_authoritative_owner_decision_recorded",
                 },

@@ -253,6 +253,22 @@ reconciliation decision before claiming complete operational acceptance. No
 timeout, restart, automatic resend or provider replay may clear these boundaries.
 See [ADR 0061](../decisions/0061-owner-delivery-hold-dispositions.md).
 
+## Owner outcome assessments
+
+Status: schema45 implementation under validation. Last verified source base:
+`af2d699df9641b701957fd6c703e8cb46a492d33`; source owner: Hub maintainer,
+root is the sole writer. Worktree purpose: bounded human outcome journal,
+base branch `feat/delivery-hold-reconciliation`. Design and transaction/batch
+ownership were independently reviewed by GPT Astra.
+[ADR 0062](../decisions/0062-owner-outcome-assessments.md) records the decision;
+the [runbook](OUTCOME_JOURNAL.md#owner-decision-procedure) owns the procedure.
+Next trigger: focused adversarial/migration tests, exact-candidate opposite-runtime
+review and canonical/privacy/hosted gates. Scope does not include productive
+collaboration, usage provenance, scoring or judges. Deployment, journal custody
+and Telegram acceptance remain independent gates. After owner integration,
+inspect all tracked/staged/untracked worktree state before cleanup. Closure is
+open until source publication gates pass; the broader goal remains open.
+
 ## Planned final-response mode indicators
 
 Owner-requested follow-up (2026-10-07), implementation pending: extend the compact

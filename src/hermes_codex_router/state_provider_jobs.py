@@ -461,13 +461,18 @@ class ProviderJobsStateFacade:
 
     def flush_batch(self, topic_id: int) -> int:
         timestamp = self._now()
-        with self._write_transaction():
-            cursor = self._connection.execute(
-                """UPDATE provider_jobs SET next_attempt_at = ?, updated_at = ?
-                   WHERE topic_id = ? AND status = 'queued'
-                     AND next_attempt_at IS NOT NULL AND next_attempt_at > ?""",
-                (timestamp, timestamp, topic_id, timestamp),
-            )
+        with self._transaction():
+            return self.flush_batch_in_transaction(topic_id, timestamp)
+
+    def flush_batch_in_transaction(self, topic_id: int, timestamp: str) -> int:
+        if not self._connection.in_transaction:
+            raise self._state_error("batch flush requires an active transaction")
+        cursor = self._connection.execute(
+            """UPDATE provider_jobs SET next_attempt_at = ?, updated_at = ?
+               WHERE topic_id = ? AND status = 'queued'
+                 AND next_attempt_at IS NOT NULL AND next_attempt_at > ?""",
+            (timestamp, timestamp, topic_id, timestamp),
+        )
         return cursor.rowcount
 
     def resolve_indeterminate(self, job_id: str, resolution: str) -> bool:
