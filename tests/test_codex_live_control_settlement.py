@@ -23,6 +23,7 @@ class CodexControlSettlementTests(unittest.TestCase):
 
     def direct_control(self, **changes):
         options: dict[str, Any] = dict(
+            config=self.fixture.fixture.config,
             state_factory=lambda: self.state,
             client_factory=lambda: self.client,
             job=self.fixture.job,
@@ -34,6 +35,85 @@ class CodexControlSettlementTests(unittest.TestCase):
         )
         options.update(changes)
         return CodexLiveControl(**options)
+
+    def test_shutdown_waits_for_fenced_interrupt_reply_and_settlement(self) -> None:
+        self.fixture.stop_request()
+        entered, release, closed = threading.Event(), threading.Event(), threading.Event()
+        errors = []
+
+        def interrupt(**kwargs):
+            self.client.interrupts.append(kwargs)
+            entered.set()
+            release.wait(2)
+            if closed.is_set():
+                raise EOFError("Example shutdown destroyed matched reply")
+
+        self.client.interrupt_turn = interrupt
+        self.client.close = closed.set
+        control = self.fixture.control()
+        self.assertTrue(entered.wait(2))
+
+        def shutdown():
+            try:
+                control.stop_and_join()
+            except BaseException as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=shutdown)
+        thread.start()
+        try:
+            self.assertFalse(closed.wait(0.05))
+        finally:
+            release.set()
+            thread.join(3)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        row = self.state.codex_controls.read(self.fixture.job.job_id)
+        assert row is not None
+        self.assertEqual(row["interrupt_outcome"], "matched_ack")
+        self.assertIsNotNone(row["owner_quiesced_at"])
+        self.assertEqual(len(self.client.interrupts), 1)
+
+    def test_matched_ack_survives_real_sqlite_writer_contention(self) -> None:
+        self.fixture.stop_request()
+        entered, release, settled = threading.Event(), threading.Event(), threading.Event()
+        attempts = []
+
+        def decorate(state):
+            finish = state.codex_controls.finish_interrupt
+
+            def settle(*args, **kwargs):
+                attempts.append(1)
+                finish(*args, **kwargs)
+                settled.set()
+
+            state.codex_controls.finish_interrupt = settle
+
+        def interrupt(**kwargs):
+            self.client.interrupts.append(kwargs)
+            entered.set()
+            release.wait(2)
+
+        self.client.interrupt_turn = interrupt
+        control = self.fixture.control(decorate=decorate)
+        self.assertTrue(entered.wait(2))
+        blocker = sqlite3.connect(self.fixture.fixture.config.state_path, isolation_level=None)
+        try:
+            blocker.execute("BEGIN IMMEDIATE")
+            release.set()
+            self.assertFalse(settled.wait(0.15))
+            blocker.execute("ROLLBACK")
+            self.assertTrue(settled.wait(2))
+        finally:
+            blocker.close()
+            release.set()
+            control.stop_and_join()
+        row = self.state.codex_controls.read(self.fixture.job.job_id)
+        assert row is not None
+        self.assertEqual(row["interrupt_outcome"], "matched_ack")
+        self.assertIsNotNone(row["owner_quiesced_at"])
+        self.assertGreater(len(attempts), 1)
+        self.assertEqual(len(self.client.interrupts), 1)
 
     def test_permanent_absorption_failure_keeps_stop_polling_and_defers_original_error(
         self,

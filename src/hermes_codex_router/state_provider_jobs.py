@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Mapping, Sequence
 
+from .codex_control_predicates import control_owner_for_topic, control_scope_is_clear
 from .delivery_control_predicates import result_ready_control_reconciled
 from .delivery_hold_predicates import job_blocks_topic_fifo
 from .provider_queue_capacity import (
@@ -46,6 +47,7 @@ COMPLETE_FINISHED_STOPS_SQL = f"""UPDATE provider_stop_requests
 _ELIGIBLE_PROVIDER_JOB_SQL = f"""SELECT candidate.* FROM provider_jobs candidate
    JOIN topics candidate_topic ON candidate_topic.topic_id = candidate.topic_id
    WHERE candidate.agent_id = ?
+     AND {control_scope_is_clear("candidate_topic.execution_scope", topic_id_expression="candidate_topic.topic_id")}
      AND candidate.attempt_count < candidate.max_attempts
      AND (
        (candidate.status = 'queued'
@@ -277,6 +279,7 @@ class ProviderJobsStateFacade:
                 f"""SELECT COUNT(*) FROM provider_jobs candidate
                    JOIN topics candidate_topic ON candidate_topic.topic_id = candidate.topic_id
                    WHERE candidate.status IN ('queued', 'retry_wait')
+                     AND {control_scope_is_clear("candidate_topic.execution_scope", topic_id_expression="candidate_topic.topic_id")}
                      AND candidate.attempt_count < candidate.max_attempts
                      AND ((candidate.status = 'queued'
                            AND candidate.created_at <= ?
@@ -407,8 +410,12 @@ class ProviderJobsStateFacade:
         rows = self._connection.execute(
             f"""SELECT jobs.agent_id, COUNT(*) AS job_count FROM provider_jobs jobs
                 WHERE jobs.agent_id IN ({placeholders})
-                  AND jobs.status IN ('queued','leased','executing','retry_wait','result_ready')
-                  AND NOT {result_ready_control_reconciled("jobs")}
+                  AND ((jobs.status IN ('queued','leased','executing','retry_wait','result_ready')
+                        AND NOT {result_ready_control_reconciled("jobs")})
+                    OR EXISTS (SELECT 1 FROM codex_turn_controls control
+                               WHERE control.job_id=jobs.job_id
+                                 AND control.send_started_at IS NOT NULL
+                                 AND control.owner_quiesced_at IS NULL))
                 GROUP BY jobs.agent_id""",
             bounded_ids,
         ).fetchall()
@@ -883,6 +890,8 @@ class ProviderJobsStateFacade:
             # Nothing joins a turn that a pending emergency stop is ending.
             if parent is None or self.pending_stop_for_job(parent_job_id) is not None:
                 return None
+            if control_owner_for_topic(self._connection, int(parent["topic_id"])) is not None:
+                return None
             # Managed steering lacks an independently verified active-policy read.
             # Keep the follow-up queued for normal exact-profile preparation.
             if (
@@ -1108,6 +1117,14 @@ class ProviderJobsStateFacade:
             return self.get(job_id)
 
     def _start_leased(self, job_id: str, lease_token: str, timestamp: str) -> bool:
+        target = self._connection.execute(
+            "SELECT topic_id FROM provider_jobs WHERE job_id=?", (job_id,)
+        ).fetchone()
+        if (
+            target is not None
+            and control_owner_for_topic(self._connection, int(target["topic_id"])) is not None
+        ):
+            return False
         cursor = self._connection.execute(
             """UPDATE provider_jobs
                SET status = 'executing', attempt_count = attempt_count + 1,

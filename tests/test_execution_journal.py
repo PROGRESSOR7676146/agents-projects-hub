@@ -566,6 +566,7 @@ class ExecutionJournalTests(unittest.TestCase):
                         "schema_delivery_holds.py",
                         "schema_delivery_control.py",
                         "schema_delivery_control_activation.py",
+                        "schema_codex_turn_controls.py",
                         "schema_outcome_assessments.py",
                         "schema_codex_permissions.py",
                         "schema_preacceptance_approvals.py",
@@ -579,7 +580,7 @@ class ExecutionJournalTests(unittest.TestCase):
             self.assertEqual(report.schema_after_rollout, LATEST_SCHEMA_VERSION)
             self.assertEqual(report.schema_after_rollback, LATEST_SCHEMA_VERSION)
             self.assertTrue(report.durable_work_preserved)
-            for old_schema in (21, 45, 46):
+            for old_schema in (21, 45, 46, 47):
                 old = _wheel(
                     base / f"example-old-schema-{old_schema}.whl",
                     version="0.5.0",

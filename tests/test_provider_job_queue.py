@@ -446,13 +446,11 @@ class ProviderJobQueueTests(unittest.TestCase):
         for delivery_status in ("pending", "delivered", "sending"):
             with self.subTest(delivery_status=delivery_status):
                 path = self.path.with_name(f"legacy-{delivery_status}.db")
-                from tests.schema_fixtures import legacy_selection_columns
+                from tests.schema_fixtures import project_historical_database
 
-                with (
-                    patch.object(migrations_module, "LATEST_SCHEMA_VERSION", 35),
-                    legacy_selection_columns(path),
-                ):
-                    legacy = HubState.open(path, codex_permission_profile=None)
+                source_path = path.with_name(f"example-current-{delivery_status}.db")
+                with patch.object(migrations_module, "LATEST_SCHEMA_VERSION", 48):
+                    legacy = HubState.open(source_path, codex_permission_profile=None)
                     try:
                         topic = legacy.observe_topic(
                             project_id="example-project",
@@ -528,6 +526,7 @@ class ProviderJobQueueTests(unittest.TestCase):
                     finally:
                         legacy.close()
 
+                project_historical_database(source_path, path, 35)
                 migrated = HubState.open(path, codex_permission_profile=None)
                 try:
                     canonical_notices = migrated.task_notices.notices_for_stop(original)

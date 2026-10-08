@@ -100,7 +100,7 @@ def codex_failure_notice(
         )
     reason = getattr(error, "failure_reason", codex_failure_reason(error))
     causes = {
-        "permission_policy_changed": "Codex permission selection changed during the task; Hub requested interruption.",
+        "permission_policy_changed": "Codex permission selection changed during the task.",
         "rate_limited": "Codex stopped after a provider rate-limit error (429 or usage limit).",
         "connection_lost": "Hub lost the connection to Codex before confirming completion.",
         "timeout": "Hub timed out waiting for Codex to confirm completion.",

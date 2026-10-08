@@ -70,6 +70,7 @@ class SessionAdoptionJourneyTests(unittest.TestCase):
             calls = []
             root = fixture.root
             backend = source
+            native_turn_count = 0
 
             class Client(worker_fixtures.WorkerClient):
                 def read_thread_metadata(self, **kwargs):
@@ -86,9 +87,12 @@ class SessionAdoptionJourneyTests(unittest.TestCase):
                     return CodexThread("example-thread", root, "gpt-5.6-sol", backend)
 
                 def start_turn(self, **kwargs):
+                    nonlocal native_turn_count
                     calls.append(("turn", kwargs["thread_id"]))
                     assert "Old topic quote" not in kwargs["text"]
-                    return super().start_turn(**kwargs)
+                    native_turn_count += 1
+                    super().start_turn(**kwargs)
+                    return f"example-turn-{native_turn_count}"
 
                 def wait_for_turn(self, turn_id):
                     return TurnResult(" | ".join(native_history), None, None)

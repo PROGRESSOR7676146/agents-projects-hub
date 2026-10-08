@@ -78,14 +78,13 @@ class TaskActivityDatabaseIntegrationTests(unittest.TestCase):
         return job
 
     def seed_v36(self):
-        from tests.schema_fixtures import legacy_selection_columns
+        from tests.schema_fixtures import project_historical_database
 
-        with (
-            patch.object(migrations, "LATEST_SCHEMA_VERSION", 36),
-            legacy_selection_columns(self.path),
-        ):
+        source_path = self.path.with_name("example-current-seed.db")
+        self.fixture.config = replace(self.fixture.config, state_path=source_path)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
             self.fixture.ready_outbox("antigravity", 501)
-            state = HubState.open(self.path, codex_permission_profile=None)
+            state = HubState.open(source_path, codex_permission_profile=None)
             try:
                 job = self.enqueue(state, 502)
                 leased = state.lease_provider_job("opencode", "example-worker")
@@ -113,6 +112,8 @@ class TaskActivityDatabaseIntegrationTests(unittest.TestCase):
                     )
             finally:
                 state.close()
+        project_historical_database(source_path, self.path, 36)
+        self.fixture.config = replace(self.fixture.config, state_path=self.path)
 
     def snapshot(self, connection):
         return {

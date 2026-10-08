@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import patch
 
-from hermes_codex_router.codex_appserver import RpcRejectedError
+from hermes_codex_router.codex_appserver import RpcRejectedError, StoredTurnOutcome
 from hermes_codex_router.codex_live_control import CodexLiveControl, CodexLiveControlError
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.sqlite_contention import is_sqlite_contention
@@ -35,6 +35,9 @@ class ControlClient:
         if self.error is not None:
             raise self.error
         return kwargs["turn_id"]
+
+    def read_turn_outcome(self, **kwargs: Any) -> StoredTurnOutcome:
+        return StoredTurnOutcome("active")
 
     def interrupt_turn(self, **kwargs: Any) -> None:
         self.interrupts.append(kwargs)
@@ -101,6 +104,85 @@ class CodexLiveControlTests(unittest.TestCase):
         )
         return request
 
+    def test_socket_stop_without_send_keeps_primary_stream_open(self) -> None:
+        request = self.stop_request()
+        for failure in ("acquire", "read", "unknown", "guard"):
+            with self.subTest(failure=failure):
+                closed = []
+
+                def acquire():
+                    if failure == "acquire":
+                        raise OSError("Example temporary connection failure")
+                    return self.client
+
+                control = CodexLiveControl(
+                    config=self.fixture.config,
+                    state_factory=lambda: self.state,
+                    client_factory=acquire,
+                    job=self.job,
+                    worker_id="example-worker",
+                    thread_id="thread-1",
+                    turn_id="turn-1",
+                    transport_mode="socket",
+                    close_owned_turn_client=lambda: closed.append(True),
+                )
+                with (
+                    patch.object(
+                        self.client,
+                        "read_turn_outcome",
+                        side_effect=OSError("Example unavailable observation")
+                        if failure == "read"
+                        else None,
+                        return_value=StoredTurnOutcome(
+                            "unknown" if failure == "unknown" else "active"
+                        ),
+                    ),
+                    patch(
+                        "hermes_codex_router.codex_live_control.begin_codex_interrupt",
+                        return_value=None,
+                    ),
+                ):
+                    control._interrupt(self.state, request)
+                self.assertEqual(closed, [])
+                self.assertEqual(self.client.interrupts, [])
+                target = self.state.codex_controls.read(self.job.job_id)
+                assert target is not None
+                self.assertIsNone(target["send_started_at"])
+
+    def test_post_send_completion_contention_still_wakes_primary_without_second_rpc(self) -> None:
+        request = self.stop_request()
+        closed = []
+        control = CodexLiveControl(
+            config=self.fixture.config,
+            state_factory=lambda: self.state,
+            client_factory=lambda: self.client,
+            job=self.job,
+            worker_id="example-worker",
+            thread_id="thread-1",
+            turn_id="turn-1",
+            transport_mode="socket",
+            close_owned_turn_client=lambda: closed.append(True),
+        )
+        from hermes_codex_router.codex_appserver import TurnResult
+
+        with (
+            patch.object(
+                self.client,
+                "read_turn_outcome",
+                side_effect=[
+                    StoredTurnOutcome("active"),
+                    StoredTurnOutcome("completed", TurnResult("Example saved final", None, None)),
+                ],
+            ),
+            patch.object(ExecutionJournal, "record_completion", side_effect=busy()),
+            self.assertRaises(sqlite3.OperationalError),
+        ):
+            control._interrupt(self.state, request)
+        self.assertEqual(len(self.client.interrupts), 1)
+        self.assertEqual(closed, [True])
+        control._interrupt(self.state, request)
+        self.assertEqual(len(self.client.interrupts), 1)
+
     def control(self, *, decorate=lambda state: None, before_open=lambda: None, **changes):
         def state_factory():
             before_open()
@@ -114,6 +196,7 @@ class CodexLiveControlTests(unittest.TestCase):
             return state
 
         options: dict[str, Any] = dict(
+            config=self.fixture.config,
             state_factory=state_factory,
             client_factory=lambda: self.client,
             job=self.job,
@@ -158,7 +241,10 @@ class CodexLiveControlTests(unittest.TestCase):
         control.stop_and_join()
         self.assertEqual((attempts, lookup_attempts), (2, 2))
         self.assertEqual(len(self.client.interrupts), 1)
-        self.assertEqual(self.client.interrupts[0], {"thread_id": "thread-1", "turn_id": "turn-1"})
+        self.assertEqual(
+            {key: self.client.interrupts[0][key] for key in ("thread_id", "turn_id")},
+            {"thread_id": "thread-1", "turn_id": "turn-1"},
+        )
         self.assertEqual(control.confirmed_interrupt_request, request)
         self.assertEqual(self.state.get_provider_job(self.job.job_id).status, "executing")
 
@@ -438,6 +524,7 @@ class CodexLiveControlTests(unittest.TestCase):
                 assert child is not None and child.lease_token is not None
                 original = busy(sqlite3.SQLITE_ERROR)
                 control = CodexLiveControl(
+                    config=self.fixture.config,
                     state_factory=lambda: self.state,
                     client_factory=lambda: self.client,
                     job=self.job,
@@ -493,6 +580,7 @@ class CodexLiveControlTests(unittest.TestCase):
 
     def test_running_preserves_primary_error_and_reports_independent_shutdown_failure(self) -> None:
         control = CodexLiveControl(
+            config=self.fixture.config,
             state_factory=lambda: self.state,
             client_factory=lambda: self.client,
             job=self.job,
@@ -523,6 +611,7 @@ class CodexLiveControlTests(unittest.TestCase):
         child = self.fixture.enqueue(2, "Example follow-up")
         self.client.error = RpcRejectedError("Example unsupported steering")
         control = CodexLiveControl(
+            config=self.fixture.config,
             state_factory=lambda: self.state,
             client_factory=lambda: self.client,
             job=self.job,
@@ -541,6 +630,7 @@ class CodexLiveControlTests(unittest.TestCase):
         child = self.fixture.enqueue(2, "Example follow-up")
         self.client.error = RpcRejectedError("Example unsupported steering")
         control = CodexLiveControl(
+            config=self.fixture.config,
             state_factory=lambda: self.state,
             client_factory=lambda: self.client,
             job=self.job,
@@ -560,13 +650,14 @@ class CodexLiveControlTests(unittest.TestCase):
         self.assertEqual(len(self.client.steers), 1)
         self.assertEqual(self.state.get_provider_job(child).status, "queued")
         request = self.stop_request()
-        control._interrupt(request)
+        control._interrupt(self.state, request)
         self.assertEqual(len(self.client.interrupts), 1)
         self.assertEqual(control.confirmed_interrupt_request, request)
 
     def test_busy_absorption_does_not_attempt_uncertainty_marking(self) -> None:
         self.fixture.enqueue(2, "Example follow-up")
         control = CodexLiveControl(
+            config=self.fixture.config,
             state_factory=lambda: self.state,
             client_factory=lambda: self.client,
             job=self.job,

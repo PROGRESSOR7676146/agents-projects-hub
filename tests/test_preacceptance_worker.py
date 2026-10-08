@@ -280,14 +280,11 @@ class PreacceptanceWorkerTests(unittest.TestCase):
                     ]
                 )
                 client = CodexAppServerClient(transport, initialized=True)
-                f = self.fixture
-                # Use a fresh prepared job for each method without rotating the runtime epoch.
-                with f.state._connection:
-                    f.state._connection.execute(
-                        "UPDATE provider_execution_checkpoints SET provider_turn_id=NULL"
-                    )
-                    f.state._connection.execute("DELETE FROM preacceptance_requests")
-                    f.state._connection.execute("DELETE FROM preacceptance_scopes")
+                # Each case uses a new prepared job; accepted authority is never reset.
+                f = fixtures.PreacceptanceApprovalTests()
+                f.setUp()
+                self.addCleanup(f.doCleanups)
+                self.fixture = f
                 with (
                     patch.object(
                         PreacceptanceApprovalState,

@@ -606,7 +606,35 @@ recreate unsaved provider context or a partially executed turn.
   proof before control. Crash after send-start permits observation only, never
   an automatic repeat interrupt; another stop cannot reset that target's budget.
   Expired claims alone MUST NOT establish that the old control process ceased.
-  Durable control fencing and late-stop service remain pending in this slice.
+  The schema48 candidate MUST create fresh control authority atomically with
+  the first coherent exact accepted checkpoint. Refused control coherence MUST
+  retain the returned native turn identity without granting authority; another
+  job or repeated recording MUST NOT upgrade that retained target.
+  Historical checkpoints MUST remain
+  read-only and MUST NOT gain interrupt authority from migration or repeated
+  recording. Exact native thread/turn identity MUST have one permanent
+  send-start fence across live, protective, late and permission-drift paths.
+  A late cycle MUST consume its persisted allowance before connecting: at most
+  three cycles, separated by 30 seconds. Only the current invocation lease or
+  current late-read claim, never both, MAY authorize a send. A fresh exact active
+  observation MUST be no older than five seconds when the state transaction
+  validates it; registry/root and retained binding MUST be rechecked.
+  Only a matched ACK/rejection with an ended send path, or an owner-authenticated
+  proof that the interrupt client method was never called, MAY establish sender
+  quiescence. The latter MUST retain the permanent fence and MUST NOT establish
+  native terminality. Shutdown MUST protect a reserved send through bounded
+  settlement; transient state contention MAY retry that write, never the RPC.
+  Native terminality alone MUST NOT clear an unquiesced control
+  owner. Productive admission, control changes, writer transfer, adoption,
+  relocation, lane maintenance and drain MUST retain that root exclusion.
+  An unresolved retained scope MUST block and visibly dispose only its own
+  input/queued work, without attributing an unrelated owner or aborting another
+  topic's delivery cycle.
+  Completed text withheld after a covering stop MUST remain saved privately
+  without a result publication or automatic replay. Embedded and external
+  consumers MUST share these guards and independent late maintenance, without
+  weakening mandatory progress/result handling. Candidate validation and
+  deployment acceptance remain separate.
   Telegram ingress and egress loss MUST be distinguished from native stream
   loss. Passive aggregate health, silence, typing, sender 429 or another topic's
   success MUST NOT establish the exact topic's controllability. Any future

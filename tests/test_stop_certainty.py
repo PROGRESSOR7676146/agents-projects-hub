@@ -34,6 +34,10 @@ class StopCertaintyTests(unittest.TestCase):
                             raise RuntimeError("fictional transport loss; turn outcome unconfirmed")
 
                     class ControlClient:
+                        def read_turn_outcome(self, **_kwargs: object) -> StoredTurnOutcome:
+                            # Fresh owning-server proof is now required before send.
+                            return StoredTurnOutcome("active")
+
                         def interrupt_turn(self, **_kwargs: object) -> None:
                             interrupted.set()
                             released.set()

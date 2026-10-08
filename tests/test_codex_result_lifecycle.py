@@ -42,6 +42,7 @@ class ResultLifecycleTests(unittest.TestCase):
                 return super().resume_thread(**kwargs)
 
         clients = [Client(), Client()]
+        clients[1].turn_id_offset = 1
 
         class Supervisor(external.WorkerSupervisor):
             calls = 0

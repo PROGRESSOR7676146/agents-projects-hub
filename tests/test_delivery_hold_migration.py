@@ -12,24 +12,22 @@ from hermes_codex_router import migrations
 from hermes_codex_router.cli import main
 from hermes_codex_router.state import HubState, StateError
 from tests import test_outbox_sender as fixtures
-from tests.schema_fixtures import legacy_delivery_hold_schema
+from tests.schema_fixtures import project_historical_database
 from tests.test_delivery_certainty_migration import snapshot
 
 
 class DeliveryHoldMigrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fixture = fixtures.TelegramOutboxSenderTests()
-        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 44):
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
             self.fixture.setUp()
             migrations.migrate_database(self.fixture.config.state_path, create_backup=False)
         self.addCleanup(self.fixture.tearDown)
-        with (
-            patch.object(migrations, "LATEST_SCHEMA_VERSION", 44),
-            closing(sqlite3.connect(self.fixture.config.state_path)) as bridge,
-            legacy_delivery_hold_schema(bridge),
-        ):
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
             self.job_id = self.fixture.ready_outbox("opencode", 91)
-        self.path = self.fixture.config.state_path
+        source_path = self.fixture.config.state_path
+        self.path = source_path.with_name("example-historical.db")
+        project_historical_database(source_path, self.path, 43)
         with closing(sqlite3.connect(self.path)) as db, db:
             self.outbox_id = db.execute(
                 "SELECT outbox_id FROM telegram_outbox WHERE job_id=?", (self.job_id,)
@@ -38,16 +36,7 @@ class DeliveryHoldMigrationTests(unittest.TestCase):
                 "UPDATE telegram_outbox SET status='unknown',error_code='example_unknown' WHERE outbox_id=?",
                 (self.outbox_id,),
             )
-            self.assertEqual(
-                db.execute("SELECT COUNT(*) FROM telegram_delivery_hold_dispositions").fetchone()[
-                    0
-                ],
-                0,
-            )
             db.execute("UPDATE topics SET execution_scope=?", ("root:" + str(self.fixture.base),))
-            db.execute("DROP TRIGGER telegram_delivery_hold_topic_binding_guard")
-            db.execute("DROP TABLE telegram_delivery_hold_dispositions")
-            db.execute("PRAGMA user_version=43")
 
     def test_populated_additive_upgrade_consistent_private_backup_and_idempotence(self) -> None:
         with sqlite3.connect(self.path) as old:

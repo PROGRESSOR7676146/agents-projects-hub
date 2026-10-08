@@ -17,7 +17,9 @@ from .codex_appserver import (
     CodexAppServerClient,
     RpcError,
 )
+from .codex_execution_control import wait_for_controlled_codex_turn
 from .codex_failure import codex_preparation, uncertain_provider_notice
+from .codex_late_control import CodexControlMaintenance
 from .codex_recovery import (
     reconcile_codex_completion,
     recover_codex_job,
@@ -147,7 +149,6 @@ from .worker_execution import (
     revalidate_worker_execution_root,
     start_codex_provider_turn,
     validate_provider_worker_binding,
-    wait_for_codex_provider_turn,
 )
 from .worker_failure_notice import commit_worker_failure_notice
 
@@ -281,6 +282,7 @@ class ProjectHubService:
         }
         self._queue_stop = threading.Event()
         self._queue_thread: threading.Thread | None = None
+        self._codex_maintenance: list[tuple[CodexControlMaintenance, threading.Thread]] = []
         self._outbox_stop = threading.Event()
         self._outbox_thread: threading.Thread | None = None
         self._outbox_agent_cursor = 0
@@ -425,6 +427,13 @@ class ProjectHubService:
             queue_thread.join(timeout=5)
             if queue_thread.is_alive():
                 close_error = ServiceError("embedded queue consumer did not stop")
+        for maintenance, thread in getattr(self, "_codex_maintenance", ()):
+            maintenance.close_client()
+            thread.join(timeout=20)
+            if thread.is_alive():
+                close_error = close_error or ServiceError(
+                    "embedded Codex control shutdown unconfirmed"
+                )
         outbox_stop = getattr(self, "_outbox_stop", None)
         outbox_thread = getattr(self, "_outbox_thread", None)
         if outbox_stop is not None:
@@ -734,6 +743,28 @@ class ProjectHubService:
             name="hub-embedded-queue",
             daemon=True,
         )
+        self._codex_maintenance = []
+        if self.supervisor is not None:
+            supervisor = self.supervisor
+            for agent in self.config.agents:
+                if agent.runtime != "codex" or not self._embedded_consumer_owns_agent(
+                    agent.agent_id
+                ):
+                    continue
+                maintenance = CodexControlMaintenance(
+                    self.config,
+                    worker_id="embedded-control",
+                    agent_id=agent.agent_id,
+                    client_factory=lambda deadline: supervisor.client(
+                        allow_fallback=False, deadline=deadline
+                    ),
+                    stop=self._queue_stop,
+                )
+                thread = threading.Thread(
+                    target=maintenance.run_forever, name="hub-embedded-control", daemon=True
+                )
+                self._codex_maintenance.append((maintenance, thread))
+                thread.start()
         self._queue_thread.start()
 
     def _start_controller_outbox_delivery(self) -> None:
@@ -1002,18 +1033,22 @@ class ProjectHubService:
                     local_image_paths=prepared.local_image_paths,
                 )
                 journal.record_turn(executing.job_id, token, turn_id)
-                client.on_visible_item = lambda item_id, text, phase: journal.record_item(
-                    executing.job_id, token, item_id, text, phase
+                accepted_supervisor = self.supervisor
+                assert accepted_supervisor is not None
+                result = wait_for_controlled_codex_turn(
+                    client,
+                    queue_state,
+                    self.config,
+                    journal=journal,
+                    job=executing,
+                    worker_id="embedded-consumer",
+                    thread_id=thread.thread_id,
+                    turn_id=turn_id,
+                    transport_mode=codex_transport_mode,
+                    client_factory=lambda: accepted_supervisor.client(
+                        allow_fallback=False, deadline=time.monotonic() + 2
+                    ),
                 )
-                client.on_completed = lambda result: journal.record_completion(
-                    executing.job_id, token, result.text
-                )
-                try:
-                    result = wait_for_codex_provider_turn(client, turn_id)
-                    journal.record_completion(executing.job_id, token, result.text)
-                finally:
-                    client.on_visible_item = None
-                    client.on_completed = None
                 post_completion_context(queue_state, executing.session_id, result)
                 provider_session_id = thread.thread_id
                 actual_model = thread.model
@@ -1146,6 +1181,12 @@ class ProjectHubService:
                         telegram_html=exc.public_message,
                     )
                 elif recovered or failure.notice == "emergency_stop":
+                    if failure.notice == "emergency_stop":
+                        current = queue_state.get_provider_job(executing.job_id)
+                        if current.status == "executing" and current.lease_token == token:
+                            queue_state.cancel_active_provider_job(
+                                executing.job_id, token, complete_stops=True
+                            )
                     queue_state.record_runtime_event(
                         agent.agent_id,
                         "info",

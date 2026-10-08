@@ -531,6 +531,13 @@ The control-loss witness closes only the primary Hub connection while the
 native turn remains active. A fresh actual Hub client reads the exact target,
 interrupts it once and independently proves it interrupted, with one local
 Responses request and no start/resume/steer on that recovery connection.
+The schema48 candidate wires the real Hub checkpoint/control journal into this
+witness: accepted identity, send-start hash, matched ACK, quiesced sender and
+one permanent send are asserted without a hardcoded authorization callback.
+State/runtime regressions cover competing live/protective control, late cycles
+and replaced claims, native terminality with unknown sender, satellite/alias
+identity, withheld raw completion and embedded progress, stop and no-fallback
+maintenance wiring.
 Both witnesses passed with Codex 0.159.2. These are offline native protocol
 observations, with no real auth, remote inference, installed service, Telegram
 or human approval. Late-stop maintenance, ingress-loss policy and live

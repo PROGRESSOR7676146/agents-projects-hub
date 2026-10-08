@@ -10,27 +10,23 @@ from unittest.mock import patch
 from hermes_codex_router import migrations
 from hermes_codex_router.state import HubState
 from tests import test_outbox_sender as fixtures
-from tests.schema_fixtures import legacy_delivery_hold_schema
+from tests.schema_fixtures import project_historical_database
 from tests.test_delivery_certainty_migration import snapshot
 
 
 class DeliveryControlMigrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fixture = fixtures.TelegramOutboxSenderTests()
-        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 45):
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
             self.fixture.setUp()
             migrations.migrate_database(self.fixture.config.state_path, create_backup=False)
             self.addCleanup(self.fixture.tearDown)
-            with (
-                closing(sqlite3.connect(self.fixture.config.state_path)) as bridge,
-                legacy_delivery_hold_schema(bridge),
-            ):
-                self.job_id = self.fixture.ready_outbox("opencode", 161)
-        self.path = self.fixture.config.state_path
+            self.job_id = self.fixture.ready_outbox("opencode", 161)
+        source_path = self.fixture.config.state_path
+        self.path = source_path.with_name("example-historical.db")
         with (
-            patch.object(migrations, "LATEST_SCHEMA_VERSION", 45),
-            closing(HubState.open(self.path, codex_permission_profile=None)) as state,
-            legacy_delivery_hold_schema(state._connection),
+            patch.object(migrations, "LATEST_SCHEMA_VERSION", 48),
+            closing(HubState.open(source_path, codex_permission_profile=None)) as state,
         ):
             db = state._connection
             with db:
@@ -84,6 +80,7 @@ class DeliveryControlMigrationTests(unittest.TestCase):
                                'example-time','example-time','example-time')""",
                     (item, self.job_id, outbox.chat_id, outbox.thread_id),
                 )
+        project_historical_database(source_path, self.path, 45)
 
     def test_populated_upgrade_preserves_rows_triggers_and_private_consistent_backup(self) -> None:
         with closing(sqlite3.connect(self.path)) as old:

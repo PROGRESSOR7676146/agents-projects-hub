@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import patch
 
-from hermes_codex_router import external_worker
+from hermes_codex_router import codex_execution_control as external_worker
 from hermes_codex_router.codex_appserver import RpcRejectedError, TurnResult
 from hermes_codex_router.codex_live_control import CodexLiveControl, CodexLiveControlError
 from hermes_codex_router.execution_journal import ExecutionJournal
@@ -25,6 +25,57 @@ class CodexLiveControlWorkerTests(unittest.TestCase):
         self.fixture = fixtures.CodexQueueWorkerTests()
         self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
+
+    def test_failed_stop_keeps_progress_and_withheld_final_without_replay(self) -> None:
+        job_id = self.fixture.enqueue()
+        controls = []
+        closed = threading.Event()
+        remained_connected = []
+
+        class Client(CallbackClient):
+            def wait_for_turn(self, _turn_id: str) -> TurnResult:
+                request, _, _ = worker.state.request_emergency_stop(
+                    topic_id=controls[0].job.topic_id,
+                    chat_id=controls[0].job.chat_id,
+                    message_id=99,
+                    target_agent_id="codex",
+                )
+                controls[0]._interrupt(worker.state, request)
+                remained_connected.append(not closed.is_set())
+                self.on_visible_item("example-progress", "Example retained progress", "commentary")
+                return TurnResult("Example privately saved final after failed stop", 1000, 100)
+
+            def close(self) -> None:
+                closed.set()
+
+        class FailedStopControl(CodexLiveControl):
+            def start(self) -> None:
+                def unavailable():
+                    raise OSError("Example temporary no-fallback control failure")
+
+                self.client_factory = unavailable
+                controls.append(self)
+
+        client = Client()
+        worker = self.fixture.worker(client)
+        try:
+            with patch.object(external_worker, "CodexLiveControl", FailedStopControl):
+                self.assertTrue(worker.run_cycle())
+            self.assertEqual(remained_connected, [True])
+            self.assertEqual(client.turns, 1)
+            self.assertEqual(worker.state.get_provider_job(job_id).status, "cancelled")
+            checkpoint = ExecutionJournal(worker.state).read(job_id)
+            assert checkpoint is not None
+            self.assertEqual(
+                checkpoint["completed_text"], "Example privately saved final after failed stop"
+            )
+            target = worker.state.codex_controls.read(job_id)
+            assert target is not None
+            self.assertIsNone(target["send_started_at"])
+            with self.assertRaises(StateError):
+                worker.state.get_provider_result(job_id)
+        finally:
+            worker.close()
 
     def test_fatal_control_observer_failure_wakes_native_wait_before_failure_commit(self) -> None:
         job_id = self.fixture.enqueue()

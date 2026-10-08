@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .codex_control_predicates import require_control_scope_clear
 from .delivery_control_predicates import (
     final_control_reconciled,
     progress_control_reconciled,
@@ -694,6 +695,11 @@ class ProjectEditStore:
                     )
                     if target_display is None or target_root is None:
                         raise StateError("project_edit_incomplete")
+                    if workflow.operation == "relocate":
+                        require_control_scope_clear(self.connection, f"root:{workflow.old_root}")
+                        require_control_scope_clear(
+                            self.connection, f"root:{target_root.resolve(strict=False)}"
+                        )
                     already_written = (
                         current_display == target_display
                         and current_root == target_root.resolve(strict=False)

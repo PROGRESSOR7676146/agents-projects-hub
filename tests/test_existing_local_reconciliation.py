@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import closing
 from typing import Any, cast
 
 import test_codex_worker as fixtures
@@ -75,6 +76,29 @@ class ExistingLocalReconciliationTests(unittest.TestCase):
         }
         arguments.update(overrides)
         return reconcile_existing_local(self.fixture.config, **arguments)
+
+    def test_exact_terminal_proof_cannot_release_unquiesced_control_sender(self) -> None:
+        with closing(
+            HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
+        ) as state:
+            with state._immediate_transaction():
+                state._connection.execute(
+                    """UPDATE codex_turn_controls SET send_started_at='example-start',
+                       send_owner_token_hash='example-crashed-owner',interrupt_source='protective'
+                       WHERE job_id=?""",
+                    (self.job_id,),
+                )
+        with self.assertRaises(StateError):
+            self.reconcile(apply=True, confirm_cli_closed=True)
+        with closing(
+            HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
+        ) as state:
+            self.assertEqual(state.get_session(self.session_id).writer_mode, "telegram")
+            self.assertIsNone(
+                state._connection.execute(
+                    "SELECT 1 FROM provider_turn_terminal_evidence WHERE job_id=?", (self.job_id,)
+                ).fetchone()
+            )
 
     def test_preview_and_exact_closed_cli_claim_preserve_old_job_and_session(self) -> None:
         preview = self.reconcile()

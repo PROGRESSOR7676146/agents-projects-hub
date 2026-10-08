@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
-from contextlib import closing
 from dataclasses import replace
 from unittest.mock import patch
 
 from hermes_codex_router import migrations
 from tests import test_outbox_sender as outbox_fixtures
 from tests import test_progress_delivery as progress_fixtures
-from tests.schema_fixtures import legacy_delivery_hold_schema
+from tests.schema_fixtures import project_historical_database
 
 
 def snapshot(connection: sqlite3.Connection) -> dict[str, list[tuple]]:
@@ -27,11 +26,12 @@ class DeliveryCertaintyMigrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.enterContext(patch.object(migrations, "LATEST_SCHEMA_VERSION", 43))
         progress = progress_fixtures.DurableProgressDeliveryTests()
-        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 42):
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
             progress.setUp()
         self.addCleanup(progress.tearDown)
-        self.path = progress.config.state_path
-        with closing(sqlite3.connect(self.path)) as bridge, legacy_delivery_hold_schema(bridge):
+        source_path = progress.config.state_path
+        self.path = source_path.with_name("example-historical.db")
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
             job_id, token, journal = progress.executing_job()
             journal.record_item(job_id, token, "example-progress", "Example progress", "commentary")
             progress.state.commit_provider_result(
@@ -45,11 +45,12 @@ class DeliveryCertaintyMigrationTests(unittest.TestCase):
             fixture = outbox_fixtures.TelegramOutboxSenderTests()
             fixture.setUp()
             self.addCleanup(fixture.tearDown)
-            fixture.config = replace(fixture.config, state_path=self.path)
-            with patch.object(migrations, "LATEST_SCHEMA_VERSION", 42):
+            fixture.config = replace(fixture.config, state_path=source_path)
+            with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
                 self.sending_job = fixture.ready_outbox("opencode", 81)
                 self.delivered_job = fixture.ready_outbox("opencode", 82)
                 self.failed_job = fixture.ready_outbox("opencode", 83)
+        project_historical_database(source_path, self.path, 42)
         with sqlite3.connect(self.path) as old:
             old.execute(
                 """UPDATE telegram_outbox SET status='sending', lease_owner='example-sender',

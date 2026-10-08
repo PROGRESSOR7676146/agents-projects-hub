@@ -235,7 +235,7 @@ class ManagedCodexPermissionTests(unittest.TestCase):
         self.open_thread(client)
         self.assertEqual(self.start_turn(client), "example-turn")
 
-    def test_policy_drift_after_acceptance_interrupts_and_retains_uncertainty(self) -> None:
+    def test_policy_drift_after_acceptance_wakes_worker_without_unfenced_interrupt(self) -> None:
         for change in (
             {"activePermissionProfile": None},
             {"sandboxPolicy": {**self.metadata()["sandbox"], "networkAccess": True}},
@@ -258,11 +258,7 @@ class ManagedCodexPermissionTests(unittest.TestCase):
             self.start_turn(client)
             with self.subTest(change=change), self.assertRaises(CodexTurnError):
                 client.wait_for_turn("example-turn")
-            self.assertEqual(transport.sent[-1]["method"], "turn/interrupt")
-            self.assertEqual(
-                transport.sent[-1]["params"],
-                {"threadId": "example-thread", "turnId": "example-turn"},
-            )
+            self.assertNotIn("turn/interrupt", [message["method"] for message in transport.sent])
 
     def test_profile_pagination_is_bounded_and_malformed_or_cyclic_metadata_refuses(self) -> None:
         for cursor in (True, "", "x" * 2049, "example-cycle"):
@@ -292,7 +288,7 @@ class ManagedCodexPermissionTests(unittest.TestCase):
         with self.assertRaises(CodexPermissionProfileError):
             verify_managed_selection(timed_out, PROFILE, self.root)
 
-    def test_drift_before_acceptance_is_reported_after_acceptance_with_interrupt(self) -> None:
+    def test_drift_before_acceptance_wakes_worker_after_acceptance(self) -> None:
         transport = self.transport(tail=[{"id": 5, "result": {}}])
         transport.incoming.insert(
             3,
@@ -309,7 +305,7 @@ class ManagedCodexPermissionTests(unittest.TestCase):
         self.assertEqual(self.start_turn(client), "example-turn")
         with self.assertRaises(CodexTurnError):
             client.wait_for_turn("example-turn")
-        self.assertEqual(transport.sent[-1]["method"], "turn/interrupt")
+        self.assertNotIn("turn/interrupt", [message["method"] for message in transport.sent])
 
     def test_settings_drift_during_thread_preparation_refuses_before_turn(self) -> None:
         for resume in (False, True):

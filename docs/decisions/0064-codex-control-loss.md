@@ -51,16 +51,58 @@ explicit protective deadlines still bound both phases.
 
 ## Remaining control stages
 
-Stage 2 adds one state-owned exact-target control journal and a maintenance
+The schema48 Stage 2 candidate adds a state-owned control journal and maintenance
 handler independent of productive execution. A pending stop covering an
 indeterminate Codex turn retains its original provenance. Three bounded read
 cycles, 30 seconds apart, cannot reset on another stop. Only a proven active exact
 turn permits the one send-start-fenced interrupt; subsequent cycles read only.
 Crash after that fence does not authorize resubmission. Live/protective/late
-paths must share the fence. Lease expiry does not prove the old process or RPC
+and permission-drift paths share the fence. Lease expiry does not prove the old process or RPC
 stopped; local takeover remains blocked while control ownership is unconfirmed.
 TurnObservation remains read-only, with terminal commit logic shared separately.
 This journal/handler is not implemented by stage 1.
+
+ExecutionJournal creates `accepted_v48` authority in the first exact acceptance
+transaction when binding is coherent. Domain refusal commits the returned native
+identity without a control row, then wakes recovery. Repetition cannot upgrade
+it; duplicate exclusion includes checkpoints without authority rows.
+Migration preserves old exact checkpoints as `legacy_read_only`;
+repeated recording cannot upgrade missing or historical authority. Native
+thread/turn deduplication spans roots. The journal stores a sender-token hash;
+raw finish authority stays in the sender's memory. Begin validates one current
+invocation lease or late-read claim, immutable permission/binding snapshot,
+canonical registry root and a finite exact active observation no older than five
+seconds, after acquiring the transaction lock. Remaining RPC budget is checked
+again before sending.
+
+Matched ACK or rejection plus an ended send path quiesces the sender; it does
+not prove native terminality. A pre-client-call deadline refusal records
+`not_sent`, quiescing only that owner while retaining its permanent fence.
+Exceptions inside the client call remain unknown. A shared phase guard reserves
+the send before durable begin; shutdown closes it only after bounded settlement.
+Matched evidence remains in memory through a two-second state-only retry window;
+one SQLite busy timeout may exceed that window. Optional runtime writes occur
+after the RPC/settlement.
+Unknown send, timeout, closure and claim expiry
+leave the owner fenced independently of job/terminal state. Productive,
+session, writer, adoption, relocation, lane and drain boundaries check that
+saved canonical root. Conservative unresolved legacy aliases fail closed only
+when a control owner exists. Typed scope refusal and a durable notice marker
+isolate unresolved topics from unrelated sender work. ObservedTurnResults owns
+exact terminal application,
+including satellite/alias identity and saved raw completion when stop withholds
+publication. It cannot clear sender ownership.
+
+External workers and the embedded consumer share the accepted wait and independent
+maintenance, each with its own state connection and fresh owning client without
+fallback. Shutdown closes only owned clients with bounded joins; unconfirmed
+shutdown cannot clear the fence. Source validation and separately authorized
+exact-revision live acceptance remain required.
+
+Physical lane cleanup has a separate pre-existing admission race: preflight and
+post-Git checks cannot reserve maintenance across the filesystem operation.
+Follow-up is a scoped maintenance reservation; holding SQLite locks across slow
+Git operations could break another turn's durable checkpoints.
 
 Stage 3 defines precautionary ingress-loss behavior separately. Existing passive
 poll and sender signals can establish recent successful operations or observed
@@ -75,7 +117,7 @@ The primary development agent owns integration. ExecutionJournal owns the
 checkpoint/lease transaction; existing state owns terminal/result commits.
 Workers own fresh control clients and cleanup. The helper issues no productive
 RPC or approval answer. No schema, migration or sender authority is added in
-stage 1. Stage 2 needs an additive control journal rather than reusing the
+stage 1. Stage 2 uses an additive control journal rather than reusing the
 unrelated observation attempt budget.
 
 Scripted RPC/worker tests cover 129+ sequential pairs, typed duplicates, saturation,

@@ -510,16 +510,24 @@ acceptance.
   retirement permits this mechanism. Keep foreign filtering independently of
   cleanup; native mechanism evidence is not installed-source attribution.
   Transport/retirement gates and coordinated live acceptance remain separate.
-- **Accepted-turn control loss:** source fix over `2f8e8bf` is under validation,
+- **Accepted-turn control loss:** Stage 1 published at
+  `fe7bb51ffa8dc491a33c624614dcff57ab40208d`; schema48 Stage 2 is under validation,
   owned by the lead agent. Resolved IDs free pending capacity; bounded typed
   history prevents reopening, and optional exhaustion preserves mandatory
   consumption. Fatal control-observer failure wakes the owning worker for exact
   recovery. Offline native 129-pair/final and control-loss witnesses passed.
-  Next trigger: independent review/publication,
-  then shared durable control fencing and late pending-stop service. Telegram
+  Stage 2 adds shared durable fencing and independent late pending-stop service;
+  next trigger is final review and canonical publication gates. Telegram
   ingress/egress loss requires its own policy/evidence. Full incident closure and
   deployment remain open; see [acceptance/runbook](CODEX_CONTROL_LOSS.md) and
   [ADR 0064](../decisions/0064-codex-control-loss.md). No automatic replay.
+  Lead also owns a future unknown-sender reconciliation boundary: independently
+  prove the send path ended; neither terminal proof nor expiry may reset it.
+- **Lane cleanup admission race:** a preflight root guard and post-Git recheck
+  do not reserve maintenance during physical cleanup. Lead owns the existing
+  follow-up: add a scoped maintenance reservation before extending cleanup,
+  without holding SQLite locks across Git subprocesses. This is separate from
+  the accepted-turn sender fence; no live cleanup is authorized here.
 - The Codex daemon moved its shared socket into `/tmp/codex-daemon-UID`, which
   the Hub units' `PrivateTmp` hid (found 2026-09-29). Since about 2026-09-27
   the Codex worker ran on the stdio fallback, without companion approvals, and
@@ -651,24 +659,19 @@ branch name; it performs connection retirement without an unsubscribe RPC.
 Base/last canonical verified revision is
 `9a70840f362bd28f860c9bede44ecacefebd3307` on `fix/codex-stdio-backpressure`.
 The native notification test dependency comes from the independently reviewed
-source corpus at `dc289f816cb6f83ae36641f89af857aa75cefd1e`; this slice shortens
-its disposable endpoint directory to fit the Unix socket pathname limit
-when the real Hub transport resolves a pinned descriptor, and stamps the scripted
-message's final-answer phase for exact stored-output assertions.
+source corpus at `dc289f816cb6f83ae36641f89af857aa75cefd1e`, with a shorter
+disposable socket path and explicit final phase for exact stored-output assertions.
 After integration, recheck tracked/staged/untracked lane state before any removal.
 Next trigger: exact clean publication, required Claude review, then an explicitly
 authorized integration and live canary. No deployment acceptance is claimed.
 
-Architecture review retained HubState as transaction owner, workers/Controller
-as invocation and cache owners, and transports as connection cleanup owners.
+HubState owns transactions, workers/Controller invocation and caches, transports cleanup.
 `codex_connection_completion` owns exact completion proof;
 `codex_result_lifecycle` owns optional context/quota and survived cleanup/report
 failures; `inline_codex_execution` owns legacy inline invocation and its completion
-journal. This extracts one shared lifecycle instead of copying policy across
-three runtime paths and reduces Controller responsibility. External execution
-keeps the explicit result checkpoint/publication/retirement order; its reviewed
-207-line exception is recorded in `hotspots.json`. Next extraction review remains
-stabilization stage 3 or any new lifecycle/transaction/invocation branch.
+journal. External execution retains checkpoint/publication/retirement order and
+the reviewed 207-line exception in `hotspots.json`. Extraction review reopens at
+stage 3 or a new lifecycle/transaction/invocation branch.
 Failure before publication retains existing certainty/recovery rules; cleanup
 after publication cannot cause productive replay. Stdio retirement awaits a
 durable owned-process exclusion barrier and is outside this slice.
@@ -678,12 +681,10 @@ durable owned-process exclusion barrier and is outside this slice.
 Owner: lead agent / Hub maintainer. Source lane `fix/codex-rpc-deadlines`
 owns fixed per-RPC response deadlines, with base/last verified source revision
 `3b40ae80d8bc34f2ae4105d10b6c75085d6e43c6` (1,915 commit-gate tests; canonical
-publication and opposite-runtime review are separate gates). State/transaction,
-invocation, completion-proof and cleanup ownership remain unchanged. The
-bounded policy is in the protocol client; no new retry authority, schema,
-shared preparation budget or provider inference is added. Architecture review
-approved default 120-second response/20-second quiet bounds and explicit
-300-second turn submission with existing caller deadlines preserved.
+publication and opposite-runtime review are separate gates). Ownership remains
+unchanged. The protocol client adds no retry authority, schema, shared preparation
+budget or inference. Reviewed bounds are 120 seconds for responses, 20 for quiet
+and 300 for turn submission, preserving caller deadlines.
 
 Next trigger: exact clean publication and independent review, then integrated
 regression and the separately authorized canary. After integration, inspect
@@ -703,14 +704,11 @@ candidate; integration must verify both together. Work is in progress: focused
 synthetic regressions pass, while exact clean publication and opposite-runtime
 review remain separate gates. No deployment or live acceptance is claimed.
 
-Transport owns first-cause selection, bounded FIFO and pipe cleanup. The client
-owns native submission/accepted identity, visible callbacks and completion;
-dependency-neutral `codex_response_drain` owns the narrow deadline, notice and
-fault-time proof policy. State and worker transaction/invocation ownership are
-unchanged. Independent Astra review closed quiet asynchronous fault detection,
-accepted-turn matching and partial-text retention at deadline expiry; it found
-no remaining blocker/high/medium in that diff. The extraction avoids copying
-fault policy across worker paths and requires no new hotspot exception.
+Transport owns first cause, bounded FIFO and pipe cleanup; client owns submission,
+accepted identity and visible completion. `codex_response_drain` owns deadlines,
+notices and fault-time proof. State/worker ownership is unchanged. Astra closed
+quiet fault detection, accepted-turn matching and partial retention, with no
+blocker/high/medium or new hotspot exception.
 
 Next trigger: exact clean publication/review, integrated regressions, then the
 separately authorized two-worker canary above. Include approval before final

@@ -150,7 +150,11 @@ class ControllerCommandOrchestrator:
                 "Use the exact Hub notice to confirm or cancel after the root is free."
             )
         if blocker is not None:
-            if blocker.kind in {"local", "terminal"}:
+            if blocker.kind == "scope_unconfirmed":
+                detail += (
+                    "\nExact project-root binding is unconfirmed; inspect its local registration."
+                )
+            elif blocker.kind in {"local", "terminal"}:
                 command = "/return" if blocker.kind == "local" else "/release"
                 detail += (
                     f"\nProject held by local writer. Close its client, then use {command}"

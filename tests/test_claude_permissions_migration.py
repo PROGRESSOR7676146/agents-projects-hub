@@ -8,12 +8,13 @@ from unittest.mock import patch
 
 from hermes_codex_router import migrations
 from hermes_codex_router.state import HubState
-from tests.schema_fixtures import legacy_selection_columns
+from tests.schema_fixtures import project_historical_database
 
 
 def create_version37(path: Path) -> dict[str, list[tuple[object, ...]]]:
-    with patch.object(migrations, "LATEST_SCHEMA_VERSION", 37), legacy_selection_columns(path):
-        state = HubState.open(path, codex_permission_profile=None)
+    source = path.with_name("example-current-seed.db")
+    with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
+        state = HubState.open(source, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project", chat_id=-1001234567890, thread_id=7, title="Example"
@@ -33,6 +34,7 @@ def create_version37(path: Path) -> dict[str, list[tuple[object, ...]]]:
             )
         finally:
             state.close()
+    project_historical_database(source, path, 37)
     return rows(path)
 
 

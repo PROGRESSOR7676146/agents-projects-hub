@@ -10,6 +10,7 @@ from unittest.mock import patch
 from hermes_codex_router import migrations
 from hermes_codex_router.state import HubState
 from tests import test_delivery_control_preview as fixtures
+from tests.schema_fixtures import project_historical_database
 from tests.test_delivery_certainty_migration import snapshot
 
 
@@ -25,7 +26,6 @@ class DeliveryControlActivationMigrationTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.path = self.fixture.fixture.config.state_path
-        db = self.fixture.db
         old = self.fixture.state.preview_delivery_hold(self.fixture.outbox.outbox_id)
         self.fixture.state.release_delivery_hold(
             self.fixture.outbox.outbox_id,
@@ -35,16 +35,11 @@ class DeliveryControlActivationMigrationTests(unittest.TestCase):
         # Restore the literal old topic guard. Schema46 has no supported consent
         # writer; an empty control ledger is required for authority activation.
         self.fixture.progress()
-        with db:
-            db.execute("DROP TRIGGER telegram_delivery_hold_topic_binding_guard")
-            historical_guard = migrations.MIGRATION_44[
-                migrations.MIGRATION_44.index(
-                    "CREATE TRIGGER telegram_delivery_hold_topic_binding_guard"
-                ) :
-            ]
-            migrations._execute_migration_script(db, historical_guard)
-            db.execute("PRAGMA user_version=46")
         self.fixture.state.close()
+        source_path = self.path
+        self.path = self.path.with_name("example-historical.db")
+        project_historical_database(source_path, self.path, 46)
+        self.enterContext(patch.object(migrations, "LATEST_SCHEMA_VERSION", 47))
 
     def test_upgrade_preserves_rows_and_backup_then_enables_exact_trigger_exception(self) -> None:
         with closing(sqlite3.connect(self.path)) as old:

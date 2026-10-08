@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import PurePath
 
+from .codex_control_predicates import control_owner_for_topic, require_control_scope_clear
 from .delivery_control_predicates import (
     legacy_hold_has_full_control,
     result_ready_control_reconciled,
@@ -65,6 +66,7 @@ class LaneState:
         ).fetchone()
         if lane is None:
             raise StateError(f"unknown or inactive lane_id: {lane_id}")
+        require_control_scope_clear(self._connection, f"root:{lane['worktree_path']}")
         topic_id = lane["topic_id"]
         destination_scope: str | None = None
         if topic_id is not None:
@@ -110,12 +112,22 @@ class LaneState:
             )
 
     def mark_cleaned(self, lane_id: str) -> int:
+        self.require_cleanup(lane_id)
         cursor = self._connection.execute(
             """UPDATE worktree_lanes SET cleaned_at = ?, updated_at = ?
                WHERE lane_id = ? AND status = 'archived' AND cleaned_at IS NULL""",
             (_now(), _now(), lane_id),
         )
         return cursor.rowcount
+
+    def require_cleanup(self, lane_id: str) -> None:
+        self._require_transaction()
+        lane = self.get_lane(lane_id)
+        if lane["status"] != "archived" or lane["cleaned_at"] is not None:
+            raise StateError("lane must be archived and not already cleaned")
+        self._require_execution_scope_idle_locked(
+            f"root:{lane['worktree_path']}", binding_change=False
+        )
 
     def bind_in_transaction(self, lane_id: str, topic_id: int, *, now: str) -> None:
         self._require_transaction()
@@ -158,6 +170,8 @@ class LaneState:
         self, topic_id: int, *, binding_change: bool = True
     ) -> None:
         """Peer checks retain busy ownership; only relocation checks retained bindings."""
+        if control_owner_for_topic(self._connection, topic_id) is not None:
+            raise StateError("native control operation has not confirmed quiescence")
         if binding_change and (
             self._connection.execute(
                 f"SELECT 1 FROM telegram_delivery_hold_dispositions hold WHERE topic_id=? "
@@ -205,6 +219,7 @@ class LaneState:
     def _require_execution_scope_idle_locked(
         self, execution_scope: str, *, binding_change: bool = True
     ) -> None:
+        require_control_scope_clear(self._connection, execution_scope)
         job = self._connection.execute(
             f"""SELECT 1 FROM provider_jobs jobs
                JOIN topics ON topics.topic_id = jobs.topic_id
