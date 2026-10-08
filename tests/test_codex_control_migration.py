@@ -64,7 +64,10 @@ class CodexControlMigrationTests(unittest.TestCase):
 
     def test_upgrade_preserves_every_historical_column_and_consistent_private_backup(self) -> None:
         result = migrations.migrate_database(self.path)
-        self.assertEqual((result.previous_version, result.current_version), (47, 48))
+        self.assertEqual(
+            (result.previous_version, result.current_version),
+            (47, migrations.LATEST_SCHEMA_VERSION),
+        )
         assert result.backup_path is not None
         self.assertEqual(result.backup_path.stat().st_mode & 0o777, 0o600)
         with closing(sqlite3.connect(result.backup_path)) as backup:

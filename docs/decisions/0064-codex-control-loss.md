@@ -1,6 +1,6 @@
 # ADR 0064: Preserve control of accepted Codex turns
 
-Status: accepted staged design; source implementation under validation
+Status: accepted staged design; Stage2 source published, Stage3 prerequisite under review
 Date: 2026-10-08
 
 ## Context and decision
@@ -51,7 +51,7 @@ explicit protective deadlines still bound both phases.
 
 ## Remaining control stages
 
-The schema48 Stage 2 candidate adds a state-owned control journal and maintenance
+Schema48 Stage 2 adds a state-owned control journal and maintenance
 handler independent of productive execution. A pending stop covering an
 indeterminate Codex turn retains its original provenance. Three bounded read
 cycles, 30 seconds apart, cannot reset on another stop. Only a proven active exact
@@ -110,6 +110,40 @@ failures, but not exact-topic end-to-end control. Aggregate egress cannot select
 a topic to stop. Missing/stale ingress needs a reviewed freshness/grace policy;
 sender idle, 429 and unrelated success must not create false outage proof. No
 automatic Telegram-health interruption is implemented by stage 1.
+
+The schema49 prerequisite collects actual group polls in a separate state-domain
+ledger, with startup previous-epoch CAS, a hashed instance token and increasing
+sample sequence. The first successful epoch snapshot defines startup intent;
+retries preserve that captured CAS/token while sampling fresh clock data. No wall
+clock establishes chronological process authority. Initial read failure remains
+unconfirmed until a snapshot can be captured; a captured stale CAS or a fenced
+publisher cannot refresh or reacquire. Clock regression and transaction guards
+defer registration or skip a sample without permanently retiring a valid owner.
+Exact repeats are idempotent; sequence gaps break an unproved
+failure streak. Stale publishers retire without registering again. Only the
+group Controller owns registration and poll forwarding, before optional
+diagnostics; direct-provider pollers do not contribute. Current-epoch success is
+separate from historical confirmation, which survives restart without proving a
+new process has polled. Migration imports no runtime health. HubState retains
+the immediate transaction; no provider or sender dependency enters this domain.
+
+The owning freshness/grace contract is in REQ-QUEUE-014. Its pure policy keeps
+confirmation even when no episode is pending and separates recovery cutoff from
+the deadline anchor, allowing an immediate successful new-epoch poll to clear
+prospective uncertainty. It neither persists exact-target episodes nor selects
+control. Next integration must capture trustworthy logical ingress for the exact
+accepted target, retain continuity/earliest deadlines durably, and recheck
+evidence and full-control consent atomically with the existing send fence.
+Unknown exact commentary delivery needs its own target-bound episode; idle,
+429 and unrelated success are not its substitutes. Existing late owner-stop
+claims do not yet authorize due Telegram precautions. No precautionary interrupt
+or new owner-stop receipt is introduced by schema49.
+
+A failure streak already past its original deadline can make a newly accepted
+target immediately due; startup/stale grace does not reset that streak. Fresh
+matching success may clear a due but unsent precaution as well as one before its
+deadline. Future integration must recheck it inside send-start; clearing an
+episode cannot erase a permanent send fence, unknown delivery or sender owner.
 
 ## Ownership and evidence
 

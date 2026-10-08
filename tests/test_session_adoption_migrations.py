@@ -155,6 +155,7 @@ class SessionAdoptionMigrationTests(unittest.TestCase):
                         "schema_outcome_assessments.py",
                         "schema_codex_permissions.py",
                         "schema_codex_turn_controls.py",
+                        "schema_telegram_ingress.py",
                         "schema_preacceptance_approvals.py",
                         "schema_preexecution_retry.py",
                         "session_adoption_policy.py",

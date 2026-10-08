@@ -359,6 +359,8 @@ class ControllerIdentityTests(unittest.TestCase):
         service.supervisor = None
         service.ingress_identity = "hub"
         service.state = State()
+        # Real poll-ledger lifecycle is covered by test_controller_ingress_polls.
+        service._group_ingress_polls = None
         service.telegram = Telegram()
         service.handle_update = lambda _update: True
         service._start_embedded_queue_consumer = lambda: None
