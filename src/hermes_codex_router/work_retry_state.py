@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .delivery_hold_predicates import outbox_delivery_hold_released
 from .task_activity_binding import ACTIVITY_BINDING, current_activity_binding
 from .task_lifecycle import TaskLifecycleNotice
 
@@ -61,6 +62,22 @@ class WorkRetryState:
                 + common
             )
         status = row["status"]
+        delivery = self.db.execute(
+            f"SELECT {outbox_delivery_hold_released('o')} AS released FROM telegram_outbox o "
+            "WHERE o.job_id=? AND o.status='unknown'",
+            (row["job_id"],),
+        ).fetchone()
+        if delivery is not None and status == "result_ready":
+            return (
+                "At retry time, Telegram delivery was unknown. "
+                + (
+                    "The owner allowed queue continuation without confirmed delivery. "
+                    if delivery["released"]
+                    else "A delivery hold remains; inspect the local delivery-hold preview. "
+                )
+                + "Saved execution evidence and independent safety boundaries remain unchanged; "
+                "the old message is not automatically resent. Inspect /status." + common
+            )
         if status == "executing":
             if row["lease_expires_at"] is None or row["lease_expires_at"] <= timestamp:
                 return (

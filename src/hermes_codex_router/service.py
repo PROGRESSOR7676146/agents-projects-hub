@@ -1926,7 +1926,9 @@ class ProjectHubService:
                 if self.state.topic_has_running_dispatch(
                     topic.topic_id
                 ) or self.state.topic_has_pending_provider_job(topic.topic_id):
-                    raise ServiceError("A provider turn is still running")
+                    raise ServiceError(
+                        "Provider work or retained result delivery blocks this change; inspect /status"
+                    )
                 replacement = self.state.new_active_session(
                     topic.topic_id, expected_session_id=expected_session_id
                 )
@@ -3086,7 +3088,8 @@ class ProjectHubService:
                 and self.state.topic_has_unheld_provider_job(topic.topic_id)
             ):
                 self._send_text(
-                    message, "Provider work is pending or being delivered; try /local again later."
+                    message,
+                    "Provider work or retained result delivery blocks /local; inspect /status.",
                 )
                 return True
             if not session.provider_session_id:
@@ -3146,7 +3149,8 @@ class ProjectHubService:
                 topic.topic_id
             ) or self.state.topic_has_unheld_provider_job(topic.topic_id):
                 self._send_text(
-                    message, "Provider work is pending or being delivered; try /return again later."
+                    message,
+                    "Provider work or retained result delivery blocks /return; inspect /status.",
                 )
                 return True
             if session.agent_id == "codex":

@@ -8,7 +8,11 @@ from hermes_codex_router.reliability_alerts import evaluate_reliability_alerts
 class ReliabilityAlertTests(unittest.TestCase):
     def test_unknown_delivery_has_separate_passive_alerts(self) -> None:
         alerts = evaluate_reliability_alerts(
-            {"unknown_delivery": 2, "unknown_progress_delivery": 1}
+            {
+                "unknown_delivery": 2,
+                "outstanding_delivery_holds": 2,
+                "unknown_progress_delivery": 1,
+            }
         )
         self.assertEqual(
             {alert.code for alert in alerts}, {"unknown_delivery", "unknown_progress_delivery"}

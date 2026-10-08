@@ -1,7 +1,7 @@
 """Remove post-v24 structures when constructing fictional older test databases."""
 
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from hermes_codex_router import migrations
@@ -12,6 +12,37 @@ from hermes_codex_router.schema_codex_permissions import (
 
 
 @contextmanager
+def legacy_delivery_hold_schema(connection: sqlite3.Connection):
+    """Current FIFO queries need an empty schema44 table during old fixture seeding.
+
+    Only a temporary, fictional compatibility bridge; remove before migration or
+    backup assertions. It never licenses dropping retained owner evidence.
+    """
+    created = (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='telegram_delivery_hold_dispositions'"
+        ).fetchone()
+        is None
+    )
+    if created:
+        with connection:
+            migrations._execute_migration_script(connection, migrations.MIGRATION_44)
+    try:
+        yield
+    finally:
+        if created:
+            with connection:
+                assert (
+                    connection.execute(
+                        "SELECT COUNT(*) FROM telegram_delivery_hold_dispositions"
+                    ).fetchone()[0]
+                    == 0
+                )
+                connection.execute("DROP TRIGGER telegram_delivery_hold_topic_binding_guard")
+                connection.execute("DROP TABLE telegram_delivery_hold_dispositions")
+
+
+@contextmanager
 def legacy_selection_columns(path: Path):
     """Temporarily support current fixture builders, then restore historical DDL.
 
@@ -19,12 +50,13 @@ def legacy_selection_columns(path: Path):
     fixture rows may use this bridge; real upgrades and backups see old DDL.
     """
     migrations.migrate_database(path, create_backup=False)
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         ensure_codex_permission_columns(connection)
     try:
-        yield
+        with closing(sqlite3.connect(path)) as bridge, legacy_delivery_hold_schema(bridge):
+            yield
     finally:
-        with sqlite3.connect(path) as connection:
+        with closing(sqlite3.connect(path)) as connection, connection:
             for table in PROFILE_TABLES:
                 assert (
                     connection.execute(
@@ -38,6 +70,7 @@ def legacy_selection_columns(path: Path):
 def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
     """Remove empty lifecycle/archive structures from fictional historical fixtures."""
     tables = (
+        "telegram_delivery_hold_dispositions",
         "provider_recovery_notice_parts",
         "task_lifecycle_legacy_stop_links",
         "task_lifecycle_legacy_parts",
@@ -51,6 +84,7 @@ def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
     for table in tables:
         if table in existing:
             assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    connection.execute("DROP TRIGGER IF EXISTS telegram_delivery_hold_topic_binding_guard")
     for table in tables:
         if table in existing:
             connection.execute(f"DROP TABLE {table}")

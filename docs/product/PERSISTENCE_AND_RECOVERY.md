@@ -21,7 +21,10 @@ This normative module is part of the
   aggregates MUST contain no prompt, response, provider-session, project, topic
   or account identity. Final/progress unknown-delivery counts MUST remain separate
   from pending delivery/retry counts and trigger passive alerts without
-  authorizing resend. The passive alert evaluator MUST report provider work with an expired execution
+  authorizing resend. Total unknown final delivery MUST remain visible after an
+  owner disposition; outstanding and owner-released delivery holds MUST be
+  counted separately, and only outstanding final holds keep the blocking alert
+  active. The passive alert evaluator MUST report provider work with an expired execution
   lease, or due and unblocked queued work waiting over 15 minutes without an
   active worker lease. A healthy long-running execution MUST NOT alert solely
   because its original queue timestamp is old. The evaluator MUST also report
@@ -368,10 +371,39 @@ recreate unsaved provider context or a partially executed turn.
   replacement. Historical missing parts MUST NOT be reconstructed as evidence.
   An unknown final/notice outbox blocks later outboxes in its numeric topic;
   a result-ready head also blocks later productive work there. Restart and age
-  MUST NOT release these holds. Schema-43 activation MUST wait for a separately
-  reviewed owner reconciliation action that preserves delivery evidence and
-  never replays provider work or blindly resends. This source prerequisite has
-  no such action yet; source publication alone MUST NOT authorize activation.
+  MUST NOT release these holds. A local-owner-only schema-44 control MAY record
+  immutable permission to continue without confirmed delivery. Its read-only
+  preview and explicit apply MUST open existing current-schema state without
+  implicit migration, configuration credentials, provider calls or Telegram.
+  Apply MUST require explicit agreement and the exact preview snapshot covering
+  the target job, saved result if any, binding, destination and every ordered
+  part including receipt provenance and artifact metadata. One HubState-owned
+  immediate transaction MUST revalidate the target and snapshot and insert only
+  the disposition; an exact repeat returns the same decision and a stale or
+  conflicting apply fails closed. Local OS authority MUST NOT be represented
+  as Telegram-authenticated owner identity.
+  First apply MUST require an established canonical execution scope, refusing
+  empty or legacy project scopes. The disposition MUST retain its numeric topic
+  destination, project and execution-scope binding for its lifetime; no-op and
+  display-only updates remain permitted. Apply and exact retry MUST report both
+  the immutable decision and its current effect. Preview MUST explicitly disclose
+  the indefinite session-control, scope-wide local/terminal transfer and agent
+  drain restrictions retained for a released `result_ready` job. Queue continuation
+  MUST NOT be presented as complete control reconciliation.
+  The outbox MUST remain unknown. Parts, receipts, spool, result, checkpoint,
+  job state, owner holds, stop state and writer/session authority MUST remain
+  unchanged. The disposition MAY remove only that exact earlier outbox's topic
+  delivery barrier and, for result_ready with its corresponding saved result,
+  the productive FIFO barrier. Native uncertainty, root/writer exclusion,
+  capacity, stop and held work remain independent. Session/model/agent controls,
+  local transfer, connect/adoption, relocation, drain and inline-fallback guards
+  MUST NOT inherit this exception. Diagnostics MUST distinguish historical
+  permission from its current binding-matched effect; a changed binding cannot
+  silently release another target. Retry/status copy MUST describe retained
+  unknown delivery and the owner's queue decision truthfully.
+  Schema-43/44 activation MUST wait for independent exact-candidate review of
+  both the delivery prerequisite and this action. Source publication alone
+  MUST NOT authorize activation, provider replay or automatic resend.
 - **REQ-QUEUE-006 (Implemented for the additive schema and global compatibility gate; per-provider rollout Planned):** Queue migration and per-provider rollout MUST be
   additive, feature-gated, recoverable through the existing backup discipline,
   and retain safe rollback without destroying accepted jobs. Changing an agent

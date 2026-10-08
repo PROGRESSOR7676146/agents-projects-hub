@@ -233,14 +233,25 @@ Closure: open until exact source publication gates pass; live backlog stays open
 
 Schema43 activation gate: unknown final/notice delivery currently blocks later
 topic deliveries, and result-ready heads block new productive work. Before any
-activation, implement and independently review an explicit owner reconciliation
+activation, independently review the schema44 local-owner reconciliation
 action that retains parts/results/spool, never fabricates delivery or replays
 provider execution, and safely resolves the topic hold. Source publication of
 this prerequisite does not waive that gate. Review also requires populated-copy
 foreign-key/orphan-part preflight before the migration. Source owner: Hub
-maintainer; decision owner: repository owner; next trigger: delivery-prerequisite
-publication, then reconciliation before live rollout. The broader live backlog
+maintainer; decision owner: repository owner; last verified source base:
+`9401becf230d74b516bec902bae44c6ddbaec78c`. The schema44 action is implemented
+in source under validation; [ADR 0061](../decisions/0061-owner-delivery-hold-dispositions.md)
+records its ownership and limits. Next trigger: exact-candidate review and
+publication, then separately authorized live rollout. The broader live backlog
 remains open.
+
+Delivery-hold follow-up: schema44 queue continuation retains indefinite
+`result_ready` session-control, scope-wide local transfer and agent-drain blockers,
+plus lifetime topic binding. Current source review base: `0669fa9`; review fixes
+are under validation. Hub maintainer owns the next separately reviewed full-control
+reconciliation decision before claiming complete operational acceptance. No
+timeout, restart, automatic resend or provider replay may clear these boundaries.
+See [ADR 0061](../decisions/0061-owner-delivery-hold-dispositions.md).
 
 ## Planned final-response mode indicators
 

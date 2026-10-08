@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Mapping, Sequence
 
+from .delivery_hold_predicates import job_blocks_topic_fifo
 from .provider_queue_capacity import (
     PROVIDER_WORKER_FAIRNESS_FRESHNESS,
     QueueCapacityConfig,
@@ -41,7 +42,7 @@ COMPLETE_FINISHED_STOPS_SQL = f"""UPDATE provider_stop_requests
    )"""
 
 
-_ELIGIBLE_PROVIDER_JOB_SQL = """SELECT candidate.* FROM provider_jobs candidate
+_ELIGIBLE_PROVIDER_JOB_SQL = f"""SELECT candidate.* FROM provider_jobs candidate
    JOIN topics candidate_topic ON candidate_topic.topic_id = candidate.topic_id
    WHERE candidate.agent_id = ?
      AND candidate.attempt_count < candidate.max_attempts
@@ -61,7 +62,7 @@ _ELIGIBLE_PROVIDER_JOB_SQL = """SELECT candidate.* FROM provider_jobs candidate
        SELECT 1 FROM provider_jobs earlier
        WHERE earlier.topic_id = candidate.topic_id
          AND earlier.topic_sequence < candidate.topic_sequence
-         AND earlier.status NOT IN ('completed', 'failed', 'cancelled', 'indeterminate')
+         AND {job_blocks_topic_fifo("earlier")}
      ))
      AND (EXISTS (SELECT 1 FROM provider_job_continuations special
                   WHERE special.continuation_job_id = candidate.job_id)
@@ -272,7 +273,7 @@ class ProviderJobsStateFacade:
         # the default worker capacity; active work must not cause an error.
         stale_ready_queue = int(
             self._connection.execute(
-                """SELECT COUNT(*) FROM provider_jobs candidate
+                f"""SELECT COUNT(*) FROM provider_jobs candidate
                    JOIN topics candidate_topic ON candidate_topic.topic_id = candidate.topic_id
                    WHERE candidate.status IN ('queued', 'retry_wait')
                      AND candidate.attempt_count < candidate.max_attempts
@@ -290,8 +291,7 @@ class ProviderJobsStateFacade:
                        SELECT 1 FROM provider_jobs earlier
                        WHERE earlier.topic_id = candidate.topic_id
                          AND earlier.topic_sequence < candidate.topic_sequence
-                         AND earlier.status NOT IN
-                           ('completed', 'failed', 'cancelled', 'indeterminate')
+                         AND {job_blocks_topic_fifo("earlier")}
                      )
                      AND NOT EXISTS (
                        SELECT 1 FROM provider_jobs earlier
@@ -406,6 +406,7 @@ class ProviderJobsStateFacade:
                 JOIN topics ON topics.topic_id = current.topic_id
                 WHERE current.agent_id IN ({placeholders})
                   AND current.status IN ('queued', 'leased', 'executing', 'result_ready')
+                  AND {job_blocks_topic_fifo("current")}
                   AND NOT EXISTS (
                     SELECT 1 FROM provider_job_holds holds
                     WHERE holds.job_id=current.job_id AND holds.decision='pending'
@@ -414,9 +415,7 @@ class ProviderJobsStateFacade:
                     SELECT 1 FROM provider_jobs earlier
                     WHERE earlier.topic_id = current.topic_id
                       AND earlier.topic_sequence < current.topic_sequence
-                      AND earlier.status NOT IN (
-                        'completed', 'failed', 'cancelled', 'indeterminate'
-                      )
+                      AND {job_blocks_topic_fifo("earlier")}
                   )
                 ORDER BY current.created_at, current.topic_id""",
             bounded_ids,
@@ -538,9 +537,9 @@ class ProviderJobsStateFacade:
 
         The result and failure commits call this first, inside their own write
         transaction, so each commit is the last stop check (R-021): a stop
-        recorded after the worker's final check still ends the job, whose
-        single outbox row stays free for the stop's Hub acknowledgement, and
-        the stops left without work complete with it. The cancellation takes
+        recorded after the worker's final check still ends the job without a
+        provider outbox. Its Hub acknowledgement uses independent task notices;
+        stops left without work complete with it. The cancellation takes
         its time here, under the write lock, so it is never earlier than the
         stop and the stop's notice can still choose the job. True when a stop
         has ended the job, now or earlier; False leaves the commit to proceed.
@@ -867,11 +866,11 @@ class ProviderJobsStateFacade:
             ):
                 return None
             candidate = self._connection.execute(
-                """SELECT * FROM provider_jobs
+                f"""SELECT * FROM provider_jobs
                    WHERE topic_id = ? AND topic_sequence = (
-                       SELECT MIN(topic_sequence) FROM provider_jobs
-                       WHERE topic_id = ? AND topic_sequence > ?
-                         AND status NOT IN ('completed', 'failed', 'cancelled', 'indeterminate')
+                       SELECT MIN(followup.topic_sequence) FROM provider_jobs followup
+                       WHERE followup.topic_id = ? AND followup.topic_sequence > ?
+                         AND {job_blocks_topic_fifo("followup")}
                    )""",
                 (parent["topic_id"], parent["topic_id"], parent["topic_sequence"]),
             ).fetchone()

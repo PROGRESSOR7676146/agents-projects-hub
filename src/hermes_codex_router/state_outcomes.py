@@ -10,9 +10,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from .delivery_hold_predicates import outbox_delivery_hold_released
+
 REFERENCE_LIMIT = 64
 
-_PROJECTION = """
+_PROJECTION = f"""
 WITH target AS (
     SELECT j.job_id, j.topic_id, j.session_id, j.session_generation,
            j.agent_id, j.model, j.effort, j.status, j.attempt_count,
@@ -24,6 +26,8 @@ WITH target AS (
            e.terminal_status, e.observed_at AS terminal_at,
            h.resolution, h.resolved_at,
            o.outbox_id, o.status AS delivery_status, o.delivered_at,
+           dh.outbox_id IS NOT NULL AS delivery_hold_recorded,
+           {outbox_delivery_hold_released("o")} AS delivery_hold_released,
            (SELECT COUNT(*) FROM provider_visible_items v WHERE v.job_id=j.job_id)
                AS visible_item_count
     FROM provider_jobs j
@@ -35,6 +39,7 @@ WITH target AS (
     LEFT JOIN telegram_outbox o ON o.job_id=j.job_id
                                   AND o.sender_agent_id=j.agent_id
                                   AND o.chat_id=j.chat_id AND o.thread_id=topic.thread_id
+    LEFT JOIN telegram_delivery_hold_dispositions dh ON dh.outbox_id=o.outbox_id
     WHERE j.job_id=?
 ), artifacts AS (
     SELECT p.outbox_id, p.part_index, p.file_size, p.file_sha256,
@@ -179,6 +184,15 @@ class OutcomeJournalStateFacade:
             delivery = {
                 "outbox_id": row["outbox_id"],
                 "status": row["delivery_status"],
+                "delivery_hold": (
+                    "released_by_owner"
+                    if row["delivery_hold_released"]
+                    else "disposition_binding_changed"
+                    if row["delivery_hold_recorded"] and row["delivery_status"] == "unknown"
+                    else "outstanding"
+                    if row["delivery_status"] == "unknown"
+                    else None
+                ),
                 "parts_total": row["part_count"],
                 "parts_receipted": row["receipt_count"],
                 "receipts_complete": receipts_complete,

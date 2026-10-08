@@ -132,6 +132,8 @@ class MonitorHealthTests(unittest.TestCase):
                     "pending_progress_delivery": 0,
                     "unknown_delivery": 0,
                     "unknown_progress_delivery": 0,
+                    "outstanding_delivery_holds": 0,
+                    "released_delivery_holds": 0,
                     "oldest_queue_age_seconds": None,
                     "oldest_delivery_age_seconds": None,
                     "oldest_progress_delivery_age_seconds": None,

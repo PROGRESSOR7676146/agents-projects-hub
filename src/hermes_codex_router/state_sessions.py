@@ -455,7 +455,7 @@ class SessionsStateFacade:
                 topic_id
             ):
                 raise self._state_error(
-                    "provider work is pending; retry controls after it completes"
+                    "provider work or retained result delivery blocks this change; inspect /status"
                 )
 
     def activate_agent(

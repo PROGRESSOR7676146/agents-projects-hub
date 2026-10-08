@@ -321,7 +321,7 @@ class SessionAdoptionStateTests(unittest.TestCase):
         session = self.attach().session
         self.activate(session)
         self.enqueue(self.state.get_session(session.session_id))
-        with self.assertRaisesRegex(StateError, "pending"):
+        with self.assertRaisesRegex(StateError, "provider work or retained result delivery blocks"):
             self.state.replace_active_session(
                 self.topic.topic_id,
                 model="other-model",

@@ -125,6 +125,18 @@ class ControllerCommandOrchestrator:
                     " Reply exactly retry to its failure notice to continue with inspection."
                 )
         held_jobs = self.state.held_provider_job_count(topic.topic_id)
+        delivery_holds = self.state.delivery.topic_delivery_holds(topic.topic_id)
+        if delivery_holds["outstanding"]:
+            detail += (
+                f"\nUnknown Telegram delivery hold(s): {delivery_holds['outstanding']}. "
+                "Later delivery is blocked; inspect the local delivery-hold preview."
+            )
+        if delivery_holds["released"]:
+            detail += (
+                f"\nOwner-released delivery hold(s): {delivery_holds['released']}. "
+                "Delivery remains unknown; the owner allowed queue continuation. "
+                "Existing session and writer safety checks still apply."
+            )
         if held_jobs:
             detail += (
                 f"\nSaved request(s) held before provider execution: {held_jobs}. "
