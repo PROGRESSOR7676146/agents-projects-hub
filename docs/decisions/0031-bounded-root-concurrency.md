@@ -61,6 +61,27 @@ Archive restores a conservative project-ID fallback; the next registry-aware
 topic observation upgrades it to the canonical base root. Cleanup remains a
 separate explicit local operation.
 
+### Archive correction, 2026-10-08
+
+The project-ID fallback above is superseded for new bound-lane archives. Startup
+normalization correctly prefers retained native origins/checkpoints for genuine
+legacy topics; after an explicit archive, that could restore the historical
+lane root or refuse conflicting history instead of retaining the chosen base
+root. The local CLI now validates the current registered base Git root while
+holding the registry lock through the state transaction. Archive rechecks the
+project and exact source binding, requires both source and destination scopes
+idle, and atomically stores the canonical destination with archived metadata.
+Any still-legacy topic must also be idle: absent or conflicting root evidence
+cannot prove that its busy ownership is independent of the destination. This
+temporarily blocks bound archive even for another project's busy legacy topic;
+existing trusted startup normalization restores canonical independent scopes.
+Idle legacy metadata is not rewritten by archive, and busy canonical topics
+on an independent root remain unaffected.
+Historical roots remain unchanged. No schema migration or automatic repair of
+earlier ambiguous archives is added; legacy normalization and schema-44 lifetime
+binding restrictions retain their existing authority. Unbound lanes still need
+no destination. Cleanup remains separately explicit.
+
 Cache-only status reports configured capacity, occupied/available totals,
 bounded worker instance/agent/phase owners, and an aggregate unresolved-scope
 count. It exposes no project root, topic, prompt, provider session, output, or

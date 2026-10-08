@@ -42,14 +42,14 @@ from .monitoring import run_monitor_once
 from .outbox_sender import TelegramOutboxSender
 from .outcome_cli import add_outcome_parser, outcome_command
 from .pilot import run_codex_pilot
-from .project_admin import add_project, set_project_enabled
+from .project_admin import add_project, registry_lock, set_project_enabled
 from .project_onboarding import ProjectOnboardingStore
 from .project_provisioner import (
     ProjectProvisioner,
     ProjectProvisioningError,
     login_project_provisioner,
 )
-from .registry import RegistryError, load_registry
+from .registry import RegistryError, load_registry, validate_execution_root
 from .release_dry_run import report_dict, run_release_dry_run
 from .release_identity import CURRENT_RELEASE
 from .runtime_health import project_runtime_health
@@ -340,7 +340,18 @@ def _lane_command(args: argparse.Namespace) -> int:
             _print({"ok": True, "lanes": state.list_lanes()})
             return 0
         if args.lane_command == "archive":
-            state.archive_lane(args.lane)
+            lane = state.get_lane(args.lane)
+            if lane["topic_id"] is None:
+                state.archive_lane(args.lane)
+            else:
+                with registry_lock(config.registry_path):
+                    registry = load_registry(config.registry_path)
+                    try:
+                        project = registry.require_project(str(lane["project_id"]))
+                    except KeyError:
+                        raise WorktreeError("lane project is unknown or disabled") from None
+                    root = validate_execution_root(registry, project)
+                    state.archive_lane(args.lane, project_id=project.project_id, project_root=root)
             _print({"ok": True, "lane_id": args.lane, "status": "archived"})
             return 0
         if args.lane_command == "bind":

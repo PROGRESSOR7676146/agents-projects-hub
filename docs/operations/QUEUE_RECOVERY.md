@@ -563,6 +563,10 @@ local-writer-owned, or provider-bound topics. Start a fresh unbound session
 before changing its root; archive first, then clean up. A lane is never
 selected from Telegram input, and a worker refuses a path that is not the exact
 derived, allowlisted and currently registered Git worktree.
+Bound archival also validates the current registered base Git root and checks
+that destination scope is idle before committing. An unavailable, disabled or
+invalid registration must be corrected locally before retrying archive. See the
+[archive correction](../decisions/0031-bounded-root-concurrency.md#archive-correction-2026-10-08).
 
 ## Changing provider ownership
 
