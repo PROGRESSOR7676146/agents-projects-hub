@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import unittest
 from contextlib import closing
@@ -10,6 +11,27 @@ from unittest.mock import patch
 from hermes_codex_router import migrations
 from tests import test_task_notice_migration as fixtures
 from tests.test_delivery_certainty_migration import snapshot
+
+
+def canonical_sql(sql: str | None) -> str | None:
+    if sql is None:
+        return None
+    sql = re.sub(r'"(task_lifecycle_notices|task_lifecycle_legacy_stop_links)"', r"\1", sql)
+    return re.sub(r"\s*([(),])\s*", r"\1", " ".join(sql.split()))
+
+
+def incoming_notice_fks(connection: sqlite3.Connection) -> dict[str, list[tuple]]:
+    incoming = {}
+    for (table,) in connection.execute("SELECT name FROM sqlite_master WHERE type='table'"):
+        quoted = table.replace('"', '""')
+        references = [
+            tuple(row)
+            for row in connection.execute(f'PRAGMA foreign_key_list("{quoted}")')
+            if row[2] == "task_lifecycle_notices"
+        ]
+        if references:
+            incoming[table] = references
+    return incoming
 
 
 class OutcomeAssessmentMigrationTests(unittest.TestCase):
@@ -51,6 +73,22 @@ class OutcomeAssessmentMigrationTests(unittest.TestCase):
             self.objects = old.execute(
                 "SELECT type,name,sql FROM sqlite_master ORDER BY name"
             ).fetchall()
+            self.notice_objects = {
+                name: (kind, canonical_sql(sql))
+                for kind, name, sql in old.execute(
+                    "SELECT type,name,sql FROM sqlite_master WHERE tbl_name IN (?,?)",
+                    ("task_lifecycle_notices", "task_lifecycle_legacy_stop_links"),
+                )
+            }
+            self.incoming_fks = incoming_notice_fks(old)
+            self.assertEqual(set(self.incoming_fks), {"task_lifecycle_legacy_stop_links"})
+            self.notice_columns = old.execute(
+                "PRAGMA table_info(task_lifecycle_notices)"
+            ).fetchall()
+            self.notice_fks = {
+                tuple(row[2:])
+                for row in old.execute("PRAGMA foreign_key_list(task_lifecycle_notices)")
+            }
 
     def test_populated_upgrade_preserves_all_notice_states_links_and_private_backup(self) -> None:
         result = migrations.migrate_database(self.path)
@@ -103,3 +141,50 @@ class OutcomeAssessmentMigrationTests(unittest.TestCase):
                 self.objects,
             )
             self.assertEqual(retained.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+    def test_notice_rebuild_preserves_exact_existing_objects_constraints_and_incoming_fks(
+        self,
+    ) -> None:
+        migrations.migrate_database(self.path, create_backup=False)
+        with closing(sqlite3.connect(self.path)) as upgraded:
+            after_objects = {
+                name: (kind, canonical_sql(sql))
+                for kind, name, sql in upgraded.execute(
+                    "SELECT type,name,sql FROM sqlite_master WHERE tbl_name IN (?,?)",
+                    ("task_lifecycle_notices", "task_lifecycle_legacy_stop_links"),
+                )
+            }
+            self.assertEqual(
+                set(after_objects), set(self.notice_objects) | {"task_notice_assessment"}
+            )
+            for name, (kind, sql) in self.notice_objects.items():
+                after_kind, after_sql = after_objects[name]
+                if name == "task_lifecycle_notices":
+                    assert after_sql is not None
+                    after_sql = after_sql.replace(
+                        "assessment_disposition_id TEXT REFERENCES outcome_assessment_dispositions(disposition_id),",
+                        "",
+                    ).replace(" OR assessment_disposition_id IS NOT NULL", "")
+                self.assertEqual((after_kind, after_sql), (kind, sql), name)
+            columns = upgraded.execute("PRAGMA table_info(task_lifecycle_notices)").fetchall()
+            self.assertEqual(columns[:-1], self.notice_columns)
+            self.assertEqual(columns[-1][1:], ("assessment_disposition_id", "TEXT", 0, None, 0))
+            self.assertEqual(
+                {
+                    tuple(row[2:])
+                    for row in upgraded.execute("PRAGMA foreign_key_list(task_lifecycle_notices)")
+                },
+                self.notice_fks
+                | {
+                    (
+                        "outcome_assessment_dispositions",
+                        "assessment_disposition_id",
+                        "disposition_id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    )
+                },
+            )
+            self.assertEqual(incoming_notice_fks(upgraded), self.incoming_fks)
+            self.assertEqual(upgraded.execute("PRAGMA foreign_key_check").fetchall(), [])

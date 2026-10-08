@@ -56,7 +56,7 @@ class ControllerAssessmentOrchestrator:
     ) -> AssessmentControlDecision:
         # Preserve distinctions lost by quote/material normalization, without
         # storing a raw message, nested replied-to output or update transport ID.
-        raw = json.dumps(raw_message, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        raw = json.dumps(raw_message, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
         material = json.dumps(
             {
                 "attachments": [asdict(item) for item in message.attachments],
@@ -64,7 +64,7 @@ class ControllerAssessmentOrchestrator:
                 "media_group_id": message.media_group_id,
             },
             sort_keys=True,
-            ensure_ascii=False,
+            ensure_ascii=True,
             separators=(",", ":"),
         )
         request = OutcomeAssessmentInput(

@@ -63,6 +63,14 @@ class OutcomeAssessmentFixture(unittest.TestCase):
 
 
 class OutcomeAssessmentStateTests(OutcomeAssessmentFixture):
+    def test_multiline_tab_and_unicode_reason_preserves_valid_text(self) -> None:
+        self.deliver()
+        request = self.request(text="/assess accepted Проверено\nAPI\tи файлы 🎯")
+        disposition, created = self.assess(request)
+        self.assertTrue(created)
+        self.assertEqual(disposition.disposition, "applied")
+        self.assertEqual(disposition.reason, "Проверено\nAPI\tи файлы 🎯")
+
     def test_delivered_progress_and_control_are_not_saved_final_targets(self) -> None:
         self.deliver()
         job = self.fixture.enqueue(2)

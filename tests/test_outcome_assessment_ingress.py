@@ -7,12 +7,16 @@ import sqlite3
 import unittest
 from dataclasses import replace
 from typing import Any, cast
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from hermes_codex_router.catalog_refresh import CatalogRefreshResult
+from hermes_codex_router.diagnostics import Check, run_doctor
 from hermes_codex_router.external_service import ExternalAgentService
 from hermes_codex_router.hub_config import AcceptanceActor, HubTelegramBot
+from hermes_codex_router.monitoring import run_monitor_once
 from hermes_codex_router.service import QueueAcceptanceError
 from hermes_codex_router.state import HubState, StateError
+from hermes_codex_router.terminal_runtime import TerminalRuntime
 from tests import test_embedded_queue_service as fixtures
 from tests.delivery_fixture import complete_final_delivery
 
@@ -160,6 +164,104 @@ class OutcomeAssessmentIngressTests(unittest.TestCase):
         self.assertEqual(self.records()[0]["decision"], "accepted")
         self.assert_no_execution()
 
+    def test_poison_reasons_are_durably_refused_without_input_retry_or_execution(self) -> None:
+        for number, reason in enumerate(("\x00", "\x01bad", "bad\x1f", "\ud800", "\udfff"), 50):
+            with self.subTest(reason=repr(reason)):
+                incoming = self.update(number, f"/assess accepted {reason}")
+                self.assertTrue(self.service.handle_update(incoming))
+                stored = self.records()[-1]
+                self.assertEqual(stored["disposition"], "refused")
+                self.assertIsNone(stored["reason"])
+                self.assertTrue(
+                    self.service.state.message_already_observed(self.topic.chat_id, number)
+                )
+                self.assertFalse(self.service.handle_update(incoming))
+        self.assertEqual(len(self.records()), 5)
+        self.assertEqual(
+            self.service.state._connection.execute(
+                "SELECT COUNT(*) FROM task_lifecycle_notices"
+            ).fetchone()[0],
+            5,
+        )
+        self.assert_no_execution()
+
+    def test_unpaired_surrogate_in_raw_metadata_is_fingerprinted_without_retry(self) -> None:
+        incoming = self.update()
+        cast(dict[str, Any], incoming["message"])["example_metadata"] = "\ud800"
+        self.assertTrue(self.service.handle_update(incoming))
+        stored = self.records()[0]
+        self.assertEqual(stored["disposition"], "applied")
+        self.assertFalse(self.service.handle_update(incoming))
+        changed = copy.deepcopy(incoming)
+        cast(dict[str, Any], changed["message"])["example_metadata"] = "\udfff"
+        with patch.object(
+            self.service.state,
+            "record_outcome_assessment",
+            wraps=self.service.state.record_outcome_assessment,
+        ) as record:
+            self.assertFalse(self.service.handle_update(changed))
+            self.assertNotEqual(stored["input_fingerprint"], record.call_args.args[0].fingerprint())
+        self.assertEqual(len(self.records()), 1)
+        self.assert_no_execution()
+
+    def test_subjectless_ack_is_safe_in_status_doctor_and_monitor_even_when_unknown(self) -> None:
+        self.assertTrue(self.service.handle_update(self.update()))
+        notice = self.service.state.task_notices.lease_notice(
+            "example-sender", now=fixtures.datetime.now(fixtures.timezone.utc)
+        )
+        assert notice is not None and notice.lease_token is not None
+        self.assertIsNone(notice.job_id)
+        self.assertIsNone(notice.stop_request_id)
+        self.assertIsNotNone(notice.assessment_disposition_id)
+        baseline = self.service.state.status_snapshot()["reliability"]
+        for status in ("leased", "unknown"):
+            with self.subTest(status=status):
+                if status == "unknown":
+                    now = fixtures.datetime.now(fixtures.timezone.utc)
+                    self.service.state.task_notices.begin_send(
+                        notice.notice_id, notice.lease_token, now=now
+                    )
+                    self.service.state.task_notices.mark_send_unknown(
+                        notice.notice_id, notice.lease_token, error_code="example-timeout", now=now
+                    )
+                with (
+                    patch(
+                        "hermes_codex_router.diagnostics._command",
+                        return_value=Check("example-command", True, "example"),
+                    ),
+                    patch(
+                        "hermes_codex_router.diagnostics._socket_check",
+                        return_value=Check("example-socket", True, "example"),
+                    ),
+                    patch(
+                        "hermes_codex_router.diagnostics.probe_codex_config_proxy",
+                        return_value=Mock(ok=True, detail="example"),
+                    ),
+                    patch.object(TerminalRuntime, "launcher_available", return_value=True),
+                    patch.object(TerminalRuntime, "launcher_program", return_value=None),
+                    patch(
+                        "hermes_codex_router.monitoring.refresh_provider_catalogs",
+                        return_value=CatalogRefreshResult((), (), {}),
+                    ),
+                    patch("hermes_codex_router.monitoring._hermes_health", return_value=None),
+                    patch("hermes_codex_router.monitoring._telegram_access", return_value={}),
+                    patch(
+                        "hermes_codex_router.monitoring.project_runtime_health", return_value=None
+                    ),
+                ):
+                    doctor = run_doctor(self.service.config)
+                    monitor = run_monitor_once(self.service.config, notify=False)
+                self.assertTrue(doctor["ok"])
+                self.assertTrue(monitor["ok"])
+                self.assertEqual(monitor["delivered"], [])
+                self.assertEqual(monitor["reliability"], baseline)
+                self.assertEqual(self.service.state.status_snapshot()["reliability"], baseline)
+                self.assertEqual(
+                    self.service.state.task_notices.get_notice(notice.notice_id).status, status
+                )
+                self.assertEqual(self.records()[0]["decision"], "accepted")
+        self.assert_no_execution()
+
     def test_source_digest_retains_normalized_away_quote_and_attachment_differences(self) -> None:
         for number, variant in enumerate(("quote", "attachment"), 50):
             incoming = self.update(number)
@@ -191,7 +293,15 @@ class OutcomeAssessmentIngressTests(unittest.TestCase):
             stored = self.records()[-1]
             self.assertNotEqual(stored["input_fingerprint"], changed_digest)
             incoming["update_id"] = 500 + number
-            self.assertFalse(self.service.handle_update(incoming))
+            with patch.object(
+                self.service.state,
+                "record_outcome_assessment",
+                wraps=self.service.state.record_outcome_assessment,
+            ) as duplicate:
+                self.assertFalse(self.service.handle_update(incoming))
+                self.assertEqual(
+                    stored["input_fingerprint"], duplicate.call_args.args[0].fingerprint()
+                )
         self.assertEqual(len(self.records()), 2)
         self.assert_no_execution()
 

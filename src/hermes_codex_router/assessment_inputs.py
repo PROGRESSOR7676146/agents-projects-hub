@@ -35,11 +35,19 @@ class OutcomeAssessmentInput:
     def fingerprint(self) -> str:
         # Hash full raw input before bounded parsing; changed input must not alias.
         encoded = json.dumps(
-            asdict(self), sort_keys=True, ensure_ascii=False, separators=(",", ":")
+            asdict(self), sort_keys=True, ensure_ascii=True, separators=(",", ":")
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
     def parsed(self) -> tuple[str, str] | None:
+        # Refuse before trimming: SQLite length truncates at NUL and cannot
+        # encode surrogate codepoints. Such input needs a durable refusal,
+        # not an exception that leaves central ingress retrying forever.
+        if any(
+            (ord(char) < 32 and char not in "\n\t") or 0xD800 <= ord(char) <= 0xDFFF
+            for char in self.text
+        ):
+            return None
         matched = _COMMAND.fullmatch(self.text.strip())
         if matched is None:
             return None

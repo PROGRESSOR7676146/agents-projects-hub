@@ -225,7 +225,7 @@ def record_assessment(
         f"Outcome recorded: {parsed[0]}. Reason: {html.escape(parsed[1])}"
         if applied and parsed is not None
         else "Outcome was not recorded. Reply to the whole delivered saved final with "
-        "/assess accepted|rework|unknown REASON. To correct a decision, Reply to your latest applied /assess command."
+        "/assess accepted|rework|unknown REASON. To correct a decision, Reply to the latest applied owner /assess command."
     )
     notices.prepare_notice_in_transaction(
         event_key="outcome-assessment:" + disposition_id,

@@ -4,16 +4,96 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import unittest
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timezone
+from typing import Any, cast
 from unittest.mock import patch
 
+from hermes_codex_router.assessment_inputs import OutcomeAssessmentInput
+from hermes_codex_router.codex_appserver import (
+    CodexTurnError,
+    RpcError,
+    StoredTurnOutcome,
+    TurnResult,
+)
 from hermes_codex_router.state import HubState, StateError
 from hermes_codex_router.task_notice_sender import deliver_task_notice
 from hermes_codex_router.telegram import TelegramError
+from hermes_codex_router.turn_observation import TurnObservation
+from tests import test_codex_worker as worker_fixtures
+from tests.delivery_fixture import complete_final_delivery
 from tests.test_outcome_assessment_state import OutcomeAssessmentFixture
 from tests.test_task_notice_sender import FakeTelegram
+
+
+class AssessedFinalRetentionTests(unittest.TestCase):
+    def test_recovered_assessed_final_cannot_reenter_notice_replacement(self) -> None:
+        fixture = worker_fixtures.CodexQueueWorkerTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+
+        class Client(worker_fixtures.WorkerClient):
+            observed = "unknown"
+            reads = 0
+
+            def wait_for_turn(self, _turn_id: str) -> TurnResult:
+                raise CodexTurnError(RpcError("Example lost stream"), "Example partial")
+
+            def read_turn_outcome(self, **_kwargs: object) -> StoredTurnOutcome:
+                self.reads += 1
+                return StoredTurnOutcome(
+                    cast(Any, self.observed),
+                    TurnResult("Example recovered result", None, None)
+                    if self.observed == "completed"
+                    else None,
+                )
+
+        job_id = fixture.enqueue(1, "Example task")
+        client = Client()
+        worker = fixture.worker(client)
+        self.addCleanup(worker.close)
+        worker.run_cycle()
+        state = worker.state
+        job = state.get_provider_job(job_id)
+        self.assertEqual(job.status, "indeterminate")
+        observation = TurnObservation(state, fixture.config)
+        client.observed = "completed"
+        self.assertTrue(observation.observe_topic(job.topic_id, cast(Any, lambda: client)))
+        self.assertEqual(state.get_provider_job(job_id).status, "result_ready")
+        outbox = state.lease_telegram_outbox("codex", "example-sender")
+        assert outbox is not None and outbox.lease_token is not None
+        complete_final_delivery(
+            state, outbox.outbox_id, outbox.lease_token, telegram_message_id=101
+        )
+        disposition, created = state.record_outcome_assessment(
+            OutcomeAssessmentInput(
+                42, job.chat_id, 77, 50, 101, "/assess accepted Example checked"
+            ),
+            project_id="example-project",
+            owner_user_ids=(42,),
+        )
+        self.assertTrue(created)
+        self.assertEqual(disposition.disposition, "applied")
+        self.assertEqual(state.get_provider_job(job_id).status, "completed")
+        before = "\n".join(state._connection.iterdump())
+        reads = client.reads
+        self.assertFalse(observation.observe_topic(job.topic_id, cast(Any, lambda: client)))
+        self.assertFalse(observation.run_once(cast(Any, lambda: client)))
+        with self.assertRaisesRegex(StateError, "observed turn binding changed"):
+            observation._commit_terminal(
+                job_id,
+                "thread-1",
+                "turn-1",
+                fixture.registry.projects[0].root,
+                StoredTurnOutcome(
+                    "completed", TurnResult("Example repeated observation", None, None)
+                ),
+            )
+        self.assertEqual(client.reads, reads)
+        self.assertEqual(client.turns, 1)
+        self.assertEqual("\n".join(state._connection.iterdump()), before)
 
 
 class OutcomeAssessmentBoundaryTests(OutcomeAssessmentFixture):
@@ -187,7 +267,7 @@ class OutcomeAssessmentBoundaryTests(OutcomeAssessmentFixture):
         now = datetime.now(timezone.utc)
         with self.state._immediate_transaction():
             for changes in ({"chat_id": 43}, {"thread_id": 77}, {"job_id": self.job.job_id}):
-                values = dict(
+                values: dict[str, Any] = dict(
                     event_key="example-tamper",
                     kind="outcome_assessed",
                     assessment_disposition_id=record.disposition_id,

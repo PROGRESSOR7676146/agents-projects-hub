@@ -99,12 +99,15 @@ In the registered project topic, Reply to a saved final part with:
 /assess unknown Verification is incomplete
 ```
 
-For a correction, Reply to your latest applied `/assess` message. The Hub's
+For a correction, Reply to the latest applied owner `/assess` message. Any
+configured owner can record the correction. The Hub's
 acknowledgement is not the correction target. A refusal asks for a fresh command;
 retrying its old message after delivery completes retains that original refusal.
 Forwarded commands remain passive context; selected quotes, captions and
 attachments are refused without download. No public-menu entry is added.
 The supported path requires central Hub ingress and external queue/outbox.
+Reservation belongs to the exact command message: refusing an album caption
+does not reserve its siblings; they retain normal material/routing behavior.
 
 The independent sender delivers acknowledgements under Hub identity. Unknown
 acknowledgement delivery does not erase the recorded decision or permit resend;
