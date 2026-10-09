@@ -433,6 +433,16 @@ class NativeRequestMutationTests(unittest.TestCase):
 
 
 class NativeRequestPureContractTests(unittest.TestCase):
+    def test_host_selected_prompt_is_independent_of_default_fixture_material(self) -> None:
+        prompt = "Example fresh host-selected material."
+        body = valid_body()
+        body["messages"][0]["content"] = prompt
+        expected = ExpectedNativeRequest("2.1.285", EXAMPLE_ENVIRONMENT, prompt=prompt)
+        validate_request_body(json.dumps(body).encode(), expected)
+        body["messages"][0]["content"] = PROMPT
+        with self.assertRaises(NativeRequestContractError):
+            validate_request_body(json.dumps(body).encode(), expected)
+
     def test_decoder_strictness_is_independent_of_request_schema(self) -> None:
         # A permissive decoder accepts each grammar below. Call the decoder
         # directly so unrelated Messages schema checks cannot hide a regression.

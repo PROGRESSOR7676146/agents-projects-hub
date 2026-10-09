@@ -184,10 +184,11 @@ found no mandatory findings. All seven exact-head hosted checks passed. These
 fictional peer/HTTP and kernel namespace fixtures do not establish productive
 advisor integration or a real upstream route.
 
-Next trigger: owner integration of these separate lanes and native request
-validation before productive wiring.
+PR #174 at `cad8e8d8732bfb52aadb45e15d783785af4da84a` joins the native
+corpus and PR #154; source gates passed. Next: HTTP envelope/semantic owner,
+then combined native/pipe witness; see [next session](NEXT_DEVELOPMENT_SESSION.md).
 Closure remains open: no productive advisor, real upstream, durable role/material
-authorization, native body validator, worker wiring, deployment or live acceptance
+authorization, productive native adapter, worker wiring, deployment or live acceptance
 is enabled. The original project, host authority sockets and credentials remain
 outside this proposed child boundary. Inspect all lane state before post-merge
 cleanup; main merge and deployment remain owner actions.
