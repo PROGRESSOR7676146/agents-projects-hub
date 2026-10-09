@@ -230,6 +230,14 @@ Recovery after a claim does not refund it; recovery after send-start cannot clea
 the frozen cause or sender owner. SQL replacement/rowid guards do not depend on
 recursive DELETE triggers.
 
+Post-fence ingress claims remain useful for exact terminal/result recovery after
+an ACK with active work or an unknown send. They are bounded read-only cycles,
+sharing the same allowance even after a native fence; they cannot resend,
+enrich provenance or prove sender quiescence. A later stop receives only the
+remaining cycles. Claims still require a currently due ingress episode and
+exclude recovery, exact terminal evidence and owner resolution; a covering real
+pending stop takes priority. They are not unconditional background maintenance.
+
 This is a dormant state slice: no worker, scheduler or native-client path calls
 the new facade. The owning contract is REQ-QUEUE-014. Runtime integration must
 catch optional assessment faults locally as uncertainty, recheck proof/deadline

@@ -142,7 +142,12 @@ the accepted egress policy rather than treating delivery consent as ingress reco
 
 Schema52's dormant state candidate covers reassessment plus immutable first-send
 cause capture, recovery before/after reservation, current lease/read-claim guards,
-one shared budget/fence and later real-stop precedence. Its populated schema51
+one shared budget/fence and later real-stop precedence. The state fixtures also
+cover bounded post-fence claims for read-only terminal/result observation after ingress or
+native sends, with no resend, cause enrichment or sender quiescence. Recovery,
+terminal proof and owner resolution suppress ingress claims; later stops retain
+only the shared remaining cycles.
+Its populated schema51
 upgrade must preserve rows, claims, schedules, unknown senders and exact earlier
 triggers, with a nullable added parent column, empty cause storage, consistent
 backup and complete DDL-fault rollback. Historical sends must not acquire causes.

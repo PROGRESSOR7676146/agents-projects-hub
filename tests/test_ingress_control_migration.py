@@ -79,7 +79,19 @@ class IngressControlMigrationTests(unittest.TestCase):
             current_objects = objects(current)
             for definition in self.old_objects:
                 # Only the parent CREATE TABLE gains the nullable discriminator.
-                if definition[1] != "codex_turn_controls":
+                if definition[1] == "codex_turn_controls":
+                    anchor = "owner_quiesced_at TEXT,"
+                    self.assertEqual(definition[2].count(anchor), 1)
+                    expected_sql = definition[2].replace(
+                        anchor,
+                        "owner_quiesced_at TEXT, ingress_assessment_revision_at_send INTEGER\n"
+                        "    CHECK(ingress_assessment_revision_at_send IS NULL OR\n"
+                        "      (typeof(ingress_assessment_revision_at_send)='integer'\n"
+                        "       AND ingress_assessment_revision_at_send BETWEEN 1 AND 9223372036854775807)),",
+                    )
+                    actual_sql = next(obj[2] for obj in current_objects if obj[1] == definition[1])
+                    self.assertEqual(actual_sql, expected_sql)
+                else:
                     self.assertIn(definition, current_objects)
             self.assertEqual(
                 current.execute("SELECT * FROM codex_ingress_interrupt_causes").fetchall(), []
@@ -113,6 +125,40 @@ class IngressControlMigrationTests(unittest.TestCase):
             assert row is not None
             self.assertEqual(dict(row), before)
             self.assertIsNone(state.codex_ingress_control.read_cause(self.fixture.job.job_id))
+
+    def test_unsent_genuine_schema51_target_retains_first_send_authority_after_upgrade(self):
+        fixture = fixtures.CodexIngressControlTests()
+        fixture.setUp()
+        self.addCleanup(lambda: self.assertTrue(fixture.doCleanups()))
+        path = self.path.with_name("example-unsent51.db")
+        project_historical_database(fixture.fixture.harness.config.state_path, path, 51)
+        with closing(sqlite3.connect(path)) as old:
+            self.assertEqual(old.execute("PRAGMA user_version").fetchone()[0], 51)
+            self.assertNotIn(
+                "ingress_assessment_revision_at_send", columns(old)["codex_turn_controls"]
+            )
+            self.assertIsNone(
+                old.execute("SELECT send_started_at FROM codex_turn_controls").fetchone()[0]
+            )
+        migrations.migrate_database(path)
+        with closing(HubState.open_existing(path, codex_permission_profile=None)) as state:
+            owner = state.codex_ingress_control.begin_interrupt(
+                job_id=fixture.job.job_id,
+                proof=fixture.proof(),
+                validated_root=fixture.root,
+                invocation_token=fixture.token,
+                now=fixture.now,
+            )
+            assert owner is not None
+            cause = state.codex_ingress_control.read_cause(fixture.job.job_id)
+            control = state.codex_controls.read(fixture.job.job_id)
+            assert cause is not None and control is not None
+            self.assertEqual(
+                cause["assessment_revision"], control["ingress_assessment_revision_at_send"]
+            )
+            self.assertEqual(cause["reason"], "poll_failures")
+            self.assertIsNotNone(control["send_started_at"])
+            self.assertIsNone(control["owner_quiesced_at"])
 
     def test_ddl_fault_rolls_back_add_column_causes_objects_data_and_version(self):
         with (

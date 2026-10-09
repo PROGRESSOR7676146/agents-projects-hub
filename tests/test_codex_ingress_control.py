@@ -93,7 +93,9 @@ class CodexIngressControlTests(unittest.TestCase):
             "policy_version",
             "episode_generation",
             "reason",
+            "since",
             "deadline",
+            "recovery_after",
             "recovery_cutoff_epoch",
             "recovery_cutoff_sequence",
             "source_failure_epoch",
@@ -125,6 +127,127 @@ class CodexIngressControlTests(unittest.TestCase):
         cause = self.cause()
         assert cause is not None
         self.assertEqual((dict(cause), dict(self.control())), retained)
+        self.assertIsNone(self.control()["owner_quiesced_at"])
+
+    def test_ingress_fence_permits_read_only_claim_without_changing_cause_or_owner(self):
+        self.assertIsNotNone(self.begin())
+        cause = self.cause()
+        assert cause is not None
+        frozen_cause = dict(cause)
+        before = dict(self.control())
+        self.indeterminate()
+        claim = self.claim()
+        assert claim is not None
+        self.assertEqual(claim["late_read_attempts"], 1)
+        self.assertIsNone(
+            self.state.codex_ingress_control.begin_interrupt(
+                job_id=self.job.job_id,
+                proof=self.proof(),
+                validated_root=self.root,
+                read_claim_token=claim["read_claim_token"],
+                now=self.now,
+            )
+        )
+        self.state.codex_controls.finish_late_read(self.job.job_id, claim["read_claim_token"])
+        cause = self.cause()
+        assert cause is not None
+        self.assertEqual(dict(cause), frozen_cause)
+        for key in (
+            "send_started_at",
+            "send_owner_token_hash",
+            "interrupt_source",
+            "interrupt_outcome",
+            "owner_quiesced_at",
+            "ingress_assessment_revision_at_send",
+        ):
+            self.assertEqual(self.control()[key], before[key])
+
+    def test_native_fence_permits_read_only_ingress_claim_without_cause_enrichment(self):
+        owner = self.state.codex_controls.begin_interrupt(
+            job_id=self.job.job_id,
+            source="protective",
+            proof=self.proof(),
+            validated_root=self.root,
+            invocation_token=self.token,
+            now=self.now,
+        )
+        assert owner is not None
+        self.state.codex_controls.finish_interrupt(
+            self.job.job_id, owner, outcome="matched_ack", send_path_quiesced=True, now=self.now
+        )
+        self.indeterminate()
+        claim = self.claim()
+        assert claim is not None
+        self.assertIsNone(
+            self.state.codex_ingress_control.begin_interrupt(
+                job_id=self.job.job_id,
+                proof=self.proof(),
+                validated_root=self.root,
+                read_claim_token=claim["read_claim_token"],
+                now=self.now,
+            )
+        )
+        self.assertIsNone(self.cause())
+        self.assertIsNone(self.control()["ingress_assessment_revision_at_send"])
+        self.assertEqual(self.control()["interrupt_outcome"], "matched_ack")
+        self.assertIsNotNone(self.control()["owner_quiesced_at"])
+
+    def test_post_fence_three_spaced_reads_exhaust_shared_budget_before_later_stop(self):
+        self.assertIsNotNone(self.begin())
+        self.indeterminate()
+        for attempt in range(1, 4):
+            at = self.now + timedelta(seconds=30 * (attempt - 1))
+            claim = self.claim(now=at)
+            assert claim is not None
+            self.assertEqual(claim["late_read_attempts"], attempt)
+            self.state.codex_controls.finish_late_read(self.job.job_id, claim["read_claim_token"])
+            self.assertIsNone(self.claim(now=at + timedelta(seconds=29)))
+        self.state.request_emergency_stop(
+            topic_id=self.job.topic_id,
+            chat_id=self.job.chat_id,
+            message_id=99,
+            target_agent_id="codex",
+        )
+        later = self.now + timedelta(seconds=200)
+        self.assertIsNone(self.claim(now=later))
+        self.assertIsNone(
+            self.state.codex_controls.claim_late_read("example-stop-reader", now=later)
+        )
+        self.assertEqual(self.control()["late_read_attempts"], 3)
+        self.assertIsNone(self.control()["owner_quiesced_at"])
+
+    def test_ingress_recovery_suppresses_post_fence_claims_without_clearing_owner(self):
+        self.assertIsNotNone(self.begin())
+        self.indeterminate()
+        before = dict(self.control())
+        self.poll(4, succeeded=True, at=self.now)
+        self.assertIsNone(self.claim())
+        self.assertEqual(dict(self.control()), before)
+        self.assertIsNotNone(self.cause())
+
+    def test_post_fence_exact_terminal_proof_excludes_read_claim(self):
+        self.assertIsNotNone(self.begin())
+        self.state.terminate_provider_job_with_notice(
+            self.job.job_id,
+            self.token,
+            status="indeterminate",
+            error_class="example-loss",
+            error_code="example-confirmed-interruption",
+            sender_agent_id="codex",
+            telegram_html="Fictional confirmed interruption",
+            terminal_turn_status="interrupted",
+            now=self.now,
+        )
+        self.assertIsNone(self.claim())
+        self.assertEqual(self.control()["late_read_attempts"], 0)
+        self.assertIsNone(self.control()["owner_quiesced_at"])
+
+    def test_post_fence_owner_resolution_excludes_read_claim(self):
+        self.assertIsNotNone(self.begin())
+        self.indeterminate()
+        self.assertTrue(self.state.resolve_indeterminate_job(self.job.job_id, "acknowledged"))
+        self.assertIsNone(self.claim())
+        self.assertEqual(self.control()["late_read_attempts"], 0)
         self.assertIsNone(self.control()["owner_quiesced_at"])
 
     def test_not_due_writes_no_fence_or_cause(self):
@@ -289,7 +412,8 @@ class CodexIngressControlTests(unittest.TestCase):
                     proof=self.proof(),
                     validated_root=self.root,
                     now=self.now,
-                    **tokens,
+                    invocation_token=tokens.get("invocation_token"),
+                    read_claim_token=tokens.get("read_claim_token"),
                 )
         with self.state._immediate_transaction():
             with self.assertRaisesRegex(StateError, "cannot nest"):
@@ -340,6 +464,39 @@ class CodexIngressControlTests(unittest.TestCase):
                 self.state.codex_ingress_control.begin_interrupt(
                     job_id=self.job.job_id,
                     proof=replace(self.proof(), observed_monotonic=10.0),
+                    validated_root=self.root,
+                    invocation_token=self.token,
+                    send_deadline=15.0,
+                    now=self.now,
+                )
+            )
+        self.assertIsNone(self.cause())
+        self.assertIsNone(self.control()["send_started_at"])
+
+    def test_deadline_expiry_during_assessment_refuses_still_fresh_proof(self):
+        original = self.state.telegram_ingress_assessments.assess_in_transaction
+        clock = [12.0]
+
+        def delayed(*args, **kwargs):
+            result = original(*args, **kwargs)
+            clock[0] = 15.5
+            return result
+
+        with (
+            patch(
+                "hermes_codex_router.codex_turn_controls.time.monotonic",
+                side_effect=lambda: clock[0],
+            ),
+            patch.object(
+                self.state.telegram_ingress_assessments,
+                "assess_in_transaction",
+                side_effect=delayed,
+            ),
+        ):
+            self.assertIsNone(
+                self.state.codex_ingress_control.begin_interrupt(
+                    job_id=self.job.job_id,
+                    proof=replace(self.proof(), observed_monotonic=12.0),
                     validated_root=self.root,
                     invocation_token=self.token,
                     send_deadline=15.0,
@@ -408,12 +565,14 @@ class CodexIngressControlTests(unittest.TestCase):
                 WHERE job_id=?""",
                 (self.job.job_id,),
             )
-        before = dict(self.state.telegram_ingress_assessments.read(self.job.job_id))
+        assessment = self.state.telegram_ingress_assessments.read(self.job.job_id)
+        assert assessment is not None
+        before = dict(assessment)
         with self.assertRaises(StateError):
             self.begin()
-        self.assertEqual(
-            dict(self.state.telegram_ingress_assessments.read(self.job.job_id)), before
-        )
+        assessment = self.state.telegram_ingress_assessments.read(self.job.job_id)
+        assert assessment is not None
+        self.assertEqual(dict(assessment), before)
         self.assertIsNone(self.cause())
         self.assertIsNone(self.control()["send_started_at"])
 
@@ -572,7 +731,9 @@ class CodexIngressControlTests(unittest.TestCase):
                 )
         with self.assertRaises(sqlite3.IntegrityError), self.state._immediate_transaction():
             db.execute("UPDATE OR REPLACE codex_ingress_interrupt_causes SET rowid=rowid+1")
-        self.assertEqual(dict(self.cause()), before)
+        cause = self.cause()
+        assert cause is not None
+        self.assertEqual(dict(cause), before)
 
     def test_claim_fault_rolls_back_allowance_and_assessment(self):
         self.indeterminate()

@@ -85,6 +85,8 @@ class CodexIngressControl:
         usable only after commit, with a fresh proof/deadline check before RPC.
         Storage/assessment faults propagate to the optional ingress caller,
         which must not treat them as loss of the mandatory native stream.
+        Runtime callers must leave now=None for refreshed wall-clock validation;
+        an explicit now is a fixed fixture clock, not a production time source.
         """
         source = "late" if read_claim_token is not None else "protective"
         _validate_interrupt_selection(source, invocation_token, read_claim_token)
@@ -142,6 +144,11 @@ class CodexIngressControl:
 
         A covering real pending stop defers to the existing stop-only consumer.
         Recovery, another episode or another stop never replenish the allowance.
+        While ingress is still due, an ingress or native send-start fence permits
+        bounded exact terminal/result observation only. It never permits resend,
+        provenance enrichment or sender quiescence. Recovery, terminal proof or
+        owner resolution suppress further ingress claims; this is not an
+        unconditional maintenance allocator.
         This method is deliberately not wired into worker maintenance yet.
         """
         if not worker_id or len(worker_id) > 128:

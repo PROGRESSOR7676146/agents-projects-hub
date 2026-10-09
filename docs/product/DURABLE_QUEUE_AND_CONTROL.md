@@ -606,6 +606,12 @@ This normative module is part of the
   allowance and 30-second spacing before connection, defer to a covering real
   pending stop, and never invent a stop row or receipt. Recovery and new episodes
   MUST NOT replenish that allowance or clear a reserved fence/sender owner.
+  While the exact ingress episode remains due, claims after either an ingress
+  or native send-start fence MAY consume that same allowance for bounded exact
+  terminal/result observation only. They MUST NOT resend, enrich ingress
+  provenance or establish sender quiescence. Recovery, exact terminal proof or
+  owner resolution MUST suppress further ingress claims; a pending real stop
+  retains priority, and a later stop MUST NOT replenish consumed cycles.
   Migration MUST leave the discriminator NULL and cause storage empty, preserve
   all earlier evidence and refuse replacement/rowid attacks. These dormant
   domain methods MUST NOT activate worker or scheduler behavior. Future native
