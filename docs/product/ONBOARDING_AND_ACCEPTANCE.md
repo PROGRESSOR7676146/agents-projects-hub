@@ -180,14 +180,13 @@ necessary but not sufficient for items marked live.
   block relocation; crash recovery and callback replay converge once; new
   Controller/worker resolution uses the new root while archived provider origins
   retain the old root.
-- **AC-F-015 (Planned; REQ-COLLAB-001..002, REQ-WRITER-013,
-  REQ-QUEUE-011, REQ-EVAL-010):** Offline tests MUST prove either provider can
-  lead; an uninvoked advisor spends no tokens; advisor tools, local transfer
-  and descendants cannot write; role handover cannot race active work; one
-  bounded review and continuation survive duplicate delivery and restart
-  without replay. Subscription/CPA routing, human approvals, Telegram behavior
-  and exact-session local return require separate live acceptance before parity
-  is claimed.
+- **AC-F-015 (Retired by ADR 0065):** Lead/advisor role and review-workflow
+  acceptance is removed, not passed. The ID remains reserved. Independent
+  subscription/CPA routing, human approvals, Telegram behavior, custody and
+  exact-session local return still require their existing separate acceptance
+  before Claude parity is claimed; REQ-EVAL-010 remains an independent milestone.
+  Its acceptance is owned by the
+  [evaluation module](EVALUATION_AND_ALLOCATION.md#acceptance-boundaries).
 
 ## 16. Non-functional acceptance criteria
 
@@ -243,5 +242,5 @@ necessary but not sufficient for items marked live.
 | Automatic OS terminal window/PID management | Rejected | Explicit resume commands and writer leases are simpler and safer. |
 | Message-by-message CLI transcript mirroring | Rejected | Provider sessions plus explicit bounded history retrieval are sufficient. |
 | Automatic approval or security relaxation | Rejected | Violates the trust model. |
-| Claude Code CLI worker | Repository scaffold; live acceptance pending | Text-only adapter behind a loopback CPA route with independent slots; approvals, advisor isolation and parity work continue (REQ-AUTH-009, ADR 0039, ADR 0045). |
+| Claude Code CLI worker | Repository scaffold; live acceptance pending | Text-only adapter behind a loopback CPA route with independent slots; approvals, authority custody and parity work continue (REQ-AUTH-009, ADR 0039, ADR 0045). |
 | Out-of-band update and incident plane | Planned | Hub keeps a passive incident journal and stack drift check; Hermes sends model-free incident cards and analyzes only on the owner's press; a deterministic tool switches the stack only from an owner-confirmed plan (REQ-OPS-013..015, ADR 0048). |

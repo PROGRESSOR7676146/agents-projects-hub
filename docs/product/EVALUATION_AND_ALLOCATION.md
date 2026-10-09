@@ -10,12 +10,12 @@ automatic provider switch, evaluation run, new provider, or deployment is enable
 by this document. Algorithms and evaluator vendors remain implementation choices.
 Rationale: [ADR 0037](../decisions/0037-evidence-based-task-allocation.md).
 
-Delivery priority: the initial [lead/advisor milestone](../operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
-uses human-selected participants and a minimal outcome/usage journal. Automatic
+Delivery priority: the minimal outcome/usage journal is independent of the
+retired [Hub role workflow](../decisions/0065-retire-hub-lead-advisor.md). Automatic
 profiles, ranking, allocation, model judges and comparative experiments remain
 deferred until observed need and suitable evidence justify them. The accepted
 long-term requirements below do not make those mechanisms a prerequisite for
-the first collaboration release.
+the current provider-parity release.
 
 ## 21. Evaluation and resource-aware task allocation
 
@@ -106,8 +106,8 @@ the first collaboration release.
   Cross-project aggregation and transfer to an external evaluator require
   explicit data scope; ordinary context isolation remains in force. Models
   MUST NOT edit their own authoritative grades, usage or allocation receipts.
-- **REQ-EVAL-010 (Accepted initial milestone; implementation pending):** The
-  first Claude Code/Codex collaboration release MUST provide a minimal
+- **REQ-EVAL-010 (Accepted independent milestone; implementation pending):**
+  Hub MUST provide a minimal
   private outcome journal: task, participant/model/effort, result or artifact,
   accepted/rework/unknown decision with a short reason, and observable elapsed
   time and usage. Unknown usage MUST remain unknown. It MUST NOT require an
@@ -152,6 +152,13 @@ the first collaboration release.
   untrusted model access to this journal remains an independent OS-boundary gate.
 
 ### Acceptance boundaries
+
+For the independent REQ-EVAL-010 journal, offline acceptance MUST cover duplicate
+and conflicting dispositions, corrections, strict Reply/result provenance,
+atomic rollback and absence of productive fallback. Unknown usage/time/model
+evidence MUST remain unknown; an assessment MUST NOT invoke a provider, replay
+work, grant tools or release execution uncertainty. These journal checks remain
+required after AC-F-015 retirement, independent of scoring and model evaluation.
 
 Implementation acceptance requires offline evidence for duplicate outcome
 delivery, delayed corrections, attribution uncertainty, shared quota pools,

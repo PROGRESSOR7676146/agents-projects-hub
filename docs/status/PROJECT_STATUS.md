@@ -18,9 +18,9 @@ owning modules.
 | Capability | Repository state | Live acceptance | Contract |
 | --- | --- | --- | --- |
 | Multiple Codex worker slots | Implemented | Pending (three projects) | [REQ-QUEUE-002](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md) |
-| Claude Code CPA worker | Text-only default; protected file-tool permission boundary implemented offline (schema 38) | Pending; advisor isolation and full parity remain open | [REQ-AUTH-009/SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0052](../decisions/0052-protected-claude-file-permissions.md) |
-| Managed Codex permission-profile continuity | External queue slice and immutable schema-39 snapshots; native offline adapter coverage | Pending; custody and local/advisor boundaries remain open | [REQ-SEC-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0055](../decisions/0055-managed-codex-profile-continuity.md) |
-| Claude/Codex lead and advisor | Accepted plan; not implemented | — | [REQ-COLLAB-001](../product/IDENTITY_AND_INTERACTION.md), [ADR 0040](../decisions/0040-bounded-claude-codex-lead-advisor.md) |
+| Claude Code CPA worker | Text-only default; protected file-tool permission boundary implemented offline (schema 38) | Pending; authority custody and full parity remain open | [REQ-AUTH-009/SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0052](../decisions/0052-protected-claude-file-permissions.md) |
+| Managed Codex permission-profile continuity | External queue slice and immutable schema-39 snapshots; native offline adapter coverage | Pending; custody, helpers and local boundaries remain open | [REQ-SEC-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0055](../decisions/0055-managed-codex-profile-continuity.md) |
+| Claude/Codex lead and advisor | Retired from Hub scope; not implemented | Not required | [Retired IDs](../product/IDENTITY_AND_INTERACTION.md#explicit-claude-codecodex-collaboration), [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md) |
 | Participant evaluation and allocation | Accepted foundation; not implemented | — | [Requirements](../product/EVALUATION_AND_ALLOCATION.md), [ADR 0037](../decisions/0037-evidence-based-task-allocation.md) |
 | Stop certainty and independent notices (schema 36) | Implemented; canonical checks and independent review at `d3be874` | Pending | [REQ-QUEUE-005/013](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md) |
 | Final/progress send certainty (schema 43) | Source implementation under validation; exact publication gates pending | Pending | [REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0060](../decisions/0060-final-and-progress-delivery-certainty.md) |
@@ -57,7 +57,7 @@ Claude Code has a text-only external worker with native identity preparation,
 bounded visible streaming and saved-result recovery. Offline tests cover the
 invocation, failure and restart boundaries in
 [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md). Human approvals,
-write-capable lead, isolated advisor, native local transfer, session connect and
+authority custody, native local transfer, session connect and
 live CPA/account acceptance remain pending under
 [REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
 
@@ -77,11 +77,12 @@ Participant evaluation and resource-aware task allocation are an accepted
 product foundation; implementation and acceptance remain pending. See
 [the owning requirements](../product/EVALUATION_AND_ALLOCATION.md) and
 [ADR 0037](../decisions/0037-evidence-based-task-allocation.md).
-The initial [Claude/Codex milestone](../operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
-is scoped to one lead, a read-only advisor and a minimal outcome journal;
-automated scoring and parallel writers are deferred. Full provider integration,
-role enforcement and live acceptance remain pending; see
-[ADR 0040](../decisions/0040-bounded-claude-codex-lead-advisor.md).
+Hub lead/advisor roles and their review workflow are retired by
+[ADR 0065](../decisions/0065-retire-hub-lead-advisor.md), not implemented.
+Independent cross-provider project review remains outside Hub orchestration.
+The minimal outcome journal stays an independent milestone. Standalone
+[Claude parity](../operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md), custody and live
+acceptance remain open; scoring and parallel writers remain deferred.
 
 Schema35 root-blocker admission is implemented offline; deployment/live
 acceptance remain pending under
@@ -403,17 +404,12 @@ artifact for schema 33 remain deployment-specific; the current target is schema 
   manifest, switches back, runs the rollback artifact against the retained target, and compares
   queued/outbox/indeterminate rows byte-for-value. It has no service, provider,
   Telegram, credential, or live-state capability.
-- Telegram polling and durable-send failures are classified without raw
-  exception text as bounded operation, network/API class, optional safe HTTP
-  status/retry-after, consecutive-failure count, and last-success time.
-  The first two consecutive failures remain visible without falsely degrading
-  the component; the third degrades health and emits one edge for the whole
-  episode. A successful request emits one recovery only for a degraded episode,
-  clears it, and re-arms the threshold. Direct-provider pollers use the same
-  threshold/recovery contract without becoming required deployment-health
-  components.
-  Advisory chat-action failures remain best-effort and do not block or repeat
-  provider work.
+- Telegram polling and durable-send failures retain bounded operation/class,
+  optional HTTP status/retry-after, failure count and success time. The third
+  failure degrades once; successful transport clears and re-arms the episode.
+  Direct-provider pollers share the contract without becoming required health
+  components; best-effort chat actions do not block execution. See
+  [REQ-OPS-006](../product/PERSISTENCE_AND_RECOVERY.md).
 - Central Telegram ingress with deterministic ordinary, Reply, mention, and
   quote routing; forwarded messages are passive durable context and bypass all
   command/stop/provider parsing. Non-target providers are not invoked merely to observe. An

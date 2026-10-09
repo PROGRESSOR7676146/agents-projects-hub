@@ -1,8 +1,17 @@
 # ADR 0057: Sealed explicitly selected review materials
 
-Status: offline implementation candidate; publication review and workflow integration pending.
+Status: retained offline primitive; advisor workflow integration withdrawn by ADR 0065.
 Date: 2026-10-07.
 Owner: Hub maintainer.
+
+## 2026-10-09 scope amendment
+
+[ADR 0065](0065-retire-hub-lead-advisor.md) retires the advisor role and cancels
+the role/session/material binding and productive transport follow-ups below.
+The existing primitive, tests and source evidence remain; their retention does
+not make them a release prerequisite or prove productive acceptance. Further
+advisor integration requires a new owner scope decision. Shared mount/security
+fixes and ordinary provider/helper custody remain independently required.
 
 ## Context
 

@@ -420,6 +420,12 @@ and [SDK result message](https://code.claude.com/docs/en/agent-sdk/typescript#sd
 
 ## Offline review pipe primitives
 
+Scope update: [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md) retires
+Hub-managed advisor integration. The existing fixtures and required CI are
+retained as source regressions; the combined native/pipe witness and productive
+role/material workflow are not pending release acceptance tasks. Standalone
+Claude parity and provider/helper custody retain their separate gates.
+
 `tests.test_review_bridge_protocol` and `tests.test_review_bridge_attempt` exercise
 the [bounded pipe primitives](../decisions/0058-bounded-review-pipe-primitives.md)
 without a provider, socket, process launch, environment credentials or live route:
@@ -431,15 +437,10 @@ PYTHONPATH=src:. python scripts/validate.py --profile focused \
   tests.test_review_materials
 ```
 
-Codec tests cover fragmented/combined frames, declared payload limits before body
-accumulation, aggregate byte/frame budgets including headers and empty frames,
-invalid caller types and permanent retirement after failure/EOF. Gate tests use
-real sealed capsules and a recording fake callback: exact material binding and
-trusted request bytes, source changes after sealing, unsealed/closed material,
-forbidden frame directions, single-use concurrent/reentrant admission, safe
-callback diagnostics and cancellation/deadlines before and after claim. The host
-injected callback has no live upstream implementation; its return is not provider
-acceptance or completion. Deadline checks cannot interrupt that callback.
+Codec/gate tests cover framing/bounds, retirement, sealed-material substitution,
+one-use races, cancellation and deadlines. The injected callback has no live
+upstream; its return is not provider acceptance or completion. Deadline checks
+cannot interrupt it. Exact contracts remain in ADR 0058/tests.
 
 Sequence and write-buffer tests add wrong direction/order, duplicate controls,
 stdout before request, graceful cancellation with bounded discarded in-flight
@@ -495,8 +496,8 @@ restart deduplication, subscription/no-paid-fallback, productive advisor,
 deployment or Telegram acceptance. Fixed source snapshots are fixture inputs,
 not an installed supervisor. The ordinary suite creates no real inference route.
 
-The in-process `tests.test_claude_native_pipe_contract` adds a test-only seam for
-the future combined native/pipe witness:
+The in-process `tests.test_claude_native_pipe_contract` retains the test-only seam
+prepared for the now-withdrawn combined native/pipe witness:
 
 ```bash
 PYTHONPATH=src:. python scripts/validate.py --profile focused \
@@ -515,9 +516,9 @@ Run `tests.test_review_bridge_exchange` with the pipe and namespace corpus above
 It checks bounded raw stdout/exit returned after cleanup without receipt parsing,
 structural owners, native refusal with zero consumption/EOF and cancellation with
 zero/one consumption. A forged receipt can complete transport while the legacy
-wrapper refuses it. The ten-second transport deadline remains, plus bounded cleanup;
-the future native wrapper
-needs a separate bounded budget and parser after cleanup. No native launch,
+wrapper refuses it. The ten-second transport deadline remains, plus bounded cleanup.
+Any later native wrapper would require a new scope decision, its own bounded
+budget and parser after cleanup. No native launch,
 productive authorization or combined witness is established by this extraction.
 
 ## Live acceptance boundary
@@ -557,7 +558,8 @@ Python memfd allocator, without closing test resources; untracked snapshot
 differences remain diagnostics, not cleanup authority. Allocation-fault tests
 also check capsule descriptor closure explicitly.
 This is snapshot
-and fixture evidence; durable material authorization and productive review remain open.
+and fixture evidence; durable advisor authorization and productive review are
+withdrawn by ADR 0065, rather than proven by these fixtures.
 An executable-specific AppArmor
 profile permits bubblewrap user namespaces only on that disposable CI runner.
 Developer environments may skip unavailable namespace fixtures; those skips

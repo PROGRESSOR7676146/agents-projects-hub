@@ -1,7 +1,10 @@
 # ADR 0040: Bounded Claude Code/Codex lead and advisor workflow
 
-Status: accepted scope; implementation and live acceptance pending
+Status: superseded by [ADR 0065](0065-retire-hub-lead-advisor.md); retained rationale
 Date: 2026-09-27
+
+The Hub-managed role and review workflow below is retired, not implemented.
+Independent Claude parity and provider safety requirements remain in scope.
 
 ## Context
 

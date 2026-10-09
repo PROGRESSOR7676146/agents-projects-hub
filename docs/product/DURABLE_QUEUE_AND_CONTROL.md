@@ -653,15 +653,11 @@ This normative module is part of the
   authenticated `not_sent`, matched rejection, quiescence or native terminality.
   Monitoring invokes no inference; unavailable delivery is no owner receipt. See
   [ADR 0064](../decisions/0064-codex-control-loss.md).
-- **REQ-QUEUE-011 (Accepted; implementation pending):** An explicitly enabled
-  Claude Code/Codex review workflow MUST durably bind its request, permitted
-  materials, exact artifact/revision reference, advisor result, lead decision,
-  and continuation to the originating project, topic, provider sessions and
-  role generation. Duplicate delivery or restart MUST NOT create a second
-  advisor call or lead continuation. An uncertain provider turn MUST retain
-  the existing no-automatic-replay boundary. The lead MUST finish its turn
-  before the advisor takes a separate queue slot; a role change MUST NOT mutate
-  already accepted target snapshots.
+- **REQ-QUEUE-011 (Retired by ADR 0065):** The Hub-managed review/continuation
+  workflow and role generation are outside scope. Its withdrawal changes no
+  existing queue, immutable target, writer, uncertainty or no-replay boundary.
+  The ID remains reserved; see
+  [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md).
 
 The detailed state machine, retry proof rule, reconciliation, and required
 fault acceptance are normative in [ADR 0001](../decisions/0001-durable-provider-job-queue.md).
