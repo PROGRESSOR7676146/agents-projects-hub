@@ -75,8 +75,19 @@ and independently constructed native scaffolds, instead of only model/tools/effo
 Test-first substitutions, strict JSON/headers and global one-POST controls are in
 `tests.test_claude_native_request_contract`; the explicit pinned native matrix is
 documented in the [testing guide](../testing/README.md#optional-offline-native-claude-transport).
-Finish independent exact-source review and canonical publication for this slice,
-then design the semantic adapter and combined owned-pipe/namespace witness.
+The corpus is published at `f190318af06751683036ff50bf81487b59f207c4`,
+with canonical 2,805 tests in 251 modules, zero typing errors, independent
+Astra/actual Opus review and seven exact-head hosted checks. Do not repeat its
+publication gates on the unchanged revision.
+The next test-only integration candidate joins the exact pipe witness prerequisite
+at `cc976f6828554104b7326770f1e3a67b6e2de6ef`, retaining its shared process owner,
+namespace CI coverage and failure tests. Complete exact integrated-source review
+and publication before adding the combined native/owned-pipe witness.
+That witness must validate a host-preconstructed expectation and use fresh fictional
+materials supplied only through CAPSULE and a fresh fake response supplied only
+through response frames. The namespace supervisor must not generate inference
+responses locally. This test-only seam does not establish productive authorization;
+the semantic adapter and durable workflow remain a separate design.
 Keep the existing host-precomputed exact request digest authority unchanged.
 This corpus enables no productive advisor, role transfer or subscription route;
 durable workflow binding and live acceptance remain open.

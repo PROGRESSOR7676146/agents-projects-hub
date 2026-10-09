@@ -81,3 +81,4 @@ jobs:
           tests.test_codex_native_namespace
           tests.test_process_namespace_rehearsal
           tests.test_review_materials_namespace
+          tests.test_review_bridge_namespace
