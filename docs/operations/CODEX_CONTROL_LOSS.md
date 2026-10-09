@@ -4,8 +4,10 @@ Status: staged source fix; full control-loss acceptance pending
 Owner: lead development agent. Last verified Stage 1 revision: `fe7bb51ffa8dc491a33c624614dcff57ab40208d`.
 Stage 2 source published at `b9822a797572ee6edab0d3b3c515516e38a68148`;
 no deployment acceptance. Stage3's schema49 prerequisite is source-published at
-`7af0204a117e2b1a23c0a364f44249c12de14fa4`; schema50 provenance remains
-under source validation.
+`7af0204a117e2b1a23c0a364f44249c12de14fa4`; schema50 provenance and schema51
+causal episodes are source-published at
+`4727241b3906c27ab4556cd4abd8eb6157e0c4f6` and
+`506f3bf765ae477bc1945c6317214a3d86fcec6c`. Runtime ingress precautions remain pending.
 
 Follow [REQ-QUEUE-014](../product/DURABLE_QUEUE_AND_CONTROL.md) and
 [ADR 0064](../decisions/0064-codex-control-loss.md). A worker marked idle or a
@@ -30,6 +32,7 @@ installed clean revision and all required component revisions. Distinguish:
 | Authenticated `not_sent` before calling the client | Sender quiesced; permanent fence and native uncertainty remain |
 | Active/unknown exact turn | Root remains held; no retry, reset or replacement writer |
 | Prepared notice | Saved for delivery; owner receipt is not established |
+| One unknown commentary/progress delivery | Retain uncertainty; this alone does not authorize interruption |
 | Aggregate Telegram transport failures | Diagnose ingress/egress separately; exact-topic loss is unproved |
 | Fenced successful group poll | Recent global ingress; exact topic control is unproved |
 | New ingress epoch with historical success only | Startup uncertainty; no current poll or automatic control |
@@ -95,6 +98,10 @@ Responses, with no real login, remote model or installed service access.
 5. Independent ingress and egress loss while provider work continues: stale or
    missing ingress, empty successful polls, sender idle/429, another topic's
    success and unavailable notice delivery cannot fabricate control or receipt.
+   One unknown progress with healthy ingress must not interrupt. With independent
+   due ingress loss, the same unknown progress or delivery consent must not hide
+   that cause. Recovery before reservation must suppress an unsent precaution;
+   recovery after reservation must retain its fence and sender ownership.
 6. Shutdown during fenced interrupt and real SQLite writer contention after ACK
    preserve matched settlement with one RPC; pre-call deadline refusal quiesces
    only the sender. Refused acceptance retains exact identity without later
@@ -123,9 +130,15 @@ commit faults, separate historical confirmation, and additive migration with
 retained schema48 unknown-sender fences. The pure policy covers long healthy
 turns followed by restart, immediate new-epoch recovery, original third-failure
 deadlines, stale/missing samples and malformed clocks. These are offline state
-and policy checks. Item5's exact-target persistent episodes, full-control consent
-race, native work surviving Telegram loss and shared protective send integration
+and policy checks. Exact-target persistent episodes are now source-published in
+schema51. Item5's native work surviving Telegram ingress loss and shared send integration
 remain open; neither ledger nor policy interrupts work or notifies the owner.
+
+The neutral transaction prerequisite covers assessment/reservation atomicity,
+caller rollback, rejected commit, guard refusal and monotone real-stop binding.
+It does not grant ingress control authority; its composed tests use an existing
+independently authorized protective source. Follow the dated ADR amendment for
+the accepted egress policy rather than treating delivery consent as ingress recovery.
 
 Schema50 provenance fixtures must additionally cover current Reply retry chains,
 continuation duplicates, batching/steering's nine identity pairs, direct steering

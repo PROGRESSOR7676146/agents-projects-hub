@@ -1,6 +1,6 @@
 # ADR 0064: Preserve control of accepted Codex turns
 
-Status: accepted staged design; schemas48–50 source published, schema51 under validation
+Status: accepted staged design; schemas48–51 source published, runtime integration pending
 Date: 2026-10-08
 
 ## Context and decision
@@ -134,8 +134,9 @@ prospective uncertainty. It neither persists exact-target episodes nor selects
 control. Next integration must capture trustworthy logical ingress for the exact
 accepted target, retain continuity/earliest deadlines durably, and recheck
 evidence and full-control consent atomically with the existing send fence.
-Unknown exact commentary delivery needs its own target-bound episode; idle,
-429 and unrelated success are not its substitutes. Existing late owner-stop
+The original Stage3 proposal included a target-bound episode for unknown exact
+commentary delivery; the dated amendment below supersedes that proposal. Idle,
+429 and unrelated success are not outage proof. Existing late owner-stop
 claims do not yet authorize due Telegram precautions. No precautionary interrupt
 or new owner-stop receipt is introduced by schema49.
 
@@ -182,6 +183,31 @@ target immediately due; startup/stale grace does not reset that streak. Fresh
 matching success may clear a due but unsent precaution as well as one before its
 deadline. Future integration must recheck it inside send-start; clearing an
 episode cannot erase a permanent send fence, unknown delivery or sender owner.
+
+## 2026-10-09 amendment: one unknown progress delivery
+
+The owner selected the third proposed policy: one unknown commentary/progress
+delivery alone does not trigger precautionary interruption. It does not prove
+loss of ingress, `/stop` or native approvals. The owning clause is
+REQ-QUEUE-014; existing unknown-delivery storage and reconciliation remain in
+force. This decision removes the need for a commentary-cause sidecar or its
+consent/send-start race from the ingress-only integration. Delivery consent
+does not establish ingress health and cannot suppress an independent cause.
+
+The neutral prerequisite extracts transaction-required assessment and existing
+interrupt reservation methods, while their public wrappers retain transaction
+ownership. The caller alone commits or rolls back; a returned sender token is
+usable only after successful commit. No native I/O occurs in that transaction.
+The first covering real stop initializes a missing late-read deadline or retains
+the later existing deadline, without resetting attempts, claims or provenance.
+The source slice introduces no new interrupt source, claim or runtime action.
+
+Later integration must give ingress its own explicit cause provenance, share
+the permanent exact-target fence and the bounded late-read allowance, and
+reassess recovery immediately before reservation. Optional assessment faults
+must remain uncertainty without closing the primary stream and accidentally
+entering unconditional native-loss recovery. Runtime and channel-loss
+acceptance remain open and separately authorized.
 
 ## Ownership and evidence
 

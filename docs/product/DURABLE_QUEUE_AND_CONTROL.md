@@ -519,7 +519,14 @@ This normative module is part of the
   deployment acceptance remain separate.
   Telegram ingress and egress loss MUST be distinguished from native stream
   loss. Passive aggregate health, silence, typing, sender 429 or another topic's
-  success MUST NOT establish the exact topic's controllability. Any future
+  success MUST NOT establish the exact topic's controllability. Unknown delivery
+  of one commentary/progress message alone MUST NOT create
+  a precaution episode or authorize interruption. Its delivery evidence MUST
+  remain unknown under REQ-QUEUE-005, without blind resend. Delivery-control
+  consent MUST NOT establish healthy ingress or suppress an independent ingress,
+  native-control, owner-stop or permission-drift cause. This policy does not
+  relax approval safety or exact-terminal proof.
+  Any future
   precautionary interruption awaits Stage3 integration. Schema49 MUST record only
   group polls (`hub`/`codex`), including empty success, never DM/health/send data.
   Startup MUST claim one captured previous-epoch CAS/token; exact repeats
@@ -580,8 +587,15 @@ This normative module is part of the
   Confirmation, cause bundle and assessment revision MUST commit together.
   SQL replacement and rowid collisions MUST NOT reset either sidecar or ledger.
   These assessments grant no control, delivery, approval, replay or release
-  authority. Atomic full-control consent/send-start and live/maintenance
+  authority. Atomic ingress reassessment/send-start and live/maintenance
   integration remain pending; aggregate egress is diagnostic.
+  Transaction-local assessment and existing interrupt reservation MUST require
+  an owning state transaction and MUST NOT commit or roll it back. Existing
+  source/lease/claim rules still apply; assessment alone grants no authority.
+  A reserved sender token MUST NOT authorize a native call before successful
+  outer commit. Binding the first real stop MUST initialize a missing late-read
+  deadline or preserve the later of its existing deadline and stop creation;
+  it MUST NOT reset attempts, claims or first-stop provenance.
   Monitoring invokes no inference; unavailable delivery is no owner receipt. See
   [ADR 0064](../decisions/0064-codex-control-loss.md).
 - **REQ-QUEUE-011 (Accepted; implementation pending):** An explicitly enabled

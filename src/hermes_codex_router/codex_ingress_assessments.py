@@ -65,6 +65,12 @@ def _recover(cause: EpisodeCause | None, watermark: IngressWatermark) -> Episode
     return cause
 
 
+def _assessment_clock(now: datetime) -> datetime:
+    if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
+        raise StateError("ingress assessment time must be timezone-aware")
+    return now.astimezone(timezone.utc)
+
+
 class CodexIngressAssessments:
     def __init__(
         self,
@@ -83,102 +89,106 @@ class CodexIngressAssessments:
         ).fetchone()
 
     def assess(self, job_id: str, *, now: datetime) -> IngressAssessment:
-        if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
-            raise StateError("ingress assessment time must be timezone-aware")
-        now = now.astimezone(timezone.utc)
+        now = _assessment_clock(now)
         with self.transaction():
-            target = self.db.execute(
-                """SELECT target.ingress_identity,control.accepted_at
-                FROM codex_telegram_precaution_targets target
-                JOIN codex_turn_controls control ON control.job_id=target.job_id
-                WHERE target.job_id=? AND control.origin='accepted_v48'""",
-                (job_id,),
-            ).fetchone()
-            if target is None:
-                raise StateError("ingress assessment requires a fresh exact Telegram target")
-            identity = cast(IngressIdentity, target["ingress_identity"])
-            accepted_at = evidence_time(target["accepted_at"], now=now)
-            assert accepted_at is not None
-            prior = self.read(job_id)
-            if prior is not None:
-                assessed_at = evidence_time(prior["last_assessed_at"], now=now)
-                if assessed_at is None or now < assessed_at:
-                    raise StateError("ingress assessment clock moved backwards")
-            row = self.db.execute(
-                "SELECT * FROM telegram_group_ingress WHERE identity=?", (identity,)
-            ).fetchone()
-            cursor = None if row is None else row_cursor(row, "epoch", "poll_sequence", minimum=0)
-            previous_cursor = (
-                None
-                if prior is None
-                else row_cursor(prior, "last_read_epoch", "last_read_sequence", minimum=0)
+            return self.assess_in_transaction(job_id, now=now)
+
+    def assess_in_transaction(self, job_id: str, *, now: datetime) -> IngressAssessment:
+        """Assess in the caller's transaction without granting control authority."""
+        if not self.db.in_transaction:
+            raise StateError("ingress assessment requires an owning transaction")
+        now = _assessment_clock(now)
+        target = self.db.execute(
+            """SELECT target.ingress_identity,control.accepted_at
+            FROM codex_telegram_precaution_targets target
+            JOIN codex_turn_controls control ON control.job_id=target.job_id
+            WHERE target.job_id=? AND control.origin='accepted_v48'""",
+            (job_id,),
+        ).fetchone()
+        if target is None:
+            raise StateError("ingress assessment requires a fresh exact Telegram target")
+        identity = cast(IngressIdentity, target["ingress_identity"])
+        accepted_at = evidence_time(target["accepted_at"], now=now)
+        assert accepted_at is not None
+        prior = self.read(job_id)
+        if prior is not None:
+            assessed_at = evidence_time(prior["last_assessed_at"], now=now)
+            if assessed_at is None or now < assessed_at:
+                raise StateError("ingress assessment clock moved backwards")
+        row = self.db.execute(
+            "SELECT * FROM telegram_group_ingress WHERE identity=?", (identity,)
+        ).fetchone()
+        cursor = None if row is None else row_cursor(row, "epoch", "poll_sequence", minimum=0)
+        previous_cursor = (
+            None
+            if prior is None
+            else row_cursor(prior, "last_read_epoch", "last_read_sequence", minimum=0)
+        )
+        if previous_cursor is not None and (cursor is None or cursor < previous_cursor):
+            raise StateError("retained ingress ledger disappeared or regressed")
+        snapshot = self.ledger.read(identity)
+        if snapshot is not None and not valid_poll_evidence(snapshot.evidence, now):
+            raise StateError("incoherent retained group poll evidence")
+        watermark = self.ledger.watermarks.read(identity, ledger=row, now=now)
+        confirmation = None if snapshot is None else snapshot.last_confirmed_poll_at
+        previous_confirmation = (
+            None if prior is None else evidence_time(prior["last_confirmed_poll_at"], now=now)
+        )
+        if confirmation is not None:
+            evidence_time(confirmation.isoformat(), now=now)
+        if previous_confirmation is not None and (
+            confirmation is None or confirmation < previous_confirmation
+        ):
+            raise StateError("retained ingress confirmation regressed")
+        confirmation = max(
+            (value for value in (confirmation, previous_confirmation) if value is not None),
+            default=None,
+        )
+        old_cause = _prior_cause(prior, identity, now=now)
+        surviving = _recover(old_cause, watermark)
+        selected = surviving
+        if watermark.failure is not None:
+            threshold = watermark.failure_threshold_at
+            assert threshold is not None
+            candidate = EpisodeCause(
+                IngressEpisode(
+                    identity,
+                    "poll_failures",
+                    threshold,
+                    threshold + timedelta(seconds=30),
+                    threshold,
+                ),
+                watermark.failure,
+                watermark.failure,
             )
-            if previous_cursor is not None and (cursor is None or cursor < previous_cursor):
-                raise StateError("retained ingress ledger disappeared or regressed")
-            snapshot = self.ledger.read(identity)
-            if snapshot is not None and not valid_poll_evidence(snapshot.evidence, now):
-                raise StateError("incoherent retained group poll evidence")
-            watermark = self.ledger.watermarks.read(identity, ledger=row, now=now)
-            confirmation = None if snapshot is None else snapshot.last_confirmed_poll_at
-            previous_confirmation = (
-                None if prior is None else evidence_time(prior["last_confirmed_poll_at"], now=now)
-            )
-            if confirmation is not None:
-                evidence_time(confirmation.isoformat(), now=now)
-            if previous_confirmation is not None and (
-                confirmation is None or confirmation < previous_confirmation
+            if (
+                selected is None
+                or retain_earlier_deadline(selected.episode, candidate.episode) is candidate.episode
             ):
-                raise StateError("retained ingress confirmation regressed")
-            confirmation = max(
-                (value for value in (confirmation, previous_confirmation) if value is not None),
-                default=None,
-            )
-            old_cause = _prior_cause(prior, identity, now=now)
-            surviving = _recover(old_cause, watermark)
-            selected = surviving
-            if watermark.failure is not None:
-                threshold = watermark.failure_threshold_at
-                assert threshold is not None
-                candidate = EpisodeCause(
-                    IngressEpisode(
-                        identity,
-                        "poll_failures",
-                        threshold,
-                        threshold + timedelta(seconds=30),
-                        threshold,
-                    ),
-                    watermark.failure,
-                    watermark.failure,
-                )
-                if (
-                    selected is None
-                    or retain_earlier_deadline(selected.episode, candidate.episode)
-                    is candidate.episode
-                ):
-                    selected = candidate
-            result = assess_ingress(
-                None if snapshot is None else snapshot.evidence,
-                expected_identity=identity,
-                accepted_at=accepted_at,
-                now=now,
-                prior=None if selected is None else selected.episode,
-                last_confirmed_poll_at=confirmation,
-            )
-            # Timestamp-only success cannot retire a logically later cause, and
-            # historical recovery cannot prove that the current epoch is polling.
-            if selected is not None and result.episode is None:
-                result = IngressAssessment(False, selected.episode, result.last_confirmed_poll_at)
-            if result.episode is not None and (
-                selected is None or result.episode is not selected.episode
-            ):
-                selected = EpisodeCause(result.episode, cursor, None)
-            if result.episode is None:
-                selected = None
-            generation = 0 if prior is None else int(prior["episode_generation"])
-            if selected is not None and surviving is None:
-                generation += 1
-            self._persist(job_id, now, prior, cursor, generation, selected, result)
-            return result
+                selected = candidate
+        result = assess_ingress(
+            None if snapshot is None else snapshot.evidence,
+            expected_identity=identity,
+            accepted_at=accepted_at,
+            now=now,
+            prior=None if selected is None else selected.episode,
+            last_confirmed_poll_at=confirmation,
+        )
+        # Timestamp-only success cannot retire a logically later cause, and
+        # historical recovery cannot prove that the current epoch is polling.
+        if selected is not None and result.episode is None:
+            result = IngressAssessment(False, selected.episode, result.last_confirmed_poll_at)
+        if result.episode is not None and (
+            selected is None or result.episode is not selected.episode
+        ):
+            selected = EpisodeCause(result.episode, cursor, None)
+        if result.episode is None:
+            selected = None
+        generation = 0 if prior is None else int(prior["episode_generation"])
+        if selected is not None and surviving is None:
+            generation += 1
+        self._persist(job_id, now, prior, cursor, generation, selected, result)
+        return result
 
     def _persist(
         self,
