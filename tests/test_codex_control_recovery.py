@@ -5,10 +5,14 @@ from __future__ import annotations
 import sqlite3
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from hermes_codex_router.codex_appserver import RpcRejectedError, StoredTurnOutcome, TurnResult
 from hermes_codex_router.codex_control_recovery import observe_after_control_loss
+from hermes_codex_router.codex_turn_controls import ActiveTurnProof
+from hermes_codex_router.root_blockers import persistent_root_blocker
+from tests import test_codex_turn_controls as fixtures
 
 
 class Client:
@@ -97,6 +101,139 @@ class ControlRecoveryTests(unittest.TestCase):
             )
         self.assertEqual(client.calls, [("read", "example-thread", "example-turn")])
         self.assertEqual(settlements, [("example-persisted-owner", "not_sent")])
+
+    def test_commit_delay_expiring_active_proof_never_sends_with_remaining_deadline(self):
+        clock = [0.0]
+        settlements = []
+        events = []
+        client = Client([StoredTurnOutcome("active"), StoredTurnOutcome("active")])
+
+        def committed_guard(proof, deadline):
+            self.assertEqual(proof.observed_monotonic, 0.0)
+            self.assertEqual(deadline, 15.0)
+            clock[0] = 5.001
+            return "example-persisted-owner"
+
+        with patch(
+            "hermes_codex_router.codex_control_recovery.time",
+            SimpleNamespace(monotonic=lambda: clock[0]),
+        ):
+            outcome = observe_after_control_loss(
+                client,
+                thread_id="example-thread",
+                turn_id="example-turn",
+                root=Path("/home/example/project"),
+                begin_interrupt=committed_guard,
+                finish_interrupt=lambda owner, result: settlements.append((owner, result)),
+                on_interrupt_event=events.append,
+            )
+        self.assertEqual(outcome.status, "active")
+        self.assertEqual([call[0] for call in client.calls], ["read", "read"])
+        self.assertEqual(settlements, [("example-persisted-owner", "not_sent")])
+        self.assertNotIn("attempted", events)
+
+    def test_committed_guard_at_five_second_proof_boundary_can_send_once(self):
+        clock = [0.0]
+        settlements = []
+        client = Client([StoredTurnOutcome("active"), StoredTurnOutcome("interrupted")])
+
+        def committed_guard(proof, deadline):
+            clock[0] = 5.0
+            return "example-persisted-owner"
+
+        with patch(
+            "hermes_codex_router.codex_control_recovery.time",
+            SimpleNamespace(monotonic=lambda: clock[0]),
+        ):
+            outcome = observe_after_control_loss(
+                client,
+                thread_id="example-thread",
+                turn_id="example-turn",
+                root=Path("/home/example/project"),
+                begin_interrupt=committed_guard,
+                finish_interrupt=lambda owner, result: settlements.append((owner, result)),
+            )
+        self.assertEqual(outcome.status, "interrupted")
+        self.assertEqual([call[0] for call in client.calls], ["read", "interrupt", "read"])
+        self.assertEqual(settlements, [("example-persisted-owner", "matched_ack")])
+
+    def test_expired_post_commit_proof_retains_real_fence_and_native_root_exclusion(self):
+        fixture = fixtures.CodexTurnControlJournalTests()
+        fixture.setUp()
+        self.addCleanup(lambda: self.assertTrue(fixture.doCleanups()))
+        fixture.journal.record_turn(fixture.job_id, fixture.token, "example-turn")
+        clock = [0.0]
+        client = Client([StoredTurnOutcome("active"), StoredTurnOutcome("active")])
+
+        def begin(proof, deadline):
+            owner = fixture.state.codex_controls.begin_interrupt(
+                job_id=fixture.job_id,
+                source="protective",
+                proof=proof,
+                validated_root=str(fixture.root),
+                invocation_token=fixture.token,
+                send_deadline=deadline,
+            )
+            self.assertIsNotNone(owner)
+            # Time spent exiting the committed transaction is independent of
+            # the RPC deadline and may expire the already validated proof.
+            clock[0] = 6.0
+            return owner
+
+        with (
+            patch(
+                "hermes_codex_router.codex_control_recovery.time",
+                SimpleNamespace(monotonic=lambda: clock[0]),
+            ),
+            patch(
+                "hermes_codex_router.codex_turn_controls.time",
+                SimpleNamespace(monotonic=lambda: clock[0]),
+            ),
+        ):
+            outcome = observe_after_control_loss(
+                client,
+                thread_id="example-thread",
+                turn_id="example-turn",
+                root=fixture.root,
+                begin_interrupt=begin,
+                finish_interrupt=lambda owner, result: (
+                    fixture.state.codex_controls.finish_interrupt(
+                        fixture.job_id,
+                        owner,
+                        outcome=result,
+                        send_path_quiesced=result != "unknown",
+                    )
+                ),
+            )
+            row = fixture.state.codex_controls.read(fixture.job_id)
+            assert row is not None
+            self.assertIsNotNone(row["send_started_at"])
+            self.assertEqual(row["interrupt_outcome"], "not_sent")
+            self.assertIsNotNone(row["owner_quiesced_at"])
+            self.assertIsNone(
+                fixture.state.codex_controls.begin_interrupt(
+                    job_id=fixture.job_id,
+                    source="protective",
+                    proof=ActiveTurnProof(
+                        "example-thread", "example-turn", str(fixture.root), clock[0]
+                    ),
+                    validated_root=str(fixture.root),
+                    invocation_token=fixture.token,
+                )
+            )
+        self.assertEqual(outcome.status, "active")
+        self.assertEqual([call[0] for call in client.calls], ["read", "read"])
+        fixture.state.mark_provider_job_indeterminate(
+            fixture.job_id,
+            fixture.token,
+            error_code="example-control-loss",
+            error_detail="Fictional active turn without terminal proof",
+        )
+        job = fixture.state.get_provider_job(fixture.job_id)
+        with fixture.state._immediate_transaction():
+            self.assertIsNotNone(
+                persistent_root_blocker(fixture.state._connection, topic_id=job.topic_id)
+            )
 
     def test_shared_authority_records_matched_reply_and_refuses_second_send(self):
         owners = []
