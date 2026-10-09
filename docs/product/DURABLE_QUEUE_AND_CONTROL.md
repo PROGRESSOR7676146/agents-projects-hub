@@ -587,8 +587,8 @@ This normative module is part of the
   Confirmation, cause bundle and assessment revision MUST commit together.
   SQL replacement and rowid collisions MUST NOT reset either sidecar or ledger.
   These assessments grant no control, delivery, approval, replay or release
-  authority. Atomic ingress reassessment/send-start and live/maintenance
-  integration remain pending; aggregate egress is diagnostic.
+  authority. Live/maintenance integration remains pending; aggregate egress
+  is diagnostic.
   Transaction-local assessment and existing interrupt reservation MUST require
   an owning state transaction and MUST NOT commit or roll it back. Existing
   source/lease/claim rules still apply; assessment alone grants no authority.
@@ -596,6 +596,20 @@ This normative module is part of the
   outer commit. Binding the first real stop MUST initialize a missing late-read
   deadline or preserve the later of its existing deadline and stop creation;
   it MUST NOT reset attempts, claims or first-stop provenance.
+  Schema52 MUST capture an immutable exact ingress-cause snapshot only in the
+  first send-start transaction, through a nullable parent discriminator. Old
+  sends MUST NOT gain ingress provenance. A state-owned ingress reservation
+  MUST reassess recovery and require a due fresh-target cause together with
+  the existing exact proof, current lease or read claim and coherent binding.
+  Protective/late identify invocation/read paths; only the cause sidecar proves
+  ingress provenance. An ingress read claim MUST consume the same three-cycle
+  allowance and 30-second spacing before connection, defer to a covering real
+  pending stop, and never invent a stop row or receipt. Recovery and new episodes
+  MUST NOT replenish that allowance or clear a reserved fence/sender owner.
+  Migration MUST leave the discriminator NULL and cause storage empty, preserve
+  all earlier evidence and refuse replacement/rowid attacks. These dormant
+  domain methods MUST NOT activate worker or scheduler behavior. Future native
+  callers MUST recheck proof freshness and RPC deadline after commit before I/O.
   Monitoring invokes no inference; unavailable delivery is no owner receipt. See
   [ADR 0064](../decisions/0064-codex-control-loss.md).
 - **REQ-QUEUE-011 (Accepted; implementation pending):** An explicitly enabled

@@ -140,6 +140,17 @@ It does not grant ingress control authority; its composed tests use an existing
 independently authorized protective source. Follow the dated ADR amendment for
 the accepted egress policy rather than treating delivery consent as ingress recovery.
 
+Schema52's dormant state candidate covers reassessment plus immutable first-send
+cause capture, recovery before/after reservation, current lease/read-claim guards,
+one shared budget/fence and later real-stop precedence. Its populated schema51
+upgrade must preserve rows, claims, schedules, unknown senders and exact earlier
+triggers, with a nullable added parent column, empty cause storage, consistent
+backup and complete DDL-fault rollback. Historical sends must not acquire causes.
+This is state evidence; item5's provider continuing after ingress loss and worker
+fault isolation remain required before runtime or live acceptance. Future native
+callers recheck proof freshness and remaining RPC budget after commit; optional
+assessment failure must not close the primary stream or impersonate native loss.
+
 Schema50 provenance fixtures must additionally cover current Reply retry chains,
 continuation duplicates, batching/steering's nine identity pairs, direct steering
 recheck and stop precedence, refused/repeated acceptance, atomic storage faults,
