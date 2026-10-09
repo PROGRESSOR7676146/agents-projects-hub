@@ -4,6 +4,12 @@ Status: revised preparation decision; infrastructure selection and acceptance pe
 Date: 2026-10-04.
 Owner: Hub maintainer; deployment authorization remains with the repository owner.
 
+## 2026-10-09 scope amendment
+
+[ADR 0065](0065-retire-hub-lead-advisor.md) withdraws the read-only advisor
+parity follow-up below. Ordinary helper/launch custody and same-session Claude
+local transfer remain open; no infrastructure or security gate is relaxed.
+
 ## Context
 
 [REQ-SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md) already requires

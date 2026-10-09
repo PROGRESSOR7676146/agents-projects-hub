@@ -1,8 +1,11 @@
 # Retained provider dependencies after role withdrawal
 
-Status: source dependency inventory; integration decision pending.
+Status: retain dormant primitives/tests proposed for owner integration;
+candidate publication pending.
 Date: 2026-10-09. Owner: Hub maintainer, sole integration writer.
 Last inspected source base: `851714b5005553906b29c771fcd095de133f776b`.
+Production reachability rechecked at `4483dfd9364c01cd235aded784832ccbb490538c`,
+with unchanged retained source code.
 Scope decision: [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md).
 This inventory describes local commit ancestry, not main or installed state.
 
@@ -23,17 +26,38 @@ and ingress candidates in this base, and sequencing → observation → ingress.
 Published tests/reviews keep their exact source revisions. A custody table on
 this source cannot establish that main or an installed release has these fixes.
 
-## Integration decision before owner merge
+## Proposed source integration
 
-Retiring the product feature does not remove its ancestors. Before integrating
-in-scope visibility/control/parity fixes, prepare an explicit dependency choice:
-retain dormant primitives and their existing CI with no runtime role wiring,
-or split/rebase the needed changes while preserving every shared security fix
-and regression. Do not assume an in-scope branch is free of cancelled work.
+The integration maintainer prepares a candidate retaining dormant primitives
+and existing tests/CI, with no runtime role wiring. Owner integration is pending.
+Independent Astra source review found
+that the five `review_materials`/`review_bridge_*` modules have no production
+callers outside that set, no CLI/config/schema/worker entry point and no wired
+inference client. Shared namespace/pin code remains an active dependency of
+protected Claude file tools; imports do not run back toward retired modules.
+Splitting this ancestry adds regression risk without removing active product
+behavior. Packaging retains the dormant modules and their maintenance cost.
 
-Neither choice happens automatically. Review the resulting exact candidate and
-run its publication gates; inspect tracked/staged/untracked state before cleanup.
-Keep existing branches, tests and evidence until an explicit owner decision.
-No merge, deletion, deployment, service restart, live-state change or replay is
-authorized by this inventory. Next trigger: dependency selection for the next
-integration candidate. Closure remains open until that selection is reviewed.
+The [source regression](../../tests/test_retired_hub_roles.py) scans all Python
+modules under `src/hermes_codex_router`, including nested packages and
+conditional/function-local imports. It rejects static imports into the retired set from outside it;
+absolute, relative, aliased and package-member forms have negative fixtures.
+Internal dormant edges and ordinary namespace consumers remain allowed. The
+guard runs through normal test discovery and existing publication/CI gates.
+It prevents accidental static imports within that package. Packaging entry-point
+registrations, wildcard exports, dynamic imports, copied implementations and
+runtime access are outside its coverage; it is not a security sandbox. New role
+orchestration still requires a new owner product decision under ADR 0065.
+
+Focused command: `python -m unittest tests.test_retired_hub_roles`.
+Review the exact resulting candidate and run publication gates. Keep existing
+branches/tests/evidence; inspect tracked/staged/untracked before cleanup. No merge,
+deletion, deployment, restart, live-state change or replay is authorized here.
+
+## Closure
+
+The dependency recommendation is complete at source-design level; retaining
+packaged dormant modules still needs owner integration. Publication of the
+guard is pending; ordinary custody and standalone Claude parity remain open.
+Next trigger: the smallest enforceable custody candidate and separate native
+human-approval acceptance in [the next session](NEXT_DEVELOPMENT_SESSION.md).

@@ -3,6 +3,12 @@
 Status: accepted implementation choice; publication validation in progress
 Date: 2026-10-08
 
+## 2026-10-09 scope amendment
+
+[ADR 0065](0065-retire-hub-lead-advisor.md) withdraws the durable lead/advisor
+workflow listed below. Ordinary Claude observation, progress, local/session
+parity, custody and subscription-route acceptance remain open.
+
 ## Context and decision
 
 Claude's prepared session UUID and stream message UUIDs do not establish a native

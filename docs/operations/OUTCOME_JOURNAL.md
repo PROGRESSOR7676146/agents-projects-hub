@@ -2,7 +2,8 @@
 
 This diagnostic and the bounded owner-command slice support the private outcome
 journal in [REQ-EVAL-010](../product/EVALUATION_AND_ALLOCATION.md). They do not
-complete the lead/advisor milestone, usage provenance or deployed custody.
+complete usage provenance or deployed custody. Hub roles are retired by
+[ADR 0065](../decisions/0065-retire-hub-lead-advisor.md); the journal remains independent.
 
 ```bash
 agents-projects-hub outcome-journal /home/example/.config/agents-projects-hub/hub.json EXAMPLE_JOB_ID
@@ -86,8 +87,8 @@ Fixtures exercise immutable selection, unknown acceptance/usage, failed notices,
 artifact/lineage bounds, delivery ownership/receipts, empty completion, invalid
 time, concurrent writes, read-only state opening and sanitized command errors.
 They do not establish deployment, Telegram acceptance or subscription routing.
-Per-job observation provenance and the collaboration workflow remain separate
-follow-ups.
+Per-job observation provenance remains a separate follow-up; the collaboration
+workflow is withdrawn by ADR 0065.
 
 ## Owner decision procedure
 

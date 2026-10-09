@@ -60,8 +60,9 @@ changes; neither is automatic. The checked lanes, PRs and revisions are in the
 ## Affected records
 
 ADR 0040 is superseded. The advisor-only prerequisite in ADR 0039 and future
-integration triggers in ADRs 0056–0058 are withdrawn, while their reusable
-provider/security decisions remain. Retired IDs are recorded in the identity,
+role/isolation/integration triggers in ADRs 0051–0053 and 0055–0059 are withdrawn,
+while their reusable provider/security decisions remain. Retired IDs are recorded
+in the identity,
 writer, queue and acceptance modules; REQ-EVAL-010 stays independently owned
 with its [acceptance boundaries](../product/EVALUATION_AND_ALLOCATION.md#acceptance-boundaries).
 
