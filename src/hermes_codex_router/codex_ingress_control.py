@@ -1,4 +1,4 @@
-"""Dormant exact ingress control authority; no native I/O or scheduling."""
+"""Exact ingress authority and historical notices; no native I/O or scheduling."""
 
 from __future__ import annotations
 
@@ -16,6 +16,14 @@ from .codex_turn_controls import (
 )
 from .state_errors import StateError
 from .stop_coverage import STOP_COVERS_JOB_SQL
+from .task_lifecycle import TaskLifecycleState
+
+INGRESS_PRECAUTION_NOTICE = (
+    "Hub reserved a precautionary interrupt when reliable Telegram ingress became unavailable or unconfirmed for this exact turn. "
+    "This earlier reservation was a Hub precaution, separate from any owner /stop. It does not prove transmission or "
+    "termination. Saved turn outcome and confirmed owner delivery remain separate. "
+    "The task was not replayed; inspect /status before further work."
+)
 
 
 class CodexIngressControl:
@@ -26,16 +34,96 @@ class CodexIngressControl:
         transaction: Callable[[], AbstractContextManager[None]],
         controls: CodexTurnControls,
         assessments: CodexIngressAssessments,
+        notices: TaskLifecycleState,
     ) -> None:
         self.db = connection
         self.transaction = transaction
         self.controls = controls
         self.assessments = assessments
+        self.notices = notices
 
     def read_cause(self, job_id: str) -> sqlite3.Row | None:
         return self.db.execute(
             "SELECT * FROM codex_ingress_interrupt_causes WHERE job_id=?", (job_id,)
         ).fetchone()
+
+    def prepare_notice(self, job_id: str) -> bool:
+        """Historical frozen-cause notice, independently fenced by the Hub sender.
+
+        Runtime calls this after the native helper settles, never between the
+        interrupt reservation and RPC. Failure cannot revoke a control fence.
+        Delivery neither resolves ingress/native uncertainty nor claims stop.
+        """
+        if self.read_cause(job_id) is None:
+            return False
+        with self.transaction():
+            if self.read_cause(job_id) is None:
+                return False
+            row = self.db.execute(
+                "SELECT job.chat_id,job.message_id,topic.thread_id FROM provider_jobs job "
+                "JOIN topics topic ON topic.topic_id=job.topic_id WHERE job.job_id=?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                raise StateError("ingress notice lost its exact job")
+            _, created = self.notices.prepare_notice_in_transaction(
+                event_key="codex_ingress_control:" + job_id,
+                kind="codex_ingress_control",
+                job_id=job_id,
+                chat_id=row["chat_id"],
+                thread_id=row["thread_id"],
+                reply_to_message_id=row["message_id"],
+                telegram_html=INGRESS_PRECAUTION_NOTICE,
+                now=_now(None),
+            )
+        return created
+
+    def candidate_page(
+        self,
+        agent_id: str,
+        *,
+        after: str | None = None,
+        through: str | None = None,
+        limit: int = 32,
+        now: datetime | None = None,
+    ) -> tuple[tuple[str, ...], str | None]:
+        """Bounded advisory keyset scan; only claim_read can allocate authority.
+
+        The captured upper key bounds one sweep against continuous insertions.
+        This page query takes no write lock; claim_read reassesses each candidate
+        transactionally, including healthy candidates. Post-send targets
+        remain eligible for terminal/result observation, never another send.
+        """
+        if not agent_id or len(agent_id) > 64 or type(limit) is not int or not 1 <= limit <= 32:
+            raise StateError("invalid ingress candidate page")
+        timestamp = _now(now).isoformat()
+        selection = """FROM codex_turn_controls control
+            JOIN codex_telegram_precaution_targets target ON target.job_id=control.job_id
+            JOIN provider_jobs job ON job.job_id=control.job_id
+            JOIN provider_execution_checkpoints checkpoint ON checkpoint.job_id=control.job_id
+            WHERE control.agent_id=? AND control.origin='accepted_v48'
+              AND job.status='indeterminate' AND job.lease_token IS NULL
+              AND checkpoint.completed_text IS NULL AND control.late_read_attempts<3
+              AND (control.next_late_read_at IS NULL OR control.next_late_read_at<=?)
+              AND (control.read_claim_token IS NULL OR control.read_claim_expires_at<=?)
+              AND NOT EXISTS (SELECT 1 FROM provider_turn_terminal_evidence terminal
+                              WHERE terminal.job_id=control.job_id)
+              AND NOT EXISTS (SELECT 1 FROM provider_job_resolutions resolved
+                              WHERE resolved.job_id=control.job_id)"""
+        parameters = (agent_id, timestamp, timestamp)
+        if through is None:
+            through = self.db.execute(
+                "SELECT MAX(control.job_id) " + selection, parameters
+            ).fetchone()[0]
+        if through is None:
+            return (), None
+        rows = self.db.execute(
+            "SELECT control.job_id "
+            + selection
+            + " AND control.job_id>? AND control.job_id<=? ORDER BY control.job_id LIMIT ?",
+            (*parameters, after or "", through, limit),
+        ).fetchall()
+        return tuple(str(row[0]) for row in rows), through
 
     def _fresh_target(self, job_id: str) -> bool:
         return (
@@ -149,7 +237,7 @@ class CodexIngressControl:
         provenance enrichment or sender quiescence. Recovery, terminal proof or
         owner resolution suppress further ingress claims; this is not an
         unconditional maintenance allocator.
-        This method is deliberately not wired into worker maintenance yet.
+        Worker-owned maintenance is the caller; this domain owns no scheduler.
         """
         if not worker_id or len(worker_id) > 128:
             raise StateError("invalid control read owner")

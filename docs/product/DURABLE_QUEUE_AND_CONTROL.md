@@ -526,8 +526,8 @@ This normative module is part of the
   consent MUST NOT establish healthy ingress or suppress an independent ingress,
   native-control, owner-stop or permission-drift cause. This policy does not
   relax approval safety or exact-terminal proof.
-  Any future
-  precautionary interruption awaits Stage3 integration. Schema49 MUST record only
+  Runtime precautions MUST use the exact immutable ingress target below.
+  Schema49 MUST record only
   group polls (`hub`/`codex`), including empty success, never DM/health/send data.
   Startup MUST claim one captured previous-epoch CAS/token; exact repeats
   preserve epoch, stale publishers retire without reacquiring. Samples MUST fence
@@ -587,8 +587,7 @@ This normative module is part of the
   Confirmation, cause bundle and assessment revision MUST commit together.
   SQL replacement and rowid collisions MUST NOT reset either sidecar or ledger.
   These assessments grant no control, delivery, approval, replay or release
-  authority. Live/maintenance integration remains pending; aggregate egress
-  is diagnostic.
+  authority. Aggregate egress remains diagnostic.
   Transaction-local assessment and existing interrupt reservation MUST require
   an owning state transaction and MUST NOT commit or roll it back. Existing
   source/lease/claim rules still apply; assessment alone grants no authority.
@@ -613,9 +612,34 @@ This normative module is part of the
   owner resolution MUST suppress further ingress claims; a pending real stop
   retains priority, and a later stop MUST NOT replenish consumed cycles.
   Migration MUST leave the discriminator NULL and cause storage empty, preserve
-  all earlier evidence and refuse replacement/rowid attacks. These dormant
-  domain methods MUST NOT activate worker or scheduler behavior. Future native
-  callers MUST recheck proof freshness and RPC deadline after commit before I/O.
+  all earlier evidence and refuse replacement/rowid attacks. Native callers
+  MUST recheck proof freshness and RPC deadline after commit before I/O.
+  Live observation MUST prioritize real pending stops over ingress/steering.
+  Pre-attempt optional assessment, connection,
+  read, event and notice faults MUST preserve progress, results and steering
+  without impersonating native-stream loss. Assessment MUST be limited
+  to one per five seconds; ingress native observation to one per thirty seconds,
+  advancing the observation deadline before acquisition across faults/recovery.
+  No-send MUST keep the primary open; native attempt or terminal proof MAY wake recovery.
+  Post-attempt or terminal-wake faults MUST end observation without steering.
+  Quiesced authenticated `not_sent` without terminal wake MUST keep observation/
+  steering across polls. The permanent fence forbids later interrupts, including
+  /stop; stop priority/withholding persist. This grants no send authority.
+  Maintenance MUST reuse the worker-owned thread/connection: one real-stop cycle
+  before at most one ingress cycle; check shutdown between them and before each
+  ingress claim. Read-only keyset pages MUST bound scans to 32 candidates and one
+  frozen sweep upper key, pass healthy/refused/faulted targets and throttle
+  completed sweeps for thirty seconds. Only transactional claims allocate allowance.
+  Reservation-time owner stop MUST reuse proof/lease/claim without another cycle
+  or synthetic stop.
+  Historical notices MUST require the immutable first-send cause and independent
+  control-delivery fence, after native settlement, never between reservation/RPC.
+  Copy MUST separate Hub reservation, transmission, terminality and owner
+  delivery without claiming owner /stop. Faults MUST NOT erase causes, change
+  execution or permit resend. Explanations MUST preserve raw completion, partials,
+  artifact references and unknown delivery.
+  Omit optional explanations exceeding result/rendered-delivery bounds; MUST NOT
+  truncate mandatory output.
   The original five-second proof window and RPC response deadline MUST separately
   bound local frame-write initiation, including time spent in the outbound queue.
   Deadline-aware control MUST preserve their earlier send-start cutoff at admission

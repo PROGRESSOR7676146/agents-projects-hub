@@ -7,7 +7,8 @@ no deployment acceptance. Stage3's schema49 prerequisite is source-published at
 `7af0204a117e2b1a23c0a364f44249c12de14fa4`; schema50 provenance and schema51
 causal episodes are source-published at
 `4727241b3906c27ab4556cd4abd8eb6157e0c4f6` and
-`506f3bf765ae477bc1945c6317214a3d86fcec6c`. Runtime ingress precautions remain pending.
+`506f3bf765ae477bc1945c6317214a3d86fcec6c`. Schema52 authority and local-write
+prerequisite are published; runtime precautions are under exact-source validation.
 
 Follow [REQ-QUEUE-014](../product/DURABLE_QUEUE_AND_CONTROL.md) and
 [ADR 0064](../decisions/0064-codex-control-loss.md). A worker marked idle or a
@@ -140,8 +141,8 @@ retained schema48 unknown-sender fences. The pure policy covers long healthy
 turns followed by restart, immediate new-epoch recovery, original third-failure
 deadlines, stale/missing samples and malformed clocks. These are offline state
 and policy checks. Exact-target persistent episodes are now source-published in
-schema51. Item5's native work surviving Telegram ingress loss and shared send integration
-remain open; neither ledger nor policy interrupts work or notifies the owner.
+schema51. The runtime witness below now covers native work surviving fictional
+ingress loss; the ledger and pure policy alone grant no control or delivery authority.
 
 The neutral transaction prerequisite covers assessment/reservation atomicity,
 caller rollback, rejected commit, guard refusal and monotone real-stop binding.
@@ -160,10 +161,26 @@ Its populated schema51
 upgrade must preserve rows, claims, schedules, unknown senders and exact earlier
 triggers, with a nullable added parent column, empty cause storage, consistent
 backup and complete DDL-fault rollback. Historical sends must not acquire causes.
-This is state evidence; item5's provider continuing after ingress loss and worker
-fault isolation remain required before runtime or live acceptance. Future native
-callers recheck proof freshness and remaining RPC budget after commit; optional
-assessment failure must not close the primary stream or impersonate native loss.
+Runtime fixtures now exercise the shared accepted worker wait, progress/final
+callbacks and steering through optional assessment/read/notice faults. They also
+cover reservation-time stop priority, post-attempt state faults preventing
+steering, no-send observer continuity and later stop withholding, real eligible
+keyset rows beyond healthy/error pages with insertion/eligibility withdrawal,
+post-fence raw completion with unknown delivery and sender ownership, notice
+deduplication and receipt-commit ambiguity. The optional native ingress fixture
+keeps the primary connection open while independent polling becomes overdue,
+observes native active work, calls its real `_poll_ingress` method once and independently
+proves eventual exact interruption. It uses one local scripted Responses call,
+without real auth, Telegram, service changes or productive replay. Final
+publication review/gates and item5's installed channel-loss acceptance stay open.
+
+Under [REQ-QUEUE-014](../product/DURABLE_QUEUE_AND_CONTROL.md), authenticated
+`not_sent` preserves live observation/steering but consumes the permanent send
+fence: a later `/stop` cannot send again and retains completion withholding.
+Notice preparation is best-effort; its immutable cause remains available to
+bounded recovery explanations. No blind notice resend or extra scheduler is
+introduced. Persistent real-stop claim faults retain connection reopen/backoff
+and may delay ingress maintenance; investigate storage faults separately.
 
 Schema50 provenance fixtures must additionally cover current Reply retry chains,
 continuation duplicates, batching/steering's nine identity pairs, direct steering

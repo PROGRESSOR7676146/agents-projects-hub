@@ -14,6 +14,7 @@ from .codex_appserver import CodexAppServerClient, CodexTurnError, RpcError
 from .codex_control_authority import begin_codex_interrupt
 from .codex_control_recovery import observe_after_control_loss
 from .codex_failure import CodexPreparationError, codex_failure_notice, codex_failure_reason
+from .codex_ingress_notice import append_ingress_precaution
 from .codex_turn_controls import ActiveTurnProof, InterruptOutcome
 from .diagnostic_log import survived
 from .execution_journal import ExecutionJournal
@@ -34,11 +35,15 @@ def checkpoint_failure_notice(
     retained = CodexTurnError(error, partial)
     if isinstance(error, CodexTurnError):
         retained.failure_reason = error.failure_reason
-    return codex_failure_notice(
-        retained,
-        turn_status=turn_status,
-        protective_interrupt_attempted=getattr(error, "protective_interrupt_attempted", False)
-        is True,
+    return append_ingress_precaution(
+        state,
+        job_id,
+        codex_failure_notice(
+            retained,
+            turn_status=turn_status,
+            protective_interrupt_attempted=getattr(error, "protective_interrupt_attempted", False)
+            is True,
+        ),
     )
 
 
@@ -162,6 +167,12 @@ def reconcile_codex_completion(
             )
         if rejections:
             visible += "\n\nSome staged artifacts could not be recovered; inspect the task staging."
+        visible = append_ingress_precaution(
+            state,
+            job_id,
+            visible,
+            render=lambda text: "Recovered completed Codex result:\n\n" + html.escape(text),
+        )
         job = state.get_provider_job(job_id)
         committed = state.commit_provider_result(
             job_id,
@@ -246,7 +257,11 @@ def recover_codex_job(
         # mismatches cannot authorize productive replay or a successful result.
         partial = journal.partial_text(job.job_id) if binding_valid else ""
         terminal_status = observed_status if observed_status in {"failed", "interrupted"} else None
-        notice = codex_failure_notice(CodexTurnError(exc, partial), turn_status=observed_status)
+        notice = append_ingress_precaution(
+            state,
+            job.job_id,
+            codex_failure_notice(CodexTurnError(exc, partial), turn_status=observed_status),
+        )
         state.terminate_provider_job_with_notice(
             job.job_id,
             token,
