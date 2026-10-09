@@ -324,6 +324,40 @@ def _terminal_failure_code(terminal: dict[str, object], assistant_error: str | N
     return error_codes.get(assistant_error or "", "claude_provider_failure")
 
 
+def _terminal_failure_message(code: str) -> str:
+    inspect_work = "Inspect saved partial work before sending a new request."
+    inspect_limits = (
+        "Inspect saved partial work and the configured execution limits before continuing."
+    )
+    check_route = "Check the configured Claude/CPA route locally before sending new work."
+    reason, action = {
+        "claude_quota_exhausted": (
+            "Claude reported a terminal quota rejection; reset time is unknown.",
+            inspect_work,
+        ),
+        "claude_authentication_failed": ("Claude reported an authentication failure.", check_route),
+        "claude_billing_error": ("Claude reported a billing rejection.", check_route),
+        "claude_model_not_found": (
+            "Claude reported that the selected model was not found.",
+            "Review the configured model selection before sending new work.",
+        ),
+        "claude_provider_overloaded": (
+            "Claude reported temporary provider overload.",
+            inspect_work,
+        ),
+        "claude_turn_limit": ("Claude reached the configured turn limit.", inspect_limits),
+        "claude_budget_exhausted": (
+            "Claude reached the configured execution budget.",
+            inspect_limits,
+        ),
+        "claude_structured_output_failed": (
+            "Claude exhausted its structured-output attempts.",
+            "Inspect saved partial work and the requested output format before continuing.",
+        ),
+    }.get(code, ("Claude reported a terminal provider failure.", inspect_work))
+    return f"{reason} No completed result was returned. {action}"
+
+
 def parse_claude_stream(
     output: str,
     *,
@@ -412,12 +446,7 @@ def parse_claude_stream(
         raise ClaudeStreamError("claude returned a conflicting terminal outcome")
     if is_error:
         code = _terminal_failure_code(terminal, assistant_error)
-        message = (
-            "Claude reported a terminal quota rejection; reset time is unknown."
-            if code == "claude_quota_exhausted"
-            else "Claude reported a terminal provider failure."
-        )
-        raise ClaudeTerminalFailure(code, message, session_id)
+        raise ClaudeTerminalFailure(code, _terminal_failure_message(code), session_id)
     if returncode != 0:
         raise ClaudeStreamError("claude process exit conflicts with its successful result")
     text = terminal.get("result")
