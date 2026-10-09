@@ -518,8 +518,11 @@ acceptance.
   fenced poll ledger/pure policy is published at
   `7af0204a117e2b1a23c0a364f44249c12de14fa4` with independent review and
   seven hosted checks. Schema50 immutable admission/accepted-target ingress
-  is under source validation; exact episodes and precaution integration
-  remain pending. Incident closure and deployment remain open; see
+  and schema51 causal episodes are source-published with canonical/review/hosted
+  gates; exact revisions are in the [next session](NEXT_DEVELOPMENT_SESSION.md).
+  See ADR 0064's dated progress-policy amendment.
+  Neutral transaction composition precedes explicit ingress-cause authority;
+  runtime/live integration and incident closure remain open. See
   [acceptance/runbook](CODEX_CONTROL_LOSS.md) and
   [ADR 0064](../decisions/0064-codex-control-loss.md). No automatic replay.
   Lead also owns a future unknown-sender reconciliation boundary: independently

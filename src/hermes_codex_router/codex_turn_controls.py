@@ -39,6 +39,17 @@ def _now(value: datetime | None) -> datetime:
     return current.astimezone(timezone.utc)
 
 
+def _validate_interrupt_selection(
+    source: InterruptSource, invocation_token: str | None, read_claim_token: str | None
+) -> None:
+    if (invocation_token is None) == (read_claim_token is None):
+        raise StateError("interrupt requires exactly one invocation or read-claim authority")
+    if source not in {"live", "protective", "late", "permission_drift"}:
+        raise StateError("invalid interrupt source")
+    if (source == "late") != (read_claim_token is not None):
+        raise StateError("read-claim control must use the late source")
+
+
 class CodexTurnControls:
     def __init__(
         self,
@@ -141,71 +152,95 @@ class CodexTurnControls:
         now: datetime | None = None,
     ) -> str | None:
         """Atomically fence one exact interrupt, with mutually exclusive authority."""
-        if (invocation_token is None) == (read_claim_token is None):
-            raise StateError("interrupt requires exactly one invocation or read-claim authority")
-        if source not in {"live", "protective", "late", "permission_drift"}:
-            raise StateError("invalid interrupt source")
-        if (source == "late") != (read_claim_token is not None):
-            raise StateError("read-claim control must use the late source")
+        _validate_interrupt_selection(source, invocation_token, read_claim_token)
         with self.transaction():
-            current = _now(now).isoformat()
-            row = self.read(job_id)
-            if row is None or row["origin"] != "accepted_v48" or row["send_started_at"] is not None:
-                return None
-            if (
-                not isinstance(proof, ActiveTurnProof)
-                or type(proof.observed_monotonic) not in (float, int)
-                or not math.isfinite(proof.observed_monotonic)
-                or not 0 <= time.monotonic() - proof.observed_monotonic <= 5
-                or proof.thread_id != row["provider_thread_id"]
-                or proof.turn_id != row["provider_turn_id"]
-                or proof.root != row["project_root"]
-                or validated_root != row["project_root"]
-                or (send_deadline is not None and time.monotonic() >= send_deadline)
-            ):
-                return None
-            job = self.db.execute(
-                "SELECT * FROM provider_jobs WHERE job_id=?", (job_id,)
-            ).fetchone()
-            if job is None:
-                return None
-            if invocation_token is not None:
-                if (
-                    job["status"] != "executing"
-                    or job["lease_token"] != invocation_token
-                    or job["lease_expires_at"] is None
-                    or job["lease_expires_at"] <= current
-                    or row["read_claim_token"] is not None
-                ):
-                    return None
-            elif (
-                job["status"] != "indeterminate"
-                or job["lease_token"] is not None
-                or row["read_claim_token"] != read_claim_token
-                or row["read_claim_expires_at"] is None
-                or row["read_claim_expires_at"] <= current
-            ):
-                return None
-            if not self._coherent_target(row, job):
-                return None
-            if (
-                source in {"live", "late"}
-                and self.db.execute(
-                    f"""SELECT 1 FROM provider_stop_requests stop
-                    JOIN provider_jobs job ON job.job_id=?
-                    WHERE stop.request_id=? AND stop.status='pending' AND {STOP_COVERS_JOB_SQL}""",
-                    (job_id, row["stop_request_id"]),
-                ).fetchone()
-                is None
-            ):
-                return None
-            owner = uuid.uuid4().hex
-            changed = self.db.execute(
-                """UPDATE codex_turn_controls SET send_owner_token_hash=?,send_started_at=?,
-                   interrupt_source=? WHERE job_id=? AND send_started_at IS NULL""",
-                (hashlib.sha256(owner.encode()).hexdigest(), current, source, job_id),
+            return self.begin_interrupt_in_transaction(
+                job_id=job_id,
+                source=source,
+                proof=proof,
+                validated_root=validated_root,
+                invocation_token=invocation_token,
+                read_claim_token=read_claim_token,
+                send_deadline=send_deadline,
+                now=now,
             )
-            return owner if changed.rowcount == 1 else None
+
+    def begin_interrupt_in_transaction(
+        self,
+        *,
+        job_id: str,
+        source: InterruptSource,
+        proof: ActiveTurnProof,
+        validated_root: str,
+        invocation_token: str | None = None,
+        read_claim_token: str | None = None,
+        send_deadline: float | None = None,
+        now: datetime | None = None,
+    ) -> str | None:
+        """Reserve in the caller's transaction; use the token only after commit.
+
+        Existing source and authority rules still apply. Assessment evidence
+        does not independently authorize an interrupt or a native call.
+        """
+        if not self.db.in_transaction:
+            raise StateError("interrupt reservation requires an owning transaction")
+        _validate_interrupt_selection(source, invocation_token, read_claim_token)
+        current = _now(now).isoformat()
+        row = self.read(job_id)
+        if row is None or row["origin"] != "accepted_v48" or row["send_started_at"] is not None:
+            return None
+        if (
+            not isinstance(proof, ActiveTurnProof)
+            or type(proof.observed_monotonic) not in (float, int)
+            or not math.isfinite(proof.observed_monotonic)
+            or not 0 <= time.monotonic() - proof.observed_monotonic <= 5
+            or proof.thread_id != row["provider_thread_id"]
+            or proof.turn_id != row["provider_turn_id"]
+            or proof.root != row["project_root"]
+            or validated_root != row["project_root"]
+            or (send_deadline is not None and time.monotonic() >= send_deadline)
+        ):
+            return None
+        job = self.db.execute("SELECT * FROM provider_jobs WHERE job_id=?", (job_id,)).fetchone()
+        if job is None:
+            return None
+        if invocation_token is not None:
+            if (
+                job["status"] != "executing"
+                or job["lease_token"] != invocation_token
+                or job["lease_expires_at"] is None
+                or job["lease_expires_at"] <= current
+                or row["read_claim_token"] is not None
+            ):
+                return None
+        elif (
+            job["status"] != "indeterminate"
+            or job["lease_token"] is not None
+            or row["read_claim_token"] != read_claim_token
+            or row["read_claim_expires_at"] is None
+            or row["read_claim_expires_at"] <= current
+        ):
+            return None
+        if not self._coherent_target(row, job):
+            return None
+        if (
+            source in {"live", "late"}
+            and self.db.execute(
+                f"""SELECT 1 FROM provider_stop_requests stop
+                JOIN provider_jobs job ON job.job_id=?
+                WHERE stop.request_id=? AND stop.status='pending' AND {STOP_COVERS_JOB_SQL}""",
+                (job_id, row["stop_request_id"]),
+            ).fetchone()
+            is None
+        ):
+            return None
+        owner = uuid.uuid4().hex
+        changed = self.db.execute(
+            """UPDATE codex_turn_controls SET send_owner_token_hash=?,send_started_at=?,
+               interrupt_source=? WHERE job_id=? AND send_started_at IS NULL""",
+            (hashlib.sha256(owner.encode()).hexdigest(), current, source, job_id),
+        )
+        return owner if changed.rowcount == 1 else None
 
     def _coherent_target(self, row: sqlite3.Row, job: sqlite3.Row) -> bool:
         target = self.db.execute(
@@ -398,7 +433,9 @@ class CodexTurnControls:
         ).fetchall()
         for row in rows:
             self.db.execute(
-                """UPDATE codex_turn_controls SET stop_request_id=?,next_late_read_at=?
+                """UPDATE codex_turn_controls SET stop_request_id=?,next_late_read_at=
+                   CASE WHEN next_late_read_at IS NULL OR next_late_read_at < ?
+                        THEN ? ELSE next_late_read_at END
                    WHERE job_id=? AND stop_request_id IS NULL""",
-                (row["request_id"], row["created_at"], row["job_id"]),
+                (row["request_id"], row["created_at"], row["created_at"], row["job_id"]),
             )

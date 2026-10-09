@@ -41,10 +41,13 @@ published at `7af0204a117e2b1a23c0a364f44249c12de14fa4`, with canonical
 2,628 tests in 237 modules, Pyright zero errors and seven hosted checks.
 Schema50 immutable admission/accepted-target ingress provenance is published at
 `4727241b3906c27ab4556cd4abd8eb6157e0c4f6`; its exact-revision gates are recorded
-below. Schema51 durable continuity/episodes are under source validation.
-Automatic precautions are not activated. Next is exact
-commentary unknown delivery and full-control consent checked in the send-fence
-transaction, then shared live/independent maintenance regression coverage.
+below. Schema51 durable continuity/episodes are published at
+`506f3bf765ae477bc1945c6317214a3d86fcec6c`.
+Automatic precautions are not activated. The accepted one-progress policy is
+recorded in [ADR 0064's amendment](../decisions/0064-codex-control-loss.md#2026-10-09-amendment-one-unknown-progress-delivery).
+Next is transaction-local ingress reassessment and existing send reservation,
+then explicit ingress-cause authority and shared live/independent maintenance
+regression coverage.
 Use immutable job-ingress sidecars and fresh-acceptance target rows; do not infer
 authority from legacy jobs or observer labels. Retry children bind their current
 Reply ingress; mixed/unknown provenance must not batch or steer into a proven
@@ -276,13 +279,17 @@ reviews and all seven exact-head hosted checks. It retains fresh immutable
 admission/acceptance provenance and first-input/control fences; no automatic
 precaution is enabled. Owner merge and live acceptance remain separate.
 
-The next persistence-only slice is schema51 in lane `feat/codex-ingress-episodes`,
-based on that revision. Root owns implementation; Astra reviewed causal ordering
-and DDL boundaries. Producer continuity and exact-target assessments are under
-offline validation; publication and independent exact-source review remain open.
-Next trigger: complete those gates, then design atomic full-control consent and
-exact commentary egress inside the existing shared send fence. The three-cycle
-budget, root uncertainty and no-replay policy remain unchanged. Closure is open
+Schema51 in lane `feat/codex-ingress-episodes` is published at
+`506f3bf765ae477bc1945c6317214a3d86fcec6c`, with canonical 2,683 tests in 242
+modules, Pyright zero, independent Astra/actual Opus reviews and seven hosted
+checks. No deployment or channel-loss acceptance follows from those gates.
+Root owns the next neutral transaction prerequisite in lane
+`feat/codex-ingress-control-gates`, based on that revision; Astra reviewed its
+bounded extraction and stop-schedule design. Next trigger: complete its exact
+source gates, then design explicit ingress-cause authority inside the shared
+send fence. Ignored single-progress uncertainty needs no new stop episode or
+consent writer. The three-cycle budget, root uncertainty and no-replay policy
+remain unchanged. Closure is open
 until live/maintenance integration and separately authorized channel-loss
 acceptance pass; neither restart nor this storage prerequisite is acceptance.
 Inspect tracked, staged and untracked lane state before any post-merge cleanup.
