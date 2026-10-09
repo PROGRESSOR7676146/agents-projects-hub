@@ -3,6 +3,13 @@
 Status: repository scaffold; deployment acceptance pending
 Date: 2026-09-27
 
+## 2026-10-09 scope amendment
+
+[ADR 0065](0065-retire-hub-lead-advisor.md) withdraws the planned lead/advisor
+capability and advisor-isolation prerequisite below. Standalone Claude human
+approvals, general provider/helper custody, exact sessions and route acceptance
+remain required. The original scaffold rationale is retained.
+
 ## Decision
 
 The existing external queue owns Claude Code CLI turns. `claude_worker_count`

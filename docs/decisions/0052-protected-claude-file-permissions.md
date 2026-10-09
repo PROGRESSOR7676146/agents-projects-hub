@@ -3,6 +3,12 @@
 Status: accepted implementation choice; deployment/live acceptance pending.
 Date: 2026-10-03.
 
+## 2026-10-09 scope amendment
+
+[ADR 0065](0065-retire-hub-lead-advisor.md) withdraws the lead/advisor milestone
+and advisor-specific next trigger below. Human file permissions, authority
+custody, local/session parity and subscription acceptance retain their gates.
+
 ## Context
 
 Ordinary tlive Claude approvals cannot distinguish a human callback from policy

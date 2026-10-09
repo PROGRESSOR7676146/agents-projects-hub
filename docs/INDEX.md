@@ -14,18 +14,19 @@ and the [decision map](decisions/README.md) routes durable rationale.
 The completed [requirements split](product/REQUIREMENTS_SPLIT_PLAN.md) is
 migration rationale, not a routine prerequisite or another specification.
 
-For Claude Code/Codex integration, read the accepted
-[lead/advisor plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md) and its
+For Claude Code integration, read the revised
+[parity/approval plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md) and its
 [next development task](operations/NEXT_DEVELOPMENT_SESSION.md) after the
-baseline above. Check [status](status/PROJECT_STATUS.md) for the implemented
-subset; the plan's accepted role choices are not a claim of runtime parity.
+baseline above. Hub roles are retired by [ADR 0065](decisions/0065-retire-hub-lead-advisor.md).
+Check [status](status/PROJECT_STATUS.md) for the implemented subset and separate
+live acceptance.
 
 ## Delivery and operation
 
 - [Stabilization plan and live-acceptance backlog](operations/STABILIZATION_PLAN.md)
 - [Roadmap](ROADMAP.ru.md)
 - [Next development session](operations/NEXT_DEVELOPMENT_SESSION.md)
-- [Claude Code and Codex: bounded lead/advisor plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
+- [Claude Code: parity and human approval plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
 - [Claude protected file-tool candidate](operations/CLAUDE_FILE_PERMISSIONS.md)
 - [Claude authority custody preparation](operations/CLAUDE_CUSTODY.md)
 - [Exact-job outcome diagnostics](operations/OUTCOME_JOURNAL.md)

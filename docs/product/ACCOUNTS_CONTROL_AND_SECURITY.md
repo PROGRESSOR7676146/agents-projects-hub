@@ -49,8 +49,8 @@ This normative module is part of the
   skills, or MCP servers and MUST deny permission prompts. An explicit local
   file-tool opt-in MAY use the protected human boundary of REQ-SEC-008;
   deployment and native/Telegram acceptance remain separate gates. It MUST NOT
-  claim write-capable lead or read-only advisor parity on the strength of prompt
-  instructions or this limited tool slice alone.
+  claim complete provider parity or authority-data custody on the strength of
+  prompt instructions or this limited tool slice alone.
 
 ### Compact control surface
 
@@ -263,19 +263,12 @@ This normative module is part of the
   The next later ordinary message continues the exact chosen thread without a
   separate `/return`; stale callbacks, cancellation and expiry create no new
   generation.
-- **REQ-WRITER-013 (Accepted; implementation pending):** In the initial
-  Claude Code/Codex collaboration workflow, the lead alone MAY change project
-  files, and the advisor MUST be technically limited to reading authorized
-  materials and sending visible advice. Prompt instructions or Plan mode alone
-  MUST NOT establish that boundary: shell, MCP, hooks, plugins, skills, child
-  processes and local transfer MUST NOT grant the advisor write capability.
-  The initial advisor has no subagents; optional lead helpers are limited to
-  one level of read/search/analysis and cannot write. A role change MUST occur
-  only after active work and approvals reach a safe boundary, revoke the prior
-  role before granting the new one, and MUST NOT retarget queued work. The
-  existing canonical-root writer exclusion still applies across topics;
-  additional worker slots never grant parallel writers on one root. Neither
-  provider MAY approve the other's actions.
+- **REQ-WRITER-013 (Retired by ADR 0065):** Hub-managed lead/advisor permissions
+  and role handover are withdrawn. Existing writer leases, canonical-root
+  exclusion, sandbox and human approval authority remain mandatory. Project
+  review instructions MUST NOT be treated as access isolation or approval
+  grants. The ID remains reserved; see
+  [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md).
 
 Initial reviewed resume shapes are `codex resume SESSION_ID -C ROOT`,
 with explicit provider/model `-c` overrides when local `codex_model_provider`
@@ -324,12 +317,14 @@ single-writer checks remain mandatory. See
   inline/pilot execution and local/tmux transfer MUST refuse before their effects
   until separately supported. Metadata proves selection continuity only; it
   does not expose the full managed definition or establish read isolation,
-  authority-data custody, helper isolation or an advisor boundary. Those claims
+  authority-data custody or helper isolation. Those claims
   require independent OS-boundary and negative access evidence.
 - **REQ-SEC-002 (Implemented):** Hermes and Hub are not approval authorities.
   Codex/tlive retains approval ownership and first-valid-answer-wins behavior.
 - **REQ-SEC-003 (Accepted):** Timeout, restart, ambiguity, missing state, and
   channel failure MUST resolve to deny/no action, never approval.
+  Neither provider MAY approve the other's actions; enforcement against
+  provider/helper access to approval channels remains subject to REQ-SEC-008 custody.
 - **REQ-SEC-004 (Implemented):** Tokens MUST live in private local files, not
   command arguments, JSON examples, logs, Git, documents, or Telegram content.
 - **REQ-SEC-005 (Implemented):** State and secret files MUST use restrictive
@@ -355,12 +350,12 @@ single-writer checks remain mandatory. See
   The per-turn hook MUST have no signing keys or Hub state access, and no Stop,
   continuation, mirroring or second conversation writer. Shell, MCP, skills,
   external plugins and children remain unavailable. This slice does not establish
-  advisor isolation, collaboration, subscription routing or local-transfer parity.
+  subscription routing or local-transfer parity.
   The trusted worker and tlive host remain the receipt trust base; this slice
   MUST NOT claim isolation from an unconfined hostile process sharing their UID.
   Live activation MUST exclude such principals from signing keys, Hub state and
-  transport endpoints through independently verified OS isolation. A same-UID
-  read-only advisor MUST NOT be enabled on the strength of this boundary.
+  transport endpoints through independently verified OS isolation. Prompt-based
+  review MUST NOT exempt helpers or other launch paths from this custody gate.
 
 The detailed threat model in `docs/SECURITY.ru.md` remains normative where it is
 more specific and consistent with this baseline.

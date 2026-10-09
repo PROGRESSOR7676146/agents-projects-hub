@@ -1,8 +1,8 @@
 # Stabilization plan
 
 Status: active; stages 0–2 and 3b done, stage 3 in progress
-Date: 2026-09-27; updated 2026-10-04
-Owner: repository owner (decisions and merges); lead development agent integrates
+Date: 2026-09-27; scope updated 2026-10-09
+Owner: repository owner (decisions and merges); integration owner implements
 Last verified integrated repository revision:
 `3750ccfb0f8eb98333f9219f3a697d6328890d04` for stop, native Claude and schema-37
 visibility (canonical and hosted checks, after independent candidate reviews).
@@ -17,10 +17,36 @@ actual launch/service exposure first; a dedicated VM remains a reserve option,
 not a selected prerequisite. The revised preparation decision is in
 [ADR 0053](../decisions/0053-claude-custody-reference-deployment.md) and the
 [custody preparation runbook](CLAUDE_CUSTODY.md).
-Next trigger: the native human approval boundary in the
-[continuation plan](NEXT_DEVELOPMENT_SESSION.md); continue the separately
-authorized live backlog and ADR 0048 work.
+Next trigger: [revised delivery scope](#revised-delivery-scope) and the
+[continuation plan](NEXT_DEVELOPMENT_SESSION.md); live/ADR 0048 work stays separate.
 Deployment identity and private acceptance records remain outside this plan.
+
+## Revised delivery scope
+
+Owner decision: remove Hub-managed lead/advisor roles from the current goal and
+release scope; cross-provider review belongs to project rules. See
+[ADR 0065](../decisions/0065-retire-hub-lead-advisor.md). This section supersedes
+older role/transport next triggers below; historical source evidence remains.
+Last inspected source base: `851714b5005553906b29c771fcd095de133f776b`.
+Owner: Hub maintainer, sole writer. Next trigger: the checked
+[dependency inventory](RETAINED_PROVIDER_DEPENDENCIES.md), then Claude/custody.
+
+| Original goal item | Remaining scope |
+| --- | --- |
+| 1 — integration | Owner merge, dependency selection, separately authorized exact-revision rollout and post-restart acceptance |
+| 2 — authority | Managed permissions and project/service-data custody across productive launches, helpers, MCP, local and recovery paths |
+| 3 — visible control | Remaining provider progress, approvals, retry/stop and live control-loss acceptance |
+| 4 — Claude parity | Human file approvals, model/effort, exact sessions, local/return, saved-session connection, recovery and subscription without paid fallback |
+| 5 — roles | Withdrawn, not implemented; general outcome/time/usage journal remains an independent supporting milestone |
+| 6 — live acceptance | Three independent projects, queue/approvals/stop/connect, Telegram ↔ CLI, restarts and denied-access scenarios |
+| 7 — operations/release | Hermes incidents and controlled updates, off-machine restore drill, remaining refactoring and release 0.8 |
+| Added footer visibility | [Existing /goal and /fast follow-up](#planned-final-response-mode-indicators) |
+
+Hub role/review orchestration and the combined native/pipe witness are withdrawn.
+Preserve source/tests and select shared fixes on independent
+merits; no branch/PR deletion, merge, replay or live change follows. Independent
+development review remains required. Scoring, judges and parallel writers stay
+excluded. Closure: role work is closed by withdrawal; the remaining goal is open.
 
 ## Current source integration checkpoint
 
@@ -54,8 +80,8 @@ integrate and revalidate the combined revision before the two-worker canary.
 Inspect tracked, staged and untracked lane state before any post-merge cleanup.
 
 Full authority custody, broader provider progress, Claude native transfer and
-saved-session connection, subscription/no-paid-fallback acceptance, role/review
-workflow and outcome journal, three-project/restart acceptance, Hermes incident
+saved-session connection, subscription/no-paid-fallback acceptance, independent
+outcome journal, three-project/restart acceptance, Hermes incident
 and update plane, off-machine restore drill and release 0.8 remain open. Restart
 alone closes neither the repeated notification incident nor payload recovery.
 
@@ -80,41 +106,27 @@ where the existing records cannot establish them. This does not close
 Source owner: Hub maintainer; next trigger: integrate the reviewed foundations,
 then separately design authenticated immutable owner decisions and corrections.
 Inspect tracked, staged and untracked lane state before any post-merge cleanup.
-Closure remains open alongside the role/review workflow; there is no deployed
-advisor, acceptance journal or accounting claim.
+Closure of the independent outcome journal remains open; there is no deployed
+acceptance journal or complete accounting claim. Hub roles are retired by ADR 0065.
 
 ## Advisor foundations integration candidate
 
-Current state: published in lane `feat/advisor-foundations-integration`,
-base `dcc6507`, preserving the namespace/capsule histories at `fcc755f` and
-`cd8b604`. Source owner: Hub maintainer, sole integration writer. Clean candidate
-`1c70d5639b59cfa97829bb56deaf3f95f577cb42` passed the commit and canonical
-publication gates (2,149 tests in 195 modules, zero typing errors, static and
-privacy/history checks), independent exact-head Astra and Claude Opus reviews,
-and all seven hosted checks including Python 3.11/3.12/3.13 and strict namespaces.
-The strict affected corpus passed 123 tests with no namespace skips; its sole
-skip was Python 3.11's absent memfd wrapper. The later Python 3.12 affected
-subset passed 33 tests.
+Published source: `feat/advisor-foundations-integration`, base `dcc6507`, with
+namespace/capsule histories `fcc755f` and `cd8b604`. Owner: Hub maintainer, sole
+writer. Clean `1c70d5639b59cfa97829bb56deaf3f95f577cb42` passed commit/canonical
+gates (2,149 tests/195 modules, types/static/privacy/history), exact-head Astra
+and actual Opus review, and seven hosted checks including strict namespaces.
+Affected corpus: 123 tests, no namespace skips; Python 3.11 lacked the memfd
+wrapper, and a later Python 3.12 subset passed 33 tests.
 
-The neutral core carries the private-alias/parser/runtime protections for every
-access profile; private validation descriptors never join inherited launch pins.
-Independent review found that cold casefold lookups can preserve requested
-spelling. The corrected shared pin owner therefore requires supported
-case-sensitive filesystem evidence at every parent and terminal directory,
-including final walks. Unknown/overlay ancestors, unreadable directories,
-unavailable metadata and unsupported ABI refuse. Refusing ioctl sentinels reject
-success without written evidence; exact inode-targeted capsule regressions and
-FD allocation tracking preserve cleanup evidence without closing tested resources.
-These are kernel-isolation and scripted metadata tests, not a real casefold/cache
-or XFS acceptance witness. Bare/separate Git directories remain the trusted
-caller's material-authorization responsibility. See ADRs 0056 and 0057.
-
-Next trigger: native compatibility with an isolated fake inference endpoint,
-then the authorized-material/workflow binding and bounded inference transport.
-Closure remains open: these primitives enable no productive advisor, role
-handover, owner assessment or installed custody. Private networking blocks the
-existing loopback route. Owner main merge and deployment remain separate.
-Inspect tracked, staged and untracked lane state before any post-merge cleanup.
+Shared private-source and case-sensitive lookup guards apply to every profile.
+ADRs 0056/0057 own the descriptor, alias and caller-authorization boundaries;
+scripted lookup/FD fixtures are not real casefold/XFS or installed custody proof.
+Advisor material/workflow and inference transport follow-ups are withdrawn by
+ADR 0065. Retain shared Claude/security fixes on independent merits. Private
+networking still blocks host loopback; owner merge/deployment remain separate.
+Inspect all lane state before any post-merge cleanup; cancellation is not
+productive acceptance.
 
 ## Offline native Claude transport follow-up
 
@@ -143,54 +155,38 @@ the exact 529 envelope, zero visible assistant messages on rejection and fully
 validated host diagnostics. All four cases passed with CLI 2.1.285; additional
 retry/output bounds belong only to the fixture.
 
-Next trigger: confirm exact-revision hosted checks, then the bounded isolated
-transport below. The
+The advisor-specific isolated transport follow-up is withdrawn by ADR 0065.
+Retain the standalone native/error corpus; hosted confirmation at exact `535c0b8`
+is recorded above, so no unchanged gate is repeated. The
 [testing guide](../testing/README.md#optional-offline-native-claude-transport)
 owns the procedure and evidence limits. This does not close subscription routing,
 CPA/no-paid-fallback, human file approvals, local transfer or Telegram acceptance.
 
 ## Bounded review pipe primitives
 
-Current state: clean offline candidate `dd43ae6` in lane
-`feat/advisor-inference-bridge`, based on `535c0b8`. Source owner: Hub maintainer.
-The mandatory commit and canonical publication gates passed 2,204 tests in 198
-modules with zero typing errors and privacy/history checks. Exact-candidate
-Astra and Claude Opus reviews have no remaining mandatory findings; all seven
-hosted checks passed at exact head `dd43ae6`. Early capsule-type/UUID
-findings and Opus's exception-chain/request-byte findings are fixed with
-negative regressions. See
-[ADR 0058](../decisions/0058-bounded-review-pipe-primitives.md) for the selected
-ownership and evidence boundary.
+Retained offline source/fixtures under
+[ADR 0058](../decisions/0058-bounded-review-pipe-primitives.md), owner Hub maintainer:
 
-The published clean candidate `e563dd4ca51b5d4884227681782d4a7fce275b2e`
-in lane `feat/advisor-pipe-sequencing` adds directional wire ordering and finite
-partial-write accounting on `dd43ae6`. Commit/canonical gates passed 2,241 tests
-in 200 modules, types and privacy/history; Astra and actual Claude Opus 5.5/high
-source reviews have no mandatory findings. All seven exact-head hosted checks
-passed, including coverage. The process-wide FD-count failure at its earlier
-candidate has unknown allocation/close attribution; the replacement fixture
-tracks identity-bound allocations without taking cleanup authority.
-It keeps distinct request observation, callback consumption, buffered bytes,
-caller-reported writes and native completion. Graceful wire cancellation drains
-and discards in-flight stdout; buffer abort requires channel closure after a
-partial frame. It introduces no physical I/O or runtime switch.
-Source owner: Hub maintainer.
+| Source | Scope and completed source gates |
+| --- | --- |
+| `dd43ae6`, `feat/advisor-inference-bridge`, base `535c0b8` | Framing/one-use fake gate; canonical 2,204 tests/198 modules, types/privacy, Astra/actual Opus and seven hosted checks |
+| `e563dd4ca51b5d4884227681782d4a7fce275b2e`, `feat/advisor-pipe-sequencing` | Directional ordering/finite partial writes; canonical 2,241 tests/200 modules and the same independent/hosted gates |
+| `cc976f6828554104b7326770f1e3a67b6e2de6ef`, PR #154 | Owned actual pipes/private namespace witness; canonical 2,264 tests/203 modules and independent/hosted gates |
+| `cad8e8d8732bfb52aadb45e15d783785af4da84a`, PR #174 | Native corpus + PR #154 foundations joined; source gates passed |
+| `496a719707a5b02557e659e77facf6a481f2a4da`, PR #175 | Test-only exact HTTP envelope/semantic owner; source gates passed |
+| `851714b5005553906b29c771fcd095de133f776b`, PR #176 | Owned raw exchange extraction; canonical 2,855 tests/256 modules, types/privacy, Astra/actual Opus and seven hosted checks |
 
-PR #154 at `cc976f6828554104b7326770f1e3a67b6e2de6ef` adds owned offline pipes
-and the private namespace witness. Canonical 2,264 tests in 203 modules, types,
-privacy/history, independent Astra/actual Opus reviews and seven hosted checks
-passed. This is fictional HTTP/kernel evidence, not productive advisor acceptance.
+The original process-wide FD-count discrepancy has unknown attribution; fixtures
+now track identity-bound allocations without taking cleanup authority. Request
+observation, callback consumption, partial writes and native completion remain
+distinct. The [testing guide](../testing/README.md#offline-review-pipe-primitives)
+owns commands and evidence limits. These fixtures are not productive/native
+integration, subscription, installed custody or Telegram acceptance.
 
-PR #174 at `cad8e8d8732bfb52aadb45e15d783785af4da84a` joins the native
-corpus and PR #154; source gates passed. The HTTP envelope/semantic owner is
-published at `496a719707a5b02557e659e77facf6a481f2a4da`; its source gates passed.
-The test-only raw exchange extraction in lane `test/claude-pipe-exchange`, based
-on that revision, keeps owned process/pump cleanup separate from receipt parsing.
-Source owner: Hub maintainer. Next trigger: its exact-revision publication,
-then combined native/pipe witness; see [next session](NEXT_DEVELOPMENT_SESSION.md).
-Closure is open: productive advisor/workflow/native integration and live acceptance
-remain pending. The project and host authority stay outside the child. Inspect
-all lane state before post-merge cleanup; merge and deployment are owner actions.
+Combined native/pipe witness and productive advisor/role/material integration
+are withdrawn by ADR 0065. Preserve tests/shared cleanup and do not repeat
+completed gates or continue advisor development. Merge/deployment remain owner
+actions; inspect tracked/staged/untracked state before any worktree cleanup.
 
 ## Claude process observations
 
@@ -206,8 +202,8 @@ passed at that exact head. These are source/offline and hosted checks.
 
 Next trigger: owner integration and separately authorized native
 and Telegram acceptance alongside the remaining Claude parity work. This lane
-is bounded to optional passive ordinary quiet notices; productive advisor
-wiring, tool/build activity, local transfer, saved-session connection and billing
+is bounded to optional passive ordinary quiet notices; tool/build activity,
+local transfer, saved-session connection and billing
 route acceptance remain open. Root is the sole implementation writer. The
 worktree owner is Hub maintainer; its purpose is schema-42 observation and
 worker/sender integration, with base `feat/advisor-pipe-sequencing`. Post-merge,
@@ -346,19 +342,15 @@ remain separate. Inspect tracked/staged/untracked state before post-merge cleanu
 
 Owner-requested follow-up (2026-10-07), implementation pending: extend the compact
 final-response identity/telemetry footer with important active modes, initially
-goal execution (`/goal`) and fast/service-tier selection (`/fast`), and other
-supported modes that materially affect the owner's understanding of the turn.
-Keep the footer concise; use authoritative state bound to the exact completed
-turn, rather than interpreting prompt text or assuming that a requested mode was
-enabled. Distinguish active, paused and terminal goal states; show fast mode only
-when its actual provider setting is observable. Missing or unsupported evidence
-must not become an enabled-mode claim. Reading/formatting this metadata must not
-invoke a provider or change modes. Preserve the existing session, agent,
-model/effort, context and quota information. Before implementation, define the
-owning display contract and verify per-provider metadata, retries, provider/model
-switches and missing/stale state. Source owner: Hub maintainer; next trigger:
-the task-visibility follow-up after the current authority-isolation fix. This
-plan item neither enables these modes nor changes their resource policy.
+`/goal`, `/fast` and other supported consequential modes. Keep the footer concise.
+Use authoritative
+exact-turn state, never inferred prompt intent. Distinguish active/paused/terminal
+goals; show fast only from observable settings, missing evidence stays unknown.
+Formatting invokes no provider and changes no modes/resource policy. Preserve
+session, agent, model/effort, context and quota. Before implementation, define the
+owning contract and test provider metadata, retries, switches and stale/missing
+state. Owner: Hub maintainer; next trigger: the task-visibility follow-up after
+the current authority-isolation fix.
 
 ## Why
 
@@ -480,7 +472,7 @@ acceptance.
 | Inbound materials and context/quota labels | REQ-UX-009, REQ-QUEUE-010, REQ-CMD-001 | Acceptance actor `p0_p1_live` in a maintenance window |
 | Restart continuity and exactly-once processing | AC-F-005, AC-F-010 | Controlled restart during queued and active work |
 | Summary-free Codex `/local` → `/return` | REQ-WRITER-006, REQ-WRITER-007 | Telegram → native CLI → Telegram on the same thread |
-| Managed Codex profile continuity and custody (schema 39) | REQ-SEC-001, ADR 0055 | Exact start/resume/restart selection, approvals, negative project/service-data access; local/advisor routes remain unsupported pending their own boundary evidence |
+| Managed Codex profile continuity and custody (schema 39) | REQ-SEC-001, ADR 0055 | Exact start/resume/restart selection, approvals, negative project/service-data access; local routes remain unsupported pending their own boundary evidence; helpers retain independent custody checks |
 | Saved-session `/connect` | REQ-CMD-008, REQ-WRITER-012, AC-F-013 | Topic, Hub-private and local-code entry paths |
 | Accepted-turn activity and queue snapshots (schema 37) | REQ-QUEUE-012, REQ-QUEUE-013 | Queue blocker, long tool, approval resolution, restart and ambiguous delivery at the exact deployed revision |
 | Preacceptance Codex approval observations (schema 40) | REQ-QUEUE-012, REQ-QUEUE-013 | Human wait before native acknowledgement, exact promotion, worker-epoch restart and preserved unknown sends |
@@ -544,7 +536,7 @@ acceptance.
   Hosted checks and independent review passed at that exact candidate; it is
   merged in the integrated revision above, whose canonical checks cover
   1,488 tests in 135 modules. This is source evidence, not live acceptance.
-  Human approval hosting, tools, advisor isolation, native local transfer and
+  Human approval hosting, tools, authority custody, native local transfer and
   CPA/account live acceptance remain separate parity work.
 - `codex-worker@1` / `claude-worker@1` duplicate slot 1 of `worker@codex` /
   `worker@claude` (PR #80 review, item 5).

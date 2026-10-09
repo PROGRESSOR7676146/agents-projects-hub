@@ -4,6 +4,15 @@ Status: implemented extraction candidate; publication review and installed custo
 Date: 2026-10-07.
 Owner: Hub maintainer.
 
+## 2026-10-09 scope amendment
+
+[ADR 0065](0065-retire-hub-lead-advisor.md) withdraws the advisor-only transport
+and role-integration next triggers below. The shared namespace, mount-pin and
+Claude security controls remain active foundations with their existing tests
+and CI. Installed provider/helper custody under ADR 0053 remains open. Retain
+the original rationale and evidence limits; no networking or authority grant
+changes, and no productive advisor is scheduled.
+
 ## Context
 
 The Claude file-tool wrapper already owns pinned mount validation, bounded

@@ -3,6 +3,12 @@
 Status: accepted implementation slice; live acceptance pending
 Date: 2026-10-06
 
+## 2026-10-09 scope amendment
+
+[ADR 0065](0065-retire-hub-lead-advisor.md) withdraws the advisor-isolation
+follow-up below. Managed-profile continuity, helper/tool custody, supported
+local transfer and owner-coordinated live acceptance remain required.
+
 ## Context
 
 Legacy workspace overrides can replace a native named permission profile.

@@ -195,22 +195,17 @@ Routing precedence is deterministic:
 
 ### Explicit Claude Code/Codex collaboration
 
-- **REQ-COLLAB-001 (Accepted; implementation pending):** Hub MUST support an
-  explicitly enabled topic workflow pairing Codex and Claude Code with one
-  human-selected lead and one advisor; either provider MAY lead. The owner
-  initially chooses roles, models, and effort. The advisor MUST run only when
-  the owner invokes it or the lead requests it within an explicitly enabled
-  bounded workflow. Ordinary turns, Reply/mention routing, provider-native
-  sessions, and the rule against automatic history sharing remain unchanged
-  outside that workflow.
-- **REQ-COLLAB-002 (Accepted; implementation pending):** The initial workflow
-  MUST execute lead request, advisor review, and lead continuation in sequence,
-  with one review round and one lead response by default. The lead MUST release
-  its active turn before the advisor can run; it MUST NOT wait while occupying
-  the same topic FIFO slot. Hub MUST carry only bounded, attributed visible
-  materials and an exact result/revision reference, never hidden reasoning or
-  full native transcripts. Provider bots MUST NOT be used as a bot-to-bot
-  delivery channel. Further rounds require an explicit bound.
+- **REQ-COLLAB-001 (Retired by ADR 0065):** Hub-managed lead/advisor roles
+  are outside current product scope. Independent cross-provider review belongs
+  to project instructions and explicit agent work; Hub does not enforce or
+  certify that review. Ordinary active/satellite routing and provider-native
+  session isolation remain governed by the existing requirements.
+- **REQ-COLLAB-002 (Retired by ADR 0065):** Hub does not implement the
+  sequential advisor-review/lead-continuation workflow. Its withdrawal grants
+  no automatic history sharing, provider invocation or replay authority.
+  Provider bots MUST NOT be used as a bot-to-bot review delivery channel.
+  Retained IDs MUST NOT be reused. See
+  [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md).
 
 ## 9. Provider identity and adapter contract
 

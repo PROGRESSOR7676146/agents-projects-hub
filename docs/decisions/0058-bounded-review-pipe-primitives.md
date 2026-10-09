@@ -1,8 +1,19 @@
 # ADR 0058: Bounded pipe primitives for isolated review
 
-Status: offline implementation candidate; productive integration pending.
+Status: retained offline primitives/fixtures; productive advisor integration withdrawn.
 Date: 2026-10-08.
 Owner: Hub maintainer.
+
+## 2026-10-09 scope amendment
+
+[ADR 0065](0065-retire-hub-lead-advisor.md) withdraws productive advisor wiring,
+durable role/material authorization and the combined native/pipe witness. These
+are no longer pending goal or release tasks. Preserve the primitives, existing
+fixtures and source review evidence, including shared process-cleanup fixes;
+do not delete branches or weaken existing CI automatically. The original
+transport decision and hypothetical integration prerequisites below are retained
+rationale. Reintroduction requires a new owner scope decision; standalone Claude
+parity and authority custody keep their independent acceptance gates.
 
 ## Context
 

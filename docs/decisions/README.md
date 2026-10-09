@@ -1,7 +1,7 @@
 # Decision map
 
 Status: active  
-Last updated: 2026-10-02
+Last updated: 2026-10-09
 
 This directory is the durable entry point for consequential product and
 architecture decisions. New records should be named `NNNN-short-title.md`.
@@ -58,8 +58,8 @@ with a new record.
 | Durable local-root blockers | Schema 35 refuses new blocked input, holds already accepted queue work for an exact owner decision, and delivers Hub notices independently of provider execution. | [ADR 0036](0036-durable-local-root-blockers.md) |
 | Evidence-based task allocation | Accepted foundation for participant evaluation and resource-aware allocation; implementation pending, optional judges and bounded experiments. | [ADR 0037](0037-evidence-based-task-allocation.md) |
 | Multiple Codex worker slots | Separate Codex processes share a bounded queue while retaining one client/connection per slot, root exclusion, fairness and exact revision health. | [ADR 0038](0038-multiple-codex-worker-slots.md) |
-| Limited Claude CPA workers | Separate Claude CLI slots share queue bounds; the initial adapter is text-only until approval and advisor isolation are proven. | [ADR 0039](0039-claude-cpa-worker-scaffold.md) |
-| Bounded Claude/Codex collaboration | One human-selected lead and one read-only advisor run a durable sequential review; parallel writers and automatic scoring are deferred. | [ADR 0040](0040-bounded-claude-codex-lead-advisor.md) |
+| Limited Claude CPA workers | Separate Claude CLI slots share queue bounds; the initial adapter is text-only until the human approval and custody gates are proven. | [ADR 0039](0039-claude-cpa-worker-scaffold.md) |
+| Bounded Claude/Codex collaboration (retired) | Hub role and review orchestration withdrawn; project instructions own independent review. Claude parity, custody and the general journal remain. | [ADR 0065](0065-retire-hub-lead-advisor.md), superseding [ADR 0040](0040-bounded-claude-codex-lead-advisor.md) |
 | Parallel isolated test modules | Canonical tests run every module in its own discovery process in parallel; focused selectors import sibling fixtures as discovery does. | [ADR 0041](0041-parallel-isolated-test-modules.md) |
 | Pre-commit gate | A versioned pre-commit hook refuses unvalidated working-tree content and runs cheap contracts, the history scan and the full parallel suite; Pyright stays at push. | [ADR 0042](0042-pre-commit-gate.md) |
 | Survived-failure diagnostics | Deliberately survived failures log only exception class and a static site label, rate-limited, to stderr/journald; Ruff S110/S112 forbid new silent handlers. | [ADR 0043](0043-bounded-diagnostics-for-survived-failures.md) |
@@ -75,9 +75,9 @@ with a new record.
 | Claude authority custody | Assess existing-host launch/service exposure before choosing infrastructure; VM remains conditional, with the unchanged installed custody gate. | [ADR 0053](0053-claude-custody-reference-deployment.md) |
 | Notice-bound work retry reports | Candidate passive Reply control reports the existing job through the durable notice sender; independent review and deployment remain separate. | [ADR 0054](0054-notice-bound-work-retry-reports.md) |
 | Managed Codex profile continuity | Immutable selection snapshots and passive native confirmation preserve named profiles without claiming complete custody or enabling unsupported writers. | [ADR 0055](0055-managed-codex-profile-continuity.md) |
-| Provider-neutral process namespace | Shared pinned builder preserves the Claude facade and adds a provider-free read-only/private-network witness; advisor and installed custody remain open. | [ADR 0056](0056-provider-neutral-process-namespace.md) |
-| Sealed review material capsules | A trusted explicit text selection becomes bounded digest-bound kernel-sealed bytes; no durable authorization, provider route or review workflow is enabled. | [ADR 0057](0057-sealed-review-material-capsules.md) |
-| Bounded review pipe primitives | Finite byte framing and a host-created one-use fake attempt gate prepare private-network transport without productive wiring or durable authorization. | [ADR 0058](0058-bounded-review-pipe-primitives.md) |
+| Provider-neutral process namespace | Shared pinned builder preserves the Claude facade and adds a provider-free read-only/private-network witness; installed custody remains open; advisor work is withdrawn (ADR 0065). | [ADR 0056](0056-provider-neutral-process-namespace.md) |
+| Sealed review material capsules | Retained offline primitive; advisor integration withdrawn by ADR 0065, no productive authorization. | [ADR 0057](0057-sealed-review-material-capsules.md), [ADR 0065](0065-retire-hub-lead-advisor.md) |
+| Bounded review pipe primitives | Retained offline framing/gate/fixtures; advisor integration withdrawn by ADR 0065. | [ADR 0058](0058-bounded-review-pipe-primitives.md), [ADR 0065](0065-retire-hub-lead-advisor.md) |
 | Final/progress delivery certainty | Schema43 fences sends, preserves unknown outcomes and multipart receipts, and separates late native proof from delivery replacement. | [ADR 0060](0060-final-and-progress-delivery-certainty.md) |
 | Local owner delivery holds | Schema44 records exact immutable permission to continue past unknown delivery, preserving receipts, results and independent safety boundaries. | [ADR 0061](0061-owner-delivery-hold-dispositions.md) |
 

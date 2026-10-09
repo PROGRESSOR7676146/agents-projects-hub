@@ -1,8 +1,8 @@
 # Next session: Claude parity and visible task states
 
 Status: native Claude and schema-37 visibility merged; human approval boundary in progress.
-Date: 2026-10-04.
-Decision owner: repository owner. Integration owner: lead development agent.
+Date: 2026-10-09 (scope revised by ADR 0065).
+Decision owner: repository owner. Integration owner: primary development agent.
 Last verified integrated revision: `3750ccfb0f8eb98333f9219f3a697d6328890d04`.
 The stop/native/visibility stack passed exact-candidate independent reviews;
 the merged revision passed canonical validation (1,488 tests in 135 modules,
@@ -25,7 +25,7 @@ adversarial corpus and mandatory CI checks, and reuse completed mount, peer,
 runtime and receipt controls. Then separately authorize and verify the
 native/Telegram human approval boundary described in the
 [Claude plan](CLAUDE_LEAD_REVIEW_PLAN.ru.md#следующая-граница-разрешений), then
-continue advisor isolation and remaining visibility work. Do not enable tools
+continue standalone Claude parity and remaining visibility work. Do not enable tools
 from a CLI flag or an unqualified tlive `allow` alone.
 The current owner instruction caps helpers at GPT-6 Sol with reasoning `high`, using standard service without priority.
 
@@ -92,19 +92,17 @@ and JSON evidence, and returns only prepared fake bytes after validation. The
 production digest gate remains unchanged. It is published at
 `496a719707a5b02557e659e77facf6a481f2a4da`; canonical 2,848 tests in 255 modules,
 types, independent Astra/actual Opus review and seven hosted checks passed.
-The current test-only extraction separates `_run_pipe_exchange` from the legacy
-receipt wrapper. Its bounded raw stdout/exit evidence returns after owned cleanup;
-transport completion alone does not validate a native result. Complete this
-extraction's publication, then add the combined native/owned-pipe witness.
-Neither the in-process semantic owner nor this extraction launches a native CLI.
-That witness must validate a host-preconstructed expectation and use fresh fictional
-materials supplied only through CAPSULE and a fresh fake response supplied only
-through response frames. The namespace supervisor must not generate inference
-responses locally. This test-only seam does not establish productive authorization;
-the semantic adapter and durable workflow remain a separate design.
-Keep the existing host-precomputed exact request digest authority unchanged.
-This corpus enables no productive advisor, role transfer or subscription route;
-durable workflow binding and live acceptance remain open.
+The test-only raw pipe exchange extraction (PR #176) is published at
+`851714b5005553906b29c771fcd095de133f776b`: canonical 2,855 tests/256 modules,
+Pyright zero, static/privacy/history, Astra/actual Opus 5.5/high and all seven
+exact-head hosted checks passed. Do not repeat them on unchanged source. The owner withdrew
+Hub-managed lead/advisor roles under [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md).
+Do not start the combined native/pipe witness, productive advisor transport,
+material/workflow binding or role transfer. Preserve existing candidates/tests;
+shared namespace, native CLI, cleanup and error-classification fixes retain their
+independent value. Ordinary provider custody and native/Telegram acceptance
+remain open. The reduced goal is recorded in the
+[stabilization plan](STABILIZATION_PLAN.md#revised-delivery-scope).
 
 The Codex compatibility candidate now refuses unsupported active permission
 profiles reported by `thread/start` or `thread/resume` before productive
@@ -154,11 +152,11 @@ configurable. They trigger notices only; they never approve, stop, unlock or rep
    purpose, base revision and post-merge review point privately.
 3. Resume the owner's goal explicitly in the new session. Do not mark it complete
    after a plan, a prototype or offline tests alone. Report unsupported capabilities
-   honestly; ask only decisions that change the result. Roles, subscription mode
-   and scoring scope are already recorded.
+   honestly; ask only decisions that change the result. Hub roles are retired;
+   subscription mode and deferred scoring scope are already recorded.
 4. Complete package A against current official Claude documentation and passive
    installed-CLI version/capabilities. Verify human approval hosting, exact resume,
-   stop, local transfer, saved-session discovery and enforceable advisor isolation.
+   stop, local transfer, saved-session discovery and general authority custody.
    Separate documented capability, adapter tests and authorized live evidence.
 5. Reconcile deferred capacity and canary-root questions with bounded read-only
    inspection if needed. Use a schema-compatible read-only path; never initialize
@@ -186,13 +184,14 @@ Never delegate private profiles, credentials or deployment inventories.
 | Task visibility | Admission, FIFO/root capacity, approvals, progress, retry, stop, sender ownership | Durable transitions/notices and passive no-progress detection behind the agreed state API |
 | Acceptance | Existing fault tests, migrations, replay/stop certainty, regressions | Adversarial fixtures, restart/ambiguity tests and integration checks |
 
-Start all three with investigation only. The lead defines state API, transaction
-ownership and invocation boundaries before writing starts. Each writing helper
-uses a distinct worktree/lane and disjoint modules, never the primary checkout.
-Schema, migrations, worker wiring and normative documents have one named author
-at a time. Integrate sequentially and test the integrated revision. No recursive
-delegation or additional writer authority. Sol checks supplement, but do not
-replace, independent review of Codex-authored lifecycle/security changes. The
+Start all three with investigation only. The integration owner defines state
+API, transaction ownership and invocation boundaries before writing starts.
+Each writing helper uses a distinct worktree/lane and disjoint modules, never
+the primary checkout. Schema, migrations, worker wiring and normative documents
+have one named author at a time. Integrate sequentially and test the integrated
+revision. No recursive delegation or additional writer authority. Sol checks
+supplement, but do not replace, independent review of Codex-authored
+lifecycle/security changes. The
 owner explicitly selected **Claude Opus 5.5, effort high** as the reviewer. If
 that reviewer becomes unavailable, use **Gemini** as the owner-authorized
 fallback. Determine availability from supported passive metadata or an actual
@@ -282,28 +281,36 @@ from CLI login. Quota/provider terminal rejection and unknown outcome receive
 different classifications; neither permits automatic replay. Persist native
 identity before invocation wherever supported.
 
-### 4. Bounded collaboration and supporting maintenance
+### 4. Independent outcome journal and maintenance
 
-Complete packages C/E: either provider can lead, advisor is technically read-only,
-role transfer requires a proven safe boundary, one bounded review and continuation
-are durable/idempotent, and minimal outcome/usage records preserve unknowns.
-The lead releases its FIFO slot before the advisor runs. Keep scoring, judges,
-parallel writers and recursive/write-capable helpers deferred.
+Keep the minimal outcome/usage journal under REQ-EVAL-010 independent of roles:
+exact result, human decision/correction, observed time/usage and explicit unknowns.
+Use existing diagnostic and assessment foundations; do not add a review scheduler,
+advisor transport or role lifecycle. Scoring, judges, learned allocation and
+parallel writers remain outside this goal.
 
 Address directly supporting debt: Claude failure classification, duplicated slot
-identity and lifecycle/dispatcher seams. Continue remaining stabilization and
-update-plane items in their existing plans after checking ownership/priority;
-do not mix the pending update-tool PR or host migration into this feature branch.
+identity and lifecycle/dispatcher seams. Continue Hermes incident/update-plane,
+off-machine restore and release 0.8 work in their existing plans after checking
+ownership/priority. Review candidate dependencies before integrating shared
+foundations; advisor-only stacks are not automatic release prerequisites. Do not
+delete or close branches/PRs as a side effect of the scope decision.
+Use the [checked dependency inventory](RETAINED_PROVIDER_DEPENDENCIES.md):
+in-scope observation/control candidates inherit advisor ancestors. Retaining
+dormant code/CI or splitting those changes requires an explicit integration
+choice and exact-candidate checks. Do not mix the pending update-tool PR or host
+migration into this feature branch.
 
 ### 5. Verification, independent review and separate live acceptance
 
 Offline scenarios: unhandled/unreachable approval, hung tool, long productive
 build, retry active work, another-topic queue/root owner, `/stop`, restart while
-blocked, unknown interruption, role/session/root mismatch, partial/completed
+blocked, unknown interruption, permission/session/root mismatch, partial/completed
 Claude output, quota rejection, delivery ambiguity, stale callbacks, duplicate
 inputs and zero inference from passive monitoring. Use injected clocks and fake
-structured providers. Test both lead/advisor orders, Codex/other-provider
-regressions and additive migration backup/rollback.
+structured providers. Test Codex/other-provider regressions, standalone Claude
+parity and additive migration backup/rollback. Retired role scenarios are no
+longer release acceptance requirements.
 
 Follow the [testing guide](../testing/README.md): focused iteration, history/privacy
 before every commit, pre-commit hook, canonical gate on the publication revision,

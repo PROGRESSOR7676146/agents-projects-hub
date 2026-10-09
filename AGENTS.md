@@ -10,11 +10,12 @@ Always read this file, `docs/SECURITY.ru.md`, and
 `docs/product/PRODUCT_REQUIREMENTS.md`, `docs/product/MAINTENANCE.md`,
 `docs/status/PROJECT_STATUS.md`, and `docs/INDEX.md`.
 
-For Claude Code/Codex collaboration or Claude integration, then read
+For Claude integration or cross-provider review scope, then read
 `docs/operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md` and
 `docs/operations/NEXT_DEVELOPMENT_SESSION.md` before proposing scope or asking
-the operator to choose roles, write concurrency, subscription mode, or scoring.
-Those decisions are already recorded there; recheck `docs/status/PROJECT_STATUS.md` and
+the operator to choose write concurrency, subscription mode, or scoring.
+Hub-managed lead/advisor roles are retired by ADR 0065; the other decisions are
+already recorded there. Recheck `docs/status/PROJECT_STATUS.md` and
 owning requirements before treating a plan statement as implemented behavior.
 
 For a local implementation/test fix or non-normative documentation edit, read

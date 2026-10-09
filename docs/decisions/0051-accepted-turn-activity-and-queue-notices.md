@@ -3,6 +3,12 @@
 Status: accepted; repository implementation under validation
 Date: 2026-10-02
 
+## 2026-10-09 scope amendment
+
+[ADR 0065](0065-retire-hub-lead-advisor.md) withdraws the advisor-isolation
+follow-up mentioned below. Ordinary provider visibility, human approvals,
+custody and native Claude parity remain open; the activity decision is retained.
+
 ## Context
 
 [ADR 0049](0049-task-visibility-and-stop-certainty.md) separates control delivery
