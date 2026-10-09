@@ -352,6 +352,67 @@ class TelegramOutboxSenderTests(unittest.TestCase):
             sender_id="test-sender",
         )
 
+    def test_observed_goal_footer_survives_rejected_send_and_sender_restart(self) -> None:
+        from hermes_codex_router.codex_appserver import RateLimits, TurnResult
+        from hermes_codex_router.codex_turn_modes import CodexModeSnapshot
+        from hermes_codex_router.metadata import format_telegram_response
+
+        self.config = replace(
+            self.config,
+            agents=(
+                AgentDefinition(
+                    "codex",
+                    "Codex",
+                    "example_codex_bot",
+                    "codex",
+                    None,
+                    False,
+                    False,
+                    "gpt-example",
+                    "high",
+                ),
+            ),
+            external_worker_agent_ids=("codex",),
+        )
+        rendered = format_telegram_response(
+            result=TurnResult("Saved final", None, None, CodexModeSnapshot("paused")),
+            agent="Codex",
+            model="gpt-example",
+            effort="high",
+            session_label="Example Project · General",
+            limits=RateLimits(None, None),
+            timezone_name="UTC",
+        )
+        job_id = self.ready_outbox("codex", 901, telegram_html=rendered)
+        rejecting = Bot(
+            send_error=TelegramError(
+                "rejected",
+                operation="send_message",
+                failure_class="api_rejection",
+                status_code=429,
+                retry_after=60,
+            )
+        )
+        sender = self.sender(codex=rejecting)
+        try:
+            now = datetime.now(timezone.utc) + timedelta(seconds=1)
+            self.assertTrue(sender.run_cycle(now=now))
+            outbox = sender.state.get_telegram_outbox_for_job(job_id)
+            due = datetime.fromisoformat(outbox.available_at)
+            self.assertEqual(outbox.status, "pending")
+        finally:
+            sender.close()
+        accepted = Bot()
+        restarted = self.sender(codex=accepted)
+        try:
+            self.assertTrue(restarted.run_cycle(now=due))
+            self.assertEqual(rejecting.sent[0][2], rendered)
+            self.assertEqual(accepted.sent[0][2], rendered)
+            self.assertEqual(restarted.state.get_provider_job(job_id).attempt_count, 1)
+            self.assertEqual(restarted.state.get_provider_job(job_id).status, "completed")
+        finally:
+            restarted.close()
+
     def add_dynamic_binding(self, project_id: str, chat_id: int) -> str:
         root = self.base / project_id
         root.mkdir()

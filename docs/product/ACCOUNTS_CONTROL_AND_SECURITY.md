@@ -66,6 +66,20 @@ This normative module is part of the
   or weekly. A Codex window missing from the account snapshot MAY come from the
   rolling rate-limit update the provider sent during the same turn; it serves
   only that turn's response and MUST NOT be shown later as current.
+  A final Codex response MAY include an observed `/goal` status only from
+  payload-free observations of native events bound to the exact accepted turn
+  and thread.
+  Active, paused, blocked, usage-limited, budget-limited and complete MUST remain
+  distinguishable. The label MUST say `observed`: it describes the latest exact
+  event consumed during submission/wait, not the state at native completion or
+  when Telegram receives it. Foreign or unbound events, clear, malformed state,
+  exhausted optional bounds and a new submission MUST NOT become stale or
+  inferred mode claims. Unknown modes MUST be omitted rather than shown as off.
+  Observation MUST add no RPC, inference, mode change or execution authority and
+  MUST NOT interrupt mandatory result, approval or telemetry consumption.
+  Delivery retries MUST retain the saved footer; completion-only recovery MUST
+  NOT borrow today's thread state. Prompt text and preparatory/subsequent-turn
+  service-tier settings MUST NOT establish current-turn `/fast` evidence.
 - **REQ-CMD-002 (Implemented):** `/model` is the single cascaded selector for
   provider, model, and effort. It marks current values and validates callbacks
   against the exact cached catalog snapshot displayed to the user. The final

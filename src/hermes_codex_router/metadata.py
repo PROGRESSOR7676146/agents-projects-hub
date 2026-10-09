@@ -5,6 +5,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from .codex_appserver import LimitWindow, RateLimits, TurnResult, context_remaining_percent
+from .codex_turn_modes import goal_mode_label
 from .quota_windows import quota_window_label
 
 _ABSENT_DETAIL_VALUES = {"", "unavailable", "unknown", "none", "n/a"}
@@ -50,6 +51,9 @@ def _compact_details(details: dict[str, str]) -> str:
         identity += f" · {model_label}" if identity else model_label
 
     telemetry: list[str] = []
+    modes = details.get("Modes")
+    if _available_detail(modes) and modes:
+        telemetry.append(f"Modes: {modes.strip()}")
     context = details.get("Context remaining")
     if _available_detail(context):
         telemetry.append(f"Context remaining: {context}")
@@ -76,6 +80,7 @@ def _compact_details(details: dict[str, str]) -> str:
         "Runtime",
         "Model",
         "Effort",
+        "Modes",
         "Context remaining",
         *window_keys,
     }
@@ -132,6 +137,7 @@ def format_telegram_response(
         "Agent": agent,
         "Model": model,
         "Effort": effort,
+        "Modes": goal_mode_label(result.modes) or "unavailable",
         "Context remaining": _context_remaining(result),
     }
     for slot, window in (("primary", limits.primary), ("secondary", limits.secondary)):
