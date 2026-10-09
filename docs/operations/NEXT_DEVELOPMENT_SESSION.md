@@ -79,10 +79,20 @@ The corpus is published at `f190318af06751683036ff50bf81487b59f207c4`,
 with canonical 2,805 tests in 251 modules, zero typing errors, independent
 Astra/actual Opus review and seven exact-head hosted checks. Do not repeat its
 publication gates on the unchanged revision.
-The next test-only integration candidate joins the exact pipe witness prerequisite
-at `cc976f6828554104b7326770f1e3a67b6e2de6ef`, retaining its shared process owner,
-namespace CI coverage and failure tests. Complete exact integrated-source review
-and publication before adding the combined native/owned-pipe witness.
+The test-only integration at `cad8e8d8732bfb52aadb45e15d783785af4da84a`
+joins the exact pipe witness prerequisite at
+`cc976f6828554104b7326770f1e3a67b6e2de6ef`, retaining its shared process owner,
+namespace CI coverage and failure tests. Its canonical 2,828 tests in 254 modules,
+zero typing errors, independent Astra/actual Opus reviews and seven hosted checks
+passed. Do not repeat completed publication gates on the unchanged revision.
+The next in-process test-only seam is the raw HTTP request envelope and one-use
+semantic fixture owner in `tests.claude_native_pipe_contract`. It binds the host
+capsule to an independently prepared expected prompt, preserves duplicate header
+and JSON evidence, and returns only prepared fake bytes after validation. The
+production digest gate remains unchanged. Complete this seam's independent review
+and publication before extracting the existing pump and adding the combined
+native/owned-pipe witness; no native launch or physical pipe crossing is proved
+by the semantic owner itself.
 That witness must validate a host-preconstructed expectation and use fresh fictional
 materials supplied only through CAPSULE and a fresh fake response supplied only
 through response frames. The namespace supervisor must not generate inference

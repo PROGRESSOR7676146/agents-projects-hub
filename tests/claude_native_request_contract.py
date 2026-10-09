@@ -10,7 +10,7 @@ import hashlib
 import json
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, NoReturn, Sequence
 
 MODEL = "claude-opus-5-5"
@@ -96,7 +96,8 @@ def environment_text(os_version: str, date: str) -> str:
 @dataclass(frozen=True)
 class ExpectedNativeRequest:
     version: str
-    environment: str
+    environment: str = field(repr=False)
+    prompt: str = field(default=PROMPT, repr=False)
 
 
 def _invalid() -> NoReturn:
@@ -235,6 +236,8 @@ def validate_request_body(raw: bytes, expected: ExpectedNativeRequest) -> None:
         or expected.version != SUPPORTED_VERSION
         or not isinstance(expected.environment, str)
         or not 1 <= len(expected.environment) <= 2048
+        or not isinstance(expected.prompt, str)
+        or not 1 <= len(expected.prompt) <= MAX_REQUEST_BYTES
     ):
         _invalid()
     body = _strict_json(raw)
@@ -253,7 +256,7 @@ def validate_request_body(raw: bytes, expected: ExpectedNativeRequest) -> None:
         _invalid()
     cached = {"type": "ephemeral"}
     messages = [
-        {"role": "user", "content": PROMPT},
+        {"role": "user", "content": expected.prompt},
         {
             "role": "system",
             "content": [{"type": "text", "text": expected.environment, "cache_control": cached}],
