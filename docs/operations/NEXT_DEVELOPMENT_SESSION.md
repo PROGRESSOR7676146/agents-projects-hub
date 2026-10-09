@@ -52,11 +52,12 @@ Do not repeat those gates on the unchanged revision. Schema52 authority is
 published at `f135872ca1dca205aaeabd5efa094774f7567710`, post-commit proof fix at
 `b8ebb7f3fb2f6b94230eff57e8d7de25af75522b`, and local-write prerequisite at
 `cbe9564af90365cc87e23834a45968826eac8946`. Their canonical/independent/hosted
-gates passed. Lead owns `feat/codex-ingress-runtime` on the latter base: live
-observer, existing independent maintenance and historical cause notices are
-under exact-source validation. The actual offline native ingress witness passed.
-Next: final focused checks, Astra and actual Opus review, canonical publication,
-then separately authorized channel-loss acceptance. No service change follows.
+gates passed. The runtime observer, independent maintenance and historical
+cause notices are published at `c52ab719c1a5c4a671b18dc50e69b3af764d7477`,
+with canonical 2,787 tests in 250 modules, Pyright zero, independent Astra/actual
+Opus review and seven exact-head hosted checks. The actual offline native
+ingress witness passed. Do not repeat completed publication gates. Next: separately
+authorized channel-loss acceptance; no service change follows from source gates.
 Use immutable job-ingress sidecars and fresh-acceptance target rows; do not infer
 authority from legacy jobs or observer labels. Retry children bind their current
 Reply ingress; mixed/unknown provenance must not batch or steer into a proven
@@ -67,6 +68,18 @@ late-read deadline backward. Queue/control clauses now have one owning module,
 The remaining Claude/operations goal stays open. See
 [control-loss acceptance](CODEX_CONTROL_LOSS.md) and the
 [stabilization plan](STABILIZATION_PLAN.md). No live activation is authorized.
+
+Current Claude source slice: the offline native Messages corpus now validates
+the complete request against a fixed fictional capsule, replacement system text
+and independently constructed native scaffolds, instead of only model/tools/effort.
+Test-first substitutions, strict JSON/headers and global one-POST controls are in
+`tests.test_claude_native_request_contract`; the explicit pinned native matrix is
+documented in the [testing guide](../testing/README.md#optional-offline-native-claude-transport).
+Finish independent exact-source review and canonical publication for this slice,
+then design the semantic adapter and combined owned-pipe/namespace witness.
+Keep the existing host-precomputed exact request digest authority unchanged.
+This corpus enables no productive advisor, role transfer or subscription route;
+durable workflow binding and live acceptance remain open.
 
 The Codex compatibility candidate now refuses unsupported active permission
 profiles reported by `thread/start` or `thread/resume` before productive

@@ -2,19 +2,34 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import socket
 import sys
 import threading
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import cast
 
-MODEL = "claude-opus-5-5"
-NATIVE_SESSION_ID = "00000000-0000-4000-8000-000000000001"
-MARKER = "example-native-ok"
-DUMMY = "example-fixture-no-real-credential"
+if __name__ == "__main__":
+    # Only native execution adds this wrapper-owned readonly import tree.
+    sys.path.insert(0, "/opt/example")
+
+from tests.claude_native_request_contract import (
+    CAPSULE_BYTES,
+    MARKER,
+    MODEL,
+    NATIVE_SESSION_ID,
+    ExpectedNativeRequest,
+    NativeRequestContractError,
+    environment_text,
+    validate_headers,
+    validate_request_body,
+)
+
 CASES = {"api-key-success", "api-key-reject", "bearer-success", "bearer-reject"}
 STAGES = {"initialization", "isolation", "version", "native_stream", "terminal", "cleanup"}
 FAILURE_CATEGORIES = {
@@ -123,6 +138,9 @@ class FixtureServer(ThreadingHTTPServer):
         self.lock = threading.Lock()
         self.requests = self.heads = self.posts = self.connections = self.violations = 0
         self.messages_served = self.timeouts = 0
+        self.validated_requests = 0
+        self.response_complete = threading.Event()
+        self.request_contract: ExpectedNativeRequest | None = None
         self.case = case
         for _attempt in range(4):
             super().__init__(("127.0.0.1", 0), Handler)
@@ -199,10 +217,17 @@ class Handler(BaseHTTPRequestHandler):
         with self.fixture.lock:
             self.fixture.heads += 1
             valid = self.fixture.heads <= 1
-        if self.path != "/api/hello" or not valid or self.headers.get("Transfer-Encoding"):
+        if self.path != "/api/hello" or not valid:
             self.send_error(400)
             return
-        if self.headers.get_all("Content-Length", []) not in ([], ["0"]):
+        try:
+            validate_headers(
+                list(self.headers.raw_items()),
+                port=self.fixture.server_port,
+                case=self.fixture.case,
+                method="HEAD",
+            )
+        except NativeRequestContractError:
             self.send_error(400)
             return
         self._respond(200, "application/json", b"")
@@ -214,42 +239,28 @@ class Handler(BaseHTTPRequestHandler):
         if self.path not in {"/v1/messages", "/v1/messages?beta=true"} or not unique:
             self.send_error(400)
             return
-        lengths = self.headers.get_all("Content-Length", [])
-        if len(lengths) != 1 or self.headers.get_all("Transfer-Encoding"):
+        try:
+            size = validate_headers(
+                list(self.headers.raw_items()),
+                port=self.fixture.server_port,
+                case=self.fixture.case,
+                method="POST",
+            )
+        except NativeRequestContractError:
             self.send_error(400)
             return
-        length = lengths[0]
-        if not length.isascii() or not length.isdecimal() or not 0 < int(length) <= 1024 * 1024:
-            self.send_error(413)
-            return
-        raw = self.rfile.read(int(length))
-        if len(raw) != int(length):
+        raw = self.rfile.read(size)
+        expected = self.fixture.request_contract
+        if len(raw) != size or expected is None:
             self.send_error(400)
             return
         try:
-            body = json.loads(raw)
-        except (ValueError, RecursionError):
+            validate_request_body(raw, expected)
+        except NativeRequestContractError:
             self.send_error(400)
             return
-        bearer = self.fixture.case.startswith("bearer")
-        credentials_match = (
-            self.headers.get_all("Authorization", []) == ["Bearer " + DUMMY]
-            and not self.headers.get_all("x-api-key")
-            if bearer
-            else self.headers.get_all("x-api-key", []) == [DUMMY]
-            and not self.headers.get_all("Authorization")
-        )
-        if (
-            not isinstance(body, dict)
-            or body.get("model") != MODEL
-            or body.get("stream") is not True
-            or body.get("max_tokens") != 1024
-            or body.get("tools") != []
-            or body.get("output_config", {}).get("effort") != "high"
-            or not credentials_match
-        ):
-            self.send_error(400)
-            return
+        with self.fixture.lock:
+            self.fixture.validated_requests += 1
         if self.fixture.case.endswith("reject"):
             error = {
                 "type": "error",
@@ -258,6 +269,7 @@ class Handler(BaseHTTPRequestHandler):
             self._respond(529, "application/json", json.dumps(error).encode())
             with self.fixture.lock:
                 self.fixture.messages_served += 1
+            self.fixture.response_complete.set()
             return
         message = {
             "id": "msg_example_native",
@@ -295,6 +307,7 @@ class Handler(BaseHTTPRequestHandler):
         self._respond(200, "text/event-stream", encoded.encode())
         with self.fixture.lock:
             self.fixture.messages_served += 1
+        self.fixture.response_complete.set()
 
 
 def update_terminal_shape(raw: bytes, shape: dict[str, object]) -> None:
@@ -361,6 +374,7 @@ def main() -> None:
         ClaudeVisibleAssistant,
         parse_claude_stream,
     )
+    from tests.claude_native_request_contract import DUMMY
     from tests.native_process_capture import NativeCaptureError, capture_owned_process
 
     global stage, policy_shape, transport_counts
@@ -422,6 +436,14 @@ def main() -> None:
             or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+ \(Claude Code\)", version_text)
         ):
             raise NativeCaptureError("native_fixture_version_invalid")
+        # Host-chosen scaffold inputs are captured before the native Messages
+        # request. Never infer expected material/environment from child output.
+        server.request_contract = ExpectedNativeRequest(
+            version_text.removesuffix(" (Claude Code)"),
+            environment_text(
+                "Linux " + os.uname().release, datetime.now(timezone.utc).date().isoformat()
+            ),
+        )
         stage = "native_stream"
 
         class DiagnosticReader(ClaudeStreamReader):
@@ -481,6 +503,10 @@ def main() -> None:
             "terminal_success": success,
             "terminal_failure": failure,
             "failure_code": failure_code,
+            "request_contract": {
+                "validated_requests": server.validated_requests,
+                "selected_capsule_sha256": hashlib.sha256(CAPSULE_BYTES).hexdigest(),
+            },
         }
     finally:
         failed_stage = stage
@@ -519,8 +545,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # Only native execution adds this wrapper-owned readonly import tree.
-    sys.path.insert(0, "/opt/example")
     try:
         main()
     except BaseException as error:
