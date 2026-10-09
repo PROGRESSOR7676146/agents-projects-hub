@@ -27,6 +27,9 @@ class CountedTransport:
     def send(self, message):
         return self.transport.send(message)
 
+    def send_before(self, message, *, deadline):
+        return self.transport.send_before(message, deadline=deadline)
+
     def receive(self, *, timeout=None):
         message = self.transport.receive(timeout=timeout)
         params = message.get("params", {})

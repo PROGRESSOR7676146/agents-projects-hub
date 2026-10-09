@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from hermes_codex_router.codex_appserver import RpcRejectedError, StoredTurnOutcome, TurnResult
 from hermes_codex_router.codex_control_recovery import observe_after_control_loss
+from hermes_codex_router.codex_rpc import RpcSendDeadlineError
 from hermes_codex_router.codex_turn_controls import ActiveTurnProof
 from hermes_codex_router.root_blockers import persistent_root_blocker
 from tests import test_codex_turn_controls as fixtures
@@ -30,11 +31,90 @@ class Client:
     def close(self):
         pass
 
-    def interrupt_turn(self, *, thread_id, turn_id, deadline=None):
+    def interrupt_turn(self, *, thread_id, turn_id, deadline=None, send_start_deadline=None):
         self.calls.append(("interrupt", thread_id, turn_id))
 
 
 class ControlRecoveryTests(unittest.TestCase):
+    def test_original_proof_deadline_and_post_call_expiry_retain_unknown_owner(self):
+        fixture = fixtures.CodexTurnControlJournalTests()
+        fixture.setUp()
+        self.addCleanup(lambda: self.assertTrue(fixture.doCleanups()))
+        fixture.journal.record_turn(fixture.job_id, fixture.token, "example-turn")
+        clock = [0.0]
+        client = Client([StoredTurnOutcome("active"), StoredTurnOutcome("active")])
+        calls = []
+
+        def begin(proof, deadline):
+            owner = fixture.state.codex_controls.begin_interrupt(
+                job_id=fixture.job_id,
+                source="protective",
+                proof=proof,
+                validated_root=str(fixture.root),
+                invocation_token=fixture.token,
+                send_deadline=deadline,
+            )
+            clock[0] = 4.0
+            return owner
+
+        def interrupt(**kwargs):
+            calls.append(kwargs)
+            # Transport queue expiry happens after the client method was called.
+            clock[0] = 6.0
+            raise RpcSendDeadlineError()
+
+        client.interrupt_turn = interrupt
+        with (
+            patch(
+                "hermes_codex_router.codex_control_recovery.time",
+                SimpleNamespace(monotonic=lambda: clock[0]),
+            ),
+            patch(
+                "hermes_codex_router.codex_turn_controls.time",
+                SimpleNamespace(monotonic=lambda: clock[0]),
+            ),
+        ):
+            outcome = observe_after_control_loss(
+                client,
+                thread_id="example-thread",
+                turn_id="example-turn",
+                root=fixture.root,
+                begin_interrupt=begin,
+                finish_interrupt=lambda owner, result: (
+                    fixture.state.codex_controls.finish_interrupt(
+                        fixture.job_id,
+                        owner,
+                        outcome=result,
+                        send_path_quiesced=result != "unknown",
+                    )
+                ),
+            )
+            self.assertIsNone(
+                fixture.state.codex_controls.begin_interrupt(
+                    job_id=fixture.job_id,
+                    source="protective",
+                    proof=ActiveTurnProof(
+                        "example-thread", "example-turn", str(fixture.root), clock[0]
+                    ),
+                    validated_root=str(fixture.root),
+                    invocation_token=fixture.token,
+                )
+            )
+        self.assertEqual(outcome.status, "active")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["send_start_deadline"], 5.0)
+        self.assertEqual(calls[0]["deadline"], 9.0)
+        row = fixture.state.codex_controls.read(fixture.job_id)
+        assert row is not None
+        self.assertIsNotNone(row["send_started_at"])
+        self.assertEqual(row["interrupt_outcome"], "unknown")
+        self.assertIsNone(row["owner_quiesced_at"])
+        job = fixture.state.get_provider_job(fixture.job_id)
+        with fixture.state._immediate_transaction():
+            self.assertIsNotNone(
+                persistent_root_blocker(fixture.state._connection, topic_id=job.topic_id)
+            )
+
     def test_matched_reply_settlement_retries_only_contention_not_rpc(self):
         client = Client([StoredTurnOutcome("active"), StoredTurnOutcome("interrupted")])
         attempts = []

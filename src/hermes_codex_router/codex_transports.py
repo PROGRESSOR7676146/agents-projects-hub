@@ -3,18 +3,20 @@ from __future__ import annotations
 import asyncio
 import errno
 import json
+import math
 import queue
 import socket
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 import aiohttp
 
 from .codex_inbox import BoundedInbox
-from .codex_rpc import RpcError, RpcOutboundUnavailableError
+from .codex_rpc import RpcError, RpcOutboundUnavailableError, RpcSendDeadlineError
 
 STDIO_FAILURE_POLL_SECONDS = 1.0
 
@@ -240,6 +242,12 @@ class StdioJsonLineTransport:
                         pass  # Owned peer already terminated; no further flush is possible.
 
 
+@dataclass(frozen=True)
+class OutboundFrame:
+    text: str
+    send_start_deadline: float | None = None
+
+
 class UnixWebSocketTransport:
     """Synchronous facade over Codex's WebSocket-over-Unix transport."""
 
@@ -248,7 +256,7 @@ class UnixWebSocketTransport:
     ) -> None:
         self._socket_path = socket_path.expanduser().resolve(strict=True)
         self._timeout = timeout
-        self._outbound: queue.Queue[str] = queue.Queue(maxsize=16)
+        self._outbound: queue.Queue[OutboundFrame] = queue.Queue(maxsize=16)
         self._inbound: BoundedInbox[str] = BoundedInbox(max_frames=max_pending_frames)
         self._receiver_done = threading.Event()
         self._ready = threading.Event()
@@ -296,7 +304,7 @@ class UnixWebSocketTransport:
         try:
             async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.ws_connect(
-                    "http://localhost/", max_msg_size=4 * 1024 * 1024
+                    "http://localhost/", max_msg_size=4 * 1024 * 1024, compress=0
                 ) as websocket:
                     self._ready.set()
 
@@ -305,11 +313,21 @@ class UnixWebSocketTransport:
                             while not self._receiver_done.is_set():
                                 outbound_event.clear()
                                 try:
-                                    message = self._outbound.get_nowait()
+                                    frame = self._outbound.get_nowait()
                                 except queue.Empty:
                                     await outbound_event.wait()
                                     continue
-                                await websocket.send_str(message)
+                                if self._closed or self._receiver_done.is_set():
+                                    return
+                                if (
+                                    frame.send_start_deadline is not None
+                                    and time.monotonic() > frame.send_start_deadline
+                                ):
+                                    raise RpcSendDeadlineError()
+                                # Uncompressed aiohttp writes/buffers the frame before
+                                # its first drain await. This bounds local initiation,
+                                # never network receipt or server processing.
+                                await websocket.send_str(frame.text)
                         except Exception as exc:
                             self._inbound.finish(exc)
                             raise
@@ -360,13 +378,28 @@ class UnixWebSocketTransport:
                 pass  # Concurrent transport teardown already closed the loop.
 
     def send(self, message: dict[str, Any]) -> None:
+        self._enqueue(message, send_start_deadline=None)
+
+    def send_before(self, message: dict[str, Any], *, deadline: float) -> None:
+        """Admit a frame without refreshing its original local write deadline."""
+        if (
+            isinstance(deadline, bool)
+            or not isinstance(deadline, (int, float))
+            or not math.isfinite(deadline)
+        ):
+            raise RpcError("Codex send-start deadline is invalid")
+        self._enqueue(message, send_start_deadline=deadline)
+
+    def _enqueue(self, message: dict[str, Any], *, send_start_deadline: float | None) -> None:
         if self._closed or self._receiver_done.is_set():
             raise RpcError("Codex Unix WebSocket is closed")
         encoded = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
         if len(encoded.encode("utf-8")) > 4 * 1024 * 1024:
             raise RpcError("Codex outbound frame exceeded its bound")
+        if send_start_deadline is not None and time.monotonic() > send_start_deadline:
+            raise RpcSendDeadlineError()
         try:
-            self._outbound.put_nowait(encoded)
+            self._outbound.put_nowait(OutboundFrame(encoded, send_start_deadline))
         except queue.Full as exc:
             raise RpcError("Codex outbound buffer exceeded its bound") from exc
         self._wake_event(self._outbound_event)

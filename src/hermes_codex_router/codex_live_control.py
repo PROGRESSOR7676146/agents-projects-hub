@@ -26,7 +26,12 @@ class ControlClient(Protocol):
         self, *, thread_id: str, turn_id: str, cwd: Path, deadline: float | None = None
     ) -> StoredTurnOutcome: ...
     def interrupt_turn(
-        self, *, thread_id: str, turn_id: str, deadline: float | None = None
+        self,
+        *,
+        thread_id: str,
+        turn_id: str,
+        deadline: float | None = None,
+        send_start_deadline: float | None = None,
     ) -> None: ...
     def steer_turn(
         self, *, thread_id: str, turn_id: str, text: str, client_user_message_id: str

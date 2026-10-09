@@ -12,6 +12,13 @@ class RpcDeadlineError(RpcError):
         super().__init__("Codex request deadline exceeded")
 
 
+class RpcSendDeadlineError(RpcError):
+    """Local frame-write initiation expired; native certainty is independent."""
+
+    def __init__(self) -> None:
+        super().__init__("Codex send-start deadline exceeded")
+
+
 class RpcRejectedError(RpcError):
     """The app-server returned an explicit JSON-RPC rejection."""
 

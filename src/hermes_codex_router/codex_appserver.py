@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import time
 from collections import deque
@@ -33,7 +34,7 @@ from .codex_permissions import (
     verify_managed_selection,
 )
 from .codex_response_drain import CodexResponseDrain
-from .codex_rpc import RpcDeadlineError, RpcOutboundUnavailableError
+from .codex_rpc import RpcDeadlineError, RpcOutboundUnavailableError, RpcSendDeadlineError
 from .codex_rpc import RpcError as RpcError
 from .codex_rpc import RpcRejectedError as RpcRejectedError
 from .codex_transports import (
@@ -450,7 +451,12 @@ class CodexAppServerClient:
         return self._transport.receive(timeout=timeout)
 
     def _request(
-        self, method: str, params: dict[str, Any], *, deadline: float | None = None
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        deadline: float | None = None,
+        send_start_deadline: float | None = None,
     ) -> Any:
         default_deadline = deadline is None
         if default_deadline:
@@ -460,7 +466,23 @@ class CodexAppServerClient:
             raise RpcDeadlineError()
         request_id = self._next_request_id
         self._next_request_id += 1
-        self._transport.send({"method": method, "id": request_id, "params": params})
+        message = {"method": method, "id": request_id, "params": params}
+        if send_start_deadline is None:
+            self._transport.send(message)
+        else:
+            if (
+                isinstance(send_start_deadline, bool)
+                or not isinstance(send_start_deadline, (int, float))
+                or not math.isfinite(send_start_deadline)
+            ):
+                raise RpcError("Codex send-start deadline is invalid")
+            send_start_deadline = min(send_start_deadline, deadline)
+            if time.monotonic() > send_start_deadline:
+                raise RpcSendDeadlineError()
+            send_before = getattr(self._transport, "send_before", None)
+            if not callable(send_before):
+                raise RpcError("Codex transport cannot enforce a send-start deadline")
+            send_before(message, deadline=send_start_deadline)
         while True:
             remaining = self._response_remaining(deadline=deadline)
             if remaining <= 0:
@@ -861,7 +883,12 @@ class CodexAppServerClient:
         return turn_id
 
     def interrupt_turn(
-        self, *, thread_id: str, turn_id: str, deadline: float | None = None
+        self,
+        *,
+        thread_id: str,
+        turn_id: str,
+        deadline: float | None = None,
+        send_start_deadline: float | None = None,
     ) -> None:
         result = self._request(
             "turn/interrupt",
@@ -869,6 +896,7 @@ class CodexAppServerClient:
             deadline=min(deadline, time.monotonic() + 10)
             if deadline is not None
             else time.monotonic() + 10,
+            send_start_deadline=send_start_deadline,
         )
         if result is not None and not isinstance(result, dict):
             raise RpcError("turn/interrupt returned an invalid result")
