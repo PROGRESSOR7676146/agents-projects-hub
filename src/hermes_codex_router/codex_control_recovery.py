@@ -20,7 +20,12 @@ class RecoveryControlClient(Protocol):
         self, *, thread_id: str, turn_id: str, cwd: Path, deadline: float | None = None
     ) -> StoredTurnOutcome: ...
     def interrupt_turn(
-        self, *, thread_id: str, turn_id: str, deadline: float | None = None
+        self,
+        *,
+        thread_id: str,
+        turn_id: str,
+        deadline: float | None = None,
+        send_start_deadline: float | None = None,
     ) -> None: ...
 
 
@@ -89,10 +94,12 @@ def observe_after_control_loss(
                 outcome = "not_sent"
             else:
                 attempted = True
+                response_deadline = min(deadline, time.monotonic() + 5)
                 client.interrupt_turn(
                     thread_id=thread_id,
                     turn_id=turn_id,
-                    deadline=min(deadline, time.monotonic() + 5),
+                    deadline=response_deadline,
+                    send_start_deadline=min(proof.observed_monotonic + 5, response_deadline),
                 )
                 outcome = "matched_ack"
         except RpcRejectedError as error:

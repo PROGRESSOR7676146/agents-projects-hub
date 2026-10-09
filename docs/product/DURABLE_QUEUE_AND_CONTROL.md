@@ -616,6 +616,17 @@ This normative module is part of the
   all earlier evidence and refuse replacement/rowid attacks. These dormant
   domain methods MUST NOT activate worker or scheduler behavior. Future native
   callers MUST recheck proof freshness and RPC deadline after commit before I/O.
+  The original five-second proof window and RPC response deadline MUST separately
+  bound local frame-write initiation, including time spent in the outbound queue.
+  Deadline-aware control MUST preserve their earlier send-start cutoff at admission
+  and immediately before the uncompressed WebSocket write, without refreshing it.
+  Expired queued frames MUST be discarded and wake the waiting RPC; an unsupported
+  transport MUST refuse rather than silently ignore the cutoff. An on-time write
+  MAY receive its matched ACK after proof expiry within the response budget. This
+  boundary MUST NOT claim timely network receipt or server processing. Once the
+  interrupt client method has been called, queue expiry, refusal or transport loss
+  MUST retain unknown sender ownership and its permanent fence, never establish
+  authenticated `not_sent`, matched rejection, quiescence or native terminality.
   Monitoring invokes no inference; unavailable delivery is no owner receipt. See
   [ADR 0064](../decisions/0064-codex-control-loss.md).
 - **REQ-QUEUE-011 (Accepted; implementation pending):** An explicitly enabled

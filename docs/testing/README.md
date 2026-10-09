@@ -74,6 +74,15 @@ send time, managed metadata refusal, early approval visibility and actual
 external/embedded post-submission uncertainty with retained root exclusion and
 one submission. It does not establish a whole preparation wall-clock budget or
 legacy inline recovery parity.
+`tests.test_codex_send_deadline`, `tests.test_codex_control_recovery` and the
+local socket tests cover the original proof cutoff through outbound admission
+and a blocked writer, RPC timeout before dequeue, shutdown and queue bounds,
+unsupported capability and durable unknown ownership/no resend. A real fictional
+Unix WebSocket verifies compression disabled and an ACK after proof expiry but
+before the independent response deadline. The locked aiohttp implementation is
+exercised directly under backpressure: uncompressed send must write before its
+first await. Dependency upgrades must retain this contract. These fixtures bound local frame-write
+initiation only; they invoke no model or installed service.
 `tests.test_preparation_deadline_retry` exercises real flooded RPC preparation
 expiry through both workers, exact delivered-notice retry with the original
 payload/session generation and zero productive submission. Typed expiry under

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 import unittest
 from collections import deque
 from contextlib import closing
@@ -11,6 +12,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from hermes_codex_router.codex_appserver import CodexAppServerClient
+from hermes_codex_router.codex_rpc import RpcSendDeadlineError
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.state import HubState, StateError
 from tests import test_codex_worker as fixtures
@@ -32,6 +34,11 @@ class Transport:
         self.provider = provider
         self.productive = productive
         self.incoming: deque[dict[str, Any]] = deque()
+
+    def send_before(self, message: dict[str, Any], *, deadline: float) -> None:
+        if time.monotonic() > deadline:
+            raise RpcSendDeadlineError()
+        self.send(message)
 
     def send(self, message: dict[str, Any]) -> None:
         method = message["method"]
@@ -247,6 +254,26 @@ class ControlLossWorkerTests(unittest.TestCase):
         self.assertNotEqual(notice.status, "delivered")
         worker.run_cycle()  # Passive observation may run; productive work must not.
         self.assertEqual(provider.calls.count("turn/start"), 1)
+
+    def test_transport_without_send_deadline_keeps_unknown_and_root_without_resend(self):
+        with patch.object(Transport, "send_before", None):
+            job_id, provider, worker, _ = self.run_failure()
+        self.assertEqual(provider.interrupts, [])
+        self.assertEqual(provider.status, "inProgress")
+        self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
+        events = worker.state._connection.execute(
+            "SELECT code FROM runtime_events WHERE code LIKE 'codex_protective_interrupt%'"
+        ).fetchall()
+        self.assertEqual(
+            [row["code"] for row in events],
+            ["codex_protective_interrupt_attempted", "codex_protective_interrupt_unconfirmed"],
+        )
+        with self.assertRaises(StateError):
+            self.fixture.enqueue(2, "Example retained unknown root")
+        worker.run_cycle()
+        self.assertEqual(provider.interrupts, [])
+        self.assertEqual(provider.calls.count("turn/start"), 1)
+        self.assertNotIn("thread/resume", provider.calls)
 
     def test_exact_terminal_read_after_interrupt_records_proof_without_replay(self):
         job_id, provider, worker, _ = self.run_failure("interrupted")

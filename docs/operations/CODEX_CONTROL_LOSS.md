@@ -30,6 +30,7 @@ installed clean revision and all required component revisions. Distinguish:
 | Durable send-start with unknown response | Sender remains fenced even after native terminal proof |
 | Matched ACK/rejection and ended send path | Sender quiesced; native terminality remains independent |
 | Authenticated `not_sent` before calling the client | Sender quiesced; permanent fence and native uncertainty remain |
+| Outbound queue expiry after calling the client | Unknown sender remains fenced; no late frame or automatic resend |
 | Active/unknown exact turn | Root remains held; no retry, reset or replacement writer |
 | Prepared notice | Saved for delivery; owner receipt is not established |
 | One unknown commentary/progress delivery | Retain uncertainty; this alone does not authorize interruption |
@@ -106,6 +107,14 @@ Responses, with no real login, remote model or installed service access.
    preserve matched settlement with one RPC; pre-call deadline refusal quiesces
    only the sender. Refused acceptance retains exact identity without later
    upgrade. An ambiguous legacy topic cannot stop an unrelated final delivery.
+   Block the outbound WebSocket writer behind another frame, expire the original
+   proof cutoff and resume it: the interrupt must never start writing and its RPC
+   waiter must wake. Repeat after response timeout, close-before-dequeue, full
+   queue and unsupported transport. Separately prove an uncompressed on-time
+   local socket write with an ACK after proof expiry, inside the response budget.
+   Post-client-call expiry keeps an unknown owner/fence and cannot authorize
+   another interrupt or release the root. These are offline transport witnesses,
+   not physical delivery timestamps or installed Telegram acceptance.
 
 The offline native witness passed 129 sequential deny-only pairs, exact final
 retention and independent exact interruption of work surviving primary

@@ -116,12 +116,18 @@ async def control_after_disconnect(fixture):
                 async with hub_client(fixture) as (control, wire):
                     calls = []
                     send = wire.send
+                    send_before = wire.send_before
 
                     def counted_send(message):
                         calls.append(message.get("method"))
                         return send(message)
 
+                    def counted_send_before(message, *, deadline):
+                        calls.append(message.get("method"))
+                        return send_before(message, deadline=deadline)
+
                     wire.send = counted_send
+                    wire.send_before = counted_send_before
                     outcome = await asyncio.to_thread(
                         observe_after_control_loss,
                         control,

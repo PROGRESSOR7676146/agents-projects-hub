@@ -510,21 +510,20 @@ acceptance.
   retirement permits this mechanism. Keep foreign filtering independently of
   cleanup; native mechanism evidence is not installed-source attribution.
   Transport/retirement gates and coordinated live acceptance remain separate.
-- **Accepted-turn control loss:** Stage 1 published at
-  `fe7bb51ffa8dc491a33c624614dcff57ab40208d`; schema48 Stage 2 published at
-  `b9822a797572ee6edab0d3b3c515516e38a68148`, unmerged,
-  owned by the lead agent, with canonical/review and seven hosted checks passed.
-  Offline native 129-pair/final and control-loss witnesses passed. Stage3's
-  schema49–51 poll/provenance/episode prerequisites passed publication gates;
-  exact revisions are in the [next session](NEXT_DEVELOPMENT_SESSION.md).
-  Follow ADR 0064's dated progress-policy amendment.
-  Neutral transaction composition is source-published. Schema52's dormant
-  ingress-cause authority and common fence/read allowance are under validation;
-  runtime/live integration and incident closure remain open. See
-  [acceptance/runbook](CODEX_CONTROL_LOSS.md) and
-  [ADR 0064](../decisions/0064-codex-control-loss.md). No automatic replay.
-  Lead also owns a future unknown-sender reconciliation boundary: independently
-  prove the send path ended; neither terminal proof nor expiry may reset it.
+- **Accepted-turn control loss:** Stages1–2 and schema49–51 prerequisites passed
+  source publication; exact evidence is in the [runbook](CODEX_CONTROL_LOSS.md)
+  and [next session](NEXT_DEVELOPMENT_SESSION.md). Offline native 129-pair/final
+  and control-loss witnesses passed. Schema52 dormant authority is published at
+  `f135872ca1dca205aaeabd5efa094774f7567710`; post-commit proof fix at
+  `b8ebb7f3fb2f6b94230eff57e8d7de25af75522b`. Both passed canonical, independent
+  reviews and seven hosted checks. Lead owns `fix/codex-control-send-deadline`,
+  based on that proof fix. Next: publish local-write deadline gates/review,
+  then integrate optional ingress with fault isolation. Inspect all lane changes
+  before post-merge cleanup. Runtime/live integration and incident closure remain
+  open under [ADR 0064](../decisions/0064-codex-control-loss.md), including its
+  progress-policy amendment. No automatic replay. Future unknown-sender
+  reconciliation must independently prove send-path termination; terminal proof
+  or expiry cannot reset the fence.
 - **Lane cleanup admission race:** a preflight root guard and post-Git recheck
   do not reserve maintenance during physical cleanup. Lead owns the existing
   follow-up: add a scoped maintenance reservation before extending cleanup,

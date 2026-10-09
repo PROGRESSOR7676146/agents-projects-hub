@@ -244,6 +244,28 @@ catch optional assessment faults locally as uncertainty, recheck proof/deadline
 after commit before RPC, and cover work that continues after ingress loss without
 closing the mandatory stream on an optional fault. Live acceptance remains open.
 
+## Outbound local-write deadline prerequisite
+
+The response deadline cannot bound a queued write: the synchronous WebSocket
+facade admits a frame before its owned writer starts it. The original active
+proof window therefore supplies a separate send-start deadline, capped by the
+RPC response deadline. The client requires an explicit deadline-aware capability;
+the owning WebSocket control route uses it without fallback. Ordinary RPC sends retain
+the existing interface. The transport stores that deadline in an immutable frame,
+checks admission and dequeue, discards expiry, and finishes the inbound channel
+to wake the caller. Deadline-aware control uses a dedicated client with one
+outstanding RPC: expiry closes that whole connection, including queued frames. Existing teardown owns task cancellation and bounded close.
+
+Compression stays explicitly disabled so the inspected aiohttp uncompressed
+path writes/buffers before its first drain await. This bounds local initiation,
+not network arrival or server processing. An on-time write may receive a later
+ACK. Recovery passes the original proof cutoff rather than renewing freshness
+at enqueue. Post-client-call errors remain unknown under the existing journal;
+only pre-call refusal may settle authenticated `not_sent`. No schema, scheduler,
+second transaction owner or generic RPC cancellation lifecycle is introduced.
+Hub maintainer owns this bounded slice; client routing, transport expiry/cleanup
+and helper certainty remain cohesive. Ingress runtime activation remains pending.
+
 ## Ownership and evidence
 
 The primary development agent owns integration. ExecutionJournal owns the
