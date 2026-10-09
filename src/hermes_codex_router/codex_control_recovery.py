@@ -82,7 +82,10 @@ def observe_after_control_loss(
         attempted = False
         try:
             # Only this branch proves that the client method was never called.
-            if time.monotonic() >= deadline:
+            # The owning transaction may have spent the proof's freshness
+            # window before COMMIT, even with RPC budget still remaining.
+            before_send = time.monotonic()
+            if before_send >= deadline or not 0 <= before_send - proof.observed_monotonic <= 5:
                 outcome = "not_sent"
             else:
                 attempted = True
