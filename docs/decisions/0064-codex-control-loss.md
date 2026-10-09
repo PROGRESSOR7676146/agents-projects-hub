@@ -1,6 +1,6 @@
 # ADR 0064: Preserve control of accepted Codex turns
 
-Status: accepted staged design; schemas48–51 source published, runtime integration pending
+Status: accepted staged design; schemas48–51 source published, dormant schema52 under validation
 Date: 2026-10-08
 
 ## Context and decision
@@ -133,7 +133,8 @@ the deadline anchor, allowing an immediate successful new-epoch poll to clear
 prospective uncertainty. It neither persists exact-target episodes nor selects
 control. Next integration must capture trustworthy logical ingress for the exact
 accepted target, retain continuity/earliest deadlines durably, and recheck
-evidence and full-control consent atomically with the existing send fence.
+ingress evidence atomically with the existing send fence. Delivery consent is
+not an ingress-health input under the amendment below.
 The original Stage3 proposal included a target-bound episode for unknown exact
 commentary delivery; the dated amendment below supersedes that proposal. Idle,
 429 and unrelated success are not outage proof. Existing late owner-stop
@@ -155,7 +156,7 @@ parser correction supports exact saved-notice recovery without adding private
 provider addressing or group-control semantics; unmatched private Replies keep
 their ordinary-input behavior under REQ-QUEUE-004.
 This prerequisite grants no precaution authority; persistent continuity/episodes,
-full-control consent/send-start and live/late integration remain the next stage.
+ingress reassessment/send-start and live/late integration remain the next stage.
 
 Schema51 separates the producer's retained causal watermark from the current
 consecutive streak. A newly accepted failed sample preserves an established
@@ -208,6 +209,40 @@ reassess recovery immediately before reservation. Optional assessment faults
 must remain uncertainty without closing the primary stream and accidentally
 entering unconditional native-loss recovery. Runtime and channel-loss
 acceptance remain open and separately authorized.
+
+## Schema52 dormant ingress authority
+
+The representation is additive: a nullable assessment revision on the existing
+control parent and a frozen cause sidecar captured by the first-send update.
+The source CHECK remains unchanged; `protective` and `late` describe invocation
+and read-claim paths, never the reason or an invented owner stop. The snapshot
+records the selected cause bundle and causal cursors, not mutable current health.
+Historical sends cannot be enriched, and released48–51 DDL stays unchanged.
+
+CodexIngressControl owns the composition on HubState's connection and supplied
+immediate transaction. It reassesses before reserving the shared permanent fence;
+recovery suppresses a due unsent cause. Cause capture and reservation commit
+together, and no token is returned on failed commit. Existing control wrappers
+retain real-stop guards; private validation/reservation/allocation primitives
+avoid duplicating their lifecycle. An independent ingress read uses the existing
+persisted three-cycle budget, with a covering real pending stop taking precedence.
+Recovery after a claim does not refund it; recovery after send-start cannot clear
+the frozen cause or sender owner. SQL replacement/rowid guards do not depend on
+recursive DELETE triggers.
+
+Post-fence ingress claims remain useful for exact terminal/result recovery after
+an ACK with active work or an unknown send. They are bounded read-only cycles,
+sharing the same allowance even after a native fence; they cannot resend,
+enrich provenance or prove sender quiescence. A later stop receives only the
+remaining cycles. Claims still require a currently due ingress episode and
+exclude recovery, exact terminal evidence and owner resolution; a covering real
+pending stop takes priority. They are not unconditional background maintenance.
+
+This is a dormant state slice: no worker, scheduler or native-client path calls
+the new facade. The owning contract is REQ-QUEUE-014. Runtime integration must
+catch optional assessment faults locally as uncertainty, recheck proof/deadline
+after commit before RPC, and cover work that continues after ingress loss without
+closing the mandatory stream on an optional fault. Live acceptance remains open.
 
 ## Ownership and evidence
 

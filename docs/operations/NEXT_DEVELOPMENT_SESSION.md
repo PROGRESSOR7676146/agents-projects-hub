@@ -45,9 +45,14 @@ below. Schema51 durable continuity/episodes are published at
 `506f3bf765ae477bc1945c6317214a3d86fcec6c`.
 Automatic precautions are not activated. The accepted one-progress policy is
 recorded in [ADR 0064's amendment](../decisions/0064-codex-control-loss.md#2026-10-09-amendment-one-unknown-progress-delivery).
-Next is transaction-local ingress reassessment and existing send reservation,
-then explicit ingress-cause authority and shared live/independent maintenance
-regression coverage.
+The transaction-local prerequisite is published at
+`cf7f967ef134a983c6cd39b37612dc3d1536f21e`, with canonical 2,695 tests in
+243 modules, independent Astra/actual Opus review and seven hosted checks.
+Do not repeat those gates on the unchanged revision. Schema52 dormant
+ingress-cause authority is under validation: additive first-send cause storage
+and a state-domain facade sharing the existing fence/read allowance. Next is
+exact-source review/publication, then separate live/independent maintenance
+wiring with optional-fault isolation and post-commit proof/deadline recheck.
 Use immutable job-ingress sidecars and fresh-acceptance target rows; do not infer
 authority from legacy jobs or observer labels. Retry children bind their current
 Reply ingress; mixed/unknown provenance must not batch or steer into a proven

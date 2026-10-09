@@ -514,14 +514,12 @@ acceptance.
   `fe7bb51ffa8dc491a33c624614dcff57ab40208d`; schema48 Stage 2 published at
   `b9822a797572ee6edab0d3b3c515516e38a68148`, unmerged,
   owned by the lead agent, with canonical/review and seven hosted checks passed.
-  Offline native 129-pair/final and control-loss witnesses passed. Stage3's schema49
-  fenced poll ledger/pure policy is published at
-  `7af0204a117e2b1a23c0a364f44249c12de14fa4` with independent review and
-  seven hosted checks. Schema50 immutable admission/accepted-target ingress
-  and schema51 causal episodes are source-published with canonical/review/hosted
-  gates; exact revisions are in the [next session](NEXT_DEVELOPMENT_SESSION.md).
-  See ADR 0064's dated progress-policy amendment.
-  Neutral transaction composition precedes explicit ingress-cause authority;
+  Offline native 129-pair/final and control-loss witnesses passed. Stage3's
+  schema49–51 poll/provenance/episode prerequisites passed publication gates;
+  exact revisions are in the [next session](NEXT_DEVELOPMENT_SESSION.md).
+  Follow ADR 0064's dated progress-policy amendment.
+  Neutral transaction composition is source-published. Schema52's dormant
+  ingress-cause authority and common fence/read allowance are under validation;
   runtime/live integration and incident closure remain open. See
   [acceptance/runbook](CODEX_CONTROL_LOSS.md) and
   [ADR 0064](../decisions/0064-codex-control-loss.md). No automatic replay.

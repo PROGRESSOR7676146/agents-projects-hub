@@ -114,20 +114,40 @@ class CodexTurnControls:
             ).fetchone()
             if row is None:
                 return None
-            token = uuid.uuid4().hex
-            self.db.execute(
-                """UPDATE codex_turn_controls SET late_read_attempts=late_read_attempts+1,
-                   next_late_read_at=?,read_claim_token=?,read_claim_owner=?,read_claim_expires_at=?
-                   WHERE job_id=?""",
-                (
-                    (current + timedelta(seconds=30)).isoformat(),
-                    token,
-                    worker_id,
-                    (current + timedelta(seconds=30)).isoformat(),
-                    row["job_id"],
-                ),
-            )
-            return self.read(str(row["job_id"]))
+            return self._allocate_read_in_transaction(str(row["job_id"]), worker_id, now=current)
+
+    def _allocate_read_in_transaction(
+        self,
+        job_id: str,
+        worker_id: str,
+        *,
+        now: datetime,
+    ) -> sqlite3.Row | None:
+        if not self.db.in_transaction:
+            raise StateError("control read allocation requires an owning transaction")
+        row = self.read(job_id)
+        timestamp = now.isoformat()
+        if (
+            row is None
+            or row["late_read_attempts"] >= 3
+            or (row["next_late_read_at"] is not None and row["next_late_read_at"] > timestamp)
+            or (row["read_claim_token"] is not None and row["read_claim_expires_at"] > timestamp)
+        ):
+            return None
+        token = uuid.uuid4().hex
+        self.db.execute(
+            """UPDATE codex_turn_controls SET late_read_attempts=late_read_attempts+1,
+               next_late_read_at=?,read_claim_token=?,read_claim_owner=?,read_claim_expires_at=?
+               WHERE job_id=?""",
+            (
+                (now + timedelta(seconds=30)).isoformat(),
+                token,
+                worker_id,
+                (now + timedelta(seconds=30)).isoformat(),
+                job_id,
+            ),
+        )
+        return self.read(job_id)
 
     def finish_late_read(self, job_id: str, claim_token: str) -> None:
         """Release only this observation claim, never send-owner authority."""
@@ -180,11 +200,55 @@ class CodexTurnControls:
         """Reserve in the caller's transaction; use the token only after commit.
 
         Existing source and authority rules still apply. Assessment evidence
-        does not independently authorize an interrupt or a native call.
+        does not independently authorize an interrupt or a native call. The
+        caller must recheck the RPC deadline and proof freshness after commit.
         """
         if not self.db.in_transaction:
             raise StateError("interrupt reservation requires an owning transaction")
         _validate_interrupt_selection(source, invocation_token, read_claim_token)
+        current_time = _now(now)
+        row = self._validated_target_in_transaction(
+            job_id=job_id,
+            proof=proof,
+            validated_root=validated_root,
+            invocation_token=invocation_token,
+            read_claim_token=read_claim_token,
+            send_deadline=send_deadline,
+            now=current_time,
+        )
+        if row is None:
+            return None
+        if (
+            source in {"live", "late"}
+            and self.db.execute(
+                f"""SELECT 1 FROM provider_stop_requests stop
+                JOIN provider_jobs job ON job.job_id=?
+                WHERE stop.request_id=? AND stop.status='pending' AND {STOP_COVERS_JOB_SQL}""",
+                (job_id, row["stop_request_id"]),
+            ).fetchone()
+            is None
+        ):
+            return None
+        return self._reserve_in_transaction(job_id, source, now=current_time)
+
+    def _validated_target_in_transaction(
+        self,
+        *,
+        job_id: str,
+        proof: ActiveTurnProof,
+        validated_root: str,
+        invocation_token: str | None,
+        read_claim_token: str | None,
+        send_deadline: float | None,
+        now: datetime,
+    ) -> sqlite3.Row | None:
+        if not self.db.in_transaction:
+            raise StateError("control target validation requires an owning transaction")
+        _validate_interrupt_selection(
+            "late" if read_claim_token is not None else "protective",
+            invocation_token,
+            read_claim_token,
+        )
         current = _now(now).isoformat()
         row = self.read(job_id)
         if row is None or row["origin"] != "accepted_v48" or row["send_started_at"] is not None:
@@ -223,22 +287,30 @@ class CodexTurnControls:
             return None
         if not self._coherent_target(row, job):
             return None
-        if (
-            source in {"live", "late"}
-            and self.db.execute(
-                f"""SELECT 1 FROM provider_stop_requests stop
-                JOIN provider_jobs job ON job.job_id=?
-                WHERE stop.request_id=? AND stop.status='pending' AND {STOP_COVERS_JOB_SQL}""",
-                (job_id, row["stop_request_id"]),
-            ).fetchone()
-            is None
-        ):
-            return None
+        return row
+
+    def _reserve_in_transaction(
+        self,
+        job_id: str,
+        source: InterruptSource,
+        *,
+        now: datetime,
+        ingress_assessment_revision: int | None = None,
+    ) -> str | None:
+        if not self.db.in_transaction:
+            raise StateError("control fence requires an owning transaction")
         owner = uuid.uuid4().hex
         changed = self.db.execute(
             """UPDATE codex_turn_controls SET send_owner_token_hash=?,send_started_at=?,
-               interrupt_source=? WHERE job_id=? AND send_started_at IS NULL""",
-            (hashlib.sha256(owner.encode()).hexdigest(), current, source, job_id),
+               interrupt_source=?,ingress_assessment_revision_at_send=?
+               WHERE job_id=? AND send_started_at IS NULL""",
+            (
+                hashlib.sha256(owner.encode()).hexdigest(),
+                now.isoformat(),
+                source,
+                ingress_assessment_revision,
+                job_id,
+            ),
         )
         return owner if changed.rowcount == 1 else None
 

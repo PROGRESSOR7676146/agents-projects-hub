@@ -80,7 +80,10 @@ class IngressAssessmentMigrationTests(unittest.TestCase):
 
     def test_upgrade_keeps_all_rows_unknown_fence_backup_and_empty_continuity(self) -> None:
         result = migrations.migrate_database(self.path)
-        self.assertEqual((result.previous_version, result.current_version), (50, 51))
+        self.assertEqual(
+            (result.previous_version, result.current_version),
+            (50, migrations.LATEST_SCHEMA_VERSION),
+        )
         assert result.backup_path is not None
         self.assertEqual(result.backup_path.stat().st_mode & 0o777, 0o600)
         with closing(sqlite3.connect(result.backup_path)) as backup:
@@ -91,7 +94,9 @@ class IngressAssessmentMigrationTests(unittest.TestCase):
             self.assertEqual(rows(current, self.old_columns), self.before)
             current_objects = objects(current)
             for value in self.old_objects:
-                self.assertIn(value, current_objects)
+                # Schema52 adds only a nullable column to this parent table.
+                if value[:2] != ("table", "codex_turn_controls"):
+                    self.assertIn(value, current_objects)
             for table in ("telegram_ingress_watermarks", "codex_telegram_ingress_assessments"):
                 self.assertEqual(current.execute(f"SELECT * FROM {table}").fetchall(), [])
             self.assertEqual(current.execute("PRAGMA foreign_key_check").fetchall(), [])
