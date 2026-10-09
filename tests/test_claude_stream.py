@@ -378,6 +378,45 @@ class ClaudeStreamTests(unittest.TestCase):
             self.assertEqual(raised.exception.session_id, SESSION)
             self.assertNotIn("fictional provider error", str(raised.exception))
 
+    def test_typed_terminal_failures_have_bounded_actionable_messages(self) -> None:
+        messages: set[str] = set()
+        cases = (
+            ("authentication_failed", "error_during_execution", "authentication", "route locally"),
+            ("billing_error", "error_during_execution", "billing", "route locally"),
+            ("model_not_found", "error_during_execution", "selected model", "model selection"),
+            ("overloaded", "error_during_execution", "overload", "partial work"),
+            ("rate_limit", "error_during_execution", "reset time is unknown", "partial work"),
+            (None, "error_max_turns", "turn limit", "execution limits"),
+            (None, "error_max_budget_usd", "budget", "execution limits"),
+            (None, "error_max_structured_output_retries", "structured", "output format"),
+            ("private unknown error", "error_during_execution", "provider failure", "partial work"),
+        )
+        for error, subtype, reason, action in cases:
+            with self.subTest(error=error, subtype=subtype):
+                with self.assertRaises(ClaudeTerminalFailure) as raised:
+                    parse_claude_stream(
+                        output(
+                            {"type": "assistant", "session_id": SESSION, "error": error},
+                            result(
+                                subtype=subtype,
+                                is_error=True,
+                                errors=["private terminal diagnostic"],
+                                result="private raw result",
+                            ),
+                        ),
+                        expected_session_id=SESSION,
+                    )
+                message = raised.exception.public_message
+                self.assertIn(reason, message)
+                self.assertIn(action, message)
+                self.assertIn("No completed result was returned", message)
+                self.assertLessEqual(len(message), 300)
+                self.assertNotIn("private", message)
+                self.assertNotIn(SESSION, message)
+                self.assertEqual(raised.exception.session_id, SESSION)
+                messages.add(message)
+        self.assertEqual(len(messages), len(cases))
+
     def test_native_http_error_variant_requires_status_result_and_exact_terminality(self) -> None:
         for changes in (
             {},

@@ -438,6 +438,94 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
     def test_exit_zero_does_not_make_native_http_failure_success_or_replayable(self) -> None:
         self.assert_native_http_failure_not_replayed(returncode=0)
 
+    def test_native_terminal_guidance_is_saved_once_without_replay_or_raw_diagnostics(self) -> None:
+        cases = (
+            (
+                "authentication_failed",
+                "error_during_execution",
+                "claude_authentication_failed",
+                "route locally",
+            ),
+            ("billing_error", "error_during_execution", "claude_billing_error", "route locally"),
+            (
+                "model_not_found",
+                "error_during_execution",
+                "claude_model_not_found",
+                "model selection",
+            ),
+            ("overloaded", "error_during_execution", "claude_provider_overloaded", "overload"),
+            (
+                "rate_limit",
+                "error_during_execution",
+                "claude_quota_exhausted",
+                "reset time is unknown",
+            ),
+            (None, "error_max_turns", "claude_turn_limit", "execution limits"),
+            (None, "error_max_budget_usd", "claude_budget_exhausted", "execution limits"),
+            (
+                None,
+                "error_max_structured_output_retries",
+                "claude_structured_output_failed",
+                "output format",
+            ),
+        )
+        for index, (error, subtype, code, guidance) in enumerate(cases, start=1):
+            with self.subTest(code=code):
+                job_id = self.fixture.enqueue("claude", index, thread_id=77 + index)
+                calls: list[tuple[str, ...]] = []
+
+                def fake_run(
+                    argv: tuple[str, ...], **_: object
+                ) -> subprocess.CompletedProcess[str]:
+                    calls.append(argv)
+                    native = argv[argv.index("--session-id") + 1]
+                    events = (
+                        {"type": "assistant", "session_id": native, "error": error},
+                        {
+                            "type": "result",
+                            "subtype": subtype,
+                            "is_error": True,
+                            "session_id": native,
+                            "errors": ["private terminal diagnostic"],
+                        },
+                    )
+                    return subprocess.CompletedProcess(
+                        argv, 1, "\n".join(map(json.dumps, events)), "private stderr"
+                    )
+
+                adapter = cast(Any, ExternalCliAdapter("claude", run=fake_run))
+                worker = self.worker(adapter)
+                with patch.dict(
+                    "os.environ",
+                    {
+                        "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                        "ANTHROPIC_AUTH_TOKEN": "example",
+                    },
+                    clear=True,
+                ):
+                    self.assertTrue(worker.run_cycle())
+                    self.assertFalse(worker.run_cycle())
+                    restarted = self.worker(adapter)
+                    self.assertFalse(restarted.run_cycle())
+                job = worker.state.get_provider_job(job_id)
+                self.assertEqual((job.status, job.error_code), ("failed", code))
+                self.assert_no_result(worker.state, job_id)
+                self.assertIsNone(
+                    persistent_root_blocker(worker.state._connection, topic_id=job.topic_id)
+                )
+                notice = worker.state.get_telegram_outbox_for_job(job_id)
+                self.assertIn(guidance, notice.telegram_html)
+                self.assertIn("No completed result was returned", notice.telegram_html)
+                self.assertNotIn("private", notice.telegram_html)
+                self.assertNotIn("private", job.error_detail or "")
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(
+                    worker.state._connection.execute(
+                        "SELECT COUNT(*) FROM telegram_outbox WHERE job_id=?", (job_id,)
+                    ).fetchone()[0],
+                    1,
+                )
+
     def assert_native_http_failure_not_replayed(self, *, returncode: int) -> None:
         job_id = self.enqueue(1)
         calls: list[tuple[str, ...]] = []
