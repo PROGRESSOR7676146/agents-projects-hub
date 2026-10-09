@@ -347,14 +347,43 @@ turn to one, and replace the system prompt. Fixture-only environment settings
 suppress retries and limit output tokens. Restricted mode already loads only
 managed and explicit settings according to the CLI contract; the extra empty
 source flag is a fixture bound. Production retry/fallback behavior is not proven
-by this corpus. The fixture requires the chosen model/effort,
-empty tools, 1,024 output tokens, exactly one served Messages POST, at most one
+by this corpus. The test-only
+`tests/claude_native_request_contract.py` checks the complete Messages request
+against an independently selected fictional material capsule and replacement
+system prompt. It requires exact message/system order, text, roles, block keys,
+cache control and options, including the native environment block constructed
+before invocation from namespace observations. SDK headers, the fixture Host and
+the single dummy credential are checked with duplicate header pairs preserved.
+The characterized billing suffix and generated device ID have narrow formats;
+the account field is empty and both session references match the chosen UUID.
+These native fields are compatibility evidence, never material authorization.
+Unknown/extra fields, malformed containers, duplicate JSON keys at every level
+(including embedded metadata), invalid UTF-8, nonfinite numbers, trailing data
+and byte/depth/node overflow refuse before serving SSE or HTTP 529. Native schema
+changes require deliberate review; expectations are never learned from the
+arriving request. `tests.test_claude_native_request_contract` runs this rejection
+corpus through the actual HTTP handler, with a fresh attempt per mutation and
+positive synthetic controls. The separate argv regression remains mandatory.
+Direct decoder checks witness strictness independently of the Messages schema;
+a full embedded-metadata duplicate with a valid last value and a surrogate
+metadata string also exercise handler rejection. Declared-size refusal sends
+headers only, avoiding resets from an unread oversized TCP payload.
+
+The fixture requires the chosen model/effort, empty tools, 1,024 output tokens,
+exactly one validated and served Messages POST, at most one
 optional HEAD and no unknown requests, empty connections, timeouts or retry POST.
+Concurrent connections share one attempt; an invalid first POST consumes it.
 Host-side file reads and an actual loopback exchange establish positive controls;
 the namespace actor must prove both targets unreachable. Native stdout is bounded
 and passed through the real stream reader/parser; evidence contains only fixed
 categories, booleans and counts, plus validated CLI version, copied binary SHA256
-and parser Python version. Required native runs pin the expected digest and
+and parser Python version. Request evidence retains only the validated count
+and fictional capsule digest, without native request bodies or environment text.
+The date scaffold fails closed if execution crosses its chosen UTC-date boundary;
+this compatibility failure is not a right to relax the material contract.
+The productive bridge still requires its host-precomputed exact request digest;
+this test-only validator neither creates that authority nor enables an advisor.
+Required native runs pin the expected digest and
 version from private locally verified evidence; never put real binary identities
 in Git. Success requires exactly one visible message; HTTP 529 requires the native
 `success`/`is_error:true`/exact-529/string-result envelope, an overloaded failure,

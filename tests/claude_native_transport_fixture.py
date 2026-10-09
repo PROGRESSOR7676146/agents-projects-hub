@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from hermes_codex_router import claude_stream
+from tests.claude_native_request_contract import CAPSULE_BYTES, PROMPT, SYSTEM_PROMPT
 from tests.claude_native_transport_actor import (
     CASES,
     FAILURE_CATEGORIES,
@@ -75,7 +76,7 @@ def build_native_fixture_argv(cwd: Path) -> tuple[str, ...]:
     argv = list(
         ExternalCliAdapter("claude", executable="/opt/example/claude").build_argv(
             cwd=cwd,
-            prompt="Return example-native-ok.",
+            prompt=PROMPT,
             model=MODEL,
             effort="high",
             new_session_id=NATIVE_SESSION_ID,
@@ -97,7 +98,7 @@ def build_native_fixture_argv(cwd: Path) -> tuple[str, ...]:
         "--max-turns",
         "1",
         "--system-prompt",
-        "Return the fixture marker.",
+        SYSTEM_PROMPT,
     ]
     return tuple(argv)
 
@@ -143,6 +144,15 @@ def validate_transport_evidence(report: object, case: str) -> dict[str, Any]:
         or report["timeouts"] != 0
     ):
         raise NativeTransportFixtureError("native_request_surface_unproven")
+    contract = report.get("request_contract")
+    if (
+        not isinstance(contract, dict)
+        or set(contract) != {"validated_requests", "selected_capsule_sha256"}
+        or type(contract.get("validated_requests")) is not int
+        or contract["validated_requests"] != 1
+        or contract.get("selected_capsule_sha256") != hashlib.sha256(CAPSULE_BYTES).hexdigest()
+    ):
+        raise NativeTransportFixtureError("native_request_contract_unproven")
     rejected = case.endswith("reject")
     if type(report.get("exit_code")) is not int or any(
         type(report.get(key)) is not bool for key in ("terminal_success", "terminal_failure")
@@ -247,6 +257,7 @@ def run_native_transport_case(
         empty.write_bytes(b"")
         actor = Path(__file__).with_name("claude_native_transport_actor.py")
         capture = Path(__file__).with_name("native_process_capture.py")
+        contract = Path(__file__).with_name("claude_native_request_contract.py")
         parser = Path(claude_stream.__file__)
         with socket.socket() as listener:
             listener.settimeout(2)
@@ -294,6 +305,9 @@ def run_native_transport_case(
                 "--ro-bind",
                 str(capture),
                 "/opt/example/tests/native_process_capture.py",
+                "--ro-bind",
+                str(contract),
+                "/opt/example/tests/claude_native_request_contract.py",
                 "--ro-bind",
                 str(empty),
                 "/opt/example/tests/__init__.py",

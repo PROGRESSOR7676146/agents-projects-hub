@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.claude_native_request_contract import CAPSULE_BYTES, PROMPT, SYSTEM_PROMPT
 from tests.claude_native_transport_actor import (
     NATIVE_SESSION_ID,
     failure_category,
@@ -60,6 +61,10 @@ class NativeTransportEvidenceTests(unittest.TestCase):
             },
             "visible_messages": 1,
             "parser_python_version": [3, 11],
+            "request_contract": {
+                "validated_requests": 1,
+                "selected_capsule_sha256": hashlib.sha256(CAPSULE_BYTES).hexdigest(),
+            },
         }
 
     def test_validated_success_and_terminal_rejection_are_distinct(self) -> None:
@@ -125,7 +130,7 @@ class NativeTransportEvidenceTests(unittest.TestCase):
             production = list(
                 ExternalCliAdapter("claude", executable="/opt/example/claude").build_argv(
                     cwd=cwd,
-                    prompt="Return example-native-ok.",
+                    prompt=PROMPT,
                     model="claude-opus-5-5",
                     effort="high",
                     new_session_id=NATIVE_SESSION_ID,
@@ -156,7 +161,7 @@ class NativeTransportEvidenceTests(unittest.TestCase):
                 "--max-turns",
                 "1",
                 "--system-prompt",
-                "Return the fixture marker.",
+                SYSTEM_PROMPT,
             ],
         )
 
@@ -169,6 +174,15 @@ class NativeTransportEvidenceTests(unittest.TestCase):
             {"terminal_shape": {**report["terminal_shape"], "extra": "example-private-data"}},
             {"terminal_shape": {**report["terminal_shape"], "latest_assistant_error": []}},
             {"terminal_shape": {**report["terminal_shape"], "errors_is_list": 1}},
+            {"request_contract": None},
+            {"request_contract": {**report["request_contract"], "validated_requests": True}},
+            {
+                "request_contract": {
+                    **report["request_contract"],
+                    "selected_capsule_sha256": "a" * 64,
+                }
+            },
+            {"request_contract": {**report["request_contract"], "extra": "example-private-data"}},
         ):
             with (
                 self.subTest(change=change),
@@ -438,6 +452,7 @@ class NativeClaudeTransportTests(unittest.TestCase):
                         "parser_python_version",
                         "terminal_shape",
                         "visible_messages",
+                        "request_contract",
                     )
                 }
             ),
