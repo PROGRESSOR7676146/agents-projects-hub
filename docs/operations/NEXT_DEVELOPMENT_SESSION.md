@@ -48,11 +48,15 @@ recorded in [ADR 0064's amendment](../decisions/0064-codex-control-loss.md#2026-
 The transaction-local prerequisite is published at
 `cf7f967ef134a983c6cd39b37612dc3d1536f21e`, with canonical 2,695 tests in
 243 modules, independent Astra/actual Opus review and seven hosted checks.
-Do not repeat those gates on the unchanged revision. Schema52 dormant
-ingress-cause authority is under validation: additive first-send cause storage
-and a state-domain facade sharing the existing fence/read allowance. Next is
-exact-source review/publication, then separate live/independent maintenance
-wiring with optional-fault isolation and post-commit proof/deadline recheck.
+Do not repeat those gates on the unchanged revision. Schema52 authority is
+published at `f135872ca1dca205aaeabd5efa094774f7567710`, post-commit proof fix at
+`b8ebb7f3fb2f6b94230eff57e8d7de25af75522b`, and local-write prerequisite at
+`cbe9564af90365cc87e23834a45968826eac8946`. Their canonical/independent/hosted
+gates passed. Lead owns `feat/codex-ingress-runtime` on the latter base: live
+observer, existing independent maintenance and historical cause notices are
+under exact-source validation. The actual offline native ingress witness passed.
+Next: final focused checks, Astra and actual Opus review, canonical publication,
+then separately authorized channel-loss acceptance. No service change follows.
 Use immutable job-ingress sidecars and fresh-acceptance target rows; do not infer
 authority from legacy jobs or observer labels. Retry children bind their current
 Reply ingress; mixed/unknown provenance must not batch or steer into a proven

@@ -516,14 +516,13 @@ acceptance.
   and control-loss witnesses passed. Schema52 dormant authority is published at
   `f135872ca1dca205aaeabd5efa094774f7567710`; post-commit proof fix at
   `b8ebb7f3fb2f6b94230eff57e8d7de25af75522b`. Both passed canonical, independent
-  reviews and seven hosted checks. Lead owns `fix/codex-control-send-deadline`,
-  based on that proof fix. Next: publish local-write deadline gates/review,
-  then integrate optional ingress with fault isolation. Inspect all lane changes
-  before post-merge cleanup. Runtime/live integration and incident closure remain
-  open under [ADR 0064](../decisions/0064-codex-control-loss.md), including its
-  progress-policy amendment. No automatic replay. Future unknown-sender
-  reconciliation must independently prove send-path termination; terminal proof
-  or expiry cannot reset the fence.
+  reviews and seven hosted checks. Local-write prerequisite `cbe9564` passed
+  canonical 2,753 tests, independent Astra/actual Opus reviews and seven checks.
+  Lead owns `feat/codex-ingress-runtime` on that base: live/maintenance wiring
+  and a native offline ingress witness are under final validation. Next: exact
+  reviews/publication, then separately authorized live acceptance. Inspect all
+  lane changes before cleanup. Incident closure stays open under [ADR 0064](../decisions/0064-codex-control-loss.md).
+  No replay; terminality or expiry cannot quiesce an unknown sender.
 - **Lane cleanup admission race:** a preflight root guard and post-Git recheck
   do not reserve maintenance during physical cleanup. Lead owns the existing
   follow-up: add a scoped maintenance reservation before extending cleanup,

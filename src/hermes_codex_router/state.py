@@ -158,12 +158,6 @@ class HubState:
         self.telegram_ingress_assessments = CodexIngressAssessments(
             connection, transaction=self._immediate_transaction, ledger=self.telegram_ingress
         )
-        self.codex_ingress_control = CodexIngressControl(
-            connection,
-            transaction=self._immediate_transaction,
-            controls=self.codex_controls,
-            assessments=self.telegram_ingress_assessments,
-        )
         self._incoming_material_state = IncomingMaterialsStateFacade(
             connection,
             state_path,
@@ -181,6 +175,13 @@ class HubState:
             transaction=self._immediate_transaction,
             state_error=StateError,
             selected_codex_profile=lambda: self.codex_permission_profile,
+        )
+        self.codex_ingress_control = CodexIngressControl(
+            connection,
+            transaction=self._immediate_transaction,
+            controls=self.codex_controls,
+            assessments=self.telegram_ingress_assessments,
+            notices=self.task_notices,
         )
         self.queue_visibility = QueueVisibilityState(
             connection, self.task_notices, state_error=StateError

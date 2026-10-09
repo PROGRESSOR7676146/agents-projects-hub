@@ -29,6 +29,7 @@ owning modules.
 | Codex approvals observed before acceptance (schema 40) | Separate fenced observation slice under validation; accepted execution authority is unchanged | Pending | [REQ-QUEUE-012/013](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md) |
 | Claude process observations (schema 42) | Ordinary quiet notices implemented; offline candidate under publication validation | Pending | [REQ-QUEUE-012](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0059](../decisions/0059-claude-process-observation-notices.md) |
 | Durable local-root blockers (schema 35) | Implemented | Pending | [REQ-WRITER-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0036](../decisions/0036-durable-local-root-blockers.md) |
+| Codex ingress-loss precautions (schema 52) | Live observer and existing maintenance integration under exact-source validation; native offline witness passed | Pending | [REQ-QUEUE-014](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0064](../decisions/0064-codex-control-loss.md) |
 | Exact Codex turn recovery (schema 34) | Implemented | Pending | [REQ-QUEUE-004](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0035](../decisions/0035-exact-terminal-turn-reconciliation.md) |
 | Inbound Telegram materials (schema 33) | Implemented | Pending | [REQ-UX-009](../product/IDENTITY_AND_INTERACTION.md), [ADR 0032](../decisions/0032-durable-inbound-telegram-materials.md) |
 | Context and quota telemetry | Implemented | Pending | [REQ-CMD-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0033](../decisions/0033-truthful-context-and-quota-telemetry.md) |
@@ -94,19 +95,13 @@ inspection-first continuation, paused queue work and ownership checks; see
 [REQ-QUEUE-004](../product/DURABLE_QUEUE_AND_CONTROL.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
 and [ADR 0035](../decisions/0035-exact-terminal-turn-reconciliation.md).
 
-The integrated development baseline retains released schemas 26–30 unchanged,
-adds root exclusion and bounded concurrency as schemas 31–32, and adds durable
-inbound Telegram materials as schema 33. Project
-relocation commits topic execution scopes with the registry/binding transition,
+Schemas 26–30 remain unchanged; schemas 31–33 add root/concurrency and materials.
+Project relocation commits topic execution scopes with the registry/binding transition,
 including crash recovery. Transient admission faults in dynamically onboarded
 groups retain their Telegram offset and retry through idempotent queue admission.
 Native Codex route/model continuity and Antigravity model/effort pinning remain
 part of this baseline. Deployment and schema-compatible runtime rollback are
 separate gates; existing schema-30/32 executables cannot open schema-33 state.
-
-Inbound attachment/caption/album completeness and accurate Codex
-context/quota-window telemetry are repository-complete. Deployment and live
-acceptance remain separate; see the [roadmap](../ROADMAP.ru.md).
 
 Context/quota telemetry is repository-complete with offline notification,
 snapshot and display regressions; no new migration beyond schema 33. Behavior

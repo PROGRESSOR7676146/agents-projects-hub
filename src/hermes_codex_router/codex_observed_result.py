@@ -19,6 +19,7 @@ from .codex_appserver import (
     StoredTurnOutcome,
 )
 from .codex_failure import codex_failure_notice
+from .codex_ingress_notice import append_ingress_precaution
 from .diagnostic_log import survived
 from .execution_journal import ExecutionJournal
 from .hub_config import HubConfig
@@ -245,6 +246,7 @@ class ObservedTurnResults:
                 partial = ExecutionJournal(self.state).partial_text(job_id)
                 error = CodexTurnError(RpcError("stream disconnected"), partial)
                 notice = codex_failure_notice(error, turn_status=outcome.status, held_count=held)
+            notice = append_ingress_precaution(self.state, job_id, notice)
             if len(notice) > 200_000:
                 raise StateError("recovered notice exceeds delivery bound")
             archive_recovery_notice(

@@ -534,7 +534,8 @@ RPC client against an explicitly supplied Codex binary:
 HUB_NATIVE_CODEX_FIXTURE_EXECUTABLE=/home/example/tools/codex \
   HUB_REQUIRE_NATIVE_CODEX_PROFILE_TESTS=1 HUB_REQUIRE_NAMESPACE_TESTS=1 \
   PYTHONPATH=src:tests python -m unittest -v \
-  tests.test_codex_native_approval_sequence tests.test_codex_native_control_loss
+  tests.test_codex_native_approval_sequence tests.test_codex_native_control_loss \
+  tests.test_codex_native_ingress_loss
 ```
 
 The approval witness uses 129 sequential requested/resolved pairs in one exact
@@ -561,8 +562,17 @@ identity, withheld raw completion and embedded progress, stop and no-fallback
 maintenance wiring.
 Both witnesses passed with Codex 0.159.2. These are offline native protocol
 observations, with no real auth, remote inference, installed service, Telegram
-or human approval. Late-stop maintenance, ingress-loss policy and live
-acceptance remain separate gates in the [control-loss runbook](../operations/CODEX_CONTROL_LOSS.md).
+or human approval. The ingress witness uses the real live observer with the primary connection
+still open, one due immutable target and one local Responses call. It proves
+active native work after fictional ingress loss, one exact fenced interrupt,
+retained cause and independently observed eventual interruption. It introduces
+no owner stop or replay. Focused regressions are `tests.test_codex_ingress_live`,
+`tests.test_codex_ingress_maintenance` and `tests.test_codex_ingress_notice`.
+Observer-loop tests cover post-attempt SQLite contention, no-send continuity,
+later stop priority/withholding and the separate observation throttle. Notice
+tests preserve near-bound raw completion; maintenance checks shutdown between claims.
+Installed Telegram ingress/egress and human approval acceptance remain separate
+gates in the [control-loss runbook](../operations/CODEX_CONTROL_LOSS.md).
 
 ## Publication preflight
 

@@ -1,6 +1,6 @@
 # ADR 0064: Preserve control of accepted Codex turns
 
-Status: accepted staged design; schemas48–51 source published, dormant schema52 under validation
+Status: accepted staged design; schema52 and local-write prerequisite published; ingress runtime under validation
 Date: 2026-10-08
 
 ## Context and decision
@@ -238,11 +238,34 @@ remaining cycles. Claims still require a currently due ingress episode and
 exclude recovery, exact terminal evidence and owner resolution; a covering real
 pending stop takes priority. They are not unconditional background maintenance.
 
-This is a dormant state slice: no worker, scheduler or native-client path calls
-the new facade. The owning contract is REQ-QUEUE-014. Runtime integration must
-catch optional assessment faults locally as uncertainty, recheck proof/deadline
-after commit before RPC, and cover work that continues after ingress loss without
-closing the mandatory stream on an optional fault. Live acceptance remains open.
+The published storage prerequisite was dormant. Runtime activation now uses
+CodexLiveControl and the existing CodexControlMaintenance thread, sharing their
+cohesive live and claimed-control lifecycles rather than creating another
+scheduler. REQ-QUEUE-014 owns ordering, throttles, paging and failure certainty.
+CodexIngressControl retains transaction composition; native I/O remains outside
+SQLite. A stop arriving inside reservation reuses the proof and original claim.
+Historical notice preparation runs after settlement through TaskLifecycleState;
+its failure cannot revoke a fence or abort primary progress/results. Shared
+recovery adds only a fixed cause explanation, retaining raw completion and the
+existing delivery disposition. No schema or service change is added.
+
+After authenticated no-send, the live observer continues under REQ-QUEUE-014;
+the permanent fence still excludes later native interruption, including an
+owner stop. Its ordinary completion withholding remains effective. A state
+fault after attempt or terminal wake cannot resume steering. Optional explanations
+fit both saved-result and rendered-delivery bounds without changing raw output.
+Historical notice preparation is best-effort over the durable cause; no new
+retry scheduler is added. Healthy candidates are assessed transactionally;
+read-only due prefiltering is deferred pending causal-recovery analysis. Shutdown
+is checked before each claim, but a racing committed claim is not refunded.
+Real-stop claim faults retain existing connection reopen/backoff; a persistent
+fault can delay ingress maintenance rather than reuse a possibly damaged connection.
+
+The bounded hotspot exceptions retain HubState constructor/transaction ownership
+and ObservedTurnResults terminal disposition. Constructor dependency wiring and
+one optional explanation append do not justify a forwarding-only extraction.
+Final exact-source review/publication and separately authorized live acceptance
+remain open.
 
 ## Outbound local-write deadline prerequisite
 
@@ -264,7 +287,7 @@ at enqueue. Post-client-call errors remain unknown under the existing journal;
 only pre-call refusal may settle authenticated `not_sent`. No schema, scheduler,
 second transaction owner or generic RPC cancellation lifecycle is introduced.
 Hub maintainer owns this bounded slice; client routing, transport expiry/cleanup
-and helper certainty remain cohesive. Ingress runtime activation remains pending.
+and helper certainty remain cohesive. Ingress runtime is under validation; live activation remains pending.
 
 ## Ownership and evidence
 

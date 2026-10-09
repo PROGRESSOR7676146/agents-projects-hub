@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Protocol
 
 from .codex_appserver import RpcRejectedError, StoredTurnOutcome
-from .codex_control_authority import begin_codex_interrupt
+from .codex_control_authority import begin_codex_ingress_or_stop, begin_codex_interrupt
 from .codex_control_connection import ControlSendPath
 from .codex_control_recovery import observe_after_control_loss
+from .codex_ingress_notice import prepare_ingress_notice
+from .codex_turn_controls import ActiveTurnProof
 from .diagnostic_log import survived
 from .execution_journal import ExecutionJournal
 from .hub_config import HubConfig
@@ -41,6 +45,18 @@ class ControlClient(Protocol):
 
 class CodexLiveControlError(RuntimeError):
     pass
+
+
+def _fence_ends_observation(target: sqlite3.Row | None, *, ingress: bool) -> bool:
+    return (
+        target is not None
+        and target["send_started_at"] is not None
+        and not (
+            ingress
+            and target["interrupt_outcome"] == "not_sent"
+            and target["owner_quiesced_at"] is not None
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -91,6 +107,8 @@ class CodexLiveControl:
         self._deferred_failure: Exception | None = None
         self._stop_no_send_attempts = 0
         self._next_stop_attempt = 0.0
+        self._next_ingress_assessment = 0.0
+        self._next_ingress_observation = 0.0
 
     def start(self) -> None:
         if self._thread is not None:
@@ -199,6 +217,8 @@ class CodexLiveControl:
                             return
                         self._next_stop_attempt = time.monotonic() + self.stop_retry_seconds
                         continue
+                    if self._poll_ingress(state):
+                        return
                     if self.transport_mode != "stdio-fallback":
                         try:
                             self._steer(state)
@@ -241,14 +261,79 @@ class CodexLiveControl:
 
     def _interrupt(self, state: HubState, request_id: str) -> bool:
         """End retries on a send fence/terminal proof; keep no-send streams alive."""
+        return self._observe_control(state, request_id=request_id, ingress=False)
+
+    def _poll_ingress(self, state: HubState) -> bool:
+        """Optional assessment/control faults must never kill the primary stream."""
+        try:
+            if self._stop.is_set() or self.transport_mode not in {"socket", "managed-socket"}:
+                return False
+            current = time.monotonic()
+            if current < self._next_ingress_assessment:
+                return False
+            self._next_ingress_assessment = current + 5
+            if state.telegram_turn_provenance.target(self.job.job_id) is None:
+                return False
+            assessment = state.telegram_ingress_assessments.assess(
+                self.job.job_id, now=datetime.now(timezone.utc)
+            )
+            if assessment.episode is None or assessment.episode.deadline > datetime.now(
+                timezone.utc
+            ):
+                return False
+            if current < self._next_ingress_observation:
+                return False
+            # Advance before acquisition. Failures or ingress flapping cannot
+            # open a new native observation window sooner than thirty seconds.
+            self._next_ingress_observation = current + 30
+            return self._observe_control(state, request_id=None, ingress=True)
+        except Exception as error:
+            survived("codex_live_control.ingress_unconfirmed", error)
+            return False
+
+    def _observe_control(self, state: HubState, *, request_id: str | None, ingress: bool) -> bool:
+        """One lifecycle for exact owner stops and optional ingress precautions."""
         client = None
         wake_primary = False
         fenced = False
+        selected_stop = request_id
+
+        def begin(proof: ActiveTurnProof, deadline: float) -> str | None:
+            nonlocal selected_stop
+            if ingress:
+                reservation = begin_codex_ingress_or_stop(
+                    state,
+                    self.config,
+                    job_id=self.job.job_id,
+                    proof=proof,
+                    deadline=deadline,
+                    invocation_token=self.job.lease_token,
+                )
+                if reservation is None:
+                    return None
+                selected_stop = reservation.real_stop_request
+                return reservation.owner
+            return begin_codex_interrupt(
+                state,
+                self.config,
+                job_id=self.job.job_id,
+                source="live",
+                proof=proof,
+                deadline=deadline,
+                invocation_token=self.job.lease_token,
+            )
 
         def observe_event(event: str) -> None:
             nonlocal wake_primary
             if event == "attempted":
                 wake_primary = True
+            if ingress and state.codex_ingress_control.read_cause(self.job.job_id) is not None:
+                state.record_runtime_event(
+                    self.job.agent_id,
+                    "warning",
+                    "codex_ingress_interrupt_" + event,
+                    self.job.job_id,
+                )
 
         try:
             if self._stop.is_set():
@@ -260,7 +345,7 @@ class CodexLiveControl:
                 if target is None or self.job.lease_token is None:
                     return True
                 if target["send_started_at"] is not None:
-                    return True
+                    return _fence_ends_observation(target, ingress=ingress)
                 client = self._acquire_client()
                 if client is None or self._stop.is_set():
                     return self._stop.is_set()
@@ -274,15 +359,7 @@ class CodexLiveControl:
                     turn_id=self.turn_id,
                     root=Path(target["project_root"]),
                     send_scope=path.sending_scope,
-                    begin_interrupt=lambda proof, deadline: begin_codex_interrupt(
-                        state,
-                        self.config,
-                        job_id=self.job.job_id,
-                        source="live",
-                        proof=proof,
-                        deadline=deadline,
-                        invocation_token=self.job.lease_token,
-                    ),
+                    begin_interrupt=begin,
                     finish_interrupt=lambda owner, result: state.codex_controls.finish_interrupt(
                         self.job.job_id,
                         owner,
@@ -298,19 +375,23 @@ class CodexLiveControl:
                         self.job.job_id, self.job.lease_token, outcome.result.text
                     )
                 target = state.codex_controls.read(self.job.job_id)
-                fenced = target is not None and target["send_started_at"] is not None
+                fenced = _fence_ends_observation(target, ingress=ingress)
                 if target is not None and target["interrupt_outcome"] == "matched_ack":
-                    self.confirmed_interrupt_request = request_id
+                    self.confirmed_interrupt_request = selected_stop
         except Exception as error:
             if is_sqlite_contention(error):
                 # Pre-send contention keeps the productive stream intact.
                 # A post-send completion write may also contend; the local
                 # attempted flag still wakes recovery without repeating RPC.
+                if ingress and wake_primary:
+                    return True
                 raise
             survived("codex_live_control.interrupt_unconfirmed", error)
         finally:
             if client is not None:
                 self._release_client(client)
+            if ingress:
+                prepare_ingress_notice(state, self.job.job_id)
             # A sent interrupt must wake the primary even if native work ignores
             # ACK. Without a send, keep consuming progress and the saved final.
             if wake_primary:
