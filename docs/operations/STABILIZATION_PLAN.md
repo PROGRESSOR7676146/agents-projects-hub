@@ -340,17 +340,16 @@ remain separate. Inspect tracked/staged/untracked state before post-merge cleanu
 
 ## Planned final-response mode indicators
 
-Owner-requested follow-up (2026-10-07), implementation pending: extend the compact
-final-response identity/telemetry footer with important active modes, initially
-`/goal`, `/fast` and other supported consequential modes. Keep the footer concise.
-Use authoritative
-exact-turn state, never inferred prompt intent. Distinguish active/paused/terminal
-goals; show fast only from observable settings, missing evidence stays unknown.
-Formatting invokes no provider and changes no modes/resource policy. Preserve
-session, agent, model/effort, context and quota. Before implementation, define the
-owning contract and test provider metadata, retries, switches and stale/missing
-state. Owner: Hub maintainer; next trigger: the task-visibility follow-up after
-the current authority-isolation fix.
+Owner-requested follow-up (2026-10-07): goal-only offline candidate; broader
+mode visibility remains open. The owning
+[REQ-CMD-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md#compact-control-surface)
+defines exact-turn observations and recovery limits. Codex CLI 0.159.2 generated
+schemas establish event shapes only. `/fast` remains unknown: service-tier
+settings may affect subsequent turns and establish no current-turn mapping.
+No provider RPC or schema is added. Owner: Hub maintainer. Last verified base:
+`008a1a95c78ee77893448b700ef866940c8baae1`. Next: exact-candidate source review
+and publication, supported fast evidence, then separately authorized Telegram
+acceptance. Other consequential modes remain follow-ups; closure is partial.
 
 ## Why
 

@@ -46,6 +46,7 @@ from .codex_transports import (
 from .codex_transports import (
     UnixWebSocketTransport as UnixWebSocketTransport,
 )
+from .codex_turn_modes import CodexModeSnapshot, CodexTurnModes
 from .diagnostic_log import survived
 
 DEFAULT_RPC_RESPONSE_SECONDS = 120.0
@@ -157,6 +158,7 @@ class TurnResult:
     text: str
     context_window: int | None
     context_tokens_used: int | None
+    modes: CodexModeSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +234,7 @@ class CodexAppServerClient:
         self._activity_requests = self._activity_request_tracker.pending
         self._activity_retired = False
         self._activity_observed_notifications: set[int] = set()
+        self._turn_modes = CodexTurnModes()
 
     @property
     def transport_mode(self) -> Literal["socket", "stdio-fallback"] | None:
@@ -248,6 +251,7 @@ class CodexAppServerClient:
         return self._completed_connection.consume(thread_id=thread_id, turn_id=turn_id)
 
     def _clear_activity(self) -> None:
+        self._turn_modes.reset()
         self._turn_start_pending = False
         self._activity_thread_id = self._activity_turn_id = None
         self._activity_ready = False
@@ -513,6 +517,7 @@ class CodexAppServerClient:
             # only bounded protocol objects; hidden reasoning is never emitted
             # to Telegram by this client.
             if "method" in message and "id" not in message:
+                self._turn_modes.observe(message)
                 self._observe_permission_settings(message)
                 if message.get("method") == "serverRequest/resolved":
                     self._observe_activity(message)
@@ -821,6 +826,7 @@ class CodexAppServerClient:
         self._clear_activity()
         self._response_drain = CodexResponseDrain()
         self.notifications.clear()
+        self._turn_modes.begin(thread_id)
         canonical_cwd = cwd.expanduser().resolve(strict=True)
         if self._permission_profile is not None and (
             self._permission_binding is None
@@ -880,6 +886,7 @@ class CodexAppServerClient:
         finally:
             self._turn_start_pending = False
         self._activity_turn_id = turn_id
+        self._turn_modes.accept(turn_id)
         return turn_id
 
     def interrupt_turn(
@@ -982,6 +989,7 @@ class CodexAppServerClient:
             except Exception as exc:
                 raise CodexTurnError(exc, "\n\n".join(answers)) from exc
             method = message.get("method")
+            self._turn_modes.observe(message)
             self._observe_permission_settings(message)
             self._refuse_permission_drift(turn_id, "\n\n".join(answers))
             if method and "id" in message:
@@ -1073,6 +1081,7 @@ class CodexAppServerClient:
                         text=self._response_drain.annotate(_final_visible_text(final_items)),
                         context_window=context_window,
                         context_tokens_used=context_tokens_used,
+                        modes=self._turn_modes.snapshot(),
                     )
                     if self.on_completed is not None:
                         try:
