@@ -176,22 +176,21 @@ and discards in-flight stdout; buffer abort requires channel closure after a
 partial frame. It introduces no physical I/O or runtime switch.
 Source owner: Hub maintainer.
 
-The separate owned nonblocking I/O/private namespace witness is published in
-PR #154 at `cc976f6828554104b7326770f1e3a67b6e2de6ef`, based on the
-sequencing prerequisite. Canonical publication passed 2,264 tests in 203 modules,
-types and privacy/history; exact GPT Astra and actual Claude Opus 5.5/high reviews
-found no mandatory findings. All seven exact-head hosted checks passed. These
-fictional peer/HTTP and kernel namespace fixtures do not establish productive
-advisor integration or a real upstream route.
+PR #154 at `cc976f6828554104b7326770f1e3a67b6e2de6ef` adds owned offline pipes
+and the private namespace witness. Canonical 2,264 tests in 203 modules, types,
+privacy/history, independent Astra/actual Opus reviews and seven hosted checks
+passed. This is fictional HTTP/kernel evidence, not productive advisor acceptance.
 
 PR #174 at `cad8e8d8732bfb52aadb45e15d783785af4da84a` joins the native
-corpus and PR #154; source gates passed. Next: HTTP envelope/semantic owner,
+corpus and PR #154; source gates passed. The HTTP envelope/semantic owner is
+published at `496a719707a5b02557e659e77facf6a481f2a4da`; its source gates passed.
+The test-only raw exchange extraction in lane `test/claude-pipe-exchange`, based
+on that revision, keeps owned process/pump cleanup separate from receipt parsing.
+Source owner: Hub maintainer. Next trigger: its exact-revision publication,
 then combined native/pipe witness; see [next session](NEXT_DEVELOPMENT_SESSION.md).
-Closure remains open: no productive advisor, real upstream, durable role/material
-authorization, productive native adapter, worker wiring, deployment or live acceptance
-is enabled. The original project, host authority sockets and credentials remain
-outside this proposed child boundary. Inspect all lane state before post-merge
-cleanup; main merge and deployment remain owner actions.
+Closure is open: productive advisor/workflow/native integration and live acceptance
+remain pending. The project and host authority stay outside the child. Inspect
+all lane state before post-merge cleanup; merge and deployment are owner actions.
 
 ## Claude process observations
 
