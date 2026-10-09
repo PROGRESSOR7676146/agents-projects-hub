@@ -405,6 +405,49 @@ class CodexTurnModePipelineTests(unittest.TestCase):
         rendered = self.render(TurnResult("Done", None, None, CodexModeSnapshot("<b>invented</b>")))
         self.assertNotIn("invented", rendered)
 
+    def test_mismatched_wait_does_not_attach_the_accepted_turn_goal(self) -> None:
+        for early in (True, False):
+            with self.subTest(early=early):
+                acceptance = {"id": 1, "result": {"turn": {"id": "example-turn"}}}
+                other_completion = completed()
+                other_completion["params"]["turn"]["id"] = "example-other-turn"
+                goal = goal_event()
+                events = [goal, acceptance] if early else [acceptance, goal]
+                transport = FakeTransport(
+                    [
+                        *events,
+                        {
+                            "method": "item/completed",
+                            "params": {
+                                "threadId": "example-thread",
+                                "turnId": "example-other-turn",
+                                "item": {
+                                    "id": "example-other-final",
+                                    "type": "agentMessage",
+                                    "phase": "final_answer",
+                                    "text": "Other final",
+                                },
+                            },
+                        },
+                        other_completion,
+                    ]
+                )
+                client = CodexAppServerClient(transport, initialized=True)
+                with tempfile.TemporaryDirectory() as directory:
+                    accepted = client.start_turn(
+                        thread_id="example-thread",
+                        cwd=Path(directory),
+                        text="Task",
+                        model="gpt-example",
+                        effort="high",
+                    )
+                    self.assertEqual(accepted, "example-turn")
+                    result = client.wait_for_turn("example-other-turn")
+                self.assertEqual(result.text, "Other final")
+                self.assertIsNone(result.modes)
+                self.assertNotIn("Modes:", self.render(result))
+                self.assertEqual([message["method"] for message in transport.sent], ["turn/start"])
+
 
 if __name__ == "__main__":
     unittest.main()

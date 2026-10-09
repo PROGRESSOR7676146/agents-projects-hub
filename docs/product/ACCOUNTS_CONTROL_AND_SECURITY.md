@@ -67,7 +67,8 @@ This normative module is part of the
   rolling rate-limit update the provider sent during the same turn; it serves
   only that turn's response and MUST NOT be shown later as current.
   A final Codex response MAY include an observed `/goal` status only from
-  payload-free native events bound to the exact accepted thread and turn.
+  payload-free observations of native events bound to the exact accepted turn
+  and thread.
   Active, paused, blocked, usage-limited, budget-limited and complete MUST remain
   distinguishable. The label MUST say `observed`: it describes the latest exact
   event consumed during submission/wait, not the state at native completion or

@@ -1081,7 +1081,7 @@ class CodexAppServerClient:
                         text=self._response_drain.annotate(_final_visible_text(final_items)),
                         context_window=context_window,
                         context_tokens_used=context_tokens_used,
-                        modes=self._turn_modes.snapshot(),
+                        modes=self._turn_modes.snapshot() if self._activity_ready else None,
                     )
                     if self.on_completed is not None:
                         try:
