@@ -12,8 +12,9 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 
-from hermes_codex_router.review_bridge_attempt import BridgeAttemptError, BridgeAttemptGate
+from hermes_codex_router.review_bridge_attempt import BridgeAttemptError
 from hermes_codex_router.review_bridge_protocol import (
     BridgeFrame,
     BridgeFrameDecoder,
@@ -31,6 +32,7 @@ from hermes_codex_router.review_bridge_write_buffer import (
     BridgeWriteError,
     bounded_response_frames,
 )
+from tests.claude_native_pipe_contract import NativePipeContractError
 from tests.native_process_capture import owned_fixture_process
 
 _BOOTSTRAP = """
@@ -95,10 +97,63 @@ class PipeFixtureResult:
     escaped_ready: bool = False
 
 
+class FixtureObservation(Protocol):
+    @property
+    def attempted(self) -> bool: ...
+
+    @property
+    def revoked(self) -> bool: ...
+
+
+class FixtureAttempt(Protocol):
+    """Only the in-memory attempt operations needed by this test pump."""
+
+    @property
+    def capsule_bytes(self) -> bytes: ...
+
+    @property
+    def observation(self) -> FixtureObservation: ...
+
+    def submit(self, frame: BridgeFrame) -> bytes: ...
+
+    def cancel(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class PipeExchange:
+    """Bounded bytes after cleanup; complete reads the current mutable result.
+
+    Interpret native/receipt bytes before checking complete; a parser refusal
+    must set result.error. Transport evidence alone never validates those bytes.
+    """
+
+    result: PipeFixtureResult
+    stdout: bytes = field(repr=False)
+    native_exit: bytes | None = field(repr=False)
+    response_sha256: str | None = field(repr=False)
+    response_size: int
+
+    @property
+    def complete(self) -> bool:
+        result = self.result
+        return (
+            not result.error
+            and result.attempted
+            and not result.revoked
+            and result.drained
+            and result.transport_closed
+            and result.response_ended
+            and result.cleanup_eof
+            and self.native_exit == b"0"
+        )
+
+
 def run_pipe_fixture(
     argv: list[str],
     environment: dict[str, str],
-    gate: BridgeAttemptGate,
+    gate: FixtureAttempt,
     *,
     scenario: str = "success",
     timeout: float = 3,
@@ -109,7 +164,57 @@ def run_pipe_fixture(
     inputs: dict[str, object] | None = None,
     deny_inherited_stdin: bool = False,
 ) -> PipeFixtureResult:
-    """Finite fake callback, absolute transport deadline and unconditional cleanup."""
+    """Legacy fictional-client receipt, interpreted only after owned cleanup."""
+    exchange = _run_pipe_exchange(
+        argv,
+        environment,
+        gate,
+        scenario=scenario,
+        timeout=timeout,
+        write_quantum=write_quantum,
+        pipe_capacity=pipe_capacity,
+        cancel_at=cancel_at,
+        pass_fds=pass_fds,
+        inputs=inputs,
+        deny_inherited_stdin=deny_inherited_stdin,
+    )
+    result = exchange.result
+    if not result.error and cancel_at is None:
+        try:
+            receipt = json.loads(exchange.stdout)
+            if (
+                not isinstance(receipt, dict)
+                or set(receipt) != {"response_sha256", "response_size", "isolated"}
+                or receipt["response_sha256"] != exchange.response_sha256
+                or type(receipt["response_size"]) is not int
+                or receipt["response_size"] != exchange.response_size
+                or type(receipt["isolated"]) is not bool
+            ):
+                raise ValueError
+            result.receipt = receipt
+        except (ValueError, UnicodeError):
+            result.error = "example_receipt_invalid"
+        result.success = exchange.complete
+        if not result.success and not result.error:
+            result.error = "example_completion_incomplete"
+    return result
+
+
+def _run_pipe_exchange(
+    argv: list[str],
+    environment: dict[str, str],
+    gate: FixtureAttempt,
+    *,
+    scenario: str = "success",
+    timeout: float = 3,
+    write_quantum: int = 511,
+    pipe_capacity: int = 4096,
+    cancel_at: str | None = None,
+    pass_fds: tuple[int, ...] = (),
+    inputs: dict[str, object] | None = None,
+    deny_inherited_stdin: bool = False,
+) -> PipeExchange:
+    """Finite test exchange, absolute deadline and unconditional process cleanup."""
     if not 0 < timeout <= 10 or not 1 <= write_quantum <= 8192:
         raise ValueError("example_fixture_budget")
     if cancel_at not in (None, "before_claim", "after_claim", "partial_response"):
@@ -279,6 +384,8 @@ def run_pipe_fixture(
             result.error = "example_actor_exit"
     except (BridgeFrameError, BridgeSequenceError, BridgeWriteError, BridgeAttemptError) as error:
         result.error = str(error)
+    except NativePipeContractError:
+        result.error = "example_native_attempt_refused"
     except OSError:
         result.error = "example_pipe_io"
     finally:
@@ -333,29 +440,4 @@ def run_pipe_fixture(
     result.stdout_bytes, result.stderr = len(output), bytes(diagnostics)
     result.escaped_ready = bytes(output) == b"example-escaped-ready"
     result.elapsed = time.monotonic() - started
-    if not result.error and cancel_at is None:
-        try:
-            receipt = json.loads(output)
-            if (
-                not isinstance(receipt, dict)
-                or set(receipt) != {"response_sha256", "response_size", "isolated"}
-                or receipt["response_sha256"] != response_digest
-                or type(receipt["response_size"]) is not int
-                or receipt["response_size"] != response_size
-                or type(receipt["isolated"]) is not bool
-            ):
-                raise ValueError
-            result.receipt = receipt
-        except (ValueError, UnicodeError):
-            result.error = "example_receipt_invalid"
-        result.success = (
-            not result.error
-            and result.drained
-            and result.transport_closed
-            and result.response_ended
-            and result.cleanup_eof
-            and exit_payload == b"0"
-        )
-        if not result.success and not result.error:
-            result.error = "example_completion_incomplete"
-    return result
+    return PipeExchange(result, bytes(output), exit_payload, response_digest, response_size)

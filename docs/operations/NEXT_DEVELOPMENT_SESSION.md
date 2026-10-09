@@ -89,10 +89,14 @@ The next in-process test-only seam is the raw HTTP request envelope and one-use
 semantic fixture owner in `tests.claude_native_pipe_contract`. It binds the host
 capsule to an independently prepared expected prompt, preserves duplicate header
 and JSON evidence, and returns only prepared fake bytes after validation. The
-production digest gate remains unchanged. Complete this seam's independent review
-and publication before extracting the existing pump and adding the combined
-native/owned-pipe witness; no native launch or physical pipe crossing is proved
-by the semantic owner itself.
+production digest gate remains unchanged. It is published at
+`496a719707a5b02557e659e77facf6a481f2a4da`; canonical 2,848 tests in 255 modules,
+types, independent Astra/actual Opus review and seven hosted checks passed.
+The current test-only extraction separates `_run_pipe_exchange` from the legacy
+receipt wrapper. Its bounded raw stdout/exit evidence returns after owned cleanup;
+transport completion alone does not validate a native result. Complete this
+extraction's publication, then add the combined native/owned-pipe witness.
+Neither the in-process semantic owner nor this extraction launches a native CLI.
 That witness must validate a host-preconstructed expectation and use fresh fictional
 materials supplied only through CAPSULE and a fresh fake response supplied only
 through response frames. The namespace supervisor must not generate inference

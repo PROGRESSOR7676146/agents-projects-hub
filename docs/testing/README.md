@@ -504,21 +504,21 @@ PYTHONPATH=src:. python scripts/validate.py --profile focused \
   tests.test_claude_native_transport
 ```
 
-The envelope carries a four-byte header length, exact bounded HTTP request-line/
-header bytes and unchanged body. Framing refuses ambiguous Content-Length,
-transfer encoding, folding, alternate paths and incomplete/trailing bytes;
-non-length duplicates and embedded JSON remain intact for host validation.
-The host selects the listener port, capsule, immutable expected native scaffolds
-and prepared response before receiving a child request. The semantic owner
-checks the prompt's exact relationship to that host capsule and retires on the
-first submission; concurrent/repeated/refused/cancelled/expired submissions
-cannot regain a response. Tests cover positive controls, otherwise valid material
-substitution, expectation mismatch, snapshot mutation, duplicate headers/JSON,
-byte/grammar bounds and fixed diagnostics without exception chains.
-Observation is sticky; expiry retires at submit. The future process owner must
-enforce its own deadline. Fake bytes prove only in-memory consumption, with no
-native launch, pipe crossing, network, durable authority or replay. The production
-`BridgeAttemptGate` remains unchanged; combined/native and custody work are pending.
+The envelope preserves exact bounded HTTP headers/body and duplicate evidence.
+The host chooses the capsule, expected scaffolds, port and prepared response
+before submission. Tests cover material substitution, ambiguous framing, duplicate
+headers/JSON, bounds, snapshot mutation, one-use consumption, cancellation and
+expiry. Observation is sticky; expiry retires at submit. This is in-memory
+evidence only; production digest authority, native wiring and custody are unchanged.
+
+Run `tests.test_review_bridge_exchange` with the pipe and namespace corpus above.
+It checks bounded raw stdout/exit returned after cleanup without receipt parsing,
+structural owners, native refusal with zero consumption/EOF and cancellation with
+zero/one consumption. A forged receipt can complete transport while the legacy
+wrapper refuses it. The ten-second transport deadline remains, plus bounded cleanup;
+the future native wrapper
+needs a separate bounded budget and parser after cleanup. No native launch,
+productive authorization or combined witness is established by this extraction.
 
 ## Live acceptance boundary
 
