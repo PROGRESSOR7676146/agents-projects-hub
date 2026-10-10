@@ -125,6 +125,20 @@ class NativePtyCaptureTests(unittest.TestCase):
             self.capture(code, output_limit=1024)
         self.assert_gone(int(proof.read_text()))
 
+    def test_terminal_eof_with_living_leader_waits_for_deadline_and_reaps(self) -> None:
+        proof = self.root / "pid"
+        closed = self.root / "closed"
+        code = (
+            "import os,time; from pathlib import Path; "
+            f"Path({str(proof)!r}).write_text(str(os.getpid())); "
+            "os.close(0); os.close(1); os.close(2); "
+            f"Path({str(closed)!r}).touch(); time.sleep(30)"
+        )
+        with self.assertRaisesRegex(NativePtyError, "native_pty_timeout"):
+            self.capture(code, timeout=0.75)
+        self.assertTrue(closed.exists(), "fixture must close the terminal before timing out")
+        self.assertFalse(Path(f"/proc/{int(proof.read_text())}").exists())
+
     def test_exit_before_all_input_requires_visible_incomplete_failure(self) -> None:
         with self.assertRaisesRegex(NativePtyError, "native_pty_input_incomplete"):
             self.capture("pass", inputs=(NativePtyInput(b"not sent\r", lambda: False),))

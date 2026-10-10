@@ -124,10 +124,15 @@ Published at `1613936d03624435a7097571c12f09479e536d38`, it checks named emitted
 scaffold reencoding; it does not expand the configured catalog or establish
 entitlement/effective effort. Its PR owns exact publication evidence. Remaining
 local/return, saved-session connect, human approvals and route acceptance stay open.
-Next is the [test-only controlling-PTY prerequisite](../testing/CLAUDE_NATIVE_LOCAL.md)
-for an actual native interactive continuation witness. It changes no runtime or
-lease; production Claude transfer remains refused. Verify launch-store/route
-continuity and custody before any later production enablement.
+The [test-only controlling-PTY prerequisite](../testing/CLAUDE_NATIVE_LOCAL.md)
+is published at `913caf0dff3eaa6c6566189d631f35e12f6abc96`; its PR owns hosted
+evidence. It changes no runtime or lease; production Claude transfer remains
+refused. The first disposable interactive-resume investigation did not reach a
+Messages POST or save the expected new pair. Next resolve documented disposable
+startup preparation and strict persisted-dialogue validation before claiming the
+three-phase witness. A fixed positional prompt avoids screen synchronization but
+does not establish editor readiness. Verify launch-store/route continuity and
+custody before any later production enablement.
 
 The Codex compatibility candidate now refuses unsupported active permission
 profiles reported by `thread/start` or `thread/resume` before productive
