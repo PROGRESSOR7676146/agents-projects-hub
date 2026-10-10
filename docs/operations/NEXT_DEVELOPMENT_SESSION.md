@@ -118,12 +118,16 @@ Do not enable images from a success marker or grant Read to supply paths. Native
 compatibility establishes no subscription, human approval, custody or deployment
 acceptance. Text-only remains the default; Hub roles remain retired.
 
-The next standalone test-only candidate is the pinned
+The standalone test-only candidate is the pinned
 [model/effort continuation corpus](../testing/CLAUDE_NATIVE_SELECTION.md).
-It checks named emitted settings and exact synthetic dialogue, including native
+Published at `1613936d03624435a7097571c12f09479e536d38`, it checks named emitted settings and exact synthetic dialogue, including native
 scaffold reencoding; it does not expand the configured catalog or establish
 entitlement/effective effort. Its PR owns exact publication evidence. Remaining
 local/return, saved-session connect, human approvals and route acceptance stay open.
+Next is the [test-only controlling-PTY prerequisite](../testing/CLAUDE_NATIVE_LOCAL.md)
+for an actual native interactive continuation witness. It changes no runtime or
+lease; production Claude transfer remains refused. Verify launch-store/route
+continuity and custody before any later production enablement.
 
 The Codex compatibility candidate now refuses unsupported active permission
 profiles reported by `thread/start` or `thread/resume` before productive
