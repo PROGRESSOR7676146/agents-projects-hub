@@ -35,7 +35,9 @@ class ClaudeImageConfigurationTests(unittest.TestCase):
         self.assertTrue(self.load(claude_image_input=True).claude_image_input)
 
     def test_invalid_values_ownership_and_file_tool_combination_refuse(self) -> None:
-        invalid = [dict(claude_image_input=value) for value in (None, 1, "true", {})]
+        invalid: list[dict[str, object]] = [
+            dict(claude_image_input=value) for value in (None, 1, "true", {})
+        ]
         invalid.extend(
             (
                 {"claude_image_input": True, "external_worker_agent_ids": ["codex"]},
