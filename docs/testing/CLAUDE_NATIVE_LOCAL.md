@@ -41,22 +41,38 @@ PYTHONPATH=src:. python scripts/validate.py --profile focused \
 Tests use Python children and fictional temporary files. They cover actual
 controlling-terminal properties, literal prompt/exit input, partial writes,
 gate failure/deadline, output flood, leader/descendant cleanup, signal/nonzero
-exit, exec/spawn failure and descriptor retention. No Claude, inference,
+exit, exec/spawn failure, terminal closure while the leader remains alive and
+descriptor retention. No Claude, inference,
 account, network or live state is involved. The PR owns exact publication
 evidence; these checks are not a native Claude witness.
 
 ## Next bounded witness
 
 Reuse the pinned binary and isolated HOME/network/PID/IPC fixture. Independently
-validate one consumed HTTP request per phase, exact full dialogue, selected
+validate one consumed Messages POST per phase, exact full dialogue, selected
 model/effort and the single saved UUID. Native interactive argv must deliberately
 omit print-only options while retaining applicable restrictions; pin its shape.
+The pinned CLI advertises a positional prompt in interactive mode. Supplying
+one fixed prompt through that argv avoids an unsupported prompt-editor readiness
+claim; it does not prove keyboard submission through the editor. Do not retain
+print-only permission-prompt, output-format or turn-budget options in this phase.
 Before `/exit`, require a bounded, strictly parsed saved-session update with the
 exact fictional user/assistant pair, not merely a flushed server response. The
 TUI must exit normally before cleanup and the final headless phase must validate
 that pair in its own request. Do not retry discarded input, scrape screens or
 send affirmative startup-dialog responses. Unavailable readiness remains a
 failed witness. Missing UUID must not create a replacement or inference request.
+
+The initial disposable startup investigation on CLI 2.1.285 established a
+headless seed with one validated Messages POST, then observed one HEAD and zero
+Messages POSTs during interactive resume. The PTY helper refused incomplete
+input; the expected new pair was absent from the saved dialogue. This was a
+failed compatibility investigation, not a three-phase witness or a diagnosis of
+the specific startup barrier. No terminal bytes or affirmative startup answers
+were used. Headless mode skips workspace trust, so a headless seed cannot prove
+that interactive trust/onboarding is satisfied. Do not invent private settings
+keys to bypass that boundary. The next witness needs documented disposable
+startup preparation and a strict saved-dialogue validator before advancing.
 
 This future witness does not establish production launch HOME/route continuity,
 hook/MCP/plugin or local shell-escape isolation, human approvals, authority-data
