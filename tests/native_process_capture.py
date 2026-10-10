@@ -10,6 +10,8 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 
+MAX_NATIVE_INPUT_BYTES = 1024 * 1024
+
 
 class NativeCaptureError(RuntimeError):
     """A fixed fixture diagnostic, never a raw native stream."""
@@ -62,9 +64,19 @@ def capture_owned_process(
     stdout_limit: int,
     stderr_limit: int,
     on_stdout: Callable[[bytes], None] | None = None,
+    stdin_data: bytes | None = None,
+    stdin_limit: int = MAX_NATIVE_INPUT_BYTES,
 ) -> tuple[int, bytes]:
+    if stdin_data is not None and (
+        type(stdin_data) is not bytes
+        or type(stdin_limit) is not int
+        or not 0 < stdin_limit <= MAX_NATIVE_INPUT_BYTES
+        or len(stdin_data) > stdin_limit
+    ):
+        raise NativeCaptureError("native_fixture_input_bound")
     selector: selectors.BaseSelector | None = None
-    with owned_fixture_process(argv, environment) as process:
+    input_mode = subprocess.DEVNULL if stdin_data is None else subprocess.PIPE
+    with owned_fixture_process(argv, environment, stdin=input_mode) as process:
         try:
             selector = selectors.DefaultSelector()
             output = bytearray()
@@ -73,11 +85,34 @@ def capture_owned_process(
             assert process.stdout is not None and process.stderr is not None
             selector.register(process.stdout, selectors.EVENT_READ, 0)
             selector.register(process.stderr, selectors.EVENT_READ, 1)
+            offset = 0
+            if stdin_data is not None:
+                assert process.stdin is not None
+                os.set_blocking(process.stdin.fileno(), False)
+                if stdin_data:
+                    selector.register(process.stdin, selectors.EVENT_WRITE, 2)
+                else:
+                    process.stdin.close()
             while selector.get_map():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise NativeCaptureError("native_fixture_timeout")
                 for key, _mask in selector.select(min(0.1, remaining)):
+                    if key.data == 2:
+                        assert stdin_data is not None and process.stdin is not None
+                        try:
+                            count = os.write(key.fd, stdin_data[offset : offset + 8192])
+                        except (InterruptedError, BlockingIOError):
+                            continue
+                        except BrokenPipeError:
+                            raise NativeCaptureError("native_fixture_input_incomplete") from None
+                        if count <= 0:
+                            raise NativeCaptureError("native_fixture_input_incomplete")
+                        offset += count
+                        if offset == len(stdin_data):
+                            selector.unregister(process.stdin)
+                            process.stdin.close()
+                        continue
                     chunk = os.read(key.fd, 8192)
                     if not chunk:
                         selector.unregister(key.fileobj)

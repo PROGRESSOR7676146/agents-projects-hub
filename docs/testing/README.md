@@ -340,7 +340,7 @@ HUB_NATIVE_CLAUDE_FIXTURE_EXECUTABLE=/home/example/tools/claude-native \
 The bearer/API-key × SSE-success/HTTP-529 matrix derives its base argv from the
 production text-only builder, without bare mode. A canonical regression checks
 every production start argument and setting, including a caller-chosen fictional
-session UUID checked by both reader and parser. Saved-session resume is separate.
+session UUID checked by both reader and parser. Image/resume has a [separate corpus](CLAUDE_NATIVE_IMAGES.md).
 Shared native settings arrive through this host-built argv. Fixture-only additions empty setting
 sources/MCP, disable session persistence and model switching/fallback, limit the
 turn to one, and replace the system prompt. Fixture-only environment settings

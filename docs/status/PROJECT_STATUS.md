@@ -61,6 +61,7 @@ invocation, failure and restart boundaries in
 authority custody, native local transfer, session connect and
 live CPA/account acceptance remain pending under
 [REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
+Native [image/resume tests](../testing/CLAUDE_NATIVE_IMAGES.md) do not enable production images.
 
 Queue admission snapshots and accepted Codex turn activity are implemented in
 schema 37 under [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md).
