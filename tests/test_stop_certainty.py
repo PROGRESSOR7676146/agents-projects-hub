@@ -21,14 +21,15 @@ class StopCertaintyTests(unittest.TestCase):
                     fixture = codex_fixtures.CodexQueueWorkerTests()
                     fixture.setUp()
                     job_id = fixture.enqueue()
-                    entered = threading.Event()
                     released = threading.Event()
                     interrupted = threading.Event()
                     reads: list[dict[str, object]] = []
 
                     class MainClient(codex_fixtures.WorkerClient):
                         def wait_for_turn(self, _turn_id: str) -> TurnResult:
-                            entered.set()
+                            # Submit after native acceptance, so preparation
+                            # cannot exhaust a separate sender-thread deadline.
+                            request_stop()
                             if not released.wait(3):
                                 raise AssertionError("fictional stop did not reach the worker")
                             raise RuntimeError("fictional transport loss; turn outcome unconfirmed")
@@ -105,8 +106,6 @@ class StopCertaintyTests(unittest.TestCase):
                     )
 
                     def request_stop() -> None:
-                        if not entered.wait(2):
-                            return
                         state = HubState.open(
                             fixture.config.state_path, codex_permission_profile=None
                         )
@@ -121,9 +120,7 @@ class StopCertaintyTests(unittest.TestCase):
                         finally:
                             state.close()
 
-                    sender = threading.Thread(target=request_stop)
                     try:
-                        sender.start()
                         self.assertTrue(worker.run_cycle())
                         self.assertTrue(interrupted.is_set())
                         self.assertEqual(
@@ -164,7 +161,6 @@ class StopCertaintyTests(unittest.TestCase):
                         self.assertEqual(supervisor.main.turns, 1)
                     finally:
                         released.set()
-                        sender.join(2)
                         worker.close()
                         fixture.tearDown()
 
