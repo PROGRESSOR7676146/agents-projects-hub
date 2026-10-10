@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from .claude_image_receipt import ClaudeImageReceipt
 
 MAX_CLAUDE_OUTPUT_BYTES = 2 * 1024 * 1024
 MAX_CLAUDE_VISIBLE_CHARACTERS = 200_000
@@ -12,6 +15,8 @@ MAX_CLAUDE_STDERR_BYTES = 64 * 1024
 MAX_CLAUDE_FILE_OUTPUT_BYTES = 64 * 1024 * 1024
 MAX_CLAUDE_FILE_EVENT_BYTES = 4 * 1024 * 1024
 MAX_CLAUDE_FILE_EVENTS = 4096
+MAX_IMAGE_EVENT_BYTES = 8 * 1024 * 1024
+MAX_IMAGE_STREAM_BYTES = 12 * 1024 * 1024
 
 
 class ClaudeStreamError(RuntimeError):
@@ -129,10 +134,14 @@ class ClaudeStreamReader:
         expected_session_id: str | None = None,
         on_visible_assistant: VisibleAssistantCallback | None = None,
         event_policy: Callable[[dict[str, object]], None] | None = None,
+        image_receipt: ClaudeImageReceipt | None = None,
     ) -> None:
         self.session_id = expected_session_id
         self.on_visible_assistant = on_visible_assistant
         self.event_policy = event_policy
+        if event_policy is not None and image_receipt is not None:
+            raise ClaudeStreamError("claude image input cannot use file-tool policy")
+        self.image_receipt = image_receipt
         self._output = bytearray()
         self._pending = bytearray()
         self._events = 0
@@ -143,10 +152,16 @@ class ClaudeStreamReader:
 
     def feed(self, chunk: bytes) -> None:
         self._received_bytes += len(chunk)
-        byte_limit = MAX_CLAUDE_FILE_OUTPUT_BYTES if self.event_policy else MAX_CLAUDE_OUTPUT_BYTES
+        byte_limit = (
+            MAX_IMAGE_STREAM_BYTES
+            if self.image_receipt
+            else MAX_CLAUDE_FILE_OUTPUT_BYTES
+            if self.event_policy
+            else MAX_CLAUDE_OUTPUT_BYTES
+        )
         if self._received_bytes > byte_limit:
             raise ClaudeStreamError("claude structured output exceeded its limit")
-        if self.event_policy is None:
+        if self.event_policy is None and self.image_receipt is None:
             self._output.extend(chunk)
         self._pending.extend(chunk)
         while (end := self._pending.find(b"\n")) >= 0:
@@ -155,17 +170,23 @@ class ClaudeStreamReader:
             self._line(line)
         if self.event_policy and len(self._pending) > MAX_CLAUDE_FILE_EVENT_BYTES:
             raise ClaudeStreamError("claude structured event exceeded its limit")
+        if self.image_receipt and len(self._pending) > MAX_IMAGE_EVENT_BYTES:
+            raise ClaudeStreamError("claude structured event exceeded its limit")
 
     def finish(self) -> str:
         if self._pending:
             self._line(bytes(self._pending))
             self._pending.clear()
+        if self.image_receipt is not None:
+            self.image_receipt.finish()
         try:
             return self._output.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ClaudeStreamError("claude returned invalid structured encoding") from exc
 
     def _line(self, raw: bytes) -> None:
+        if self.image_receipt and len(raw) > MAX_IMAGE_EVENT_BYTES:
+            raise ClaudeStreamError("claude structured event exceeded its limit")
         if self.event_policy and len(raw) > MAX_CLAUDE_FILE_EVENT_BYTES:
             raise ClaudeStreamError("claude structured event exceeded its limit")
         try:
@@ -183,10 +204,21 @@ class ClaudeStreamReader:
             if self.session_id is not None and self.session_id != identity:
                 raise ClaudeStreamError("claude stream session identity changed")
             self.session_id = identity
-        if self._terminal_seen and event.get("type") != "prompt_suggestion":
+        retain = self.image_receipt.observe(event) if self.image_receipt else True
+        if (
+            self._terminal_seen
+            and event.get("type") != "prompt_suggestion"
+            and not (not retain and event.get("type") == "command_lifecycle")
+        ):
             raise ClaudeStreamError("claude returned events after its terminal outcome")
         if event.get("type") == "result":
             self._terminal_seen = True
+        if not retain:
+            return
+        if self.image_receipt is not None:
+            if len(self._output) + len(raw) + 1 > MAX_CLAUDE_OUTPUT_BYTES:
+                raise ClaudeStreamError("claude retained visible output exceeded its limit")
+            self._output.extend(raw + b"\n")
         if self.on_visible_assistant is not None:
             self._visible_assistant(event)
         if self.event_policy is not None:

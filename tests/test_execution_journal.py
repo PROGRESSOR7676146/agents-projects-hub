@@ -562,6 +562,7 @@ class ExecutionJournalTests(unittest.TestCase):
                         "schema_task_activity.py",
                         "schema_claude_permissions.py",
                         "schema_claude_activity.py",
+                        "schema_claude_material_notice.py",
                         "schema_delivery_certainty.py",
                         "schema_delivery_holds.py",
                         "schema_delivery_control.py",

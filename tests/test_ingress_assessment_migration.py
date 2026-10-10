@@ -95,7 +95,17 @@ class IngressAssessmentMigrationTests(unittest.TestCase):
             current_objects = objects(current)
             for value in self.old_objects:
                 # Schema52 adds only a nullable column to this parent table.
-                if value[:2] != ("table", "codex_turn_controls"):
+                # Schema53 preserves the checkpoint DDL before its added notice.
+                if value[:2] == ("table", "provider_execution_checkpoints"):
+                    actual_sql = next(obj[2] for obj in current_objects if obj[1] == value[1])
+                    self.assertTrue(
+                        actual_sql.startswith(value[2][:-1] + ", claude_material_notice TEXT")
+                    )
+                    self.assertEqual(
+                        columns(current)[value[1]],
+                        self.old_columns[value[1]] + ("claude_material_notice",),
+                    )
+                elif value[:2] != ("table", "codex_turn_controls"):
                     self.assertIn(value, current_objects)
             for table in ("telegram_ingress_watermarks", "codex_telegram_ingress_assessments"):
                 self.assertEqual(current.execute(f"SELECT * FROM {table}").fetchall(), [])

@@ -10,6 +10,7 @@ from typing import Any, cast
 from hermes_codex_router.codex_failure import MAX_PARTIAL_TEXT
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.external_worker import ExternalQueueWorker
+from hermes_codex_router.incoming_materials import IncomingMaterialDraft
 from hermes_codex_router.root_blockers import persistent_root_blocker
 from hermes_codex_router.state import RECOVERED_RESULT_METADATA_JSON, HubState
 from tests import test_claude_native_worker as worker_fixtures
@@ -22,7 +23,9 @@ PARTIAL_TEXT = "Fictional provisional Claude response."
 
 def crash_after_completion(path: Path, job_id: str, token: str, native: str, root: Path) -> None:
     state = HubState.open(path, codex_permission_profile=None)
-    ExecutionJournal(state).record_claude_completion(job_id, token, native, SAVED_TEXT, cwd=root)
+    ExecutionJournal(state).record_claude_completion(
+        job_id, token, native, SAVED_TEXT, cwd=root, material_notice=""
+    )
     os._exit(17)
 
 
@@ -46,6 +49,8 @@ class ClaudeRecoveryTests(unittest.TestCase):
         checkpoint: bool = True,
         expired: bool = True,
         context: bool = False,
+        legacy_notice: bool = False,
+        material: bool = False,
     ) -> tuple[ExternalQueueWorker, NoReplayAdapter, str, str | None, Path, int | None]:
         fixture = worker_fixtures.ClaudeNativeWorkerTests()
         fixture.setUp()
@@ -86,6 +91,26 @@ class ClaudeRecoveryTests(unittest.TestCase):
             effort=session.effort,
             payload_text="Fictional accepted Claude task",
             context_watermark=watermark,
+            materials=(
+                IncomingMaterialDraft(
+                    attachment_index=1,
+                    media_group_id=None,
+                    kind="document",
+                    content_kind=None,
+                    file_unique_id=None,
+                    display_name="example.gif",
+                    mime_type="image/gif",
+                    declared_size=None,
+                    storage_path=None,
+                    byte_size=None,
+                    sha256=None,
+                    status="unavailable",
+                    unavailable_code="unsupported_format",
+                    unavailable_detail="Example GIF unavailable",
+                ),
+            )
+            if material
+            else (),
         )
         leased = state.lease_provider_job("claude", "fictional-lost-worker")
         assert leased is not None and leased.lease_token is not None
@@ -103,13 +128,20 @@ class ClaudeRecoveryTests(unittest.TestCase):
                     partial,
                     cwd=root,
                 )
-            if completion is not None:
+            if completion is not None and legacy_notice:
+                with state._connection:
+                    state._connection.execute(
+                        "UPDATE provider_execution_checkpoints SET completed_text=? WHERE job_id=?",
+                        (completion, job.job_id),
+                    )
+            elif completion is not None:
                 journal.record_claude_completion(
                     job.job_id,
                     leased.lease_token,
                     native,
                     completion,
                     cwd=root,
+                    material_notice="",
                 )
         if expired:
             state.heartbeat_provider_job(
@@ -173,6 +205,19 @@ class ClaudeRecoveryTests(unittest.TestCase):
         assert checkpoint is not None
         self.assertIsNone(checkpoint["provider_turn_id"])
         self.assert_no_replay(worker, adapter, job_id)
+
+    def test_legacy_completion_never_invents_original_material_selection(self) -> None:
+        for material in (False, True):
+            with self.subTest(material=material):
+                worker, adapter, job, _, _, _ = self.seed(legacy_notice=True, material=material)
+                self.assertTrue(worker.run_cycle())
+                result = worker.state.get_provider_result(job)
+                self.assertIn(SAVED_TEXT, result.visible_response)
+                self.assertEqual(
+                    "Attachment availability was not saved" in result.visible_response, material
+                )
+                self.assertNotIn("Example GIF unavailable", result.visible_response)
+                self.assert_no_replay(worker, adapter, job)
 
     def test_abrupt_exit_after_completion_commit_recovers_without_provider_replay(self) -> None:
         worker, adapter, job_id, native, root, _ = self.seed(completion=None, expired=False)

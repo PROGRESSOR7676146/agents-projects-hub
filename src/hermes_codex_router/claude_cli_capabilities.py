@@ -98,12 +98,23 @@ def _advertised_options(help_text: str) -> dict[str, list[str]]:
     return entries
 
 
-def _has_required_advertisement(output: bytes, *, file_tools: bool = False) -> bool:
+def _has_required_advertisement(
+    output: bytes, *, file_tools: bool = False, image_input: bool = False
+) -> bool:
     entries = _advertised_options(output.decode("utf-8", errors="replace"))
     return (
         _REQUIRED_OPTIONS.issubset(entries)
         and any(_NONE.search(stanza) for stanza in entries["permission-prompts"])
         and any(_DONT_ASK.search(stanza) for stanza in entries["permission-mode"])
+        and (
+            not image_input
+            or "input-format" in entries
+            and "replay-user-messages" in entries
+            and any(
+                re.search(r"(?<![\w-])stream-json(?![\w-])", stanza)
+                for stanza in entries["input-format"]
+            )
+        )
         and (
             not file_tools
             or "setting-sources" in entries
@@ -189,7 +200,7 @@ class ClaudeCliCapabilities:
     """Cache only successful help inspections for an unchanged executable."""
 
     def __init__(self) -> None:
-        self._success: dict[tuple[str, bool], tuple[int, int, int, int, int]] = {}
+        self._success: dict[tuple[str, bool, bool], tuple[int, int, int, int, int]] = {}
         self._lock = threading.Lock()
 
     def require(
@@ -200,6 +211,7 @@ class ClaudeCliCapabilities:
         environment: dict[str, str],
         interrupted: threading.Event,
         file_tools: bool = False,
+        image_input: bool = False,
     ) -> str:
         """Return the resolved CLI path if its current help advertises all controls."""
         if interrupted.is_set():
@@ -221,7 +233,7 @@ class ClaudeCliCapabilities:
             path = os.path.realpath(path)
             before = _fingerprint(path)
             with self._lock:
-                if self._success.get((path, file_tools)) == before:
+                if self._success.get((path, file_tools, image_input)) == before:
                     if interrupted.is_set():
                         raise ClaudeCliCapabilityError()
                     return path
@@ -240,13 +252,15 @@ class ClaudeCliCapabilities:
                 output = _read_help(
                     path, cwd=Path(directory), environment=isolated, interrupted=interrupted
                 )
-            if not _has_required_advertisement(output, file_tools=file_tools):
+            if not _has_required_advertisement(
+                output, file_tools=file_tools, image_input=image_input
+            ):
                 raise ClaudeCliCapabilityError()
             after = _fingerprint(path)
             if interrupted.is_set() or after != before:
                 raise ClaudeCliCapabilityError()
             with self._lock:
-                self._success[(path, file_tools)] = after
+                self._success[(path, file_tools, image_input)] = after
             return path
         except ClaudeCliCapabilityError:
             raise

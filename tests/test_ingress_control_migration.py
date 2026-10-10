@@ -67,7 +67,10 @@ class IngressControlMigrationTests(unittest.TestCase):
 
     def test_upgrade_preserves_old_rows_objects_claim_unknown_owner_and_backup(self):
         result = migrations.migrate_database(self.path)
-        self.assertEqual((result.previous_version, result.current_version), (51, 52))
+        self.assertEqual(
+            (result.previous_version, result.current_version),
+            (51, migrations.LATEST_SCHEMA_VERSION),
+        )
         assert result.backup_path is not None
         self.assertEqual(result.backup_path.stat().st_mode & 0o777, 0o600)
         with closing(sqlite3.connect(result.backup_path)) as backup:
@@ -78,7 +81,7 @@ class IngressControlMigrationTests(unittest.TestCase):
             self.assertEqual(rows(current, self.old_columns), self.before)
             current_objects = objects(current)
             for definition in self.old_objects:
-                # Only the parent CREATE TABLE gains the nullable discriminator.
+                # Schema52 adds the discriminator; schema53 adds the checkpoint notice.
                 if definition[1] == "codex_turn_controls":
                     anchor = "owner_quiesced_at TEXT,"
                     self.assertEqual(definition[2].count(anchor), 1)
@@ -91,6 +94,15 @@ class IngressControlMigrationTests(unittest.TestCase):
                     )
                     actual_sql = next(obj[2] for obj in current_objects if obj[1] == definition[1])
                     self.assertEqual(actual_sql, expected_sql)
+                elif definition[:2] == ("table", "provider_execution_checkpoints"):
+                    actual_sql = next(obj[2] for obj in current_objects if obj[1] == definition[1])
+                    self.assertTrue(
+                        actual_sql.startswith(definition[2][:-1] + ", claude_material_notice TEXT")
+                    )
+                    self.assertEqual(
+                        columns(current)[definition[1]],
+                        self.old_columns[definition[1]] + ("claude_material_notice",),
+                    )
                 else:
                     self.assertIn(definition, current_objects)
             self.assertEqual(

@@ -187,6 +187,7 @@ class WorkerExecutionPhaseTests(unittest.TestCase):
             execution_root=self.project.root,
             job_id="fictional-job",
             runtime="codex",
+            claude_image_input=False,
         )
 
     def test_staging_and_contract_decision_are_bounded_pre_invocation_inputs(self) -> None:

@@ -1005,12 +1005,18 @@ class ExternalQueueWorker:
         assert isinstance(topic, TopicRecord)
         assert self.adapter is not None
         adapter = self.adapter
+        if self.config.claude_image_input and self.config.claude_file_permissions is not None:
+            raise ProviderUnavailableError(
+                "claude_image_input_unverified",
+                "Claude image input cannot be combined with file tools.",
+            )
         prepared = prepare_worker_materials(
             self.state,
             state_path=self.config.state_path,
             execution_root=Path(project.root),
             job=job,
             runtime=self.agent.runtime,
+            claude_image_input=self.agent.runtime == "claude" and self.config.claude_image_input,
         )
         staging_dir = prepare_worker_staging_directory(Path(project.root), job.job_id)
         claude_session_binding = None
@@ -1120,6 +1126,7 @@ class ExternalQueueWorker:
                     on_visible_assistant=on_visible_assistant,
                     on_claude_process_started=on_claude_process_started,
                     claude_sandbox=hosted.sandbox if hosted else None,
+                    claude_images=prepared.claude_images,
                 )
             if claude_journal is not None and claude_session_binding is not None:
                 try:
@@ -1129,6 +1136,7 @@ class ExternalQueueWorker:
                         claude_session_binding.session_id,
                         result.text,
                         cwd=Path(project.root),
+                        material_notice=prepared.visible_notice,
                     )
                 except Exception as exc:
                     raise ClaudeStreamError("claude completion could not be saved") from exc

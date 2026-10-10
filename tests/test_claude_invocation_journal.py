@@ -98,6 +98,7 @@ class ClaudeInvocationJournalTests(unittest.TestCase):
             session_id,
             text,
             cwd=self.root if cwd is None else cwd,
+            material_notice="",
         )
 
     def snapshot(self) -> tuple[str, ...]:

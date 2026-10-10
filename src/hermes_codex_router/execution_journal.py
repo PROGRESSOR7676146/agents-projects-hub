@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .codex_failure import MAX_PARTIAL_TEXT
 from .progress_delivery import ProgressDeliveryQueue
+from .schema_claude_material_notice import MAX_CLAUDE_MATERIAL_NOTICE_CHARACTERS
 from .state import HubState, ProviderJobRecord, SessionRecord, StateError
 
 CLAUDE_PRE_INVOCATION_ERROR_CODES = frozenset(
@@ -16,8 +17,10 @@ CLAUDE_PRE_INVOCATION_ERROR_CODES = frozenset(
         "claude_cpa_credential_ambiguous",
         "claude_cli_unavailable",
         "claude_cli_capabilities_unverified",
+        "claude_image_input_unverified",
         "claude_permission_host_unverified",
         "claude_session_mode_changed",
+        "claude_material_notice_unverified",
     }
 )
 
@@ -363,20 +366,36 @@ class ExecutionJournal:
             self._insert_visible_item(job_id, message_id, text, "unknown")
 
     def record_claude_completion(
-        self, job_id: str, token: str, session_id: str, text: str, *, cwd: Path
+        self,
+        job_id: str,
+        token: str,
+        session_id: str,
+        text: str,
+        *,
+        cwd: Path,
+        material_notice: str,
     ) -> None:
         if not isinstance(text, str) or len(text) > 200_000:
             raise StateError("invalid completed checkpoint text")
+        if (
+            not isinstance(material_notice, str)
+            or len(material_notice) > MAX_CLAUDE_MATERIAL_NOTICE_CHARACTERS
+            or "\x00" in material_notice
+        ):
+            raise StateError("invalid Claude material notice")
         with self.state._immediate_transaction():
             checkpoint = self._claude_checkpoint(job_id, token, session_id, cwd)
             if checkpoint["completed_text"] is not None:
-                if checkpoint["completed_text"] != text:
+                if (
+                    checkpoint["completed_text"] != text
+                    or checkpoint["claude_material_notice"] != material_notice
+                ):
                     raise StateError("completed checkpoint changed")
                 return
             self.connection.execute(
-                "UPDATE provider_execution_checkpoints SET completed_text=?,updated_at=? "
+                "UPDATE provider_execution_checkpoints SET completed_text=?,claude_material_notice=?,updated_at=? "
                 "WHERE job_id=?",
-                (text, datetime.now(timezone.utc).isoformat(), job_id),
+                (text, material_notice, datetime.now(timezone.utc).isoformat(), job_id),
             )
 
     def validated_claude_partial(
