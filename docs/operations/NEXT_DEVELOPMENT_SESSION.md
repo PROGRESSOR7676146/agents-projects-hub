@@ -110,11 +110,20 @@ Standalone Claude image preparation has a published test-only pinned
 Do not repeat them on unchanged source. The standalone production opt-in now has
 a source candidate under [ADR 0066](../decisions/0066-verified-claude-image-input.md),
 including processed-image receipts and schema-53 recovery of original material
-notices. Current candidate publication and exact independent reviews remain open.
-Next trigger: complete those gates, then separately authorized Telegram acceptance.
+notices, published at `25866e1d95e47dc7323f17bdafd04e4f7f20f2ad` with canonical,
+independent Astra/Gemini fallback review and seven exact-head hosted checks.
+Actual Opus review was unavailable on quota; no Opus approval is claimed.
+Next trigger: separately authorized Telegram acceptance.
 Do not enable images from a success marker or grant Read to supply paths. Native
 compatibility establishes no subscription, human approval, custody or deployment
 acceptance. Text-only remains the default; Hub roles remain retired.
+
+The next standalone test-only candidate is the pinned
+[model/effort continuation corpus](../testing/CLAUDE_NATIVE_SELECTION.md).
+It checks named emitted settings and exact synthetic dialogue, including native
+scaffold reencoding; it does not expand the configured catalog or establish
+entitlement/effective effort. Its PR owns exact publication evidence. Remaining
+local/return, saved-session connect, human approvals and route acceptance stay open.
 
 The Codex compatibility candidate now refuses unsupported active permission
 profiles reported by `thread/start` or `thread/resume` before productive
@@ -374,8 +383,8 @@ No deployment or live acceptance follows from these repository checks.
 
 First-pass pointers to recheck, not final design:
 
-- `external_runtime.py` / `claude_stream.py`: bounded text-only native stream;
-  `catalog_refresh.py`: Claude catalog is just the configured default;
+- `external_runtime.py` / `claude_stream.py`: bounded native stream, image opt-in;
+  `claude_catalog.py`: configured model/effort catalog and exact-session selection;
   `local_transfer.py`: no Claude resume branch.
 - `codex_appserver.py`: shared approvals wait for the companion; fallback declines.
   Add source-topic visibility while preserving human approval ownership.
