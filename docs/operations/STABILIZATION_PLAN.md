@@ -23,6 +23,13 @@ Deployment identity and private acceptance records remain outside this plan.
 
 ## Revised delivery scope
 
+The opt-in [Claude image candidate](../decisions/0066-verified-claude-image-input.md)
+builds on published corpus `6e88caede24351e30991cb4059f47cd42aab03ef`.
+Offline evidence covers receipts, worker uncertainty and material-notice recovery.
+Next: exact independent/canonical/hosted publication gates, then owner-authorized
+caption/album/stop/restart Telegram acceptance with schema-53 rollback.
+Live activation, file tools, paid fallback and Hub roles remain excluded.
+
 Owner decision: remove Hub-managed lead/advisor roles from the current goal and
 release scope; cross-provider review belongs to project rules. See
 [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md). This section supersedes
@@ -176,17 +183,11 @@ Retained offline source/fixtures under
 | `496a719707a5b02557e659e77facf6a481f2a4da`, PR #175 | Test-only exact HTTP envelope/semantic owner; source gates passed |
 | `851714b5005553906b29c771fcd095de133f776b`, PR #176 | Owned raw exchange extraction; canonical 2,855 tests/256 modules, types/privacy, Astra/actual Opus and seven hosted checks |
 
-The original process-wide FD-count discrepancy has unknown attribution; fixtures
-now track identity-bound allocations without taking cleanup authority. Request
-observation, callback consumption, partial writes and native completion remain
-distinct. The [testing guide](../testing/README.md#offline-review-pipe-primitives)
-owns commands and evidence limits. These fixtures are not productive/native
-integration, subscription, installed custody or Telegram acceptance.
-
-Combined native/pipe witness and productive advisor/role/material integration
-are withdrawn by ADR 0065. Preserve tests/shared cleanup and do not repeat
-completed gates or continue advisor development. Merge/deployment remain owner
-actions; inspect tracked/staged/untracked state before any worktree cleanup.
+Fixtures track owned allocations; the earlier FD-count discrepancy is unattributed.
+The [testing guide](../testing/README.md#offline-review-pipe-primitives) owns
+commands and limits; offline fixtures establish no live acceptance.
+ADR 0065 withdraws advisor integration. Retain tests/cleanup, do not repeat gates;
+owner merge/deployment and post-merge worktree inspection remain required.
 
 ## Claude process observations
 

@@ -167,6 +167,18 @@ Routing precedence is deterministic:
   Telegram Premium does not expand that bot API boundary. Unsupported formats,
   excess parts/bytes, unavailable Telegram content, and non-queue legacy paths
   MUST fail visibly rather than claim that metadata alone was read.
+  An explicit local Claude image-input gate MAY supply bounded verified PNG/JPEG
+  bytes through the owned external CLI with tools disabled. The gate MUST default
+  to false and MUST reject combination with protected file tools. Original bytes
+  MUST match the immutable spool snapshot. Terminal success additionally MUST
+  require one processed-input receipt bound to the current caller UUID and exact
+  native session, preserving prompt, material markers and image count/order.
+  Characterized native processing MAY change image bytes or convert PNG to JPEG;
+  the receipt MUST retain bounded inline supported images and MUST NOT be described
+  as pixel-equivalence or comprehension proof. A missing, conflicting, omitted
+  or image-to-text receipt after spawn MUST preserve uncertainty, original material
+  evidence and root exclusion without automatic replay. See
+  [ADR 0066](../decisions/0066-verified-claude-image-input.md).
 
 ## 8. Shared visible context and spend policy
 
@@ -230,7 +242,7 @@ Current provider status:
 | Hermes | Implemented integration | Native Gateway owns Telegram/session; Hub plugin/hook owns fail-closed project admission and bounded visible exchange. |
 | OpenCode | Implemented adapter | Go-authenticated provider-owned session through structured CLI output; centrally routed bot identity. |
 | Antigravity | Implemented adapter | `agy` conversation in sandboxed `accept-edits` work mode; no dangerous permission bypass. |
-| Claude Code | Repository scaffold; live acceptance pending | Headless CLI through an explicit loopback CPA route with independent worker slots; text-only, with no tools, MCP, skills or permission prompts until a human approval host is accepted (REQ-AUTH-009). |
+| Claude Code | Repository scaffold; live acceptance pending | Headless CLI through an explicit loopback CPA route with independent worker slots; text-only default, optional verified image input under REQ-UX-009, and separate protected file-tool acceptance under REQ-SEC-008. No implicit tool, MCP, skill or permission grant. |
 | Gemini CLI | Rejected for active product | Google provider work uses Antigravity; do not reactivate a parallel Gemini CLI path without a new decision. |
 
 Provider bot identity maps to a runtime, not to a model or paid account. Model

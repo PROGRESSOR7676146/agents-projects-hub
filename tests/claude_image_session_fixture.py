@@ -82,9 +82,33 @@ def validate_image_evidence(report: object) -> dict[str, Any]:
     return report
 
 
+def validate_worker_image_evidence(report: object) -> dict[str, Any]:
+    if (
+        not isinstance(report, dict)
+        or set(report) != {"base", "production_input", "maximum_input", "corrupt_outcomes"}
+        or report["production_input"] is not True
+        or report["maximum_input"] is not True
+        or not isinstance(report["corrupt_outcomes"], list)
+        or len(report["corrupt_outcomes"]) != 3
+        or any(
+            not isinstance(item, str) or item != "guarded_downgrade"
+            for item in report["corrupt_outcomes"]
+        )
+    ):
+        raise NativeTransportFixtureError("native_image_evidence_unproven")
+    return {
+        **validate_image_evidence(report["base"]),
+        "production_input": True,
+        "maximum_input": True,
+        "corrupt_outcomes": report["corrupt_outcomes"],
+    }
+
+
 def run_image_session_fixture(
-    executable: Path, *, expected_sha256: str, expected_version: str
+    executable: Path, *, expected_sha256: str, expected_version: str, worker_input: bool = False
 ) -> dict[str, Any]:
+    if type(worker_input) is not bool:
+        raise NativeTransportFixtureError("native_image_evidence_unproven")
     validate_native_identity(expected_sha256, expected_version, None, None)
     if expected_version != "2.1.285 (Claude Code)":
         raise NativeTransportFixtureError("native_identity_mismatch")
@@ -143,6 +167,7 @@ def run_image_session_fixture(
                 "claude_native_request_contract",
                 "claude_native_transport_actor",
                 "native_process_capture",
+                *(("claude_image_worker_actor",) if worker_input else ()),
             ):
                 argv.extend(
                     (
@@ -157,6 +182,14 @@ def run_image_session_fixture(
                 (Path(claude_stream.__file__), "/opt/example/hermes_codex_router/claude_stream.py"),
             ):
                 argv.extend(("--ro-bind", str(source), destination))
+            if worker_input:
+                argv.extend(
+                    (
+                        "--ro-bind",
+                        str(Path(claude_stream.__file__).parent),
+                        "/opt/example/hermes_codex_router",
+                    )
+                )
             argv.extend(
                 (
                     "--proc",
@@ -168,7 +201,12 @@ def run_image_session_fixture(
                     "--",
                     "/usr/bin/python3",
                     "-I",
-                    "/opt/example/tests/claude_image_session_actor.py",
+                    "/opt/example/tests/"
+                    + (
+                        "claude_image_worker_actor.py"
+                        if worker_input
+                        else "claude_image_session_actor.py"
+                    ),
                     str(port),
                     str(sentinel),
                     json.dumps(build_image_fixture_argv(base)),
@@ -177,7 +215,7 @@ def run_image_session_fixture(
             code, output = capture_owned_process(
                 argv,
                 {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
-                timeout=130,
+                timeout=410 if worker_input else 130,
                 stdout_limit=8192,
                 stderr_limit=65536,
             )
@@ -191,8 +229,14 @@ def run_image_session_fixture(
 
             suffix = ":" + stage if isinstance(stage, str) and stage in STAGES else ""
             raise NativeTransportFixtureError("native_image_execution_failed" + suffix)
-        validated = validate_image_evidence(report)
+        if worker_input:
+            validated = validate_worker_image_evidence(report)
+        else:
+            validated = validate_image_evidence(report)
         validate_native_identity(
             digest, validated["native_version"], expected_sha256, expected_version
         )
-        return {**validated, "native_binary_sha256": digest}
+        return {
+            **validated,
+            "native_binary_sha256": digest,
+        }

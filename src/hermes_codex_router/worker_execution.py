@@ -12,6 +12,7 @@ from .artifacts import (
     spool_staged_artifacts,
 )
 from .claude_file_sandbox import FileToolSandboxConfig
+from .claude_image_input import VerifiedClaudeImage
 from .claude_stream import ClaudeStreamError, ClaudeTerminalFailure, VisibleAssistantCallback
 from .codex_appserver import CodexAppServerClient, CodexThread, RateLimits, TurnResult
 from .codex_failure import CodexPreparationError, CodexRetryBindingError
@@ -34,6 +35,7 @@ from .models import Project, ProjectRegistry
 from .preexecution_retry_state import PreexecutionRetryState, PreparationRetryRefused
 from .project_resolution import resolve_project_context
 from .registry import ExecutionRootError
+from .schema_claude_material_notice import MAX_CLAUDE_MATERIAL_NOTICE_CHARACTERS
 from .state import HubState, ProviderJobRecord, TopicRecord
 from .telegram_interaction import (
     telegram_contract_version,
@@ -241,15 +243,26 @@ def prepare_worker_materials(
     execution_root: Path,
     job: ProviderJobRecord,
     runtime: str,
+    claude_image_input: bool = False,
 ) -> PreparedIncomingMaterials:
     """Materialize the job's bounded inputs before any provider invocation."""
-    return prepare_incoming_materials(
+    prepared = prepare_incoming_materials(
         state.incoming_materials_for_job(job.job_id),
         state_path=state_path,
         execution_root=execution_root,
         job_id=job.job_id,
         runtime=runtime,
+        claude_image_input=claude_image_input,
     )
+    if runtime == "claude" and (
+        len(prepared.visible_notice) > MAX_CLAUDE_MATERIAL_NOTICE_CHARACTERS
+        or "\x00" in prepared.visible_notice
+    ):
+        raise ProviderUnavailableError(
+            "claude_material_notice_unverified",
+            "Claude material preparation exceeds the recoverable notice limit. The provider was not invoked.",
+        )
+    return prepared
 
 
 def prepare_worker_staging_directory(execution_root: Path, job_id: str) -> Path:
@@ -438,6 +451,7 @@ def invoke_external_provider_turn(
     on_visible_assistant: VisibleAssistantCallback | None = None,
     on_claude_process_started: Callable[[], None] | None = None,
     claude_sandbox: FileToolSandboxConfig | None = None,
+    claude_images: tuple[VerifiedClaudeImage, ...] = (),
 ) -> ExternalTurnResult:
     """Invoke one external CLI turn from an immutable job snapshot."""
     if getattr(adapter, "runtime", None) == "claude" and claude_session_binding is None:
@@ -462,6 +476,7 @@ def invoke_external_provider_turn(
                 on_visible_assistant=on_visible_assistant,
                 on_claude_process_started=on_claude_process_started,
                 claude_sandbox=claude_sandbox,
+                claude_images=claude_images,
             )
         except ClaudeTerminalFailure as exc:
             if exc.session_id != claude_session_binding.session_id:

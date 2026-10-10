@@ -133,6 +133,7 @@ class HubConfig:
     codex_worker_count: int = 1
     claude_worker_count: int = 1
     claude_file_permissions: ClaudeFilePermissionsConfig | None = None
+    claude_image_input: bool = False
     # Consecutive productive messages with identical routing are collected
     # into one provider turn.  Zero keeps legacy one-message/one-turn behavior.
     message_batch_quiet_ms: int = 0
@@ -1054,6 +1055,14 @@ def load_hub_config(
     topology = _parse_runtime_topology(
         root, agents, hub_bot=hub_bot, manage_codex_server=codex.manage_codex_server
     )
+    claude_image_input = root.get("claude_image_input", False)
+    if type(claude_image_input) is not bool:
+        raise HubConfigError("claude_image_input must be a boolean")
+    if claude_image_input and not any(
+        agent.runtime == "claude" and agent.agent_id in topology.external_worker_agent_ids
+        for agent in agents
+    ):
+        raise HubConfigError("claude_image_input requires an external Claude worker")
     try:
         claude_file_permissions = parse_claude_file_permissions(root.get("claude_file_permissions"))
     except ValueError as exc:
@@ -1063,6 +1072,8 @@ def load_hub_config(
         for agent in agents
     ):
         raise HubConfigError("claude_file_permissions requires an external Claude worker")
+    if claude_image_input and claude_file_permissions is not None:
+        raise HubConfigError("claude_image_input cannot be combined with claude_file_permissions")
     project_provisioning = _parse_project_provisioning(
         root,
         hub_bot=hub_bot,
@@ -1092,6 +1103,7 @@ def load_hub_config(
         codex_worker_count=topology.codex_worker_count,
         claude_worker_count=topology.claude_worker_count,
         claude_file_permissions=claude_file_permissions,
+        claude_image_input=claude_image_input,
         message_batch_quiet_ms=topology.message_batch_quiet_ms,
         message_batch_max_ms=topology.message_batch_max_ms,
         task_no_progress_seconds=_task_progress_seconds(root, "task_no_progress_seconds", 300),

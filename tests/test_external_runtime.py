@@ -738,7 +738,12 @@ class ExternalRuntimeTests(unittest.TestCase):
                 {"new_session_id": session, "session_id": session},
             ):
                 with self.subTest(kwargs=kwargs), self.assertRaises(ProviderUnavailableError):
-                    adapter.build_argv(cwd=Path(directory), prompt="start", **kwargs)
+                    adapter.build_argv(
+                        cwd=Path(directory),
+                        prompt="start",
+                        new_session_id=kwargs["new_session_id"],
+                        session_id=kwargs.get("session_id"),
+                    )
 
     def test_claude_adapter_verifies_new_identity_and_preserves_terminal_error(self) -> None:
         session = str(uuid.uuid4())

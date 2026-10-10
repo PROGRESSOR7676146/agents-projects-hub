@@ -54,14 +54,13 @@ Deployment and live three-project acceptance remain pending. See
 [REQ-QUEUE-002](../product/DURABLE_QUEUE_AND_CONTROL.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
 and [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md).
 
-Claude Code has a text-only external worker with native identity preparation,
-bounded visible streaming and saved-result recovery. Offline tests cover the
-invocation, failure and restart boundaries in
-[ADR 0050](../decisions/0050-claude-native-invocation-evidence.md). Human approvals,
-authority custody, native local transfer, session connect and
-live CPA/account acceptance remain pending under
+Claude's text-only default has offline identity, streaming and recovery coverage
+under [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md).
+The schema-53 [image/notice candidate](../decisions/0066-verified-claude-image-input.md)
+has [native and worker coverage](../testing/CLAUDE_NATIVE_IMAGES.md); publication
+and live gates remain open. Human approvals, custody, local transfer, connect and
+subscription/no-paid-fallback acceptance remain pending under
 [REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
-Native [image/resume tests](../testing/CLAUDE_NATIVE_IMAGES.md) do not enable production images.
 
 Queue admission snapshots and accepted Codex turn activity are implemented in
 schema 37 under [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md).

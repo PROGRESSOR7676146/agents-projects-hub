@@ -39,10 +39,10 @@ This normative module is part of the
   workers for explicitly configured local agent IDs. A worker owns its adapter or
   Codex app-server lifecycle and SQLite connection, leases only its own jobs,
   and has no Telegram transport or token-reading capability. The default
-  external-worker list remains Codex for rollback compatibility; OpenCode and
-  Antigravity and Claude are enabled independently through
-  `external_worker_agent_ids`. Locally managed Claude MUST use external queue
-  mode; its first repository adapter is text-only pending approval integration.
+  external-worker list remains Codex for rollback; `external_worker_agent_ids`
+  independently enables OpenCode, Antigravity and Claude. Local Claude MUST use
+  external queue mode: text-only by default, optional REQ-UX-009 image input and
+  separate protected file-tool approvals.
   `max_parallel_roots` MUST default to one and MUST bound simultaneous
   Hub-owned productive execution across all external workers. A value above one
   MUST require external queue mode. `codex_worker_count` MUST default to one and
@@ -183,14 +183,19 @@ This normative module is part of the
   A Claude worker MUST persist its caller-chosen native session UUID and
   canonical root before invocation, validate the current generation and writer,
   and resume only that exact identity. Native message UUIDs MAY deduplicate
-  bounded provisional visible text; neither session nor message identity is
-  native turn-acceptance or terminality evidence. Only a validated complete
+  bounded provisional visible text; neither UUID proves native acceptance or
+  terminality. Only a validated complete
   stream with a matching session and terminal success MAY create a completion
-  checkpoint. Recovery MAY deliver that saved completion without invocation;
-  partial-only, missing or conflicting evidence MUST remain uncertain and
-  retain root exclusion. A local failure after completion persistence MUST
+  checkpoint. Recovery MAY deliver saved completion without invocation;
+  partial, missing or conflicting evidence MUST retain uncertainty and
+  root exclusion. A local failure after completion persistence MUST
   preserve recovery of that result, including when its delivery preparation
-  fails again. Verified terminal provider failures and quota rejections MUST
+  fails again. Hub material notices MUST commit atomically with raw Claude
+  completion in separate fields and recover once without invocation. Their
+  bound MUST be checked before invocation. Legacy recovery with materials MUST
+  warn that original availability was not saved; it MUST remain unknown, never
+  reconstructed from current config or project files.
+  Verified terminal provider failures and quota rejections MUST
   remain distinct from unknown outcomes, without invented quota/reset values
   or automatic replay. A covering stop retains the existing precedence.
 - **REQ-QUEUE-005 (Implemented for embedded compatibility and the external sender):** Provider result persistence and Telegram delivery

@@ -97,6 +97,11 @@ def _recover_leased_claude_job(
             root, job.job_id, artifact_spool_root(config.state_path), rejection_sink=rejections
         )
         visible = text or "Claude completed the invocation without visible text."
+        material_notice = checkpoint["claude_material_notice"]
+        if material_notice is not None:
+            visible += material_notice
+        elif state.incoming_materials_for_job(job.job_id):
+            visible += "\n\nAttachment availability was not saved; recovery cannot confirm which attachments were supplied."
         if rejections:
             visible += "\n\nSome staged artifacts could not be recovered; inspect the task staging."
         result = state.commit_provider_result(

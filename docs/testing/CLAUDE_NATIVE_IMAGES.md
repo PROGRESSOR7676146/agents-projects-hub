@@ -1,8 +1,9 @@
 # Offline native Claude image continuation
 
 `tests.test_claude_image_session` is a separate test-only compatibility corpus
-for the explicitly pinned CLI 2.1.285. Production Claude still rejects image
-materials. Run it manually with a locally verified standalone ELF:
+for the explicitly pinned CLI 2.1.285. The production image gate defaults to
+false; this prerequisite does not enable it. Run it manually with a locally
+verified standalone ELF:
 
 ```bash
 HUB_NATIVE_CLAUDE_FIXTURE_EXECUTABLE=/home/example/tools/claude-native \
@@ -49,3 +50,35 @@ tests run these controls and evidence checks without launching Claude. Explicit
 native opt-in is optional; requiring it makes missing binary identity fail.
 No real account, remote inference, subscription route, Telegram approval,
 production image encoding, local transfer or deployment is proven by this corpus.
+
+## Owned production input witness
+
+The separate `tests.test_claude_worker_image_native` witness uses the production
+encoder and owned process/reader under the same disposable native boundary:
+
+```bash
+HUB_NATIVE_CLAUDE_FIXTURE_EXECUTABLE=/home/example/tools/claude-native \
+  HUB_NATIVE_CLAUDE_FIXTURE_SHA256='<locally-verified-sha256>' \
+  HUB_NATIVE_CLAUDE_FIXTURE_VERSION='2.1.285 (Claude Code)' \
+  HUB_REQUIRE_NATIVE_CLAUDE_WORKER_IMAGE_TESTS=1 \
+  PYTHONPATH=src:. python -m unittest -v tests.test_claude_worker_image_native
+```
+
+It retains the complete independent request/history oracle and compares the
+actual correlated replay frames too. Fresh/resume inputs include distinct PNG
+and JPEG padded to 2 MiB each, with swapped image order in the resumed turn;
+their native processed JPEG outputs are fixed fictional fixture bytes. The
+original small corpus additionally covers unchanged images. Signature-only PNG,
+JPEG and a mixed valid/corrupt album deliberately receive endpoint success after
+native image-to-text downgrade. The unguarded reference must demonstrate that
+false success; the production guard must refuse it. A success marker or complete
+stdin write cannot substitute for the processed receipt. Receipt data is never
+forwarded as visible output.
+
+Ordinary tests cover limits/closed sources, short/blocked writes, stop/timeout
+during input and incomplete acknowledgement, public-worker missing/downgraded
+receipts, retained materials/root and no replay. Schema-53 tests cover raw
+completion plus notice atomicity, delivery-preparation faults, stale recovery
+after configuration change, legacy unknown availability, backup and migration
+rollback. These gates do not prove full deployed worker/Telegram E2E, real image
+comprehension, human approvals, subscription routing or authority-data custody.
