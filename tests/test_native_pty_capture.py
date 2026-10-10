@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import signal
@@ -39,10 +40,41 @@ class NativePtyCaptureTests(unittest.TestCase):
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
             status = Path(f"/proc/{pid}/stat")
-            if not status.exists() or status.read_text().split()[2] == "Z":
+            try:
+                state = status.read_text().split()[2]
+            except (FileNotFoundError, ProcessLookupError):
+                # A process may disappear after opening its proc entry and
+                # before read; Linux can report ESRCH as well as ENOENT.
+                return
+            if state == "Z":
                 return
             time.sleep(0.02)
         self.fail("owned fixture process survived cleanup")
+
+    def test_cleanup_observation_accepts_process_disappearing_during_read(self) -> None:
+        for error in (
+            FileNotFoundError(errno.ENOENT, "example-process-gone"),
+            ProcessLookupError(errno.ESRCH, "example-process-gone"),
+        ):
+            with (
+                self.subTest(error_type=type(error).__name__),
+                patch.object(Path, "exists", return_value=True),
+                patch.object(Path, "read_text", side_effect=error),
+            ):
+                self.assert_gone(os.getpid())
+
+    def test_cleanup_observation_preserves_other_read_failures(self) -> None:
+        for error in (
+            PermissionError(errno.EACCES, "example-denied"),
+            OSError(errno.EIO, "example-io-error"),
+        ):
+            with (
+                self.subTest(error_type=type(error).__name__),
+                patch.object(Path, "exists", return_value=True),
+                patch.object(Path, "read_text", side_effect=error),
+                self.assertRaises(OSError),
+            ):
+                self.assert_gone(os.getpid())
 
     def test_real_controlling_terminal_literal_input_and_discarded_output(self) -> None:
         proof = self.root / "proof.json"
