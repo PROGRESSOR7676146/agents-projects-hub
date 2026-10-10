@@ -104,6 +104,15 @@ independent value. Ordinary provider custody and native/Telegram acceptance
 remain open. The reduced goal is recorded in the
 [stabilization plan](STABILIZATION_PLAN.md#revised-delivery-scope).
 
+Standalone Claude image preparation now has a separate test-only pinned
+[native image/resume corpus](../testing/CLAUDE_NATIVE_IMAGES.md).
+It changes no provider worker or productive capability. Next trigger: review and
+publish this prerequisite, then design a bounded verified-byte input slice using
+existing material/root/generation/FIFO/stop/recovery controls. Do not enable images
+from a successful marker alone or grant Read authority to supply image paths.
+Native CLI compatibility does not establish subscription, human approval or
+Telegram acceptance; the existing text-only defaults remain in force.
+
 The Codex compatibility candidate now refuses unsupported active permission
 profiles reported by `thread/start` or `thread/resume` before productive
 `turn/start`, with a bounded durable queue notice. Absent/null profiles remain
