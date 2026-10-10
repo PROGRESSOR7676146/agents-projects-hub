@@ -48,6 +48,45 @@ evidence; these checks are not a native Claude witness.
 
 ## Next bounded witness
 
+The standalone `tests.claude_saved_dialogue` oracle prepares the saved-session
+gate without invoking a provider. The caller supplies one fixture-owned UUID
+filename, exact canonical root and two, four or six alternating visible messages;
+expectations are not derived from the arriving transcript. It returns only
+`waiting`, `ready` or `invalid`, with no transcript, identity or raw error.
+`waiting` uses the caller's existing finite polling deadline; `invalid` aborts.
+Only endpoint response completion **and** `ready` may admit a later `/exit`.
+The helper is not yet wired into a native interactive witness.
+
+Every lexical ancestor is opened with directory descriptors and no symlink
+following. A regular single-link file is checked before a bounded read of at
+most 1 MiB plus one overflow byte. Limits are 32 path components, 512 completed
+records and 16 KiB per record or trailing fragment. Strict JSON preserves
+duplicate-key refusal and bounds depth, nodes, finite numbers and Unicode.
+File identity, size and timestamps are rechecked after parsing; a second walk
+checks ancestor and final-file identities. Missing or changed snapshots wait;
+stable unsafe files or invalid records refuse. These checks observe a snapshot,
+not filesystem custody or atomic isolation after the final check.
+
+The synthetic contract permits one ordered `user`/`assistant`/`attachment` chain,
+exact session/root/version and `isSidechain=False`. Attachments advance the
+chain but cannot hide top-level dialogue. Only `queue-operation`, `atis-latch`,
+`last-prompt` and `cost-state` metadata are recognized; metadata does not advance
+the chain or contain dialogue/chain identity fields. Their full schemas and
+attachment context equivalence remain outside this oracle. User content is one
+exact string; assistant content is one exact text block. Unknown types,
+branches, duplicate IDs, sidechains and wrong or extra dialogue refuse.
+Completed malformed records refuse even with an incomplete suffix. A bounded
+non-newline suffix always waits, including complete JSON without its newline.
+This narrow chain contract is a synthetic restriction, not native compatibility.
+
+Run its provider-free tests with the neighboring parser and PTY checks:
+
+```bash
+PYTHONPATH=src:. python scripts/validate.py --profile focused \
+  tests.test_claude_saved_dialogue tests.test_claude_native_request_contract \
+  tests.test_native_pty_capture
+```
+
 Reuse the pinned binary and isolated HOME/network/PID/IPC fixture. Independently
 validate one consumed Messages POST per phase, exact full dialogue, selected
 model/effort and the single saved UUID. Native interactive argv must deliberately

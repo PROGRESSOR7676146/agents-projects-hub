@@ -248,17 +248,33 @@ class DeliveryCertaintyTests(unittest.TestCase):
         )
         for index, (error, expected) in enumerate(cases, start=30):
             with self.subTest(error=error, expected=expected):
-                job_id = self.fixture.ready_outbox("opencode", index)
+                # A prior pending retry can become due while the next case is
+                # preparing. Independent queues keep the observed send bound
+                # to this case even under slow parallel validation.
+                fixture = fixtures.TelegramOutboxSenderTests()
+                fixture.setUp()
+                self.addCleanup(fixture.tearDown)
+                job_id = fixture.ready_outbox("opencode", index)
                 bot = fixtures.Bot(send_error=error)
-                sender = self.fixture.sender(opencode=bot, antigravity=fixtures.Bot())
+                sender = fixture.sender(opencode=bot, antigravity=fixtures.Bot())
                 try:
                     now = datetime.now(timezone.utc) + timedelta(seconds=1)
-                    sender._deliver_one("opencode", now=now)
+                    self.assertTrue(sender._deliver_one("opencode", now=now))
                     outbox = sender.state.get_telegram_outbox_for_job(job_id)
+                    self.assertEqual(len(bot.sent), 1)
+                    self.assertEqual(bot.sent[0][:2], (outbox.chat_id, outbox.thread_id))
                     self.assertEqual(outbox.status, expected)
                     if expected == "pending":
                         self.assertIsNone(outbox.send_started_at)
-                        self.assertGreater(datetime.fromisoformat(outbox.available_at), now)
+                        delay = (
+                            60
+                            if isinstance(error, TelegramError) and error.status_code == 429
+                            else 1
+                        )
+                        self.assertEqual(
+                            datetime.fromisoformat(outbox.available_at),
+                            now + timedelta(seconds=delay),
+                        )
                 finally:
                     sender.close()
 

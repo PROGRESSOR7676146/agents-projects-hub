@@ -128,9 +128,12 @@ The [test-only controlling-PTY prerequisite](../testing/CLAUDE_NATIVE_LOCAL.md)
 is published at `913caf0dff3eaa6c6566189d631f35e12f6abc96`; its PR owns hosted
 evidence. It changes no runtime or lease; production Claude transfer remains
 refused. The first disposable interactive-resume investigation did not reach a
-Messages POST or save the expected new pair. Next resolve documented disposable
-startup preparation and strict persisted-dialogue validation before claiming the
-three-phase witness. A fixed positional prompt avoids screen synchronization but
+Messages POST or save the expected new pair. The standalone test-only strict
+saved-dialogue oracle now has a source candidate in `tests.claude_saved_dialogue`;
+its synthetic tests do not prove native chain compatibility, startup or transfer.
+Next resolve documented disposable startup preparation and characterize the saved
+records against that gate before claiming the three-phase witness. A fixed
+positional prompt avoids screen synchronization but
 does not establish editor readiness. Verify launch-store/route continuity and
 custody before any later production enablement.
 
