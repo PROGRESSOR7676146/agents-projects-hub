@@ -340,7 +340,8 @@ HUB_NATIVE_CLAUDE_FIXTURE_EXECUTABLE=/home/example/tools/claude-native \
 The bearer/API-key × SSE-success/HTTP-529 matrix derives its base argv from the
 production text-only builder, without bare mode. A canonical regression checks
 every production start argument and setting, including a caller-chosen fictional
-session UUID checked by both reader and parser. Image/resume has a [separate corpus](CLAUDE_NATIVE_IMAGES.md).
+session UUID checked by reader and parser. Separate corpora cover
+[images](CLAUDE_NATIVE_IMAGES.md) and [model/effort resume](CLAUDE_NATIVE_SELECTION.md).
 Shared native settings arrive through this host-built argv. Fixture-only additions empty setting
 sources/MCP, disable session persistence and model switching/fallback, limit the
 turn to one, and replace the system prompt. Fixture-only environment settings
@@ -381,8 +382,7 @@ and parser Python version. Request evidence retains only the validated count
 and fictional capsule digest, without native request bodies or environment text.
 The date scaffold fails closed if execution crosses its chosen UTC-date boundary;
 this compatibility failure is not a right to relax the material contract.
-The productive bridge still requires its host-precomputed exact request digest;
-this test-only validator neither creates that authority nor enables an advisor.
+This test-only validator grants no production authority.
 Required native runs pin the expected digest and
 version from private locally verified evidence; never put real binary identities
 in Git. Success requires exactly one visible message; HTTP 529 requires the native

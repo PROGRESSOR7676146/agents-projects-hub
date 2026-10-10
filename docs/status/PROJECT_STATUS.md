@@ -57,8 +57,8 @@ and [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md).
 Claude's text-only default has offline identity, streaming and recovery coverage
 under [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md).
 The schema-53 [image/notice candidate](../decisions/0066-verified-claude-image-input.md)
-has [native and worker coverage](../testing/CLAUDE_NATIVE_IMAGES.md); publication
-and live gates remain open. Human approvals, custody, local transfer, connect and
+is published at `25866e1` with [native/worker coverage](../testing/CLAUDE_NATIVE_IMAGES.md);
+live gates remain open. Human approvals, custody, local transfer, connect and
 subscription/no-paid-fallback acceptance remain pending under
 [REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
 

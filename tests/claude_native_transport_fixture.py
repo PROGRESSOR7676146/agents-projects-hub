@@ -10,7 +10,7 @@ import socket
 import stat
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from hermes_codex_router import claude_stream
 from tests.claude_native_request_contract import CAPSULE_BYTES, PROMPT, SYSTEM_PROMPT
@@ -237,7 +237,40 @@ def run_native_transport_case(
     expected_sha256: str | None = None,
     expected_version: str | None = None,
 ) -> dict[str, Any]:
-    if case not in CASES:
+    return _run_native_case(
+        executable, case, expected_sha256=expected_sha256, expected_version=expected_version
+    )
+
+
+def run_native_selection_case(
+    executable: Path, case: str, *, expected_sha256: str, expected_version: str
+) -> dict[str, Any]:
+    validate_native_identity(expected_sha256, expected_version, None, None)
+    if expected_version != "2.1.285 (Claude Code)":
+        raise NativeTransportFixtureError("native_identity_mismatch")
+    return _run_native_case(
+        executable,
+        case,
+        expected_sha256=expected_sha256,
+        expected_version=expected_version,
+        selection_case=True,
+    )
+
+
+def _run_native_case(
+    executable: Path,
+    case: str,
+    *,
+    expected_sha256: str | None,
+    expected_version: str | None,
+    selection_case: bool = False,
+) -> dict[str, Any]:
+    allowed_cases = CASES
+    if selection_case:
+        from tests.claude_selection_contract import CASES as SELECTION_CASES
+
+        allowed_cases = set(SELECTION_CASES)
+    if case not in allowed_cases:
         raise NativeTransportFixtureError("native_case_invalid")
     bwrap = Path("/usr/bin/bwrap")
     if not bwrap.is_file():
@@ -255,7 +288,9 @@ def run_native_transport_case(
             raise NativeTransportFixtureError("host_file_positive_control_failed")
         empty = base / "empty.py"
         empty.write_bytes(b"")
-        actor = Path(__file__).with_name("claude_native_transport_actor.py")
+        actor = Path(__file__).with_name(
+            "claude_selection_actor.py" if selection_case else "claude_native_transport_actor.py"
+        )
         capture = Path(__file__).with_name("native_process_capture.py")
         contract = Path(__file__).with_name("claude_native_request_contract.py")
         parser = Path(claude_stream.__file__)
@@ -317,26 +352,47 @@ def run_native_transport_case(
                 "--ro-bind",
                 str(empty),
                 "/opt/example/hermes_codex_router/__init__.py",
-                "--proc",
-                "/proc",
-                "--dev",
-                "/dev",
-                "--chdir",
-                "/workspace/example",
-                "--",
-                "/usr/bin/python3",
-                "-I",
-                "/opt/example/actor.py",
-                str(port),
-                str(sentinel),
-                case,
-                json.dumps(build_native_fixture_argv(base)),
             ]
+            if selection_case:
+                for name in (
+                    "claude_native_transport_actor",
+                    "claude_selection_contract",
+                    "claude_image_request_contract",
+                ):
+                    argv.extend(
+                        (
+                            "--ro-bind",
+                            str(Path(__file__).with_name(name + ".py")),
+                            "/opt/example/tests/" + name + ".py",
+                        )
+                    )
+            argv.extend(
+                [
+                    "--proc",
+                    "/proc",
+                    "--dev",
+                    "/dev",
+                    "--chdir",
+                    "/workspace/example",
+                    "--",
+                    "/usr/bin/python3",
+                    "-I",
+                    "/opt/example/actor.py",
+                    str(port),
+                    str(sentinel),
+                    case,
+                    json.dumps(
+                        build_selection_fixture_argv(base, case)
+                        if selection_case
+                        else build_native_fixture_argv(base)
+                    ),
+                ]
+            )
             try:
                 code, output = capture_owned_process(
                     argv,
                     {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
-                    timeout=105,
+                    timeout=130 if selection_case else 105,
                     stdout_limit=8192,
                     stderr_limit=65536,
                 )
@@ -359,14 +415,154 @@ def run_native_transport_case(
                         + ":"
                         + failure["category"]
                     )
+                if selection_case:
+                    from tests.claude_selection_actor import STAGES as SELECTION_STAGES
+
+                    if (
+                        isinstance(failure, dict)
+                        and failure.get("fixture_failed") is True
+                        and failure.get("stage") in SELECTION_STAGES
+                    ):
+                        raise NativeTransportFixtureError(
+                            "native_selection_execution_failed:" + failure["stage"]
+                        )
                 raise NativeTransportFixtureError("native_namespace_execution_failed")
             try:
                 report = json.loads(output)
             except (ValueError, RecursionError) as error:
                 raise NativeTransportFixtureError("native_evidence_shape_invalid") from error
-            validated = validate_transport_evidence(report, case)
+            validated = (
+                validate_selection_evidence(report, case)
+                if selection_case
+                else validate_transport_evidence(report, case)
+            )
             validate_native_identity(
                 digest, validated.get("native_version"), expected_sha256, expected_version
             )
             validated["native_binary_sha256"] = digest
             return validated
+
+
+def build_selection_fixture_argv(cwd: Path, case: str) -> tuple[tuple[str, ...], ...]:
+    from hermes_codex_router.external_runtime import ExternalCliAdapter
+    from tests.claude_image_request_contract import MISSING_SESSION_ID
+    from tests.claude_selection_contract import PROMPTS, selection
+
+    invocations = []
+    for phase in (0, 1, 2):
+        model, effort = selection(case, min(phase, 1))
+        argv = list(
+            ExternalCliAdapter("claude", executable="/opt/example/claude").build_argv(
+                cwd=cwd,
+                prompt=PROMPTS[min(phase, 1)],
+                model=model,
+                effort=effort,
+                new_session_id=NATIVE_SESSION_ID if phase == 0 else None,
+                session_id=(NATIVE_SESSION_ID if phase == 1 else MISSING_SESSION_ID)
+                if phase
+                else None,
+            )
+        )
+        index = argv.index("--settings") + 1
+        settings = json.loads(argv[index])
+        settings.update(switchModelsOnFlag=False, fallbackModel=[])
+        argv[index] = json.dumps(settings, separators=(",", ":"))
+        separator = argv.index("--")
+        argv[separator:separator] = [
+            "--mcp-config",
+            '{"mcpServers":{}}',
+            "--setting-sources",
+            "",
+            "--max-turns",
+            "1",
+            "--system-prompt",
+            SYSTEM_PROMPT,
+        ]
+        invocations.append(tuple(argv))
+    return tuple(invocations)
+
+
+def validate_selection_evidence(report: object, case: str) -> dict[str, Any]:
+    from tests.claude_selection_actor import COUNTERS
+    from tests.claude_selection_contract import CASES as SELECTION_CASES
+    from tests.claude_selection_contract import selection
+
+    def invalid() -> NoReturn:
+        raise NativeTransportFixtureError("native_selection_evidence_unproven")
+
+    if (
+        case not in SELECTION_CASES
+        or not isinstance(report, dict)
+        or set(report)
+        != {
+            "case",
+            "native_version",
+            "host_files_hidden",
+            "host_loopback_blocked",
+            "ports_distinct",
+            "phases",
+            "missing",
+        }
+    ):
+        invalid()
+    assert isinstance(report, dict)
+    if (
+        report["case"] != case
+        or report["native_version"] != "2.1.285 (Claude Code)"
+        or any(
+            report[key] is not True
+            for key in ("host_files_hidden", "host_loopback_blocked", "ports_distinct")
+        )
+    ):
+        invalid()
+    phases = report["phases"]
+    if not isinstance(phases, list) or len(phases) != 2:
+        invalid()
+    for phase, entry in enumerate(phases):
+        model, effort = selection(case, phase)
+        if (
+            not isinstance(entry, dict)
+            or set(entry)
+            != set(COUNTERS)
+            | {"phase", "model", "effort", "session_id", "completed", "store_exact"}
+            or any(type(entry[key]) is not int for key in (*COUNTERS, "phase"))
+        ):
+            invalid()
+        if (
+            entry["phase"] != phase
+            or entry["model"] != model
+            or entry["effort"] != effort
+            or entry["session_id"] != NATIVE_SESSION_ID
+            or entry["completed"] is not True
+            or entry["store_exact"] is not True
+        ):
+            invalid()
+        if (
+            any(entry[key] != 1 for key in ("posts", "validated_requests", "messages_served"))
+            or not 0 <= entry["heads"] <= 1
+            or entry["requests"] != 1 + entry["heads"]
+            or not 1 <= entry["connections"] <= entry["requests"]
+            or any(entry[key] != 0 for key in ("violations", "timeouts"))
+        ):
+            invalid()
+    missing = report["missing"]
+    if (
+        not isinstance(missing, dict)
+        or set(missing) != set(COUNTERS) | {"refusal_validated", "store_unchanged", "exit_code"}
+        or any(type(missing[key]) is not int for key in (*COUNTERS, "exit_code"))
+    ):
+        invalid()
+    if (
+        missing["refusal_validated"] is not True
+        or missing["store_unchanged"] is not True
+        or not 0 <= missing["exit_code"] <= 255
+        or any(
+            missing[key] != 0
+            for key in ("posts", "validated_requests", "messages_served", "violations", "timeouts")
+        )
+        or not 0 <= missing["heads"] <= 1
+        or missing["requests"] != missing["heads"]
+        or missing["connections"] != missing["requests"]
+    ):
+        invalid()
+    return report

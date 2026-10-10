@@ -240,12 +240,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(400)
             return
         try:
-            size = validate_headers(
-                list(self.headers.raw_items()),
-                port=self.fixture.server_port,
-                case=self.fixture.case,
-                method="POST",
-            )
+            size = self._post_headers()
         except NativeRequestContractError:
             self.send_error(400)
             return
@@ -255,7 +250,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(400)
             return
         try:
-            validate_request_body(raw, expected)
+            reply_model, reply_marker = self._post_body(raw, expected)
         except NativeRequestContractError:
             self.send_error(400)
             return
@@ -275,7 +270,7 @@ class Handler(BaseHTTPRequestHandler):
             "id": "msg_example_native",
             "type": "message",
             "role": "assistant",
-            "model": MODEL,
+            "model": reply_model,
             "content": [],
             "stop_reason": None,
             "stop_sequence": None,
@@ -291,7 +286,7 @@ class Handler(BaseHTTPRequestHandler):
             {
                 "type": "content_block_delta",
                 "index": 0,
-                "delta": {"type": "text_delta", "text": MARKER},
+                "delta": {"type": "text_delta", "text": reply_marker},
             },
             {"type": "content_block_stop", "index": 0},
             {
@@ -308,6 +303,18 @@ class Handler(BaseHTTPRequestHandler):
         with self.fixture.lock:
             self.fixture.messages_served += 1
         self.fixture.response_complete.set()
+
+    def _post_headers(self) -> int:
+        return validate_headers(
+            list(self.headers.raw_items()),
+            port=self.fixture.server_port,
+            case=self.fixture.case,
+            method="POST",
+        )
+
+    def _post_body(self, raw: bytes, expected: ExpectedNativeRequest) -> tuple[str, str]:
+        validate_request_body(raw, expected)
+        return MODEL, MARKER
 
 
 def update_terminal_shape(raw: bytes, shape: dict[str, object]) -> None:
