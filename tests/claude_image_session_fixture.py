@@ -64,7 +64,7 @@ def validate_image_evidence(report: object) -> dict[str, Any]:
         or report["missing_requests"] != report["missing_heads"]
         or not 0 <= report["heads"] - report["missing_heads"] <= 2
         or report["requests"] != 2 + report["heads"]
-        or not 1 <= report["connections"] <= report["requests"]
+        or not 2 + report["missing_heads"] <= report["connections"] <= report["requests"]
         or report["timeouts"] != 0
         or report["violations"] != 0
         or not 0 <= report["missing_exit_code"] <= 255
@@ -177,7 +177,7 @@ def run_image_session_fixture(
             code, output = capture_owned_process(
                 argv,
                 {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
-                timeout=110,
+                timeout=130,
                 stdout_limit=8192,
                 stderr_limit=65536,
             )

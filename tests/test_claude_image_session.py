@@ -76,6 +76,7 @@ class ImageSessionEvidenceTests(unittest.TestCase):
             {"missing_heads": 2, "missing_requests": 2},
             {"missing_heads": 0, "missing_requests": 1},
             {"connections": 0},
+            {"connections": 1},
             {"timeouts": 1},
             {"violations": 1},
             {"native_version": "2.1.284 (Claude Code)"},

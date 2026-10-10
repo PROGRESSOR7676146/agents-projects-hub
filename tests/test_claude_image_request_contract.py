@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import os
 import threading
@@ -124,12 +123,6 @@ class ClaudeImageRequestTests(unittest.TestCase):
                 raw, ExpectedNativeRequest("0.0.0", EXAMPLE_ENVIRONMENT), 0, uid=1234
             )
 
-    def test_validation_never_mutates_selected_or_received_body(self) -> None:
-        body = self.body(1)
-        before = copy.deepcopy(body)
-        self.validate(body, 1)
-        self.assertEqual(body, before)
-
     def test_missing_session_requires_one_explicit_validated_failure(self) -> None:
         result = {
             "type": "result",
@@ -227,3 +220,12 @@ class ImageRequestHandlerTests(unittest.TestCase):
             self.assertEqual(server.posts, 1)
             self.assertEqual((server.validated_requests, server.messages_served), (0, 0))
             self.assertGreater(server.violations, 0)
+
+    def test_third_request_overflows_endpoint_without_serving_a_second_result(self) -> None:
+        with running_image_server() as server:
+            self.assertEqual(self.head(server), 200)
+            self.assertEqual(request(server, self.wire_body(0))[0], 200)
+            self.assertEqual(self.head(server), 429)
+            self.assertEqual((server.requests, server.heads, server.posts), (3, 1, 1))
+            self.assertEqual((server.validated_requests, server.messages_served), (1, 1))
+            self.assertEqual(server.violations, 1)

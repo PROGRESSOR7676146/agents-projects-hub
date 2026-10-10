@@ -61,8 +61,9 @@ def validate_missing_session_result(raw: bytes, *, returncode: int) -> None:
         parse_claude_stream(
             raw.decode("utf-8"), expected_session_id=MISSING_SESSION_ID, returncode=returncode
         )
-    except ClaudeTerminalFailure:
-        return
+    except ClaudeTerminalFailure as error:
+        if error.code == "claude_provider_failure" and error.session_id == MISSING_SESSION_ID:
+            return
     except ClaudeStreamError:
         pass
     raise NativeRequestContractError("native_missing_session_refusal_unproven")
