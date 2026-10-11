@@ -428,5 +428,7 @@ Open. Close the Claude milestone against the bounded editor matrix, with
 exact-revision evidence, independent review and separately authorized live
 acceptance. Other goal milestones retain their own criteria. Deferred Claude
 features must not become new editor gates without an owner decision.
-Update the matrix and next trigger as evidence changes; do not report a subjective
-percentage as remaining-effort evidence.
+Update the matrix and next trigger as evidence changes. Owner-facing reports
+include an approximate overall-goal completion percentage with an uncertainty
+range, a stable reduced scope, and concrete completed/open milestones. Treat it
+as a planning estimate, separate from acceptance evidence and automatic scoring.
