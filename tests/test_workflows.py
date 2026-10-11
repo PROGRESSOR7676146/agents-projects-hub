@@ -115,6 +115,7 @@ def _assert_namespace_job(job: dict[str, Any]) -> None:
         "test_namespace_blocks_authority_aliases_and_privilege_but_shares_network "
         "tests.test_codex_native_namespace "
         "tests.test_process_namespace_rehearsal "
+        "tests.test_process_namespace_topology "
         "tests.test_review_materials_namespace "
         "tests.test_review_bridge_namespace"
     ):

@@ -26,16 +26,10 @@ whole-project Pyright and all unit/integration tests. The full privacy/history
 scan remains mandatory before every commit, even after focused checks pass.
 Each stage reports elapsed time and stops on failure; exit 0 means the selected
 profile passed, 1 means a failed/unavailable stage, and 2 means invalid arguments.
-Test selectors are accepted only in the focused profile; they import sibling
-fixtures from `tests/` exactly as discovery does. The canonical test stage asks
-discovery for every test module, including nested test packages, then runs
-each in its own process, several in parallel (CPU count up to eight; override
-with `--jobs N`). Each test runs in the module discovery found it in, the tests
-that start must be exactly the discovered ones by test id, and any module
-under `tests` that defines `load_tests` is refused, because the suite such a
-hook builds cannot be reproduced by an isolated module run. It names every
-failing, empty, mismatched or timed-out module after all modules finish, so
-each module must pass on its own. See [ADR 0041](../decisions/0041-parallel-isolated-test-modules.md).
+Focused selectors import sibling fixtures from `tests/` exactly as discovery
+does. The full test stage runs every discovered module in its own process;
+[scheduling and completeness checks](VALIDATION_SCHEDULING.md) also apply
+through the installed Git hooks.
 Automated tests
 use fake transports and temporary Git/SQLite fixtures. They must not contact
 real Telegram groups or consume provider tokens.

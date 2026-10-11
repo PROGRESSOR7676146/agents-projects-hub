@@ -33,3 +33,11 @@ Telegram approval provenance, worker recovery, installed immutable-runtime or
 host-wide authority custody, stop, quota, or CPA subscription/no-paid-fallback.
 Those gates remain in the [file-tool runbook](../operations/CLAUDE_FILE_PERMISSIONS.md).
 
+`tests.test_process_namespace_topology` separately checks the production builder
+with a narrow system runtime. Its real namespace denies unlink, rename,
+replacement, chmod and child creation on synthetic runtime paths and system
+aliases, while `/bin/sh` still executes. Project writes follow the selected
+access mode; HOME/tmp remain writable, and runtime/`.git` writes and private
+authority access remain blocked. Required namespace CI runs this module without
+availability skips. It proves the temporary OS boundary, not an installed native
+Claude runtime or a human Telegram decision.
