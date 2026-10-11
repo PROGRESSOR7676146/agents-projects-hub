@@ -187,6 +187,9 @@ necessary but not sufficient for items marked live.
   before Claude parity is claimed; REQ-EVAL-010 remains an independent milestone.
   Its acceptance is owned by the
   [evaluation module](EVALUATION_AND_ALLOCATION.md#acceptance-boundaries).
+  The bounded Claude editor milestone follows
+  [ADR 0067](../decisions/0067-claude-editor-first.md); deferred Claude transfer,
+  saved-session discovery and image enablement are not its acceptance gates.
 
 ## 16. Non-functional acceptance criteria
 

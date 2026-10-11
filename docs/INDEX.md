@@ -26,7 +26,7 @@ live acceptance.
 - [Stabilization plan and live-acceptance backlog](operations/STABILIZATION_PLAN.md)
 - [Roadmap](ROADMAP.ru.md)
 - [Next development session](operations/NEXT_DEVELOPMENT_SESSION.md)
-- [Claude Code: parity and human approval plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
+- [Claude Code: project editor and human approval plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
 - [Claude protected file-tool candidate](operations/CLAUDE_FILE_PERMISSIONS.md)
 - [Claude authority custody preparation](operations/CLAUDE_CUSTODY.md)
 - [Exact-job outcome diagnostics](operations/OUTCOME_JOURNAL.md)
