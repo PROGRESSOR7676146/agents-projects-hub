@@ -1,7 +1,7 @@
 # Stabilization plan
 
 Status: active; stages 0–2 and 3b done, stage 3 in progress
-Date: 2026-09-27; scope updated 2026-10-09
+Date: 2026-09-27; scope updated 2026-10-10
 Owner: repository owner (decisions and merges); integration owner implements
 Last verified integrated repository revision:
 `3750ccfb0f8eb98333f9219f3a697d6328890d04` for stop, native Claude and schema-37
@@ -23,11 +23,19 @@ Deployment identity and private acceptance records remain outside this plan.
 
 ## Revised delivery scope
 
+Owner decision under [ADR 0067](../decisions/0067-claude-editor-first.md): deliver
+Claude project reading/editing first. This supersedes older Claude parity,
+native-transfer and image next triggers below. The finite
+[editor matrix](CLAUDE_LEAD_REVIEW_PLAN.ru.md#конечная-матрица-первого-этапа)
+is the current Claude completion criterion. Full parity, native local/return,
+saved-session connect and image enablement are deferred pending an observed
+need and new owner decision; safety and other goal milestones are unchanged.
+
 The opt-in [Claude image candidate](../decisions/0066-verified-claude-image-input.md)
 builds on published corpus `6e88caede24351e30991cb4059f47cd42aab03ef`.
 Offline evidence covers receipts, worker uncertainty and material-notice recovery.
-Next: exact independent/canonical/hosted publication gates, then owner-authorized
-caption/album/stop/restart Telegram acceptance with schema-53 rollback.
+Preserve its source evidence; image enablement and Telegram acceptance are
+deferred by ADR 0067, not prerequisites for project-file editing.
 Live activation, file tools, paid fallback and Hub roles remain excluded.
 
 Owner decision: remove Hub-managed lead/advisor roles from the current goal and
@@ -43,30 +51,25 @@ Owner: Hub maintainer, sole writer. Next trigger: the checked
 | 1 — integration | Owner merge, dependency selection, separately authorized exact-revision rollout and post-restart acceptance |
 | 2 — authority | Managed permissions and project/service-data custody across productive launches, helpers, MCP, local and recovery paths |
 | 3 — visible control | Remaining provider progress, approvals, retry/stop and live control-loss acceptance |
-| 4 — Claude parity | Human file approvals, model/effort, exact sessions, local/return, saved-session connection, recovery and subscription without paid fallback |
+| 4 — Claude project editor | Protected Read/Glob/Grep/Write/Edit, configured model/effort, exact Hub-owned sessions, human write approvals, stop/results/recovery and subscription without paid fallback; full parity deferred |
 | 5 — roles | Withdrawn, not implemented; general outcome/time/usage journal remains an independent supporting milestone |
-| 6 — live acceptance | Three independent projects, queue/approvals/stop/connect, Telegram ↔ CLI, restarts and denied-access scenarios |
+| 6 — live acceptance | Three independent projects, queue/approvals/stop, restarts and denied-access scenarios; connect and Telegram ↔ CLI for supported providers, deferred for Claude |
 | 7 — operations/release | Hermes incidents and controlled updates, off-machine restore drill, remaining refactoring and release 0.8 |
 | Added footer visibility | [Existing /goal and /fast follow-up](#planned-final-response-mode-indicators) |
 
-Hub role/review orchestration and the combined native/pipe witness are withdrawn.
-Preserve source/tests and select shared fixes on independent
-merits; no branch/PR deletion, merge, replay or live change follows. Independent
-development review remains required. Scoring, judges and parallel writers stay
-excluded. Closure: role work is closed by withdrawal; the remaining goal is open.
+Role work is closed by withdrawal; the remaining goal is open. Preserve source
+and tests; independent review remains required. No merge, deletion or live action
+follows. Scoring, judges and parallel writers stay excluded.
 
 ## Current source integration checkpoint
 
-The goal integration candidate at clean
-`98c78fcfc40a3fba79a3cdecc2db8b609dabb78a` passed canonical validation
-(2,035 tests in 185 modules, zero typing errors, privacy/history and static
-gates) and all seven exact-head hosted checks. Its source includes notification
-conservation/backpressure, completion-safe connection retirement, RPC deadlines,
-schema-41 saved-task retry, managed-profile continuity, preacceptance observations,
-Claude configured choices/exact model continuation and explicit unsupported
-native-transfer refusal. This supersedes earlier pending-publication statements
-below for those integrated source slices; opposite-runtime/owner integration
-review, owner main merge and separately authorized live acceptance remain open.
+Clean `98c78fcfc40a3fba79a3cdecc2db8b609dabb78a` passed canonical validation
+(2,035 tests/185 modules, zero typing errors, privacy/history/static) and seven
+hosted checks. It integrates notification conservation, connection retirement,
+RPC deadlines, schema41 retry, managed profiles, preacceptance observations,
+Claude selection/continuation and native-transfer refusal. Earlier publication
+statements below are superseded; integration review, owner merge and live
+acceptance remain open.
 
 The stacked provider-neutral namespace extraction at clean
 `fcc755fe4d70ddbff6b544c2a1a7b09d4b27e0ac` passed canonical validation
@@ -86,11 +89,10 @@ is introduced. Source owner: Hub maintainer, lane
 integrate and revalidate the combined revision before the two-worker canary.
 Inspect tracked, staged and untracked lane state before any post-merge cleanup.
 
-Full authority custody, broader provider progress, Claude native transfer and
-saved-session connection, subscription/no-paid-fallback acceptance, independent
-outcome journal, three-project/restart acceptance, Hermes incident
-and update plane, off-machine restore drill and release 0.8 remain open. Restart
-alone closes neither the repeated notification incident nor payload recovery.
+Custody, broader progress, Claude editor/route acceptance, outcome journal,
+three-project/restart acceptance, Hermes operations, off-machine restore and
+release 0.8 remain open. Claude native transfer/connect are deferred. Restart
+does not close the notification incident or payload recovery.
 
 ## Read-only outcome projection candidate
 
@@ -367,8 +369,7 @@ accumulated without live acceptance, contrary to product principle 10.
 
 - The Claude CPA worker scaffold is fixed, reviewed and merged as a scaffold.
   The owner later withdrew the provider-expansion gate (ADR 0045): Claude work
-  toward Codex parity continues, and the backlog below is tracked debt, not a
-  gate.
+  continues as editor-first under ADR 0067; the backlog below is tracked debt.
 - Large or lifecycle/security pull requests receive an independent review by
   an agent that did not write them, recorded in the pull request. Only the
   owner merges into `main`.
@@ -536,8 +537,8 @@ acceptance.
   Hosted checks and independent review passed at that exact candidate; it is
   merged in the integrated revision above, whose canonical checks cover
   1,488 tests in 135 modules. This is source evidence, not live acceptance.
-  Human approval hosting, tools, authority custody, native local transfer and
-  CPA/account live acceptance remain separate parity work.
+  Human approvals, file tools, custody and CPA route acceptance remain open;
+  native transfer is deferred under ADR 0067.
 - `codex-worker@1` / `claude-worker@1` duplicate slot 1 of `worker@codex` /
   `worker@claude` (PR #80 review, item 5).
 - Slot identity format and bounds are duplicated in four modules (PR #80 review, items 7–8).
@@ -551,7 +552,7 @@ acceptance.
   count tests that already ran, so the gate fails although discovery passes.
 - Product principle 10 and the capability matrix contradicted the Claude
   scaffold; resolved by withdrawing the gate (ADR 0045).
-- An analysis of the Claude integration path to Codex parity follows stage 3.
+- Claude delivery now follows the finite editor matrix under ADR 0067.
 - Response quota labels on a custom Codex model provider (found by
   `p0_p1_live` at `adb8b37`). Stage 3b did not close it: the deployment does
   not use multi-auth. `account/rateLimits/read` has no windows on this route,
@@ -715,7 +716,4 @@ The plan closes when stages 0–3 are merged into `main`, the hotspot ratchet
 runs in the canonical gate, and the owner has either completed or explicitly
 re-scoped every backlog item. Record the closing revision here.
 
-Protected Claude file tools: live activation also requires independently proven
-OS separation of untrusted principals from receipt keys/state/endpoints; the
-current symmetric transport does not protect against an unconfined same-UID
-actor. See [ADR 0052](../decisions/0052-protected-claude-file-permissions.md).
+Claude live tools retain [ADR 0052's custody gate](../decisions/0052-protected-claude-file-permissions.md).

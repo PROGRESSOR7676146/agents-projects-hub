@@ -323,6 +323,8 @@ Codex binary, proving absent source aliases and unwritable mounted scripts.
 
 ## Optional offline native Claude transport
 
+[Native editor permissions](CLAUDE_NATIVE_EDITOR.md).
+
 `tests.test_claude_native_transport` uses an explicitly supplied standalone ELF
 Claude executable against a fictional HTTP endpoint inside a disposable empty-root
 network/PID/IPC namespace. It copies the bounded binary and supplies only readonly

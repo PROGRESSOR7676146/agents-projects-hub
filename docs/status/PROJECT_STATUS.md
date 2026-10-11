@@ -18,7 +18,7 @@ owning modules.
 | Capability | Repository state | Live acceptance | Contract |
 | --- | --- | --- | --- |
 | Multiple Codex worker slots | Implemented | Pending (three projects) | [REQ-QUEUE-002](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md) |
-| Claude Code CPA worker | Text-only default; protected file-tool permission boundary implemented offline (schema 38) | Pending; authority custody and full parity remain open | [REQ-AUTH-009/SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0052](../decisions/0052-protected-claude-file-permissions.md) |
+| Claude Code CPA worker | Text-only default; protected files (schema 38); native editor source fixture | Pending: human Telegram approvals, installed custody and subscription; parity deferred | [REQ-AUTH-009/SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0067](../decisions/0067-claude-editor-first.md) |
 | Managed Codex permission-profile continuity | External queue slice and immutable schema-39 snapshots; native offline adapter coverage | Pending; custody, helpers and local boundaries remain open | [REQ-SEC-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0055](../decisions/0055-managed-codex-profile-continuity.md) |
 | Claude/Codex lead and advisor | Retired from Hub scope; not implemented | Not required | [Retired IDs](../product/IDENTITY_AND_INTERACTION.md#explicit-claude-codecodex-collaboration), [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md) |
 | Participant evaluation and allocation | Accepted foundation; not implemented | — | [Requirements](../product/EVALUATION_AND_ALLOCATION.md), [ADR 0037](../decisions/0037-evidence-based-task-allocation.md) |
@@ -56,23 +56,20 @@ and [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md).
 
 Claude's text-only default has offline identity, streaming and recovery coverage
 under [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md).
-The schema-53 [image/notice candidate](../decisions/0066-verified-claude-image-input.md)
-is published at `25866e1` with [native/worker coverage](../testing/CLAUDE_NATIVE_IMAGES.md);
-live gates remain open. Human approvals, custody, local transfer, connect and
-subscription/no-paid-fallback acceptance remain pending under
-[REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
+The source [native editor fixture](../testing/CLAUDE_NATIVE_EDITOR.md)
+passes Write/Edit Allow/Deny and exact resume with four fresh fictional receipts
+on pinned CLI 2.1.285. Human approvals, custody and subscription acceptance remain
+pending under [REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
+Schema-53 [image/notice source](../decisions/0066-verified-claude-image-input.md)
+is published at `25866e1`; images, native transfer and saved-session connect are
+deferred under ADR 0067.
 
-Queue admission snapshots and accepted Codex turn activity are implemented in
-schema 37 under [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md).
-Offline evidence covers durable deduplication, binding changes, approval
-resolution, passive deadlines and delivery certainty. The integrated revision
-`3750ccfb0f8eb98333f9219f3a697d6328890d04` passed canonical and hosted validation
-after exact-candidate independent reviews; active-work retry controls, approval
-before native acceptance and wider provider visibility remain open. The
-[notice-bound retry candidate](../decisions/0054-notice-bound-work-retry-reports.md)
-now reports the same existing job offline; publication, independent review and
-live acceptance remain pending. This does
-not change the text-only Claude capability boundary.
+Schema37 queue snapshots and accepted Codex activity follow
+[ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md).
+Integrated `3750ccfb0f8eb98333f9219f3a697d6328890d04` passed canonical/hosted
+gates after independent candidate reviews. Wider visibility and live acceptance remain open;
+[notice-bound retry](../decisions/0054-notice-bound-work-retry-reports.md) has
+offline coverage. Claude remains text-only pending its protected editor gates.
 
 Participant evaluation and resource-aware task allocation are an accepted
 product foundation; implementation and acceptance remain pending. See
@@ -82,8 +79,8 @@ Hub lead/advisor roles and their review workflow are retired by
 [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md), not implemented.
 Independent cross-provider project review remains outside Hub orchestration.
 The minimal outcome journal stays an independent milestone. Standalone
-[Claude parity](../operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md), custody and live
-acceptance remain open; scoring and parallel writers remain deferred.
+[Claude editor](../operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md), custody and live
+acceptance remain open; full parity, scoring and parallel writers remain deferred.
 
 Schema35 root-blocker admission is implemented offline; deployment/live
 acceptance remain pending under

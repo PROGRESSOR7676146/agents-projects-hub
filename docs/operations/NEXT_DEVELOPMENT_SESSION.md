@@ -1,8 +1,23 @@
-# Next session: Claude parity and visible task states
+# Next session: Claude project editor and visible task states
 
 Status: native Claude and schema-37 visibility merged; human approval boundary in progress.
-Date: 2026-10-09 (scope revised by ADR 0065).
+Date: 2026-10-11 (editor-first scope under ADR 0067).
+Current priority: [Claude project reading/editing](../decisions/0067-claude-editor-first.md).
+This supersedes every older parity/native-transfer/image next trigger below.
+Finish the bounded [editor matrix](CLAUDE_LEAD_REVIEW_PLAN.ru.md#конечная-матрица-первого-этапа).
+Native local/return, saved-session connect, images and full Claude parity are
+deferred until a new owner-triggered extension. Existing safety gates and other
+goal milestones remain. Hub roles stay retired; source work remains sole-writer.
 Decision owner: repository owner. Integration owner: primary development agent.
+Current source increment: the pinned offline native editor fixture passes
+Write Allow, exact resume with previous visible history, a fresh Deny for Write
+to the same file, Read, Edit Allow and another fresh Edit Deny. Four distinct
+fictional receipts precede changes; both native turns complete successfully.
+See [native editor checks](../testing/CLAUDE_NATIVE_EDITOR.md).
+This is not installed custody, human Telegram provenance or CPA billing proof.
+Finish review/source gates for this bounded increment, then assess existing-host
+applicability and prepare separately authorized live acceptance. Do not restore
+deferred parity or treat direct hook tests as native evidence.
 Last verified integrated revision: `3750ccfb0f8eb98333f9219f3a697d6328890d04`.
 The stop/native/visibility stack passed exact-candidate independent reviews;
 the merged revision passed canonical validation (1,488 tests in 135 modules,
@@ -25,7 +40,7 @@ adversarial corpus and mandatory CI checks, and reuse completed mount, peer,
 runtime and receipt controls. Then separately authorize and verify the
 native/Telegram human approval boundary described in the
 [Claude plan](CLAUDE_LEAD_REVIEW_PLAN.ru.md#следующая-граница-разрешений), then
-continue standalone Claude parity and remaining visibility work. Do not enable tools
+continue the bounded Claude editor and remaining visibility work. Do not enable tools
 from a CLI flag or an unqualified tlive `allow` alone.
 The current owner instruction caps helpers at GPT-6 Sol with reasoning `high`, using standard service without priority.
 
@@ -113,7 +128,7 @@ including processed-image receipts and schema-53 recovery of original material
 notices, published at `25866e1d95e47dc7323f17bdafd04e4f7f20f2ad` with canonical,
 independent Astra/Gemini fallback review and seven exact-head hosted checks.
 Actual Opus review was unavailable on quota; no Opus approval is claimed.
-Next trigger: separately authorized Telegram acceptance.
+Image enablement/acceptance is deferred by ADR 0067; preserve this source evidence.
 Do not enable images from a success marker or grant Read to supply paths. Native
 compatibility establishes no subscription, human approval, custody or deployment
 acceptance. Text-only remains the default; Hub roles remain retired.
@@ -123,7 +138,7 @@ The standalone test-only candidate is the pinned
 Published at `1613936d03624435a7097571c12f09479e536d38`, it checks named emitted settings and exact synthetic dialogue, including native
 scaffold reencoding; it does not expand the configured catalog or establish
 entitlement/effective effort. Its PR owns exact publication evidence. Remaining
-local/return, saved-session connect, human approvals and route acceptance stay open.
+human approvals and route acceptance stay open; local/return and saved-session connect are deferred.
 The [test-only controlling-PTY prerequisite](../testing/CLAUDE_NATIVE_LOCAL.md)
 is published at `913caf0dff3eaa6c6566189d631f35e12f6abc96`; its PR owns hosted
 evidence. It changes no runtime or lease; production Claude transfer remains
@@ -131,11 +146,9 @@ refused. The first disposable interactive-resume investigation did not reach a
 Messages POST or save the expected new pair. The standalone test-only strict
 saved-dialogue oracle now has a source candidate in `tests.claude_saved_dialogue`;
 its synthetic tests do not prove native chain compatibility, startup or transfer.
-Next resolve documented disposable startup preparation and characterize the saved
-records against that gate before claiming the three-phase witness. A fixed
-positional prompt avoids screen synchronization but
-does not establish editor readiness. Verify launch-store/route continuity and
-custody before any later production enablement.
+Interactive startup and the three-phase witness are deferred by ADR 0067.
+Do not resume them automatically. Preserve their evidence; the next Claude
+trigger is the bounded project-file permission and custody acceptance.
 
 The Codex compatibility candidate now refuses unsupported active permission
 profiles reported by `thread/start` or `thread/resume` before productive
@@ -155,10 +168,9 @@ acceptance result.
 
 ## Objective and authority
 
-Continue development until native Claude Code meets the Hub capabilities in the
-[accepted parity matrix](CLAUDE_LEAD_REVIEW_PLAN.ru.md#что-означает-сопоставимая-поддержка-с-codex),
-and eliminate silent queue, approval and execution waits. The text-only Claude
-scaffold does not meet that objective. Track remaining maintenance and live debt
+Deliver the bounded [Claude editor matrix](CLAUDE_LEAD_REVIEW_PLAN.ru.md#конечная-матрица-первого-этапа)
+and eliminate silent queue, approval and execution waits. Text-only is not the
+accepted editor result. Full Claude parity is no longer its completion gate. Track remaining maintenance and live debt
 in the [stabilization plan](STABILIZATION_PLAN.md); do not repeat completed stages.
 
 The owner authorized repository implementation, offline tests and delegated
@@ -189,7 +201,8 @@ configurable. They trigger notices only; they never approve, stop, unlock or rep
    subscription mode and deferred scoring scope are already recorded.
 4. Complete package A against current official Claude documentation and passive
    installed-CLI version/capabilities. Verify human approval hosting, exact resume,
-   stop, local transfer, saved-session discovery and general authority custody.
+   stop and existing authority custody for the first file-editor delivery.
+   Native transfer, saved-session discovery and images are not next tasks.
    Separate documented capability, adapter tests and authorized live evidence.
 5. Reconcile deferred capacity and canary-root questions with bounded read-only
    inspection if needed. Use a schema-compatible read-only path; never initialize
@@ -217,12 +230,10 @@ Never delegate private profiles, credentials or deployment inventories.
 | Task visibility | Admission, FIFO/root capacity, approvals, progress, retry, stop, sender ownership | Durable transitions/notices and passive no-progress detection behind the agreed state API |
 | Acceptance | Existing fault tests, migrations, replay/stop certainty, regressions | Adversarial fixtures, restart/ambiguity tests and integration checks |
 
-Start all three with investigation only. The integration owner defines state
-API, transaction ownership and invocation boundaries before writing starts.
-Each writing helper uses a distinct worktree/lane and disjoint modules, never
-the primary checkout. Schema, migrations, worker wiring and normative documents
-have one named author at a time. Integrate sequentially and test the integrated
-revision. No recursive delegation or additional writer authority. Sol checks
+Use helpers for bounded read-only investigation/review when needed; do not
+automatically start all lanes. Root remains the sole writer. The integration
+owner defines state API, transaction ownership and invocation boundaries;
+parallel writing and recursive delegation are outside this goal. Sol checks
 supplement, but do not replace, independent review of Codex-authored
 lifecycle/security changes. The
 owner explicitly selected **Claude Opus 5.5, effort high** as the reviewer. If
@@ -295,11 +306,17 @@ other execution paths next.
 
 ### 3. Claude runtime and human authority
 
-Complete packages B/D of the accepted Claude plan: native identity, supported
-passive model/effort discovery/configuration, exact start/resume and root binding,
-structured visible streaming, inputs/artifacts, progress, human approvals, stop,
-durable recovery, passive telemetry, same-session `/local`/`/return`, and saved
-session connection. Record every capability's evidence in the existing matrix.
+Finish the finite editor matrix in the [Claude plan](CLAUDE_LEAD_REVIEW_PLAN.ru.md):
+Read/Glob/Grep/Write/Edit through the existing isolated worker/permission host,
+exact Hub-owned identity/root, visible results/waits/errors, stop and recovery.
+Retain configured model/effort without claiming entitlement/effective effort.
+First prove actual native Write/Edit requires fresh exact human permission;
+manual settings and mocked receipts are insufficient. Assess applicability of
+the existing custody before proposing installation. If that requires a general
+launcher, platform migration or broader infrastructure, report a concrete blocker
+for an owner decision instead of adding another automatic prerequisite.
+Do not start shell/tests/build/Git, native transfer, saved-session connect,
+image enablement or full parity. Those require a later owner-triggered extension.
 
 CLI documents `--permission-prompt-tool` and `--permission-prompts host|none`;
 these are candidates, not a validated Hub approval host. Investigate tlive's
@@ -342,7 +359,7 @@ blocked, unknown interruption, permission/session/root mismatch, partial/complet
 Claude output, quota rejection, delivery ambiguity, stale callbacks, duplicate
 inputs and zero inference from passive monitoring. Use injected clocks and fake
 structured providers. Test Codex/other-provider regressions, standalone Claude
-parity and additive migration backup/rollback. Retired role scenarios are no
+editor boundaries and additive migration backup/rollback. Retired role scenarios are no
 longer release acceptance requirements.
 
 Follow the [testing guide](../testing/README.md): focused iteration, history/privacy
@@ -390,7 +407,7 @@ saved-result recovery; canonical and hosted gates passed at `c5e130c`, while
 exact-candidate independent review and merged-revision validation are complete.
 See [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md). Queue snapshots and accepted Codex activity are present in the schema-37
 baseline. Its publication gates and independent review are complete; active retry,
-approval before acceptance, deployment acceptance and full Claude parity remain open.
+approval before acceptance and editor deployment acceptance remain open; full Claude parity is deferred.
 No deployment or live acceptance follows from these repository checks.
 
 First-pass pointers to recheck, not final design:
@@ -407,7 +424,9 @@ First-pass pointers to recheck, not final design:
 
 ## Closure
 
-Open. Close only when parity and task-visibility contracts have exact-revision
-evidence, independent review and separately authorized required live acceptance.
-Unsupported required capabilities remain owner decisions, not silently removed
-criteria. Update the accepted Claude matrix and next trigger as evidence changes.
+Open. Close the Claude milestone against the bounded editor matrix, with
+exact-revision evidence, independent review and separately authorized live
+acceptance. Other goal milestones retain their own criteria. Deferred Claude
+features must not become new editor gates without an owner decision.
+Update the matrix and next trigger as evidence changes; do not report a subjective
+percentage as remaining-effort evidence.

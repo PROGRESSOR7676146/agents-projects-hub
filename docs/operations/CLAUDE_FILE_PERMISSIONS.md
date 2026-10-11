@@ -177,6 +177,13 @@ This proves the protected namespace and old-channel exclusion, not actual human
 Telegram delivery. Canonical validation, independent exact-candidate review and
 hosted gates still apply before publication.
 
+The opt-in [native editor fixture](../testing/CLAUDE_NATIVE_EDITOR.md)
+checks the pinned CLI actually invokes PermissionRequest before Write/Edit,
+preserves bytes on Deny and requires a new decision for the same file after
+exact resume. Direct hook roundtrips alone do not prove that native behavior.
+Fictional receipts and readonly test mounts do not attest to installed custody
+or real human approval; keep those live gates open.
+
 ## Unsupported native transfer recovery
 
 Claude `/local` and `/return` are refused before transfer preparation, writer

@@ -1,7 +1,7 @@
 # Decision map
 
 Status: active  
-Last updated: 2026-10-09
+Last updated: 2026-10-10
 
 This directory is the durable entry point for consequential product and
 architecture decisions. New records should be named `NNNN-short-title.md`.
@@ -72,6 +72,7 @@ with a new record.
 | Claude native invocation evidence | Persist the exact session/root before invocation and validate bounded structured output without inventing native turn IDs. | [ADR 0050](0050-claude-native-invocation-evidence.md) |
 | Accepted-turn activity and queue notices | Schema 37 binds passive Codex progress to exact execution identity and delivers admission snapshots through the existing Hub sender. | [ADR 0051](0051-accepted-turn-activity-and-queue-notices.md) |
 | Protected Claude file permissions | An opt-in native hook uses a bounded pinned tlive extension; the existing worker/SQLite own binding, one-use receipt consumption and cleanup. | [ADR 0052](0052-protected-claude-file-permissions.md) |
+| Claude editor-first delivery | Deliver project reading and editing first; full parity, native transfer, saved-session connect and images require a later owner-triggered extension. Existing safety gates remain. | [ADR 0067](0067-claude-editor-first.md) |
 | Claude authority custody | Assess existing-host launch/service exposure before choosing infrastructure; VM remains conditional, with the unchanged installed custody gate. | [ADR 0053](0053-claude-custody-reference-deployment.md) |
 | Notice-bound work retry reports | Candidate passive Reply control reports the existing job through the durable notice sender; independent review and deployment remain separate. | [ADR 0054](0054-notice-bound-work-retry-reports.md) |
 | Managed Codex profile continuity | Immutable selection snapshots and passive native confirmation preserve named profiles without claiming complete custody or enabling unsupported writers. | [ADR 0055](0055-managed-codex-profile-continuity.md) |

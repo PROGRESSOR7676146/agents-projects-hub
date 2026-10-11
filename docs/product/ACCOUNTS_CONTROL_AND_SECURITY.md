@@ -51,6 +51,13 @@ This normative module is part of the
   deployment and native/Telegram acceptance remain separate gates. It MUST NOT
   claim complete provider parity or authority-data custody on the strength of
   prompt instructions or this limited tool slice alone.
+  The current Claude delivery milestone is project reading/search and editing
+  under [ADR 0067](../decisions/0067-claude-editor-first.md). Shell, test/build
+  execution, Git commands, skills, MCP and child agents are excluded. Claude
+  native transfer, saved-session connect and image enablement are deferred;
+  their absence MUST NOT block acceptance of the bounded editor. Expansion
+  requires a new owner decision based on observed need. Text-only remains the
+  default until the protected editor's existing live gates pass.
 
 ### Compact control surface
 
@@ -353,6 +360,11 @@ single-writer checks remain mandatory. See
   Edit inside a fail-closed Linux filesystem/PID boundary. Private Hub state,
   bot/web credentials and permission signing keys MUST be absent from its
   mounts; trusted runtime and hook code MUST remain immutable to the provider.
+  First-editor acceptance MUST establish that every native Write/Edit requires
+  a fresh exact human permission through this boundary; manual-mode settings
+  alone MUST NOT establish that behavior. Read/search MAY run without a human
+  prompt while confined to the project. This acceptance requirement is not a
+  claim that the current offline candidate has proved native enforcement.
   Only a fresh allowlisted human callback in the protected tlive namespace MAY
   authorize a prompted operation. The receipt MUST authenticate the exact
   payload, daemon epoch, nonce and original Telegram actor. Hub MUST recheck
