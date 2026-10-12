@@ -62,6 +62,16 @@ automatic deletion or reinitialization of invalid history. Preserve all sidecars
 for an explicit local inspection/recovery task. Do not infer that old episodes
 resolved from unavailable, missing or omitted data.
 
+Initial seed creation can leave a short file after a crash, even before the
+first journal exists. It refuses continuation and requires explicit local
+inspection; it is never silently replaced. A backward clock step also refuses
+projection until current time reaches the saved update time. Crash-left
+`.incident-*.tmp` files are private abandoned outputs, not recovery evidence;
+automatic cleanup does not run. Inspect them only with monitor activity stopped.
+If the lock itself is unavailable or unsafe, projection is disabled and the
+existing monitor/Operations path continues without journal serialization,
+reporting degraded health. Lock contention instead skips the entire cycle.
+
 At most 500 episodes are retained. Current open keys have priority in stable
 opaque order; remaining capacity retains the newest resolved rows, including
 the exact 30-day boundary. Open episodes do not age out. Omission counts describe

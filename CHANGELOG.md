@@ -7,7 +7,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 - Persist a bounded private passive incident journal before Operations delivery
   and ship fixed recovery guidance for every alert code; keep journal failures
-  isolated from notifications ([ADR 0048](docs/decisions/0048-out-of-band-update-and-incident-plane.md#passive-journal-implementation-clarification)).
+  isolated from notifications. Operations trigger text now uses anonymous
+  descriptions; inspect local diagnostics to identify affected bots/topics
+  ([ADR 0048](docs/decisions/0048-out-of-band-update-and-incident-plane.md#passive-journal-implementation-clarification)).
 
 - Keep Hermes out of Hub project groups' commands: the Hermes plugin stops
   bare commands there (they belong to the Hub bot), passes only commands
