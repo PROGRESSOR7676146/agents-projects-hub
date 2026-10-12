@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Update the locked multidict runtime dependency from 6.7.1 to 6.9.1 to fix
+  CVE-2026-104874 (GHSA-54p9-h82j-f925), an items-view reference leak.
+
 ## [0.8.0] - 2026-10-13
 
 - Integrate the schema-53 source stack and the immutable release packaging
