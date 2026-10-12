@@ -36,6 +36,13 @@ installed custody remains an independent gate.
    an editable checkout or PYTHONPATH is not an installation. Configure only
    explicit runtime roots under `/usr` or a dedicated `/opt` prefix. Do not mount
    operator homes or generic configuration/data directories. Bubblewrap must
+   protect synthetic runtime ancestors and system aliases with a final,
+   nonrecursive readonly root remount; explicit project, session home and temporary mounts keep
+   their own access modes. For a narrow runtime, mount canonical `/usr/bin/dash`
+   explicitly: a recognized host `/usr/bin/sh` alias is recreated only for that
+   already-pinned target. This supplies the CLI hook-runtime shell; it does not
+   expose a shell tool to the provider. Other shell layouts are not silently substituted.
+   Bubblewrap must
    advertise `--bind-fd` and `--ro-bind-fd`; missing support refuses invocation.
    These options are present in upstream 0.10.0 and Ubuntu's 0.9.0 security
    backport; an unpatched upstream 0.9.0 lacks them. Check capabilities rather

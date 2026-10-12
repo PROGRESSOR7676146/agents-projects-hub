@@ -29,6 +29,8 @@ class NamespaceError(ValueError):
 SANDBOX_HOME = "/home/example"
 _SANDBOX_SOCKET = "/run/hub-permission.sock"
 _SYSTEM_ALIASES = {"/bin": "/usr/bin", "/lib": "/usr/lib", "/lib64": "/usr/lib64"}
+_SHELL_ALIAS = Path("/usr/bin/sh")
+_SHELL_TARGET = Path("/usr/bin/dash")
 _MAX_RUNTIME_ENTRIES = 100_000
 _MAX_WRITABLE_ENTRIES = 100_000
 _MAX_SCAN_DEPTH = 128
@@ -275,9 +277,23 @@ def _validate_destinations(project: Path, roots: tuple[Path, ...], code_root: Pa
             for reserved in map(Path, (SANDBOX_HOME, "/proc", "/dev", "/run"))
         ):
             raise NamespaceError("mount destination overlaps a namespace-owned path")
-    for alias in map(Path, _SYSTEM_ALIASES):
+    for alias in (*map(Path, _SYSTEM_ALIASES), _SHELL_ALIAS):
         if _within(project, alias) or _within(alias, project):
             raise NamespaceError("project destination overlaps a system alias")
+
+
+def _system_shell_alias_args(roots: tuple[Path, ...], code: Path | None) -> list[str]:
+    """Recreate one host alias to an exact already-pinned readonly shell file."""
+    sources = (*roots, *((code,) if code is not None else ()))
+    if _SHELL_TARGET not in roots or any(_within(_SHELL_ALIAS, root) for root in sources):
+        return []  # An immutable ancestor mount already supplies the alias.
+    try:
+        recognized = (
+            _SHELL_ALIAS.is_symlink() and _SHELL_ALIAS.resolve(strict=True) == _SHELL_TARGET
+        )
+    except (OSError, RuntimeError):
+        return []
+    return ["--symlink", _SHELL_TARGET.name, str(_SHELL_ALIAS)] if recognized else []
 
 
 @dataclass(frozen=True)
@@ -563,6 +579,7 @@ class ProcessNamespaceConfig:
                 and any(_within(root, Path(target)) for root in roots)
             ):
                 command.extend(("--symlink", target.lstrip("/"), alias))
+        command.extend(_system_shell_alias_args(roots, code))
         if code is not None and code_fd is not None:
             command.extend(("--ro-bind-fd", str(code_fd), str(code)))
         project_flag = "--ro-bind-fd" if self.project_access == "read-only" else "--bind-fd"
@@ -581,7 +598,10 @@ class ProcessNamespaceConfig:
         )
         if sock is not None and sock_fd is not None:
             command.extend(("--ro-bind-fd", str(sock_fd), _SANDBOX_SOCKET))
-        command.extend(("--chdir", str(workdir), "--", *argv))
+        # Freeze synthetic ancestor directories and aliases as well as runtime
+        # bytes. This is nonrecursive: explicit project/HOME/tmp mounts retain
+        # their own access modes. A failed remount must fail the owned launch.
+        command.extend(("--remount-ro", "/", "--chdir", str(workdir), "--", *argv))
         return command, child_env
 
 

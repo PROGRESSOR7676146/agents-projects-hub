@@ -13,7 +13,8 @@ Current source increment: the pinned offline native editor fixture passes
 Write Allow, exact resume with previous visible history, a fresh Deny for Write
 to the same file, Read, Edit Allow and another fresh Edit Deny. Four distinct
 fictional receipts precede changes; both native turns complete successfully.
-See [native editor checks](../testing/CLAUDE_NATIVE_EDITOR.md).
+See the exact source/environment in
+[recorded native editor evidence](../testing/CLAUDE_NATIVE_EDITOR.md#recorded-offline-evidence).
 This is not installed custody, human Telegram provenance or CPA billing proof.
 Finish review/source gates for this bounded increment, then assess existing-host
 applicability and prepare separately authorized live acceptance. Do not restore

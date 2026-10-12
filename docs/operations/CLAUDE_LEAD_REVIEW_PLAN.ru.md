@@ -1,9 +1,9 @@
 # Claude Code: чтение и правка проекта через Hub
 
-Дата пересмотра: 2026-10-11. Статус: первый файловый этап принят;
-native/Telegram приёмка остаётся открытой. Владелец решения: владелец репозитория.
+Дата пересмотра: 2026-10-12. Статус: принят объём первого файлового этапа;
+реализация и native/Telegram приёмка остаются открытыми. Владелец решения: владелец репозитория.
 Решение об объёме: [ADR 0067](../decisions/0067-claude-editor-first.md).
-Последняя проверенная исходная основа: `112c503cd9fb29d5eaf378c0fdf1d8044324af41`.
+Последняя проверенная исходная основа editor fixture: `e5dc14830ee76215c19566f4afc36397687da257`.
 Это source/test checkpoint, не deployment или live acceptance.
 
 Путь сохранён для существующих ссылок. Этот план заменяет прежний порядок
@@ -18,7 +18,8 @@ Read/Glob/Grep/Write/Edit, точную Hub-owned сессию, очередь, 
 видимые ожидания/ошибки/результаты, stop и восстановление сохранённых результатов.
 Полномочия и подписочный маршрут определены один раз в
 [REQ-AUTH-009 и REQ-SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
-Text-only остаётся default до прохождения существующих live gates.
+Text-only остаётся default. File tools требуют явного локального opt-in и
+прохождения существующих live gates; приёмка не переключает default автоматически.
 
 Это ограниченный редактор: shell, запуск тестов/сборки, Git-команды, skills,
 MCP и дочерние агенты не входят в этап. Конфигурируемый выбор модели/effort
@@ -84,7 +85,7 @@ native/live, blocker или неизвестно. В отчётах владел
 Source publication не закрывает native/Telegram строки.
 Новые функции не добавляются в эту матрицу как условия завершения.
 
-Текущий исходный [native fixture](../testing/CLAUDE_NATIVE_EDITOR.md)
+Текущий исходный [native fixture](../testing/CLAUDE_NATIVE_EDITOR.md#recorded-offline-evidence)
 проверил Write/Edit Allow/Deny, повторную запись того же файла после exact resume
 с сохранённой историей и четыре свежих фиктивных receipts. Это закрывает узкий
 offline CLI вопрос строки «Чтение и правка»; human Telegram, installed custody

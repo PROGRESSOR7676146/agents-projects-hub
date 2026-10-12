@@ -22,6 +22,12 @@ _SPEC.loader.exec_module(validator)
 
 
 class ValidationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        environment = patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        os.environ.pop("HUB_VALIDATION_TEST_JOBS", None)
+
     def invoke(self, args: list[str], failure: str = "") -> tuple[int, list[str], str]:
         calls: list[str] = []
 
@@ -99,6 +105,35 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("FAIL full tests", output)
         self.assertIn("test_example.py", output)
+
+    def test_environment_parallelism_keeps_full_gates_and_failure(self) -> None:
+        with patch.dict(os.environ, {"HUB_VALIDATION_TEST_JOBS": "4"}):
+            for profile in ("canonical", "commit"):
+                with self.subTest(profile=profile):
+                    code, calls, _ = self.invoke(["--profile", profile])
+                    self.assertEqual(code, 0)
+                    self.assertEqual(calls.count("all test modules jobs=4"), 1)
+                    privacy = next(call for call in calls if "privacy_scan" in call)
+                    self.assertIn("--history", privacy)
+                    code, _, output = self.invoke(["--profile", profile], "all test modules")
+                    self.assertEqual(code, 1)
+                    self.assertIn("FAIL full tests", output)
+
+    def test_environment_parallelism_is_bounded_cli_wins_and_focused_ignores(self) -> None:
+        for value in ("", "0", "33", "many"):
+            with (
+                self.subTest(value=value),
+                patch.dict(os.environ, {"HUB_VALIDATION_TEST_JOBS": value}),
+            ):
+                with self.assertRaises(SystemExit) as error:
+                    self.invoke([])
+                self.assertEqual(error.exception.code, 2)
+                code, calls, _ = self.invoke(["--jobs", "2"])
+                self.assertEqual(code, 0)
+                self.assertIn("all test modules jobs=2", calls)
+                code, calls, _ = self.invoke(["--profile", "focused", "tests.test_validate"])
+                self.assertEqual(code, 0)
+                self.assertFalse(any("all test modules" in call for call in calls))
 
     def test_commit_gate_runs_history_and_full_tests_but_leaves_types_to_push(self) -> None:
         code, calls, output = self.invoke(["--profile", "commit", "--jobs", "2"])

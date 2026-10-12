@@ -238,18 +238,34 @@ class SavedDialogueTests(unittest.TestCase):
         self.assertEqual(self.status(), "invalid")
 
     def test_duplicate_keys_nonfinite_depth_nodes_and_surrogates_refuse(self) -> None:
-        for raw in (
-            b'{"type":"cost-state","type":"user"}',
-            b'{"type":"cost-state","x":NaN}',
-            b'{"type":"cost-state","x":1e999}',
-            b"[" * 13 + b"0" + b"]" * 13,
-            json.dumps(
-                {"type": "cost-state", "sessionId": SESSION, "x": list(range(257))}
-            ).encode(),
-            b'{"type":"cost-state","x":"\\ud800"}',
-        ):
-            self.path.write_bytes(raw + b"\n")
-            self.assertEqual(self.status(), "invalid")
+        metadata = {"type": "cost-state", "sessionId": SESSION, "isSidechain": False, "x": 0}
+        self.write(self.records + [metadata])
+        self.assertEqual(self.status(), "ready")
+        prefix = f'{{"type":"cost-state","sessionId":"{SESSION}",'.encode()
+        variants = {
+            "duplicate": prefix + b'"isSidechain":true,"isSidechain":false}',
+            "nonfinite_constant": prefix + b'"x":NaN}',
+            "nonfinite_float": prefix + b'"x":1e999}',
+            "depth": prefix + b'"x":' + b"[" * 13 + b"0" + b"]" * 13 + b"}",
+            "nodes": json.dumps({**metadata, "x": list(range(257))}).encode(),
+            "surrogate": prefix + b'"x":"\\ud800"}',
+        }
+        for kind, raw in variants.items():
+            with self.subTest(kind=kind):
+                self.write(suffix=raw + b"\n")
+                self.assertEqual(self.status(), "invalid")
+
+    def test_completed_valid_record_at_byte_limit_is_ready_and_over_limit_refuses(self) -> None:
+        metadata = json.dumps(
+            {"type": "cost-state", "sessionId": SESSION}, separators=(",", ":")
+        ).encode()
+        for size, status in ((16384, "ready"), (16385, "invalid")):
+            with self.subTest(size=size):
+                padded = metadata + b" " * (size - len(metadata))
+                self.assertEqual(len(padded), size)
+                self.assertEqual(json.loads(padded), json.loads(metadata))
+                self.write(suffix=padded + b"\n")
+                self.assertEqual(self.status(), status)
 
     def test_line_fragment_and_record_count_bounds_are_enforced(self) -> None:
         metadata = json.dumps({"type": "cost-state", "sessionId": SESSION}).encode() + b"\n"
