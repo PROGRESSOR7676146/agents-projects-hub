@@ -266,13 +266,20 @@ def _assert_validation_contract(workflows: Path) -> None:
         raise AssertionError("release checkout must use the event commit")
     if release_checkout_with.get("persist-credentials") is not False:
         raise AssertionError("release checkout must not persist write credentials")
-    build_setup = next(
-        (step for step in release_steps if step.get("uses") == "astral-sh/setup-uv@v7"), {}
-    ).get("with", {})
+    installers = [
+        step for step in release_steps if step.get("uses", "").startswith("astral-sh/setup-uv@")
+    ]
+    if len(installers) != 1 or not re.fullmatch(
+        r"astral-sh/setup-uv@[a-f0-9]{40}", installers[0].get("uses", "")
+    ):
+        raise AssertionError("release requires exactly one uv installer pinned by commit SHA")
+    build_setup = installers[0].get("with", {})
     if not re.fullmatch(r"\d+\.\d+\.\d+", build_setup.get("version", "")) or not re.fullmatch(
         r"[a-f0-9]{64}", build_setup.get("checksum", "")
     ):
         raise AssertionError("release uv must use an exact version and archive checksum")
+    if build_setup.get("enable-cache") is not False:
+        raise AssertionError("release uv cache must be disabled")
     release_commands: list[str] = [
         cast(str, step["run"])
         for step in release_steps
@@ -522,6 +529,9 @@ class WorkflowContractTests(unittest.TestCase):
             ("build", "clean-SHA assets"),
             ("lock", "publication command"),
             ("uv", "exact version"),
+            ("uv_tag", "pinned by commit SHA"),
+            ("uv_duplicate", "exactly one"),
+            ("uv_cache", "cache must be disabled"),
         ):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
                 workflows = Path(directory) / "workflows"
@@ -537,10 +547,20 @@ class WorkflowContractTests(unittest.TestCase):
                         for step in steps
                         if step.get("name") != "Build and verify immutable release assets"
                     ]
-                elif mutation == "uv":
-                    next(step for step in steps if step.get("uses") == "astral-sh/setup-uv@v7")[
-                        "with"
-                    ]["version"] = "latest"
+                elif mutation.startswith("uv"):
+                    installer = next(
+                        step
+                        for step in steps
+                        if step.get("uses", "").startswith("astral-sh/setup-uv@")
+                    )
+                    if mutation == "uv":
+                        installer["with"]["version"] = "latest"
+                    elif mutation == "uv_tag":
+                        installer["uses"] = "astral-sh/setup-uv@v7"
+                    elif mutation == "uv_duplicate":
+                        steps.append(copy.deepcopy(installer))
+                    else:
+                        installer["with"]["enable-cache"] = True
                 else:
                     publication = steps[-1]
                     publication["run"] = publication["run"].replace(
