@@ -461,6 +461,33 @@ class IncidentNoticeTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(len(saved), 31)
         self.assertEqual(saved[-1]["token"], f"{29:032x}")
 
+    async def test_projection_reserve_remains_available_to_saved_pending_fence(self) -> None:
+        self.project(tuple(f"example:{n}" for n in range(500)))
+        await self.tick()
+        value = self.saved()
+        template = value["deliveries"][0]
+        value["deliveries"] = [
+            {**template, "token": f"{n:032x}", "text": "x", "state": "unknown", "message_id": None}
+            for n in range(19)
+        ]
+        value["deliveries"][-1]["state"] = "pending"
+        target = 1024 * 1024 - 4096 - 1
+        remaining = target - len(
+            (json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
+        )
+        self.assertGreater(remaining, 0)
+        for row in value["deliveries"]:
+            extra = min(3499, remaining)
+            row["text"] += "x" * extra
+            remaining -= extra
+        self.assertEqual(remaining, 0)
+        self.consumer.store.write(value)
+        self.assertEqual(len(self.cursor.read_bytes()), target)
+        self.assertEqual(await self.tick(1), "sent")
+        self.assertEqual(self.saved()["deliveries"][-1]["state"], "sent")
+        self.assertLessEqual(len(self.cursor.read_bytes()), 1024 * 1024)
+        self.assertEqual(sum(row["state"] == "unknown" for row in self.saved()["deliveries"]), 18)
+
     async def test_storm_cannot_change_a_rejected_retrys_exact_notice(self) -> None:
         self.project(())
 

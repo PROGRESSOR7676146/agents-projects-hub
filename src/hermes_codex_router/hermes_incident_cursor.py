@@ -76,11 +76,11 @@ def _encoded(value: dict[str, Any]) -> bytes:
     return (json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
 
 
-def fit_deliveries(value: dict[str, Any]) -> None:
-    # Reserve room for longer attempted/unknown labels and later timestamps.
+def fit_deliveries(value: dict[str, Any], *, reserve: int = 0) -> None:
+    # Projection reserves room for later fence/outcome growth; writes consume it.
     # Only proven sent rows may be evicted, oldest first, at either bound.
     rows = value["deliveries"]
-    while len(rows) > MAX_DELIVERIES or len(_encoded(value)) > MAX_CURSOR_BYTES - 4096:
+    while len(rows) > MAX_DELIVERIES or len(_encoded(value)) > MAX_CURSOR_BYTES - reserve:
         removable = next((row for row in rows if row["state"] == "sent"), None)
         if removable is None:
             raise NoticeCapacity()

@@ -35,7 +35,9 @@ Conspicuously fictional example (never use these identities on a real host):
 Config, journal, cursor and lock must be private regular single-link files,
 owned by the Gateway UID; config/journal are read-only to this plugin. Cursor
 and lock are created as `0600`. Journal/cursor parents must exist, resolve
-canonically and be private same-UID directories. Paths and sidecars may not
+canonically and be private same-UID directories. Keep the configuration outside
+both storage directories: a transient configuration read error retires the
+integration, while storage outages recover. Paths and sidecars may not
 collide. Use one Gateway and one unchanged bot identity per cursor; concurrent
 Applications or a bot replacement require a separately reviewed deployment.
 Config accepts only the fields above; duplicate/unknown keys, unsafe
@@ -59,6 +61,9 @@ the incident, delete Telegram history or change Hub work. It requires the exact
 numeric human owner/private chat, opaque token and positively receipted message.
 The button is omitted when a notice has no retained unresolved member.
 Old controls whose episodes or delivery rows are no longer retained refuse.
+If a poll holds the cursor lock, dismiss returns «Карточка недоступна» without
+changing anything; retry after the poll completes (up to ten three-second sends
+plus joined file work).
 Own callback namespace is handled before core and never invokes a model.
 
 Inspect only the local private cursor and bounded package diagnostics:
@@ -80,7 +85,8 @@ an ambiguous response. Adding raw rejection proof is separate transport work.
 
 The cursor has at most 500 seen episodes, 128 delivery records and 1 MiB.
 Old `sent` records may be retired at either the count or byte bound, invalidating
-their controls; 4 KiB is reserved for delivery-state/timestamp growth. Unknown and
+their controls; new projections leave 4 KiB for delivery-state/timestamp growth,
+while fence/outcome writes can use the hard 1 MiB bound. Unknown and
 exhausted rows are never automatically erased; a saturated cursor refuses new
 projection without advancing seen/health state, while already saved due pending
 notices still drain. Saturation emits local diagnostics, not its own Telegram
@@ -99,6 +105,10 @@ never edit its binding to retarget evidence. Application stop joins active
 callbacks; sends have a three-second budget, at most ten attempts per cycle.
 Bounded file work runs off-loop and is joined on cancellation; stalled disk
 I/O can delay shutdown. This is not a hard total shutdown deadline.
+A change during sending can preserve an attempted/unknown row even when no
+request occurred; it is never replayed automatically. With a one-card window,
+continuous health flapping can keep a summary deferred; Operations remains the
+independent incident channel.
 
 ## Evidence and remaining acceptance
 

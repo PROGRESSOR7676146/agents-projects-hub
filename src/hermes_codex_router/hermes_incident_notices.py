@@ -122,7 +122,7 @@ class HermesIncidentNotices:
                 "kind": kind,
             }
         )
-        fit_deliveries(value)
+        fit_deliveries(value, reserve=4096)
 
     def _project(self, value: dict[str, Any], now: datetime) -> None:
         try:
@@ -289,6 +289,7 @@ class HermesIncidentNotices:
         candidate = copy.deepcopy(value)
         try:
             self._project(candidate, now)
+            fit_deliveries(candidate, reserve=4096)
             self.store.write(candidate)
         except NoticeCapacity:
             # Do not advance seen/quiet on a refused projection. Existing due

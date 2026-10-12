@@ -15,6 +15,7 @@ from unittest import mock
 
 from hermes_codex_router.hermes_incident_plugin import CONFIG_ENV, install_incident_notices
 from hermes_codex_router.incident_journal import IncidentJournal
+from hermes_codex_router.operational_alert import OperationalAlert
 
 AVAILABLE = (
     importlib.util.find_spec("telegram") is not None
@@ -72,7 +73,14 @@ class RealNoticeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             )
             config.chmod(0o600)
             with IncidentJournal(journal).cycle() as writer:
-                writer.project((), now=datetime.now(timezone.utc))
+                writer.project(
+                    (
+                        OperationalAlert(
+                            "example:open", "provider_work_stalled", "warning", "Example signal"
+                        ),
+                    ),
+                    now=datetime.now(timezone.utc),
+                )
             request = OfflineRequest()
             do_request = mock.AsyncMock(wraps=request.do_request)
             with mock.patch.object(request, "do_request", do_request):
@@ -135,7 +143,14 @@ class RealNoticeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             )
             config.chmod(0o600)
             with IncidentJournal(journal).cycle() as writer:
-                writer.project((), now=datetime.now(timezone.utc))
+                writer.project(
+                    (
+                        OperationalAlert(
+                            "example:open", "provider_work_stalled", "warning", "Example signal"
+                        ),
+                    ),
+                    now=datetime.now(timezone.utc),
+                )
             request = OfflineRequest()
             do_request = mock.AsyncMock(wraps=request.do_request)
             with mock.patch.object(request, "do_request", do_request):
@@ -145,6 +160,12 @@ class RealNoticeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(do_request.call_args.kwargs["method"], "POST")
             parameters = do_request.call_args.kwargs["request_data"].json_parameters
             self.assertEqual(parameters["chat_id"], "123456789")
+            markup = json.loads(parameters["reply_markup"])
+            saved_token = json.loads(cursor.read_text())["deliveries"][0]["token"]
+            self.assertEqual(
+                markup["inline_keyboard"],
+                [[{"text": "Скрыть", "callback_data": f"hubinc:hide:{saved_token}"}]],
+            )
             self.assertEqual(json.loads(cursor.read_text())["deliveries"][0]["message_id"], 41)
 
     async def _exercise_sdk_request(
