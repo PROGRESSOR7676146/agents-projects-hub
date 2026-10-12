@@ -24,7 +24,7 @@ class ReleaseAssetsTests(unittest.TestCase):
         (self.root / "pyproject.toml").write_text(
             '[project]\nname = "agents-projects-hub"\nversion = "0.7.1"\n'
         )
-        for name in ("requirements-release.lock", "uv.lock"):
+        for name in ("requirements-release.lock", "requirements-build.lock", "uv.lock"):
             (self.root / name).write_text("fictional locked dependencies\n")
         self.wheel = _wheel(
             self.output / "agents_projects_hub-0.7.1-py3-none-any.whl",
@@ -46,12 +46,12 @@ class ReleaseAssetsTests(unittest.TestCase):
         self.assertEqual(report["git_sha"], "a" * 40)
         self.assertEqual(report["schema_max"], 41)
         self.assertNotIn(str(self.base), json.dumps(report))
-        for name in ("requirements-release.lock", "uv.lock"):
+        for name in ("requirements-release.lock", "requirements-build.lock", "uv.lock"):
             self.assertEqual((self.output / name).read_bytes(), (self.root / name).read_bytes())
         for line in (self.output / "SHA256SUMS").read_text().splitlines():
             digest, name = line.split("  ", 1)
             self.assertEqual(digest, hashlib.sha256((self.output / name).read_bytes()).hexdigest())
-        self.assertEqual(len((self.output / "SHA256SUMS").read_text().splitlines()), 5)
+        self.assertEqual(len((self.output / "SHA256SUMS").read_text().splitlines()), 6)
 
     def test_refuses_wheel_from_another_commit_before_publishing_metadata(self) -> None:
         with self.assertRaisesRegex(ValueError, "revision"):
@@ -106,3 +106,32 @@ class ReleaseAssetsTests(unittest.TestCase):
             with patch("scripts.release_assets.subprocess.run"):
                 with self.assertRaisesRegex(ValueError, "changed"):
                     build_assets(self.root, self.base / "new-assets")
+
+    def test_build_backend_is_hash_constrained_for_each_distribution(self) -> None:
+        from scripts.release_assets import build_assets
+
+        with patch("scripts.release_assets.clean_revision", return_value="a" * 40):
+            with patch("scripts.release_assets.subprocess.run") as run:
+                with patch("scripts.release_assets.seal_assets", return_value={}):
+                    build_assets(self.root, self.base / "new-assets")
+        self.assertEqual(run.call_count, 2)
+        args = run.call_args_list[0].args[0]
+        self.assertIn("--require-hashes", args)
+        self.assertIn("--no-build-logs", args)
+        self.assertEqual(
+            args[args.index("--build-constraints") + 1],
+            str(self.root / "requirements-build.lock"),
+        )
+        archive_args = run.call_args_list[1].args[0]
+        self.assertEqual(archive_args[:2], ["git", "archive"])
+        self.assertEqual(archive_args[-1], "a" * 40)
+
+    def test_refuses_ignored_stale_build_products(self) -> None:
+        from scripts.release_assets import build_assets
+
+        (self.root / "build").mkdir()
+        with patch("scripts.release_assets.clean_revision", return_value="a" * 40):
+            with patch("scripts.release_assets.subprocess.run") as run:
+                with self.assertRaisesRegex(ValueError, "fresh checkout"):
+                    build_assets(self.root, self.base / "new-assets")
+                run.assert_not_called()

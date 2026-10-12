@@ -11,7 +11,8 @@ establish deployment, human-approval or machine-loss recovery acceptance.
 ## Contents and acceptance
 
 The release publishes a wheel built directly from an exact clean Git checkout,
-a source archive, `requirements-release.lock`, `uv.lock`, `release-info.json`
+a complete tracked-source archive, `requirements-release.lock`,
+`requirements-build.lock`, `uv.lock`, `release-info.json`
 and `SHA256SUMS`. The public inventory includes artifact names, sizes and digests,
 package version, source SHA, clean assertion, build time and schema range. It is
 not a private deployment manifest and contains no deployment paths or state.
@@ -24,11 +25,13 @@ The lock pins resolution; offline recovery must also retain its dependency
 artifacts outside the machine.
 
 Publication requires canonical checks and independent review of release plumbing.
-The actual candidate and a distinct compatible schema-41 rollback wheel must pass
+The actual candidate and a distinct clean schema-41 rollback wheel must pass
 [the synthetic rollout/rollback gate](IMMUTABLE_RELEASES.md#automated-offline-rollout-and-rollback).
 After hosted publication, download the assets into a fresh directory, verify
 `SHA256SUMS`, and inspect the wheel identity against the tag's exact clean SHA.
 For a release built on a maintenance branch, no `main` merge is implied.
+The rollback uses a separately verified baseline build (for example, the clean
+source SHA above); older published versions do not provide schema-41 rollback.
 
 ## Scope
 

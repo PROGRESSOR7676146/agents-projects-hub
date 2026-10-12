@@ -65,10 +65,16 @@ def seal_assets(root: Path, output: Path, revision: str) -> dict[str, Any]:
                     metadata = source.read()
         if metadata != (root / "pyproject.toml").read_bytes():
             raise ValueError("source archive metadata does not match checkout")
-    for name in ("requirements-release.lock", "uv.lock"):
+    for name in ("requirements-release.lock", "requirements-build.lock", "uv.lock"):
         (output / name).write_bytes((root / name).read_bytes())
     assets = []
-    for name in (wheel_name, archive_name, "requirements-release.lock", "uv.lock"):
+    for name in (
+        wheel_name,
+        archive_name,
+        "requirements-release.lock",
+        "requirements-build.lock",
+        "uv.lock",
+    ):
         data = (output / name).read_bytes()
         assets.append({"name": name, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
     report = {
@@ -96,24 +102,44 @@ def build_assets(root: Path, output: Path) -> dict[str, Any]:
     if output == root or root in output.parents:
         raise ValueError("release output must be outside the checkout")
     revision = clean_revision(root)
+    if (root / "build").exists() or tuple((root / "src").glob("*.egg-info")):
+        raise ValueError("release build requires a fresh checkout without stale build products")
     output.mkdir(parents=True, exist_ok=False)
-    # Build the wheel directly from Git. The default combined build first creates
-    # an sdist and builds its wheel without Git, losing immutable provenance.
-    for kind in ("--wheel", "--sdist"):
-        subprocess.run(
-            [
-                "uv",
-                "build",
-                kind,
-                "--python",
-                sys.executable,
-                "--out-dir",
-                str(output),
-                "--no-create-gitignore",
-            ],
-            cwd=root,
-            check=True,
-        )
+    # Build the wheel directly from Git; an archive rebuild loses Git provenance.
+    # Git archive retains all tracked public source, including tooling and locks.
+    subprocess.run(
+        [
+            "uv",
+            "build",
+            "--wheel",
+            "--python",
+            sys.executable,
+            "--out-dir",
+            str(output),
+            "--no-create-gitignore",
+            "--no-build-logs",
+            "--build-constraints",
+            str(root / "requirements-build.lock"),
+            "--require-hashes",
+        ],
+        cwd=root,
+        check=True,
+    )
+    version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
+    prefix = f"agents_projects_hub-{version}"
+    subprocess.run(
+        [
+            "git",
+            "archive",
+            "--format=tar.gz",
+            f"--prefix={prefix}/",
+            "--output",
+            str(output / f"{prefix}.tar.gz"),
+            revision,
+        ],
+        cwd=root,
+        check=True,
+    )
     if clean_revision(root) != revision:
         raise ValueError("checkout changed during release build")
     return seal_assets(root, output, revision)

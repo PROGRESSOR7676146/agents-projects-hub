@@ -301,7 +301,7 @@ acceptance.
   `fc1265286ab8b56b730cb371008ab9cc29d7a93b` completed. Its follow-up now
   protects failure publication when root resolution fails, derives Codex runtime
   from trusted configuration while retaining aliases, rechecks child selections
-  and materials, and makes tickets update-immutable in unreleased migration 41.
+  and materials, and makes tickets update-immutable in migration 41.
   Astra reviewed the domain/transaction ownership and direct failure paths.
   Lease-crash and execution-crash regressions retain their distinct certainty;
   a real 65-source chain refuses at the ancestry bound without invocation.

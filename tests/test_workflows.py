@@ -264,6 +264,8 @@ def _assert_validation_contract(workflows: Path) -> None:
         raise AssertionError("release checkout must retain complete history")
     if "ref" in release_checkout_with:
         raise AssertionError("release checkout must use the event commit")
+    if release_checkout_with.get("persist-credentials") is not False:
+        raise AssertionError("release checkout must not persist write credentials")
     release_commands: list[str] = [
         cast(str, step["run"])
         for step in release_steps
@@ -287,6 +289,7 @@ def _assert_validation_contract(workflows: Path) -> None:
             "*.whl",
             "*.tar.gz",
             "requirements-release.lock",
+            "requirements-build.lock",
             "uv.lock",
             "release-info.json",
             "SHA256SUMS",
@@ -294,7 +297,7 @@ def _assert_validation_contract(workflows: Path) -> None:
     ):
         raise AssertionError("release publication command changed")
     if (
-        '.venv/bin/python scripts/release_assets.py --output "$RUNNER_TEMP/hub-release-assets"'
+        'python scripts/release_assets.py --output "$RUNNER_TEMP/hub-release-assets"'
         not in release_commands
     ):
         raise AssertionError("release must verify clean-SHA assets before publication")
@@ -505,6 +508,35 @@ class WorkflowContractTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(AssertionError, "depend on validation"):
                 _assert_validation_contract(workflows)
+
+    def test_contract_rejects_persisted_write_credentials_and_missing_assets(self) -> None:
+        for mutation, error in (
+            ("credentials", "persist write credentials"),
+            ("build", "clean-SHA assets"),
+            ("lock", "publication command"),
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                workflows = Path(directory) / "workflows"
+                shutil.copytree(WORKFLOWS, workflows)
+                release = workflows / "release.yml"
+                workflow = _workflow(release)
+                steps = workflow["jobs"]["release"]["steps"]
+                if mutation == "credentials":
+                    steps[0]["with"]["persist-credentials"] = True
+                elif mutation == "build":
+                    steps[:] = [
+                        step
+                        for step in steps
+                        if step.get("name") != "Build and verify immutable release assets"
+                    ]
+                else:
+                    publication = steps[-1]
+                    publication["run"] = publication["run"].replace(
+                        "requirements-build.lock", "omitted.lock"
+                    )
+                release.write_text(yaml.safe_dump(workflow), encoding="utf-8")
+                with self.assertRaisesRegex(AssertionError, error):
+                    _assert_validation_contract(workflows)
 
     def test_contract_rejects_release_bypass_condition(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -40,11 +40,13 @@ run this audit.
    release. Promotion then uses the immutable artifact and records its exact SHA
    in private deployment evidence.
 
-The tag workflow builds its wheel directly from the clean Git checkout, then
-builds the source archive separately. A wheel rebuilt from the source archive
+The tag workflow builds its wheel directly from a fresh clean Git checkout with
+a hash-pinned backend from `requirements-build.lock`. The publication checkout
+does not persist write credentials. `git archive` exports the exact revision's
+complete tracked source separately. A wheel rebuilt from the source archive
 has no verified Git identity. `scripts/release_assets.py` checks the wheel's
 version, clean assertion and exact SHA, refuses a contaminated asset directory,
-and seals the wheel, source archive and checked-in runtime locks with a public
+and seals the wheel, source archive, runtime locks and build lock with a public
 inventory and `SHA256SUMS`. The public inventory contains no deployment paths,
 configuration or state and never substitutes for the private deployment manifest.
 
