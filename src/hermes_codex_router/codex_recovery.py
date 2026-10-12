@@ -11,7 +11,11 @@ from .artifacts import (
     spool_staged_artifacts,
 )
 from .codex_appserver import CodexAppServerClient, CodexTurnError, RpcError
-from .codex_failure import CodexPreparationError, codex_failure_notice
+from .codex_control_authority import begin_codex_interrupt
+from .codex_control_recovery import observe_after_control_loss
+from .codex_failure import CodexPreparationError, codex_failure_notice, codex_failure_reason
+from .codex_ingress_notice import append_ingress_precaution
+from .codex_turn_controls import ActiveTurnProof, InterruptOutcome
 from .diagnostic_log import survived
 from .execution_journal import ExecutionJournal
 from .hub_config import HubConfig
@@ -31,7 +35,16 @@ def checkpoint_failure_notice(
     retained = CodexTurnError(error, partial)
     if isinstance(error, CodexTurnError):
         retained.failure_reason = error.failure_reason
-    return codex_failure_notice(retained, turn_status=turn_status)
+    return append_ingress_precaution(
+        state,
+        job_id,
+        codex_failure_notice(
+            retained,
+            turn_status=turn_status,
+            protective_interrupt_attempted=getattr(error, "protective_interrupt_attempted", False)
+            is True,
+        ),
+    )
 
 
 def reconcile_codex_completion(
@@ -43,6 +56,8 @@ def reconcile_codex_completion(
     lease_token: str,
     agent_id: str,
     client_factory: Callable[[], CodexAppServerClient],
+    execution_error: BaseException | None = None,
+    interrupt_active_on_failure: bool = False,
 ) -> Literal["completed", "failed", "interrupted", "active", "unknown"]:
     """Reconcile one accepted turn by exact identity without productive work."""
     journal = ExecutionJournal(state)
@@ -62,9 +77,52 @@ def reconcile_codex_completion(
         client = client_factory()
         try:
             if hasattr(client, "read_turn_outcome"):
-                outcome = client.read_turn_outcome(
-                    thread_id=thread_id, turn_id=turn_id, cwd=canonical_root
-                )
+                if interrupt_active_on_failure:
+
+                    def begin_interrupt(proof: ActiveTurnProof, deadline: float) -> str | None:
+                        return begin_codex_interrupt(
+                            state,
+                            config,
+                            job_id=job_id,
+                            source="permission_drift"
+                            if getattr(execution_error, "failure_reason", None)
+                            == "permission_policy_changed"
+                            else "protective",
+                            proof=proof,
+                            deadline=deadline,
+                            invocation_token=lease_token,
+                        )
+
+                    def finish_interrupt(owner: str, outcome: InterruptOutcome) -> None:
+                        state.codex_controls.finish_interrupt(
+                            job_id,
+                            owner,
+                            outcome=outcome,
+                            send_path_quiesced=outcome != "unknown",
+                        )
+
+                    def record_interrupt(
+                        event: Literal["attempted", "acknowledged", "unconfirmed"],
+                    ) -> None:
+                        state.record_runtime_event(
+                            agent_id, "warning", "codex_protective_interrupt_" + event, job_id
+                        )
+                        if event == "attempted" and execution_error is not None:
+                            setattr(execution_error, "protective_interrupt_attempted", True)
+
+                    outcome = observe_after_control_loss(
+                        client,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                        root=canonical_root,
+                        begin_interrupt=begin_interrupt,
+                        finish_interrupt=finish_interrupt,
+                        on_interrupt_event=record_interrupt,
+                    )
+                else:
+                    outcome = client.read_turn_outcome(
+                        thread_id=thread_id, turn_id=turn_id, cwd=canonical_root
+                    )
                 outcome_status = outcome.status
                 result = outcome.result
             else:
@@ -93,8 +151,28 @@ def reconcile_codex_completion(
             rejection_sink=rejections,
         )
         visible = text or "Codex completed the turn without visible text."
+        if getattr(execution_error, "protective_interrupt_attempted", False) is True:
+            visible += (
+                "\n\nHub attempted to interrupt this exact turn after its control path failed. "
+                "The independent read recovered completion; inspect the result and project changes."
+            )
+        if execution_error is not None and (
+            getattr(execution_error, "failure_reason", codex_failure_reason(execution_error))
+            == "permission_policy_changed"
+        ):
+            visible += (
+                "\n\nWarning: Codex permission selection changed during this turn; "
+                "The exact turn completed. "
+                "Review the recovered result and project changes before continuing."
+            )
         if rejections:
             visible += "\n\nSome staged artifacts could not be recovered; inspect the task staging."
+        visible = append_ingress_precaution(
+            state,
+            job_id,
+            visible,
+            render=lambda text: "Recovered completed Codex result:\n\n" + html.escape(text),
+        )
         job = state.get_provider_job(job_id)
         committed = state.commit_provider_result(
             job_id,
@@ -179,13 +257,18 @@ def recover_codex_job(
         # mismatches cannot authorize productive replay or a successful result.
         partial = journal.partial_text(job.job_id) if binding_valid else ""
         terminal_status = observed_status if observed_status in {"failed", "interrupted"} else None
-        notice = codex_failure_notice(CodexTurnError(exc, partial), turn_status=observed_status)
+        notice = append_ingress_precaution(
+            state,
+            job.job_id,
+            codex_failure_notice(CodexTurnError(exc, partial), turn_status=observed_status),
+        )
         state.terminate_provider_job_with_notice(
             job.job_id,
             token,
             status="indeterminate",
             error_class="ambiguous_execution",
             error_code="recovery_unconfirmed",
+            provider_runtime="codex",
             sender_agent_id=agent_id,
             telegram_html=notice,
             terminal_turn_status=terminal_status,

@@ -4,6 +4,7 @@ import json
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,11 +15,15 @@ from hermes_codex_router import codex_recovery as codex_recovery_module
 from hermes_codex_router import external_worker as external_worker_module
 from hermes_codex_router.cli import main
 from hermes_codex_router.codex_appserver import (
+    CodexAppServerClient,
     CodexThread,
+    CodexTurnError,
     RateLimits,
     RpcRejectedError,
+    StoredTurnOutcome,
     TurnResult,
 )
+from hermes_codex_router.codex_permissions import CodexPermissionPolicyDriftError
 from hermes_codex_router.codex_worker import CodexQueueWorker
 from hermes_codex_router.external_runtime import ExternalTurnResult
 from hermes_codex_router.hub_config import (
@@ -33,12 +38,16 @@ from hermes_codex_router.service import ProjectHubService
 from hermes_codex_router.state import HubState
 from tests.git_fixtures import init_git_root
 from tests.stop_fixtures import pending_stop
+from tests.test_codex_appserver import FakeTransport
 
 
 class WorkerClient:
+    transport_mode: str | None = "socket"
+
     def __init__(self, *, fail_after_start: bool = False) -> None:
         self.fail_after_start = fail_after_start
         self.turns = 0
+        self.turn_id_offset = 0
 
     def start_thread(self, **kwargs: object) -> CodexThread:
         return CodexThread("thread-1", Path(str(kwargs["cwd"])), "gpt-5.6-sol", "openai")
@@ -50,12 +59,15 @@ class WorkerClient:
         self.turns += 1
         if self.fail_after_start:
             raise RuntimeError("provider may have accepted the turn")
-        return "turn-1"
+        return f"turn-{self.turn_id_offset + self.turns}"
 
     def wait_for_turn(self, _turn_id: str) -> TurnResult:
         return TurnResult("Visible answer", 1000, 100)
 
-    def read_rate_limits(self) -> RateLimits:
+    def consume_completed_connection(self, *, thread_id: str, turn_id: str) -> bool:
+        return False
+
+    def read_rate_limits(self, *, deadline: float | None = None) -> RateLimits:
         return RateLimits(None, None)
 
     def close(self) -> None:
@@ -63,15 +75,20 @@ class WorkerClient:
 
 
 class WorkerSupervisor:
+    transport_mode = "socket"
+
     def __init__(self, client: WorkerClient) -> None:
         self.client_value = client
         self.stopped = False
         self.started = False
+        self.transport_mode = type(self).transport_mode
+        if isinstance(client, WorkerClient):
+            client.transport_mode = self.transport_mode
 
     def start(self) -> None:
         self.started = True
 
-    def client(self) -> WorkerClient:
+    def client(self, *, allow_fallback: bool = True, deadline: float | None = None) -> WorkerClient:
         return self.client_value
 
     def stop(self) -> None:
@@ -139,7 +156,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
         payload: str = "durable task",
         provider_session_id: str | None = None,
     ) -> str:
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(
+            self.config.state_path, codex_permission_profile=self.config.codex_permission_profile
+        )
         try:
             topic = state.observe_topic(
                 project_id="example-project",
@@ -169,8 +188,140 @@ class CodexQueueWorkerTests(unittest.TestCase):
         finally:
             state.close()
 
+    def test_custom_profile_refusal_is_durable_pre_execution_failure_without_replay(self) -> None:
+        job_id = self.enqueue(provider_session_id="example-existing-thread")
+        transport = FakeTransport(
+            [
+                {
+                    "id": 1,
+                    "result": {
+                        "thread": {"id": "example-existing-thread"},
+                        "cwd": str(self.registry.require_project("example-project").root),
+                        "approvalPolicy": "on-request",
+                        "sandbox": {"type": "workspaceWrite", "networkAccess": False},
+                        "activePermissionProfile": {
+                            "id": "example-private-profile",
+                            "extends": ":workspace",
+                        },
+                    },
+                },
+            ]
+        )
+        client = CodexAppServerClient(transport, initialized=True, transport_mode="socket")
+
+        class Supervisor(WorkerSupervisor):
+            transport_mode = "socket"
+
+        worker = CodexQueueWorker(
+            self.config,
+            registry=self.registry,
+            supervisor=cast(Any, Supervisor(cast(Any, client))),
+            worker_id="test-codex-profile",
+        )
+        try:
+            self.assertTrue(worker.run_cycle())
+            failed = worker.state.get_provider_job(job_id)
+            self.assertEqual((failed.status, failed.error_class), ("failed", "pre_execution"))
+            self.assertEqual(
+                failed.error_code, "UnsupportedCodexPermissionProfileError", failed.error_detail
+            )
+            self.assertEqual(failed.provider_session_id, "example-existing-thread")
+            outbox = worker.state.get_telegram_outbox_for_job(job_id)
+            assert outbox is not None
+            self.assertIn("unsupported permission profile", outbox.telegram_html)
+            self.assertIn("No productive provider turn was sent", outbox.telegram_html)
+            self.assertNotIn("example-private-profile", outbox.telegram_html)
+            self.assertNotIn("root paused", outbox.telegram_html)
+            self.assertFalse(worker.run_cycle())
+            self.assertEqual([message["method"] for message in transport.sent], ["thread/resume"])
+            self.assertEqual(worker.state.get_provider_job(job_id).status, "failed")
+        finally:
+            worker.close()
+
+    def test_changed_profile_refuses_queued_job_before_materials_staging_or_client(self) -> None:
+        job_id = self.enqueue()
+        worker = CodexQueueWorker(
+            replace(self.config, codex_permission_profile="example-project-policy"),
+            registry=self.registry,
+            supervisor=cast(Any, WorkerSupervisor(WorkerClient())),
+        )
+        self.addCleanup(worker.close)
+        with (
+            patch.object(external_worker_module, "prepare_worker_materials") as materials,
+            patch.object(external_worker_module, "prepare_worker_staging_directory") as staging,
+            patch.object(worker, "_client") as client,
+        ):
+            self.assertTrue(worker.run_cycle())
+        materials.assert_not_called()
+        staging.assert_not_called()
+        client.assert_not_called()
+        failed = worker.state.get_provider_job(job_id)
+        self.assertEqual(
+            (failed.status, failed.error_class, failed.error_code),
+            ("failed", "pre_execution", "CodexPermissionProfileError"),
+        )
+        self.assertFalse(worker.run_cycle())
+
+    def test_permission_drift_keeps_journaled_turn_indeterminate_without_retry(self) -> None:
+        job_id = self.enqueue()
+
+        class DriftingClient(WorkerClient):
+            def wait_for_turn(self, _turn_id: str) -> TurnResult:
+                raise CodexTurnError(CodexPermissionPolicyDriftError(), "Example partial")
+
+        client = DriftingClient()
+        worker = CodexQueueWorker(
+            self.config,
+            registry=self.registry,
+            supervisor=cast(Any, WorkerSupervisor(client)),
+        )
+        self.addCleanup(worker.close)
+        self.assertTrue(worker.run_cycle())
+        failed = worker.state.get_provider_job(job_id)
+        self.assertEqual(failed.status, "indeterminate")
+        outbox = worker.state.get_telegram_outbox_for_job(job_id)
+        assert outbox is not None
+        self.assertIn("permission selection changed", outbox.telegram_html)
+        checkpoint = worker.state._connection.execute(
+            "SELECT provider_turn_id FROM provider_execution_checkpoints WHERE job_id=?", (job_id,)
+        ).fetchone()
+        self.assertEqual(checkpoint["provider_turn_id"], "turn-1")
+        worker.run_cycle()  # Passive uncertainty reconciliation may count as work.
+        self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
+        self.assertEqual(worker.state.get_provider_job(job_id).attempt_count, 1)
+        self.assertEqual(client.turns, 1)
+
+    def test_completed_drift_recovery_preserves_warning_without_reinvocation(self) -> None:
+        job_id = self.enqueue()
+
+        class DriftingClient(WorkerClient):
+            def wait_for_turn(self, _turn_id: str) -> TurnResult:
+                raise CodexTurnError(CodexPermissionPolicyDriftError(), "Example partial")
+
+            def read_completed_turn(self, **kwargs: object) -> TurnResult:
+                self.last_read = kwargs
+                return TurnResult("Recovered final", None, None)
+
+        client = DriftingClient()
+        worker = self.worker(client)
+        self.assertTrue(worker.run_cycle())
+        recovered = worker.state.get_provider_job(job_id)
+        self.assertEqual(recovered.status, "result_ready")
+        outbox = worker.state.get_telegram_outbox_for_job(job_id)
+        assert outbox is not None
+        self.assertIn("Recovered final", outbox.telegram_html)
+        self.assertIn("permission selection changed", outbox.telegram_html)
+        self.assertIn("Review the recovered result and project changes", outbox.telegram_html)
+        self.assertEqual(client.last_read["turn_id"], "turn-1")
+        self.assertEqual(client.turns, 1)
+        worker.close()
+        with closing(HubState.open(self.config.state_path, codex_permission_profile=None)) as state:
+            retained = state.get_telegram_outbox_for_job(job_id)
+            assert retained is not None
+            self.assertEqual(retained.telegram_html, outbox.telegram_html)
+
     def test_stdio_fallback_starts_a_new_thread_with_bounded_visible_context(self) -> None:
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",
@@ -228,7 +379,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
         job_id = self.enqueue(
             1, "Inspect current fictional project", provider_session_id="thread-1"
         )
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             with state._immediate_transaction():
                 state._connection.execute(
@@ -264,7 +415,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
 
     def test_codex_v2_contract_uses_native_thread_instructions(self) -> None:
         job_id = self.enqueue(1, "Current question", provider_session_id="thread-1")
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             job = state.get_provider_job(job_id)
             state.acknowledge_telegram_contract(job.session_id, 1)
@@ -338,7 +489,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-            def client(self) -> object:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> object:
                 self.calls += 1
                 return self.main if self.calls == 1 else ControlClient()
 
@@ -391,6 +544,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
                 steered.append(str(kwargs["text"]))
                 return str(kwargs["turn_id"])
 
+            def read_turn_outcome(self, **_kwargs: object) -> StoredTurnOutcome:
+                return StoredTurnOutcome("active")
+
             def interrupt_turn(self, **_kwargs: object) -> None:
                 interrupted.set()
                 release.set()
@@ -408,7 +564,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-            def client(self) -> object:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> object:
                 self.calls += 1
                 return self.main if self.calls == 1 else ControlClient()
 
@@ -429,7 +587,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             leased = original_lease(state, *args, **kwargs)
             if leased is not None and not stops:
                 # The owner's stop lands after the lease, before the start.
-                peer = HubState.open(state_path)
+                peer = HubState.open(state_path, codex_permission_profile=None)
                 try:
                     request_id, _, _ = peer.request_emergency_stop(
                         topic_id=leased.topic_id,
@@ -488,7 +646,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def steer_turn(self, **_kwargs: object) -> str:
                 # The owner's stop lands while the steering call is in flight,
                 # and the app-server then rejects the call.
-                peer = HubState.open(state_path)
+                peer = HubState.open(state_path, codex_permission_profile=None)
                 try:
                     topic = peer.find_topic(-1001234567890, 77)
                     assert topic is not None
@@ -518,7 +676,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-            def client(self) -> object:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> object:
                 self.calls += 1
                 return self.main if self.calls == 1 else ControlClient()
 
@@ -558,17 +718,21 @@ class CodexQueueWorkerTests(unittest.TestCase):
 
     def test_emergency_stop_acknowledgement_cannot_confirm_terminal_turn(self) -> None:
         job_id = self.enqueue()
-        entered = threading.Event()
         release = threading.Event()
         interrupted = threading.Event()
 
         class MainClient(WorkerClient):
             def wait_for_turn(self, _turn_id: str) -> TurnResult:
-                entered.set()
+                # Submit only after native acceptance, without racing worker
+                # preparation against a one-second sender-thread deadline.
+                request_stop()
                 release.wait(3)
                 raise RuntimeError("interrupted transport")
 
         class ControlClient:
+            def read_turn_outcome(self, **_kwargs: object) -> StoredTurnOutcome:
+                return StoredTurnOutcome("active")
+
             def interrupt_turn(self, **_kwargs: object) -> None:
                 interrupted.set()
                 release.set()
@@ -586,7 +750,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-            def client(self) -> object:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> object:
                 self.calls += 1
                 return self.main if self.calls == 1 else ControlClient()
 
@@ -602,9 +768,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
         requested = threading.Event()
 
         def request_stop() -> None:
-            if not entered.wait(1):
-                return
-            state = HubState.open(self.config.state_path)
+            state = HubState.open(self.config.state_path, codex_permission_profile=None)
             try:
                 topic = state.find_topic(-1001234567890, 77)
                 assert topic is not None
@@ -618,18 +782,15 @@ class CodexQueueWorkerTests(unittest.TestCase):
             finally:
                 state.close()
 
-        sender = threading.Thread(target=request_stop)
         try:
-            sender.start()
             self.assertTrue(worker.run_cycle())
-            self.assertTrue(requested.wait(1))
+            self.assertTrue(requested.is_set())
             topic = worker.state.find_topic(-1001234567890, 77)
             assert topic is not None
             self.assertTrue(interrupted.wait(2))
             self.assertEqual(worker.state.get_provider_job(job_id).status, "indeterminate")
         finally:
             release.set()
-            sender.join(1)
             worker.close()
 
     def test_stdio_stop_transport_eof_retains_unknown_turn_exclusion(self) -> None:
@@ -656,8 +817,11 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 pass
 
-            def client(self) -> WorkerClient:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> WorkerClient:
                 client: WorkerClient = Client() if not clients else WorkerClient()
+                client.transport_mode = self.transport_mode
                 clients.append(client)
                 return client
 
@@ -674,7 +838,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
         def request_stop() -> None:
             if not entered.wait(1):
                 return
-            state = HubState.open(self.config.state_path)
+            state = HubState.open(self.config.state_path, codex_permission_profile=None)
             try:
                 topic = state.find_topic(-1001234567890, 77)
                 assert topic is not None
@@ -707,7 +871,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
 
     def test_an_unfinished_older_stop_never_stops_later_codex_work(self) -> None:
         old_id = self.enqueue(message_id=102)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             leased = state.lease_provider_job("codex", "crashed-worker")
             assert leased is not None and leased.lease_token is not None
@@ -784,7 +948,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             worker.close()
 
     def test_worker_has_no_telegram_capability_and_uses_its_own_state_connection(self) -> None:
-        controller_state = HubState.open(self.config.state_path)
+        controller_state = HubState.open(self.config.state_path, codex_permission_profile=None)
         worker = self.worker(WorkerClient())
         try:
             self.assertFalse(hasattr(worker, "telegram"))
@@ -907,7 +1071,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
         self.assertFalse(controller.run_embedded_queue_cycle())
         controller.config = replace(self.config, outbox_runtime="external")
         self.assertFalse(controller.run_controller_outbox_cycle())
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             self.assertEqual(state.get_provider_job(job_id).status, "result_ready")
             self.assertEqual(state.get_telegram_outbox_for_job(job_id).status, "pending")
@@ -928,7 +1092,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
             executable="opencode",
         )
         config = replace(self.config, agents=self.config.agents + (opencode,))
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",
@@ -973,7 +1137,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
                 self.telegram = Telegram()
 
         class ForbiddenSupervisor:
-            def client(self) -> object:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> object:
                 raise AssertionError("controller called Codex RPC")
 
         external = External()
@@ -996,12 +1162,14 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def start(self) -> None:
                 raise AssertionError("controller started Codex supervisor")
 
-            def client(self) -> object:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> object:
                 raise AssertionError("controller called Codex RPC")
 
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
         controller.config = self.config
-        controller.state = HubState.open(self.config.state_path)
+        controller.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         controller.agent = self.config.require_agent("codex")
         controller.telegram = Telegram()
         controller.supervisor = ForbiddenSupervisor()
@@ -1020,13 +1188,15 @@ class CodexQueueWorkerTests(unittest.TestCase):
                 return 1
 
         class ForbiddenSupervisor:
-            def client(self) -> object:
+            def client(
+                self, *, allow_fallback: bool = True, deadline: float | None = None
+            ) -> object:
                 raise AssertionError("controller called Codex RPC")
 
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
         controller.config = self.config
         controller.registry = self.registry
-        controller.state = HubState.open(self.config.state_path)
+        controller.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         controller.agent = self.config.require_agent("codex")
         controller.telegram = Telegram()
         controller.supervisor = ForbiddenSupervisor()
@@ -1068,7 +1238,7 @@ class CodexQueueWorkerTests(unittest.TestCase):
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
         controller.config = replace(self.config, dispatch_mode="inline", queue_runtime="embedded")
         controller.registry = self.registry
-        controller.state = HubState.open(self.config.state_path)
+        controller.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         controller.agent = self.config.require_agent("codex")
         controller.telegram = Telegram()
         controller._codex_client = None

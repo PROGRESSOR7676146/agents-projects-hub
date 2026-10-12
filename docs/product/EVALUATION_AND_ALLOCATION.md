@@ -10,12 +10,12 @@ automatic provider switch, evaluation run, new provider, or deployment is enable
 by this document. Algorithms and evaluator vendors remain implementation choices.
 Rationale: [ADR 0037](../decisions/0037-evidence-based-task-allocation.md).
 
-Delivery priority: the initial [lead/advisor milestone](../operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
-uses human-selected participants and a minimal outcome/usage journal. Automatic
+Delivery priority: the minimal outcome/usage journal is independent of the
+retired [Hub role workflow](../decisions/0065-retire-hub-lead-advisor.md). Automatic
 profiles, ranking, allocation, model judges and comparative experiments remain
 deferred until observed need and suitable evidence justify them. The accepted
 long-term requirements below do not make those mechanisms a prerequisite for
-the first collaboration release.
+the current provider-parity release.
 
 ## 21. Evaluation and resource-aware task allocation
 
@@ -106,14 +106,59 @@ the first collaboration release.
   Cross-project aggregation and transfer to an external evaluator require
   explicit data scope; ordinary context isolation remains in force. Models
   MUST NOT edit their own authoritative grades, usage or allocation receipts.
-- **REQ-EVAL-010 (Accepted initial milestone; implementation pending):** The
-  first Claude Code/Codex collaboration release MUST provide a minimal
+- **REQ-EVAL-010 (Accepted independent milestone; implementation pending):**
+  Hub MUST provide a minimal
   private outcome journal: task, participant/model/effort, result or artifact,
   accepted/rework/unknown decision with a short reason, and observable elapsed
   time and usage. Unknown usage MUST remain unknown. It MUST NOT require an
   automatic score, model judge, comparative trial, or learned dispatcher.
+  The bounded owner-decision slice MUST reserve non-forwarded `/assess
+  accepted|rework|unknown REASON` at authorized central Hub ingress before
+  Reply/mention routing, session preparation, material handling or productive
+  invocation. Only configured owners MAY record it in a registered project
+  topic with external queue and outbox ownership. Captions, selected quotes,
+  materials, malformed commands and unavailable targets MUST receive a durable
+  refusal without productive fallback. Forwarded commands remain passive context.
+  A first assessment MUST Reply to any positively receipted part of exactly one
+  saved final in that same numeric destination; every final part, including
+  documents, MUST have strict version-1 receipt provenance. Progress, controls,
+  resultless notices, incomplete/unknown delivery and legacy receipts MUST NOT
+  establish a result target. Historical completed session generations MAY be
+  assessed without retargeting their execution.
+  Applied and refused dispositions MUST be append-only, deduplicated by full
+  assessment-input fingerprint before bounded parsing, including a canonical
+  digest of the original Telegram message before quote/material normalization
+  and excluding `update_id`. Semantically irrelevant source differences MAY
+  conservatively conflict; they MUST NOT reparse or replace a disposition.
+  A correction MUST Reply to the
+  latest applied human command, rather than a bot acknowledgement; competing
+  first decisions or corrections MUST have at most one applied successor.
+  Fingerprint conflicts MUST preserve the prior disposition without productive
+  fallback or endless input retry. HubState MUST atomically commit disposition,
+  input consumption, independent Hub acknowledgement and the existing command
+  boundary that advances queued future deadlines in that topic. This boundary
+  MUST preserve holds, job status, routing, root exclusion and capacity; exact
+  duplicates MUST NOT close a later batch. Failed commits MUST leave all four
+  effects retryable through control-only ingress.
+  Acknowledgement delivery MUST retain the independent control-notice fence,
+  strict receipt and unknown-send/no-blind-resend rules. Unsupported owning
+  endpoints and scoped acceptance actors MAY receive one best-effort refusal;
+  noncentral group pollers MUST NOT consume the shared input receipt. Private
+  controls MUST NOT enter onboarding/edit/connect free-text workflows.
+  Assessments are journal evidence only: `rework` MUST NOT enqueue execution,
+  `accepted` MUST NOT grant tools or release uncertainty, and `unknown` MUST NOT
+  overwrite usage, model or timing evidence. Source publication MUST NOT claim
+  deployed authority-data custody from Telegram authentication or SQL triggers;
+  untrusted model access to this journal remains an independent OS-boundary gate.
 
 ### Acceptance boundaries
+
+For the independent REQ-EVAL-010 journal, offline acceptance MUST cover duplicate
+and conflicting dispositions, corrections, strict Reply/result provenance,
+atomic rollback and absence of productive fallback. Unknown usage/time/model
+evidence MUST remain unknown; an assessment MUST NOT invoke a provider, replay
+work, grant tools or release execution uncertainty. These journal checks remain
+required after AC-F-015 retirement, independent of scoring and model evaluation.
 
 Implementation acceptance requires offline evidence for duplicate outcome
 delivery, delayed corrections, attribution uncertainty, shared quota pools,

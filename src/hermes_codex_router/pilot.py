@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from .codex_permissions import validate_managed_execution_mode
 from .hub_config import HubConfig
 from .metadata import format_telegram_response
 from .registry import load_registry, validate_execution_root
@@ -35,6 +36,7 @@ def run_codex_pilot(
     topic_title: str,
 ) -> PilotResult:
     # Pilot is an inline thread/start path, even with a queue-shaped config.
+    validate_managed_execution_mode(replace(config, dispatch_mode="inline"))
     validate_adoption_mode(replace(config, dispatch_mode="inline"))
     binding = config.project_for_chat(chat_id)
     if binding.project_id != project_id:
@@ -46,13 +48,23 @@ def run_codex_pilot(
     if agent.runtime != "codex" or agent.token_file is None:
         raise ValueError("managed Codex bot is not configured")
 
-    state = HubState.open(config.state_path)
-    supervisor = CodexAppServerSupervisor(
-        config.state_path.parent / "codex-stdio-placeholder.sock",
-        stdio_executable=config.codex_stdio_executable,
-        model_provider=config.codex_model_provider,
+    state = HubState.open(
+        config.state_path, codex_permission_profile=config.codex_permission_profile
     )
+    supervisor: CodexAppServerSupervisor | None = None
     try:
+        existing_topic = state.find_topic(chat_id, thread_id)
+        existing_session = (
+            None
+            if existing_topic is None
+            else state.retained_session(existing_topic.topic_id, "codex")
+        )
+        if (
+            existing_session is not None
+            and existing_session.agent_id == "codex"
+            and existing_session.codex_permission_profile is not None
+        ):
+            raise ValueError("managed Codex session requires the external queue worker")
         state.reconcile_legacy_execution_scopes(
             {entry.project_id: entry.root for entry in registry.projects}
         )
@@ -72,7 +84,15 @@ def run_codex_pilot(
                 agent.default_model,
                 agent.default_effort,
             )
+        if session.codex_permission_profile is not None:
+            raise ValueError("managed Codex session requires the external queue worker")
 
+        supervisor = CodexAppServerSupervisor(
+            config.state_path.parent / "codex-stdio-placeholder.sock",
+            stdio_executable=config.codex_stdio_executable,
+            model_provider=config.codex_model_provider,
+            permission_profile=config.codex_permission_profile,
+        )
         supervisor.start()
         client = supervisor.client()
         thread = client.start_thread(
@@ -115,5 +135,6 @@ def run_codex_pilot(
         client.close()
         return PilotResult(session.session_id, thread.thread_id, message_id, tab_name)
     finally:
-        supervisor.stop()
+        if supervisor is not None:
+            supervisor.stop()
         state.close()

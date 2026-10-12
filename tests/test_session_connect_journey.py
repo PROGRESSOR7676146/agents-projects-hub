@@ -6,6 +6,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
 import test_codex_worker as worker_fixtures
 import test_service_integration as service_fixtures
@@ -90,6 +91,42 @@ class Client(worker_fixtures.WorkerClient):
 
 
 class SessionConnectJourneyTests(unittest.TestCase):
+    def test_connect_profile_change_refuses_before_client_with_fixed_reason(self) -> None:
+        fixture = worker_fixtures.CodexQueueWorkerTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        state = HubState.open(
+            fixture.config.state_path, codex_permission_profile="example-project-policy"
+        )
+        self.addCleanup(state.close)
+        state.observe_topic(
+            project_id="example-project", chat_id=-1001234567890, thread_id=77, title="Example"
+        )
+        store = SessionConnectStore(state)
+        workflow = store.start_topic(
+            owner_user_id=42,
+            project_id="example-project",
+            canonical_root=fixture.registry.projects[0].root,
+            chat_id=-1001234567890,
+            thread_id=77,
+            model="example-model",
+            effort="low",
+        )
+        client = Client(fixture.registry.projects[0].root)
+        supervisor = worker_fixtures.WorkerSupervisor(client)
+        worker = ExternalQueueWorker(
+            fixture.config, "codex", registry=fixture.registry, supervisor=cast(Any, supervisor)
+        )
+        self.addCleanup(worker.close)
+        with patch.object(supervisor, "client") as connection:
+            self.assertTrue(worker._run_connect_cycle())
+        connection.assert_not_called()
+        outcome = store.get(workflow.workflow_id)
+        self.assertEqual(
+            (outcome.stage, outcome.error_code), ("failed", "connect_permission_selection_changed")
+        )
+        self.assertEqual(client.turns, 0)
+
     def test_discovery_progresses_while_productive_turn_waits(self) -> None:
         fixture = worker_fixtures.CodexQueueWorkerTests()
         fixture.setUp()
@@ -127,7 +164,7 @@ class SessionConnectJourneyTests(unittest.TestCase):
         runner.start()
         self.assertTrue(entered.wait(2), "productive turn did not start")
         try:
-            state = HubState.open(fixture.config.state_path)
+            state = HubState.open(fixture.config.state_path, codex_permission_profile=None)
             try:
                 workflow = SessionConnectStore(state).start_topic(
                     owner_user_id=42,
@@ -174,7 +211,7 @@ class SessionConnectJourneyTests(unittest.TestCase):
             outbox_runtime="external",
             external_worker_agent_ids=("codex",),
         )
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         self.addCleanup(state.close)
         state.observe_topic(
             project_id="example-project",
@@ -240,7 +277,7 @@ class SessionConnectJourneyTests(unittest.TestCase):
             outbox_runtime="external",
             external_worker_agent_ids=("codex",),
         )
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         self.addCleanup(state.close)
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
         controller.config = config
@@ -305,7 +342,7 @@ class SessionConnectJourneyTests(unittest.TestCase):
             outbox_runtime="external",
             external_worker_agent_ids=("codex",),
         )
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         self.addCleanup(state.close)
         state.observe_topic(
             project_id="example-project",

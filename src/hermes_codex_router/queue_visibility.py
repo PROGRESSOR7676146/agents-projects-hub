@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
 
+from .delivery_hold_predicates import job_blocks_topic_fifo
 from .provider_queue_capacity import QueueCapacityConfig, read_queue_capacity
 from .task_lifecycle import TaskLifecycleState
 
@@ -170,8 +171,8 @@ class QueueVisibilityState:
         )
         if not continuation:
             earlier = self.db.execute(
-                "SELECT 1 FROM provider_jobs WHERE topic_id=? AND topic_sequence<? "
-                "AND status NOT IN ('completed','failed','cancelled','indeterminate') LIMIT 1",
+                "SELECT 1 FROM provider_jobs earlier WHERE earlier.topic_id=? AND earlier.topic_sequence<? "
+                f"AND {job_blocks_topic_fifo('earlier')} LIMIT 1",
                 (job["topic_id"], job["topic_sequence"]),
             ).fetchone()
             if earlier is not None:

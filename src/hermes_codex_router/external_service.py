@@ -433,6 +433,21 @@ class ExternalAgentService:
             message.sender_id, message.chat_id, message.thread_id
         ):
             return False
+        from .assessment_inputs import is_assessment_command
+        from .controller_assessment import ControllerAssessmentOrchestrator
+
+        if not message.is_forwarded and is_assessment_command(message.text):
+            if not self.direct_messages_only:
+                return False
+            refusal = ControllerAssessmentOrchestrator(
+                self.config, self.state, self.agent.agent_id
+            ).preflight(message)
+            assert refusal is not None
+            if refusal.text is not None:
+                self.telegram.send_html(
+                    message.chat_id, message.thread_id, html.escape(refusal.text)
+                )
+            return refusal.created
         if self.direct_messages_only:
             direct_project = self.config.direct_message_project_id
             if direct_project is None:

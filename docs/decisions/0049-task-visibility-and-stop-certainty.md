@@ -19,7 +19,7 @@ SQLite database and sender, not a new service.
 
 ## Decision
 
-The owning contracts are [REQ-QUEUE-012 and REQ-QUEUE-013](../product/PERSISTENCE_AND_RECOVERY.md#implemented-queue-compatibility-and-local-provider-worker-isolation).
+The owning contracts are [REQ-QUEUE-012 and REQ-QUEUE-013](../product/DURABLE_QUEUE_AND_CONTROL.md#implemented-queue-compatibility-and-local-provider-worker-isolation).
 An owner stop is an intent. An interrupt RPC acknowledgement or owned-process
 termination alone does not prove the native turn terminal. Unknown execution
 remains indeterminate and retains root exclusion, without productive replay.

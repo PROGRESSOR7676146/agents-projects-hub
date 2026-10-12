@@ -39,7 +39,7 @@ class MonitorHealthTests(unittest.TestCase):
             agents=(),
         )
         # The Controller creates state; the monitor only uses an existing one.
-        HubState.open(config.state_path).close()
+        HubState.open(config.state_path, codex_permission_profile=None).close()
         return config
 
     def test_monitor_never_creates_or_migrates_state(self) -> None:
@@ -67,7 +67,9 @@ class MonitorHealthTests(unittest.TestCase):
     def test_existing_state_open_checks_schema_on_its_own_connection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = self._config(directory)
-            with closing(HubState.open_existing(config.state_path)) as state:
+            with closing(
+                HubState.open_existing(config.state_path, codex_permission_profile=None)
+            ) as state:
                 self.assertEqual(state.schema_version, LATEST_SCHEMA_VERSION)
                 state.record_runtime_event("monitor", "info", "probe", "ok")
 
@@ -84,7 +86,7 @@ class MonitorHealthTests(unittest.TestCase):
 
             with patch.object(Path, "is_file", replace_then_check):
                 with self.assertRaisesRegex(StateError, "state_schema_unsupported"):
-                    HubState.open_existing(config.state_path)
+                    HubState.open_existing(config.state_path, codex_permission_profile=None)
             with closing(sqlite3.connect(config.state_path)) as connection:
                 self.assertEqual(
                     connection.execute("PRAGMA user_version").fetchone()[0],
@@ -103,7 +105,7 @@ class MonitorHealthTests(unittest.TestCase):
 
             with patch.object(Path, "is_file", remove_then_check):
                 with self.assertRaisesRegex(StateError, "state_unavailable"):
-                    HubState.open_existing(config.state_path)
+                    HubState.open_existing(config.state_path, codex_permission_profile=None)
             self.assertFalse(config.state_path.exists())
 
     def test_monitor_cycle_publishes_completed_runtime_health(self) -> None:
@@ -128,6 +130,15 @@ class MonitorHealthTests(unittest.TestCase):
                     "stalled_provider_work": 0,
                     "pending_delivery": 0,
                     "pending_progress_delivery": 0,
+                    "unknown_delivery": 0,
+                    "unknown_progress_delivery": 0,
+                    "outstanding_delivery_holds": 0,
+                    "released_delivery_holds": 0,
+                    "reconciled_final_controls": 0,
+                    "reconciled_progress_controls": 0,
+                    "outstanding_progress_holds": 0,
+                    "failed_delivery": 0,
+                    "failed_progress_delivery": 0,
                     "oldest_queue_age_seconds": None,
                     "oldest_delivery_age_seconds": None,
                     "oldest_progress_delivery_age_seconds": None,
@@ -135,7 +146,7 @@ class MonitorHealthTests(unittest.TestCase):
                 },
             )
 
-            state = HubState.open(config.state_path)
+            state = HubState.open(config.state_path, codex_permission_profile=None)
             try:
                 health = state.get_runtime_health("monitor", MONITOR_INSTANCE_ID)
                 assert health is not None
@@ -157,7 +168,7 @@ class MonitorHealthTests(unittest.TestCase):
             ):
                 run_monitor_once(config, notify=False)
 
-            state = HubState.open(config.state_path)
+            state = HubState.open(config.state_path, codex_permission_profile=None)
             try:
                 health = state.get_runtime_health("monitor", MONITOR_INSTANCE_ID)
                 assert health is not None

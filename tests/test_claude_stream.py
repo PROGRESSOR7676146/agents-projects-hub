@@ -48,7 +48,6 @@ class ClaudeStreamTests(unittest.TestCase):
                 "content": [
                     {"type": "thinking", "thinking": "private thought"},
                     {"type": "text", "text": "Visible é"},
-                    {"type": "tool_use", "input": {"secret": "private input"}},
                 ]
             },
         }
@@ -103,7 +102,7 @@ class ClaudeStreamTests(unittest.TestCase):
                 ).encode()
             )
 
-    def test_incremental_callback_skips_errors_aborts_subagents_and_partial_events(self) -> None:
+    def test_incremental_callback_skips_errors_aborts_and_partial_events(self) -> None:
         items: list[ClaudeVisibleAssistant] = []
         reader = ClaudeStreamReader(expected_session_id=SESSION, on_visible_assistant=items.append)
         base = {
@@ -116,11 +115,96 @@ class ClaudeStreamTests(unittest.TestCase):
         for change in (
             {"error": "rate_limit"},
             {"aborted": True},
-            {"parent_tool_use_id": "subagent-tool"},
             {"type": "stream_event"},
         ):
             reader.feed((output({**base, **change}) + "\n").encode())
         self.assertEqual(items, [])
+
+    def test_text_only_policy_rejects_capabilities_and_actions_before_visible_publication(
+        self,
+    ) -> None:
+        unsafe = (
+            {"type": "system", "subtype": "init", "tools": ["Bash"]},
+            {"type": "system", "subtype": "init", "tools": ""},
+            {"type": "system", "subtype": "init", "mcp_servers": [{"name": "private"}]},
+            {"type": "system", "subtype": "init", "plugins": [{"name": "private"}]},
+            {"type": "system", "subtype": "init", "skills": ["private"]},
+            {"type": "system", "subtype": "init", "permissionMode": "manual"},
+            {"type": "control_request", "request": {"subtype": "can_use_tool", "input": "private"}},
+            {"type": "system", "subtype": "hook_started", "hook_name": "private"},
+            {"type": "system", "subtype": "task_started", "description": "private"},
+            {"type": "tool_progress", "tool_name": "private"},
+            {"type": "tool_use_summary", "summary": "private"},
+            {
+                "type": "assistant",
+                "uuid": OTHER_SESSION,
+                "parent_tool_use_id": None,
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Must not be published"},
+                        {"type": "tool_use", "name": "Bash", "input": {"command": "private"}},
+                    ]
+                },
+            },
+            {"type": "assistant", "parent_tool_use_id": "private", "message": {"content": []}},
+            {
+                "type": "user",
+                "message": {"content": [{"type": "tool_result", "content": "private"}]},
+            },
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_start",
+                    "content_block": {"type": "server_tool_use", "input": "private"},
+                },
+            },
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "delta": {"type": "input_json_delta", "partial_json": "private"},
+                },
+            },
+        )
+        for event in unsafe:
+            event = {"session_id": SESSION, **event}
+            with self.subTest(event=event):
+                visible: list[ClaudeVisibleAssistant] = []
+                for callback in (None, visible.append):
+                    reader = ClaudeStreamReader(
+                        expected_session_id=SESSION, on_visible_assistant=callback
+                    )
+                    with self.assertRaisesRegex(ClaudeStreamError, "text-only") as raised:
+                        reader.feed((output(event) + "\n").encode())
+                    self.assertNotIn("private", str(raised.exception))
+                self.assertEqual(visible, [])
+                with self.assertRaisesRegex(ClaudeStreamError, "text-only"):
+                    parse_claude_stream(output(event, result()), expected_session_id=SESSION)
+
+    def test_text_only_initialization_and_partial_text_preserve_terminal_result(self) -> None:
+        stream = output(
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": SESSION,
+                "tools": [],
+                "mcp_servers": [],
+                "plugins": [],
+                "skills": [],
+                "permissionMode": "dontAsk",
+            },
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": "provisional"},
+                },
+            },
+            result(),
+        )
+        reader = ClaudeStreamReader(expected_session_id=SESSION)
+        reader.feed(stream.encode())
+        self.assertEqual(parse_claude_stream(reader.finish()).text, "Visible answer")
 
     def test_incremental_callback_failure_is_uncertain_without_exception_detail(self) -> None:
         def fail(_: object) -> None:
@@ -264,6 +348,137 @@ class ClaudeStreamTests(unittest.TestCase):
                 )
             self.assertEqual(raised.exception.code, code)
 
+    def test_native_success_variant_with_http_error_is_failure_not_success(self) -> None:
+        for status, code in (
+            (400, "claude_provider_failure"),
+            (401, "claude_authentication_failed"),
+            (429, "claude_quota_exhausted"),
+            (529, "claude_provider_overloaded"),
+            (503, "claude_provider_failure"),
+            (599, "claude_provider_failure"),
+        ):
+            with self.subTest(status=status), self.assertRaises(ClaudeTerminalFailure) as raised:
+                parse_claude_stream(
+                    output(
+                        {
+                            "type": "assistant",
+                            "session_id": SESSION,
+                            "error": "rate_limit",
+                        },
+                        result(
+                            is_error=True,
+                            api_error_status=status,
+                            result="fictional provider error",
+                        ),
+                    ),
+                    expected_session_id=SESSION,
+                    returncode=1,
+                )
+            self.assertEqual(raised.exception.code, code)
+            self.assertEqual(raised.exception.session_id, SESSION)
+            self.assertNotIn("fictional provider error", str(raised.exception))
+
+    def test_typed_terminal_failures_have_bounded_actionable_messages(self) -> None:
+        messages: set[str] = set()
+        cases = (
+            ("authentication_failed", "error_during_execution", "authentication", "route locally"),
+            ("billing_error", "error_during_execution", "billing", "route locally"),
+            ("model_not_found", "error_during_execution", "selected model", "model selection"),
+            ("overloaded", "error_during_execution", "overload", "partial work"),
+            ("rate_limit", "error_during_execution", "reset time is unknown", "partial work"),
+            (None, "error_max_turns", "turn limit", "execution limits"),
+            (None, "error_max_budget_usd", "budget", "execution limits"),
+            (None, "error_max_structured_output_retries", "structured", "output format"),
+            ("private unknown error", "error_during_execution", "provider failure", "partial work"),
+        )
+        for error, subtype, reason, action in cases:
+            with self.subTest(error=error, subtype=subtype):
+                with self.assertRaises(ClaudeTerminalFailure) as raised:
+                    parse_claude_stream(
+                        output(
+                            {"type": "assistant", "session_id": SESSION, "error": error},
+                            result(
+                                subtype=subtype,
+                                is_error=True,
+                                errors=["private terminal diagnostic"],
+                                result="private raw result",
+                            ),
+                        ),
+                        expected_session_id=SESSION,
+                    )
+                message = raised.exception.public_message
+                self.assertIn(reason, message)
+                self.assertIn(action, message)
+                self.assertIn("No completed result was returned", message)
+                self.assertLessEqual(len(message), 300)
+                self.assertNotIn("private", message)
+                self.assertNotIn(SESSION, message)
+                self.assertEqual(raised.exception.session_id, SESSION)
+                messages.add(message)
+        self.assertEqual(len(messages), len(cases))
+
+    def test_native_http_error_variant_requires_status_result_and_exact_terminality(self) -> None:
+        for changes in (
+            {},
+            {"api_error_status": None},
+            {"api_error_status": True},
+            {"api_error_status": "529"},
+            {"api_error_status": 399},
+            {"api_error_status": 600},
+            {"api_error_status": 529, "result": None},
+            {"api_error_status": 529, "result": {}},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ClaudeStreamError):
+                parse_claude_stream(
+                    output(result(is_error=True, **changes)), expected_session_id=SESSION
+                )
+        terminal = result(is_error=True, api_error_status=529)
+        for events in (
+            (terminal, terminal),
+            (result(is_error=False, api_error_status=529),),
+            (result(is_error=True, api_error_status=529, session_id=OTHER_SESSION),),
+            (terminal, {"type": "assistant", "session_id": SESSION}),
+            ({"type": "system", "subtype": "init", "session_id": OTHER_SESSION}, terminal),
+        ):
+            with self.subTest(events=events), self.assertRaises(ClaudeStreamError):
+                parse_claude_stream(output(*events), expected_session_id=SESSION)
+        missing_result = result(is_error=True, api_error_status=529)
+        missing_result.pop("result")
+        with self.assertRaises(ClaudeStreamError):
+            parse_claude_stream(output(missing_result), expected_session_id=SESSION)
+
+    def test_native_http_failure_status_cannot_be_overridden_by_assistant_error(self) -> None:
+        for status in (400, 500, 503):
+            with self.subTest(status=status), self.assertRaises(ClaudeTerminalFailure) as raised:
+                parse_claude_stream(
+                    output(
+                        {"type": "assistant", "session_id": SESSION, "error": "rate_limit"},
+                        result(is_error=True, api_error_status=status),
+                    ),
+                    expected_session_id=SESSION,
+                    returncode=1,
+                )
+            self.assertEqual(raised.exception.code, "claude_provider_failure")
+
+    def test_non_error_success_with_any_non_null_http_status_stays_uncertain(self) -> None:
+        for status in ("529", True, False, 600, 0, [], {}, 200, 529, 529.0):
+            with self.subTest(status=status), self.assertRaises(ClaudeStreamError):
+                parse_claude_stream(output(result(api_error_status=status)))
+        self.assertEqual(
+            parse_claude_stream(output(result(api_error_status=None))).text, "Visible answer"
+        )
+
+    def test_valid_native_http_terminal_failure_is_never_success_even_with_exit_zero(self) -> None:
+        for exit_code in (0, 1):
+            with (
+                self.subTest(exit_code=exit_code),
+                self.assertRaises(ClaudeTerminalFailure) as raised,
+            ):
+                parse_claude_stream(
+                    output(result(is_error=True, api_error_status=529)), returncode=exit_code
+                )
+            self.assertEqual(raised.exception.code, "claude_provider_overloaded")
+
     def test_protocol_ambiguity_never_becomes_terminal_failure(self) -> None:
         ambiguous = (
             "",
@@ -281,7 +496,7 @@ class ClaudeStreamTests(unittest.TestCase):
             output(result(subtype={}, is_error=True)),
             output(result(subtype="error_during_execution", is_error=False)),
             output(result(is_error="false")),
-            output(result(subtype="success", is_error=True, api_error_status=429)),
+            output(result(subtype="success", is_error=True)),
         )
         for stream in ambiguous:
             with self.subTest(stream=stream), self.assertRaises(ClaudeStreamError):

@@ -45,10 +45,20 @@ This normative module is part of the
   token and API key MUST fail before a provider process starts. The private CPA
   configuration MUST exclude paid/API and extra-usage fallback before deployment;
   a local URL check alone does not prove its upstream account or billing route.
-  Until a human approval host is integrated and accepted, the worker MUST expose
-  no Claude built-in tools, customizations, skills, or MCP servers, and MUST deny
-  permission prompts. It MUST NOT claim write-capable lead or read-only advisor
-  parity on the strength of prompt instructions alone.
+  The default worker MUST expose no Claude built-in tools, customizations,
+  skills, or MCP servers and MUST deny permission prompts. An explicit local
+  file-tool opt-in MAY use the protected human boundary of REQ-SEC-008;
+  deployment and native/Telegram acceptance remain separate gates. It MUST NOT
+  claim complete provider parity or authority-data custody on the strength of
+  prompt instructions or this limited tool slice alone.
+  The current Claude delivery milestone is project reading/search and editing
+  under [ADR 0067](../decisions/0067-claude-editor-first.md). Shell, test/build
+  execution, Git commands, skills, MCP and child agents are excluded. Claude
+  native transfer, saved-session connect and image enablement are deferred;
+  their absence MUST NOT block acceptance of the bounded editor. Expansion
+  requires a new owner decision based on observed need. Text-only remains the
+  default. File tools require explicit local opt-in and the protected editor's
+  existing live gates to pass; passing those gates MUST NOT change the default.
 
 ### Compact control surface
 
@@ -64,11 +74,33 @@ This normative module is part of the
   or weekly. A Codex window missing from the account snapshot MAY come from the
   rolling rate-limit update the provider sent during the same turn; it serves
   only that turn's response and MUST NOT be shown later as current.
+  A final Codex response MAY include an observed `/goal` status only from
+  payload-free observations of native events bound to the exact accepted turn
+  and thread.
+  Active, paused, blocked, usage-limited, budget-limited and complete MUST remain
+  distinguishable. The label MUST say `observed`: it describes the latest exact
+  event consumed during submission/wait, not the state at native completion or
+  when Telegram receives it. Foreign or unbound events, clear, malformed state,
+  exhausted optional bounds and a new submission MUST NOT become stale or
+  inferred mode claims. Unknown modes MUST be omitted rather than shown as off.
+  Observation MUST add no RPC, inference, mode change or execution authority and
+  MUST NOT interrupt mandatory result, approval or telemetry consumption.
+  Delivery retries MUST retain the saved footer; completion-only recovery MUST
+  NOT borrow today's thread state. Prompt text and preparatory/subsequent-turn
+  service-tier settings MUST NOT establish current-turn `/fast` evidence.
 - **REQ-CMD-002 (Implemented):** `/model` is the single cascaded selector for
   provider, model, and effort. It marks current values and validates callbacks
   against the exact cached catalog snapshot displayed to the user. The final
   click changes local session state deterministically and MUST NOT depend on a
   new provider RPC or an AI-generated handoff.
+  Claude MAY expose an explicit local `model_catalog`: 1–32 unique ASCII model
+  IDs of at most 128 characters, printable labels of 1–96 characters, and
+  unique nonempty effort subsets of `low`, `medium`, `high`, `xhigh`, and `max`.
+  Every entry contains only `model_id`, `label`, and `efforts`; the configured
+  default model/effort pair MUST be included. Omission retains the single
+  configured default. This field MUST be rejected for other runtimes. Claude
+  menus MUST label these as configured choices with availability unverified;
+  neither entitlement, effective effort nor billing route is established.
 - **REQ-CMD-002A (Implemented):** Successful provider discovery updates a
   private atomic last-known-good catalog with source version and timestamp.
   Telegram callbacks use bounded opaque keys rather than provider model IDs;
@@ -80,6 +112,12 @@ This normative module is part of the
   refresh. Discovery failures preserve the last good catalog. The isolated Controller
   never discovers models itself: Refresh requests monitor refresh while keeping
   cached choices usable. Only an empty cache uses the configured default.
+  Claude catalog display, callback validation and monitor refresh MUST project
+  the same current local configuration without subprocess, network, provider
+  or account-helper invocation. A configuration change MUST invalidate removed
+  model/effort choices even when the cache is fresh. An already selected choice
+  outside the updated catalog MUST remain visibly selected without an automatic
+  reset, session replacement or false availability claim.
 - **REQ-CMD-003 (Implemented):** `/accounts` lists configured provider accounts
   and observable limits. OpenCode Go exact exhaustion/reset telemetry is shown
   only after a real provider `429`; plan caps are labelled separately. The
@@ -181,6 +219,9 @@ This normative module is part of the
   Antigravity MUST use the configured executable and the same model/effort
   argument builder as productive turns. An explicit effort replaces a known
   existing effort suffix; default effort preserves the selected model ID.
+  Named managed Codex profiles remain excluded from local/tmux transfer until
+  its execution boundary is independently verified; refusal MUST precede
+  provider preparation, process launch and lease mutation (REQ-SEC-001).
 - **REQ-WRITER-007 (Implemented for Codex with explicit owner assertion):**
   after the owner closes the CLI and Hub work is terminal, `/return` changes
   only the lease; it invokes no model and copies no summary or transcript. The
@@ -244,19 +285,12 @@ This normative module is part of the
   The next later ordinary message continues the exact chosen thread without a
   separate `/return`; stale callbacks, cancellation and expiry create no new
   generation.
-- **REQ-WRITER-013 (Accepted; implementation pending):** In the initial
-  Claude Code/Codex collaboration workflow, the lead alone MAY change project
-  files, and the advisor MUST be technically limited to reading authorized
-  materials and sending visible advice. Prompt instructions or Plan mode alone
-  MUST NOT establish that boundary: shell, MCP, hooks, plugins, skills, child
-  processes and local transfer MUST NOT grant the advisor write capability.
-  The initial advisor has no subagents; optional lead helpers are limited to
-  one level of read/search/analysis and cannot write. A role change MUST occur
-  only after active work and approvals reach a safe boundary, revoke the prior
-  role before granting the new one, and MUST NOT retarget queued work. The
-  existing canonical-root writer exclusion still applies across topics;
-  additional worker slots never grant parallel writers on one root. Neither
-  provider MAY approve the other's actions.
+- **REQ-WRITER-013 (Retired by ADR 0065):** Hub-managed lead/advisor permissions
+  and role handover are withdrawn. Existing writer leases, canonical-root
+  exclusion, sandbox and human approval authority remain mandatory. Project
+  review instructions MUST NOT be treated as access isolation or approval
+  grants. The ID remains reserved; see
+  [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md).
 
 Initial reviewed resume shapes are `codex resume SESSION_ID -C ROOT`,
 with explicit provider/model `-c` overrides when local `codex_model_provider`
@@ -282,10 +316,37 @@ single-writer checks remain mandatory. See
   requested. Any unexpected server approval request on that fallback MUST be
   explicitly declined. `danger-full-access`, dangerous provider bypass flags,
   and automatic approval MUST be rejected.
+  An explicit local `codex_permission_profile` MAY select a bounded named
+  managed profile through external Codex queue workers. Hub MUST verify, through
+  bounded passive metadata on the preparing connection, that the configured
+  selection is the managed default and the sole allowed profile. Start/resume
+  and turn submission MUST select that exact profile without legacy sandbox
+  overrides, retaining the transport's approval policy and human reviewer.
+  The session generation, accepted job, confirmed execution checkpoint and
+  connect authorization MUST retain immutable selection snapshots. Missing
+  configuration context MUST refuse Codex creation/admission/activation;
+  explicit legacy `null` remains distinct. Existing legacy rows MUST stay
+  legacy after migration. A configuration change MUST NOT retarget old work;
+  an explicit `/new` MAY create a generation with the current selection.
+  Confirmation MUST match the profile, canonical root, provider, approval
+  policy and reviewer and reject visible network access, writable roots outside
+  the project and implicit temporary writable roots. Managed parent metadata
+  MAY explicitly be `null`; it is not proof of inheritance. Matching settings
+  changes during preparation MUST be checked before turn submission. A later
+  policy change MUST trigger a bounded interrupt and retain uncertain execution
+  status until exact native terminality is separately proven.
+  Managed exact resume MUST NOT substitute another thread. Managed steering,
+  inline/pilot execution and local/tmux transfer MUST refuse before their effects
+  until separately supported. Metadata proves selection continuity only; it
+  does not expose the full managed definition or establish read isolation,
+  authority-data custody or helper isolation. Those claims
+  require independent OS-boundary and negative access evidence.
 - **REQ-SEC-002 (Implemented):** Hermes and Hub are not approval authorities.
   Codex/tlive retains approval ownership and first-valid-answer-wins behavior.
 - **REQ-SEC-003 (Accepted):** Timeout, restart, ambiguity, missing state, and
   channel failure MUST resolve to deny/no action, never approval.
+  Neither provider MAY approve the other's actions; enforcement against
+  provider/helper access to approval channels remains subject to REQ-SEC-008 custody.
 - **REQ-SEC-004 (Implemented):** Tokens MUST live in private local files, not
   command arguments, JSON examples, logs, Git, documents, or Telegram content.
 - **REQ-SEC-005 (Implemented):** State and secret files MUST use restrictive
@@ -295,6 +356,33 @@ single-writer checks remain mandatory. See
   topic, and agent allowlists MUST be enforced before provider invocation.
 - **REQ-SEC-007 (Accepted):** A provider failure MUST be visible, reversible,
   and isolated. Recovery MUST NOT weaken security policy to regain availability.
+- **REQ-SEC-008 (Implemented offline; live acceptance pending):** An explicitly
+  configured Claude file-tool turn MAY expose only Read, Glob, Grep, Write and
+  Edit inside a fail-closed Linux filesystem/PID boundary. Private Hub state,
+  bot/web credentials and permission signing keys MUST be absent from its
+  mounts; trusted runtime and hook code MUST remain immutable to the provider.
+  First-editor acceptance MUST establish that every native Write/Edit requires
+  a fresh exact human permission through this boundary; manual-mode settings
+  alone MUST NOT establish that behavior. Read/search MAY run without a human
+  prompt while confined to the project. This acceptance requirement is not a
+  claim that the current offline candidate has proved native enforcement.
+  Only a fresh allowlisted human callback in the protected tlive namespace MAY
+  authorize a prompted operation. The receipt MUST authenticate the exact
+  payload, daemon epoch, nonce and original Telegram actor. Hub MUST recheck
+  the live job, lease, writer, native session, generation, project/root and stop
+  state, then atomically consume the receipt once before native Allow. Inputs
+  requiring masking or an incomplete preview MUST be denied. Native permission
+  suggestions MUST NOT become persistent grants or input changes. Restart,
+  timeout, unavailable isolation/host and ambiguity MUST deny without replay.
+  The per-turn hook MUST have no signing keys or Hub state access, and no Stop,
+  continuation, mirroring or second conversation writer. Shell, MCP, skills,
+  external plugins and children remain unavailable. This slice does not establish
+  subscription routing or local-transfer parity.
+  The trusted worker and tlive host remain the receipt trust base; this slice
+  MUST NOT claim isolation from an unconfined hostile process sharing their UID.
+  Live activation MUST exclude such principals from signing keys, Hub state and
+  transport endpoints through independently verified OS isolation. Prompt-based
+  review MUST NOT exempt helpers or other launch paths from this custody gate.
 
 The detailed threat model in `docs/SECURITY.ru.md` remains normative where it is
 more specific and consistent with this baseline.

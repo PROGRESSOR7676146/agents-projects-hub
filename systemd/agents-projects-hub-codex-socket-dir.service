@@ -1,0 +1,8 @@
+[Unit]
+Description=Prepare private Codex daemon socket bind source
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/agents-projects-hub/venv/bin/agents-projects-hub-prepare-codex-socket-dir
+UMask=0077
+NoNewPrivileges=true

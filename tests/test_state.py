@@ -44,7 +44,7 @@ class HubStateOpenFailureTests(unittest.TestCase):
                 ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "migration fault"):
-                    HubState.open(path)
+                    HubState.open(path, codex_permission_profile=None)
 
             self.assertEqual(len(created), 1)
             self._assert_closed(created[0])
@@ -67,7 +67,7 @@ class HubStateOpenFailureTests(unittest.TestCase):
                 ),
             ):
                 with self.assertRaisesRegex(PermissionError, "chmod fault"):
-                    HubState.open(path)
+                    HubState.open(path, codex_permission_profile=None)
 
             self.assertEqual(len(created), 1)
             self._assert_closed(created[0])
@@ -77,7 +77,7 @@ class HubStateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.path = Path(self.tempdir.name) / "private" / "hub.db"
-        self.state = HubState.open(self.path)
+        self.state = HubState.open(self.path, codex_permission_profile=None)
         self.topic = self.state.observe_topic(
             project_id="alpha",
             chat_id=-1001234567890,
@@ -449,7 +449,7 @@ class HubStateTests(unittest.TestCase):
         barrier = threading.Barrier(2)
 
         def claim() -> bool:
-            state = HubState.open(self.path)
+            state = HubState.open(self.path, codex_permission_profile=None)
             try:
                 barrier.wait()
                 return state.claim_alert_delivery("worker:offline", cooldown_seconds=3600)

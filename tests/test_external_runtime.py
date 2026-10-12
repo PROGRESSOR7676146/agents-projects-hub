@@ -10,9 +10,13 @@ import time
 import unittest
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
+from hermes_codex_router.claude_file_policy import require_file_tool_event
+from hermes_codex_router.claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
+from hermes_codex_router.claude_mount_pins import MountPins, SandboxLaunch
 from hermes_codex_router.claude_stream import (
     ClaudeStreamError,
     ClaudeTerminalFailure,
@@ -25,9 +29,261 @@ from hermes_codex_router.external_runtime import (
     ProviderLimitError,
     ProviderUnavailableError,
 )
+from hermes_codex_router.owned_process_exit import peek_exit_code
+from tests.test_claude_cli_capabilities import HELP, LeaderExitClock
+
+
+def fictional_claude_source(source: str) -> str:
+    return (
+        f"#!{sys.executable}\nimport sys\n"
+        f"if sys.argv[1:] == ['--help']:\n    print({HELP!r})\n    sys.exit(0)\n" + source
+    )
 
 
 class ExternalRuntimeTests(unittest.TestCase):
+    def test_hosted_file_tools_require_owned_runner_and_never_fall_back(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        sandbox = cast(
+            FileToolSandboxConfig,
+            SimpleNamespace(
+                python_executable=Path("/usr/bin/python3"), claude_executable=Path("/usr/bin/true")
+            ),
+        )
+        with patch.dict(
+            os.environ,
+            {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+            clear=True,
+        ):
+            adapter = ExternalCliAdapter(
+                "claude", run=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", "")
+            )
+            with self.assertRaises(ProviderUnavailableError) as failure:
+                adapter.run_turn(cwd=root, prompt="Example", claude_sandbox=sandbox)
+            self.assertEqual(failure.exception.code, "claude_permission_host_unverified")
+            adapter = ExternalCliAdapter("claude")
+            with (
+                patch.object(
+                    adapter, "_verified_claude_argv", side_effect=lambda argv, **kwargs: argv
+                ),
+                patch(
+                    "hermes_codex_router.external_runtime.wrap_file_tool_argv",
+                    side_effect=FileToolSandboxError("example"),
+                ),
+                patch.object(adapter, "_run_claude_process") as native,
+                self.assertRaises(ProviderUnavailableError),
+            ):
+                adapter.run_turn(cwd=root, prompt="Example", claude_sandbox=sandbox)
+            native.assert_not_called()
+
+    def test_hosted_file_tools_wire_fixed_policy_to_owned_process(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        native_id = str(uuid.uuid4())
+        terminal = (
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "session_id": native_id,
+                    "result": "Example",
+                }
+            )
+            + "\n"
+        )
+        sandbox = cast(
+            FileToolSandboxConfig,
+            SimpleNamespace(
+                python_executable=Path("/usr/bin/python3"), claude_executable=Path("/usr/bin/true")
+            ),
+        )
+        adapter = ExternalCliAdapter("claude")
+        pins = MountPins()
+        descriptor = pins.open(root, directory=True)
+        launch = SandboxLaunch(("example-boundary",), {"EXAMPLE": "isolated"}, pins)
+        with (
+            patch.dict(
+                os.environ,
+                {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+                clear=True,
+            ),
+            patch.object(
+                adapter, "_verified_claude_argv", side_effect=lambda argv, **kwargs: argv
+            ) as verify,
+            patch(
+                "hermes_codex_router.external_runtime.wrap_file_tool_argv",
+                return_value=launch,
+            ) as wrap,
+            patch.object(
+                adapter,
+                "_run_claude_process",
+                return_value=subprocess.CompletedProcess([], 0, terminal, ""),
+            ) as native,
+        ):
+            adapter.run_turn(
+                cwd=root, prompt="Example", claude_sandbox=sandbox, new_session_id=native_id
+            )
+        self.assertTrue(verify.call_args.kwargs["file_tools"])
+        argv = wrap.call_args.args[0]
+        self.assertNotIn("--safe-mode", argv)
+        self.assertEqual(argv[argv.index("--tools") + 1], "Read,Glob,Grep,Write,Edit")
+        self.assertEqual(argv[argv.index("--setting-sources") + 1], "")
+        self.assertEqual(native.call_args.args[0], ("example-boundary",))
+        self.assertIs(native.call_args.kwargs["event_policy"], require_file_tool_event)
+        self.assertEqual(native.call_args.kwargs["pass_fds"], (descriptor,))
+        self.assertEqual(native.call_args.kwargs["cwd"], Path("/"))
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+
+    def test_hosted_mount_descriptors_close_on_every_owned_runner_failure(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="example-native-pins-") as directory:
+            root = Path(directory)
+            sandbox = cast(
+                FileToolSandboxConfig,
+                SimpleNamespace(
+                    python_executable=Path("/usr/bin/python3"),
+                    claude_executable=Path("/usr/bin/true"),
+                ),
+            )
+            for failure in (
+                ExternalTurnInterrupted("example stop"),
+                ProviderUnavailableError("example", "example unavailable"),
+                subprocess.TimeoutExpired("example", 1),
+                ClaudeStreamError("example malformed output"),
+            ):
+                with self.subTest(failure=type(failure).__name__):
+                    pins = MountPins()
+                    descriptor = pins.open(root, directory=True)
+                    launch = SandboxLaunch(("example-boundary",), {}, pins)
+                    adapter = ExternalCliAdapter("claude")
+                    with (
+                        patch.dict(
+                            os.environ,
+                            {
+                                "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                                "ANTHROPIC_AUTH_TOKEN": "example",
+                            },
+                            clear=True,
+                        ),
+                        patch.object(
+                            adapter,
+                            "_verified_claude_argv",
+                            side_effect=lambda argv, **kwargs: argv,
+                        ),
+                        patch(
+                            "hermes_codex_router.external_runtime.wrap_file_tool_argv",
+                            return_value=launch,
+                        ),
+                        patch.object(adapter, "_run_claude_process", side_effect=failure),
+                        self.assertRaises(type(failure)),
+                    ):
+                        adapter.run_turn(cwd=root, prompt="Example", claude_sandbox=sandbox)
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+
+    def test_hosted_popen_failure_closes_pins_and_has_no_plain_retry(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="example-spawn-pins-") as directory:
+            root = Path(directory)
+            sandbox = cast(
+                FileToolSandboxConfig,
+                SimpleNamespace(
+                    python_executable=Path("/usr/bin/python3"),
+                    claude_executable=Path("/usr/bin/true"),
+                ),
+            )
+            pins = MountPins()
+            descriptor = pins.open(root, directory=True)
+            launch = SandboxLaunch(("example-boundary",), {}, pins)
+            adapter = ExternalCliAdapter("claude")
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                        "ANTHROPIC_AUTH_TOKEN": "example",
+                    },
+                    clear=True,
+                ),
+                patch.object(
+                    adapter, "_verified_claude_argv", side_effect=lambda argv, **kwargs: argv
+                ),
+                patch(
+                    "hermes_codex_router.external_runtime.wrap_file_tool_argv", return_value=launch
+                ),
+                patch("subprocess.Popen", side_effect=OSError("example spawn failure")) as spawn,
+                self.assertRaises(ProviderUnavailableError),
+            ):
+                adapter.run_turn(cwd=root, prompt="Example", claude_sandbox=sandbox)
+            spawn.assert_called_once()
+            self.assertTrue(spawn.call_args.kwargs["close_fds"])
+            self.assertEqual(spawn.call_args.kwargs["pass_fds"], (descriptor,))
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def test_hosted_capability_probe_uses_validated_executable_after_mount_preflight(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="example-probe-pins-") as directory:
+            root = Path(directory)
+            executable = Path("/usr/bin/true")
+            sandbox = cast(
+                FileToolSandboxConfig,
+                SimpleNamespace(
+                    python_executable=Path("/usr/bin/python3"),
+                    claude_executable=executable,
+                ),
+            )
+            pins = MountPins()
+            descriptor = pins.open(root, directory=True)
+            launch = SandboxLaunch(("example-boundary",), {}, pins)
+            adapter = ExternalCliAdapter("claude", executable="example-untrusted-path-entry")
+            native_id = str(uuid.uuid4())
+            terminal = (
+                json.dumps(
+                    {
+                        "type": "result",
+                        "subtype": "success",
+                        "is_error": False,
+                        "session_id": native_id,
+                        "result": "Example",
+                    }
+                )
+                + "\n"
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                        "ANTHROPIC_AUTH_TOKEN": "example",
+                    },
+                    clear=True,
+                ),
+                patch.object(
+                    adapter._claude_capabilities, "require", return_value=str(executable)
+                ) as probe,
+                patch("hermes_codex_router.external_runtime.wrap_file_tool_argv") as wrap,
+                patch.object(
+                    adapter,
+                    "_run_claude_process",
+                    return_value=subprocess.CompletedProcess([], 0, terminal, ""),
+                ),
+            ):
+
+                def validated(argv: tuple[str, ...], *_args: object) -> SandboxLaunch:
+                    probe.assert_not_called()
+                    self.assertEqual(argv[0], str(executable))
+                    return launch
+
+                wrap.side_effect = validated
+                adapter.run_turn(
+                    cwd=root, prompt="Example", claude_sandbox=sandbox, new_session_id=native_id
+                )
+            self.assertEqual(probe.call_args.args[0], str(executable))
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
     def _claude_process(
         self, source: str, *, timeout: float = 1, **kwargs: Any
     ) -> ExternalTurnResult:
@@ -50,17 +306,18 @@ class ExternalRuntimeTests(unittest.TestCase):
         ):
             root = Path(directory)
             child = root / "provider"
-            child.write_text(f"#!{sys.executable}\n" + source, encoding="utf-8")
+            child.write_text(fictional_claude_source(source), encoding="utf-8")
             child.chmod(0o700)
             adapter = ExternalCliAdapter("claude", executable=str(child))
             try:
                 with patch("subprocess.Popen", side_effect=spawn):
                     return adapter.run_turn(cwd=root, prompt="work", timeout=timeout, **kwargs)
             finally:
-                self.assertEqual(len(spawned), 1)
-                self.assertIsNotNone(spawned[0].poll())
-                self.assertTrue(spawned[0].stdout and spawned[0].stdout.closed)
-                self.assertTrue(spawned[0].stderr and spawned[0].stderr.closed)
+                self.assertEqual(len(spawned), 2)
+                for process in spawned:
+                    self.assertIsNotNone(process.poll())
+                    self.assertTrue(process.stdout and process.stdout.closed)
+                    self.assertTrue(process.stderr and process.stderr.closed)
                 self.assertIsNone(adapter._active_process)
 
     def test_claude_stdout_overflow_is_rejected_before_eof(self) -> None:
@@ -82,9 +339,135 @@ class ExternalRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ClaudeStreamError, "malformed"):
             self._claude_process("import os, time\nos.write(1, b'{broken}\\n')\ntime.sleep(30)\n")
 
+    def test_claude_unexpected_permission_request_is_refused_before_eof(self) -> None:
+        visible: list[ClaudeVisibleAssistant] = []
+        request = (
+            json.dumps(
+                {
+                    "type": "control_request",
+                    "request": {"subtype": "can_use_tool", "input": "private command"},
+                }
+            )
+            + "\n"
+        )
+        with self.assertRaisesRegex(ClaudeStreamError, "text-only") as raised:
+            self._claude_process(
+                f"import os, time\nos.write(1, {request.encode()!r})\ntime.sleep(30)\n",
+                on_visible_assistant=visible.append,
+            )
+        self.assertEqual(visible, [])
+        self.assertNotIn("private command", str(raised.exception))
+
     def test_claude_timeout_reaps_process_and_closes_pipes(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "timed out"):
             self._claude_process("import time\ntime.sleep(30)\n", timeout=0.05)
+
+    def test_claude_help_and_turn_reserve_leader_pid_until_last_group_signal(self) -> None:
+        session = str(uuid.uuid4())
+        terminal = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "session_id": session,
+            "result": "Visible answer",
+        }
+        outcomes: list[int] = []
+        real_killpg = os.killpg
+
+        def signal_reserved_group(pid: int, requested_signal: int) -> None:
+            # A reaped leader raises ChildProcessError here, before any signal
+            # could reach a recycled group. WNOWAIT preserves the reservation.
+            outcome = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            self.assertIsNotNone(outcome)
+            assert outcome is not None
+            outcomes.append(outcome.si_code)
+            real_killpg(pid, requested_signal)
+
+        with patch("os.killpg", side_effect=signal_reserved_group):
+            result = self._claude_process(
+                f"import json\nprint(json.dumps({terminal!r}))\n",
+                new_session_id=session,
+            )
+        self.assertEqual(result.text, "Visible answer")
+        self.assertEqual(outcomes, [os.CLD_EXITED, os.CLD_EXITED])
+
+    def test_claude_stop_observation_and_signal_cannot_race_cleanup_reaping(self) -> None:
+        adapter = ExternalCliAdapter("claude")
+        process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True, text=True
+        )
+        adapter._active_process = process
+        peeked = threading.Event()
+        release_peek = threading.Event()
+        cleanup_attempted = threading.Event()
+        mutex = threading.Lock()
+        errors: list[BaseException] = []
+        stopped: list[bool] = []
+        signals: list[int] = []
+        real_killpg = os.killpg
+
+        class ObservedLock:
+            def __enter__(self) -> None:
+                if threading.current_thread().name == "cleanup":
+                    cleanup_attempted.set()
+                mutex.acquire()
+
+            def __exit__(self, *_: object) -> None:
+                mutex.release()
+
+        adapter._process_lock = cast(Any, ObservedLock())
+
+        def pause_stop_observation(child: subprocess.Popen[str]) -> int | None:
+            code = peek_exit_code(child)
+            if threading.current_thread().name == "stopper":
+                self.assertIsNone(code)
+                peeked.set()
+                self.assertTrue(release_peek.wait(10))
+            return code
+
+        def signal_waitable_group(pid: int, requested_signal: int) -> None:
+            # No signal may follow waitpid, including a concurrent /stop.
+            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            signals.append(requested_signal)
+            real_killpg(pid, requested_signal)
+
+        def stop() -> None:
+            try:
+                stopped.append(adapter.interrupt())
+            except BaseException as error:
+                errors.append(error)
+
+        def cleanup() -> None:
+            try:
+                adapter._terminate_claude_process(process, graceful=False)
+            except BaseException as error:
+                errors.append(error)
+
+        stopper = threading.Thread(target=stop, name="stopper")
+        cleaner = threading.Thread(target=cleanup, name="cleanup")
+        with (
+            patch("hermes_codex_router.external_runtime.peek_exit_code", pause_stop_observation),
+            patch("os.killpg", signal_waitable_group),
+        ):
+            try:
+                stopper.start()
+                self.assertTrue(peeked.wait(10))
+                cleaner.start()
+                self.assertTrue(cleanup_attempted.wait(10))
+                self.assertEqual(signals, [])
+            finally:
+                release_peek.set()
+                stopper.join(10)
+                if cleaner.ident is not None:
+                    cleaner.join(10)
+                if process.returncode is None:
+                    real_killpg(process.pid, 9)
+                    process.wait(timeout=5)
+        self.assertFalse(stopper.is_alive())
+        self.assertFalse(cleaner.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(stopped, [True])
+        self.assertEqual(signals, [9, 9])
 
     def test_claude_drains_both_pipes_and_preserves_exact_terminal_result(self) -> None:
         session = str(uuid.uuid4())
@@ -97,7 +480,6 @@ class ExternalRuntimeTests(unittest.TestCase):
                 "content": [
                     {"type": "text", "text": "Visible partial é"},
                     {"type": "thinking", "thinking": "private thought"},
-                    {"type": "tool_use", "input": {"secret": "private input"}},
                 ]
             },
         }
@@ -248,9 +630,11 @@ class ExternalRuntimeTests(unittest.TestCase):
                 + "\n"
             ).encode()
             child.write_text(
-                f"#!{sys.executable}\nimport os, signal, time\n"
-                "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-                f"os.write(1, {event!r})\ntime.sleep(30)\n",
+                fictional_claude_source(
+                    "import os, signal, time\n"
+                    "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                    f"os.write(1, {event!r})\ntime.sleep(30)\n"
+                ),
                 encoding="utf-8",
             )
             child.chmod(0o700)
@@ -276,14 +660,25 @@ class ExternalRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             child_pid = Path(directory) / "descendant-pid"
             source = (
-                "import pathlib, subprocess, sys\n"
+                "import os, pathlib, subprocess, sys\n"
                 "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
-                f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid))\n"
+                f"marker = pathlib.Path({str(child_pid)!r})\n"
+                "ready = marker.with_suffix('.ready')\n"
+                "ready.write_text(f'{child.pid} {os.getpid()}')\n"
+                "ready.replace(marker)\n"
             )
-            with self.assertRaisesRegex(RuntimeError, "timed out"):
+            clock = LeaderExitClock(child_pid)
+            with (
+                patch(
+                    "hermes_codex_router.external_runtime.time",
+                    SimpleNamespace(monotonic=clock.monotonic),
+                ),
+                self.assertRaisesRegex(RuntimeError, "timed out"),
+            ):
                 self._claude_process(source, timeout=0.2)
             self.assertTrue(child_pid.exists())
-            pid = int(child_pid.read_text())
+            self.assertTrue(clock.observed_leader_exit)
+            pid = int(child_pid.read_text().split()[0])
             deadline = time.monotonic() + 1
             while time.monotonic() < deadline:
                 status = Path(f"/proc/{pid}/stat")
@@ -343,7 +738,12 @@ class ExternalRuntimeTests(unittest.TestCase):
                 {"new_session_id": session, "session_id": session},
             ):
                 with self.subTest(kwargs=kwargs), self.assertRaises(ProviderUnavailableError):
-                    adapter.build_argv(cwd=Path(directory), prompt="start", **kwargs)
+                    adapter.build_argv(
+                        cwd=Path(directory),
+                        prompt="start",
+                        new_session_id=kwargs["new_session_id"],
+                        session_id=kwargs.get("session_id"),
+                    )
 
     def test_claude_adapter_verifies_new_identity_and_preserves_terminal_error(self) -> None:
         session = str(uuid.uuid4())
@@ -355,6 +755,11 @@ class ExternalRuntimeTests(unittest.TestCase):
             ),
             (
                 f'{{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"{session}","api_error_status":429,"errors":["private"]}}',
+                1,
+                ClaudeTerminalFailure,
+            ),
+            (
+                f'{{"type":"result","subtype":"success","is_error":true,"session_id":"{session}","api_error_status":529,"result":"private"}}',
                 1,
                 ClaudeTerminalFailure,
             ),
@@ -440,6 +845,19 @@ class ExternalRuntimeTests(unittest.TestCase):
         self.assertNotIn("private", started.text)
         self.assertIn("--strict-mcp-config", calls[0])
         self.assertIn("--safe-mode", calls[0])
+        for call in calls:
+            settings = json.loads(call[call.index("--settings") + 1])
+            self.assertIs(settings["disableAllHooks"], True)
+            self.assertEqual(
+                settings["enabledPlugins"],
+                {
+                    "cc-plugin-agents-md@builtin": False,
+                    "cc-plugin-diff@builtin": False,
+                    "cc-plugin-plugin-authoring@builtin": False,
+                    "cc-plugin-telemetry@builtin": False,
+                },
+            )
+            self.assertNotIn("cc-plugin-sec-default@builtin", settings["enabledPlugins"])
         self.assertEqual(calls[0][calls[0].index("--tools") + 1], "")
         self.assertEqual(calls[1][calls[1].index("--resume") + 1], session)
         for call, prompt in zip(calls, ("hello", "again")):

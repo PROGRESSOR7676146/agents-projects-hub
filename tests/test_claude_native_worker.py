@@ -1,19 +1,24 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+import subprocess
+import sys
 import unittest
 import uuid
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
 from hermes_codex_router.claude_stream import ClaudeStreamError, ClaudeTerminalFailure
 from hermes_codex_router.execution_journal import ExecutionJournal
-from hermes_codex_router.external_runtime import ExternalTurnResult
+from hermes_codex_router.external_runtime import ExternalCliAdapter, ExternalTurnResult
 from hermes_codex_router.external_worker import ExternalQueueWorker
 from hermes_codex_router.root_blockers import persistent_root_blocker
 from hermes_codex_router.state import HubState
 from tests import test_external_worker as worker_fixtures
+from tests.test_claude_cli_capabilities import HELP
 
 NATIVE_UUID = "00000000-0000-4000-8000-000000000001"
 OTHER_UUID = "019abcde-1234-7fff-8fff-0123456789ab"
@@ -52,7 +57,7 @@ class ObservingClaudeAdapter:
             self.observed.append((current, tuple(checkpoint) if checkpoint is not None else None))
         expected = session_id or new_session_id or NATIVE_UUID
         if self.stop:
-            state = HubState.open(self.state_path)
+            state = HubState.open(self.state_path, codex_permission_profile=None)
             try:
                 state.request_emergency_stop(
                     topic_id=job["topic_id"],
@@ -163,6 +168,102 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
         assert checkpoint is not None
         self.assertIsNone(checkpoint["provider_turn_id"])
 
+    def test_runtime_policy_drift_retains_partial_and_root_without_completion_or_replay(
+        self,
+    ) -> None:
+        job_id = self.enqueue(1)
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            native = argv[argv.index("--session-id") + 1]
+            events = (
+                {
+                    "type": "assistant",
+                    "session_id": native,
+                    "uuid": OTHER_UUID,
+                    "parent_tool_use_id": None,
+                    "message": {"content": [{"type": "text", "text": "Saved incomplete answer"}]},
+                },
+                {
+                    "type": "control_request",
+                    "request": {"subtype": "can_use_tool", "input": "private payload"},
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "session_id": native,
+                    "result": "Must not be committed",
+                },
+            )
+            return subprocess.CompletedProcess(argv, 0, "\n".join(map(json.dumps, events)), "")
+
+        adapter = ExternalCliAdapter("claude", run=fake_run)
+        worker = self.worker(cast(Any, adapter))
+        with patch.dict(
+            "os.environ",
+            {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+            clear=True,
+        ):
+            self.assertTrue(worker.run_cycle())
+            self.assertFalse(worker.run_cycle())
+        job = worker.state.get_provider_job(job_id)
+        self.assertEqual(job.status, "indeterminate")
+        self.assertIsNotNone(
+            persistent_root_blocker(worker.state._connection, topic_id=job.topic_id)
+        )
+        self.assert_no_result(worker.state, job_id)
+        checkpoint = ExecutionJournal(worker.state).read(job_id)
+        assert checkpoint is not None
+        self.assertIsNone(checkpoint["completed_text"])
+        self.assertEqual(
+            ExecutionJournal(worker.state).partial_text(job_id), "Saved incomplete answer"
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("private payload", job.error_detail or "")
+
+    def test_failed_cli_preflight_never_invokes_and_next_request_keeps_allocated_uuid(self) -> None:
+        child = self.root / "fictional-claude"
+        marker = self.root / "productive-invocations"
+
+        def install(help_text: str) -> None:
+            child.write_text(
+                f"#!{sys.executable}\nimport sys,json,pathlib\n"
+                f"if sys.argv[1:] == ['--help']:\n    print({help_text!r})\n    sys.exit(0)\n"
+                "native=sys.argv[sys.argv.index('--session-id')+1]\n"
+                f"pathlib.Path({str(marker)!r}).write_text(native)\n"
+                "print(json.dumps({'type':'result','subtype':'success','is_error':False,'session_id':native,'result':'Visible answer'}))\n",
+                encoding="utf-8",
+            )
+            child.chmod(0o700)
+
+        install("Usage: fictional-claude\nOptions:\n")
+        first = self.enqueue(1)
+        adapter = ExternalCliAdapter("claude", executable=str(child))
+        worker = self.worker(cast(Any, adapter))
+        with patch.dict(
+            "os.environ",
+            {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+            clear=True,
+        ):
+            worker.run_cycle()
+            failed = worker.state.get_provider_job(first)
+            self.assertEqual(failed.status, "failed")
+            self.assertEqual(failed.error_class, "pre_execution")
+            self.assertEqual(failed.error_code, "claude_cli_capabilities_unverified")
+            self.assertFalse(marker.exists())
+            initial = ExecutionJournal(worker.state).read(first)
+            assert initial is not None
+            native = initial["provider_thread_id"]
+            self.assert_no_result(worker.state, first)
+            install(HELP)
+            second = self.enqueue(2)
+            self.assertTrue(worker.run_cycle())
+            self.assertEqual(marker.read_text(), native)
+            self.assertEqual(worker.state.get_provider_job(first).status, "failed")
+            self.assertEqual(worker.state.get_provider_job(second).status, "result_ready")
+
     def test_already_queued_none_snapshot_resumes_previous_native_uuid(self) -> None:
         first = self.enqueue(1)
         second = self.enqueue(2)
@@ -188,9 +289,61 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
         self.assert_binding_visible_before_invocation(adapter, 1)
         self.assertEqual(worker.state.get_provider_job(second).status, "result_ready")
 
+    def test_changed_model_and_effort_resume_exact_completed_native_session(self) -> None:
+        first = self.enqueue(1)
+        adapter = ObservingClaudeAdapter(self.path)
+        worker = self.worker(adapter)
+        self.assertTrue(worker.run_cycle())
+        first_job = worker.state.get_provider_job(first)
+        native = self.assert_binding_visible_before_invocation(adapter)
+        with worker.state._connection:
+            worker.state._connection.execute(
+                "UPDATE provider_jobs SET status='completed' WHERE job_id=?", (first,)
+            )
+            worker.state._connection.execute(
+                "UPDATE telegram_outbox SET status='delivered' WHERE job_id=?", (first,)
+            )
+        prior_checkpoint = ExecutionJournal(worker.state).read(first)
+        selected = worker.state.replace_active_session(
+            first_job.topic_id,
+            model="example-next",
+            effort="medium",
+            runtime="claude",
+            expected_session_id=first_job.session_id,
+        )
+        self.assertEqual(len(adapter.calls), 1)  # Selection itself invokes no provider.
+        second, created = worker.state.enqueue_provider_job(
+            idempotency_key="example-second-selection",
+            chat_id=first_job.chat_id,
+            message_id=2,
+            topic_id=first_job.topic_id,
+            agent_id=selected.agent_id,
+            session_id=selected.session_id,
+            session_generation=selected.generation,
+            provider_session_id=selected.provider_session_id,
+            model=selected.model,
+            effort=selected.effort,
+            payload_text="Fictional next request",
+        )
+        self.assertTrue(created)
+        self.assertTrue(worker.run_cycle())
+        self.assertEqual(len(adapter.calls), 2)
+        self.assertEqual(adapter.calls[1]["session_id"], native)
+        self.assertIsNone(adapter.calls[1]["new_session_id"])
+        self.assertEqual(
+            (adapter.calls[1]["model"], adapter.calls[1]["effort"]), ("example-next", "medium")
+        )
+        self.assertEqual(selected.session_id, first_job.session_id)
+        self.assertEqual(selected.generation, first_job.session_generation)
+        self.assertEqual(ExecutionJournal(worker.state).read(first), prior_checkpoint)
+        self.assertEqual(
+            worker.state.get_provider_job(first), replace(first_job, status="completed")
+        )
+        self.assertEqual(worker.state.get_provider_job(second.job_id).status, "result_ready")
+
     def test_missing_native_root_provenance_refuses_before_adapter_invocation(self) -> None:
         job_id = self.enqueue(1)
-        state = HubState.open(self.path)
+        state = HubState.open(self.path, codex_permission_profile=None)
         job = state.get_provider_job(job_id)
         with state._connection:
             state._connection.execute(
@@ -218,7 +371,7 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
 
     def test_conflicting_native_root_provenance_refuses_before_adapter_invocation(self) -> None:
         prior_id = self.enqueue(1)
-        state = HubState.open(self.path)
+        state = HubState.open(self.path, codex_permission_profile=None)
         prior = state.lease_provider_job("claude", "fictional-prior-worker")
         assert prior is not None and prior.lease_token is not None
         state.mark_provider_job_executing(prior_id, prior.lease_token)
@@ -276,6 +429,174 @@ class ClaudeNativeWorkerTests(unittest.TestCase):
         self.assertIsNone(health.quota_reset_at)
         self.assertFalse(worker.run_cycle())
         self.assertEqual(len(adapter.calls), 1)
+
+    def test_native_http_error_envelope_is_failed_without_result_replay_or_raw_diagnosis(
+        self,
+    ) -> None:
+        self.assert_native_http_failure_not_replayed(returncode=1)
+
+    def test_exit_zero_does_not_make_native_http_failure_success_or_replayable(self) -> None:
+        self.assert_native_http_failure_not_replayed(returncode=0)
+
+    def test_native_terminal_guidance_is_saved_once_without_replay_or_raw_diagnostics(self) -> None:
+        cases = (
+            (
+                "authentication_failed",
+                "error_during_execution",
+                "claude_authentication_failed",
+                "route locally",
+            ),
+            ("billing_error", "error_during_execution", "claude_billing_error", "route locally"),
+            (
+                "model_not_found",
+                "error_during_execution",
+                "claude_model_not_found",
+                "model selection",
+            ),
+            ("overloaded", "error_during_execution", "claude_provider_overloaded", "overload"),
+            (
+                "rate_limit",
+                "error_during_execution",
+                "claude_quota_exhausted",
+                "reset time is unknown",
+            ),
+            (None, "error_max_turns", "claude_turn_limit", "execution limits"),
+            (None, "error_max_budget_usd", "claude_budget_exhausted", "execution limits"),
+            (
+                None,
+                "error_max_structured_output_retries",
+                "claude_structured_output_failed",
+                "output format",
+            ),
+        )
+        for index, (error, subtype, code, guidance) in enumerate(cases, start=1):
+            with self.subTest(code=code):
+                job_id = self.fixture.enqueue("claude", index, thread_id=77 + index)
+                calls: list[tuple[str, ...]] = []
+
+                def fake_run(
+                    argv: tuple[str, ...], **_: object
+                ) -> subprocess.CompletedProcess[str]:
+                    calls.append(argv)
+                    native = argv[argv.index("--session-id") + 1]
+                    events = (
+                        {"type": "assistant", "session_id": native, "error": error},
+                        {
+                            "type": "result",
+                            "subtype": subtype,
+                            "is_error": True,
+                            "session_id": native,
+                            "errors": ["private terminal diagnostic"],
+                        },
+                    )
+                    return subprocess.CompletedProcess(
+                        argv, 1, "\n".join(map(json.dumps, events)), "private stderr"
+                    )
+
+                adapter = cast(Any, ExternalCliAdapter("claude", run=fake_run))
+                worker = self.worker(adapter)
+                with patch.dict(
+                    "os.environ",
+                    {
+                        "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                        "ANTHROPIC_AUTH_TOKEN": "example",
+                    },
+                    clear=True,
+                ):
+                    self.assertTrue(worker.run_cycle())
+                    self.assertFalse(worker.run_cycle())
+                    restarted = self.worker(adapter)
+                    self.assertFalse(restarted.run_cycle())
+                job = worker.state.get_provider_job(job_id)
+                self.assertEqual((job.status, job.error_code), ("failed", code))
+                self.assert_no_result(worker.state, job_id)
+                self.assertIsNone(
+                    persistent_root_blocker(worker.state._connection, topic_id=job.topic_id)
+                )
+                notice = worker.state.get_telegram_outbox_for_job(job_id)
+                self.assertIn(guidance, notice.telegram_html)
+                self.assertIn("No completed result was returned", notice.telegram_html)
+                self.assertNotIn("private", notice.telegram_html)
+                self.assertNotIn("private", job.error_detail or "")
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(
+                    worker.state._connection.execute(
+                        "SELECT COUNT(*) FROM telegram_outbox WHERE job_id=?", (job_id,)
+                    ).fetchone()[0],
+                    1,
+                )
+
+    def assert_native_http_failure_not_replayed(self, *, returncode: int) -> None:
+        job_id = self.enqueue(1)
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            native = argv[argv.index("--session-id") + 1]
+            events = (
+                {"type": "assistant", "session_id": native, "error": "example_unrecognized"},
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": True,
+                    "session_id": native,
+                    "api_error_status": 529,
+                    "result": "private native error detail",
+                },
+            )
+            return subprocess.CompletedProcess(
+                argv, returncode, "\n".join(map(json.dumps, events)), "private stderr"
+            )
+
+        worker = self.worker(cast(Any, ExternalCliAdapter("claude", run=fake_run)))
+        with patch.dict(
+            "os.environ",
+            {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+            clear=True,
+        ):
+            self.assertTrue(worker.run_cycle())
+            self.assertFalse(worker.run_cycle())
+        job = worker.state.get_provider_job(job_id)
+        self.assertEqual((job.status, job.error_code), ("failed", "claude_provider_overloaded"))
+        self.assert_no_result(worker.state, job_id)
+        self.assertEqual(len(calls), 1)
+        self.assertIsNone(persistent_root_blocker(worker.state._connection, topic_id=job.topic_id))
+        notice = worker.state.get_telegram_outbox_for_job(job_id)
+        self.assertNotIn("private native error detail", notice.telegram_html)
+        self.assertNotIn("private stderr", notice.telegram_html)
+        self.assertNotIn("private", job.error_detail or "")
+
+    def test_non_error_success_with_malformed_status_retains_blocker_without_replay(self) -> None:
+        job_id = self.enqueue(1)
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run(argv: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            terminal = {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "session_id": argv[argv.index("--session-id") + 1],
+                "api_error_status": "529",
+                "result": "unproven answer",
+            }
+            return subprocess.CompletedProcess(argv, 0, json.dumps(terminal), "")
+
+        worker = self.worker(cast(Any, ExternalCliAdapter("claude", run=fake_run)))
+        with patch.dict(
+            "os.environ",
+            {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
+            clear=True,
+        ):
+            self.assertTrue(worker.run_cycle())
+            self.assertFalse(worker.run_cycle())
+        job = worker.state.get_provider_job(job_id)
+        self.assertEqual(job.status, "indeterminate")
+        self.assert_no_result(worker.state, job_id)
+        self.assertEqual(len(calls), 1)
+        self.assertIsNotNone(
+            persistent_root_blocker(worker.state._connection, topic_id=job.topic_id)
+        )
 
     def test_terminal_failure_with_wrong_uuid_retains_uncertainty(self) -> None:
         job_id = self.enqueue(1)

@@ -12,6 +12,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .codex_control_predicates import require_control_scope_clear
+from .delivery_control_predicates import (
+    final_control_reconciled,
+    progress_control_reconciled,
+    result_ready_control_reconciled,
+)
 from .models import ProjectRegistry
 from .project_admin import (
     _atomic_write,
@@ -602,9 +608,10 @@ class ProjectEditStore:
                 "unresolved_outcome",
             ),
             (
-                """SELECT 1 FROM telegram_outbox o JOIN provider_jobs j ON j.job_id=o.job_id
+                f"""SELECT 1 FROM telegram_outbox o JOIN provider_jobs j ON j.job_id=o.job_id
                    JOIN topics t ON t.topic_id=j.topic_id WHERE t.project_id=?
-                   AND o.status IN ('pending','sending') LIMIT 1""",
+                   AND o.status IN ('pending','sending','unknown')
+                   AND NOT {final_control_reconciled("o")} LIMIT 1""",
                 "pending_delivery",
             ),
             (
@@ -614,15 +621,17 @@ class ProjectEditStore:
                 "queued_or_running_work",
             ),
             (
-                """SELECT 1 FROM provider_jobs j JOIN topics t ON t.topic_id=j.topic_id
-                   WHERE t.project_id=? AND j.status='result_ready' LIMIT 1""",
+                f"""SELECT 1 FROM provider_jobs j JOIN topics t ON t.topic_id=j.topic_id
+                   WHERE t.project_id=? AND j.status='result_ready'
+                   AND NOT {result_ready_control_reconciled("j")} LIMIT 1""",
                 "pending_delivery",
             ),
             (
-                """SELECT 1 FROM provider_progress_deliveries o
+                f"""SELECT 1 FROM provider_progress_deliveries o
                    JOIN provider_jobs j ON j.job_id=o.job_id
                    JOIN topics t ON t.topic_id=j.topic_id WHERE t.project_id=?
-                   AND o.status IN ('pending','sending') LIMIT 1""",
+                   AND o.status IN ('pending','sending','unknown')
+                   AND NOT {progress_control_reconciled("o")} LIMIT 1""",
                 "pending_delivery",
             ),
             (
@@ -686,6 +695,11 @@ class ProjectEditStore:
                     )
                     if target_display is None or target_root is None:
                         raise StateError("project_edit_incomplete")
+                    if workflow.operation == "relocate":
+                        require_control_scope_clear(self.connection, f"root:{workflow.old_root}")
+                        require_control_scope_clear(
+                            self.connection, f"root:{target_root.resolve(strict=False)}"
+                        )
                     already_written = (
                         current_display == target_display
                         and current_root == target_root.resolve(strict=False)

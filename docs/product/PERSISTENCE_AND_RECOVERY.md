@@ -19,8 +19,12 @@ This normative module is part of the
   final results, partial outcomes, uncertain executions and recovered results,
   plus pending queue/final-delivery/progress-delivery counts and ages. These
   aggregates MUST contain no prompt, response, provider-session, project, topic
-  or account identity. The
-  passive alert evaluator MUST report provider work with an expired execution
+  or account identity. Final/progress unknown-delivery counts MUST remain separate
+  from pending delivery/retry counts and trigger passive alerts without
+  authorizing resend. Total unknown final delivery MUST remain visible after an
+  owner disposition; outstanding and owner-released delivery holds MUST be
+  counted separately, and only outstanding final holds keep the blocking alert
+  active. The passive alert evaluator MUST report provider work with an expired execution
   lease, or due and unblocked queued work waiting over 15 minutes without an
   active worker lease. A healthy long-running execution MUST NOT alert solely
   because its original queue timestamp is old. The evaluator MUST also report
@@ -102,9 +106,23 @@ This normative module is part of the
   A cold start without the Hermes cursor MUST send one summary of open episodes,
   not a card per historical episode. Only an authorized owner's press of the
   analyze control MAY start a Hermes model turn, which receives the incident as
-  lower-priority data, never as instructions. Enabling cards MUST stop the
-  monitor's direct Hermes recovery push in the same release. Hermes-owned cards
-  do not replace the Operations topic of REQ-OPS-006.
+  lower-priority data, never as instructions. Hermes-owned cards do not replace
+  the Operations topic or its same-topic Hermes transport fallback of REQ-OPS-006.
+  A default-off notices-only increment MAY omit analysis while its supported
+  authorized native-turn entry remains unproved; it MUST NOT offer a functioning
+  analyze control or claim this requirement complete. Notices require a separate
+  private configuration with one exact numeric owner/private destination, a
+  supported Gateway-owned periodic lifecycle and a Hermes-owned private cursor.
+  Missing lifecycle support MUST refuse opt-in; a configuration change MUST
+  retire the task and controls rather than retarget existing delivery evidence.
+  The cursor MUST persist attempted delivery before sending, require a positive
+  exact-destination receipt to establish delivery, and retain unknown outcomes
+  without automatic resend. Only proven rejection MAY retry, with bounded
+  attempts and deadlines. Unreadable or unsafe existing delivery evidence MUST
+  be preserved and refused; only an absent cursor cold-seeds. Dismiss MUST bind
+  the exact owner, private chat, opaque token and saved delivered message, and
+  MUST NOT execute recovery, update or approval actions. Shutdown MUST join its
+  callbacks and file work without leaving a competing writer on reconnect.
 - **REQ-OPS-015 (Planned; ADR 0048):** Every component that the update tool
   manages MUST run from immutable per-version directories behind a switchable
   link recorded in a private stack manifest. `doctor` and the monitor MUST
@@ -128,292 +146,6 @@ recreate unsaved provider context or a partially executed turn.
 
 ### Implemented queue compatibility and local provider-worker isolation
 
-- **REQ-HUBBOT-001 (Implemented behind optional `hub_bot` configuration):** A separate Hub Telegram bot MUST become the
-  central project-group identity. It MUST own group ingress, the universal
-  command menu, and callbacks; it MUST have Privacy Mode disabled as a
-  deployment prerequisite. Provider bots MUST NOT poll project groups, while
-  retaining their own response identities and provider-specific direct-message
-  endpoints. The Hub bot token MUST reside only in a restrictive private local
-  file and MUST NOT appear in Git, examples, logs, or Telegram content. Hub
-  ingress MUST use a durable offset identity distinct from Codex. When
-  `hub_bot` is omitted, Codex remains the compatibility ingress without
-  changing its existing offset. Controller startup MUST validate and read only
-  the selected ingress token; provider workers, direct-message services, and
-  outbox delivery retain their own credential and response-identity boundaries.
-  Hub mode MUST use external queue/outbox ownership and MUST isolate every
-  locally managed productive provider in its own external worker. A local
-  runtime without external-worker support MUST be rejected rather than run
-  inside the Controller.
-- **REQ-QUEUE-001 (Implemented behind `dispatch_mode: "queue"`):** The deterministic Hub Controller MUST durably
-  enqueue each admitted productive request before provider execution and MUST
-  NOT wait for a provider CLI, RPC, or model turn to process local commands.
-  A provider declared `managed_externally` MUST retain its native admission
-  boundary and MUST NOT be accepted into the local durable queue. The Controller
-  MUST ignore productive routes whose targets are all externally managed, MUST
-  partition mixed multi-target routes before applying local admission rules,
-  and MUST NOT invoke an externally managed provider merely to refresh a model
-  catalog. Codex is the Controller's primary local provider and cannot be
-  declared `managed_externally` in this architecture.
-- **REQ-QUEUE-002 (Implemented for Codex, OpenCode, Antigravity, and a limited
-  Claude Code CLI adapter behind
-  `queue_runtime: "external"`):** Provider execution MAY occur in isolated
-  workers for explicitly configured local agent IDs. A worker owns its adapter or
-  Codex app-server lifecycle and SQLite connection, leases only its own jobs,
-  and has no Telegram transport or token-reading capability. The default
-  external-worker list remains Codex for rollback compatibility; OpenCode and
-  Antigravity and Claude are enabled independently through
-  `external_worker_agent_ids`. Locally managed Claude MUST use external queue
-  mode; its first repository adapter is text-only pending approval integration.
-  `max_parallel_roots` MUST default to one and MUST bound simultaneous
-  Hub-owned productive execution across all external workers. A value above one
-  MUST require external queue mode. `codex_worker_count` MUST default to one and
-  MAY configure 1–16 independently identified Codex worker processes only in
-  external queue mode with `manage_codex_server: false`.
-  `claude_worker_count` MUST separately default to one and MAY configure 1–16
-  independent Claude CLI workers only in external queue mode; OpenCode and
-  Antigravity retain one worker each. Each process MUST own its own SQLite
-  connection and provider client or adapter, and one worker slot MUST NOT lease
-  two active turns. The queue MUST enforce both configured provider slot counts
-  and canonical-root exclusion
-  transactionally, preserve provider fairness and FIFO, and drain active turns
-  without cancellation when global capacity or either slot count is reduced.
-  Runtime health and revision convergence MUST include every configured slot.
-  Actual parallelism remains bounded by running worker processes and
-  `max_parallel_roots`.
-  Hermes remains externally managed and is not a queue-worker runtime. Failure,
-  quota exhaustion, or restart of one worker MUST NOT block Controller commands
-  or another provider's eligible work on an independent execution scope. This
-  stage covers the shared project-group
-  queue only; provider direct-message services remain separate legacy inline
-  endpoints with their own state database.
-- **REQ-QUEUE-003 (Implemented for Hub-owned queue consumers):** Productive jobs
-  MUST execute strict FIFO within one numeric topic. Across topics and providers,
-  at most one Hub-owned productive writer MAY own a canonical project root at a
-  time. A locally created and registered Git worktree may become an independent
-  execution scope only after an idle numeric topic is explicitly bound to it;
-  topic identity alone does not create one. Bind/archive MUST be transactional,
-  MUST refuse pending, active, provider-bound, local-writer, or unresolved work, and execution
-  MUST revalidate the exact derived allowlisted Git worktree immediately before
-  provider access. Lease selection,
-  local-writer transfer, and saved-session adoption MUST claim or reject that
-  scope in the same SQLite transaction. Different execution scopes MAY proceed
-  independently up to configured capacity. Capacity reduction MUST drain
-  existing execution without cancellation and MUST refuse new slots until the
-  occupied count falls below the new limit. Eligible live provider workers MUST
-  receive durable least-recently-granted service; a stale worker MUST stop
-  blocking fairness after a bounded heartbeat window. Expired pre-execution
-  leases release capacity. Expired execution becomes unresolved uncertainty,
-  continues to block only its own scope, and MUST NOT consume global capacity.
-  Passive health MAY expose capacity, availability, bounded worker/agent/phase
-  owners, and an aggregate uncertain-scope count, but not project paths, topic
-  IDs, prompts, sessions, or provider output. The target
-  provider/session/model/effort snapshot MUST be immutable after enqueue.
-  Persistent local/terminal ownership or unconfirmed execution on the scope
-  MUST be checked in productive admission's SQLite transaction. New blocked
-  input MUST have one durable disposition bound to its Telegram message and
-  MUST NOT silently enter a queue that cannot progress. Already accepted
-  queued work MUST keep its history and FIFO position, enter the existing
-  durable hold mechanism before a writer returns, and require an exact
-  owner decision to confirm or cancel; returning the lease alone MUST NOT
-  start it. A confirmed job remains subject to the root writer exclusion and
-  ordinary FIFO. Explicit failed-turn continuation retains its documented
-  exception to an earlier held tail.
-  A committed `result_ready` job MAY release its cross-topic filesystem scope
-  because only durable Telegram delivery remains, while the existing same-topic
-  FIFO boundary MUST continue through final-result delivery.
-- **REQ-QUEUE-004 (Implemented for the embedded compatibility consumer):** A durable job state machine MUST distinguish work
-  not yet invoked from `executing`, result delivery, terminal failure, and
-  `indeterminate` execution. An unproven in-flight turn MUST NOT be retried
-  automatically. A terminal provider failure or indeterminate outcome MUST
-  enqueue a bounded user-visible notice through the provider bot identity;
-  delivering that notice MUST NOT convert the terminal job into a successful
-  provider result.
-  Blocker and hold notices MUST be persisted separately from provider result
-  delivery, sent by the authorized Hub sender, and retried as delivery only.
-  Repeated Telegram updates or callbacks MUST not create another job, decision,
-  or provider invocation. Owner-facing text MUST distinguish a request never
-  sent to the provider, an accepted job held before execution, and executing
-  work; a typing action is not evidence of execution.
-  Codex queue paths MUST consume already-buffered turn events and deduplicate
-  completed visible items by ID. A handled turn failure MUST retain a bounded,
-  explicitly incomplete visible excerpt in its durable notice and show a safe
-  cause without exposing raw diagnostics. A caught preparation failure before
-  `turn/start` MUST be classified separately from uncertain invocation. These
-  Codex queue paths additionally persist execution identity and completed visible
-  items in schema 22, separately from immutable enqueue snapshots. Thread identity
-  MUST be recorded before `turn/start`; accepted turn identity MUST be recorded
-  before consuming its visible items. Expired invocation leases and handled
-  post-acceptance transport/commit failures MUST first enter recovery-only
-  processing: a saved completed result may be committed directly,
-  otherwise one bounded `thread/read` may retrieve the exact accepted completed
-  turn without resuming or invoking it. Root/identity mismatch, missing acceptance,
-  unavailable read capability or an unfinished turn MUST preserve uncertainty
-  and any eligible saved partial text, never authorize productive replay. A
-  read-only local audit MUST classify terminal indeterminate jobs from persisted
-  result, completion, partial, acceptance, thread, and notification evidence;
-  it MUST exclude prompt/response content from its aggregate output and MUST
-  never mutate or replay provider work. An operator MAY append exactly one
-  schema-23 resolution to an exact terminal indeterminate job: `acknowledged`,
-  `superseded`, or `externally_completed`. Repeating the same resolution MUST be
-  idempotent; replacing it or resolving another job state MUST fail. Resolution
-  MUST leave the job status, error evidence, delivery state, and replay policy
-  unchanged, and the audit MUST report resolved and unresolved counts. An
-  unresolved `indeterminate` job MUST retain its execution scope unless the
-  exact accepted turn is independently proven terminal. Its immutable operator
-  resolution MAY release the scope only for new work and MUST NOT replay or
-  mutate the uncertain job. Failure
-  notices MUST state what happened, what Hub saved, and the next safe action.
-  For an unconfirmed outcome the action MUST keep the root paused. An exact
-  read-only Codex check MAY prove completed, failed, interrupted, active, or
-  unknown without starting a new turn. Completed output is delivered from
-  saved provider data without replay. A later proof MAY replace the initial
-  unconfirmed notice with one durable corrected notice, preserving the original
-  text and delivery evidence. Confirmed failed/interrupted turns keep
-  their `indeterminate` job history and partial effects; separate durable
-  terminal evidence releases only the execution uncertainty. Active/unknown
-  remains excluded, and later reads are bounded. A confirmed failure notice
-  MUST offer a reply-bound explicit inspection-first continuation as a new job
-  in the same provider session; duplicate updates or choices MUST create at
-  most one job. Existing queued work on that root MUST remain visible and
-  paused until an owner decision. No accepted turn may be retried automatically.
-  A Claude worker MUST persist its caller-chosen native session UUID and
-  canonical root before invocation, validate the current generation and writer,
-  and resume only that exact identity. Native message UUIDs MAY deduplicate
-  bounded provisional visible text; neither session nor message identity is
-  native turn-acceptance or terminality evidence. Only a validated complete
-  stream with a matching session and terminal success MAY create a completion
-  checkpoint. Recovery MAY deliver that saved completion without invocation;
-  partial-only, missing or conflicting evidence MUST remain uncertain and
-  retain root exclusion. A local failure after completion persistence MUST
-  preserve recovery of that result, including when its delivery preparation
-  fails again. Verified terminal provider failures and quota rejections MUST
-  remain distinct from unknown outcomes, without invented quota/reset values
-  or automatic replay. A covering stop retains the existing precedence.
-- **REQ-QUEUE-005 (Implemented for embedded compatibility and the external sender):** Provider result persistence and Telegram delivery
-  MUST use a durable outbox. Telegram delivery retry MUST NOT create another
-  provider turn, and visible-context acknowledgement MUST occur only after a
-  successful provider result commit. With external queue mode and the explicit
-  `outbox_runtime: "external"` rollout gate, a standalone
-  sender MUST fairly poll every locally managed queue agent, including embedded
-  execution during mixed rollout, use each provider bot identity, recover only
-  their stale delivery leases, and MUST NOT own a provider adapter
-  or RPC client. The Controller MUST NOT deliver external-worker outbox rows.
-  Both sender paths MUST persist a retry deadline no earlier than Telegram's
-  valid `retry_after`, combined with bounded exponential backoff. Restart MUST
-  retain the deadline; waiting for it MUST NOT consume delivery attempts or
-  repeat provider work. In Hub mode, acknowledgement of a stop that affected an
-  active or queued provider job MUST use durable control delivery under the Hub
-  identity, independently of the provider result/failure outbox. Recording the
-  stop and preparing its acknowledgement MUST be atomic. Duplicate stop updates
-  MUST NOT create another acknowledgement. Delivery MUST NOT change execution
-  certainty: an unconfirmed interruption retains its root exclusion. A stop
-  that finds no work may reply directly because it records no state change.
-  With external outbox ownership, a completed visible Codex commentary item MAY
-  create a separate durable progress delivery under the provider identity. The
-  first eligible item MAY be immediate; later items MUST be limited to at most
-  one per 120 seconds for that job and bounded to Telegram-safe text. The queue
-  MUST deduplicate by durable visible-item sequence, retain Telegram retry
-  deadlines across sender restart, and supersede pending progress when the job
-  becomes terminal. Progress delivery MUST NOT complete a job, acknowledge
-  visible context, or authorize provider replay. Final-result delivery MUST have
-  priority over progress delivery. Progress messages MUST request Telegram's
-  silent delivery with `disable_notification`; final results and owner decisions
-  MUST retain normal notification behavior. Telegram clients may still display
-  a silent notification, so the flag alone does not prove the absence of screen
-  or tray alerts.
-- **REQ-QUEUE-006 (Implemented for the additive schema and global compatibility gate; per-provider rollout Planned):** Queue migration and per-provider rollout MUST be
-  additive, feature-gated, recoverable through the existing backup discipline,
-  and retain safe rollback without destroying accepted jobs. Changing an agent
-  to `managed_externally` requires its accepted local jobs to be drained or
-  explicitly reconciled first; Controller startup MUST fail visibly while any
-  such nonterminal rows remain.
-- **REQ-QUEUE-007 (Implemented):** Long-running Controller, direct-provider,
-  worker, and outbox-sender processes MUST translate `SIGTERM` and `SIGINT`
-  into cooperative stop requests only. They MUST stop polling and taking work
-  at the next explicit safe boundary, return a lease when stop is observed
-  before invocation without consuming an attempt, bound transport waits and
-  joins, propagate WebSocket closure to blocked readers/senders, and restore
-  prior process signal handlers. A signal may race after the
-  final safe-boundary check; work past that boundary is treated as potentially
-  started and remains subject to the existing `indeterminate`/outbox ambiguity
-  rules rather than being made automatically retryable.
-- **REQ-QUEUE-008 (Implemented):** While the head job of a Telegram topic is
-  queued, leased, executing, or awaiting outbox delivery, the standalone sender
-  SHOULD refresh Telegram's `typing` chat action through the target provider bot
-  identity. Group ingress MAY publish an immediate best-effort `typing` action
-  only when its bot is the selected provider identity; the provider sender owns
-  the action otherwise. These acknowledgements MUST NOT invoke a model or idle
-  provider, and a chat-action failure cannot block execution or result delivery.
-- **REQ-QUEUE-009 (Implemented):** Durable input membership MUST retain every
-  Telegram `(chat_id, message_id)` exactly once even when several inputs form
-  one provider turn or a later Codex input is absorbed through same-turn
-  steering. A crash after an ambiguous provider acceptance MUST NOT replay that
-  input automatically.
-- **REQ-QUEUE-010 (Implemented in schema 33):** Inbound Telegram material
-  identity, binding, content class, private spool path, byte count, SHA-256,
-  availability reason, and consumption state MUST be committed in the same
-  SQLite transaction as its provider-job input. Duplicate
-  `(chat_id, message_id, attachment_index)` receipts MUST neither download nor
-  invoke twice. Raw input uses a private Hub-owned spool; provider preparation
-  revalidates canonical path, regular-file status, digest, size, UTF-8 or image
-  signature, then copies only to `.hub/incoming/<job_id>` below the revalidated
-  execution root. Successful result commit atomically marks stored material
-  consumed before best-effort raw cleanup. A stale pre-execution lease MAY retry
-  the same snapshot; ambiguous execution MUST retain it without replay. Session,
-  provider, root/lane, writer, stop, and activation boundaries MUST prevent a
-  pending material from migrating to a different productive binding. Migration
-  33 is additive; rollout and runtime rollback both require artifacts that
-  declare schema-33 compatibility.
-- **REQ-QUEUE-012 (Partially implemented in schema 37; remaining scope accepted):** Source-topic control
-  notices MUST distinguish accepted, queued, executing, approval-waiting and
-  unknown-outcome work. Queue notices MUST explain provider slots, global
-  capacity, topic FIFO or canonical-root blockers and give a safe next action;
-  owner-topic links MUST use numeric identity. Meaningful provider activity MUST
-  be separate from heartbeat and typing. Configurable no-progress notices default
-  to 300 seconds for an ordinary turn and 1,200 seconds for active tools/builds.
-  Notices are edge-triggered and re-arm on meaningful progress; they never
-  approve, stop, unlock or replay. A retry addressed to active work MUST join or
-  report that exact work without another invocation; unsupported retry controls
-  MUST fail visibly. Stop notices MUST describe numeric-topic scope, cancelled
-  queued work, pending versus confirmed interruption, held work and unaffected
-  work in other topics. An interrupt acknowledgement, transport loss or timeout
-  MUST NOT prove terminality. The exact accepted turn must be proven terminal
-  before uncertainty releases a root. These rules also apply to embedded queue
-  consumers; unsupported modes MUST be refused explicitly.
-  The current implemented subset is Hub-owned external queue/external outbox
-  admission and execution notices, with accepted-turn activity for Codex only.
-  Queue reasons are bounded admission/handoff snapshots, not continuous capacity
-  claims. `task_no_progress_seconds` and `task_tool_no_progress_seconds` configure
-  the ordinary/tool thresholds; each MUST be an integer from 1 to 86,400, with
-  defaults 300 and 1,200 respectively. Activity and first delivery of an activity notice MUST
-  revalidate the exact live execution lease, unchanged project/scope, numeric
-  topic, session agent/generation, Telegram writer and accepted native checkpoint.
-  Completed checkpoints MUST NOT generate active-turn warnings. Meaningful
-  activity MUST supersede never-attempted warnings for the recovered episode;
-  exact approval resolution MUST supersede its never-attempted approval notice.
-  Approval notices MUST remain generic and direct the owner to the native
-  Codex/tlive request; no raw permission payload is stored or forwarded. An
-  approval preceding native turn acceptance remains outside this observer.
-  Payload-free event/tool/approval metadata MUST total at most 512 entries per
-  job; an exhausted bound MUST NOT authorize execution, replay or approval.
-- **REQ-QUEUE-013 (Accepted; implementation in progress):** Control delivery
-  MUST persist episode identity, immutable numeric destination, retry deadlines
-  and positive Telegram receipts separately from provider execution. A sender
-  MUST durably mark the beginning of a send before contacting Telegram. An
-  expired unattempted lease MAY retry delivery; an attempted send without a
-  positive persisted receipt MUST become unknown and MUST NOT be blindly resent.
-  Only an explicit Telegram API rejection proves a delivery attempt retryable.
-  A control-delivery failure MUST NOT change job, session or root ownership.
-  Database deduplication MUST NOT be described as exactly-once Telegram delivery.
-- **REQ-QUEUE-011 (Accepted; implementation pending):** An explicitly enabled
-  Claude Code/Codex review workflow MUST durably bind its request, permitted
-  materials, exact artifact/revision reference, advisor result, lead decision,
-  and continuation to the originating project, topic, provider sessions and
-  role generation. Duplicate delivery or restart MUST NOT create a second
-  advisor call or lead continuation. An uncertain provider turn MUST retain
-  the existing no-automatic-replay boundary. The lead MUST finish its turn
-  before the advisor takes a separate queue slot; a role change MUST NOT mutate
-  already accepted target snapshots.
-
-The detailed state machine, retry proof rule, reconciliation, and required
-fault acceptance are normative in [ADR 0001](../decisions/0001-durable-provider-job-queue.md).
+The complete durable provider queue and control contract is owned by
+[section 22](DURABLE_QUEUE_AND_CONTROL.md), including REQ-HUBBOT-001 and
+REQ-QUEUE-001..014. Requirement IDs and complete clause text are retained.

@@ -10,18 +10,21 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Literal, cast
 
+from .codex_control_predicates import control_owner_for_topic
+from .state_errors import ControlScopeError
 from .state_provider_jobs import COMPLETE_FINISHED_STOPS_SQL
 
 
 @dataclass(frozen=True, slots=True)
 class RootBlocker:
-    kind: Literal["local", "terminal", "uncertain"]
+    kind: Literal["local", "terminal", "uncertain", "control", "scope_unconfirmed"]
     topic_id: int
     chat_id: int
     thread_id: int
     session_id: str | None
     generation: int | None
     cause_job_id: str | None
+    scope_error: str | None = None
 
 
 def persistent_root_blocker(connection: sqlite3.Connection, *, topic_id: int) -> RootBlocker | None:
@@ -31,13 +34,38 @@ def persistent_root_blocker(connection: sqlite3.Connection, *, topic_id: int) ->
     returned: old rows can contain synthetic fallback names.
     """
     topic = connection.execute(
-        """SELECT COALESCE(execution_scope, 'project:' || project_id) AS scope
+        """SELECT chat_id,thread_id,COALESCE(execution_scope, 'project:' || project_id) AS scope
            FROM topics WHERE topic_id = ?""",
         (topic_id,),
     ).fetchone()
     if topic is None:
         return None
     scope = str(topic["scope"])
+    try:
+        control = control_owner_for_topic(connection, topic_id)
+    except ControlScopeError as error:
+        # Block only this unresolved topic. Never manufacture a relationship
+        # to an unrelated global sender or abort another topic's sender cycle.
+        return RootBlocker(
+            "scope_unconfirmed",
+            topic_id,
+            int(topic["chat_id"]),
+            int(topic["thread_id"]),
+            None,
+            None,
+            None,
+            error.reason,
+        )
+    if control is not None:
+        return RootBlocker(
+            "control",
+            int(control["topic_id"]),
+            int(control["chat_id"]),
+            int(control["thread_id"]),
+            str(control["session_id"]),
+            int(control["session_generation"]),
+            str(control["job_id"]),
+        )
     writer = connection.execute(
         """SELECT sessions.writer_mode, sessions.session_id, sessions.generation,
                   topics.topic_id, topics.chat_id, topics.thread_id
@@ -128,7 +156,15 @@ def _notice(row: sqlite3.Row) -> RootBlockerNotice:
         blocker_generation=(
             None if row["blocker_generation"] is None else int(row["blocker_generation"])
         ),
-        blocker_kind=(None if row["blocker_kind"] is None else str(row["blocker_kind"])),
+        blocker_kind=(
+            "scope_unconfirmed"
+            if row["control_scope_error"] is not None
+            else "control"
+            if row["control_job_id"] is not None
+            else None
+            if row["blocker_kind"] is None
+            else str(row["blocker_kind"])
+        ),
         job_id=None if row["job_id"] is None else str(row["job_id"]),
         status=str(row["status"]),
         attempt_count=int(row["attempt_count"]),
@@ -156,7 +192,21 @@ def _blocker_text(
     owner = (
         f'<a href="{link}">теме с владельцем проекта</a>' if link else "теме с владельцем проекта"
     )
-    if blocker.kind == "uncertain":
+    if blocker.kind == "scope_unconfirmed":
+        return (
+            "Провайдер не получил этот запрос: точный корень проекта этой темы "
+            "не подтверждён, пока существует незавершённая операция управления. "
+            "Запрос не будет выполнен автоматически; проверьте локальную привязку проекта.",
+            None,
+        )
+    if blocker.kind == "control":
+        text = (
+            "Провайдер не получил этот запрос: ещё не подтверждено завершение "
+            f"операции управления прежним ходом в {owner}. Проект остаётся удержан. "
+            "Этот запрос не будет выполнен автоматически; проверьте состояние в теме-владельце."
+        )
+        label = "Открыть тему-владельца"
+    elif blocker.kind == "uncertain":
         text = (
             "Провайдер не получил этот запрос: на этом проекте ещё не подтверждён исход "
             f"предыдущего хода в {owner}. Новый запрос не сохранён для автоматического "
@@ -264,13 +314,25 @@ class RootBlockerState:
                     blocker.topic_id,
                     blocker.session_id,
                     blocker.generation,
-                    blocker.kind,
+                    "uncertain"
+                    if blocker.kind in {"control", "scope_unconfirmed"}
+                    else blocker.kind,
                     blocker.cause_job_id,
                     now,
                     now,
                     now,
                 ),
             )
+            if blocker.kind == "control":
+                self.db.execute(
+                    "UPDATE hub_blocker_outbox SET control_job_id=? WHERE outbox_id=?",
+                    (blocker.cause_job_id, outbox_id),
+                )
+            if blocker.scope_error is not None:
+                self.db.execute(
+                    "UPDATE hub_blocker_outbox SET control_scope_error=? WHERE outbox_id=?",
+                    (blocker.scope_error, outbox_id),
+                )
             self.db.execute(
                 """INSERT INTO observed_messages
                    (chat_id,message_id,observer_agent_id,observed_at)
@@ -359,9 +421,16 @@ class RootBlockerState:
                 job_id,
                 blocker.cause_job_id or job_id,
                 now,
-                "uncertainty" if blocker.kind == "uncertain" else blocker.kind,
+                "uncertainty"
+                if blocker.kind in {"uncertain", "control", "scope_unconfirmed"}
+                else blocker.kind,
             ),
         )
+        if blocker.kind == "control" and inserted.rowcount == 1:
+            self.db.execute(
+                "UPDATE provider_job_holds SET control_job_id=? WHERE job_id=?",
+                (blocker.cause_job_id, job_id),
+            )
         if (
             inserted.rowcount != 1
             and self.db.execute(
@@ -374,12 +443,16 @@ class RootBlockerState:
         owner = f'<a href="{link}">тема-владелец</a>' if link else "тема-владелец"
         text = (
             (
-                f"Запрос сохранён, но не начат: прежний ход в {owner} оставил очередь на паузе. "
+                "Запрос сохранён, но не начат: точный корень проекта этой темы не подтверждён. "
+                if blocker.kind == "scope_unconfirmed"
+                else f"Запрос сохранён, но не начат: отправитель операции управления в {owner} ещё не подтверждён. "
+                if blocker.kind == "control"
+                else f"Запрос сохранён, но не начат: прежний ход в {owner} оставил очередь на паузе. "
                 if blocker.kind == "uncertain"
                 else f"Запрос сохранён, но не начат: проект удерживает {owner}. "
             )
-            + "Он не запустится автоматически после освобождения проекта. "
-            "Отмените этот запрос или явно подтвердите его запуск после освобождения."
+            + "Он не запустится автоматически после снятия ограничения. "
+            "Отмените этот запрос или явно подтвердите его запуск после проверки."
         )
         markup: dict[str, object] = {
             "inline_keyboard": [
@@ -389,8 +462,13 @@ class RootBlockerState:
                 ]
             ]
         }
-        if link:
-            markup["inline_keyboard"].append([{"text": "Освободить проект", "url": link}])  # type: ignore[union-attr]
+        if link and blocker.kind != "scope_unconfirmed":
+            label = (
+                "Открыть тему-владельца"
+                if blocker.kind in {"control", "uncertain"}
+                else "Освободить проект"
+            )
+            markup["inline_keyboard"].append([{"text": label, "url": link}])  # type: ignore[union-attr]
         notice = self.db.execute(
             """INSERT OR IGNORE INTO hub_blocker_outbox
                (outbox_id,event_key,kind,chat_id,thread_id,reply_to_message_id,
@@ -409,7 +487,7 @@ class RootBlockerState:
                 blocker.topic_id,
                 blocker.session_id,
                 blocker.generation,
-                blocker.kind,
+                "uncertain" if blocker.kind in {"control", "scope_unconfirmed"} else blocker.kind,
                 blocker.cause_job_id,
                 job_id,
                 now,
@@ -417,6 +495,16 @@ class RootBlockerState:
                 now,
             ),
         )
+        if blocker.kind == "control" and notice.rowcount == 1:
+            self.db.execute(
+                "UPDATE hub_blocker_outbox SET control_job_id=? WHERE event_key=?",
+                (blocker.cause_job_id, f"held:{job_id}"),
+            )
+        if blocker.scope_error is not None and notice.rowcount == 1:
+            self.db.execute(
+                "UPDATE hub_blocker_outbox SET control_scope_error=? WHERE event_key=?",
+                (blocker.scope_error, f"held:{job_id}"),
+            )
         if (
             notice.rowcount != 1
             and self.db.execute(
@@ -463,6 +551,8 @@ class RootBlockerState:
         now = datetime.now(timezone.utc).isoformat()
         for row in rows:
             topic_id = int(row["topic_id"])
+            if persistent_root_blocker(self.db, topic_id=topic_id) is not None:
+                continue
             held = int(
                 self.db.execute(
                     """SELECT COUNT(*) FROM provider_job_holds holds
@@ -613,7 +703,20 @@ class RootBlockerState:
                     "SELECT topic_id FROM provider_jobs WHERE job_id=?", (job_id,)
                 ).fetchone()
                 assert topic is not None
-                if persistent_root_blocker(self.db, topic_id=int(topic["topic_id"])):
+                blocker = persistent_root_blocker(self.db, topic_id=int(topic["topic_id"]))
+                if blocker is not None and blocker.kind == "scope_unconfirmed":
+                    raise self.state_error(
+                        "topic root is unconfirmed; verify its binding before retrying"
+                    )
+                if blocker is not None and blocker.kind == "control":
+                    raise self.state_error(
+                        "native control sender is unconfirmed; verify its quiescence first"
+                    )
+                if blocker is not None and blocker.kind == "uncertain":
+                    raise self.state_error(
+                        "previous native turn outcome is unconfirmed; verify its exact outcome first"
+                    )
+                if blocker is not None:
                     raise self.state_error("project is still held; release its writer first")
             now = datetime.now(timezone.utc).isoformat()
             self.db.execute(

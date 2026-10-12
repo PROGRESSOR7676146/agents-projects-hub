@@ -106,7 +106,7 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         self.wait_marker(child, enqueued)
         self.terminate(child)
 
-        state = HubState.open(self.harness.config.state_path)
+        state = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         try:
             self.assertIsNone(state.get_bot_offset("hub"))
             original = self.harness.one_job(801)
@@ -127,7 +127,7 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         self.wait_marker(replacement, restarted)
         self.wait_exit(replacement)
 
-        state = HubState.open(self.harness.config.state_path)
+        state = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         try:
             self.assertEqual(state.get_bot_offset("hub"), 202)
             redelivered = self.harness.one_job(801)
@@ -158,7 +158,7 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         self.wait_marker(pre_child, pre_marker)
         self.terminate(pre_child)
 
-        state = HubState.open(self.harness.config.state_path)
+        state = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         try:
             recovery = state.recover_stale_provider_jobs(
                 agent_id="opencode",
@@ -190,7 +190,7 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         self.wait_marker(executing_child, invocation)
         self.terminate(executing_child)
 
-        state = HubState.open(self.harness.config.state_path)
+        state = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         try:
             recovery = state.recover_stale_provider_jobs(
                 agent_id="opencode",
@@ -209,7 +209,9 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         finally:
             final_worker.close()
 
-    def test_sender_killed_after_acceptance_retries_outbox_without_provider_replay(self) -> None:
+    def test_sender_killed_after_acceptance_preserves_unknown_without_resend_or_replay(
+        self,
+    ) -> None:
         job_id = self.admit(204, 804, "example_opencode_bot", "prepare durable result")
         provider_invocation = self.base / "completed-provider.marker"
         worker = self.spawn("worker-once", "opencode", provider_invocation)
@@ -221,10 +223,11 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         self.wait_marker(sender, accepted)
         self.terminate(sender)
 
-        state = HubState.open(self.harness.config.state_path)
+        state = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         try:
             outbox = state.get_telegram_outbox_for_job(job_id)
             self.assertEqual(outbox.status, "sending")
+            self.assertIsNotNone(outbox.send_started_at)
             recovered = state.recover_stale_telegram_outbox(
                 sender_agent_ids=("codex", "opencode", "antigravity"),
                 now=datetime.now(timezone.utc) + timedelta(minutes=5),
@@ -233,20 +236,71 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         finally:
             state.close()
 
-        delivered = self.base / "telegram-retried.marker"
-        retry = self.spawn("sender-once", delivered, 300)
-        self.wait_marker(retry, delivered)
+        idle = self.base / "telegram-not-retried.marker"
+        retry = self.spawn("sender-idle", idle, 300)
+        self.wait_marker(retry, idle)
         self.wait_exit(retry)
 
-        state = HubState.open(self.harness.config.state_path)
+        state = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         try:
-            self.assertEqual(state.get_provider_job(job_id).status, "completed")
+            self.assertEqual(state.get_provider_job(job_id).status, "result_ready")
+            saved = state.get_telegram_outbox_for_job(job_id)
+            self.assertEqual(saved.status, "unknown")
+            self.assertIsNone(saved.telegram_message_id)
+            self.assertTrue(
+                all(
+                    part.telegram_message_id is None
+                    for part in state.get_telegram_outbox_parts(saved.outbox_id)
+                )
+            )
             self.assertTrue(
                 state.get_provider_result(job_id).visible_response.startswith("opencode")
             )
             self.assertEqual(
                 provider_invocation.read_text(encoding="utf-8").splitlines(), ["invoked"]
             )
+        finally:
+            state.close()
+
+    def test_sender_killed_before_send_returns_unattempted_lease_and_delivers(self) -> None:
+        job_id = self.admit(204, 804, "example_opencode_bot", "prepare durable result")
+        provider_invocation = self.base / "completed-provider.marker"
+        worker = self.spawn("worker-once", "opencode", provider_invocation)
+        self.wait_marker(worker, provider_invocation)
+        self.wait_exit(worker)
+        leased = self.base / "sender-leased.marker"
+        sender = self.spawn("sender-block-before-send", leased)
+        self.wait_marker(sender, leased)
+        self.terminate(sender)
+        state = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
+        try:
+            before = state.get_telegram_outbox_for_job(job_id)
+            self.assertEqual(before.status, "sending")
+            self.assertIsNone(before.send_started_at)
+            state.recover_stale_telegram_outbox(
+                now=datetime.now(timezone.utc) + timedelta(minutes=5)
+            )
+            recovered = state.get_telegram_outbox_for_job(job_id)
+            self.assertEqual(recovered.status, "pending")
+            self.assertEqual(recovered.attempt_count, 0)
+        finally:
+            state.close()
+        delivered = self.base / "telegram-delivered.marker"
+        replacement = self.spawn("sender-once", delivered, 300)
+        self.wait_marker(replacement, delivered)
+        self.wait_exit(replacement)
+        state = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
+        try:
+            self.assertEqual(state.get_provider_job(job_id).status, "completed")
+            outbox = state.get_telegram_outbox_for_job(job_id)
+            self.assertEqual(outbox.status, "delivered")
+            self.assertTrue(
+                all(
+                    part.receipt_validation_version == 1
+                    for part in state.get_telegram_outbox_parts(outbox.outbox_id)
+                )
+            )
+            self.assertEqual(provider_invocation.read_text().splitlines(), ["invoked"])
         finally:
             state.close()
 
@@ -263,7 +317,7 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         self.wait_exit(status)
         self.assertIsNone(hung.poll())
 
-        state = HubState.open(self.harness.config.state_path)
+        state = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         try:
             self.assertEqual(state.get_provider_job(hung_job_id).status, "executing")
             self.assertEqual(state.get_provider_job(healthy_job_id).status, "queued")
@@ -273,7 +327,7 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
             state.close()
         self.terminate(hung)
 
-        state = HubState.open(self.harness.config.state_path)
+        state = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         try:
             recovered = state.recover_stale_provider_jobs(
                 now=datetime.now(timezone.utc) + timedelta(minutes=5)
@@ -288,14 +342,14 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         healthy = self.spawn("worker-once", "antigravity", healthy_marker)
         self.wait_marker(healthy, healthy_marker)
         self.wait_exit(healthy)
-        state = HubState.open(self.harness.config.state_path)
+        state = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         try:
             self.assertEqual(state.get_provider_job(healthy_job_id).status, "result_ready")
         finally:
             state.close()
 
     def test_real_polling_loops_keep_hub_and_direct_provider_ingress_distinct(self) -> None:
-        state = HubState.open(self.harness.config.state_path)
+        state = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         try:
             state.set_bot_offset("hub", 41)
             state.set_bot_offset("codex", 73)
@@ -327,7 +381,7 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         self.wait_marker(direct, direct_marker)
         self.wait_exit(direct)
 
-        state = HubState.open(self.harness.config.state_path)
+        state = HubState.open(self.harness.config.state_path, codex_permission_profile=None)
         try:
             self.assertEqual(hub_marker.read_text(encoding="utf-8"), "offset:41")
             self.assertEqual(direct_marker.read_text(encoding="utf-8"), "offset:73")

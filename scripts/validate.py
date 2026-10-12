@@ -365,6 +365,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("test selectors require --profile focused; other profiles run all tests")
     if args.jobs is not None and args.profile == "focused":
         parser.error("--jobs applies only to profiles that run the full test suite")
+    configured_jobs = os.environ.get("HUB_VALIDATION_TEST_JOBS")
+    if args.jobs is None and args.profile != "focused" and configured_jobs is not None:
+        try:
+            args.jobs = parse_test_jobs(configured_jobs)
+        except argparse.ArgumentTypeError as error:
+            parser.error(f"HUB_VALIDATION_TEST_JOBS: {error}")
     jobs = default_test_jobs() if args.jobs is None else args.jobs
     if any(
         re.fullmatch(r"tests(?:\.[A-Za-z_][A-Za-z_0-9]*)+", name) is None for name in args.tests

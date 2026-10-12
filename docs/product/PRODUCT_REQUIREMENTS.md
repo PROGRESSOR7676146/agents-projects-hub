@@ -23,6 +23,7 @@ reading never exempts an implementation from any requirement.
 - [Identity and interaction](IDENTITY_AND_INTERACTION.md)
 - [Accounts, control, and security](ACCOUNTS_CONTROL_AND_SECURITY.md)
 - [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md)
+- [Durable queue and control](DURABLE_QUEUE_AND_CONTROL.md)
 - [Onboarding and acceptance](ONBOARDING_AND_ACCEPTANCE.md)
 - [Maintenance](MAINTENANCE.md)
 - [Evaluation and resource-aware task allocation](EVALUATION_AND_ALLOCATION.md)
@@ -102,6 +103,8 @@ model spend.
 - Guaranteed portability of an in-flight turn after process or machine loss.
 - A bot for every model or account; bot identity represents an agent runtime.
 - Treating tlive as semantic integration for unsupported providers.
+- Hub-managed lead/advisor roles and review/continuation orchestration; project
+  instructions own independent cross-provider review (ADR 0065).
 
 ## 4. User mental model and terminology
 
@@ -138,3 +141,5 @@ Every capability in this baseline uses one of these labels:
   upstream capability exists.
 - **Rejected** — explicitly outside the intended design unless the product owner
   revises this baseline.
+- **Retired** — a previously accepted capability has been withdrawn by an
+  explicit decision; its identifier remains reserved and is not completion evidence.

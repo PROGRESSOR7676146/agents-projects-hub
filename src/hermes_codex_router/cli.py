@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Callable, Sequence
 
+from . import delivery_control_cli, delivery_hold_cli
 from .acceptance_actor import (
     AcceptanceActorError,
     load_acceptance_actor_config,
@@ -39,15 +40,16 @@ from .lifecycle import stop_on_signals
 from .migrations import backup_database, migrate_database
 from .monitoring import run_monitor_once
 from .outbox_sender import TelegramOutboxSender
+from .outcome_cli import add_outcome_parser, outcome_command
 from .pilot import run_codex_pilot
-from .project_admin import add_project, set_project_enabled
+from .project_admin import add_project, registry_lock, set_project_enabled
 from .project_onboarding import ProjectOnboardingStore
 from .project_provisioner import (
     ProjectProvisioner,
     ProjectProvisioningError,
     login_project_provisioner,
 )
-from .registry import RegistryError, load_registry
+from .registry import RegistryError, load_registry, validate_execution_root
 from .release_dry_run import report_dict, run_release_dry_run
 from .release_identity import CURRENT_RELEASE
 from .runtime_health import project_runtime_health
@@ -60,6 +62,7 @@ from .worktrees import WorktreeError, cleanup_worktree, create_worktree
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agents-projects-hub")
     commands = parser.add_subparsers(dest="command", required=True)
+    add_outcome_parser(commands)
 
     session = commands.add_parser("session", help="explicit local provider-session binding")
     session_commands = session.add_subparsers(dest="session_command", required=True)
@@ -181,6 +184,8 @@ def _parser() -> argparse.ArgumentParser:
     migrate = commands.add_parser("migrate", help="migrate a state database safely")
     migrate.add_argument("state", type=Path)
     migrate.add_argument("--no-backup", action="store_true")
+    delivery_hold_cli.add_parser(commands)
+    delivery_control_cli.add_parser(commands)
 
     backup = commands.add_parser("backup", help="create an SQLite-consistent state backup")
     backup.add_argument("state", type=Path)
@@ -328,13 +333,26 @@ def _project_command(args: argparse.Namespace) -> int:
 
 def _lane_command(args: argparse.Namespace) -> int:
     config = load_hub_config(args.config)
-    state = HubState.open(config.state_path)
+    state = HubState.open(
+        config.state_path, codex_permission_profile=config.codex_permission_profile
+    )
     try:
         if args.lane_command == "list":
             _print({"ok": True, "lanes": state.list_lanes()})
             return 0
         if args.lane_command == "archive":
-            state.archive_lane(args.lane)
+            lane = state.get_lane(args.lane)
+            if lane["topic_id"] is None:
+                state.archive_lane(args.lane)
+            else:
+                with registry_lock(config.registry_path):
+                    registry = load_registry(config.registry_path)
+                    try:
+                        project = registry.require_project(str(lane["project_id"]))
+                    except KeyError:
+                        raise WorktreeError("lane project is unknown or disabled") from None
+                    root = validate_execution_root(registry, project)
+                    state.archive_lane(args.lane, project_id=project.project_id, project_root=root)
             _print({"ok": True, "lane_id": args.lane, "status": "archived"})
             return 0
         if args.lane_command == "bind":
@@ -365,6 +383,7 @@ def _lane_command(args: argparse.Namespace) -> int:
                 raise WorktreeError("lane worktree was already cleaned")
             registry = load_registry(config.registry_path)
             project = registry.require_project(str(lane["project_id"]))
+            state.require_lane_cleanup(args.lane)
             cleanup_worktree(
                 project,
                 args.lane,
@@ -628,7 +647,9 @@ def _indeterminate_audit_command(args: argparse.Namespace) -> int:
 
 def _indeterminate_resolve_command(args: argparse.Namespace) -> int:
     config = load_external_worker_config(args.config)
-    state = HubState.open(config.state_path)
+    state = HubState.open(
+        config.state_path, codex_permission_profile=config.codex_permission_profile
+    )
     try:
         created = state.resolve_indeterminate_job(args.job_id, args.resolution)
     finally:
@@ -753,7 +774,9 @@ def _project_provisioner_command(args: argparse.Namespace) -> int:
 
 def _project_provision_reconcile_command(args: argparse.Namespace) -> int:
     config = load_project_provisioner_config(args.config)
-    state = HubState.open(config.state_path)
+    state = HubState.open(
+        config.state_path, codex_permission_profile=config.codex_permission_profile
+    )
     try:
         workflow = ProjectOnboardingStore(state).reconcile_unknown(
             args.workflow_id,
@@ -770,7 +793,9 @@ def _project_provision_reconcile_command(args: argparse.Namespace) -> int:
 
 def _project_provision_resume_command(args: argparse.Namespace) -> int:
     config = load_project_provisioner_config(args.config)
-    state = HubState.open(config.state_path)
+    state = HubState.open(
+        config.state_path, codex_permission_profile=config.codex_permission_profile
+    )
     try:
         workflow = ProjectOnboardingStore(state).resume_blocked(
             args.workflow_id,
@@ -793,7 +818,9 @@ def _project_command_retry_command(args: argparse.Namespace) -> int:
         identities.add("hub")
     if args.bot_identity not in identities:
         raise StateError("project_command_scope_identity_invalid")
-    state = HubState.open(config.state_path)
+    state = HubState.open(
+        config.state_path, codex_permission_profile=config.codex_permission_profile
+    )
     try:
         ProjectOnboardingStore(state).reset_failed_command_scope(args.chat_id, args.bot_identity)
     finally:
@@ -831,12 +858,15 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "pilot": _pilot_command,
     "doctor": _doctor_command,
     "status": _status_command,
+    "outcome-journal": outcome_command,
     "indeterminate-audit": _indeterminate_audit_command,
     "indeterminate-resolve": _indeterminate_resolve_command,
     "release-info": _release_info_command,
     "release-manifest": _release_manifest_command,
     "release-dry-run": _release_dry_run_command,
     "migrate": _migrate_command,
+    "delivery-hold": delivery_hold_cli.run,
+    "delivery-control": delivery_control_cli.run,
     "backup": _backup_command,
     "monitor": _monitor_command,
     "telegram-commands": _telegram_commands_command,

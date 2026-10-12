@@ -21,19 +21,24 @@ class StopCertaintyTests(unittest.TestCase):
                     fixture = codex_fixtures.CodexQueueWorkerTests()
                     fixture.setUp()
                     job_id = fixture.enqueue()
-                    entered = threading.Event()
                     released = threading.Event()
                     interrupted = threading.Event()
                     reads: list[dict[str, object]] = []
 
                     class MainClient(codex_fixtures.WorkerClient):
                         def wait_for_turn(self, _turn_id: str) -> TurnResult:
-                            entered.set()
+                            # Submit after native acceptance, so preparation
+                            # cannot exhaust a separate sender-thread deadline.
+                            request_stop()
                             if not released.wait(3):
                                 raise AssertionError("fictional stop did not reach the worker")
                             raise RuntimeError("fictional transport loss; turn outcome unconfirmed")
 
                     class ControlClient:
+                        def read_turn_outcome(self, **_kwargs: object) -> StoredTurnOutcome:
+                            # Fresh owning-server proof is now required before send.
+                            return StoredTurnOutcome("active")
+
                         def interrupt_turn(self, **_kwargs: object) -> None:
                             interrupted.set()
                             released.set()
@@ -61,7 +66,9 @@ class StopCertaintyTests(unittest.TestCase):
                         def start(self) -> None:
                             pass
 
-                        def client(self) -> object:
+                        def client(
+                            self, *, allow_fallback: bool = True, deadline: float | None = None
+                        ) -> object:
                             self.calls += 1
                             if self.calls == 1:
                                 return self.main
@@ -99,9 +106,9 @@ class StopCertaintyTests(unittest.TestCase):
                     )
 
                     def request_stop() -> None:
-                        if not entered.wait(2):
-                            return
-                        state = HubState.open(fixture.config.state_path)
+                        state = HubState.open(
+                            fixture.config.state_path, codex_permission_profile=None
+                        )
                         try:
                             active = state.get_provider_job(job_id)
                             state.request_emergency_stop(
@@ -113,13 +120,14 @@ class StopCertaintyTests(unittest.TestCase):
                         finally:
                             state.close()
 
-                    sender = threading.Thread(target=request_stop)
                     try:
-                        sender.start()
                         self.assertTrue(worker.run_cycle())
                         self.assertTrue(interrupted.is_set())
                         self.assertEqual(
-                            reads,
+                            [
+                                {key: value for key, value in read.items() if key != "deadline"}
+                                for read in reads
+                            ],
                             [
                                 {
                                     "thread_id": "thread-1",
@@ -127,6 +135,9 @@ class StopCertaintyTests(unittest.TestCase):
                                     "cwd": fixture.registry.projects[0].root,
                                 }
                             ],
+                        )
+                        self.assertTrue(
+                            all(isinstance(read.get("deadline"), float) for read in reads)
                         )
                         self.assertEqual(
                             worker.state.get_provider_job(job_id).status, "indeterminate"
@@ -150,7 +161,6 @@ class StopCertaintyTests(unittest.TestCase):
                         self.assertEqual(supervisor.main.turns, 1)
                     finally:
                         released.set()
-                        sender.join(2)
                         worker.close()
                         fixture.tearDown()
 
@@ -163,7 +173,7 @@ class StopCertaintyTests(unittest.TestCase):
         class Adapter(external_fixtures.Adapter):
             def run_turn(self, **kwargs: object) -> Any:
                 self.calls += 1
-                state = HubState.open(fixture.config.state_path)
+                state = HubState.open(fixture.config.state_path, codex_permission_profile=None)
                 try:
                     active = state.get_provider_job(job_id)
                     state.request_emergency_stop(

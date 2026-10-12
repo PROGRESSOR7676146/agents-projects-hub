@@ -9,6 +9,14 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol, Sequence
 
+from .claude_image_input import (
+    MAX_CLAUDE_IMAGE_AGGREGATE_BYTES,
+    MAX_CLAUDE_IMAGE_BYTES,
+    MAX_CLAUDE_IMAGES,
+    VerifiedClaudeImage,
+    image_signature_matches,
+)
+from .incoming_snapshot import IncomingSnapshotError, read_verified_snapshot
 from .telegram import (
     TELEGRAM_FILE_DOWNLOAD_TIMEOUT_SECONDS,
     DownloadedTelegramFile,
@@ -134,6 +142,7 @@ class PreparedIncomingMaterials:
     notices: tuple[str, ...]
     materialized_directory: Path | None
     raw_paths: tuple[Path, ...]
+    claude_images: tuple[VerifiedClaudeImage, ...] = ()
 
     @property
     def visible_notice(self) -> str:
@@ -465,6 +474,49 @@ def _verified_raw_path(record: IncomingMaterialRecord, state_path: Path) -> Path
     return path
 
 
+def _claude_image_snapshot(
+    record: IncomingMaterialRecord, *, state_path: Path, position: int, aggregate: int
+) -> VerifiedClaudeImage | str:
+    if record.mime_type not in {"image/png", "image/jpeg"}:
+        return "Claude byte input supports PNG and JPEG only"
+    if type(record.byte_size) is not int or record.byte_size < 0:
+        raise IncomingMaterialError("stored incoming image size is invalid")
+    if position > MAX_CLAUDE_IMAGES:
+        return "Claude byte input exceeds 10 material parts"
+    if record.byte_size > MAX_CLAUDE_IMAGE_BYTES:
+        return "image exceeds the 2 MiB Claude input limit"
+    if aggregate + record.byte_size > MAX_CLAUDE_IMAGE_AGGREGATE_BYTES:
+        return "images exceed the 4 MiB aggregate Claude input limit"
+    if record.storage_path is None or record.sha256 is None:
+        raise IncomingMaterialError("stored incoming image metadata is incomplete")
+    try:
+        content = read_verified_snapshot(
+            incoming_storage_root(state_path),
+            Path(record.storage_path),
+            expected_size=record.byte_size,
+            expected_sha256=record.sha256,
+            max_bytes=MAX_CLAUDE_IMAGE_BYTES,
+        )
+    except IncomingSnapshotError:
+        raise IncomingMaterialError("stored incoming image snapshot changed") from None
+    if not image_signature_matches(content, record.mime_type):
+        raise IncomingMaterialError("stored incoming image signature changed")
+    return VerifiedClaudeImage(position, record.mime_type, content, record.sha256)
+
+
+def _materialize_image_snapshot(directory: Path, image: VerifiedClaudeImage) -> None:
+    extension = ".png" if image.media_type == "image/png" else ".jpg"
+    destination = directory / f"material-{image.position:02d}{extension}"
+    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.part")
+    try:
+        with temporary.open("xb") as stream:
+            os.fchmod(stream.fileno(), 0o400)
+            stream.write(image.data)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def prepare_incoming_materials(
     records: Sequence[IncomingMaterialRecord],
     *,
@@ -472,7 +524,10 @@ def prepare_incoming_materials(
     execution_root: Path,
     job_id: str,
     runtime: str,
+    claude_image_input: bool = False,
 ) -> PreparedIncomingMaterials:
+    if type(claude_image_input) is not bool or claude_image_input and runtime != "claude":
+        raise IncomingMaterialError("Claude image input selection is invalid")
     if not records:
         return PreparedIncomingMaterials("", (), (), None, ())
     if (
@@ -505,6 +560,8 @@ def prepare_incoming_materials(
     images: list[Path] = []
     notices: list[str] = []
     raw_paths: list[Path] = []
+    claude_images: list[VerifiedClaudeImage] = []
+    claude_image_bytes = 0
     inline_characters = 0
     for position, record in enumerate(records, start=1):
         if record.status == "unavailable":
@@ -513,6 +570,25 @@ def prepare_incoming_materials(
             blocks.append(f"MATERIAL {position} UNAVAILABLE ({record.display_name}): {detail}")
             continue
         if record.status != "stored":
+            continue
+        if record.content_kind == "image" and claude_image_input:
+            snapshot = _claude_image_snapshot(
+                record, state_path=state_path, position=position, aggregate=claude_image_bytes
+            )
+            if isinstance(snapshot, str):
+                notices.append(f"{record.display_name}: {snapshot}")
+                blocks.append(
+                    f"MATERIAL {position} UNAVAILABLE ({record.display_name}): {snapshot}"
+                )
+            else:
+                _materialize_image_snapshot(materialized, snapshot)
+                claude_images.append(snapshot)
+                claude_image_bytes += len(snapshot.data)
+                assert record.storage_path is not None
+                raw_paths.append(Path(record.storage_path))
+                blocks.append(
+                    f"MATERIAL {position} IMAGE ({record.display_name}): supplied as verified PNG/JPEG input bytes"
+                )
             continue
         raw = _verified_raw_path(record, state_path)
         raw_paths.append(raw)
@@ -566,6 +642,7 @@ def prepare_incoming_materials(
         tuple(notices),
         materialized,
         tuple(raw_paths),
+        tuple(claude_images),
     )
 
 

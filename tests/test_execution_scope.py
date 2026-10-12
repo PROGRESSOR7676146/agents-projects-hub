@@ -24,7 +24,7 @@ class ExecutionScopeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.base = Path(self.tempdir.name)
-        self.state = HubState.open(self.base / "state.db")
+        self.state = HubState.open(self.base / "state.db", codex_permission_profile=None)
 
     def tearDown(self) -> None:
         self.state.close()
@@ -210,7 +210,7 @@ class ExecutionScopeTests(unittest.TestCase):
         failures: list[Exception] = []
 
         def transfer() -> None:
-            peer = HubState.open(self.base / "state.db")
+            peer = HubState.open(self.base / "state.db", codex_permission_profile=None)
             try:
                 barrier.wait(timeout=3)
                 try:
@@ -224,7 +224,7 @@ class ExecutionScopeTests(unittest.TestCase):
                 peer.close()
 
         def admit() -> None:
-            peer = HubState.open(self.base / "state.db")
+            peer = HubState.open(self.base / "state.db", codex_permission_profile=None)
             try:
                 barrier.wait(timeout=3)
                 try:
@@ -741,7 +741,7 @@ class ExecutionScopeTests(unittest.TestCase):
         results: list[str | None] = []
 
         def lease(agent_id: str, worker_id: str) -> None:
-            state = HubState.open(self.base / "state.db")
+            state = HubState.open(self.base / "state.db", codex_permission_profile=None)
             try:
                 barrier.wait()
                 job = state.lease_provider_job(agent_id, worker_id)
@@ -805,7 +805,7 @@ class ExecutionScopeTests(unittest.TestCase):
         results: list[str] = []
 
         def claim_local() -> None:
-            state = HubState.open(self.base / "state.db")
+            state = HubState.open(self.base / "state.db", codex_permission_profile=None)
             try:
                 barrier.wait()
                 try:
@@ -817,7 +817,7 @@ class ExecutionScopeTests(unittest.TestCase):
                 state.close()
 
         def claim_job() -> None:
-            state = HubState.open(self.base / "state.db")
+            state = HubState.open(self.base / "state.db", codex_permission_profile=None)
             try:
                 barrier.wait()
                 job = state.lease_provider_job("opencode", "opencode-worker")
@@ -961,7 +961,7 @@ class ExecutionScopeTests(unittest.TestCase):
 
     def test_worker_reconciles_a_retained_legacy_local_writer_before_leasing(self) -> None:
         harness = FaultMatrixHarness(self.base)
-        state = HubState.open(harness.config.state_path)
+        state = HubState.open(harness.config.state_path, codex_permission_profile=None)
         root = harness.registry.require_project("example-project").root
         try:
             old = state.observe_topic(

@@ -11,7 +11,7 @@ from hermes_codex_router.state import HubState
 class StopCertaintyStateTests(unittest.TestCase):
     def test_pending_stop_preserves_unknown_execution_and_independent_notice(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            state = HubState.open(Path(directory) / "state.db")
+            state = HubState.open(Path(directory) / "state.db", codex_permission_profile=None)
             self.addCleanup(state.close)
             topic = state.observe_topic(
                 project_id="example-project",

@@ -41,7 +41,7 @@ class ProjectResolutionTests(unittest.TestCase):
             projects=(ProjectBinding("example", -1001234567890),),
             agents=(),
         )
-        self.state = HubState.open(self.config.state_path)
+        self.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         self.addCleanup(self.state.close)
 
     def _write_registry(self, root: Path, *, enabled: bool) -> None:

@@ -54,7 +54,9 @@ class ExternalDirectModelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             service = ExternalAgentService.__new__(ExternalAgentService)
             service.agent = cast(Any, type("Agent", (), {"agent_id": "opencode"})())
-            service.state = HubState.open(Path(directory) / "direct.db")
+            service.state = HubState.open(
+                Path(directory) / "direct.db", codex_permission_profile=None
+            )
             service._transport_consecutive_failures = 0
             service._transport_reported_signature = None
             service._transport_success_at = None
@@ -131,7 +133,7 @@ class ExternalDirectModelTests(unittest.TestCase):
             service.agent = config.agents[0]
             service.direct_messages_only = True
             service.state_path = base / "opencode-dm.db"
-            service.state = HubState.open(service.state_path)
+            service.state = HubState.open(service.state_path, codex_permission_profile=None)
             service.telegram = cast(Any, FakeTelegram())
             service.registry = ProjectRegistry(1, (base,), (Project("hub", "Hub", "Hub", base),))
 
@@ -242,7 +244,7 @@ class ExternalDirectModelTests(unittest.TestCase):
             service.agent = config.agents[0]
             service.direct_messages_only = True
             service.state_path = base / "antigravity-dm.db"
-            service.state = HubState.open(service.state_path)
+            service.state = HubState.open(service.state_path, codex_permission_profile=None)
             telegram = FakeTelegram()
             service.telegram = cast(Any, telegram)
             service.registry = ProjectRegistry(1, (base,), (Project("hub", "Hub", "Hub", base),))

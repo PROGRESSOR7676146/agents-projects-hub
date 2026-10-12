@@ -1,15 +1,157 @@
 """Remove post-v24 structures when constructing fictional older test databases."""
 
 import sqlite3
+from contextlib import closing, contextmanager
+from pathlib import Path
+from unittest.mock import patch
+
+from hermes_codex_router import migrations
+from hermes_codex_router.schema_codex_permissions import (
+    PROFILE_TABLES,
+    ensure_codex_permission_columns,
+)
+
+
+def project_historical_database(source: Path, target: Path, version: int) -> None:
+    """Build a separate genuine old-schema fixture; retain the source authority.
+
+    Test data only. This is neither a runtime downgrade nor a recovery operation.
+    """
+    assert not target.exists()
+    with patch.object(migrations, "LATEST_SCHEMA_VERSION", version):
+        migrations.migrate_database(target, create_backup=False)
+    with closing(sqlite3.connect(source)) as current, closing(sqlite3.connect(target)) as old:
+        tables = [
+            row[0]
+            for row in old.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+        ]
+        original_objects = old.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY name"
+        ).fetchall()
+        # Historical projection is not a fresh runtime admission/acceptance.
+        # Suspend only those two recording guards while copying a previously
+        # coherent fixture, then restore their exact released DDL before commit,
+        # backup or migration evidence. All other guards and final FK checks stay.
+        recording_guards = old.execute(
+            "SELECT name,sql FROM sqlite_master WHERE name IN "
+            "('provider_job_telegram_ingress_new_only','codex_telegram_precaution_target_fresh_only')"
+        ).fetchall()
+        old.execute("BEGIN IMMEDIATE")
+        for name, definition in recording_guards:
+            old.execute(f'DROP TRIGGER "{name}"')
+        for table in tables:
+            names = [row[1] for row in old.execute(f'PRAGMA table_info("{table}")')]
+            quoted = ",".join(f'"{name}"' for name in names)
+            rows = current.execute(f'SELECT {quoted} FROM "{table}"').fetchall()
+            if rows:
+                old.executemany(
+                    f'INSERT INTO "{table}" ({quoted}) VALUES ({",".join("?" for _ in names)})',
+                    rows,
+                )
+        for name, definition in recording_guards:
+            old.execute(definition)
+        assert (
+            old.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name").fetchall()
+            == original_objects
+        )
+        old.commit()
+        assert old.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+@contextmanager
+def legacy_delivery_hold_schema(connection: sqlite3.Connection):
+    """Current FIFO queries need empty delivery ledgers during old fixture seeding.
+
+    Only a temporary, fictional compatibility bridge; remove before migration or
+    backup assertions. It never licenses dropping retained owner evidence.
+    """
+    created = (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='telegram_delivery_hold_dispositions'"
+        ).fetchone()
+        is None
+    )
+    if created:
+        with connection:
+            migrations._execute_migration_script(connection, migrations.MIGRATION_44)
+    control_created = (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='telegram_delivery_control_dispositions'"
+        ).fetchone()
+        is None
+    )
+    if control_created:
+        with connection:
+            migrations._execute_migration_script(connection, migrations.MIGRATION_46)
+    try:
+        yield
+    finally:
+        if control_created:
+            with connection:
+                assert (
+                    connection.execute(
+                        "SELECT COUNT(*) FROM telegram_delivery_control_dispositions"
+                    ).fetchone()[0]
+                    == 0
+                )
+                connection.execute("DROP TABLE telegram_delivery_control_dispositions")
+        if created:
+            with connection:
+                assert (
+                    connection.execute(
+                        "SELECT COUNT(*) FROM telegram_delivery_hold_dispositions"
+                    ).fetchone()[0]
+                    == 0
+                )
+                connection.execute("DROP TRIGGER telegram_delivery_hold_topic_binding_guard")
+                connection.execute("DROP TABLE telegram_delivery_hold_dispositions")
+
+
+@contextmanager
+def legacy_selection_columns(path: Path):
+    """Temporarily support current fixture builders, then restore historical DDL.
+
+    Current state facades require schema-39 columns. Only fictional all-null
+    fixture rows may use this bridge; real upgrades and backups see old DDL.
+    """
+    migrations.migrate_database(path, create_backup=False)
+    with closing(sqlite3.connect(path)) as connection, connection:
+        ensure_codex_permission_columns(connection)
+    try:
+        with closing(sqlite3.connect(path)) as bridge, legacy_delivery_hold_schema(bridge):
+            yield
+    finally:
+        with closing(sqlite3.connect(path)) as connection, connection:
+            for table in PROFILE_TABLES:
+                assert (
+                    connection.execute(
+                        f"SELECT count(*) FROM {table} WHERE codex_permission_profile IS NOT NULL"
+                    ).fetchone()[0]
+                    == 0
+                )
+                connection.execute(f"ALTER TABLE {table} DROP COLUMN codex_permission_profile")
 
 
 def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
-    """Remove empty schema-36 structures from fictional historical fixtures."""
+    """Remove empty lifecycle/archive structures from fictional historical fixtures."""
     tables = (
+        "codex_ingress_interrupt_causes",
+        "codex_telegram_ingress_assessments",
+        "telegram_ingress_watermarks",
+        "codex_telegram_precaution_targets",
+        "provider_job_telegram_ingress",
+        "telegram_group_ingress",
+        "codex_turn_controls",
+        "telegram_delivery_control_dispositions",
+        "telegram_delivery_hold_dispositions",
+        "provider_recovery_notice_parts",
         "task_lifecycle_legacy_stop_links",
         "task_lifecycle_legacy_parts",
         "task_lifecycle_legacy_outbox",
         "task_lifecycle_notices",
+        "outcome_assessment_dispositions",
     )
     existing = {
         row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -18,12 +160,37 @@ def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
     for table in tables:
         if table in existing:
             assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    for trigger in (
+        "provider_job_telegram_identity_fence",
+        "provider_job_telegram_no_replace",
+        "provider_job_telegram_no_update_replace",
+        "provider_job_first_input_no_delete",
+        "provider_job_first_input_identity_fence",
+        "provider_job_first_input_no_replace",
+        "provider_job_first_input_no_update_replace",
+    ):
+        connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    connection.execute("DROP TRIGGER IF EXISTS codex_ingress_capture_first_send")
+    connection.execute("DROP TRIGGER IF EXISTS codex_ingress_send_first_transition")
+    if "codex_turn_controls" in existing:
+        connection.execute("ALTER TABLE hub_blocker_outbox DROP COLUMN control_scope_error")
+        for table in ("hub_blocker_outbox", "provider_job_holds"):
+            connection.execute(f"ALTER TABLE {table} DROP COLUMN control_job_id")
+    connection.execute("DROP TRIGGER IF EXISTS telegram_delivery_hold_topic_binding_guard")
     for table in tables:
         if table in existing:
             connection.execute(f"DROP TABLE {table}")
 
 
 def remove_adoption_schema(connection: sqlite3.Connection) -> None:
+    # A historical fixture must not keep new cross-table snapshot guards when
+    # its provider_jobs table is reconstructed with historical columns.
+    for table in PROFILE_TABLES:
+        connection.execute(f"DROP TRIGGER IF EXISTS {table}_codex_profile_immutable")
+    connection.execute("DROP TRIGGER IF EXISTS provider_jobs_codex_profile_snapshot")
+    connection.execute(
+        "DROP TRIGGER IF EXISTS provider_execution_checkpoints_codex_profile_snapshot"
+    )
     remove_task_lifecycle_schema(connection)
     # This is not a downgrade mechanism: retained origins must never be deleted.
     assert connection.execute("SELECT COUNT(*) FROM codex_session_origins").fetchone()[0] == 0

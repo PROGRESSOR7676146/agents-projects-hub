@@ -5,6 +5,7 @@ import os
 import subprocess
 import time
 import uuid
+from contextlib import ExitStack
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -24,6 +25,7 @@ from .hermes_health import (
     sync_hermes_group_policy,
 )
 from .hub_config import HubConfig, OperationalAlertSettings, read_telegram_token
+from .incident_journal import IncidentJournal, IncidentJournalBusy, IncidentJournalError
 from .provider_catalog_cache import ProviderCatalogCache
 from .runtime_health import MONITOR_INSTANCE_ID, project_runtime_health
 from .state import HubState
@@ -131,6 +133,57 @@ def run_monitor_once(
     cooldown_seconds: int = 60 * 60,
 ) -> dict[str, object]:
     state = HubState.open_existing(config.state_path)
+    journal = IncidentJournal(config.state_path.resolve().with_name("incident-journal.json"))
+    try:
+        with ExitStack() as cycle:
+            available: IncidentJournal | None = journal
+            try:
+                cycle.enter_context(journal.cycle())
+            except IncidentJournalBusy:
+                return {"ok": False, "error_code": "monitor_busy"}
+            except IncidentJournalError as error:
+                survived("monitoring.incident_lock", error)
+                available = None
+            return _run_monitor_once(
+                config,
+                state,
+                available,
+                notify=notify,
+                repair=repair,
+                cooldown_seconds=cooldown_seconds,
+            )
+    finally:
+        state.close()
+
+
+def _project_incidents(
+    journal: IncidentJournal | None, alerts: tuple[OperationalAlert, ...]
+) -> dict[str, object]:
+    try:
+        if journal is None:
+            raise IncidentJournalError()
+        snapshot = journal.project(alerts, now=datetime.now(timezone.utc))
+    except IncidentJournalError as error:
+        survived("monitoring.incident_projection", error)
+        return {"status": "unavailable", "error_code": "incident_journal_unavailable"}
+    return {
+        "status": "updated",
+        "open_episodes": sum(row["resolved_at"] is None for row in snapshot["episodes"]),
+        "resolved_episodes": sum(row["resolved_at"] is not None for row in snapshot["episodes"]),
+        "omitted_open_count": snapshot["omitted_open_count"],
+        "omitted_resolved_count": snapshot["omitted_resolved_count"],
+    }
+
+
+def _run_monitor_once(
+    config: HubConfig,
+    state: HubState,
+    journal: IncidentJournal | None,
+    *,
+    notify: bool,
+    repair: bool,
+    cooldown_seconds: int,
+) -> dict[str, object]:
     monitor_started = datetime.now(timezone.utc)
     monitor_marker = uuid.uuid4().hex
     monitor_completed = False
@@ -228,11 +281,12 @@ def run_monitor_once(
                 f"catalog:{agent_id}:stale",
                 "provider_catalog_stale",
                 "warning",
-                f"The {agent_id} model catalog is stale after a failed refresh; "
+                "A configured provider model catalog is stale after a failed refresh; "
                 "the last known-good local catalog remains active.",
             )
             for agent_id in stale_catalogs
         )
+        incident_status = _project_incidents(journal, alerts)
         delivered: list[str] = []
         if notify:
             _release_resolved_operational_alerts(state, alerts)
@@ -268,12 +322,14 @@ def run_monitor_once(
                 else:
                     delivered.extend(f"{alert.code}:{sender_identity}" for alert in operations_due)
         result = {
-            "ok": not any(alert.severity == "error" for alert in alerts),
+            "ok": incident_status["status"] == "updated"
+            and not any(alert.severity == "error" for alert in alerts),
             "alerts": [asdict(alert) for alert in alerts],
             "delivered": delivered,
             "repairs": repairs,
             "catalog_refresh": asdict(catalog_refresh),
             "reliability": snapshot["reliability"],
+            "incident_journal": incident_status,
         }
         completed_at = datetime.now(timezone.utc)
         state.upsert_runtime_health(
@@ -283,7 +339,10 @@ def run_monitor_once(
             process_start_marker=monitor_marker,
             started_at=monitor_started,
             heartbeat_at=completed_at,
-            success_at=completed_at,
+            success_at=completed_at if incident_status["status"] == "updated" else None,
+            error_code=None
+            if incident_status["status"] == "updated"
+            else "incident_journal_unavailable",
         )
         monitor_completed = True
         return result
@@ -301,4 +360,3 @@ def run_monitor_once(
                 )
             except Exception as survived_error:
                 survived("monitoring.error_health_publish", survived_error)
-        state.close()

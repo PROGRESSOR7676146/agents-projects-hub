@@ -86,7 +86,8 @@ class CommandDispatchCharacterizationTests(unittest.TestCase):
         hub.activate(ANTIGRAVITY)
         self.assertTrue(hub.send("queued antigravity task"))
         self.assertTrue(hub.send("/local"))
-        self.assertIn("Provider work is pending or being delivered", hub.last_reply)
+        self.assertIn("Provider work or retained result delivery blocks /local", hub.last_reply)
+        self.assertIn("inspect /status", hub.last_reply)
         self.assertEqual(hub.session().writer_mode, "telegram")
 
     def test_local_transfers_ownership_and_prints_the_resume_command(self) -> None:

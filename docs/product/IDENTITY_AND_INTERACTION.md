@@ -167,6 +167,18 @@ Routing precedence is deterministic:
   Telegram Premium does not expand that bot API boundary. Unsupported formats,
   excess parts/bytes, unavailable Telegram content, and non-queue legacy paths
   MUST fail visibly rather than claim that metadata alone was read.
+  An explicit local Claude image-input gate MAY supply bounded verified PNG/JPEG
+  bytes through the owned external CLI with tools disabled. The gate MUST default
+  to false and MUST reject combination with protected file tools. Original bytes
+  MUST match the immutable spool snapshot. Terminal success additionally MUST
+  require one processed-input receipt bound to the current caller UUID and exact
+  native session, preserving prompt, material markers and image count/order.
+  Characterized native processing MAY change image bytes or convert PNG to JPEG;
+  the receipt MUST retain bounded inline supported images and MUST NOT be described
+  as pixel-equivalence or comprehension proof. A missing, conflicting, omitted
+  or image-to-text receipt after spawn MUST preserve uncertainty, original material
+  evidence and root exclusion without automatic replay. See
+  [ADR 0066](../decisions/0066-verified-claude-image-input.md).
 
 ## 8. Shared visible context and spend policy
 
@@ -195,22 +207,17 @@ Routing precedence is deterministic:
 
 ### Explicit Claude Code/Codex collaboration
 
-- **REQ-COLLAB-001 (Accepted; implementation pending):** Hub MUST support an
-  explicitly enabled topic workflow pairing Codex and Claude Code with one
-  human-selected lead and one advisor; either provider MAY lead. The owner
-  initially chooses roles, models, and effort. The advisor MUST run only when
-  the owner invokes it or the lead requests it within an explicitly enabled
-  bounded workflow. Ordinary turns, Reply/mention routing, provider-native
-  sessions, and the rule against automatic history sharing remain unchanged
-  outside that workflow.
-- **REQ-COLLAB-002 (Accepted; implementation pending):** The initial workflow
-  MUST execute lead request, advisor review, and lead continuation in sequence,
-  with one review round and one lead response by default. The lead MUST release
-  its active turn before the advisor can run; it MUST NOT wait while occupying
-  the same topic FIFO slot. Hub MUST carry only bounded, attributed visible
-  materials and an exact result/revision reference, never hidden reasoning or
-  full native transcripts. Provider bots MUST NOT be used as a bot-to-bot
-  delivery channel. Further rounds require an explicit bound.
+- **REQ-COLLAB-001 (Retired by ADR 0065):** Hub-managed lead/advisor roles
+  are outside current product scope. Independent cross-provider review belongs
+  to project instructions and explicit agent work; Hub does not enforce or
+  certify that review. Ordinary active/satellite routing and provider-native
+  session isolation remain governed by the existing requirements.
+- **REQ-COLLAB-002 (Retired by ADR 0065):** Hub does not implement the
+  sequential advisor-review/lead-continuation workflow. Its withdrawal grants
+  no automatic history sharing, provider invocation or replay authority.
+  Provider bots MUST NOT be used as a bot-to-bot review delivery channel.
+  Retained IDs MUST NOT be reused. See
+  [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md).
 
 ## 9. Provider identity and adapter contract
 
@@ -235,7 +242,7 @@ Current provider status:
 | Hermes | Implemented integration | Native Gateway owns Telegram/session; Hub plugin/hook owns fail-closed project admission and bounded visible exchange. |
 | OpenCode | Implemented adapter | Go-authenticated provider-owned session through structured CLI output; centrally routed bot identity. |
 | Antigravity | Implemented adapter | `agy` conversation in sandboxed `accept-edits` work mode; no dangerous permission bypass. |
-| Claude Code | Repository scaffold; live acceptance pending | Headless CLI through an explicit loopback CPA route with independent worker slots; text-only, with no tools, MCP, skills or permission prompts until a human approval host is accepted (REQ-AUTH-009). |
+| Claude Code | Editor-first scope decision accepted; implementation and live acceptance remain open | Headless CLI through an explicit loopback CPA route; text-only remains the default. Protected Read/Glob/Grep/Write/Edit require explicit local opt-in and acceptance under REQ-SEC-008. Native transfer, saved-session connect, image enablement and full parity deferred by ADR 0067. No implicit tool, MCP, skill or permission grant. |
 | Gemini CLI | Rejected for active product | Google provider work uses Antigravity; do not reactivate a parallel Gemini CLI path without a new decision. |
 
 Provider bot identity maps to a runtime, not to a model or paid account. Model

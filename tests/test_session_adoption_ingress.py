@@ -22,7 +22,7 @@ class SessionAdoptionIngressTests(unittest.TestCase):
         self.service = cast(Any, ProjectHubService.__new__(ProjectHubService))
         self.service.config = replace(fixture.config, outbox_runtime="external")
         self.service.registry = fixture.registry
-        self.service.state = HubState.open(fixture.config.state_path)
+        self.service.state = HubState.open(fixture.config.state_path, codex_permission_profile=None)
         self.addCleanup(self.service.state.close)
         self.service.agent = fixture.config.agents[0]
         self.service.telegram = service_fixtures.FakeTelegram()

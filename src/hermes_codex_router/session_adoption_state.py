@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .codex_appserver import validate_codex_thread_id
+from .codex_control_predicates import require_control_scope_clear
+from .delivery_control_predicates import (
+    final_control_reconciled,
+    progress_control_reconciled,
+    result_ready_control_reconciled,
+)
 from .state import HubState, SessionRecord, StateError, TopicRecord, _bounded, _now
 
 
@@ -20,6 +26,7 @@ class AdoptionRequest:
     effort: str
     replaces_session_id: str | None = None
     model_provider: str = "openai"
+    codex_permission_profile: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +93,7 @@ class CodexSessionOrigins:
                 "target_busy",
             ),
             (
-                "SELECT 1 FROM provider_jobs WHERE topic_id = ? AND status IN ('queued','leased','executing','retry_wait','result_ready')",
+                f"SELECT 1 FROM provider_jobs jobs WHERE topic_id = ? AND status IN ('queued','leased','executing','retry_wait','result_ready') AND NOT {result_ready_control_reconciled('jobs')}",
                 "target_busy",
             ),
             (
@@ -94,11 +101,11 @@ class CodexSessionOrigins:
                 "unresolved_work",
             ),
             (
-                "SELECT 1 FROM telegram_outbox o JOIN provider_jobs j ON j.job_id=o.job_id WHERE j.topic_id=? AND o.status != 'delivered'",
+                f"SELECT 1 FROM telegram_outbox o JOIN provider_jobs j ON j.job_id=o.job_id WHERE j.topic_id=? AND o.status != 'delivered' AND NOT {final_control_reconciled('o')}",
                 "pending_delivery",
             ),
             (
-                "SELECT 1 FROM provider_progress_deliveries o JOIN provider_jobs j ON j.job_id=o.job_id WHERE j.topic_id=? AND o.status NOT IN ('delivered','superseded')",
+                f"SELECT 1 FROM provider_progress_deliveries o JOIN provider_jobs j ON j.job_id=o.job_id WHERE j.topic_id=? AND o.status NOT IN ('delivered','superseded') AND NOT {progress_control_reconciled('o')}",
                 "pending_delivery",
             ),
             (
@@ -134,6 +141,7 @@ class CodexSessionOrigins:
         if topic is None or topic.project_id != request.project_id:
             raise StateError("topic_mismatch")
         requested_scope = f"root:{request.canonical_root}"
+        require_control_scope_clear(self.connection, requested_scope)
         if topic.execution_scope.startswith("root:") and topic.execution_scope != requested_scope:
             raise StateError("project_root_changed")
         if self._exists(
@@ -156,6 +164,7 @@ class CodexSessionOrigins:
                 or origin.replaces_session_id != request.replaces_session_id
                 or current.model != request.model
                 or current.effort != request.effort
+                or current.codex_permission_profile != request.codex_permission_profile
             ):
                 raise StateError("binding_conflict")
             return AdoptionTarget(topic, current, True)
@@ -234,6 +243,8 @@ class CodexSessionOrigins:
         """
         if not self.connection.in_transaction:
             raise StateError("Codex attachment requires an immediate transaction")
+        if request.codex_permission_profile != self.state.codex_permission_profile:
+            raise StateError("binding_policy_changed")
         # Compare the active binding first, so a stale preview cannot adopt
         # a freshly reset placeholder. Exact receipt repeats are exempt.
         topic = self.state.find_topic(request.chat_id, request.thread_id)

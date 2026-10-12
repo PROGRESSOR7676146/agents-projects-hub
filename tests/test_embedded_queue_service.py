@@ -45,6 +45,8 @@ class FakeTelegram:
 
 
 class QueueClient:
+    transport_mode = "socket"
+
     def __init__(
         self, *, block: bool = False, fail: bool = False, fail_limits: bool = False
     ) -> None:
@@ -77,7 +79,10 @@ class QueueClient:
             self.release.wait(3)
         return TurnResult("Visible answer", 1000, 100)
 
-    def read_rate_limits(self) -> RateLimits:
+    def consume_completed_connection(self, *, thread_id: str, turn_id: str) -> bool:
+        return False
+
+    def read_rate_limits(self, *, deadline: float | None = None) -> RateLimits:
         if self.fail_limits:
             raise RuntimeError("telemetry unavailable")
         return RateLimits(None, None)
@@ -87,10 +92,12 @@ class QueueClient:
 
 
 class FakeSupervisor:
+    transport_mode = "socket"
+
     def __init__(self, client: QueueClient) -> None:
         self.client_value = client
 
-    def client(self) -> QueueClient:
+    def client(self, *, allow_fallback: bool = True, deadline: float | None = None) -> QueueClient:
         return self.client_value
 
     def start(self) -> None:
@@ -172,7 +179,7 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         value = ProjectHubService.__new__(ProjectHubService)
         value.config = self.config
         value.registry = self.registry
-        value.state = HubState.open(self.config.state_path)
+        value.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         value.agent = self.config.agents[0]
         telegram = FakeTelegram()
         value.telegram = cast(Any, telegram)
@@ -591,7 +598,8 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         rejected = service.state.active_session(topic.topic_id)
         assert rejected is not None
         self.assertEqual(rejected.writer_mode, "local")
-        self.assertIn("pending or being delivered", telegram.sent[-1])
+        self.assertIn("Provider work or retained result delivery blocks /return", telegram.sent[-1])
+        self.assertIn("inspect /status", telegram.sent[-1])
         self.assertEqual(len(client.turn_threads), 1)
         service.close()
 

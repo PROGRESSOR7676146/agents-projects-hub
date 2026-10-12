@@ -61,6 +61,86 @@ def _assert_required_execution(job: dict[str, Any]) -> None:
             raise AssertionError("required execution must not skip or tolerate failure")
 
 
+def _assert_namespace_job(job: dict[str, Any]) -> None:
+    _assert_required_execution(job)
+    if job.get("runs-on") != "ubuntu-24.04":
+        raise AssertionError("namespace job must use Ubuntu 24.04")
+    if job.get("env") != {"HUB_REQUIRE_NAMESPACE_TESTS": "1"}:
+        raise AssertionError("namespace job must require real namespace tests")
+    if "strategy" in job or "needs" in job:
+        raise AssertionError("namespace job must run independently and unconditionally")
+    steps = job.get("steps")
+    if not isinstance(steps, list) or len(steps) != 7:
+        raise AssertionError("namespace job must have seven required setup and test steps")
+    checkout, setup_python, setup_uv, tools, apparmor, install, invocation = steps
+    if checkout != {"uses": "actions/checkout@v6"}:
+        raise AssertionError("namespace job must check out the event commit")
+    if setup_python != {"uses": "actions/setup-python@v6", "with": {"python-version": "3.12"}}:
+        raise AssertionError("namespace job must select Python 3.12")
+    if setup_uv != {"uses": "astral-sh/setup-uv@v7"}:
+        raise AssertionError("namespace job must install uv")
+    expected_tools = (
+        "sudo apt-get update\n"
+        "sudo apt-get install --yes bubblewrap apparmor\n"
+        "/usr/bin/bwrap --help | grep -F -- '--bind-fd'\n"
+        "/usr/bin/bwrap --help | grep -F -- '--ro-bind-fd'\n"
+    )
+    if tools.get("run") != expected_tools:
+        raise AssertionError("namespace job must install compatible system bubblewrap")
+    expected_apparmor = (
+        "sudo install -m 0644 /dev/stdin /etc/apparmor.d/hub-ci-bwrap <<'APPARMOR'\n"
+        "abi <abi/4.0>,\n"
+        "include <tunables/global>\n"
+        "profile hub-ci-bwrap /usr/bin/bwrap flags=(unconfined) {\n"
+        "  userns,\n"
+        "}\n"
+        "APPARMOR\n"
+        "sudo apparmor_parser --replace /etc/apparmor.d/hub-ci-bwrap\n"
+    )
+    if apparmor.get("run") != expected_apparmor:
+        raise AssertionError("namespace job must scope CI userns access to system bwrap")
+    if install.get("env") != {"UV_PYTHON": "3.12"} or install.get("run") != (
+        "uv sync --locked --extra dev"
+    ):
+        raise AssertionError("namespace job must install locked Python 3.12 dev dependencies")
+    if invocation.get("run") != (
+        ".venv/bin/python -m unittest -v "
+        "tests.test_claude_file_sandbox.ClaudeFileSandboxTests."
+        "test_namespace_denies_private_symlink_git_write_and_host_paths "
+        "tests.test_claude_private_mount_aliases.ClaudePrivateMountAliasTests."
+        "test_real_private_bind_alias_is_refused_before_any_provider_launch "
+        "tests.test_claude_permission_host_roundtrip.PermissionHostRoundtripTests."
+        "test_namespace_client_preserves_peer_gate_and_atomic_allow_deny "
+        "tests.test_claude_custody_rehearsal.ClaudeCustodyRehearsalTests."
+        "test_namespace_blocks_authority_aliases_and_privilege_but_shares_network "
+        "tests.test_codex_native_namespace "
+        "tests.test_process_namespace_rehearsal "
+        "tests.test_process_namespace_topology "
+        "tests.test_review_materials_namespace "
+        "tests.test_review_bridge_namespace"
+    ):
+        raise AssertionError(
+            "namespace job must run all required real namespace scenarios and outer wrapper witness"
+        )
+
+
+def _assert_ruleset_required_checks(script: str, workflows: Path) -> None:
+    ci_job = next(
+        name
+        for name, job in _jobs(_workflow(workflows / "ci.yml")).items()
+        if job.get("uses") == "./.github/workflows/validate.yml"
+    )
+    validation_jobs = _jobs(_workflow(workflows / "validate.yml"))
+    expected = {
+        f"{ci_job} / validate ({version})"
+        for version in validation_jobs["validate"]["strategy"]["matrix"]["python-version"]
+    }
+    expected.add(f"{ci_job} / namespace")
+    actual = set(re.findall(r'"context": "([^"]+)"', script))
+    if actual != expected:
+        raise AssertionError(f"ruleset required checks mismatch: {actual ^ expected}")
+
+
 def _assert_validation_contract(workflows: Path) -> None:
     validation = _workflow(workflows / "validate.yml")
     if validation.get("on") != {"workflow_call": None}:
@@ -69,9 +149,10 @@ def _assert_validation_contract(workflows: Path) -> None:
         raise AssertionError("validation workflow must have read-only contents permission")
 
     validation_jobs = _jobs(validation)
-    if set(validation_jobs) != {"validate"}:
-        raise AssertionError("validation workflow must have one validation job")
+    if set(validation_jobs) != {"validate", "namespace"}:
+        raise AssertionError("validation workflow must have matrix and namespace jobs")
     validate_job = validation_jobs["validate"]
+    _assert_namespace_job(validation_jobs["namespace"])
     _assert_required_execution(validate_job)
     if validate_job.get("runs-on") != "ubuntu-latest":
         raise AssertionError("validation job runner changed")
@@ -189,6 +270,22 @@ def _assert_validation_contract(workflows: Path) -> None:
         raise AssertionError("release checkout must retain complete history")
     if "ref" in release_checkout_with:
         raise AssertionError("release checkout must use the event commit")
+    if release_checkout_with.get("persist-credentials") is not False:
+        raise AssertionError("release checkout must not persist write credentials")
+    installers = [
+        step for step in release_steps if step.get("uses", "").startswith("astral-sh/setup-uv@")
+    ]
+    if len(installers) != 1 or not re.fullmatch(
+        r"astral-sh/setup-uv@[a-f0-9]{40}", installers[0].get("uses", "")
+    ):
+        raise AssertionError("release requires exactly one uv installer pinned by commit SHA")
+    build_setup = installers[0].get("with", {})
+    if not re.fullmatch(r"\d+\.\d+\.\d+", build_setup.get("version", "")) or not re.fullmatch(
+        r"[a-f0-9]{64}", build_setup.get("checksum", "")
+    ):
+        raise AssertionError("release uv must use an exact version and archive checksum")
+    if build_setup.get("enable-cache") is not False:
+        raise AssertionError("release uv cache must be disabled")
     release_commands: list[str] = [
         cast(str, step["run"])
         for step in release_steps
@@ -198,8 +295,32 @@ def _assert_validation_contract(workflows: Path) -> None:
         "git rev-parse HEAD" in command and "RELEASE_TAG" in command for command in release_commands
     ):
         raise AssertionError("release must verify event SHA and peeled tag before publication")
-    if 'gh release create "$RELEASE_TAG" --verify-tag --generate-notes' not in release_commands:
+    publication = next(
+        (
+            command
+            for command in release_commands
+            if 'gh release create "$RELEASE_TAG" --verify-tag --generate-notes' in command
+        ),
+        "",
+    )
+    if not publication or not all(
+        name in publication
+        for name in (
+            "*.whl",
+            "*.tar.gz",
+            "requirements-release.lock",
+            "requirements-build.lock",
+            "uv.lock",
+            "release-info.json",
+            "SHA256SUMS",
+        )
+    ):
         raise AssertionError("release publication command changed")
+    if (
+        'python scripts/release_assets.py --output "$RUNNER_TEMP/hub-release-assets"'
+        not in release_commands
+    ):
+        raise AssertionError("release must verify clean-SHA assets before publication")
 
     validator = " ".join((ROOT / "scripts" / "validate.py").read_text(encoding="utf-8").split())
     for required_stage in (
@@ -219,18 +340,89 @@ class WorkflowContractTests(unittest.TestCase):
         _assert_validation_contract(WORKFLOWS)
 
     def test_ruleset_requires_the_checks_the_validation_matrix_reports(self) -> None:
-        ci_job = next(
-            name
-            for name, job in _jobs(_workflow(WORKFLOWS / "ci.yml")).items()
-            if job.get("uses") == "./.github/workflows/validate.yml"
-        )
-        ((validate_job, job),) = _jobs(_workflow(WORKFLOWS / "validate.yml")).items()
-        expected = {
-            f"{ci_job} / {validate_job} ({version})"
-            for version in job["strategy"]["matrix"]["python-version"]
-        }
         script = (ROOT / "scripts" / "configure-github.sh").read_text(encoding="utf-8")
-        self.assertEqual(set(re.findall(r'"context": "([^"]+)"', script)), expected)
+        _assert_ruleset_required_checks(script, WORKFLOWS)
+
+    def test_ruleset_rejects_missing_namespace_required_check(self) -> None:
+        script = (ROOT / "scripts" / "configure-github.sh").read_text(encoding="utf-8")
+        original = (
+            '{"context": "validation / validate (3.13)"},\n'
+            '          {"context": "validation / namespace"}'
+        )
+        self.assertIn(original, script)
+        script = script.replace(original, '{"context": "validation / validate (3.13)"}')
+        with self.assertRaisesRegex(AssertionError, "ruleset required checks mismatch"):
+            _assert_ruleset_required_checks(script, WORKFLOWS)
+
+    def test_contract_rejects_missing_or_bypassed_namespace_invocation(self) -> None:
+        for mutation in (
+            "missing",
+            "missing_custody",
+            "missing_private_alias",
+            "missing_private",
+            "missing_materials",
+            "missing_review_pipe",
+            "wrong_command",
+            "tolerate_failure",
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                workflows = Path(directory) / "workflows"
+                shutil.copytree(WORKFLOWS, workflows)
+                path = workflows / "validate.yml"
+                validation = _workflow(path)
+                invocation = validation["jobs"]["namespace"]["steps"][-1]
+                if mutation == "missing":
+                    invocation["run"] = ""
+                elif mutation == "missing_custody":
+                    selector = (
+                        "tests.test_claude_custody_rehearsal.ClaudeCustodyRehearsalTests."
+                        "test_namespace_blocks_authority_aliases_and_privilege_but_shares_network "
+                    )
+                    self.assertIn(selector, invocation["run"])
+                    invocation["run"] = invocation["run"].replace(selector, "")
+                elif mutation == "missing_private_alias":
+                    selector = (
+                        "tests.test_claude_private_mount_aliases.ClaudePrivateMountAliasTests."
+                        "test_real_private_bind_alias_is_refused_before_any_provider_launch "
+                    )
+                    self.assertIn(selector, invocation["run"])
+                    invocation["run"] = invocation["run"].replace(selector, "")
+                elif mutation == "missing_private":
+                    invocation["run"] = invocation["run"].replace(
+                        " tests.test_process_namespace_rehearsal", ""
+                    )
+                elif mutation == "missing_materials":
+                    invocation["run"] = invocation["run"].replace(
+                        " tests.test_review_materials_namespace", ""
+                    )
+                elif mutation == "missing_review_pipe":
+                    invocation["run"] = invocation["run"].replace(
+                        " tests.test_review_bridge_namespace", ""
+                    )
+                elif mutation == "wrong_command":
+                    invocation["run"] = "echo skipped"
+                else:
+                    invocation["run"] += " || true"
+                path.write_text(yaml.safe_dump(validation), encoding="utf-8")
+                with self.assertRaisesRegex(AssertionError, "real namespace scenarios"):
+                    _assert_validation_contract(workflows)
+
+    def test_contract_rejects_missing_namespace_job_or_strict_env(self) -> None:
+        for mutation in ("missing_job", "missing_env", "disabled_env"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                workflows = Path(directory) / "workflows"
+                shutil.copytree(WORKFLOWS, workflows)
+                path = workflows / "validate.yml"
+                validation = _workflow(path)
+                if mutation == "missing_job":
+                    del validation["jobs"]["namespace"]
+                elif mutation == "missing_env":
+                    del validation["jobs"]["namespace"]["env"]
+                else:
+                    validation["jobs"]["namespace"]["env"]["HUB_REQUIRE_NAMESPACE_TESTS"] = "0"
+                path.write_text(yaml.safe_dump(validation), encoding="utf-8")
+                with self.assertRaisesRegex(AssertionError, "namespace"):
+                    _assert_validation_contract(workflows)
 
     def test_contract_rejects_skipped_or_error_tolerant_validation(self) -> None:
         cases = (
@@ -238,6 +430,10 @@ class WorkflowContractTests(unittest.TestCase):
             ("validate.yml", "validate", False, "continue-on-error", True),
             ("validate.yml", "validate", True, "if", "false"),
             ("validate.yml", "validate", True, "continue-on-error", True),
+            ("validate.yml", "namespace", False, "if", "false"),
+            ("validate.yml", "namespace", False, "continue-on-error", True),
+            ("validate.yml", "namespace", True, "if", "false"),
+            ("validate.yml", "namespace", True, "continue-on-error", True),
             ("release.yml", "validation", False, "if", "false"),
             ("ci.yml", "validation", False, "if", "false"),
             ("release.yml", "release", True, "continue-on-error", True),
@@ -257,7 +453,14 @@ class WorkflowContractTests(unittest.TestCase):
                             if "run" in step
                             and (
                                 filename != "validate.yml"
-                                or step["run"] == ".venv/bin/python scripts/validate.py"
+                                or (
+                                    job_name == "validate"
+                                    and step["run"] == ".venv/bin/python scripts/validate.py"
+                                )
+                                or (
+                                    job_name == "namespace"
+                                    and "test_namespace_client_preserves" in step["run"]
+                                )
                             )
                         )
                     target[key] = value
@@ -358,6 +561,53 @@ class WorkflowContractTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(AssertionError, "depend on validation"):
                 _assert_validation_contract(workflows)
+
+    def test_contract_rejects_persisted_write_credentials_and_missing_assets(self) -> None:
+        for mutation, error in (
+            ("credentials", "persist write credentials"),
+            ("build", "clean-SHA assets"),
+            ("lock", "publication command"),
+            ("uv", "exact version"),
+            ("uv_tag", "pinned by commit SHA"),
+            ("uv_duplicate", "exactly one"),
+            ("uv_cache", "cache must be disabled"),
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                workflows = Path(directory) / "workflows"
+                shutil.copytree(WORKFLOWS, workflows)
+                release = workflows / "release.yml"
+                workflow = _workflow(release)
+                steps = workflow["jobs"]["release"]["steps"]
+                if mutation == "credentials":
+                    steps[0]["with"]["persist-credentials"] = True
+                elif mutation == "build":
+                    steps[:] = [
+                        step
+                        for step in steps
+                        if step.get("name") != "Build and verify immutable release assets"
+                    ]
+                elif mutation.startswith("uv"):
+                    installer = next(
+                        step
+                        for step in steps
+                        if step.get("uses", "").startswith("astral-sh/setup-uv@")
+                    )
+                    if mutation == "uv":
+                        installer["with"]["version"] = "latest"
+                    elif mutation == "uv_tag":
+                        installer["uses"] = "astral-sh/setup-uv@v7"
+                    elif mutation == "uv_duplicate":
+                        steps.append(copy.deepcopy(installer))
+                    else:
+                        installer["with"]["enable-cache"] = True
+                else:
+                    publication = steps[-1]
+                    publication["run"] = publication["run"].replace(
+                        "requirements-build.lock", "omitted.lock"
+                    )
+                release.write_text(yaml.safe_dump(workflow), encoding="utf-8")
+                with self.assertRaisesRegex(AssertionError, error):
+                    _assert_validation_contract(workflows)
 
     def test_contract_rejects_release_bypass_condition(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

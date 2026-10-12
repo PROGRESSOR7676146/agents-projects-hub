@@ -10,7 +10,8 @@ python scripts/validate.py --profile focused tests.test_documentation_contract
 
 With no test selectors, `--profile focused` runs only static preflight checks.
 It omits Git history scanning, whole-project Pyright and full test discovery: its output explicitly
-says **not canonical acceptance**. Select the tests affected by the change;
+says **not canonical acceptance**. Test selectors are accepted only by the focused
+profile. Select the tests affected by the change;
 the profile does not guess test coverage from a diff.
 
 The full canonical command remains:
@@ -26,19 +27,128 @@ whole-project Pyright and all unit/integration tests. The full privacy/history
 scan remains mandatory before every commit, even after focused checks pass.
 Each stage reports elapsed time and stops on failure; exit 0 means the selected
 profile passed, 1 means a failed/unavailable stage, and 2 means invalid arguments.
-Test selectors are accepted only in the focused profile; they import sibling
-fixtures from `tests/` exactly as discovery does. The canonical test stage asks
-discovery for every test module, including nested test packages, then runs
-each in its own process, several in parallel (CPU count up to eight; override
-with `--jobs N`). Each test runs in the module discovery found it in, the tests
-that start must be exactly the discovered ones by test id, and any module
-under `tests` that defines `load_tests` is refused, because the suite such a
-hook builds cannot be reproduced by an isolated module run. It names every
-failing, empty, mismatched or timed-out module after all modules finish, so
-each module must pass on its own. See [ADR 0041](../decisions/0041-parallel-isolated-test-modules.md).
+Focused selectors import sibling fixtures from `tests/` exactly as discovery
+does. The full test stage runs every discovered module in its own process;
+[scheduling and completeness checks](VALIDATION_SCHEDULING.md) also apply
+through the installed Git hooks.
 Automated tests
 use fake transports and temporary Git/SQLite fixtures. They must not contact
 real Telegram groups or consume provider tokens.
+
+Codex transport pressure tests use scripted pipes/WebSockets and an owned
+fictional Python JSONL peer. More than 1,024 foreign notifications must not
+prevent an RPC response; early final/completion/context and rolling quota
+updates must survive, and an interleaved approval must be declined on stdio
+without an automatic grant. Cover a successful client left idle before its
+next turn, bounded multibyte and unterminated frames, ordered drain before
+terminal failure, close during producer/consumer waits and delivery after a
+receive timeout. These fixtures establish source transport behavior, not the
+origin of a deployed subscription or native/Telegram live acceptance.
+
+`tests.test_codex_stdio_failure_drain` and the stdio pressure tests additionally
+cover writer failure with a full inbound queue and unread pipe tail, delayed
+tail after an empty receive timeout, both first-cause orders and a synchronized
+race, and close while the reader is full or empty. A controlled writer proves
+that a decline can enter the outbound queue before failing; its final/context/quota
+tail still reaches the exact completion checkpoint with the Hub notice and
+unchanged raw visible items. EOF before a buffered approval covers terminal
+reply-admission refusal; ordinary healthy EOF produces no notice.
+
+Fault-drain regressions require saved accepted identity and explicit completion,
+bound foreign traffic and an already-blocked quiet reader, preserve the original
+quiet deadline while polling, and retain text/notice across storage, permission,
+EOF and completion-boundary expiry failures. They prove no second submission or
+grant, not delivery of an admitted decline. Test-only shortened poll/window
+values make the quiet fault test bounded; production values and limitations
+are described in [queue recovery](../operations/QUEUE_RECOVERY.md).
+
+`tests.test_codex_rpc_deadlines` uses module-local fake clocks with real Hub
+clients. It covers more than 1,024 foreign frames exhausting a fixed default
+response deadline, explicit/quiet budgets, late responses/rejections/approvals,
+send time, managed metadata refusal, early approval visibility and actual
+external/embedded post-submission uncertainty with retained root exclusion and
+one submission. It does not establish a whole preparation wall-clock budget or
+legacy inline recovery parity.
+`tests.test_codex_send_deadline`, `tests.test_codex_control_recovery` and the
+local socket tests cover the original proof cutoff through outbound admission
+and a blocked writer, RPC timeout before dequeue, shutdown and queue bounds,
+unsupported capability and durable unknown ownership/no resend. A real fictional
+Unix WebSocket verifies compression disabled and an ACK after proof expiry but
+before the independent response deadline. The locked aiohttp implementation is
+exercised directly under backpressure: uncompressed send must write before its
+first await. Dependency upgrades must retain this contract. These fixtures bound local frame-write
+initiation only; they invoke no model or installed service.
+`tests.test_preparation_deadline_retry` exercises real flooded RPC preparation
+expiry through both workers, exact delivered-notice retry with the original
+payload/session generation and zero productive submission. Typed expiry under
+the exact preparation boundary is distinct from same-text generic errors,
+policy refusals, contradictory evidence and post-submission uncertainty; the
+latter retain zero retry tickets and the existing root exclusion.
+
+Notification/preparation recovery acceptance must cover two independent roots
+and worker connections: more than 1,024 foreign notifications during preparation
+of the second turn must not abort it before start. Preserve both exact results,
+final events, approvals and visible telemetry. Repeat after a successful client
+has retained a previous thread subscription. Separately inject two consecutive
+preparation failures, Reply to each exact delivered notice and verify that only
+one eventual native turn receives the original authorized task/context, with
+truthful retry controls and no reused tool grants. Include stop/contradiction,
+materials, queued binding drift, transaction faults, restart deduplication and
+earlier holds. Offline native fixtures use deterministic local protocol stubs;
+their evidence does not close separately authorized live Telegram acceptance.
+
+`tests.test_preexecution_retry_runtime` reconfigures a queued Codex alias retry
+to OpenCode or Antigravity in each queue consumer. Dispatch and material
+preparation must remain untouched; the saved payload and truthful pre-execution
+notice survive without another retry ticket or execution checkpoint.
+
+Claude process-observation fixtures (`tests.test_claude_process_observation`,
+`tests.test_claude_activity`, `tests.test_claude_activity_lifecycle` and
+`tests.test_claude_activity_migration`) use owned fictional processes and private
+temporary state. They prove post-Popen worker callback propagation, optional
+open/retire/evaluator failure isolation, exact first-send fencing, committed
+visible-message races, permission pending/roundtrip/expiry/revocation/bounds,
+retirement and restart episodes, attempted/unknown/rejected send preservation,
+and additive schema-42 backup/DDL rollback. Buffered runners do not establish
+process-start evidence. These checks do not establish native turn acceptance,
+tool timing, subscription routing or deployed Telegram behavior. The owning
+subset and limits are [REQ-QUEUE-012](../product/DURABLE_QUEUE_AND_CONTROL.md).
+
+Delivery-certainty fixtures (`tests.test_delivery_certainty`,
+`tests.test_progress_certainty`, `tests.test_delivery_certainty_migration` and
+`tests.test_observed_delivery_preservation`) exercise SQLite fences and fictional
+Telegram receipts. They cover malformed/bool IDs, external/embedded/document
+paths, post-HTTP expiry, receipt-commit faults, prefix preservation, cleanup,
+pre/post-fence recovery, populated schema42 backups and trigger/FK/DDL rollback.
+Late exact native proof preserves uncertain notice parts and old referenced
+artifacts without a substitute send. A sending notice defers reconciliation until
+receipt, proven rejection or unknown recovery settles it; normal replacement
+archives every original part atomically, including after a receipted prefix.
+Opener-level form/multipart rejection tests cover real HTTP400/403, malformed or
+conflicting bodies, HTTP408/5xx and incomplete HTTP200 responses. Unknown-head
+fixtures prove same-topic execution/delivery remain blocked while another topic
+can deliver. The explicit reconciliation deployment gate remains open.
+Schema44 delivery-hold fixtures (`tests.test_delivery_hold` and
+`tests.test_delivery_hold_migration`) additionally cover full-manifest stale
+tokens beyond 64 parts, receipt provenance, competing connections, immutable
+exact retries, transaction faults, both released FIFO barriers and retained
+native/writer/owner-hold/stop boundaries. Preview/apply use only fictional local
+state; missing/older schemas are refused without migration or credentials.
+Populated43-to44 backups and DDL faults preserve all existing evidence.
+No live inference, Telegram or service
+change occurs. This is offline source/fault evidence, not deployment acceptance.
+
+Ingress continuity fixtures (`tests.test_telegram_ingress_continuity`,
+`tests.test_codex_ingress_assessments` and
+`tests.test_ingress_assessment_migration`) exercise actual poll transactions and
+immutable exact targets with injected clocks. They cover threshold adoption,
+gaps, competing publishers, equal-time causal recovery, new generations,
+registration zero cursors, database reopen, malformed evidence, replacement and
+rowid refusal, atomic faults and genuine schema50 backup/DDL rollback. Native
+controls, sender budgets/fences, stops and delivery state remain unchanged.
+These fixtures prove storage and policy ordering only; automatic precaution,
+full-control consent and real loss of Telegram control still need separate
+integration and owner-authorized acceptance.
 
 Publication sequence with the installed hooks: focused checks → commit (the
 pre-commit gate) → push (one full canonical run on the clean commit) →
@@ -92,6 +202,18 @@ forced process termination to join real Controller polling, SQLite recovery,
 isolated workers, and the standalone sender. Lower-level state-machine tests
 remain in their focused modules.
 
+## Codex preparation conservation regression
+
+The preparation conservation regression is
+`tests.test_codex_notification_conservation`. Two independent workers and roots
+join the real client, execution journal and durable outbox against scripted
+transports. The second receives 3,600 foreign events while the first remains
+accepted and active. Separate start/resume cases check both saved finals,
+early/late approval resolution, context and account quota observations. A control
+case models the older unfiltered retention rule and reproduces its bounded
+preparation failure. It is offline conservation evidence, without native
+broadcast attribution, live approvals, services, Telegram or inference.
+
 ## Privacy gate
 
 `python -m hermes_codex_router.privacy_scan . --history` scans both the proposed
@@ -123,7 +245,323 @@ real temporary Git objects and a mocked successful signature result to test
 policy wiring only. Pinned-key cryptographic verification has separate tests;
 the mock is not evidence that a fixture was cryptographically signed.
 
+## Optional offline native Codex profile rehearsal
+
+`tests.test_codex_native_profiles` exercises an explicitly supplied native Codex
+binary against a deterministic local Responses fixture. It requires Linux,
+system bubblewrap and usable network/PID/IPC namespaces. Supply the native executable,
+not a shell wrapper or the ordinary logged-in CLI configuration:
+
+```bash
+HUB_NATIVE_CODEX_FIXTURE_EXECUTABLE=/home/example/tools/codex-native \
+  HUB_REQUIRE_NATIVE_CODEX_PROFILE_TESTS=1 \
+  HUB_REQUIRE_NAMESPACE_TESTS=1 \
+  PYTHONPATH=src python -m unittest -v \
+  tests.test_codex_native_profiles tests.test_codex_native_mcp \
+  tests.test_codex_native_namespace
+```
+
+The binary is copied into a disposable empty-root namespace with read-only
+system runtime, fixture scripts and managed requirements. Real Codex authentication and
+configuration are hidden, provider credential variables are excluded, and external
+network access is unavailable. A temporary managed requirements file and fictional
+project/key/symlink controls establish the policy under test. The fixture permits
+at most four local Responses requests per case. Command and file approvals are
+declined; permission requests receive an empty turn-scoped grant. MCP elicitations
+are declined unless the test explicitly
+arms one exact synthetic fixture consent; the fixture requests no persisted grant. This is not a
+human approval host or approval transport acceptance.
+It controls only its owned disposable processes, never installed services.
+Host-side repairs and observations reject symlinks at every project path
+component. The unarmed MCP case also verifies the absence of probe mutations
+independently of the native item's reported failure.
+
+The native cases cover explicit profile selection, exact stored-thread resume
+after restarting the disposable app-server, actual tool access denials, legacy
+turn policy replacement, separate standalone command overrides, and the limits
+of profile metadata. A native final message alone is insufficient: denial evidence
+requires one completed successful command from the exact current thread and turn,
+project read/write controls, and the complete boolean probe payload. Old resumed
+output, duplicate commands, failed execution and partial payloads are rejected.
+
+The fixed MCP server exposes only a nonce-only fictional probe. Direct RPC must
+use zero Responses requests; it is diagnostic evidence without a native turn.
+Current-turn evidence requires one completed MCP item matching the exact
+thread, turn, server, tool, arguments and fresh nonce. Both structured and textual
+versioned probe payloads must agree; duplicate JSON fields, malformed booleans,
+old items and assistant completion alone are rejected. Explicit synthetic consent
+is one-use and bound to that current item; restart and terminality clear it.
+Each armed native turn must record exactly one matching fresh consent acceptance,
+including after restart, before its successful output counts as exposure evidence.
+
+With native Codex 0.159.2, the fixed command descendant retained positive project
+read/write controls while denying fictional authority reads/writes and Git writes.
+Direct MCP RPC exposed the fictional authority to both the MCP process and its
+fixed Python child. A current-turn MCP call was denied by default; after one
+explicitly armed synthetic fixture consent, it showed the same exposure,
+including after exact-thread restart/resume with a fresh nonce. These results
+demonstrate a custody gap for this tested MCP launch path. They do not establish
+human approval delivery, arbitrary helper isolation, deployed custody or Telegram
+acceptance. The server validates visible fictional authority controls at startup;
+a future launch that hides those controls may fail startup and requires separate
+investigation, rather than being counted as a successful denial probe.
+
+The corpus was rehearsed with native Codex 0.159.2. No binary is downloaded by
+the tests or bundled with the repository. With no executable supplied, the
+native cases explicitly skip; requiring them makes that absence fail. Once opted
+in, fixture/protocol/namespace failures fail the run. The ordinary canonical suite
+still exercises the evidence parser without starting Codex. Skips and parser
+tests are not native evidence, and this offline corpus neither implements managed
+profile support in Hub nor establishes deployed custody or Telegram acceptance.
+The required CI namespace job also runs the outer wrapper witness without a
+Codex binary, proving absent source aliases and unwritable mounted scripts.
+
+## Optional offline native Claude transport
+
+[Native editor permissions](CLAUDE_NATIVE_EDITOR.md).
+
+`tests.test_claude_native_transport` uses an explicitly supplied standalone ELF
+Claude executable against a fictional HTTP endpoint inside a disposable empty-root
+network/PID/IPC namespace. It copies the bounded binary and supplies only readonly
+system runtime, the fixture actor and the production
+stream parser. Host HOME, project, credentials and service endpoints are absent.
+
+```bash
+HUB_NATIVE_CLAUDE_FIXTURE_EXECUTABLE=/home/example/tools/claude-native \
+  HUB_NATIVE_CLAUDE_FIXTURE_SHA256='<locally-verified-sha256>' \
+  HUB_NATIVE_CLAUDE_FIXTURE_VERSION='2.1.285 (Claude Code)' \
+  HUB_REQUIRE_NATIVE_CLAUDE_TRANSPORT_TESTS=1 \
+  PYTHONPATH=src:. python -m unittest -v tests.test_claude_native_transport
+```
+
+The bearer/API-key × SSE-success/HTTP-529 matrix derives its base argv from the
+production text-only builder, without bare mode. A canonical regression checks
+every production start argument and setting, including a caller-chosen fictional
+session UUID checked by reader and parser. Separate corpora cover
+[images](CLAUDE_NATIVE_IMAGES.md) and [model/effort resume](CLAUDE_NATIVE_SELECTION.md).
+Shared native settings arrive through this host-built argv. Fixture-only additions empty setting
+sources/MCP, disable session persistence and model switching/fallback, limit the
+turn to one, and replace the system prompt. Fixture-only environment settings
+suppress retries and limit output tokens. Restricted mode already loads only
+managed and explicit settings according to the CLI contract; the extra empty
+source flag is a fixture bound. Production retry/fallback behavior is not proven
+by this corpus. The test-only
+`tests/claude_native_request_contract.py` checks the complete Messages request
+against an independently selected fictional material capsule and replacement
+system prompt. It requires exact message/system order, text, roles, block keys,
+cache control and options, including the native environment block constructed
+before invocation from namespace observations. SDK headers, the fixture Host and
+the single dummy credential are checked with duplicate header pairs preserved.
+The characterized billing suffix and generated device ID have narrow formats;
+the account field is empty and both session references match the chosen UUID.
+These native fields are compatibility evidence, never material authorization.
+Unknown/extra fields, malformed containers, duplicate JSON keys at every level
+(including embedded metadata), invalid UTF-8, nonfinite numbers, trailing data
+and byte/depth/node overflow refuse before serving SSE or HTTP 529. Native schema
+changes require deliberate review; expectations are never learned from the
+arriving request. `tests.test_claude_native_request_contract` runs this rejection
+corpus through the actual HTTP handler, with a fresh attempt per mutation and
+positive synthetic controls. The separate argv regression remains mandatory.
+Direct decoder checks witness strictness independently of the Messages schema;
+a full embedded-metadata duplicate with a valid last value and a surrogate
+metadata string also exercise handler rejection. Declared-size refusal sends
+headers only, avoiding resets from an unread oversized TCP payload.
+
+The fixture requires the chosen model/effort, empty tools, 1,024 output tokens,
+exactly one validated and served Messages POST, at most one
+optional HEAD and no unknown requests, empty connections, timeouts or retry POST.
+Concurrent connections share one attempt; an invalid first POST consumes it.
+Host-side file reads and an actual loopback exchange establish positive controls;
+the namespace actor must prove both targets unreachable. Native stdout is bounded
+and passed through the real stream reader/parser; evidence contains only fixed
+categories, booleans and counts, plus validated CLI version, copied binary SHA256
+and parser Python version. Request evidence retains only the validated count
+and fictional capsule digest, without native request bodies or environment text.
+The date scaffold fails closed if execution crosses its chosen UTC-date boundary;
+this compatibility failure is not a right to relax the material contract.
+This test-only validator grants no production authority.
+Required native runs pin the expected digest and
+version from private locally verified evidence; never put real binary identities
+in Git. Success requires exactly one visible message; HTTP 529 requires the native
+`success`/`is_error:true`/exact-529/string-result envelope, an overloaded failure,
+and zero visible assistant messages with an error-bearing latest assistant event.
+The actor requires Python 3.11 or later; the host validates the reported Python
+version and every terminal diagnostic key/value before printing the evidence.
+Special-file sources refuse before open and regular files use nonblocking open;
+timeout, output-bound, callback failure and parent-exits-first regressions check
+owned group termination before leader reaping and pipe cleanup.
+
+The corpus was rehearsed with CLI 2.1.285. It discovered that built-in mods are
+independent of safe mode; shared settings now disable the four known optional
+mods through documented `enabledPlugins`. The mandatory policy security mod is
+not disabled, and unknown/enabled plugin metadata still fails the strict guard.
+Disabling participation does not prove that the binary never imports/registers
+bundled modules. The native success result variant may also carry `is_error:true`:
+an exact integer 4xx/5xx status and string result prove only a terminated failed
+turn. Missing/malformed status/result, conflicting success, duplicate terminal,
+session drift and trailing events stay ambiguous. HTTP 529 is classified from
+that exact native status, without reading diagnostic text.
+
+No executable is downloaded or bundled. Without explicit opt-in, native cases
+skip; requiring them makes absence fail. Once opted in, namespace, protocol and
+compatibility failures fail without fallback. Ordinary canonical tests exercise
+the fixture evidence and failure cleanup without launching Claude. A fictional
+API-key path is compatibility evidence, not a paid-route authorization. No
+real account, CPA upstream, subscription billing, live provider inference,
+installed service, Telegram or human approval is exercised. Native file-tool
+permissions, saved-session/local transfer and productive custody remain separate.
+
+Primary references: [built-in mods](https://code.claude.com/docs/en/plugins/mods/overview#mods-built-into-claude-code),
+[plugin settings](https://code.claude.com/docs/en/settings-reference#enabledplugins)
+and [SDK result message](https://code.claude.com/docs/en/agent-sdk/typescript#sdkresultmessage).
+
+## Offline review pipe primitives
+
+Scope update: [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md) retires
+Hub-managed advisor integration. The existing fixtures and required CI are
+retained as source regressions; the combined native/pipe witness and productive
+role/material workflow are not pending release acceptance tasks. Standalone
+Claude parity and provider/helper custody retain their separate gates.
+
+`tests.test_review_bridge_protocol` and `tests.test_review_bridge_attempt` exercise
+the [bounded pipe primitives](../decisions/0058-bounded-review-pipe-primitives.md)
+without a provider, socket, process launch, environment credentials or live route:
+
+```bash
+PYTHONPATH=src:. python scripts/validate.py --profile focused \
+  tests.test_review_bridge_protocol tests.test_review_bridge_attempt \
+  tests.test_review_bridge_sequence tests.test_review_bridge_write_buffer \
+  tests.test_review_materials
+```
+
+Codec/gate tests cover framing/bounds, retirement, sealed-material substitution,
+one-use races, cancellation and deadlines. The injected callback has no live
+upstream; its return is not provider acceptance or completion. Deadline checks
+cannot interrupt it. Exact contracts remain in ADR 0058/tests.
+
+Sequence and write-buffer tests add wrong direction/order, duplicate controls,
+stdout before request, graceful cancellation with bounded discarded in-flight
+stdout, early exit versus incomplete response, EOF in every unfinished phase,
+per-direction/stream budgets, partial writes and zero-progress would-block,
+backpressure without cumulative admission, one stable outstanding offer and
+abort midway through headers/payloads. A serialized fake owner retries buffer
+admission without advancing sequence twice. A late sequence failure preserves
+one consumed fake callback and refuses resubmission. Buffer abort never permits
+appending CANCEL to a truncated frame; after buffer abort or failure the future
+I/O owner must close the pipe unconditionally. Uninitialized frame objects retire
+both sequence and buffer through fixed diagnostics without exception chains.
+
+Those primitives are in-process fixtures; the buffer performs no physical writes.
+`tests.test_review_bridge_pipe` adds actual nonblocking pipes and a fictional HTTP
+peer. It covers recorded kernel short writes (8-KiB offers into a 4-KiB pipe),
+fragmentation/backpressure, exact capsule request binding, a fresh
+response digest receipt, cancellation before/after claim, duplicate requests,
+truncated frames, stream-budget refusal under floods, absolute deadlines under
+trickled activity/held pipes, bounded HTTP headers/bodies and malformed requests.
+Extra-byte cases require an explicit
+rejection diagnostic, including a byte delivered during response transmission;
+EOF and an actor timeout are insufficient. The descriptor scan requires readable
+FD tables for self, parent and PID1 and fails closed on PermissionError; mocks
+cover incomplete directory/descriptor scans. Cancellation is sampled before
+unconditional gate cleanup, and success is a non-revoked positive control.
+Deterministic would-block offer conservation remains in the fake-owner tests.
+`tests.test_owned_fixture_process` covers
+kill-before-reap and closure of all owned streams; the existing native capture
+regressions reuse that lifecycle. Pipe cleanup drains buffered stderr and stdout
+under one finite deadline; a forced stdout-first failure checks that the explicit
+late-byte diagnostic survives cleanup.
+
+`tests.test_review_bridge_namespace` adds the private namespace witness to the
+required strict CI job. Positive host controls precede parent/exec-child denial
+checks for original project/Git, authority paths, TCP/pathname/abstract sockets
+and inherited authority/capsule/mount-pin inodes. A positive control deliberately
+marks the inherited stdin pipe inode as denied; the detector must reject it
+before any callback. A TERM-ignoring setsid descendant holding the
+pipe must reach EOF after namespace teardown. Completion also requires drained
+writes, a client response receipt and valid EXIT/EOF after cleanup; END admission
+alone does not prove delivery. Run locally with:
+
+```bash
+HUB_REQUIRE_NAMESPACE_TESTS=1 PYTHONPATH=src:. python -m unittest -v \
+  tests.test_review_bridge_pipe tests.test_review_bridge_namespace \
+  tests.test_owned_fixture_process
+```
+
+These are actual kernel/fictional-HTTP fixtures. They do not prove native CLI
+compatibility, immutable installed supervisor custody, durable authorization or
+restart deduplication, subscription/no-paid-fallback, productive advisor,
+deployment or Telegram acceptance. Fixed source snapshots are fixture inputs,
+not an installed supervisor. The ordinary suite creates no real inference route.
+
+The in-process `tests.test_claude_native_pipe_contract` retains the test-only seam
+prepared for the now-withdrawn combined native/pipe witness:
+
+```bash
+PYTHONPATH=src:. python scripts/validate.py --profile focused \
+  tests.test_claude_native_pipe_contract tests.test_claude_native_request_contract \
+  tests.test_claude_native_transport
+```
+
+The envelope preserves exact bounded HTTP headers/body and duplicate evidence.
+The host chooses the capsule, expected scaffolds, port and prepared response
+before submission. Tests cover material substitution, ambiguous framing, duplicate
+headers/JSON, bounds, snapshot mutation, one-use consumption, cancellation and
+expiry. Observation is sticky; expiry retires at submit. This is in-memory
+evidence only; production digest authority, native wiring and custody are unchanged.
+
+Run `tests.test_review_bridge_exchange` with the pipe and namespace corpus above.
+It checks bounded raw stdout/exit returned after cleanup without receipt parsing,
+structural owners, native refusal with zero consumption/EOF and cancellation with
+zero/one consumption. A forged receipt can complete transport while the legacy
+wrapper refuses it. The ten-second transport deadline remains, plus bounded cleanup.
+Any later native wrapper would require a new scope decision, its own bounded
+budget and parser after cleanup. No native launch,
+productive authorization or combined witness is established by this extraction.
+
 ## Live acceptance boundary
+
+The reusable validation workflow also runs a required Ubuntu 24.04 namespace
+job with system bubblewrap and Python 3.12. `HUB_REQUIRE_NAMESPACE_TESTS=1`
+turns missing fixtures or unavailable user namespaces into failures. It runs
+real fd-bind isolation and a fictional socket/receipt-journal Allow/Deny
+roundtrip, plus an authority-alias/privilege/shared-network rehearsal with
+fictional sentinels, with no model or Telegram calls. The third scenario
+deliberately demonstrates loopback and abstract-socket descriptor exposure;
+see the [custody runbook](../operations/CLAUDE_CUSTODY.md#automated-offline-rehearsal).
+The same strict job runs `tests.test_process_namespace_rehearsal`, a second
+provider-free consumer of the [neutral namespace core](../decisions/0056-provider-neutral-process-namespace.md).
+Its Python parent and exec child read authorized project material, fail project
+and Git writes, retain a separate writable session HOME, and cannot reach
+fictional host TCP, pathname or abstract sockets. Host controls prove those
+targets work, including a real synthetic `SCM_RIGHTS` transfer. An accessible
+process FD-table census checks authority and mount-pin inode identities rather
+than reusable descriptor numbers. This is kernel/fixture evidence, with no
+provider, Telegram, live service or advisor activation.
+`tests.test_review_materials_namespace` also runs in this strict job. It sends
+an explicitly selected [sealed text capsule](../decisions/0057-sealed-review-material-capsules.md)
+through owned stdin to an isolated parent and exec child, without mounting the
+original project or Git. Unit coverage checks exact digest/size, parser bounds,
+source replacement/mutation, kernel seals and failure cleanup.
+`tests.test_mount_lookup` and `tests.test_claude_mount_pins` cover the shared
+lookup guard with scripted flag/geometry evidence, targeted intermediate and
+terminal directories, repeated final walks, unavailable metadata, and ordinary
+real Unicode paths. They are not a real casefold/cache-state or XFS witness.
+All source ancestors must satisfy the supported lookup/read-access boundary in
+[ADR 0056](../decisions/0056-provider-neutral-process-namespace.md); overlay
+ancestors and tmpfs without working flag queries refuse conservatively. Such
+refusals must not be reclassified as absent private paths or ignored by fixtures.
+Descriptor assertions track calling-thread open/dup/dup2/pipe and the optional
+Python memfd allocator, without closing test resources; untracked snapshot
+differences remain diagnostics, not cleanup authority. Allocation-fault tests
+also check capsule descriptor closure explicitly.
+This is snapshot
+and fixture evidence; durable advisor authorization and productive review are
+withdrawn by ADR 0065, rather than proven by these fixtures.
+An executable-specific AppArmor
+profile permits bubblewrap user namespaces only on that disposable CI runner.
+Developer environments may skip unavailable namespace fixtures; those skips
+are not namespace evidence. The source ruleset setup includes this check;
+applying a changed remote ruleset remains a separate authorized operation.
 
 Live Telegram acceptance is a separate owner-coordinated operation because it
 changes external state and uses real identities/accounts. Store its transcript,
@@ -131,6 +569,98 @@ IDs, account hints, screenshots, and service logs outside Git. Public status may
 state only the reusable behavior tested and the kind of acceptance required.
 The reusable go/no-go sequence and rollback boundary are defined in
 [`LIVE_CANARY.md`](../operations/LIVE_CANARY.md).
+
+## Optional offline native notification attribution
+
+The direct-socket fixture uses an explicitly supplied native Codex executable
+inside an empty filesystem/network/PID namespace. A local deterministic
+Responses server emits the traffic; real authentication, provider endpoints,
+installed services and daemon sockets are absent. Its disposable endpoint
+storage is mounted only inside that namespace. Both clients connect directly
+to a pinned native socket, without an RPC forwarding proxy.
+
+```bash
+HUB_NATIVE_CODEX_FIXTURE_EXECUTABLE=/home/example/tools/codex \
+  HUB_REQUIRE_NATIVE_CODEX_PROFILE_TESTS=1 HUB_REQUIRE_NAMESPACE_TESTS=1 \
+  PYTHONPATH=src:tests python -m unittest -v \
+  tests.test_codex_native_notification_origin tests.test_codex_native_completed_connection
+```
+
+Attribution distinguishes fresh connection, initialization, passive metadata and
+explicit subscription. It requires source traffic above 1,024 events, exact
+terminal history, healthy observers and a positive control after a thread
+switch. Structural method/phase/count summaries contain no payload text.
+The retirement test uses the real Hub client/transport against that same
+disposable native listener. After exact completion and saved native output, it
+closes only the completed connection. An independently subscribed peer emits
+over 1,024 frames while a fresh Hub client prepares a different thread; raw
+pre-filter counts and same-connection RPC barriers prove no inherited turn/item
+subscription stream. Global `thread/status/changed` can still reach fresh
+unrelated connections; the test excludes only that observed broadcast method.
+The peer remains healthy, both threads retain exact final output, and a later
+fresh client resumes the original identity and completes another turn.
+Four local Responses requests account for all scripted productive turns.
+The fixture supports one active scripted Responses stream at a time; this is
+parallel metadata preparation, not two concurrently streaming native turns.
+Hub durable outbox/stop/publication and cleanup-fault ordering have separate
+pipeline regressions in `tests.test_codex_result_lifecycle`.
+
+These tests establish behavior of the supplied executable, not a deployed failure's
+source or live Telegram acceptance. Missing optional executables may skip;
+the required flags turn unavailable native/namespace execution into failure.
+The owner-authorized two-worker canary still must verify both productive results,
+final events, approvals, visible progress and quota telemetry through delivery,
+plus two successive pre-execution failures retaining the exact task through
+notice-bound retries. No restart-only recovery counts as a permanent fix.
+
+## Optional offline native approval and control-loss witnesses
+
+The existing disposable native namespace fixture also exercises the real Hub
+RPC client against an explicitly supplied Codex binary:
+
+```bash
+HUB_NATIVE_CODEX_FIXTURE_EXECUTABLE=/home/example/tools/codex \
+  HUB_REQUIRE_NATIVE_CODEX_PROFILE_TESTS=1 HUB_REQUIRE_NAMESPACE_TESTS=1 \
+  PYTHONPATH=src:tests python -m unittest -v \
+  tests.test_codex_native_approval_sequence tests.test_codex_native_control_loss \
+  tests.test_codex_native_ingress_loss
+```
+
+The approval witness uses 129 sequential requested/resolved pairs in one exact
+turn, peak outstanding one, a deny-only synthetic companion and the retained
+completed final. A fixed compatibility case uses two approvals plus final,
+with a four-request Responses cap; the full sequence uses exactly 130 requests
+and a fixed cap of 130. One completed warmup precedes companion subscription
+and is accounted separately. Every request, including retries or unexpected
+calls, consumes the cap. Native output must identify the exact denied previous
+call, and the next response waits for primary resolution. No grants or approval
+authority are introduced. Fixture-plan unit tests cover these bounds and
+premature, repeated and mismatched output.
+
+The control-loss witness closes only the primary Hub connection while the
+native turn remains active. A fresh actual Hub client reads the exact target,
+interrupts it once and independently proves it interrupted, with one local
+Responses request and no start/resume/steer on that recovery connection.
+The schema48 candidate wires the real Hub checkpoint/control journal into this
+witness: accepted identity, send-start hash, matched ACK, quiesced sender and
+one permanent send are asserted without a hardcoded authorization callback.
+State/runtime regressions cover competing live/protective control, late cycles
+and replaced claims, native terminality with unknown sender, satellite/alias
+identity, withheld raw completion and embedded progress, stop and no-fallback
+maintenance wiring.
+Both witnesses passed with Codex 0.159.2. These are offline native protocol
+observations, with no real auth, remote inference, installed service, Telegram
+or human approval. The ingress witness uses the real live observer with the primary connection
+still open, one due immutable target and one local Responses call. It proves
+active native work after fictional ingress loss, one exact fenced interrupt,
+retained cause and independently observed eventual interruption. It introduces
+no owner stop or replay. Focused regressions are `tests.test_codex_ingress_live`,
+`tests.test_codex_ingress_maintenance` and `tests.test_codex_ingress_notice`.
+Observer-loop tests cover post-attempt SQLite contention, no-send continuity,
+later stop priority/withholding and the separate observation throttle. Notice
+tests preserve near-bound raw completion; maintenance checks shutdown between claims.
+Installed Telegram ingress/egress and human approval acceptance remain separate
+gates in the [control-loss runbook](../operations/CODEX_CONTROL_LOSS.md).
 
 ## Publication preflight
 

@@ -20,7 +20,7 @@ class ExternalAdmissionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.path = Path(self.tempdir.name) / "hub.db"
-        state = HubState.open(self.path)
+        state = HubState.open(self.path, codex_permission_profile=None)
         self.topic = state.observe_topic(
             project_id="alpha",
             chat_id=-1001234567890,
@@ -52,7 +52,7 @@ class ExternalAdmissionTests(unittest.TestCase):
         self.assertFalse(is_active_agent(broken, -1001234567890, 73, agent_id="hermes"))
 
     def test_visible_context_is_read_only_after_explicit_request(self) -> None:
-        state = HubState.open(self.path)
+        state = HubState.open(self.path, codex_permission_profile=None)
         state.record_visible_turn(
             self.topic.topic_id,
             agent_id="codex",
@@ -116,7 +116,7 @@ class ExternalAdmissionTests(unittest.TestCase):
         )
 
     def test_peeks_and_acknowledges_visible_context_for_hermes(self) -> None:
-        state = HubState.open(self.path)
+        state = HubState.open(self.path, codex_permission_profile=None)
         state.record_visible_turn(
             self.topic.topic_id,
             agent_id="antigravity",

@@ -28,7 +28,7 @@ class SessionsStateFacadeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.base = Path(self.tempdir.name)
-        self.state = HubState.open(self.base / "private" / "hub.db")
+        self.state = HubState.open(self.base / "private" / "hub.db", codex_permission_profile=None)
         self.topic = self.state.observe_topic(
             project_id="example-project",
             chat_id=-1001234567890,
@@ -83,7 +83,7 @@ class SessionsStateFacadeTests(unittest.TestCase):
             "fictional-model",
             "high",
         )
-        transaction = self.state._sessions_state._write_transaction
+        transaction = self.state._sessions_state._transaction
 
         @contextmanager
         def fail_after_write() -> Iterator[None]:
@@ -91,7 +91,7 @@ class SessionsStateFacadeTests(unittest.TestCase):
                 yield
                 raise RuntimeError("fictional post-session-write fault")
 
-        with patch.object(self.state._sessions_state, "_write_transaction", fail_after_write):
+        with patch.object(self.state._sessions_state, "_transaction", fail_after_write):
             with self.assertRaisesRegex(RuntimeError, "post-session-write fault"):
                 self.state.bind_provider_session(
                     session.session_id,

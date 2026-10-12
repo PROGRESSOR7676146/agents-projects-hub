@@ -23,7 +23,7 @@ class SessionAdoptionWorkerTests(unittest.TestCase):
         self.config = replace(self.fixture.config, outbox_runtime="external")
         self.root = self.fixture.registry.projects[0].root
         subprocess.run(("git", "init", "-q", str(self.root)), check=True)
-        self.state = HubState.open(self.config.state_path)
+        self.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         self.addCleanup(self.state.close)
         self.topic = self.state.observe_topic(
             project_id="example-project", chat_id=-1001234567890, thread_id=7, title="Example"
@@ -114,6 +114,7 @@ class SessionAdoptionWorkerTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 job = self.enqueue(11 + index)
                 client = self.client()
+                client.turn_id_offset = index
                 self.run_worker(client, mode)
                 self.assertEqual(
                     client.calls,

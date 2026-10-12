@@ -359,6 +359,8 @@ class ControllerIdentityTests(unittest.TestCase):
         service.supervisor = None
         service.ingress_identity = "hub"
         service.state = State()
+        # Real poll-ledger lifecycle is covered by test_controller_ingress_polls.
+        service._group_ingress_polls = None
         service.telegram = Telegram()
         service.handle_update = lambda _update: True
         service._start_embedded_queue_consumer = lambda: None
@@ -372,7 +374,7 @@ class ControllerIdentityTests(unittest.TestCase):
 
     def test_controller_poll_transport_health_threshold_recovers_and_rearms(self) -> None:
         service = cast(Any, ProjectHubService.__new__(ProjectHubService))
-        service.state = HubState.open(self.base / "transport.db")
+        service.state = HubState.open(self.base / "transport.db", codex_permission_profile=None)
         service._publishes_controller_health = True
         service._health_started_at = datetime.now(timezone.utc)
         service._health_process_start_marker = "controller-transport-test"
@@ -451,7 +453,7 @@ class ControllerIdentityTests(unittest.TestCase):
             service.state.close()
 
     def test_hub_offset_does_not_replace_existing_codex_offset(self) -> None:
-        state = HubState.open(self.base / "offsets.db")
+        state = HubState.open(self.base / "offsets.db", codex_permission_profile=None)
         try:
             state.set_bot_offset("codex", 17)
             state.set_bot_offset("hub", 31)

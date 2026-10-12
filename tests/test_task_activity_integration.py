@@ -78,9 +78,13 @@ class TaskActivityDatabaseIntegrationTests(unittest.TestCase):
         return job
 
     def seed_v36(self):
-        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 36):
+        from tests.schema_fixtures import project_historical_database
+
+        source_path = self.path.with_name("example-current-seed.db")
+        self.fixture.config = replace(self.fixture.config, state_path=source_path)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
             self.fixture.ready_outbox("antigravity", 501)
-            state = HubState.open(self.path)
+            state = HubState.open(source_path, codex_permission_profile=None)
             try:
                 job = self.enqueue(state, 502)
                 leased = state.lease_provider_job("opencode", "example-worker")
@@ -108,6 +112,8 @@ class TaskActivityDatabaseIntegrationTests(unittest.TestCase):
                     )
             finally:
                 state.close()
+        project_historical_database(source_path, self.path, 36)
+        self.fixture.config = replace(self.fixture.config, state_path=self.path)
 
     def snapshot(self, connection):
         return {
@@ -125,7 +131,8 @@ class TaskActivityDatabaseIntegrationTests(unittest.TestCase):
         with sqlite3.connect(self.path) as connection:
             before = self.snapshot(connection)
             self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 36)
-        result = migrations.migrate_database(self.path)
+        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 37):
+            result = migrations.migrate_database(self.path)
         self.assertEqual((result.previous_version, result.current_version), (36, 37))
         assert result.backup_path is not None
         self.assertEqual(result.backup_path.stat().st_mode & 0o777, 0o600)
@@ -179,7 +186,7 @@ class TaskActivityDatabaseIntegrationTests(unittest.TestCase):
             task_tool_no_progress_seconds=71,
         )
         now = datetime.now(timezone.utc)
-        state = HubState.open(self.path)
+        state = HubState.open(self.path, codex_permission_profile=None)
         try:
             job = self.enqueue(state, 601)
             lease = state.lease_provider_job("opencode", "example-worker", lease_seconds=3600)

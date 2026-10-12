@@ -17,7 +17,7 @@ class SessionAdoptionStateTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
         self.path = self.root / "state.db"
-        self.state = HubState.open(self.path)
+        self.state = HubState.open(self.path, codex_permission_profile=None)
         self.addCleanup(self.state.close)
         self.topic = self.state.observe_topic(
             project_id="example", chat_id=-1001, thread_id=7, title="Example"
@@ -209,7 +209,7 @@ class SessionAdoptionStateTests(unittest.TestCase):
         barrier = threading.Barrier(2)
 
         def attempt(thread_id):
-            state = HubState.open(self.path)
+            state = HubState.open(self.path, codex_permission_profile=None)
             try:
                 origins = CodexSessionOrigins(state)
                 request = replace(self.request, provider_thread_id=thread_id)
@@ -321,7 +321,7 @@ class SessionAdoptionStateTests(unittest.TestCase):
         session = self.attach().session
         self.activate(session)
         self.enqueue(self.state.get_session(session.session_id))
-        with self.assertRaisesRegex(StateError, "pending"):
+        with self.assertRaisesRegex(StateError, "provider work or retained result delivery blocks"):
             self.state.replace_active_session(
                 self.topic.topic_id,
                 model="other-model",

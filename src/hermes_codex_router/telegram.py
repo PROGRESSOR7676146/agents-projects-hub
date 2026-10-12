@@ -134,6 +134,26 @@ def _retry_after(document: object) -> int | None:
     )
 
 
+def _rejection_status(document: object) -> int | None:
+    if not isinstance(document, dict) or document.get("ok") is not False:
+        return None
+    status = document.get("error_code")
+    return status if type(status) is int and 400 <= status <= 599 else None
+
+
+def _api_result(method: str, document: object) -> Any:
+    if isinstance(document, dict) and document.get("ok") is True:
+        return document.get("result")
+    status = _rejection_status(document)
+    raise TelegramError(
+        "Telegram API did not return a successful result",
+        operation=_operation(method),
+        failure_class="api_rejection" if status is not None else "invalid_response",
+        status_code=status,
+        retry_after=_retry_after(document),
+    )
+
+
 def _transport_error(method: str, exc: Exception) -> TelegramError:
     operation = _operation(method)
     status_code: int | None = None
@@ -145,7 +165,15 @@ def _transport_error(method: str, exc: Exception) -> TelegramError:
         except Exception:
             document = None
         retry_after = _retry_after(document)
-        failure_class = "api_http"
+        rejected = _rejection_status(document)
+        failure_class = (
+            "api_rejection"
+            if rejected == status_code
+            and rejected is not None
+            and rejected < 500
+            and rejected != 408
+            else "api_http"
+        )
     elif isinstance(exc, urllib.error.URLError):
         reason = exc.reason
         if isinstance(reason, (TimeoutError, socket.timeout)):
@@ -337,6 +365,27 @@ def _selected_quote(message: dict[str, Any]) -> str | None:
     return text.strip()[:4000]
 
 
+def _reply_address(
+    message: dict[str, Any], *, topic_anchor: object = None
+) -> tuple[str | None, int | None]:
+    """Plain Reply addressing; selected quotes and forum roots stay context."""
+    reply = message.get("reply_to_message")
+    if not isinstance(reply, dict) or isinstance(message.get("quote"), dict):
+        return None, None
+    message_id = reply.get("message_id")
+    if type(message_id) is not int or message_id <= 0 or message_id == topic_anchor:
+        return None, None
+    author = reply.get("from")
+    username = (
+        author["username"]
+        if isinstance(author, dict)
+        and author.get("is_bot") is True
+        and isinstance(author.get("username"), str)
+        else None
+    )
+    return username, message_id
+
+
 def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
     message = update.get("message")
     if not isinstance(message, dict) or message.get("from", {}).get("is_bot"):
@@ -346,8 +395,7 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
     attachments, unavailable_materials = _incoming_materials(message)
     parsed_text = _message_text(message, has_material=bool(attachments or unavailable_materials))
     raw_thread_id = message.get("message_thread_id")
-    reply_to_username = None
-    reply_to_message_id = None
+    reply_to_username, reply_to_message_id = _reply_address(message, topic_anchor=raw_thread_id)
     is_forwarded = isinstance(message.get("forward_origin"), dict) or any(
         key in message
         for key in (
@@ -357,23 +405,6 @@ def parse_topic_message(update: dict[str, Any]) -> TopicMessage | None:
             "forward_date",
         )
     )
-    reply = message.get("reply_to_message")
-    # A manually selected Telegram quote is commentary for the active agent,
-    # while a plain Reply is direct addressing of the original bot author.
-    if (
-        isinstance(reply, dict)
-        and not isinstance(message.get("quote"), dict)
-        and reply.get("message_id") != raw_thread_id
-    ):
-        if isinstance(reply.get("message_id"), int):
-            reply_to_message_id = int(reply["message_id"])
-        reply_author = reply.get("from")
-        if (
-            isinstance(reply_author, dict)
-            and reply_author.get("is_bot") is True
-            and isinstance(reply_author.get("username"), str)
-        ):
-            reply_to_username = str(reply_author["username"])
     # Telegram omits message_thread_id for the General forum topic. Keep a
     # stable local numeric identity without pretending it is an API thread id.
     thread_id = raw_thread_id if isinstance(raw_thread_id, int) else 1
@@ -429,6 +460,9 @@ def parse_direct_message(update: dict[str, Any]) -> TopicMessage | None:
     ):
         return None
     raw_thread_id = message.get("message_thread_id")
+    # Private Reply IDs support exact saved notices, without changing provider
+    # addressing. An explicit private-topic root remains only an anchor.
+    _, reply_to_message_id = _reply_address(message, topic_anchor=raw_thread_id)
     return TopicMessage(
         update_id=int(update["update_id"]),
         message_id=int(message["message_id"]),
@@ -437,6 +471,8 @@ def parse_direct_message(update: dict[str, Any]) -> TopicMessage | None:
         chat_title="Direct",
         sender_id=int(sender["id"]),
         text=parsed_text[0],
+        reply_to_username=None,
+        reply_to_message_id=reply_to_message_id,
         is_forwarded=isinstance(message.get("forward_origin"), dict)
         or any(
             key in message
@@ -668,16 +704,7 @@ class TelegramBotApi:
             # The original urllib exception may contain the token-bearing URL.
             # Preserve only the explicitly bounded classification above.
             raise _transport_error(method, exc) from None
-        if not isinstance(document, dict) or not document.get("ok"):
-            status = document.get("error_code") if isinstance(document, dict) else None
-            raise TelegramError(
-                "Telegram API rejected the request",
-                operation=_operation(method),
-                failure_class="api_rejection" if isinstance(document, dict) else "invalid_response",
-                status_code=status if isinstance(status, int) and 100 <= status <= 599 else None,
-                retry_after=_retry_after(document),
-            )
-        return document.get("result")
+        return _api_result(method, document)
 
     def updates(self, *, offset: int | None, timeout: int = 50) -> list[dict[str, Any]]:
         params: dict[str, Any] = {
@@ -724,7 +751,11 @@ class TelegramBotApi:
         if disable_notification:
             params["disable_notification"] = "true"
         result = self.call("sendMessage", **params)
-        if not isinstance(result, dict) or not isinstance(result.get("message_id"), int):
+        if (
+            not isinstance(result, dict)
+            or type(result.get("message_id")) is not int
+            or result["message_id"] <= 0
+        ):
             raise TelegramError(
                 "sendMessage returned an invalid result",
                 operation="send_message",
@@ -841,16 +872,7 @@ class TelegramBotApi:
                 document = json.load(response)
         except Exception as exc:
             raise _transport_error(method, exc) from None
-        if not isinstance(document, dict) or not document.get("ok"):
-            status = document.get("error_code") if isinstance(document, dict) else None
-            raise TelegramError(
-                "Telegram API rejected the request",
-                operation=_operation(method),
-                failure_class="api_rejection" if isinstance(document, dict) else "invalid_response",
-                status_code=status if isinstance(status, int) and 100 <= status <= 599 else None,
-                retry_after=_retry_after(document),
-            )
-        return document.get("result")
+        return _api_result(method, document)
 
     def send_document(
         self,
@@ -911,7 +933,11 @@ class TelegramBotApi:
         result = self._call_multipart(
             "sendDocument", fields=fields, files=files, request_timeout=60.0
         )
-        if not isinstance(result, dict) or not isinstance(result.get("message_id"), int):
+        if (
+            not isinstance(result, dict)
+            or type(result.get("message_id")) is not int
+            or result["message_id"] <= 0
+        ):
             raise TelegramError(
                 "sendDocument returned an invalid result",
                 operation="send_document",

@@ -9,6 +9,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 
+from .approval_observations import activity_metadata_count, approval_event_key, approval_notice_html
 from .codex_activity import CodexActivityEvent
 from .task_activity_binding import ACTIVITY_BINDING as _BINDING
 from .task_activity_binding import current_activity_binding
@@ -117,6 +118,27 @@ class TaskActivityState:
     def _digest(value: str | int) -> str:
         return hashlib.sha256((type(value).__name__ + ":" + str(value)).encode()).hexdigest()
 
+    def retire_observation(self, job_id: str, token: str, *, now: datetime) -> bool:
+        """Drop failed optional visibility without touching execution authority."""
+        timestamp = self._time(now)
+        with self.transaction():
+            bound = self.db.execute(
+                "SELECT 1 FROM task_activity WHERE job_id=? AND lease_token=?", (job_id, token)
+            ).fetchone()
+            if bound is None:
+                return False
+            self.db.execute("DELETE FROM task_activity_entries WHERE job_id=?", (job_id,))
+            self.db.execute(
+                "DELETE FROM task_activity WHERE job_id=? AND lease_token=?", (job_id, token)
+            )
+            self.db.execute(
+                "UPDATE task_lifecycle_notices SET status='superseded',updated_at=? "
+                "WHERE job_id=? AND kind IN ('approval_wait','no_progress') "
+                "AND status IN ('pending','leased') AND attempt_count=0 AND send_started_at IS NULL",
+                (timestamp, job_id),
+            )
+            return True
+
     def _event_identity(self, event: CodexActivityEvent) -> tuple[str, str, str | None] | None:
         if not isinstance(event, CodexActivityEvent):
             raise self.state_error("invalid activity observation")
@@ -207,9 +229,7 @@ class TaskActivityState:
                 (state, job_id, kind, key),
             )
         else:
-            count = self.db.execute(
-                "SELECT count(*) FROM task_activity_entries WHERE job_id=?", (job_id,)
-            ).fetchone()[0]
+            count = activity_metadata_count(self.db, job_id)
             if count >= MAX_ACTIVITY_ENTRIES:
                 return False
             self.db.execute(
@@ -237,18 +257,76 @@ class TaskActivityState:
         elif event.kind == "approval_requested" and self.notices_enabled:
             self._notice(
                 bound,
-                event_key=f"activity:{job_id}:approval:{key}",
+                event_key=approval_event_key(job_id, key),
                 kind="approval_wait",
-                text="Codex is waiting for human permission for "
-                + {
-                    "command": "command execution",
-                    "file_change": "file changes",
-                    "network": "network access",
-                    "permissions": "additional permissions",
-                }[event.category]
-                + ". Open the exact request in Codex/tlive to review and allow or deny it, "
-                "or use /stop in this topic. Hub cannot approve it.",
+                text=approval_notice_html(event.category),
                 now=now,
+            )
+        return True
+
+    def import_approval_in_transaction(
+        self,
+        job_id: str,
+        token: str,
+        *,
+        thread_id: str,
+        turn_id: str,
+        identity: str,
+        item_identity: str,
+        category: str,
+        state: str,
+        now: datetime,
+    ) -> bool:
+        """Import stored metadata only after the journal's exact acceptance.
+
+        Hashes are identities, never a way to construct an execution checkpoint.
+        The caller owns the transaction shared with accepted binding and promotion.
+        """
+        self._transaction_required()
+        timestamp = self._time(now)
+        bound = self._bound(job_id, token, timestamp)
+        if (
+            (thread_id, turn_id) != (bound["provider_thread_id"], bound["provider_turn_id"])
+            or re.fullmatch(r"[0-9a-f]{64}", identity) is None
+            or re.fullmatch(r"[0-9a-f]{64}", item_identity) is None
+            or category not in {"command", "file_change", "network", "permissions"}
+            or state not in {"pending", "resolved"}
+        ):
+            raise self.state_error("invalid accepted approval metadata import")
+        prior = self.db.execute(
+            "SELECT * FROM task_activity_entries WHERE job_id=? AND kind='approval' AND identity=?",
+            (job_id, identity),
+        ).fetchone()
+        if prior is not None:
+            if (prior["category"], prior["item_identity"], prior["state"]) != (
+                category,
+                item_identity,
+                state,
+            ):
+                raise self.state_error("accepted approval import identity changed")
+            return True
+        if activity_metadata_count(self.db, job_id) >= MAX_ACTIVITY_ENTRIES:
+            return False
+        self.db.execute(
+            "INSERT INTO task_activity_entries VALUES(?,'approval',?,?,?,?)",
+            (job_id, identity, category, item_identity, state),
+        )
+        pending = self.db.execute(
+            "SELECT 1 FROM task_activity_entries WHERE job_id=? AND kind='approval' AND state='pending'",
+            (job_id,),
+        ).fetchone()
+        active = self.db.execute(
+            "SELECT 1 FROM task_activity_entries WHERE job_id=? AND kind='tool' AND state='active'",
+            (job_id,),
+        ).fetchone()
+        self.db.execute(
+            "UPDATE task_activity SET mode=?,last_meaningful_at=?,episode=episode+1,notified_episode=NULL WHERE job_id=?",
+            ("approval" if pending else "tool" if active else "ordinary", timestamp, job_id),
+        )
+        self._supersede(job_id, "no_progress", timestamp)
+        if state == "resolved":
+            self._supersede(
+                job_id, "approval_wait", timestamp, event_key=approval_event_key(job_id, identity)
             )
         return True
 

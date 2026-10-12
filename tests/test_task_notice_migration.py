@@ -8,7 +8,7 @@ from unittest import mock
 
 from hermes_codex_router import migrations as migration
 from hermes_codex_router import schema_task_lifecycle as lifecycle
-from hermes_codex_router.root_blockers import persistent_root_blocker
+from hermes_codex_router.root_blockers import RootBlocker, persistent_root_blocker
 
 
 class TaskNoticeMigrationTests(unittest.TestCase):
@@ -270,14 +270,17 @@ class TaskNoticeMigrationTests(unittest.TestCase):
             self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
         after = self._snapshot()
         for table in ("provider_jobs", "provider_job_results", "provider_stop_requests", "topics"):
-            self.assertEqual(after[table], self.before[table])
+            expected = self.before[table]
+            if table == "provider_jobs":
+                expected = [(*row, None) for row in expected]
+            self.assertEqual(after[table], expected)
         self.assertEqual(
             after["telegram_outbox"],
-            [row for row in self.before["telegram_outbox"] if row[0] == "provider"],
+            [(*row, None) for row in self.before["telegram_outbox"] if row[0] == "provider"],
         )
         self.assertEqual(
             after["telegram_outbox_parts"],
-            [row for row in self.before["telegram_outbox_parts"] if row[0] == "provider"],
+            [(*row, 0) for row in self.before["telegram_outbox_parts"] if row[0] == "provider"],
         )
         self.assertEqual(self._upgrade().previous_version, migration.LATEST_SCHEMA_VERSION)
 
@@ -387,7 +390,14 @@ class TaskNoticeMigrationTests(unittest.TestCase):
                 "SELECT topic_id FROM provider_jobs WHERE job_id=?", (unknown_job,)
             ).fetchone()[0]
             connection.row_factory = sqlite3.Row
-            blocker_before = persistent_root_blocker(connection, topic_id=topic)
+            # Current facades require current schema; historical native-uncertainty
+            # expectation comes from the literal fixture, without runtime bridging.
+            destination = connection.execute(
+                "SELECT chat_id,thread_id FROM topics WHERE topic_id=?", (topic,)
+            ).fetchone()
+            blocker_before = RootBlocker(
+                "uncertain", topic, destination[0], destination[1], None, None, unknown_job
+            )
             evidence_before = [
                 tuple(row)
                 for row in connection.execute("SELECT * FROM provider_turn_terminal_evidence")

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Mapping
 
 from .diagnostic_log import survived
+from .incident_runbooks import RUNTIME_COMPONENTS, RUNTIME_FAILURE_STATUSES
 from .operational_alert import OperationalAlert
 from .reliability_alerts import evaluate_reliability_alerts
 
@@ -273,9 +274,12 @@ def evaluate_operational_alerts(
             if status in {"healthy", "not_configured"}:
                 continue
             component = str(item.get("component") or "runtime")[:32]
+            if component not in RUNTIME_COMPONENTS:
+                component = "runtime"
+            if status not in RUNTIME_FAILURE_STATUSES:
+                status = "unknown"
             instance_id = str(item.get("instance_id") or "unknown")[:128]
-            agent_id = str(item.get("agent_id") or "")[:64]
-            label = f"provider worker {agent_id}" if component == "provider_worker" else component
+            label = component.replace("_", " ")
             alerts.append(
                 OperationalAlert(
                     f"runtime:{component}:{instance_id}",
@@ -333,7 +337,8 @@ def evaluate_operational_alerts(
                     f"telegram:{agent_id}:{project_id}",
                     "telegram_bot_group_unavailable",
                     "error" if agent_id == "codex" else "warning",
-                    f"The {agent_id} bot cannot access the {project_id} project group.",
+                    "A configured provider bot cannot access a registered project group; "
+                    "inspect local group diagnostics.",
                 )
             )
     if hermes_telegram is not None:
@@ -376,19 +381,6 @@ def evaluate_operational_alerts(
             )
     pending = state_snapshot.get("pending_dispatches")
     if isinstance(pending, list):
-        topic_lookup: dict[int, str] = {}
-        topics = state_snapshot.get("topics")
-        if isinstance(topics, list):
-            for t in topics:
-                if isinstance(t, dict) and t.get("topic_id") is not None:
-                    try:
-                        tid = int(t["topic_id"])
-                        project = str(t.get("project_id") or "hub")
-                        title = str(t.get("title") or "").strip()
-                        topic_lookup[tid] = f"{project}: {title}" if title else project
-                    except (ValueError, TypeError):
-                        pass
-
         for item in pending:
             if not isinstance(item, dict):
                 continue
@@ -399,18 +391,14 @@ def evaluate_operational_alerts(
             ):
                 continue
             topic_id = item.get("topic_id")
-            topic_desc = (
-                f"topic {topic_id} ({topic_lookup[topic_id]})"
-                if topic_id in topic_lookup
-                else f"topic {topic_id}"
-            )
             agent_id = str(item.get("agent_id") or "unknown")[:32]
             alerts.append(
                 OperationalAlert(
                     f"dispatch:topic:{topic_id}:agent:{agent_id}",
                     "dispatch_stuck",
                     "error",
-                    f"A {agent_id} dispatch in {topic_desc} has been running for over 15 minutes.",
+                    "A provider dispatch has been running for over 15 minutes; "
+                    "inspect the exact saved outcome before any continuation.",
                 )
             )
     return tuple(alerts)

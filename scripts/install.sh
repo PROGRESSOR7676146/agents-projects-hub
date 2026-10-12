@@ -37,6 +37,8 @@ install -m 644 "$repo_root/systemd/agents-projects-hub@.service" \
   "$systemd_root/agents-projects-hub@.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-worker@.service" \
   "$systemd_root/agents-projects-hub-worker@.service"
+install -m 644 "$repo_root/systemd/agents-projects-hub-codex-socket-dir.service" \
+  "$systemd_root/agents-projects-hub-codex-socket-dir.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-codex-worker@.service" \
   "$systemd_root/agents-projects-hub-codex-worker@.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-claude-worker@.service" \

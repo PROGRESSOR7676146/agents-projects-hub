@@ -8,10 +8,20 @@ from pathlib import Path
 
 from .codex_failure import MAX_PARTIAL_TEXT
 from .progress_delivery import ProgressDeliveryQueue
+from .schema_claude_material_notice import MAX_CLAUDE_MATERIAL_NOTICE_CHARACTERS
 from .state import HubState, ProviderJobRecord, SessionRecord, StateError
 
 CLAUDE_PRE_INVOCATION_ERROR_CODES = frozenset(
-    {"claude_cpa_route_unverified", "claude_cpa_credential_ambiguous", "claude_cli_unavailable"}
+    {
+        "claude_cpa_route_unverified",
+        "claude_cpa_credential_ambiguous",
+        "claude_cli_unavailable",
+        "claude_cli_capabilities_unverified",
+        "claude_image_input_unverified",
+        "claude_permission_host_unverified",
+        "claude_session_mode_changed",
+        "claude_material_notice_unverified",
+    }
 )
 
 
@@ -50,6 +60,44 @@ class ExecutionJournal:
             "SELECT * FROM provider_execution_checkpoints WHERE job_id = ?", (job_id,)
         ).fetchone()
         return dict(row) if row is not None else None
+
+    def can_control_accepted_turn(
+        self, job_id: str, token: str, *, thread_id: str, turn_id: str, root: Path
+    ) -> bool:
+        """Coherent read of the live owner/checkpoint; grants no new writer lease."""
+        with self.state._immediate_transaction():
+            try:
+                job = self._lease(job_id, token)
+            except StateError:
+                return False
+            session = self.state.retained_session(int(job["topic_id"]), str(job["agent_id"]))
+            topic = self.state.get_topic(int(job["topic_id"]))
+            saved = self.read(job_id)
+            return bool(
+                session is not None
+                and session.session_id == job["session_id"]
+                and session.generation == job["session_generation"]
+                and session.writer_mode == "telegram"
+                and session.provider_session_id == thread_id
+                and topic.chat_id == job["chat_id"]
+                and topic.execution_scope in (f"root:{root}", f"project:{topic.project_id}")
+                and saved is not None
+                and saved["provider_thread_id"] == thread_id
+                and saved["provider_turn_id"] == turn_id
+                and saved["project_root"] == str(root)
+                and saved["completed_text"] is None
+                and self.connection.execute(
+                    "SELECT 1 FROM provider_turn_terminal_evidence WHERE job_id=?", (job_id,)
+                ).fetchone()
+                is None
+                and self.connection.execute(
+                    "SELECT 1 FROM provider_job_resolutions WHERE job_id=?", (job_id,)
+                ).fetchone()
+                is None
+                and saved["codex_permission_profile"]
+                == job["codex_permission_profile"]
+                == session.codex_permission_profile
+            )
 
     def prepare_claude_session(self, job_id: str, token: str, cwd: Path) -> ClaudeSessionBinding:
         """Commit a native UUID before invocation without manufacturing turn evidence."""
@@ -129,20 +177,47 @@ class ExecutionJournal:
             )
             return ClaudeSessionBinding(identifier, is_new)
 
-    def record_thread(self, job_id: str, token: str, thread_id: str, cwd: Path) -> None:
+    def record_thread(
+        self,
+        job_id: str,
+        token: str,
+        thread_id: str,
+        cwd: Path,
+        *,
+        codex_permission_profile: str | None = None,
+    ) -> None:
         thread_id = _bounded(thread_id, 256)
         root = _bounded(str(cwd.resolve(strict=True)), 4096)
         with self.state._immediate_transaction():
             job = self._lease(job_id, token)
+            if job["agent_id"] == "codex":
+                session = self.state.get_session(str(job["session_id"]))
+                if not (
+                    codex_permission_profile
+                    == job["codex_permission_profile"]
+                    == session.codex_permission_profile
+                    == self.state.codex_permission_profile
+                ):
+                    raise StateError(
+                        "execution permission selection differs from its immutable snapshot"
+                    )
             prior = self.read(job_id)
             if prior and (
-                prior["provider_thread_id"] != thread_id or prior["project_root"] != root
+                prior["provider_thread_id"] != thread_id
+                or prior["project_root"] != root
+                or prior["codex_permission_profile"] != codex_permission_profile
             ):
                 raise StateError("execution thread binding is immutable")
             self.connection.execute(
                 "INSERT OR IGNORE INTO provider_execution_checkpoints "
-                "(job_id, provider_thread_id, project_root, updated_at) VALUES (?, ?, ?, ?)",
-                (job_id, thread_id, root, datetime.now(timezone.utc).isoformat()),
+                "(job_id, provider_thread_id, project_root, updated_at, codex_permission_profile) VALUES (?, ?, ?, ?, ?)",
+                (
+                    job_id,
+                    thread_id,
+                    root,
+                    datetime.now(timezone.utc).isoformat(),
+                    codex_permission_profile,
+                ),
             )
             changed = self.connection.execute(
                 "UPDATE agent_sessions SET provider_session_id = ?, updated_at = ? "
@@ -160,15 +235,20 @@ class ExecutionJournal:
     def record_turn(self, job_id: str, token: str, turn_id: str) -> None:
         turn_id = _bounded(turn_id, 256)
         with self.state._immediate_transaction():
-            self._lease(job_id, token)
+            job = self._lease(job_id, token)
             checkpoint = self.read(job_id)
             if checkpoint is None or checkpoint["provider_turn_id"] not in (None, turn_id):
                 raise StateError("execution turn binding is missing or immutable")
+            authorized = self.state.codex_controls.accept_in_transaction(job, checkpoint, turn_id)
             self.connection.execute(
                 "UPDATE provider_execution_checkpoints SET provider_turn_id = ?, updated_at = ? "
                 "WHERE job_id = ?",
                 (turn_id, datetime.now(timezone.utc).isoformat(), job_id),
             )
+        if not authorized:
+            # The provider already accepted this exact turn. Preserve its
+            # mandatory identity before waking recovery; grant no send authority.
+            raise StateError("accepted native identity retained without coherent control authority")
 
     def record_item(self, job_id: str, token: str, item_id: str, text: str, phase: str) -> None:
         item_id = _bounded(item_id, 256)
@@ -286,20 +366,36 @@ class ExecutionJournal:
             self._insert_visible_item(job_id, message_id, text, "unknown")
 
     def record_claude_completion(
-        self, job_id: str, token: str, session_id: str, text: str, *, cwd: Path
+        self,
+        job_id: str,
+        token: str,
+        session_id: str,
+        text: str,
+        *,
+        cwd: Path,
+        material_notice: str,
     ) -> None:
         if not isinstance(text, str) or len(text) > 200_000:
             raise StateError("invalid completed checkpoint text")
+        if (
+            not isinstance(material_notice, str)
+            or len(material_notice) > MAX_CLAUDE_MATERIAL_NOTICE_CHARACTERS
+            or "\x00" in material_notice
+        ):
+            raise StateError("invalid Claude material notice")
         with self.state._immediate_transaction():
             checkpoint = self._claude_checkpoint(job_id, token, session_id, cwd)
             if checkpoint["completed_text"] is not None:
-                if checkpoint["completed_text"] != text:
+                if (
+                    checkpoint["completed_text"] != text
+                    or checkpoint["claude_material_notice"] != material_notice
+                ):
                     raise StateError("completed checkpoint changed")
                 return
             self.connection.execute(
-                "UPDATE provider_execution_checkpoints SET completed_text=?,updated_at=? "
+                "UPDATE provider_execution_checkpoints SET completed_text=?,claude_material_notice=?,updated_at=? "
                 "WHERE job_id=?",
-                (text, datetime.now(timezone.utc).isoformat(), job_id),
+                (text, material_notice, datetime.now(timezone.utc).isoformat(), job_id),
             )
 
     def validated_claude_partial(

@@ -119,7 +119,11 @@ def prepare_connect_code(
 
     agent = config.require_agent("codex")
     try:
-        with open_adoption_state(config.state_path, writable=True) as state:
+        with open_adoption_state(
+            config.state_path,
+            writable=True,
+            codex_permission_profile=config.codex_permission_profile,
+        ) as state:
             issued = SessionConnectStore(state).issue_code(
                 owner_user_id=owner_user_id,
                 project_id=project.project_id,

@@ -16,7 +16,7 @@ class QueueVisibilityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.path = Path(self.tempdir.name) / "private" / "state.db"
-        self.state = HubState.open(self.path)
+        self.state = HubState.open(self.path, codex_permission_profile=None)
         self.topic, self.session = self.topic_session("example-project", 7)
 
     def tearDown(self) -> None:
@@ -371,7 +371,7 @@ class QueueVisibilityTests(unittest.TestCase):
             error_code="fictional_outcome",
         )
         self.state.close()
-        self.state = HubState.open_existing(self.path)
+        self.state = HubState.open_existing(self.path, codex_permission_profile=None)
         rows = self.notices(job.job_id)
         self.assertEqual(
             next(row for row in rows if row["notice_id"] == lease.notice_id)["status"], "unknown"

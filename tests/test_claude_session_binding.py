@@ -24,7 +24,7 @@ class ClaudeSessionBindingTests(unittest.TestCase):
         self.root = self.base / "example-project"
         self.root.mkdir()
         self.path = self.base / "state.db"
-        self.state = HubState.open(self.path)
+        self.state = HubState.open(self.path, codex_permission_profile=None)
         self.addCleanup(self.state.close)
         self.topic = self.state.observe_topic(
             project_id="example-project",

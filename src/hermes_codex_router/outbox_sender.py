@@ -10,17 +10,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from .artifacts import (
-    artifact_spool_root,
-    remove_spooled_artifact,
-    verify_spooled_artifact,
-)
 from .blocker_notice_sender import deliver_root_blocker_notice
+from .claude_activity import ClaudeActivityState
 from .command_menu import GROUP_COMMANDS
 from .delivery_retry import delivery_retry_delay
 from .diagnostic_log import survived
+from .final_delivery import FinalDeliveryResult, deliver_final_part
 from .hub_config import HubConfig
 from .progress_delivery import ProgressDeliveryQueue
+from .progress_delivery_sender import deliver_progress
 from .project_onboarding import ProjectOnboardingStore
 from .project_resolution import resolve_project_context
 from .session_connect import SessionConnectStore
@@ -129,7 +127,9 @@ class TelegramOutboxSender:
         self.config = config
         self.telegram_bots = dict(telegram_bots)
         self.sender_id = sender_id
-        self.state = HubState.open(config.state_path)
+        self.state = HubState.open(
+            config.state_path, codex_permission_profile=config.codex_permission_profile
+        )
         self.progress = ProgressDeliveryQueue(self.state)
         self.task_activity = TaskActivityState(
             self.state._connection,
@@ -139,6 +139,13 @@ class TelegramOutboxSender:
             notices_enabled=config.hub_bot is not None,
         )
         self._cursor = 0
+        self.claude_activity = ClaudeActivityState(
+            self.state._connection,
+            transaction=self.state._immediate_transaction,
+            state_error=StateError,
+            notices=self.state.task_notices,
+            notices_enabled=config.hub_bot is not None,
+        )
         self._delivery_class_cursor = 0
         self._progress_cursor = 0
         self._stop = threading.Event()
@@ -344,6 +351,13 @@ class TelegramOutboxSender:
             ordinary_seconds=self.config.task_no_progress_seconds,
             tool_seconds=self.config.task_tool_no_progress_seconds,
         )
+        try:
+            self.claude_activity.evaluate(
+                now=now if now is not None else datetime.now(timezone.utc),
+                ordinary_seconds=self.config.task_no_progress_seconds,
+            )
+        except Exception as error:
+            survived("outbox_sender.claude_activity", error)
         if (
             self._final_deliveries_since_command_scope >= 10
             and self._sync_onboarded_project_commands()
@@ -421,6 +435,8 @@ class TelegramOutboxSender:
         outbox = store.lease_outbox(self.sender_id)
         if outbox is None:
             return False
+        if store.refuse_changed_marker_selection(outbox):
+            return True
         try:
             message_id = cast(Any, self.telegram_bots["hub"]).send_html(
                 outbox.chat_id,
@@ -520,69 +536,28 @@ class TelegramOutboxSender:
             active_lease_expires_at=lease_expires_at,
             force=True,
         )
-        try:
-            part = self.state.next_telegram_outbox_part(
-                outbox.outbox_id, outbox.lease_token, now=now
-            )
-            delivered_file: Path | None = None
-            if part.part_type == "document":
-                if (
-                    not part.file_path
-                    or not part.file_name
-                    or part.file_size is None
-                    or part.file_sha256 is None
-                ):
-                    raise TelegramOutboxSenderError("artifact outbox metadata is incomplete")
-                file_path = Path(part.file_path)
-                spool_root = artifact_spool_root(self.config.state_path)
-                verify_spooled_artifact(
-                    file_path,
-                    spool_root,
-                    expected_size=part.file_size,
-                    expected_sha256=part.file_sha256,
-                )
-                message_id = self.telegram_bots[agent_id].send_document(
-                    outbox.chat_id,
-                    outbox.thread_id,
-                    file_path,
-                    caption=part.telegram_html or None,
-                    file_name=part.file_name,
-                )
-                delivered_file = file_path
-            else:
-                message_id = self.telegram_bots[agent_id].send_html(
-                    outbox.chat_id, outbox.thread_id, part.telegram_html
-                )
-            self.state.mark_telegram_outbox_delivered(
-                outbox.outbox_id,
-                outbox.lease_token,
-                telegram_message_id=message_id or 1,
-                now=now,
-            )
-            self._record_transport_success()
-            if delivered_file is not None:
-                try:
-                    remove_spooled_artifact(
-                        delivered_file, artifact_spool_root(self.config.state_path)
-                    )
-                except Exception as exc:
-                    self._record_event("warning", "artifact_cleanup_error", type(exc).__name__)
-        except Exception as exc:
-            error_code = type(exc).__name__[:128]
-            if isinstance(exc, TelegramError):
-                self._record_transport_failure(exc)
-                error_code = exc.health_code
-            else:
-                self._last_error_code = error_code
-            self.state.retry_telegram_outbox(
-                outbox.outbox_id,
-                outbox.lease_token,
-                error_code=error_code,
-                delay_seconds=delivery_retry_delay(exc, outbox.attempt_count),
-                now=now,
-            )
+        result = deliver_final_part(
+            self.state.delivery,
+            self.telegram_bots[agent_id],
+            outbox,
+            state_path=self.config.state_path,
+            now=now,
+        )
+        self._record_delivery_result(result)
         self._publish_health(force=True)
         return True
+
+    def _record_delivery_result(self, result: FinalDeliveryResult) -> None:
+        if result.receipt_committed:
+            self._record_transport_success()
+        elif isinstance(result.error, TelegramError):
+            self._record_transport_failure(result.error)
+        elif result.error is not None:
+            self._last_error_code = type(result.error).__name__[:128]
+        if result.cleanup_error is not None:
+            self._record_event(
+                "warning", "artifact_cleanup_error", type(result.cleanup_error).__name__
+            )
 
     def _deliver_progress_one(self, agent_id: str, *, now: datetime | None = None) -> bool:
         progress = self.progress.lease(agent_id, self.sender_id, now=now)
@@ -602,33 +577,9 @@ class TelegramOutboxSender:
             active_lease_expires_at=lease_expires_at,
             force=True,
         )
-        try:
-            message_id = self.telegram_bots[agent_id].send_html(
-                progress.chat_id,
-                progress.thread_id,
-                progress.telegram_html,
-                disable_notification=True,
-            )
-            self.progress.mark_delivered(
-                progress.progress_id,
-                progress.lease_token,
-                telegram_message_id=message_id or 1,
-                now=now,
-            )
-            self._record_transport_success()
-        except Exception as exc:
-            error_code = type(exc).__name__[:128]
-            if isinstance(exc, TelegramError):
-                self._record_transport_failure(exc)
-                error_code = exc.health_code
-            else:
-                self._last_error_code = error_code
-            self.progress.retry(
-                progress.progress_id,
-                progress.lease_token,
-                error_code=error_code,
-                delay_seconds=delivery_retry_delay(exc, progress.attempt_count),
-                now=now,
-            )
+        result = deliver_progress(
+            self.state.delivery, self.telegram_bots[agent_id], progress, now=now
+        )
+        self._record_delivery_result(result)
         self._publish_health(force=True)
         return True

@@ -1,26 +1,192 @@
-# Next session: Claude parity and visible task states
+# Next session: Claude project editor and visible task states
 
-Status: implementation in progress; native Claude publication and schema-37 visibility review pending.
-Date: 2026-10-03.
-Decision owner: repository owner. Integration owner: lead development agent.
-Last verified stop/notice revision: `d3be8747dd402823e8807babfffff7245daa6364`
-(canonical checks and independent review; live acceptance remains open).
-Native Claude publication candidate: `c5e130ccc86291d5833592d50eb47c4542ef4ecc`;
-canonical publication checks passed (1,375 tests, 128 modules, no typing errors);
-Hosted checks passed at that exact revision; required Claude or owner review remains pending.
-Astra review is supplementary.
-Schema-37 visibility is a separate working candidate under focused validation,
-without an exact-revision canonical or deployment acceptance claim.
-Next trigger: complete exact-revision checks and independent review for each
-candidate, then continue human approval hosting and remaining visibility work.
+Source-release checkpoint: [0.8.0](RELEASE_0_8_0.md), following published 0.7.1.
+It supersedes historical pending source-integration checkpoints for the included
+stack; activation, live acceptance and the independent updater remain open.
+
+Maintenance-release checkpoint: [0.7.1](STABILIZATION_RELEASE_0_7_1.md).
+Its packaging gates are separate from provider activation and the later stack.
+
+Status: native Claude and schema-37 visibility merged; human approval boundary in progress.
+Date: 2026-10-11 (editor-first scope under ADR 0067).
+Current priority: [Claude project reading/editing](../decisions/0067-claude-editor-first.md).
+This supersedes every older parity/native-transfer/image next trigger below.
+Finish the bounded [editor matrix](CLAUDE_LEAD_REVIEW_PLAN.ru.md#конечная-матрица-первого-этапа).
+Native local/return, saved-session connect, images and full Claude parity are
+deferred until a new owner-triggered extension. Existing safety gates and other
+goal milestones remain. Hub roles stay retired; source work remains sole-writer.
+Decision owner: repository owner. Integration owner: primary development agent.
+Current source increment: the pinned offline native editor fixture passes
+Write Allow, exact resume with previous visible history, a fresh Deny for Write
+to the same file, Read, Edit Allow and another fresh Edit Deny. Four distinct
+fictional receipts precede changes; both native turns complete successfully.
+See the exact source/environment in
+[recorded native editor evidence](../testing/CLAUDE_NATIVE_EDITOR.md#recorded-offline-evidence).
+This is not installed custody, human Telegram provenance or CPA billing proof.
+Finish review/source gates for this bounded increment, then assess existing-host
+applicability and prepare separately authorized live acceptance. Do not restore
+deferred parity or treat direct hook tests as native evidence.
+
+Independent operations follow-up: the passive incident journal/catalogue slice
+is source-published at `c41f52c`; [journal checkpoint](INCIDENT_JOURNAL.md#source-checkpoint).
+The default-off [Hermes notices/dismiss candidate](HERMES_INCIDENT_NOTICES.md)
+uses lane `feat/hermes-incident-cards` on that base. Finish exact-source review
+and publication; live activation, Analyze, stack drift and updates stay open.
+This does not replace the bounded Claude editor priority or reactivate roles.
+
+Last verified integrated revision: `3750ccfb0f8eb98333f9219f3a697d6328890d04`.
+The stop/native/visibility stack passed exact-candidate independent reviews;
+the merged revision passed canonical validation (1,488 tests in 135 modules,
+no typing errors), hosted Python 3.11/3.12/3.13 validation and CodeQL.
+This is repository evidence; deployment and live acceptance remain separate.
+The protected file-tool candidate now has a pinned tlive extension, native hook,
+schema-38 receipt journal and worker-owned socket/namespace wiring; see
+[ADR 0052](../decisions/0052-protected-claude-file-permissions.md) and the
+[candidate runbook](CLAUDE_FILE_PERMISSIONS.md). Text-only remains the default.
+The authority-isolation source candidate at
+`6a848c7a326b35e4c3ea552339e8c5c3d7beba53` passed canonical validation
+(1,613 tests in 149 modules), independent review and hosted checks, including
+both required real namespace scenarios; it remains unmerged and undeployed.
+Next trigger: assess the existing narrow Claude boundary and actual agent
+launch/service exposure, then choose the smallest enforceable custody candidate in
+[ADR 0053](../decisions/0053-claude-custody-reference-deployment.md) and its
+[runbook](CLAUDE_CUSTODY.md). A dedicated VM is a reserve option requiring a
+demonstrated need; a separate UID is not yet accepted or proven. Preserve the
+adversarial corpus and mandatory CI checks, and reuse completed mount, peer,
+runtime and receipt controls. Then separately authorize and verify the
+native/Telegram human approval boundary described in the
+[Claude plan](CLAUDE_LEAD_REVIEW_PLAN.ru.md#следующая-граница-разрешений), then
+continue the bounded Claude editor and remaining visibility work. Do not enable tools
+from a CLI flag or an unqualified tlive `allow` alone.
 The current owner instruction caps helpers at GPT-6 Sol with reasoning `high`, using standard service without priority.
+
+Current control-loss continuation: Stage 1 is published at
+`fe7bb51ffa8dc491a33c624614dcff57ab40208d`; schema48 Stage 2 is published at
+`b9822a797572ee6edab0d3b3c515516e38a68148`, unmerged, with canonical 2,581 tests
+in 233 modules, Pyright zero errors, independent Astra/actual Opus sign-off and
+seven exact-revision hosted checks. Its actual native offline control-loss
+witness passed; none of this is deployment evidence. Do not repeat completed
+publication gates after an interrupted agent turn.
+Stage3's schema49 fenced group-poll ledger and pure freshness/grace policy are
+published at `7af0204a117e2b1a23c0a364f44249c12de14fa4`, with canonical
+2,628 tests in 237 modules, Pyright zero errors and seven hosted checks.
+Schema50 immutable admission/accepted-target ingress provenance is published at
+`4727241b3906c27ab4556cd4abd8eb6157e0c4f6`; its exact-revision gates are recorded
+below. Schema51 durable continuity/episodes are published at
+`506f3bf765ae477bc1945c6317214a3d86fcec6c`.
+Automatic precautions are not activated. The accepted one-progress policy is
+recorded in [ADR 0064's amendment](../decisions/0064-codex-control-loss.md#2026-10-09-amendment-one-unknown-progress-delivery).
+The transaction-local prerequisite is published at
+`cf7f967ef134a983c6cd39b37612dc3d1536f21e`, with canonical 2,695 tests in
+243 modules, independent Astra/actual Opus review and seven hosted checks.
+Do not repeat those gates on the unchanged revision. Schema52 authority is
+published at `f135872ca1dca205aaeabd5efa094774f7567710`, post-commit proof fix at
+`b8ebb7f3fb2f6b94230eff57e8d7de25af75522b`, and local-write prerequisite at
+`cbe9564af90365cc87e23834a45968826eac8946`. Their canonical/independent/hosted
+gates passed. The runtime observer, independent maintenance and historical
+cause notices are published at `c52ab719c1a5c4a671b18dc50e69b3af764d7477`,
+with canonical 2,787 tests in 250 modules, Pyright zero, independent Astra/actual
+Opus review and seven exact-head hosted checks. The actual offline native
+ingress witness passed. Do not repeat completed publication gates. Next: separately
+authorized channel-loss acceptance; no service change follows from source gates.
+Use immutable job-ingress sidecars and fresh-acceptance target rows; do not infer
+authority from legacy jobs or observer labels. Retry children bind their current
+Reply ingress; mixed/unknown provenance must not batch or steer into a proven
+target. Late precautions share the existing three-read budget and permanent
+fence without synthetic stop receipts. Stop binding must never move the next
+late-read deadline backward. Queue/control clauses now have one owning module,
+[section 22](../product/DURABLE_QUEUE_AND_CONTROL.md); their IDs are retained.
+The remaining Claude/operations goal stays open. See
+[control-loss acceptance](CODEX_CONTROL_LOSS.md) and the
+[stabilization plan](STABILIZATION_PLAN.md). No live activation is authorized.
+
+Current Claude source slice: the offline native Messages corpus now validates
+the complete request against a fixed fictional capsule, replacement system text
+and independently constructed native scaffolds, instead of only model/tools/effort.
+Test-first substitutions, strict JSON/headers and global one-POST controls are in
+`tests.test_claude_native_request_contract`; the explicit pinned native matrix is
+documented in the [testing guide](../testing/README.md#optional-offline-native-claude-transport).
+The corpus is published at `f190318af06751683036ff50bf81487b59f207c4`,
+with canonical 2,805 tests in 251 modules, zero typing errors, independent
+Astra/actual Opus review and seven exact-head hosted checks. Do not repeat its
+publication gates on the unchanged revision.
+The test-only integration at `cad8e8d8732bfb52aadb45e15d783785af4da84a`
+joins the exact pipe witness prerequisite at
+`cc976f6828554104b7326770f1e3a67b6e2de6ef`, retaining its shared process owner,
+namespace CI coverage and failure tests. Its canonical 2,828 tests in 254 modules,
+zero typing errors, independent Astra/actual Opus reviews and seven hosted checks
+passed. Do not repeat completed publication gates on the unchanged revision.
+The next in-process test-only seam is the raw HTTP request envelope and one-use
+semantic fixture owner in `tests.claude_native_pipe_contract`. It binds the host
+capsule to an independently prepared expected prompt, preserves duplicate header
+and JSON evidence, and returns only prepared fake bytes after validation. The
+production digest gate remains unchanged. It is published at
+`496a719707a5b02557e659e77facf6a481f2a4da`; canonical 2,848 tests in 255 modules,
+types, independent Astra/actual Opus review and seven hosted checks passed.
+The test-only raw pipe exchange extraction (PR #176) is published at
+`851714b5005553906b29c771fcd095de133f776b`: canonical 2,855 tests/256 modules,
+Pyright zero, static/privacy/history, Astra/actual Opus 5.5/high and all seven
+exact-head hosted checks passed. Do not repeat them on unchanged source. The owner withdrew
+Hub-managed lead/advisor roles under [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md).
+Do not start the combined native/pipe witness, productive advisor transport,
+material/workflow binding or role transfer. Preserve existing candidates/tests;
+shared namespace, native CLI, cleanup and error-classification fixes retain their
+independent value. Ordinary provider custody and native/Telegram acceptance
+remain open. The reduced goal is recorded in the
+[stabilization plan](STABILIZATION_PLAN.md#revised-delivery-scope).
+
+Standalone Claude image preparation has a published test-only pinned
+[native image/resume corpus](../testing/CLAUDE_NATIVE_IMAGES.md) at
+`6e88caede24351e30991cb4059f47cd42aab03ef`; its canonical and hosted gates passed.
+Do not repeat them on unchanged source. The standalone production opt-in now has
+a source candidate under [ADR 0066](../decisions/0066-verified-claude-image-input.md),
+including processed-image receipts and schema-53 recovery of original material
+notices, published at `25866e1d95e47dc7323f17bdafd04e4f7f20f2ad` with canonical,
+independent Astra/Gemini fallback review and seven exact-head hosted checks.
+Actual Opus review was unavailable on quota; no Opus approval is claimed.
+Image enablement/acceptance is deferred by ADR 0067; preserve this source evidence.
+Do not enable images from a success marker or grant Read to supply paths. Native
+compatibility establishes no subscription, human approval, custody or deployment
+acceptance. Text-only remains the default; Hub roles remain retired.
+
+The standalone test-only candidate is the pinned
+[model/effort continuation corpus](../testing/CLAUDE_NATIVE_SELECTION.md).
+Published at `1613936d03624435a7097571c12f09479e536d38`, it checks named emitted settings and exact synthetic dialogue, including native
+scaffold reencoding; it does not expand the configured catalog or establish
+entitlement/effective effort. Its PR owns exact publication evidence. Remaining
+human approvals and route acceptance stay open; local/return and saved-session connect are deferred.
+The [test-only controlling-PTY prerequisite](../testing/CLAUDE_NATIVE_LOCAL.md)
+is published at `913caf0dff3eaa6c6566189d631f35e12f6abc96`; its PR owns hosted
+evidence. It changes no runtime or lease; production Claude transfer remains
+refused. The first disposable interactive-resume investigation did not reach a
+Messages POST or save the expected new pair. The standalone test-only strict
+saved-dialogue oracle now has a source candidate in `tests.claude_saved_dialogue`;
+its synthetic tests do not prove native chain compatibility, startup or transfer.
+Interactive startup and the three-phase witness are deferred by ADR 0067.
+Do not resume them automatically. Preserve their evidence; the next Claude
+trigger is the bounded project-file permission and custody acceptance.
+
+The Codex compatibility candidate now refuses unsupported active permission
+profiles reported by `thread/start` or `thread/resume` before productive
+`turn/start`, with a bounded durable queue notice. Absent/null profiles remain
+compatible; this guard cannot detect a profile already lost during resume or
+later control-plane changes.
+Next implement narrowly explicit managed-profile support; profile ID and
+`extends` alone cannot establish equivalent or stricter permissions. Keep
+custody and native/Telegram acceptance open; this refusal is not profile support.
+The optional [offline native profile corpus](../testing/README.md#optional-offline-native-codex-profile-rehearsal)
+now makes the access-denial and legacy-override experiments reproducible with
+fictional fixtures. Current native metadata exposes profile selection and
+allowlisting, but not the managed profile definition. Resolve trustworthy effective
+policy evidence before enabling profile support; meanwhile continue the remaining
+repository lifecycle work below. This corpus is not a Hub implementation or live
+acceptance result.
 
 ## Objective and authority
 
-Continue development until native Claude Code meets the Hub capabilities in the
-[accepted parity matrix](CLAUDE_LEAD_REVIEW_PLAN.ru.md#что-означает-сопоставимая-поддержка-с-codex),
-and eliminate silent queue, approval and execution waits. The text-only Claude
-scaffold does not meet that objective. Track remaining maintenance and live debt
+Deliver the bounded [Claude editor matrix](CLAUDE_LEAD_REVIEW_PLAN.ru.md#конечная-матрица-первого-этапа)
+and eliminate silent queue, approval and execution waits. Text-only is not the
+accepted editor result. Full Claude parity is no longer its completion gate. Track remaining maintenance and live debt
 in the [stabilization plan](STABILIZATION_PLAN.md); do not repeat completed stages.
 
 The owner authorized repository implementation, offline tests and delegated
@@ -47,11 +213,12 @@ configurable. They trigger notices only; they never approve, stop, unlock or rep
    purpose, base revision and post-merge review point privately.
 3. Resume the owner's goal explicitly in the new session. Do not mark it complete
    after a plan, a prototype or offline tests alone. Report unsupported capabilities
-   honestly; ask only decisions that change the result. Roles, subscription mode
-   and scoring scope are already recorded.
+   honestly; ask only decisions that change the result. Hub roles are retired;
+   subscription mode and deferred scoring scope are already recorded.
 4. Complete package A against current official Claude documentation and passive
    installed-CLI version/capabilities. Verify human approval hosting, exact resume,
-   stop, local transfer, saved-session discovery and enforceable advisor isolation.
+   stop and existing authority custody for the first file-editor delivery.
+   Native transfer, saved-session discovery and images are not next tasks.
    Separate documented capability, adapter tests and authorized live evidence.
 5. Reconcile deferred capacity and canary-root questions with bounded read-only
    inspection if needed. Use a schema-compatible read-only path; never initialize
@@ -79,13 +246,12 @@ Never delegate private profiles, credentials or deployment inventories.
 | Task visibility | Admission, FIFO/root capacity, approvals, progress, retry, stop, sender ownership | Durable transitions/notices and passive no-progress detection behind the agreed state API |
 | Acceptance | Existing fault tests, migrations, replay/stop certainty, regressions | Adversarial fixtures, restart/ambiguity tests and integration checks |
 
-Start all three with investigation only. The lead defines state API, transaction
-ownership and invocation boundaries before writing starts. Each writing helper
-uses a distinct worktree/lane and disjoint modules, never the primary checkout.
-Schema, migrations, worker wiring and normative documents have one named author
-at a time. Integrate sequentially and test the integrated revision. No recursive
-delegation or additional writer authority. Sol checks supplement, but do not
-replace, independent review of Codex-authored lifecycle/security changes. The
+Use helpers for bounded read-only investigation/review when needed; do not
+automatically start all lanes. Root remains the sole writer. The integration
+owner defines state API, transaction ownership and invocation boundaries;
+parallel writing and recursive delegation are outside this goal. Sol checks
+supplement, but do not replace, independent review of Codex-authored
+lifecycle/security changes. The
 owner explicitly selected **Claude Opus 5.5, effort high** as the reviewer. If
 that reviewer becomes unavailable, use **Gemini** as the owner-authorized
 fallback. Determine availability from supported passive metadata or an actual
@@ -146,17 +312,27 @@ or reject unsupported configurations visibly.
 The schema-37 slice now has queue admission/handoff snapshots and accepted Codex
 activity wired to the existing sender; see
 [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md). Do not
-restart that implementation as a new task. Finish its exact-revision validation
-and required review, then address active-work retries, approval before native
-turn acceptance and explicitly scoped visibility for other execution paths.
+restart that implementation as a new task. Its exact-revision publication
+validation and independent reviews are complete. The
+[notice-bound active-work retry candidate](../decisions/0054-notice-bound-work-retry-reports.md)
+has offline implementation; complete its publication/review gates separately.
+Address remaining retry surfaces,
+approval before native turn acceptance and explicitly scoped visibility for
+other execution paths next.
 
 ### 3. Claude runtime and human authority
 
-Complete packages B/D of the accepted Claude plan: native identity, supported
-passive model/effort discovery/configuration, exact start/resume and root binding,
-structured visible streaming, inputs/artifacts, progress, human approvals, stop,
-durable recovery, passive telemetry, same-session `/local`/`/return`, and saved
-session connection. Record every capability's evidence in the existing matrix.
+Finish the finite editor matrix in the [Claude plan](CLAUDE_LEAD_REVIEW_PLAN.ru.md):
+Read/Glob/Grep/Write/Edit through the existing isolated worker/permission host,
+exact Hub-owned identity/root, visible results/waits/errors, stop and recovery.
+Retain configured model/effort without claiming entitlement/effective effort.
+First prove actual native Write/Edit requires fresh exact human permission;
+manual settings and mocked receipts are insufficient. Assess applicability of
+the existing custody before proposing installation. If that requires a general
+launcher, platform migration or broader infrastructure, report a concrete blocker
+for an owner decision instead of adding another automatic prerequisite.
+Do not start shell/tests/build/Git, native transfer, saved-session connect,
+image enablement or full parity. Those require a later owner-triggered extension.
 
 CLI documents `--permission-prompt-tool` and `--permission-prompts host|none`;
 these are candidates, not a validated Hub approval host. Investigate tlive's
@@ -171,28 +347,36 @@ from CLI login. Quota/provider terminal rejection and unknown outcome receive
 different classifications; neither permits automatic replay. Persist native
 identity before invocation wherever supported.
 
-### 4. Bounded collaboration and supporting maintenance
+### 4. Independent outcome journal and maintenance
 
-Complete packages C/E: either provider can lead, advisor is technically read-only,
-role transfer requires a proven safe boundary, one bounded review and continuation
-are durable/idempotent, and minimal outcome/usage records preserve unknowns.
-The lead releases its FIFO slot before the advisor runs. Keep scoring, judges,
-parallel writers and recursive/write-capable helpers deferred.
+Keep the minimal outcome/usage journal under REQ-EVAL-010 independent of roles:
+exact result, human decision/correction, observed time/usage and explicit unknowns.
+Use existing diagnostic and assessment foundations; do not add a review scheduler,
+advisor transport or role lifecycle. Scoring, judges, learned allocation and
+parallel writers remain outside this goal.
 
 Address directly supporting debt: Claude failure classification, duplicated slot
-identity and lifecycle/dispatcher seams. Continue remaining stabilization and
-update-plane items in their existing plans after checking ownership/priority;
-do not mix the pending update-tool PR or host migration into this feature branch.
+identity and lifecycle/dispatcher seams. Continue Hermes incident/update-plane,
+off-machine restore and release 0.8 work in their existing plans after checking
+ownership/priority. Review candidate dependencies before integrating shared
+foundations; advisor-only stacks are not automatic release prerequisites. Do not
+delete or close branches/PRs as a side effect of the scope decision.
+Use the [checked dependency inventory](RETAINED_PROVIDER_DEPENDENCIES.md):
+in-scope observation/control candidates inherit advisor ancestors. Retaining
+dormant code/CI or splitting those changes requires an explicit integration
+choice and exact-candidate checks. Do not mix the pending update-tool PR or host
+migration into this feature branch.
 
 ### 5. Verification, independent review and separate live acceptance
 
 Offline scenarios: unhandled/unreachable approval, hung tool, long productive
 build, retry active work, another-topic queue/root owner, `/stop`, restart while
-blocked, unknown interruption, role/session/root mismatch, partial/completed
+blocked, unknown interruption, permission/session/root mismatch, partial/completed
 Claude output, quota rejection, delivery ambiguity, stale callbacks, duplicate
 inputs and zero inference from passive monitoring. Use injected clocks and fake
-structured providers. Test both lead/advisor orders, Codex/other-provider
-regressions and additive migration backup/rollback.
+structured providers. Test Codex/other-provider regressions, standalone Claude
+editor boundaries and additive migration backup/rollback. Retired role scenarios are no
+longer release acceptance requirements.
 
 Follow the [testing guide](../testing/README.md): focused iteration, history/privacy
 before every commit, pre-commit hook, canonical gate on the publication revision,
@@ -205,22 +389,47 @@ temporary root/topic, provider calls, expected effects and cleanup before asking
 permission. Request provider acceptance, any restart and deployment separately.
 Update private handoff whenever plan, pending decisions or deployment state changes.
 
+## Exact Telegram control provenance and continuity
+
+Source owner: Hub maintainer; sole writer. Schema50 source at clean
+`4727241b3906c27ab4556cd4abd8eb6157e0c4f6`, lane
+`feat/codex-telegram-provenance`, passed canonical 2,654 tests in 239 modules,
+Pyright zero, privacy/history, independent Astra and actual Claude Opus 5.5/high
+reviews and all seven exact-head hosted checks. It retains fresh immutable
+admission/acceptance provenance and first-input/control fences; no automatic
+precaution is enabled. Owner merge and live acceptance remain separate.
+
+Schema51 in lane `feat/codex-ingress-episodes` is published at
+`506f3bf765ae477bc1945c6317214a3d86fcec6c`, with canonical 2,683 tests in 242
+modules, Pyright zero, independent Astra/actual Opus reviews and seven hosted
+checks. No deployment or channel-loss acceptance follows from those gates.
+Root owns the next neutral transaction prerequisite in lane
+`feat/codex-ingress-control-gates`, based on that revision; Astra reviewed its
+bounded extraction and stop-schedule design. Next trigger: complete its exact
+source gates, then design explicit ingress-cause authority inside the shared
+send fence. Ignored single-progress uncertainty needs no new stop episode or
+consent writer. The three-cycle budget, root uncertainty and no-replay policy
+remain unchanged. Closure is open
+until live/maintenance integration and separately authorized channel-loss
+acceptance pass; neither restart nor this storage prerequisite is acceptance.
+Inspect tracked, staged and untracked lane state before any post-merge cleanup.
+
 ## Current evidence and source pointers
 
 The schema-36 stop/control-delivery slice passed canonical checks and independent
 review at the revision above; see
 [ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md). The native Claude slice adds identity preparation, bounded streaming and
 saved-result recovery; canonical and hosted gates passed at `c5e130c`, while
-required Claude or owner review remains pending.
+exact-candidate independent review and merged-revision validation are complete.
 See [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md). Queue snapshots and accepted Codex activity are present in the schema-37
-candidate. Its final gates/review, active retry, approval before acceptance and
-full Claude parity remain open.
+baseline. Its publication gates and independent review are complete; active retry,
+approval before acceptance and editor deployment acceptance remain open; full Claude parity is deferred.
 No deployment or live acceptance follows from these repository checks.
 
 First-pass pointers to recheck, not final design:
 
-- `external_runtime.py` / `claude_stream.py`: bounded text-only native stream;
-  `catalog_refresh.py`: Claude catalog is just the configured default;
+- `external_runtime.py` / `claude_stream.py`: bounded native stream, image opt-in;
+  `claude_catalog.py`: configured model/effort catalog and exact-session selection;
   `local_transfer.py`: no Claude resume branch.
 - `codex_appserver.py`: shared approvals wait for the companion; fallback declines.
   Add source-topic visibility while preserving human approval ownership.
@@ -231,7 +440,11 @@ First-pass pointers to recheck, not final design:
 
 ## Closure
 
-Open. Close only when parity and task-visibility contracts have exact-revision
-evidence, independent review and separately authorized required live acceptance.
-Unsupported required capabilities remain owner decisions, not silently removed
-criteria. Update the accepted Claude matrix and next trigger as evidence changes.
+Open. Close the Claude milestone against the bounded editor matrix, with
+exact-revision evidence, independent review and separately authorized live
+acceptance. Other goal milestones retain their own criteria. Deferred Claude
+features must not become new editor gates without an owner decision.
+Update the matrix and next trigger as evidence changes. Owner-facing reports
+include an approximate overall-goal completion percentage with an uncertainty
+range, a stable reduced scope, and concrete completed/open milestones. Treat it
+as a planning estimate, separate from acceptance evidence and automatic scoring.

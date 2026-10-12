@@ -82,7 +82,10 @@ class IdleCodexClient:
     def wait_for_turn(self, _turn_id: str) -> TurnResult:
         return TurnResult("Visible answer", 1000, 100)
 
-    def read_rate_limits(self) -> RateLimits:
+    def consume_completed_connection(self, *, thread_id: str, turn_id: str) -> bool:
+        return False
+
+    def read_rate_limits(self, *, deadline: float | None = None) -> RateLimits:
         return RateLimits(None, None)
 
     def close(self) -> None:
@@ -166,7 +169,7 @@ class HubHarness:
         service = ProjectHubService.__new__(ProjectHubService)
         service.config = self.config
         service.registry = self.registry
-        service.state = HubState.open(self.config.state_path)
+        service.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         service.agent = agents[0]
         service.telegram = cast(Any, self.telegram)
         service.supervisor = cast(Any, StaticSupervisor(self.client))

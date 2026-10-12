@@ -13,6 +13,7 @@ from hermes_codex_router import state_stop as state_stop_module
 from hermes_codex_router.root_blockers import persistent_root_blocker
 from hermes_codex_router.state import HubState, StateError
 from hermes_codex_router.task_lifecycle import TaskLifecycleNotice
+from tests.delivery_fixture import complete_final_delivery
 from tests.stop_fixtures import pending_stop
 
 
@@ -33,7 +34,7 @@ class ProviderJobQueueTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.path = Path(self.tempdir.name) / "private" / "hub.db"
-        self.state = HubState.open(self.path)
+        self.state = HubState.open(self.path, codex_permission_profile=None)
         self.topic = self.state.observe_topic(
             project_id="example-project",
             chat_id=-1001234567890,
@@ -445,8 +446,11 @@ class ProviderJobQueueTests(unittest.TestCase):
         for delivery_status in ("pending", "delivered", "sending"):
             with self.subTest(delivery_status=delivery_status):
                 path = self.path.with_name(f"legacy-{delivery_status}.db")
-                with patch.object(migrations_module, "LATEST_SCHEMA_VERSION", 35):
-                    legacy = HubState.open(path)
+                from tests.schema_fixtures import project_historical_database
+
+                source_path = path.with_name(f"example-current-{delivery_status}.db")
+                with patch.object(migrations_module, "LATEST_SCHEMA_VERSION", 48):
+                    legacy = HubState.open(source_path, codex_permission_profile=None)
                     try:
                         topic = legacy.observe_topic(
                             project_id="example-project",
@@ -522,7 +526,8 @@ class ProviderJobQueueTests(unittest.TestCase):
                     finally:
                         legacy.close()
 
-                migrated = HubState.open(path)
+                project_historical_database(source_path, path, 35)
+                migrated = HubState.open(path, codex_permission_profile=None)
                 try:
                     canonical_notices = migrated.task_notices.notices_for_stop(original)
                     alias_notices = migrated.task_notices.notices_for_stop(alias)
@@ -598,7 +603,7 @@ class ProviderJobQueueTests(unittest.TestCase):
         recorded = threading.Event()
 
         def record_stop() -> None:
-            peer = HubState.open(self.path)
+            peer = HubState.open(self.path, codex_permission_profile=None)
             try:
                 peer.request_emergency_stop(
                     topic_id=self.topic.topic_id,
@@ -657,7 +662,7 @@ class ProviderJobQueueTests(unittest.TestCase):
         started: list[str] = []
 
         def start_job_elsewhere() -> None:
-            peer = HubState.open(self.path)
+            peer = HubState.open(self.path, codex_permission_profile=None)
             try:
                 job, _ = peer.enqueue_provider_job(
                     idempotency_key="telegram:-1001234567890:671",
@@ -1408,8 +1413,8 @@ class ProviderJobQueueTests(unittest.TestCase):
         self.assertEqual(outbox.status, "pending")
         sending = self.state.lease_telegram_outbox("codex", "sender-one")
         assert sending is not None and sending.lease_token is not None
-        self.state.mark_telegram_outbox_delivered(
-            sending.outbox_id, sending.lease_token, telegram_message_id=9001
+        complete_final_delivery(
+            self.state, sending.outbox_id, sending.lease_token, telegram_message_id=9001
         )
         self.assertEqual(self.state.get_provider_job(queued.job_id).status, "completed")
         self.assertEqual(
@@ -1616,8 +1621,12 @@ class ProviderJobQueueTests(unittest.TestCase):
                 now=expired,
             )
         with self.assertRaisesRegex(StateError, "lease"):
-            self.state.mark_telegram_outbox_delivered(
-                outbox.outbox_id, outbox.lease_token, telegram_message_id=9002, now=expired
+            complete_final_delivery(
+                self.state,
+                outbox.outbox_id,
+                outbox.lease_token,
+                telegram_message_id=9002,
+                now=expired,
             )
 
     def test_terminal_outbox_failure_unblocks_fifo_without_replaying_provider(self) -> None:
@@ -1678,7 +1687,7 @@ class ProviderJobQueueTests(unittest.TestCase):
         lock = threading.Lock()
 
         def enqueue(index: int) -> None:
-            state = HubState.open(self.path)
+            state = HubState.open(self.path, codex_permission_profile=None)
             try:
                 barrier.wait()
                 job, _ = state.enqueue_provider_job(
@@ -1706,7 +1715,7 @@ class ProviderJobQueueTests(unittest.TestCase):
             thread.start()
         for thread in threads:
             thread.join()
-        self.state = HubState.open(self.path)
+        self.state = HubState.open(self.path, codex_permission_profile=None)
 
         self.assertEqual(failures, [])
         self.assertEqual(sorted(sequences), [1, 2, 3, 4, 5, 6])
@@ -1720,7 +1729,7 @@ class ProviderJobQueueTests(unittest.TestCase):
         lock = threading.Lock()
 
         def lease(index: int) -> None:
-            state = HubState.open(self.path)
+            state = HubState.open(self.path, codex_permission_profile=None)
             try:
                 barrier.wait()
                 job = state.lease_provider_job("codex", f"worker-{index}")
@@ -1738,7 +1747,7 @@ class ProviderJobQueueTests(unittest.TestCase):
             thread.start()
         for thread in threads:
             thread.join()
-        self.state = HubState.open(self.path)
+        self.state = HubState.open(self.path, codex_permission_profile=None)
 
         self.assertEqual(failures, [])
         self.assertEqual(claimed, [queued.job_id])
@@ -1746,7 +1755,7 @@ class ProviderJobQueueTests(unittest.TestCase):
     def test_queue_state_survives_close_and_reopen(self) -> None:
         queued, _ = self.enqueue(560)
         self.state.close()
-        self.state = HubState.open(self.path)
+        self.state = HubState.open(self.path, codex_permission_profile=None)
         reopened = self.state.get_provider_job(queued.job_id)
         self.assertEqual((reopened.status, reopened.topic_sequence), ("queued", 1))
 

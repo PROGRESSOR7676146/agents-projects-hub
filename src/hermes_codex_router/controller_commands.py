@@ -12,7 +12,7 @@ from .provider_catalog_cache import CatalogSnapshot
 from .provider_limits import ProviderLimit, decode_provider_limit
 from .provider_telemetry import load_antigravity_telemetry
 from .session_controls import bind_controls
-from .state import HubState, StateError, TopicRecord
+from .state import HubState, SessionRecord, StateError, TopicRecord
 from .status_view import format_accounts, format_session_status
 
 
@@ -125,13 +125,36 @@ class ControllerCommandOrchestrator:
                     " Reply exactly retry to its failure notice to continue with inspection."
                 )
         held_jobs = self.state.held_provider_job_count(topic.topic_id)
+        delivery_controls = self.state.delivery.topic_delivery_controls(topic.topic_id)
+        if delivery_controls["outstanding"]:
+            detail += (
+                f"\nUnknown Telegram delivery hold(s): {delivery_controls['outstanding']}. "
+                "Later delivery is blocked; inspect the local delivery-hold preview."
+            )
+        queue_only = delivery_controls["queue_only"]
+        if queue_only:
+            detail += (
+                f"\nOwner-released delivery hold(s): {queue_only}. "
+                "Delivery remains unknown; the owner allowed queue continuation. "
+                "Existing session and writer safety checks still apply."
+            )
+        if delivery_controls["final_reconciled"] or delivery_controls["progress_reconciled"]:
+            detail += (
+                f"\nOwner-reconciled delivery waits: {delivery_controls['final_reconciled']} final, "
+                f"{delivery_controls['progress_reconciled']} progress. Delivery remains unconfirmed; "
+                "independent execution, writer and control checks still apply."
+            )
         if held_jobs:
             detail += (
                 f"\nSaved request(s) held before provider execution: {held_jobs}. "
                 "Use the exact Hub notice to confirm or cancel after the root is free."
             )
         if blocker is not None:
-            if blocker.kind in {"local", "terminal"}:
+            if blocker.kind == "scope_unconfirmed":
+                detail += (
+                    "\nExact project-root binding is unconfirmed; inspect its local registration."
+                )
+            elif blocker.kind in {"local", "terminal"}:
                 command = "/return" if blocker.kind == "local" else "/release"
                 detail += (
                     f"\nProject held by local writer. Close its client, then use {command}"
@@ -218,6 +241,24 @@ class ControllerCommandOrchestrator:
         if catalog.agent_id != agent_id:
             raise ModelSelectionError("provider selection is no longer available")
 
+    def model_refresh_acknowledgement(self, agent_id: str, *, external_worker: bool) -> str:
+        if self.config.require_agent(agent_id).runtime == "claude":
+            return "Refreshing configured choices…"
+        if external_worker:
+            return "Refresh queued for monitor; reopen /model after its next check."
+        return "Refreshing catalog…"
+
+    def native_transfer_refusal(self, session: SessionRecord | None) -> TextCommandDecision | None:
+        if session is None or self.config.require_agent(session.agent_id).runtime != "claude":
+            return None
+        detail = (
+            "Claude native session transfer is not supported yet. Writer ownership is "
+            "unchanged; this command did not invoke the provider."
+        )
+        if session.writer_mode == "local":
+            detail += " A retained local lease requires local reconciliation before Telegram work can resume."
+        return TextCommandDecision(detail)
+
     def model_menu(
         self,
         topic: TopicRecord,
@@ -272,8 +313,22 @@ class ControllerCommandOrchestrator:
         )
         agent = self.config.require_agent(agent_id)
         cached = " · cached" if catalog.last_failure_at is not None else ""
+        description = f"{agent.display_name}: choose model · {page + 1}/{page_count}{cached}"
+        if agent.runtime == "claude":
+            description += "\nConfigured choices; availability unverified."
+            if (
+                active
+                and active.agent_id == agent_id
+                and not any(
+                    model.model_id == active.model and active.effort in model.efforts
+                    for model in catalog.models
+                )
+            ):
+                description += (
+                    f"\nCurrent: {active.model} · {active.effort} (outside configured choices)."
+                )
         return HtmlCommandDecision(
-            html.escape(f"{agent.display_name}: choose model · {page + 1}/{page_count}{cached}"),
+            html.escape(description),
             {"inline_keyboard": keyboard},
         )
 
@@ -370,6 +425,7 @@ class ControllerCommandOrchestrator:
                     model=model,
                     effort=effort,
                     expected_session_id=replacement.session_id,
+                    runtime=agent.runtime,
                 )
             return TextCommandDecision(
                 f"{agent.display_name} is now active (generation {replacement.generation}). "
@@ -382,6 +438,7 @@ class ControllerCommandOrchestrator:
             model=model,
             effort=effort,
             expected_session_id=active.session_id,
+            runtime=agent.runtime,
         )
         return TextCommandDecision(
             f"{agent.display_name} · {model} · {effort.title()} will start on the next "

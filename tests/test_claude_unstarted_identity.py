@@ -51,6 +51,7 @@ class ClaudeUnstartedIdentityTests(unittest.TestCase):
             "claude_cpa_route_unverified",
             "claude_cpa_credential_ambiguous",
             "claude_cli_unavailable",
+            "claude_cli_capabilities_unverified",
         ):
             with self.subTest(code=code):
                 f, a, w = self.seed((code,))

@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
+from .claude_activity_binding import claude_activity_notice_is_current
+from .claude_permission_binding import permission_notice_is_current
+from .preacceptance_binding import preacceptance_notice_is_current
 from .task_activity_binding import activity_notice_is_current
 
 MAX_NOTICE_ATTEMPTS = 5
@@ -37,6 +40,7 @@ class TaskLifecycleNotice:
     error_code: str | None
     created_at: str
     updated_at: str
+    assessment_disposition_id: str | None = None
 
 
 class TaskLifecycleState:
@@ -48,10 +52,12 @@ class TaskLifecycleState:
         *,
         transaction: TransactionFactory,
         state_error: Callable[[str], Exception],
+        selected_codex_profile: Callable[[], str | None] | None = None,
     ) -> None:
         self.db = connection
         self.transaction = transaction
         self.state_error = state_error
+        self.selected_codex_profile = selected_codex_profile
 
     def _time(self, now: datetime) -> str:
         if now.tzinfo is None or now.utcoffset() is None:
@@ -95,8 +101,24 @@ class TaskLifecycleState:
         )
 
     def _validate_destination(
-        self, job_id: str | None, stop_request_id: str | None, chat_id: int, thread_id: int
+        self,
+        job_id: str | None,
+        stop_request_id: str | None,
+        chat_id: int,
+        thread_id: int,
+        assessment_disposition_id: str | None = None,
     ) -> None:
+        if assessment_disposition_id is not None:
+            if job_id is not None or stop_request_id is not None:
+                raise self.state_error("assessment notice requires its own subject")
+            self._text(assessment_disposition_id, "subject reference", 128)
+            row = self.db.execute(
+                "SELECT chat_id,thread_id FROM outcome_assessment_dispositions WHERE disposition_id=?",
+                (assessment_disposition_id,),
+            ).fetchone()
+            if row is None or (row["chat_id"], row["thread_id"]) != (chat_id, thread_id):
+                raise self.state_error("task notice destination does not match its subject")
+            return
         if job_id is None and stop_request_id is None:
             raise self.state_error("task notice requires a job or stop reference")
         for identifier, table, column in (
@@ -126,6 +148,7 @@ class TaskLifecycleState:
         kind: str,
         job_id: str | None = None,
         stop_request_id: str | None = None,
+        assessment_disposition_id: str | None = None,
         chat_id: int,
         thread_id: int,
         reply_to_message_id: int | None = None,
@@ -142,7 +165,9 @@ class TaskLifecycleState:
         if reply_to_message_id is not None:
             self._integer(reply_to_message_id, "reply identity")
         timestamp = self._time(now)
-        self._validate_destination(job_id, stop_request_id, chat_id, thread_id)
+        self._validate_destination(
+            job_id, stop_request_id, chat_id, thread_id, assessment_disposition_id
+        )
         immutable = (
             kind,
             job_id,
@@ -167,14 +192,23 @@ class TaskLifecycleState:
             )
             if tuple(prior[field] for field in fields) != immutable:
                 raise self.state_error("task notice event content is immutable")
+            if dict(prior).get("assessment_disposition_id") != assessment_disposition_id:
+                raise self.state_error("task notice event subject is immutable")
             return self._record(prior), False
         notice_id = uuid.uuid4().hex
+        subject_column = (
+            ",assessment_disposition_id" if assessment_disposition_id is not None else ""
+        )
+        subject_placeholder = ",?" if assessment_disposition_id is not None else ""
+        subject_values = (
+            (assessment_disposition_id,) if assessment_disposition_id is not None else ()
+        )
         self.db.execute(
             "INSERT INTO task_lifecycle_notices "
             "(notice_id,event_key,kind,job_id,stop_request_id,chat_id,thread_id,"
-            "reply_to_message_id,telegram_html,status,available_at,created_at,updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,'pending',?,?,?)",
-            (notice_id, event_key, *immutable, timestamp, timestamp, timestamp),
+            f"reply_to_message_id,telegram_html,status,available_at,created_at,updated_at{subject_column}) "
+            f"VALUES(?,?,?,?,?,?,?,?,?,'pending',?,?,?{subject_placeholder})",
+            (notice_id, event_key, *immutable, timestamp, timestamp, timestamp, *subject_values),
         )
         return self.get_notice(notice_id), True
 
@@ -232,19 +266,58 @@ class TaskLifecycleState:
                 "executing": {"executing"},
                 "approval_wait": {"executing"},
                 "no_progress": {"executing"},
+                "claude_permission_wait": {"executing"},
+                "claude_no_progress": {"executing"},
             }.get(notice.kind)
             obsolete = False
             if notice.attempt_count == 0 and notice.stop_request_id is None:
-                if notice.kind in {"approval_wait", "no_progress"}:
-                    obsolete = not activity_notice_is_current(
+                if notice.kind == "claude_no_progress":
+                    obsolete = not claude_activity_notice_is_current(
                         self.db,
                         job_id=notice.job_id,
-                        kind=notice.kind,
                         event_key=notice.event_key,
                         chat_id=notice.chat_id,
                         thread_id=notice.thread_id,
                         created_at=notice.created_at,
                         timestamp=timestamp,
+                    )
+                if notice.kind == "claude_permission_wait":
+                    obsolete = not permission_notice_is_current(
+                        self.db,
+                        job_id=notice.job_id,
+                        event_key=notice.event_key,
+                        chat_id=notice.chat_id,
+                        thread_id=notice.thread_id,
+                        timestamp=timestamp,
+                    )
+                if notice.kind in {"approval_wait", "no_progress"}:
+                    early = (
+                        preacceptance_notice_is_current(
+                            self.db,
+                            job_id=notice.job_id,
+                            event_key=notice.event_key,
+                            chat_id=notice.chat_id,
+                            thread_id=notice.thread_id,
+                            created_at=notice.created_at,
+                            timestamp=timestamp,
+                            selected_profile=self.selected_codex_profile,
+                        )
+                        if notice.kind == "approval_wait"
+                        else None
+                    )
+                    obsolete = not (
+                        early
+                        if early is not None
+                        else activity_notice_is_current(
+                            self.db,
+                            job_id=notice.job_id,
+                            kind=notice.kind,
+                            event_key=notice.event_key,
+                            chat_id=notice.chat_id,
+                            thread_id=notice.thread_id,
+                            created_at=notice.created_at,
+                            timestamp=timestamp,
+                        )
                     )
                 if valid_states is not None and notice.job_id is not None:
                     job = self.db.execute(

@@ -54,6 +54,23 @@ def _run_lines(argv: tuple[str, ...], run: Run) -> str:
     return result.stdout
 
 
+def provider_source_version(executable: str, *, run: Run = subprocess.run) -> str | None:
+    try:
+        result = run(
+            (executable, "--version"),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    lines = (result.stdout or result.stderr).strip().splitlines()
+    return lines[0][:128] if lines else None
+
+
 def opencode_models(executable: str, *, run: Run = subprocess.run) -> tuple[ProviderModel, ...]:
     output = _run_lines((executable, "models", "opencode-go", "--verbose"), run)
     decoder = json.JSONDecoder()

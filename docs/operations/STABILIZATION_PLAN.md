@@ -1,14 +1,365 @@
 # Stabilization plan
 
+Source checkpoint: [0.8.0](RELEASE_0_8_0.md). Earlier source entries are historical;
+the PR/tag own combined gates. Live acceptance remains open.
+
+Maintenance: [0.7.1](STABILIZATION_RELEASE_0_7_1.md).
+
 Status: active; stages 0–2 and 3b done, stage 3 in progress
-Date: 2026-09-27; updated 2026-10-02
-Owner: repository owner (decisions and merges); lead development agent integrates
-Last verified repository revision: `d3be874` for the stop/notice slice
-(canonical checks and independent review). Native Claude candidate `c5e130c`
-and the schema-37 visibility work remain separate publication/review tracks.
-Next trigger: finish their exact-revision validation and required independent
-review; continue the separately authorized live backlog and ADR 0048 work.
-Deployment identity and private acceptance records remain outside this plan.
+Date: 2026-09-27; scope updated 2026-10-10
+Owner: repository owner (decisions and merges); integration owner implements
+Pre-0.8 integrated checkpoint: `3750ccfb0f8eb98333f9219f3a697d6328890d04`.
+The schema-38 protected file tools are implemented offline; follow
+[ADR 0052](../decisions/0052-protected-claude-file-permissions.md) and the
+[candidate runbook](CLAUDE_FILE_PERMISSIONS.md). Publication/review gates and
+separately authorized native/Telegram acceptance remain open. Authority-isolation
+source `6a848c7a326b35e4c3ea552339e8c5c3d7beba53` is included in 0.8;
+activation remains separate.
+Actual authority custody is still open. Assess the existing narrow boundary and
+actual launch/service exposure first; a dedicated VM remains a reserve option,
+not a selected prerequisite. The revised preparation decision is in
+[ADR 0053](../decisions/0053-claude-custody-reference-deployment.md) and the
+[custody preparation runbook](CLAUDE_CUSTODY.md).
+Next trigger: [revised delivery scope](#revised-delivery-scope) and the
+[continuation plan](NEXT_DEVELOPMENT_SESSION.md); live/ADR 0048 work stays separate.
+Keep deployment and live evidence private.
+
+## Revised delivery scope
+
+Owner decision under [ADR 0067](../decisions/0067-claude-editor-first.md): deliver
+Claude project reading/editing first. This supersedes older Claude parity,
+native-transfer and image next triggers below. The finite
+[editor matrix](CLAUDE_LEAD_REVIEW_PLAN.ru.md#конечная-матрица-первого-этапа)
+is the current Claude completion criterion. Full parity, native local/return,
+saved-session connect and image enablement are deferred pending an observed
+need and new owner decision; safety and other goal milestones are unchanged.
+
+The opt-in [Claude image candidate](../decisions/0066-verified-claude-image-input.md)
+builds on published corpus `6e88caede24351e30991cb4059f47cd42aab03ef`.
+Offline evidence covers receipts, worker uncertainty and material-notice recovery.
+Preserve its source evidence; image enablement and Telegram acceptance are
+deferred by ADR 0067, not prerequisites for project-file editing.
+Live activation, file tools, paid fallback and Hub roles remain excluded.
+
+Owner decision: remove Hub-managed lead/advisor roles from the current goal and
+release scope; cross-provider review belongs to project rules. See
+[ADR 0065](../decisions/0065-retire-hub-lead-advisor.md). This section supersedes
+older role/transport next triggers below; historical source evidence remains.
+Last inspected source base: `851714b5005553906b29c771fcd095de133f776b`.
+Owner: Hub maintainer, sole writer. Next trigger: the checked
+[dependency inventory](RETAINED_PROVIDER_DEPENDENCIES.md), then Claude/custody.
+
+| Original goal item | Remaining scope |
+| --- | --- |
+| 1 — integration | Owner merge, dependency selection, separately authorized exact-revision rollout and post-restart acceptance |
+| 2 — authority | Managed permissions and project/service-data custody across productive launches, helpers, MCP, local and recovery paths |
+| 3 — visible control | Remaining provider progress, approvals, retry/stop and live control-loss acceptance |
+| 4 — Claude project editor | Protected Read/Glob/Grep/Write/Edit, configured model/effort, exact Hub-owned sessions, human write approvals, stop/results/recovery and subscription without paid fallback; full parity deferred |
+| 5 — roles | Withdrawn, not implemented; general outcome/time/usage journal remains an independent supporting milestone |
+| 6 — live acceptance | Three independent projects, queue/approvals/stop, restarts and denied-access scenarios; connect and Telegram ↔ CLI for supported providers, deferred for Claude |
+| 7 — operations/release | Hermes incidents and controlled updates, off-machine restore drill, remaining refactoring and release 0.8 |
+| Added footer visibility | [Existing /goal and /fast follow-up](#planned-final-response-mode-indicators) |
+
+Roles are withdrawn; the goal stays open. Preserve source/tests and independent
+review. No merge, deletion or live action follows. Scoring, judges and parallel
+writers stay excluded.
+
+## Current source integration checkpoint
+
+Clean `98c78fcfc40a3fba79a3cdecc2db8b609dabb78a` passed canonical validation
+(2,035 tests/185 modules, zero typing errors, privacy/history/static) and seven
+hosted checks. It integrates notification conservation, connection retirement,
+RPC deadlines, schema41 retry, managed profiles, preacceptance observations,
+Claude selection/continuation and native-transfer refusal. This supersedes older evidence for these slices; integration review, owner
+merge and live acceptance remain open.
+
+The stacked provider-neutral namespace extraction at clean
+`fcc755fe4d70ddbff6b544c2a1a7b09d4b27e0ac` passed canonical validation
+(2,042 tests in 187 modules) and seven hosted checks. The bounded sealed-material
+primitive at clean `cd8b6047177b92296df78f2dc5c1ef80c2c83490` passed canonical
+validation (2,051 tests in 189 modules); required independent review and its
+hosted checks remain separate. Both are offline foundations, with no productive
+advisor, role workflow or installed custody claim. ADRs 0056 and 0057 belong to
+those independent candidate branches; they are not part of this integration base.
+
+The next bounded recovery follow-up gives a typed local response-budget expiry
+the existing saved-task retry only at the exact pre-submission preparation
+boundary. Generic/profile/post-submission errors and contradictory execution
+evidence remain excluded; no new replay, approval, schema or lifecycle ownership
+is introduced. Source owner: Hub maintainer, lane
+`fix/codex-preparation-deadline-retry`, base `98c78fc`. After publication/review,
+integrate and revalidate the combined revision before the two-worker canary.
+Inspect tracked, staged and untracked lane state before any post-merge cleanup.
+
+Custody, broader progress, Claude editor/route acceptance, outcome journal,
+three-project/restart acceptance, Hermes operations, off-machine restore and
+release 0.8 remain open. Claude native transfer/connect are deferred. Restart
+does not close the notification incident or payload recovery.
+
+## Incident candidates
+
+Journal: [checkpoint](INCIDENT_JOURNAL.md#source-checkpoint).
+Hermes notices: [checkpoint](HERMES_INCIDENT_NOTICES.md); live/Analyze open.
+
+## Read-only outcome projection candidate
+
+Current state: bounded offline implementation in lane
+`feat/outcome-journal-projection`, based on source `93577e5`. Clean candidate
+`dcc650794719a1be6c4143766bdb007265352471` passed the local canonical publication
+gate on Python 3.11 (2,085 tests in 189 modules, zero typing errors, and passed
+privacy/history gates). Astra and Claude Opus independently reviewed the runtime
+at `1164770`; Opus found a supported-Python-3.13 test-gate failure. The `dcc6507`
+test/documentation follow-up fixes it and received a separate Opus review with
+no blocker/high/medium finding. All seven hosted checks at exact head `dcc6507`
+passed, including the Python 3.11/3.12/3.13 matrix and required namespace job.
+This remains repository evidence. The
+[local diagnostic](OUTCOME_JOURNAL.md) projects one saved job without a migration,
+provider invocation or new writer/decision authority. Requested/stored/observed
+model provenance, result/delivery, direct lineage and source-bound time intervals
+remain distinct. Acceptance, native durations and per-job usage stay unknown
+where the existing records cannot establish them. This does not close
+[REQ-EVAL-010](../product/EVALUATION_AND_ALLOCATION.md).
+Source owner: Hub maintainer; next trigger: integrate the reviewed foundations,
+then separately design authenticated immutable owner decisions and corrections.
+Inspect tracked, staged and untracked lane state before any post-merge cleanup.
+Closure of the independent outcome journal remains open; there is no deployed
+acceptance journal or complete accounting claim. Hub roles are retired by ADR 0065.
+
+## Advisor foundations integration candidate
+
+Published source: `feat/advisor-foundations-integration`, base `dcc6507`, with
+namespace/capsule histories `fcc755f` and `cd8b604`. Owner: Hub maintainer, sole
+writer. Clean `1c70d5639b59cfa97829bb56deaf3f95f577cb42` passed commit/canonical
+gates (2,149 tests/195 modules, types/static/privacy/history), exact-head Astra
+and actual Opus review, and seven hosted checks including strict namespaces.
+Affected corpus: 123 tests, no namespace skips; Python 3.11 lacked the memfd
+wrapper, and a later Python 3.12 subset passed 33 tests.
+
+Shared private-source and case-sensitive lookup guards apply to every profile.
+ADRs 0056/0057 own the descriptor, alias and caller-authorization boundaries;
+scripted lookup/FD fixtures are not real casefold/XFS or installed custody proof.
+Advisor material/workflow and inference transport follow-ups are withdrawn by
+ADR 0065. Retain shared Claude/security fixes on independent merits. Private
+networking still blocks host loopback; owner merge/deployment remain separate.
+Inspect all lane state before any post-merge cleanup; cancellation is not
+productive acceptance.
+
+## Offline native Claude transport follow-up
+
+Current state: published source candidate `535c0b8` in lane
+`test/claude-native-transport-corpus`, based on clean `1c70d56`; canonical
+publication passed with 2,175 tests and Pyright 0. Exact-candidate Claude Opus
+review has no remaining mandatory findings; Astra reviewed the production
+follow-up. All seven hosted checks passed at exact head `535c0b8`, including the
+Python 3.11/3.12/3.13 matrix and namespaces. Source owner: Hub maintainer.
+The optional corpus uses an explicitly supplied native CLI with
+synthetic credentials and an HTTP fixture inside private network/PID/IPC
+namespaces; host files and loopback have positive and negative controls.
+
+The four bearer/API-key × SSE-success/HTTP-529 cases exposed two compatibility
+fixes: safe mode leaves optional built-in mods enabled, so both settings builders
+now explicitly disable the known optional IDs; native API rejection uses the
+success result variant with an error flag and explicit HTTP status. The strict
+plugin guard remains unchanged, required security policy mods remain untouched,
+and incomplete/contradictory HTTP-error evidence remains indeterminate. Verified
+rejection does not establish an absence of earlier effects or authorize replay.
+The process fixture additionally kills its owned group before reaping an exited
+leader, and refuses special-file executable sources before open. The final
+corpus inherits production start argv and checks its exact fictional session
+identity. Strict native execution pins local binary/version evidence and requires
+the exact 529 envelope, zero visible assistant messages on rejection and fully
+validated host diagnostics. All four cases passed with CLI 2.1.285; additional
+retry/output bounds belong only to the fixture.
+
+The advisor-specific isolated transport follow-up is withdrawn by ADR 0065.
+Retain the standalone native/error corpus; hosted confirmation at exact `535c0b8`
+is recorded above, so no unchanged gate is repeated. The
+[testing guide](../testing/README.md#optional-offline-native-claude-transport)
+owns the procedure and evidence limits. This does not close subscription routing,
+CPA/no-paid-fallback, human file approvals, local transfer or Telegram acceptance.
+
+## Bounded review pipe primitives
+
+Retained offline source/fixtures under
+[ADR 0058](../decisions/0058-bounded-review-pipe-primitives.md), owner Hub maintainer:
+
+| Source | Scope and completed source gates |
+| --- | --- |
+| `dd43ae6`, `feat/advisor-inference-bridge`, base `535c0b8` | Framing/one-use fake gate; canonical 2,204 tests/198 modules, types/privacy, Astra/actual Opus and seven hosted checks |
+| `e563dd4ca51b5d4884227681782d4a7fce275b2e`, `feat/advisor-pipe-sequencing` | Directional ordering/finite partial writes; canonical 2,241 tests/200 modules and the same independent/hosted gates |
+| `cc976f6828554104b7326770f1e3a67b6e2de6ef`, PR #154 | Owned actual pipes/private namespace witness; canonical 2,264 tests/203 modules and independent/hosted gates |
+| `cad8e8d8732bfb52aadb45e15d783785af4da84a`, PR #174 | Native corpus + PR #154 foundations joined; source gates passed |
+| `496a719707a5b02557e659e77facf6a481f2a4da`, PR #175 | Test-only exact HTTP envelope/semantic owner; source gates passed |
+| `851714b5005553906b29c771fcd095de133f776b`, PR #176 | Owned raw exchange extraction; canonical 2,855 tests/256 modules, types/privacy, Astra/actual Opus and seven hosted checks |
+
+Fixtures track owned allocations; the earlier FD-count discrepancy is unattributed.
+The [testing guide](../testing/README.md#offline-review-pipe-primitives) owns
+commands and limits; offline fixtures establish no live acceptance.
+ADR 0065 withdraws advisor integration. Retain tests/cleanup, do not repeat gates;
+owner merge/deployment and post-merge worktree inspection remain required.
+
+## Claude process observations
+
+Current state: source published in PR #155 at clean
+`a542b2054250dcd7e60ad7df0969ca7462e4054b`, based on prerequisite
+`e563dd4ca51b5d4884227681782d4a7fce275b2e`. Source owner: Hub maintainer.
+[ADR 0059](../decisions/0059-claude-process-observation-notices.md) records the
+separate process/permission evidence boundary. Focused actual-process, SQLite
+and migration fixtures passed. Canonical publication passed 2,277 tests in
+204 modules, full Pyright and privacy/history; exact clean GPT Astra and actual
+Claude Opus 5.5/high reviews found no remaining blockers. All seven hosted checks
+passed at that exact head. These are source/offline and hosted checks.
+
+Next trigger: owner integration and separately authorized native
+and Telegram acceptance alongside the remaining Claude parity work. This lane
+is bounded to optional passive ordinary quiet notices; tool/build activity,
+local transfer, saved-session connection and billing
+route acceptance remain open. Root is the sole implementation writer. The
+worktree owner is Hub maintainer; its purpose is schema-42 observation and
+worker/sender integration, with base `feat/advisor-pipe-sequencing`. Post-merge,
+inspect tracked, staged and untracked state before worktree cleanup. Closure is
+open; no deployed or live acceptance is claimed.
+
+## Final/progress delivery certainty prerequisite
+
+Status: schema43 source implementation under validation. Base verified revision:
+`a542b2054250dcd7e60ad7df0969ca7462e4054b`; exact candidate publication remains
+pending. Root is the sole writer; Hub maintainer owns this worktree. Its purpose
+is durable send fencing, shared final-part policy, provenance and preservation
+of late native proof. Base branch: `feat/claude-process-observations`. After owner
+integration, inspect tracked/staged/untracked work before any cleanup.
+
+The [owning contract](../product/PERSISTENCE_AND_RECOVERY.md) and
+[ADR 0060](../decisions/0060-final-and-progress-delivery-certainty.md) define the
+change. Next trigger: exact-candidate source reviews, canonical/privacy and
+hosted gates, then the bounded owner-assessment slice. Deployment, Telegram
+acceptance and unknown-delivery reconciliation remain separate; no provider
+replay, writer change, service change or assessment command is enabled here.
+Closure: open until exact source publication gates pass; live backlog stays open.
+
+Schema43 activation gate: unknown final/notice delivery currently blocks later
+topic deliveries, and result-ready heads block new productive work. Before any
+activation, independently review the schema44 local-owner reconciliation
+action that retains parts/results/spool, never fabricates delivery or replays
+provider execution, and safely resolves the topic hold. Source publication of
+this prerequisite does not waive that gate. Review also requires populated-copy
+foreign-key/orphan-part preflight before the migration. Source owner: Hub
+maintainer; decision owner: repository owner; last verified source base:
+`9401becf230d74b516bec902bae44c6ddbaec78c`. The schema44 action is implemented
+in source under validation; [ADR 0061](../decisions/0061-owner-delivery-hold-dispositions.md)
+records its ownership and limits. Next trigger: exact-candidate review and
+publication, then separately authorized live rollout. The broader live backlog
+remains open.
+
+Delivery-hold follow-up: schema44 queue continuation retains indefinite
+`result_ready` session-control, scope-wide local transfer and agent-drain blockers,
+plus lifetime topic binding. Source publication is complete at
+`aac70181d21a00a51104ebbfe459f2e987fc4128` with exact-revision independent
+reviews and canonical/hosted gates. Hub maintainer owns the next separately reviewed full-control
+reconciliation decision before claiming complete operational acceptance. No
+timeout, restart, automatic resend or provider replay may clear these boundaries.
+See [ADR 0061](../decisions/0061-owner-delivery-hold-dispositions.md).
+
+## Owner outcome assessments
+
+Status: source publication complete in PR #158 at
+`bc7a2ab29fe0ad699eb39ee22b85a7143a5f3c16`; source owner: Hub maintainer,
+root is the sole writer. Worktree purpose: bounded human outcome journal,
+base branch `feat/delivery-hold-reconciliation`. Design and transaction/batch
+ownership were independently reviewed by GPT Astra.
+[ADR 0062](../decisions/0062-owner-outcome-assessments.md) records the decision;
+the [runbook](OUTCOME_JOURNAL.md#owner-decision-procedure) owns the procedure.
+Closure: malformed-input and migration/consumer/recovery follow-ups passed
+focused checks; exact GPT Astra and actual Claude Opus 5.5/high reviews have no
+remaining mandatory findings. Mandatory pre-commit and clean-commit canonical
+pre-push passed 2,372 tests in 215 modules, Pyright 0 and privacy/history; all
+seven exact-head hosted checks passed. PR #158 is ready and unmerged.
+Next trigger: owner integration, then independently authorized custody and
+Telegram acceptance. Scope does not include productive
+collaboration, usage provenance, scoring or judges. Deployment, journal custody
+and Telegram acceptance remain independent gates. After owner integration,
+inspect all tracked/staged/untracked worktree state before cleanup. Closure is
+complete for source publication; the broader goal remains open.
+
+## Canonical lane archive correction
+
+Status: source publication complete in PR #159 at
+`07fb1cfe088e0ac9e013acb7c46e60aab52ab685`; seven exact-head hosted checks passed.
+Owner: Hub maintainer, sole writer.
+Worktree purpose: repair canonical-root persistence after archive/restart;
+base branch `feat/owner-outcome-assessments`. GPT Astra reviewed the minimal
+root-validation and transaction design. The old-code regression reproduced
+historical-root normalization after CLI archive. The
+[dated ADR correction](../decisions/0031-bounded-root-concurrency.md#archive-correction-2026-10-08)
+records the restored boundary. Legacy evidence protections, schema-44 consent
+limits and cleanup remain unchanged. Next trigger: owner integration and separately designed full-control
+reconciliation. After owner integration inspect tracked, staged and untracked
+work before cleanup. Source publication closure is complete; no deployment
+or earlier-topic repair is authorized here.
+Exact GPT Astra and actual Claude Opus 5.5/high reviews have no remaining
+mandatory findings after correcting the over-broad idle-peer guard. Commit and
+canonical publication checks passed 2,401 tests in 216 modules, with no typing
+errors. These checks do not establish deployment or live acceptance.
+
+## Lane-state domain extraction
+
+Status: neutral source publication complete in PR #160; source owner: Hub maintainer,
+root sole writer. Base revision:
+`07fb1cfe088e0ac9e013acb7c46e60aab52ab685` in `fix/canonical-lane-archive`.
+Worktree purpose: move cohesive lane queries, binding/archive policy and cleanup
+SQL to a dependency-neutral domain before full-control delivery reconciliation.
+GPT Astra reviewed the extraction boundary. HubState retains public signatures,
+one connection and all immediate/plain-write transaction ownership; registry/Git
+validation, topic observation, legacy normalization and session policy remain
+with their existing owners. No schema or observable control exception is added.
+New characterization checks cover register/bind rollback and real cleanup commit
+contention; existing archive/history/peer/source restrictions remain required.
+Source publication complete at `61657f24592c43c5e57cd551d9484fd672bc5512`:
+commit/canonical 2,405 tests in 217 modules, Pyright 0, privacy/history and all
+seven exact-head hosted checks passed. GPT Astra and actual Claude Opus 5.5/high
+source reviews have no mandatory findings. PR #160 is open and unmerged.
+Next: the separately reviewed full-control contract and ledger. After owner
+integration, inspect tracked, staged
+and untracked state before any cleanup. No deployment or restart is authorized.
+
+## Delivery control storage and preview prerequisite
+
+Status: schema46 source published at `357409b0d52a6796a3fe609f9f49c2b3bb918817`;
+PR #161 ready/open/unmerged, full-control authority unavailable in that revision.
+Owner: Hub maintainer, root sole writer. Branch `feat/delivery-control-preview`
+owns additive ledger/read-only preview; base `61657f24592c43c5e57cd551d9484fd672bc5512`.
+Exact Astra and actual Opus 5.5/high source reviews have no mandatory findings.
+Commit/canonical: 2,422 tests/219 modules, Pyright 0, privacy/history and seven
+hosted checks passed. [ADR 0063](../decisions/0063-delivery-control-reconciliation.md)
+owns the boundary. Next trigger: coordinated authority below. Closure remains open
+until owner integration; inspect tracked/staged/untracked state before cleanup.
+Source publication grants no migration, deployment, restart or live acceptance.
+
+## Coordinated delivery control authority
+
+Status: schema47 implementation under validation. Owner: Hub maintainer, root sole
+writer. Branch `feat/delivery-control-authority` owns coordinated public CAS and
+consumers; base/last verified source `357409b0d52a6796a3fe609f9f49c2b3bb918817`.
+GPT Astra reviewed design, dirty-source consumer and retention inventory. Three
+findings were repaired: coherent status, separate legacy/full effect and final
+job/result fail-closed parity. [ADR 0063](../decisions/0063-delivery-control-reconciliation.md)
+and [runbook](DELIVERY_CONTROL.md) own design/procedure. Next trigger: complete
+consumer/race/retention/migration tests, canonical gates, exact independent review
+and hosted publication. Closure open; owner integration and private live gates
+remain separate. Inspect tracked/staged/untracked state before post-merge cleanup.
+
+## Planned final-response mode indicators
+
+Owner-requested follow-up (2026-10-07): goal-only offline candidate; broader
+mode visibility remains open. The owning
+[REQ-CMD-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md#compact-control-surface)
+defines exact-turn observations and recovery limits. Codex CLI 0.159.2 generated
+schemas establish event shapes only. `/fast` remains unknown: service-tier
+settings may affect subsequent turns and establish no current-turn mapping.
+No provider RPC or schema is added. Owner: Hub maintainer. Last verified base:
+`008a1a95c78ee77893448b700ef866940c8baae1`. Next: exact-candidate source review
+and publication, supported fast evidence, then separately authorized Telegram
+acceptance. Other consequential modes remain follow-ups; closure is partial.
 
 ## Why
 
@@ -25,8 +376,7 @@ accumulated without live acceptance, contrary to product principle 10.
 
 - The Claude CPA worker scaffold is fixed, reviewed and merged as a scaffold.
   The owner later withdrew the provider-expansion gate (ADR 0045): Claude work
-  toward Codex parity continues, and the backlog below is tracked debt, not a
-  gate.
+  continues as editor-first under ADR 0067; the backlog below is tracked debt.
 - Large or lifecycle/security pull requests receive an independent review by
   an agent that did not write them, recorded in the pull request. Only the
   owner merges into `main`.
@@ -47,7 +397,7 @@ accumulated without live acceptance, contrary to product principle 10.
 | 2c | Capability summary table in project status; closure sections for six completed plans | Done: #86 | Prose still to move into owning modules |
 | 3 | Extract `_handle_update`, `load_hub_config`, `cli.main`; remove dead code; tests for weak modules; injected clocks in timing tests | In progress: read-only `status`, `doctor` and monitor (#97); `cli.main` split into command handlers (#99); `run_monitor_once` and `evaluate_operational_alerts` below the hotspot line (#100); onboarding lease test on an injected clock (#101); `load_hub_config` split into section parsers (#103) | Dispatcher coverage 316 → 359 of 421 (#89) |
 | 3b | Retire the multi-auth integration (reliability package B): migration contract, retired keys rejected before helper access, superseded ADRs | Done: #100 | ADR 0047; no schema change; host leftovers are a separate authorized task |
-| 4 | Release 0.8.0; branch and worktree hygiene | Planned; each action needs owner approval | — |
+| 4 | Release 0.8.0; branch and worktree hygiene | Source promotion authorized; cleanup separate | Release PR/tag |
 
 ## Live-acceptance backlog
 
@@ -130,11 +480,14 @@ acceptance.
 | Inbound materials and context/quota labels | REQ-UX-009, REQ-QUEUE-010, REQ-CMD-001 | Acceptance actor `p0_p1_live` in a maintenance window |
 | Restart continuity and exactly-once processing | AC-F-005, AC-F-010 | Controlled restart during queued and active work |
 | Summary-free Codex `/local` → `/return` | REQ-WRITER-006, REQ-WRITER-007 | Telegram → native CLI → Telegram on the same thread |
+| Managed Codex profile continuity and custody (schema 39) | REQ-SEC-001, ADR 0055 | Exact start/resume/restart selection, approvals, negative project/service-data access; local routes remain unsupported pending their own boundary evidence; helpers retain independent custody checks |
 | Saved-session `/connect` | REQ-CMD-008, REQ-WRITER-012, AC-F-013 | Topic, Hub-private and local-code entry paths |
 | Accepted-turn activity and queue snapshots (schema 37) | REQ-QUEUE-012, REQ-QUEUE-013 | Queue blocker, long tool, approval resolution, restart and ambiguous delivery at the exact deployed revision |
+| Preacceptance Codex approval observations (schema 40) | REQ-QUEUE-012, REQ-QUEUE-013 | Human wait before native acknowledgement, exact promotion, worker-epoch restart and preserved unknown sends |
 | Durable root blockers (schema 35) | REQ-WRITER-008 | Blocked input, held job, owner decision |
 | Exact Codex turn recovery (schema 34) | REQ-QUEUE-004 | Uncertain turn, read-only proof, continuation |
 | Root concurrency, worktree lanes, Codex slots | REQ-QUEUE-002, REQ-QUEUE-003 | Three projects on independent roots |
+| Codex preparation notification conservation | REQ-QUEUE-004, REQ-QUEUE-012 | Keep one exact turn active on root A while root B starts or resumes; preserve both finals, early/late human approvals, context and account quota observations, with no additional invocation or unrelated-worker restart |
 | Project-group provisioning | REQ-ONBOARD-003, REQ-ONBOARD-006 | New project canary |
 | Registered-project editing | REQ-PROJECT-EDIT-001..004 | Rename and relocation canary |
 | Machine-loss recovery drill | REQ-OPS-012 | Private cold-restore drill |
@@ -142,6 +495,39 @@ acceptance.
 
 ## Follow-ups found during execution
 
+- Codex preparation notification overflow: the source filter is present at
+  `5a1b12d608873b4660b758f43d0e9a5dac37d404`. The combined offline regression
+  injects 3,600 foreign events across preparation/submission on two independent
+  workers/roots, preserving both completions/outboxes, approvals and telemetry
+  for start and exact resume. The old retention rule reproduces overflow.
+  Publication/review and separately authorized deployed conservation/attribution
+  remain required; the installed event source is unverified.
+- Native notification attribution has an optional offline direct-socket fixture
+  in `tests/test_codex_native_notification_origin.py`: two connections, local
+  deterministic Responses, more than 1,024 events, exact completion and a
+  subscribed positive control, without real auth/endpoints. Subscriptions survive
+  starting another thread on the same connection; reuse without strict completed
+  retirement permits this mechanism. Keep foreign filtering independently of
+  cleanup; native mechanism evidence is not installed-source attribution.
+  Transport/retirement gates and coordinated live acceptance remain separate.
+- **Accepted-turn control loss:** Stages1–2 and schema49–51 prerequisites passed
+  source publication; exact evidence is in the [runbook](CODEX_CONTROL_LOSS.md)
+  and [next session](NEXT_DEVELOPMENT_SESSION.md). Offline native 129-pair/final
+  and control-loss witnesses passed. Schema52 dormant authority is published at
+  `f135872ca1dca205aaeabd5efa094774f7567710`; post-commit proof fix at
+  `b8ebb7f3fb2f6b94230eff57e8d7de25af75522b`. Both passed canonical, independent
+  reviews and seven hosted checks. Local-write prerequisite `cbe9564` passed
+  canonical 2,753 tests, independent Astra/actual Opus reviews and seven checks.
+  Lead owns `feat/codex-ingress-runtime` on that base: live/maintenance wiring
+  and a native offline ingress witness are under final validation. Next: exact
+  reviews/publication, then separately authorized live acceptance. Inspect all
+  lane changes before cleanup. Incident closure stays open under [ADR 0064](../decisions/0064-codex-control-loss.md).
+  No replay; terminality or expiry cannot quiesce an unknown sender.
+- **Lane cleanup admission race:** a preflight root guard and post-Git recheck
+  do not reserve maintenance during physical cleanup. Lead owns the existing
+  follow-up: add a scoped maintenance reservation before extending cleanup,
+  without holding SQLite locks across Git subprocesses. This is separate from
+  the accepted-turn sender fence; no live cleanup is authorized here.
 - The Codex daemon moved its shared socket into `/tmp/codex-daemon-UID`, which
   the Hub units' `PrivateTmp` hid (found 2026-09-29). Since about 2026-09-27
   the Codex worker ran on the stdio fallback, without companion approvals, and
@@ -155,10 +541,11 @@ acceptance.
   repository implementation is present under
   [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md), with candidate
   `c5e130c` passing canonical publication checks (1,375 tests, 128 modules).
-  Hosted checks passed at that exact candidate; required Claude or owner
-  review remains open. Astra review is supplementary.
-  Human approval hosting, tools, advisor isolation, native local transfer and
-  CPA/account live acceptance remain separate parity work.
+  Hosted checks and independent review passed at that exact candidate; it is
+  merged in the integrated revision above, whose canonical checks cover
+  1,488 tests in 135 modules. This is source evidence, not live acceptance.
+  Human approvals, file tools, custody and CPA route acceptance remain open;
+  native transfer is deferred under ADR 0067.
 - `codex-worker@1` / `claude-worker@1` duplicate slot 1 of `worker@codex` /
   `worker@claude` (PR #80 review, item 5).
 - Slot identity format and bounds are duplicated in four modules (PR #80 review, items 7–8).
@@ -172,7 +559,7 @@ acceptance.
   count tests that already ran, so the gate fails although discovery passes.
 - Product principle 10 and the capability matrix contradicted the Claude
   scaffold; resolved by withdrawing the gate (ADR 0045).
-- An analysis of the Claude integration path to Codex parity follows stage 3.
+- Claude delivery now follows the finite editor matrix under ADR 0067.
 - Response quota labels on a custom Codex model provider (found by
   `p0_p1_live` at `adb8b37`). Stage 3b did not close it: the deployment does
   not use multi-auth. `account/rateLimits/read` has no windows on this route,
@@ -203,8 +590,137 @@ acceptance.
   broader provider/compatibility coverage, and separately authorized capacity
   and canary-root checks. No background inference or automatic replay is added.
 
+- **Repeated notification/preparation failure and saved-payload retry:** source
+  candidates and isolated native corpus are under review. The next trigger is
+  exact-revision canonical/independent review of bounded transport consumption
+  and schema-41 text-only notice-bound retry, then owner integration and a
+  separately approved two-worker canary. Last verified published transport
+  revision: `1a54af15d375992001579e328e8b31b5e1b9267d`; this is repository
+  evidence only. Verify more than 1,024 foreign notifications and both results;
+  two consecutive preparation failures must retain the original task/context
+  through explicit retries, or visibly refuse when preparation replaced an
+  existing thread without saving its effective context. Frozen fallback-context
+  preservation and ordinary Reply historical context remain separate follow-ups.
+  Restart alone does not close the item. Materials,
+  safe unsubscribe, stdio buffering and exact deployed-source attribution remain
+  open; no deployment or active-worker restart follows from this entry. See the
+  [recovery procedure](QUEUE_RECOVERY.md#durable-dispositions) and
+  [acceptance strategy](../testing/README.md).
+  Independent Opus source review of retry head
+  `fc1265286ab8b56b730cb371008ab9cc29d7a93b` completed. Its follow-up now
+  protects failure publication when root resolution fails, derives Codex runtime
+  from trusted configuration while retaining aliases, rechecks child selections
+  and materials, and makes tickets update-immutable in migration 41.
+  Astra reviewed the domain/transaction ownership and direct failure paths.
+  Lease-crash and execution-crash regressions retain their distinct certainty;
+  a real 65-source chain refuses at the ancestry bound without invocation.
+  Final exact-head publication/review is pending. Explicit retries follow FIFO
+  arrival order; they do not rewind the session. This source lane stacks on
+  transport head `1a54af15`, separately from later transport/retirement/deadline
+  siblings. Integration and live evidence remain open.
+
 ## Closure
+
+Repeated Codex preparation overflow has source-level transport and saved-task
+retry candidates, not deployment acceptance. The schema-41 text-only retry
+candidate is published at `fc1265286ab8b56b730cb371008ab9cc29d7a93b`;
+canonical publication validation passed, while required opposite-runtime review
+and live gates remain open. It refuses thread-replacement retry ancestry that
+lacks a frozen effective context. The stdio follow-up bounds both directions and
+preserves accepted inbound frames at
+`9a70840f362bd28f860c9bede44ecacefebd3307` (1,887 automated tests, canonical typing/privacy
+and all seven hosted checks). Its actual Opus review found no blocker/high/medium,
+but confirmed that immediate inbound sealing on writer failure could lose an
+unread stdout tail. The response-channel follow-up below closes that source gap;
+the older candidate alone is not full tail-conservation evidence.
+The completed-socket retirement slice is in progress on that base: strict
+single-use proof, publish-before-close, exact-client cache removal, optional
+telemetry deadlines and cache-only queued catalogs passed focused checks and
+architectural review. Eight offline native/observer cases passed with Codex
+0.159.2, including surviving-peer operation, fresh metadata preparation under
+over 1,024 foreign stream events and exact stored resume. Final publication and
+required Claude review remain separate gates. The first Opus review requested
+full idle-restoration/catalog context and explicit reconnect tradeoffs; follow-up
+also guards queued clients against unrelated foreground poller cleanup.
+Closeout requires a separately
+authorized two-worker canary with more than 1,024 foreign notifications, both
+results saved and two successive preparation failures retaining the original
+task through explicit notice-bound retries. Restart alone does not close this
+item. Absolute preparation/metadata deadlines, client-event
+byte bounds, material retry and exact deployed-source attribution remain open.
+See [queue recovery](QUEUE_RECOVERY.md) and the
+[acceptance strategy](../testing/README.md).
+
+### Completed-socket slice ownership and extraction
+
+Owner: lead agent / Hub maintainer. Source lane
+`fix/codex-successful-unsubscribe` owns this bounded slice, despite its historical
+branch name; it performs connection retirement without an unsubscribe RPC.
+Base/last canonical verified revision is
+`9a70840f362bd28f860c9bede44ecacefebd3307` on `fix/codex-stdio-backpressure`.
+The native notification test dependency comes from the independently reviewed
+source corpus at `dc289f816cb6f83ae36641f89af857aa75cefd1e`, with a shorter
+disposable socket path and explicit final phase for exact stored-output assertions.
+After integration, recheck tracked/staged/untracked lane state before any removal.
+Next trigger: exact clean publication, required Claude review, then an explicitly
+authorized integration and live canary. No deployment acceptance is claimed.
+
+HubState owns transactions, workers/Controller invocation and caches, transports cleanup.
+`codex_connection_completion` owns exact completion proof;
+`codex_result_lifecycle` owns optional context/quota and survived cleanup/report
+failures; `inline_codex_execution` owns legacy inline invocation and its completion
+journal. External execution retains checkpoint/publication/retirement order and
+the reviewed 207-line exception in `hotspots.json`. Extraction review reopens at
+stage 3 or a new lifecycle/transaction/invocation branch.
+Failure before publication retains existing certainty/recovery rules; cleanup
+after publication cannot cause productive replay. Stdio retirement awaits a
+durable owned-process exclusion barrier and is outside this slice.
+
+### RPC deadline follow-up ownership
+
+Owner: lead agent / Hub maintainer. Source lane `fix/codex-rpc-deadlines`
+owns fixed per-RPC response deadlines, with base/last verified source revision
+`3b40ae80d8bc34f2ae4105d10b6c75085d6e43c6` (1,915 commit-gate tests; canonical
+publication and opposite-runtime review are separate gates). Ownership remains
+unchanged. The protocol client adds no retry authority, schema, shared preparation
+budget or inference. Reviewed bounds are 120 seconds for responses, 20 for quiet
+and 300 for turn submission, preserving caller deadlines.
+
+Next trigger: exact clean publication and independent review, then integrated
+regression and the separately authorized canary. After integration, inspect
+tracked/staged/untracked lane state before changing or removing the worktree.
+See [RPC recovery procedures](QUEUE_RECOVERY.md#codex-rpc-response-deadlines) and
+the [testing guide](../testing/README.md). Native/live acceptance remains open;
+legacy inline uncertainty, event-byte budgets and a durable owned-process
+barrier including idle stdio restoration remain separate work.
+
+### Stdio response-channel follow-up ownership
+
+Owner: lead agent / Hub maintainer. Lane `fix/codex-stdio-tail-conservation` is
+based on clean `ebd92469f0701c70539ce95a70bcbbd445868d62`, the independently
+reviewed RPC-deadline candidate (1,926 canonical tests, typing/privacy and seven
+hosted checks). This lane does not include the sibling schema-41 saved-task retry
+candidate; integration must verify both together. Work is in progress: focused
+synthetic regressions pass, while exact clean publication and opposite-runtime
+review remain separate gates. No deployment or live acceptance is claimed.
+
+Transport owns first cause, bounded FIFO and pipe cleanup; client owns submission,
+accepted identity and visible completion. `codex_response_drain` owns deadlines,
+notices and fault-time proof. State/worker ownership is unchanged. Astra closed
+quiet fault detection, accepted-turn matching and partial retention, with no
+blocker/high/medium or new hotspot exception.
+
+Next trigger: exact clean publication/review, integrated regressions, then the
+separately authorized two-worker canary above. Include approval before final
+under a broken stdio response channel and verify the saved result carries the
+fixed Hub notice without a grant or another invocation. Inspect tracked, staged
+and untracked lane state after integration before any worktree change/removal.
+See [queue recovery](QUEUE_RECOVERY.md) for the 20-second observed-fault drain
+and its late-tail limits. Traceback retention and descendant-held pipe cleanup
+remain open; restart is still temporary recovery, not incident closure.
 
 The plan closes when stages 0–3 are merged into `main`, the hotspot ratchet
 runs in the canonical gate, and the owner has either completed or explicitly
 re-scoped every backlog item. Record the closing revision here.
+
+Claude live tools retain [ADR 0052's custody gate](../decisions/0052-protected-claude-file-permissions.md).

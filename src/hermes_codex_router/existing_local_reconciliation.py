@@ -12,7 +12,10 @@ from .codex_appserver import (
     StoredTurnOutcome,
     UnixWebSocketTransport,
 )
+from .codex_control_predicates import require_control_scope_clear
+from .codex_permissions import MANAGED_LOCAL_REFUSAL
 from .codex_session_adoption import open_adoption_state
+from .delivery_control_predicates import result_ready_control_reconciled
 from .hub_config import HubConfig
 from .local_transfer import local_resume_command
 from .project_resolution import resolve_project_context
@@ -76,6 +79,11 @@ def reconcile_existing_local(
     root = expected_root.resolve(strict=True)
     with open_adoption_state(config.state_path) as state:
         session = state.get_session(session_id)
+        if (
+            config.codex_permission_profile is not None
+            or session.codex_permission_profile is not None
+        ):
+            raise StateError(MANAGED_LOCAL_REFUSAL)
         topic = state.get_topic(session.topic_id)
         resolved = resolve_project_context(
             config,
@@ -142,6 +150,7 @@ def reconcile_existing_local(
         model_provider=config.codex_model_provider,
         model=session.model,
         codex_socket_path=config.codex_socket_path,
+        permission_profile=session.codex_permission_profile,
     )
     if not apply:
         return ExistingLocalResult(
@@ -153,7 +162,9 @@ def reconcile_existing_local(
             outcome.status,
             False,
         )
-    with open_adoption_state(config.state_path, writable=True) as state:
+    with open_adoption_state(
+        config.state_path, writable=True, codex_permission_profile=config.codex_permission_profile
+    ) as state:
         changed = _claim_exact_local(
             state,
             session_id=session_id,
@@ -221,6 +232,7 @@ def _claim_exact_local(
 ) -> bool:
     now = datetime.now(timezone.utc).isoformat()
     with state._immediate_transaction():
+        require_control_scope_clear(state._connection, "root:" + str(root))
         row = state._connection.execute(
             """SELECT sessions.session_id, sessions.status, sessions.agent_id,
                       sessions.generation, sessions.writer_mode,
@@ -276,14 +288,15 @@ def _claim_exact_local(
             (old_job_id, now, "root:" + str(root), old_job_id),
         )
         conflict = state._connection.execute(
-            """SELECT 1 FROM provider_jobs jobs
+            f"""SELECT 1 FROM provider_jobs jobs
                JOIN topics ON topics.topic_id = jobs.topic_id
                WHERE topics.execution_scope = ? AND jobs.job_id != ? AND (
                  (jobs.status IN ('queued', 'retry_wait') AND NOT EXISTS (
                    SELECT 1 FROM provider_job_holds holds WHERE holds.job_id = jobs.job_id
                      AND holds.decision = 'pending'
                  ))
-                 OR jobs.status IN ('leased', 'executing', 'result_ready')
+                 OR (jobs.status IN ('leased', 'executing', 'result_ready')
+                     AND NOT {result_ready_control_reconciled("jobs")})
                  OR (jobs.status = 'indeterminate' AND NOT EXISTS (
                    SELECT 1 FROM provider_job_resolutions resolution
                    WHERE resolution.job_id = jobs.job_id

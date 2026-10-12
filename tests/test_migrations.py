@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from schema_fixtures import remove_adoption_schema, remove_task_lifecycle_schema
+from schema_fixtures import (
+    project_historical_database,
+    remove_adoption_schema,
+    remove_task_lifecycle_schema,
+)
 
 from hermes_codex_router import migrations as migrations_module
 from hermes_codex_router.migrations import (
@@ -25,8 +29,9 @@ class MigrationTests(unittest.TestCase):
     def test_schema_34_hold_evidence_survives_schema_35_upgrade(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
-            with mock.patch.object(migrations_module, "LATEST_SCHEMA_VERSION", 34):
-                state = HubState.open(path)
+            source_path = path.with_name("example-current-seed.db")
+            with mock.patch.object(migrations_module, "LATEST_SCHEMA_VERSION", 48):
+                state = HubState.open(source_path, codex_permission_profile=None)
                 try:
                     topic = state.observe_topic(
                         project_id="example-project",
@@ -66,6 +71,7 @@ class MigrationTests(unittest.TestCase):
                         )
                 finally:
                     state.close()
+            project_historical_database(source_path, path, 34)
             result = migrate_database(path, create_backup=False)
             self.assertEqual(
                 (result.previous_version, result.current_version), (34, LATEST_SCHEMA_VERSION)
@@ -241,6 +247,8 @@ class MigrationTests(unittest.TestCase):
             connection = sqlite3.connect(path)
             try:
                 for table, rows in before.items():
+                    if table == "session_connect_workflows":
+                        rows = [(*row, None) for row in rows]
                     self.assertEqual(connection.execute(f"SELECT * FROM {table}").fetchall(), rows)
                 self.assertEqual(
                     connection.execute("SELECT execution_scope FROM topics").fetchone()[0],
@@ -555,6 +563,7 @@ class MigrationTests(unittest.TestCase):
                         "created_at",
                         "updated_at",
                         "delivered_at",
+                        "send_started_at",
                     },
                 )
                 self.assertEqual(migrated.execute("PRAGMA integrity_check").fetchone()[0], "ok")
@@ -798,13 +807,13 @@ class MigrationTests(unittest.TestCase):
                     """INSERT INTO runtime_events
                        (component, level, code, detail, created_at)
                        VALUES ('controller', 'warning', 'legacy', 'kept',
-                               '2026-09-05T12:00:00+00:00')"""
+                               strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', '-1 day'))"""
                 )
                 connection.execute(
                     """INSERT INTO runtime_events
                        (component, level, code, detail, created_at)
                        VALUES ('controller', 'info', 'expired', 'removed',
-                               '2020-01-01T00:00:00+00:00')"""
+                               strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', '-31 days'))"""
                 )
                 connection.executescript(
                     """INSERT INTO topics
@@ -1139,13 +1148,12 @@ class MigrationTests(unittest.TestCase):
     def test_version_14_repairs_early_version_13_database(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
-            migrate_database(path, create_backup=False)
+            with mock.patch.object(migrations_module, "LATEST_SCHEMA_VERSION", 13):
+                migrate_database(path, create_backup=False)
             connection = sqlite3.connect(path)
             try:
-                remove_adoption_schema(connection)
                 connection.executescript(
-                    """DROP TABLE telegram_outbox_parts;
-                       DROP TABLE provider_job_absorptions;
+                    """DROP TABLE provider_job_absorptions;
                        DROP TABLE provider_stop_requests;
                        PRAGMA user_version = 13;"""
                 )

@@ -298,6 +298,57 @@ class TelegramUpdateTests(unittest.TestCase):
         update["message"]["chat"]["id"] = 987654321
         self.assertIsNone(parse_direct_message(update))
 
+    def test_private_plain_reply_retains_notice_identity_without_forum_anchor(self) -> None:
+        for reply_id in (1, 101):
+            with self.subTest(reply_id=reply_id):
+                update = {
+                    "update_id": 16,
+                    "message": {
+                        "message_id": 25,
+                        "chat": {"id": 123456789, "type": "private"},
+                        "from": {"id": 123456789, "is_bot": False},
+                        "text": "retry",
+                        "reply_to_message": {
+                            "message_id": reply_id,
+                            "from": {"is_bot": True, "username": "example_codex_bot"},
+                        },
+                    },
+                }
+                parsed = parse_direct_message(update)
+                assert parsed is not None
+                self.assertEqual(parsed.reply_to_message_id, reply_id)
+                self.assertIsNone(parsed.reply_to_username)
+                update["message"]["quote"] = {"text": "Example selected quote"}
+                quoted = parse_direct_message(update)
+                assert quoted is not None
+                self.assertIsNone(quoted.reply_to_message_id)
+                self.assertIsNone(quoted.reply_to_username)
+
+    def test_private_explicit_topic_anchor_is_not_a_notice_reply(self) -> None:
+        update = {
+            "update_id": 100,
+            "message": {
+                "message_id": 30,
+                "chat": {"id": 123456789, "type": "private"},
+                "from": {"id": 123456789},
+                "message_thread_id": 77,
+                "text": "retry",
+                "reply_to_message": {
+                    "message_id": 77,
+                    "from": {"is_bot": True, "username": "example_codex_bot"},
+                },
+            },
+        }
+        parsed = parse_direct_message(update)
+        assert parsed is not None
+        self.assertIsNone(parsed.reply_to_message_id)
+        self.assertIsNone(parsed.reply_to_username)
+        update["message"]["reply_to_message"]["message_id"] = 101
+        notice = parse_direct_message(update)
+        assert notice is not None
+        self.assertEqual(notice.reply_to_message_id, 101)
+        self.assertIsNone(notice.reply_to_username)
+
     def test_accepts_private_callback_only_when_chat_matches_sender(self) -> None:
         parsed = parse_direct_callback(
             {

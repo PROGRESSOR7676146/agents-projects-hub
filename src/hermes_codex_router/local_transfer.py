@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .antigravity_model import model_arguments
+from .codex_permissions import MANAGED_LOCAL_REFUSAL
 
 
 class LocalTransferError(ValueError):
@@ -35,7 +36,10 @@ def local_resume_command(
     model: str | None = None,
     effort: str | None = None,
     codex_socket_path: Path | None = None,
+    permission_profile: str | None = None,
 ) -> LocalResumeCommand:
+    if runtime == "codex" and permission_profile is not None:
+        raise LocalTransferError(MANAGED_LOCAL_REFUSAL)
     session_id = provider_session_id.strip()
     if not session_id:
         raise LocalTransferError("provider session id is empty")

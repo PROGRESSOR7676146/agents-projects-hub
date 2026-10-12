@@ -44,7 +44,7 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertFalse(config.state_path.parent.exists())
 
             older = replace(config, state_path=root / "state.db")
-            HubState.open(older.state_path).close()
+            HubState.open(older.state_path, codex_permission_profile=None).close()
             with closing(sqlite3.connect(older.state_path)) as connection, connection:
                 connection.execute(f"PRAGMA user_version = {LATEST_SCHEMA_VERSION - 1}")
             unsupported = state_check(run_doctor(older))

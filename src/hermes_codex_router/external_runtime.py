@@ -15,6 +15,21 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from .antigravity_model import model_arguments
+from .claude_cli_capabilities import (
+    ClaudeCliCapabilities,
+    ClaudeCliCapabilityError,
+    ClaudeCliUnavailableError,
+)
+from .claude_file_policy import file_tool_argv, require_file_tool_event, wrap_file_tool_argv
+from .claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
+from .claude_image_input import (
+    MAX_CLAUDE_INPUT_BYTES,
+    ClaudeImageInputError,
+    VerifiedClaudeImage,
+    encode_claude_image_input,
+)
+from .claude_image_receipt import ClaudeImageReceipt
+from .claude_native_settings import text_only_settings
 from .claude_stream import (
     MAX_CLAUDE_STDERR_BYTES,
     ClaudeStreamError,
@@ -22,6 +37,8 @@ from .claude_stream import (
     VisibleAssistantCallback,
     parse_claude_stream,
 )
+from .diagnostic_log import survived
+from .owned_process_exit import peek_exit_code
 from .provider_limits import ProviderLimit, parse_antigravity_limit, parse_opencode_limit
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
@@ -149,28 +166,34 @@ class ExternalCliAdapter:
         self._process_lock = threading.Lock()
         self._active_process: subprocess.Popen[str] | None = None
         self._interrupt_requested = threading.Event()
+        self._claude_capabilities = ClaudeCliCapabilities()
 
     def interrupt(self) -> bool:
         """Terminate only this adapter's active provider process group."""
         self._interrupt_requested.set()
         with self._process_lock:
             process = self._active_process
-        if process is None or process.poll() is not None:
-            return False
-        try:
-            # This path is reserved for the user's emergency stop.  A provider
-            # may ignore SIGTERM while it is inside its own model/runtime loop,
-            # so terminate the isolated process group deterministically.
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            return False
-        return True
+            if process is None:
+                return False
+            exit_code = peek_exit_code(process) if self.runtime == "claude" else process.poll()
+            if exit_code is not None:
+                return False
+            try:
+                # Serialize observation and signal with cleanup/reaping so
+                # an emergency stop cannot target a recycled process group.
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return False
+            return True
 
     def prepare_interruptible_turn(self) -> None:
         """Clear a prior interrupt before a worker starts its monitor."""
         with self._process_lock:
-            if self._active_process is not None and self._active_process.poll() is None:
-                raise ExternalRuntimeError("provider process is already active")
+            if self._active_process is not None:
+                process = self._active_process
+                exit_code = peek_exit_code(process) if self.runtime == "claude" else process.poll()
+                if exit_code is None:
+                    raise ExternalRuntimeError("provider process is already active")
             self._interrupt_requested.clear()
 
     def build_argv(
@@ -182,6 +205,7 @@ class ExternalCliAdapter:
         model: str | None = None,
         effort: str | None = None,
         new_session_id: str | None = None,
+        structured_input: bool = False,
     ) -> tuple[str, ...]:
         canonical_cwd = cwd.expanduser().resolve(strict=True)
         if not prompt.strip():
@@ -248,6 +272,8 @@ class ExternalCliAdapter:
                 "--verbose",
                 "--restricted",
                 "--safe-mode",
+                "--settings",
+                text_only_settings(),
                 "--strict-mcp-config",
                 "--disable-slash-commands",
                 "--permission-mode",
@@ -270,7 +296,10 @@ class ExternalCliAdapter:
                     )
                 argv.extend(("--effort", effort))
             # `--tools` is variadic, so the prompt must not directly follow it.
-            argv.extend(("--", prompt))
+            if structured_input:
+                argv.extend(("--input-format", "stream-json", "--replay-user-messages"))
+            else:
+                argv.extend(("--", prompt))
             return tuple(argv)
         argv = [
             self.executable,
@@ -302,6 +331,9 @@ class ExternalCliAdapter:
         staging_dir: Path | None = None,
         new_session_id: str | None = None,
         on_visible_assistant: VisibleAssistantCallback | None = None,
+        on_claude_process_started: Callable[[], None] | None = None,
+        claude_sandbox: FileToolSandboxConfig | None = None,
+        claude_images: tuple[VerifiedClaudeImage, ...] = (),
     ) -> ExternalTurnResult:
         argv = self.build_argv(
             cwd=cwd,
@@ -310,10 +342,19 @@ class ExternalCliAdapter:
             model=model,
             effort=effort,
             new_session_id=new_session_id,
+            structured_input=bool(claude_images),
         )
         environment = os.environ.copy()
-        if self.runtime == "claude":
-            _claude_cpa_environment(environment)
+        input_data = self._prepare_claude_input(
+            prompt, claude_images, session_id or new_session_id, claude_sandbox, environment
+        )
+        if claude_sandbox is not None:
+            if self.runtime != "claude" or not self._uses_default_runner:
+                raise ProviderUnavailableError(
+                    "claude_permission_host_unverified",
+                    "Claude file tools require the owned process runner.",
+                )
+            argv = file_tool_argv(argv, claude_sandbox)
         if staging_dir is not None:
             environment["HUB_STAGING_DIR"] = str(staging_dir)
             environment["HUB_ARTIFACTS_DIR"] = str(staging_dir)
@@ -326,13 +367,16 @@ class ExternalCliAdapter:
         owned_antigravity_log = False
         active_antigravity_log_path: Path | None = None
         if self._uses_default_runner and self.runtime == "claude":
-            result = self._run_claude_process(
+            result = self._run_owned_claude_turn(
                 argv,
                 cwd=cwd,
                 environment=environment,
                 timeout=timeout,
                 expected_session_id=session_id if session_id is not None else new_session_id,
                 on_visible_assistant=on_visible_assistant,
+                on_process_started=on_claude_process_started,
+                sandbox=claude_sandbox,
+                input_data=input_data,
             )
         elif self._uses_default_runner:
             if self.runtime == "antigravity":
@@ -470,7 +514,146 @@ class ExternalCliAdapter:
             new_session_id=new_session_id,
             model=model,
             antigravity_log=antigravity_log,
+            event_policy=require_file_tool_event if claude_sandbox is not None else None,
         )
+
+    def _prepare_claude_input(
+        self,
+        prompt: str,
+        images: tuple[VerifiedClaudeImage, ...],
+        session_id: str | None,
+        sandbox: FileToolSandboxConfig | None,
+        environment: dict[str, str],
+    ) -> bytes | None:
+        if self.runtime == "claude":
+            _claude_cpa_environment(environment)
+        if not images:
+            return None
+        if (
+            self.runtime != "claude"
+            or not self._uses_default_runner
+            or sandbox is not None
+            or session_id is None
+        ):
+            raise ProviderUnavailableError(
+                "claude_image_input_unverified",
+                "Claude image input requires the owned tools-disabled runner.",
+            )
+        try:
+            return encode_claude_image_input(prompt, images, session_id)
+        except ClaudeImageInputError:
+            raise ProviderUnavailableError(
+                "claude_image_input_unverified",
+                "Claude image input failed bounded preparation; the turn was not started.",
+            ) from None
+
+    def _run_owned_claude_turn(
+        self,
+        argv: tuple[str, ...],
+        *,
+        cwd: Path,
+        environment: dict[str, str],
+        timeout: float,
+        expected_session_id: str | None,
+        on_visible_assistant: VisibleAssistantCallback | None,
+        on_process_started: Callable[[], None] | None,
+        sandbox: FileToolSandboxConfig | None,
+        input_data: bytes | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Own mount descriptors across every productive invocation exit path."""
+        if sandbox is not None and input_data is not None:
+            raise ProviderUnavailableError(
+                "claude_image_input_unverified",
+                "Claude image input requires the owned tools-disabled runner.",
+            )
+        if sandbox is None:
+            try:
+                receipt = (
+                    ClaudeImageReceipt(input_data, expected_session_id=expected_session_id)
+                    if input_data is not None
+                    else None
+                )
+            except ClaudeImageInputError:
+                raise ProviderUnavailableError(
+                    "claude_image_input_unverified",
+                    "Claude image input failed bounded preparation.",
+                ) from None
+            argv = self._verified_claude_argv(
+                argv, cwd=cwd, environment=environment, image_input=input_data is not None
+            )
+            return self._run_claude_process(
+                argv,
+                cwd=cwd,
+                environment=environment,
+                timeout=timeout,
+                expected_session_id=expected_session_id,
+                on_visible_assistant=on_visible_assistant,
+                on_process_started=on_process_started,
+                input_data=input_data,
+                image_receipt=receipt,
+            )
+        try:
+            argv = (str(sandbox.claude_executable), *argv[1:])
+            launch = wrap_file_tool_argv(argv, environment, cwd, sandbox)
+        except FileToolSandboxError:
+            raise ProviderUnavailableError(
+                "claude_permission_host_unverified",
+                "Claude file-tool isolation could not be verified. The productive turn was not started.",
+            ) from None
+        with launch:
+            verified = self._verified_claude_argv(
+                argv, cwd=cwd, environment=environment, file_tools=True
+            )
+            if verified[0] != argv[0]:
+                raise ProviderUnavailableError(
+                    "claude_permission_host_unverified",
+                    "Claude executable differs from the validated runtime.",
+                )
+            return self._run_claude_process(
+                launch.argv,
+                cwd=Path("/"),
+                environment=launch.environment,
+                timeout=timeout,
+                expected_session_id=expected_session_id,
+                on_visible_assistant=on_visible_assistant,
+                on_process_started=on_process_started,
+                event_policy=require_file_tool_event,
+                pass_fds=launch.pass_fds,
+            )
+
+    def _verified_claude_argv(
+        self,
+        argv: tuple[str, ...],
+        *,
+        cwd: Path,
+        environment: dict[str, str],
+        file_tools: bool = False,
+        image_input: bool = False,
+    ) -> tuple[str, ...]:
+        """Bind advertised isolation controls to the executable before invocation."""
+        if self._interrupt_requested.is_set():
+            raise ExternalTurnInterrupted("claude turn interrupted by user")
+        try:
+            executable = self._claude_capabilities.require(
+                argv[0] if file_tools else self.executable,
+                cwd=cwd,
+                environment=environment,
+                interrupted=self._interrupt_requested,
+                file_tools=file_tools,
+                image_input=image_input,
+            )
+        except ClaudeCliUnavailableError:
+            raise ProviderUnavailableError(
+                "claude_cli_unavailable", "Claude CLI could not be started."
+            ) from None
+        except ClaudeCliCapabilityError:
+            if self._interrupt_requested.is_set():
+                raise ExternalTurnInterrupted("claude turn interrupted by user") from None
+            raise ProviderUnavailableError(
+                "claude_cli_capabilities_unverified",
+                "Claude CLI isolation controls could not be verified. The productive turn was not started.",
+            ) from None
+        return (executable, *argv[1:])
 
     def _run_claude_process(
         self,
@@ -481,20 +664,44 @@ class ExternalCliAdapter:
         timeout: float,
         expected_session_id: str | None,
         on_visible_assistant: VisibleAssistantCallback | None,
+        on_process_started: Callable[[], None] | None = None,
+        event_policy: Callable[[dict[str, object]], None] | None = None,
+        pass_fds: tuple[int, ...] = (),
+        input_data: bytes | None = None,
+        image_receipt: ClaudeImageReceipt | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Drain both pipes without communicate() or an unbounded reader queue."""
         if self._interrupt_requested.is_set():
             raise ExternalTurnInterrupted("claude turn interrupted by user")
+        if input_data is not None and (
+            not isinstance(input_data, bytes) or len(input_data) > MAX_CLAUDE_INPUT_BYTES
+        ):
+            raise ProviderUnavailableError(
+                "claude_image_input_unverified",
+                "Claude input exceeds the bounded native input contract.",
+            )
+        if image_receipt is not None and input_data is None:
+            raise ProviderUnavailableError(
+                "claude_image_input_unverified", "Claude image receipt has no bounded input."
+            )
+        reader = ClaudeStreamReader(
+            expected_session_id=expected_session_id,
+            on_visible_assistant=on_visible_assistant,
+            event_policy=event_policy,
+            image_receipt=image_receipt,
+        )
         try:
             process = subprocess.Popen(
                 argv,
                 cwd=cwd,
                 env=environment,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 start_new_session=True,
+                close_fds=True,
+                pass_fds=pass_fds,
             )
         except OSError as exc:
             raise ProviderUnavailableError(
@@ -502,17 +709,26 @@ class ExternalCliAdapter:
             ) from exc
         with self._process_lock:
             self._active_process = process
-        reader = ClaudeStreamReader(
-            expected_session_id=expected_session_id, on_visible_assistant=on_visible_assistant
-        )
         deadline = time.monotonic() + timeout
         diagnostic_bytes = 0
+        input_offset = 0
         try:
+            if on_process_started is not None:
+                try:
+                    on_process_started()
+                except Exception as error:
+                    survived("external_runtime.claude_process_observer", error)
             assert process.stdout is not None and process.stderr is not None
             with selectors.DefaultSelector() as selector:
                 for pipe in (process.stdout, process.stderr):
                     os.set_blocking(pipe.fileno(), False)
                     selector.register(pipe, selectors.EVENT_READ)
+                if process.stdin is not None:
+                    if input_data:
+                        os.set_blocking(process.stdin.fileno(), False)
+                        selector.register(process.stdin, selectors.EVENT_WRITE)
+                    else:
+                        process.stdin.close()
                 while selector.get_map():
                     if self._interrupt_requested.is_set():
                         raise ExternalTurnInterrupted("claude turn interrupted by user")
@@ -520,9 +736,30 @@ class ExternalCliAdapter:
                     if remaining <= 0:
                         raise subprocess.TimeoutExpired(argv, timeout)
                     for key, _ in selector.select(min(0.1, remaining)):
+                        if key.fileobj is process.stdin:
+                            assert input_data is not None
+                            assert process.stdin is not None
+                            try:
+                                written = os.write(
+                                    key.fd,
+                                    memoryview(input_data)[input_offset : input_offset + 65536],
+                                )
+                            except (BlockingIOError, InterruptedError):
+                                continue
+                            except BrokenPipeError:
+                                raise ClaudeStreamError(
+                                    "claude input transfer incomplete"
+                                ) from None
+                            if written <= 0:
+                                raise ClaudeStreamError("claude input transfer incomplete")
+                            input_offset += written
+                            if input_offset == len(input_data):
+                                selector.unregister(key.fileobj)
+                                process.stdin.close()
+                            continue
                         try:
                             chunk = os.read(key.fd, 65536)
-                        except BlockingIOError:
+                        except (BlockingIOError, InterruptedError):
                             continue
                         if not chunk:
                             selector.unregister(key.fileobj)
@@ -537,11 +774,17 @@ class ExternalCliAdapter:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(argv, timeout)
-                process.wait(timeout=remaining)
+                while (exit_code := peek_exit_code(process)) is None:
+                    if self._interrupt_requested.is_set():
+                        raise ExternalTurnInterrupted("claude turn interrupted by user")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(argv, timeout)
+                    self._interrupt_requested.wait(min(0.05, remaining))
             stdout = reader.finish()
             if time.monotonic() >= deadline:
                 raise subprocess.TimeoutExpired(argv, timeout)
-            return subprocess.CompletedProcess(argv, process.returncode, stdout, "")
+            return subprocess.CompletedProcess(argv, exit_code, stdout, "")
         except subprocess.TimeoutExpired:
             self._terminate_claude_process(process, graceful=True)
             if self._interrupt_requested.is_set():
@@ -555,32 +798,40 @@ class ExternalCliAdapter:
             # Kill the owned group even if its leader exited while a descendant
             # retained a pipe. Never leave children after protocol/callback errors.
             try:
-                self._terminate_claude_process(process, graceful=False)
-                for pipe in (process.stdout, process.stderr):
-                    if pipe is not None:
-                        pipe.close()
+                try:
+                    self._terminate_claude_process(process, graceful=False)
+                finally:
+                    for pipe in (process.stdin, process.stdout, process.stderr):
+                        if pipe is not None:
+                            pipe.close()
             finally:
                 with self._process_lock:
                     if self._active_process is process:
                         self._active_process = None
 
-    @staticmethod
-    def _terminate_claude_process(process: subprocess.Popen[str], *, graceful: bool) -> None:
-        try:
-            os.killpg(process.pid, signal.SIGTERM if graceful else signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        if graceful:
+    def _terminate_claude_process(self, process: subprocess.Popen[str], *, graceful: bool) -> None:
+        with self._process_lock:
+            if process.returncode is not None:
+                return
             try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
-        if process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
+                os.killpg(process.pid, signal.SIGTERM if graceful else signal.SIGKILL)
             except ProcessLookupError:
                 pass
-        process.wait(timeout=5)
+            if graceful:
+                # Reserve the leader PID until the last group signal. The
+                # stop event can shorten this wait without acquiring the lock.
+                deadline = time.monotonic() + 5
+                while (
+                    peek_exit_code(process) is None
+                    and time.monotonic() < deadline
+                    and not self._interrupt_requested.is_set()
+                ):
+                    time.sleep(0.01)
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            process.wait(timeout=5)
 
     def _parse_result(
         self,
@@ -590,6 +841,7 @@ class ExternalCliAdapter:
         new_session_id: str | None,
         model: str | None,
         antigravity_log: str,
+        event_policy: Callable[[dict[str, object]], None] | None = None,
     ) -> ExternalTurnResult:
         """Interpret an exited process separately from its lifecycle and stop."""
         if self.runtime == "claude":
@@ -598,6 +850,7 @@ class ExternalCliAdapter:
                 expected_session_id=session_id if session_id is not None else new_session_id,
                 requested_model=model,
                 returncode=result.returncode,
+                event_policy=event_policy,
             )
             return ExternalTurnResult("claude", parsed.text, parsed.session_id, parsed.model)
         if result.returncode != 0:

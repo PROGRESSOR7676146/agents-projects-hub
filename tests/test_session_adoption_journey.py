@@ -50,7 +50,7 @@ class SessionAdoptionJourneyTests(unittest.TestCase):
     def journey(self, fixture, replacement, mode, route=None, source="openai"):
         config = replace(fixture.config, codex_model_provider=route)
         registry = load_registry(config.registry_path)
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             topic = state.find_topic(-1001234567890, 7)
             assert topic is not None
@@ -70,6 +70,7 @@ class SessionAdoptionJourneyTests(unittest.TestCase):
             calls = []
             root = fixture.root
             backend = source
+            native_turn_count = 0
 
             class Client(worker_fixtures.WorkerClient):
                 def read_thread_metadata(self, **kwargs):
@@ -86,9 +87,12 @@ class SessionAdoptionJourneyTests(unittest.TestCase):
                     return CodexThread("example-thread", root, "gpt-5.6-sol", backend)
 
                 def start_turn(self, **kwargs):
+                    nonlocal native_turn_count
                     calls.append(("turn", kwargs["thread_id"]))
                     assert "Old topic quote" not in kwargs["text"]
-                    return super().start_turn(**kwargs)
+                    native_turn_count += 1
+                    super().start_turn(**kwargs)
+                    return f"example-turn-{native_turn_count}"
 
                 def wait_for_turn(self, turn_id):
                     return TurnResult(" | ".join(native_history), None, None)
@@ -152,7 +156,7 @@ class SessionAdoptionJourneyTests(unittest.TestCase):
             self.assertEqual(len([name for name, _ in calls if name == "turn"]), 1)
             # Reopen Hub state and construct a fresh worker/client: no in-memory binding.
             state.close()
-            state = HubState.open(config.state_path)
+            state = HubState.open(config.state_path, codex_permission_profile=None)
             service.state = state
             self.assertTrue(send(31, "Continue after local work"))
             second = deliver()

@@ -9,9 +9,32 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
+from .migration_sql import _execute_migration_script
+from .schema_claude_activity import CLAUDE_ACTIVITY_SCHEMA as MIGRATION_42
+from .schema_claude_material_notice import CLAUDE_MATERIAL_NOTICE_SCHEMA as MIGRATION_53
+from .schema_claude_material_notice import ensure_claude_material_notice_column
+from .schema_claude_permissions import CLAUDE_PERMISSIONS_SCHEMA as MIGRATION_38
+from .schema_codex_permissions import (
+    CODEX_PERMISSIONS_SCHEMA as MIGRATION_39,
+)
+from .schema_codex_permissions import (
+    ensure_codex_permission_columns,
+)
+from .schema_codex_turn_controls import CODEX_TURN_CONTROLS_SCHEMA as MIGRATION_48
 from .schema_compatibility import TARGET_SCHEMA_VERSION
+from .schema_delivery_certainty import DELIVERY_CERTAINTY_SCHEMA as MIGRATION_43
+from .schema_delivery_control import DELIVERY_CONTROL_SCHEMA as MIGRATION_46
+from .schema_delivery_control_activation import DELIVERY_CONTROL_ACTIVATION_SCHEMA as MIGRATION_47
+from .schema_delivery_holds import DELIVERY_HOLD_SCHEMA as MIGRATION_44
+from .schema_ingress_assessments import INGRESS_ASSESSMENT_SCHEMA as MIGRATION_51
+from .schema_ingress_control import INGRESS_CONTROL_SCHEMA as MIGRATION_52
+from .schema_outcome_assessments import OUTCOME_ASSESSMENT_SCHEMA as MIGRATION_45
+from .schema_preacceptance_approvals import PREACCEPTANCE_APPROVAL_SCHEMA as MIGRATION_40
+from .schema_preexecution_retry import PREEXECUTION_RETRY_SCHEMA as MIGRATION_41
 from .schema_task_activity import TASK_ACTIVITY_SCHEMA as MIGRATION_37
 from .schema_task_lifecycle import MIGRATION_36
+from .schema_telegram_ingress import TELEGRAM_INGRESS_SCHEMA as MIGRATION_49
+from .schema_telegram_turn_provenance import TELEGRAM_TURN_PROVENANCE_SCHEMA as MIGRATION_50
 
 LATEST_SCHEMA_VERSION = TARGET_SCHEMA_VERSION
 
@@ -1431,28 +1454,6 @@ def _ensure_hold_decision_columns(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE provider_job_holds ADD COLUMN decided_at TEXT")
 
 
-def _execute_migration_script(connection: sqlite3.Connection, script: str) -> None:
-    """Execute one trusted migration script without sqlite3's implicit COMMIT.
-
-    ``Connection.executescript`` commits an open transaction before executing
-    its input.  Migrations must instead remain inside the surrounding
-    ``BEGIN IMMEDIATE`` so a DDL or retention fault restores the exact
-    pre-migration database, including writes which committed after the backup
-    snapshot was taken.
-    """
-    pending: list[str] = []
-    for line in script.splitlines(keepends=True):
-        pending.append(line)
-        statement = "".join(pending)
-        if not sqlite3.complete_statement(statement):
-            continue
-        if statement.strip():
-            connection.execute(statement)
-        pending.clear()
-    if "".join(pending).strip():
-        raise RuntimeError("incomplete SQLite migration statement")
-
-
 def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
     connection.execute("PRAGMA busy_timeout = 5000")
     connection.execute("PRAGMA foreign_keys = ON")
@@ -1500,6 +1501,22 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_35,
         MIGRATION_36,
         MIGRATION_37,
+        MIGRATION_38,
+        MIGRATION_39,
+        MIGRATION_40,
+        MIGRATION_41,
+        MIGRATION_42,
+        MIGRATION_43,
+        MIGRATION_44,
+        MIGRATION_45,
+        MIGRATION_46,
+        MIGRATION_47,
+        MIGRATION_48,
+        MIGRATION_49,
+        MIGRATION_50,
+        MIGRATION_51,
+        MIGRATION_52,
+        MIGRATION_53,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:
@@ -1513,6 +1530,18 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
                     _ensure_input_group_key_column(connection)
                 if version == 35:
                     _ensure_hold_decision_columns(connection)
+                if version == 39:
+                    ensure_codex_permission_columns(connection)
+                if version == 53:
+                    ensure_claude_material_notice_column(connection)
+                if (
+                    version == 47
+                    and connection.execute(
+                        "SELECT 1 FROM telegram_delivery_control_dispositions LIMIT 1"
+                    ).fetchone()
+                    is not None
+                ):
+                    raise RuntimeError("schema46 control ledger must be empty before activation")
                 _execute_migration_script(connection, script)
                 if version == 1:
                     _ensure_legacy_columns(connection)
@@ -1520,6 +1549,8 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
             check = connection.execute("PRAGMA integrity_check").fetchone()
             if check is None or check[0] != "ok":
                 raise RuntimeError("SQLite integrity check failed during migration")
+            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise RuntimeError("SQLite foreign key check failed during migration")
             connection.commit()
         except Exception:
             connection.rollback()

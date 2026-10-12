@@ -71,6 +71,26 @@ class SystemdTopologyTests(unittest.TestCase):
                 self.assertIn("PrivateTmp=true", unit)
                 self.assertIn("BindPaths=-/tmp/codex-daemon-%U", unit)
 
+    def test_socket_bind_source_exists_before_codex_workers_start(self) -> None:
+        prepare = self.unit("agents-projects-hub-codex-socket-dir.service")
+        self.assertIn("Type=oneshot", prepare)
+        self.assertIn("prepare-codex-socket-dir", prepare)
+        for name in (
+            "agents-projects-hub.service",
+            "agents-projects-hub-worker@.service",
+            "agents-projects-hub-codex-worker@.service",
+            "agents-projects-hub-monitor.service",
+            "agents-projects-hub@.service",
+            "tlive.service",
+        ):
+            with self.subTest(unit=name):
+                unit = self.unit(name)
+                self.assertIn("Wants=agents-projects-hub-codex-socket-dir.service", unit)
+                self.assertNotIn("Requires=agents-projects-hub-codex-socket-dir.service", unit)
+                self.assertIn("After=agents-projects-hub-codex-socket-dir.service", unit)
+        installer = (self.root / "scripts" / "install.sh").read_text(encoding="utf-8")
+        self.assertIn("agents-projects-hub-codex-socket-dir.service", installer)
+
     def test_monitor_timer_schedules_from_each_activation(self) -> None:
         timer = self.unit("agents-projects-hub-monitor.timer")
         self.assertIn("OnActiveSec=5min", timer)

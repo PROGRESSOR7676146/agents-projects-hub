@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .delivery_control_predicates import result_ready_control_reconciled
+
 if TYPE_CHECKING:
     from .state import HubState, ProviderJobRecord
 
@@ -77,8 +79,10 @@ class TurnContinuationState:
         notice_message_id: int,
         reply_message_id: int,
         canonical_root: Path,
+        telegram_ingress_identity: str | None = None,
     ) -> tuple[ProviderJobRecord, bool, int]:
         from .state import StateError
+        from .state_errors import CodexPermissionSelectionChanged
 
         root = canonical_root.resolve(strict=True)
         now = datetime.now(timezone.utc).isoformat()
@@ -135,11 +139,22 @@ class TurnContinuationState:
             ).fetchone()
             if prior is not None:
                 return self.state.get_provider_job(str(prior["continuation_job_id"])), False, 0
+            from .codex_control_predicates import require_control_scope_clear
+
+            require_control_scope_clear(self.connection, "root:" + str(root))
+            session = self.state.get_session(str(old["session_id"]))
+            if not (
+                old["codex_permission_profile"]
+                == session.codex_permission_profile
+                == self.state.codex_permission_profile
+            ):
+                raise CodexPermissionSelectionChanged()
             conflict = self.connection.execute(
-                """SELECT 1 FROM provider_jobs jobs
+                f"""SELECT 1 FROM provider_jobs jobs
                    JOIN topics topics ON topics.topic_id = jobs.topic_id
                    WHERE topics.execution_scope = ? AND jobs.job_id != ? AND (
-                     jobs.status IN ('leased', 'executing', 'result_ready')
+                     (jobs.status IN ('leased', 'executing', 'result_ready')
+                      AND NOT {result_ready_control_reconciled("jobs")})
                      OR (jobs.status IN ('queued', 'retry_wait') AND NOT EXISTS (
                        SELECT 1 FROM provider_job_holds holds WHERE holds.job_id = jobs.job_id
                          AND holds.decision = 'pending'
@@ -197,9 +212,9 @@ class TurnContinuationState:
                 """INSERT INTO provider_jobs (
                      job_id, idempotency_key, chat_id, message_id, topic_id, topic_sequence,
                      agent_id, session_id, session_generation, provider_session_id,
-                     model, effort, payload_text, status, attempt_count, max_attempts,
+                     model, effort, payload_text, codex_permission_profile, status, attempt_count, max_attempts,
                      created_at, updated_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, 'codex', ?, ?, ?, ?, ?, ?, 'queued', 0, 1, ?, ?)""",
+                   ) VALUES (?, ?, ?, ?, ?, ?, 'codex', ?, ?, ?, ?, ?, ?, ?, 'queued', 0, 1, ?, ?)""",
                 (
                     job_id,
                     "continuation:" + source_job_id,
@@ -213,9 +228,13 @@ class TurnContinuationState:
                     old["model"],
                     old["effort"],
                     CONTINUATION_PROMPT,
+                    old["codex_permission_profile"],
                     now,
                     now,
                 ),
+            )
+            self.state.telegram_turn_provenance.record_new_job_in_transaction(
+                job_id, telegram_ingress_identity
             )
             self.connection.execute(
                 "UPDATE topic_queue_counters SET next_sequence = next_sequence + 1, "

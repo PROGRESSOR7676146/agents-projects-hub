@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import closing
 from typing import Any, cast
 
 import test_codex_worker as fixtures
@@ -45,7 +46,7 @@ class ExistingLocalReconciliationTests(unittest.TestCase):
         finally:
             worker.close()
 
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         try:
             old = state.get_provider_job(self.job_id)
             self.session_id = old.session_id
@@ -76,6 +77,29 @@ class ExistingLocalReconciliationTests(unittest.TestCase):
         arguments.update(overrides)
         return reconcile_existing_local(self.fixture.config, **arguments)
 
+    def test_exact_terminal_proof_cannot_release_unquiesced_control_sender(self) -> None:
+        with closing(
+            HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
+        ) as state:
+            with state._immediate_transaction():
+                state._connection.execute(
+                    """UPDATE codex_turn_controls SET send_started_at='example-start',
+                       send_owner_token_hash='example-crashed-owner',interrupt_source='protective'
+                       WHERE job_id=?""",
+                    (self.job_id,),
+                )
+        with self.assertRaises(StateError):
+            self.reconcile(apply=True, confirm_cli_closed=True)
+        with closing(
+            HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
+        ) as state:
+            self.assertEqual(state.get_session(self.session_id).writer_mode, "telegram")
+            self.assertIsNone(
+                state._connection.execute(
+                    "SELECT 1 FROM provider_turn_terminal_evidence WHERE job_id=?", (self.job_id,)
+                ).fetchone()
+            )
+
     def test_preview_and_exact_closed_cli_claim_preserve_old_job_and_session(self) -> None:
         preview = self.reconcile()
         self.assertEqual((preview.writer_mode, preview.old_turn_status), ("telegram", "failed"))
@@ -91,7 +115,7 @@ class ExistingLocalReconciliationTests(unittest.TestCase):
         self.assertTrue(applied.changed)
         repeated = self.reconcile(apply=True, confirm_cli_closed=True)
         self.assertFalse(repeated.changed)
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         try:
             old = state.get_provider_job(self.job_id)
             session = state.get_session(self.session_id)
@@ -119,14 +143,14 @@ class ExistingLocalReconciliationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(StateError, "idle terminal turn"):
             self.reconcile(apply=True, confirm_remote_idle=True, inspector=active)
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         try:
             self.assertEqual(state.get_session(self.session_id).writer_mode, "telegram")
         finally:
             state.close()
 
     def test_queued_tail_is_held_during_closed_cli_reconciliation(self) -> None:
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         try:
             old = state.get_provider_job(self.job_id)
             # Recreate an already accepted pre-upgrade tail. New admission
@@ -150,7 +174,7 @@ class ExistingLocalReconciliationTests(unittest.TestCase):
             state.close()
         result = self.reconcile(apply=True, confirm_cli_closed=True)
         self.assertEqual(result.writer_mode, "local")
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         try:
             held = state._connection.execute(
                 "SELECT cause_job_id FROM provider_job_holds WHERE job_id = ?", (tail.job_id,)
@@ -164,7 +188,7 @@ class ExistingLocalReconciliationTests(unittest.TestCase):
             state.close()
 
     def test_remote_idle_assertion_and_other_topic_writer_on_same_root(self) -> None:
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",
@@ -183,7 +207,7 @@ class ExistingLocalReconciliationTests(unittest.TestCase):
             state.close()
         with self.assertRaisesRegex(StateError, "another writer"):
             self.reconcile(apply=True, confirm_remote_idle=True)
-        state = HubState.open(self.fixture.config.state_path)
+        state = HubState.open(self.fixture.config.state_path, codex_permission_profile=None)
         try:
             with state._immediate_transaction():
                 state._connection.execute(

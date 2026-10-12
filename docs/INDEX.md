@@ -1,5 +1,7 @@
 # Documentation map
 
+Source-release checkpoint: [0.8.0](operations/RELEASE_0_8_0.md).
+
 This repository documents only reusable product behavior. Deployment inventory,
 operator identities, real project names, session exports, and live transcripts
 are intentionally excluded.
@@ -14,23 +16,30 @@ and the [decision map](decisions/README.md) routes durable rationale.
 The completed [requirements split](product/REQUIREMENTS_SPLIT_PLAN.md) is
 migration rationale, not a routine prerequisite or another specification.
 
-For Claude Code/Codex integration, read the accepted
-[lead/advisor plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md) and its
+For Claude Code integration, read the revised
+[parity/approval plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md) and its
 [next development task](operations/NEXT_DEVELOPMENT_SESSION.md) after the
-baseline above. Check [status](status/PROJECT_STATUS.md) for the implemented
-subset; the plan's accepted role choices are not a claim of runtime parity.
+baseline above. Hub roles are retired by [ADR 0065](decisions/0065-retire-hub-lead-advisor.md).
+Check [status](status/PROJECT_STATUS.md) for the implemented subset and separate
+live acceptance.
 
 ## Delivery and operation
 
 - [Stabilization plan and live-acceptance backlog](operations/STABILIZATION_PLAN.md)
 - [Roadmap](ROADMAP.ru.md)
 - [Next development session](operations/NEXT_DEVELOPMENT_SESSION.md)
-- [Claude Code and Codex: bounded lead/advisor plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
+- [Claude Code: project editor and human approval plan](operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md)
+- [Claude protected file-tool candidate](operations/CLAUDE_FILE_PERMISSIONS.md)
+- [Claude authority custody preparation](operations/CLAUDE_CUSTODY.md)
+- [Exact-job outcome diagnostics](operations/OUTCOME_JOURNAL.md)
+- [Passive incident journal and runbook catalogue](operations/INCIDENT_JOURNAL.md)
+- [Hermes incident notices and dismiss](operations/HERMES_INCIDENT_NOTICES.md)
 - [Inbound materials implementation plan](operations/INBOUND_MATERIALS_PLAN.md)
 - [Operations](operations/README.md)
 - [Queue and process recovery](operations/QUEUE_RECOVERY.md)
 - [Live canary and rollback](operations/LIVE_CANARY.md)
 - [Release metadata synchronization](operations/RELEASE_METADATA.md)
+- [Stabilization release 0.7.1](operations/STABILIZATION_RELEASE_0_7_1.md)
 - [Recovery plane](RECOVERY_PLANE.ru.md)
 - [Reciprocal recovery capsules](operations/RECOVERY_CAPSULES.md)
 - [Off-machine WSL recovery plan](operations/WSL_OFF_MACHINE_RECOVERY.md)

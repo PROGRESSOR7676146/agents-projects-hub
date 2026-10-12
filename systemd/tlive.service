@@ -2,6 +2,8 @@
 Description=tlive Telegram monitoring and Codex remote approvals
 After=network-online.target
 Wants=network-online.target
+Wants=agents-projects-hub-codex-socket-dir.service
+After=agents-projects-hub-codex-socket-dir.service
 
 [Service]
 Type=simple

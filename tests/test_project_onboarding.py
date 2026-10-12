@@ -237,7 +237,7 @@ class ProjectOnboardingTests(unittest.TestCase):
         self.tempdir.cleanup()
 
     def prepare_workflow(self, *, required_owner_ids: tuple[int, ...] | None = None) -> str:
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             store = ProjectOnboardingStore(state)
             workflow = store.start(owner_user_id=42, allowed_roots=(self.allowed,))
@@ -283,7 +283,7 @@ class ProjectOnboardingTests(unittest.TestCase):
                 ("example_codex_bot",),
             ),
         )
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             store = ProjectOnboardingStore(state)
             self.assertEqual(store.get(workflow_id).stage, "completed")
@@ -350,7 +350,7 @@ class ProjectOnboardingTests(unittest.TestCase):
             )
 
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
-        controller.state = HubState.open(self.config.state_path)
+        controller.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         controller.telegram = TelegramBotApi("123:example", opener=rate_limited_opener)
         try:
             self.assertTrue(controller.run_project_onboarding_outbox_cycle())
@@ -392,7 +392,7 @@ class ProjectOnboardingTests(unittest.TestCase):
                 return 0
 
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
-        controller.state = HubState.open(self.config.state_path)
+        controller.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         controller.telegram = MissingMessageIdTelegram()
         try:
             self.assertTrue(controller.run_project_onboarding_outbox_cycle())
@@ -425,7 +425,7 @@ class ProjectOnboardingTests(unittest.TestCase):
             self.assertFalse(worker.run_cycle())
         finally:
             worker.close()
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             store = ProjectOnboardingStore(state)
             self.assertEqual(store.get(workflow_id).stage, "group_unknown")
@@ -466,7 +466,7 @@ class ProjectOnboardingTests(unittest.TestCase):
         finally:
             worker.close()
         self.assertEqual(client.create_calls, 0)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             failed = ProjectOnboardingStore(state).get(workflow_id)
             self.assertEqual(failed.stage, "failed")
@@ -487,7 +487,7 @@ class ProjectOnboardingTests(unittest.TestCase):
         self.assertEqual(client.create_calls, 1)
         assert client.preflight is not None
         self.assertEqual(client.preflight[:2], (42, (42, 43)))
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             self.assertEqual(ProjectOnboardingStore(state).get(workflow_id).stage, "completed")
         finally:
@@ -502,7 +502,7 @@ class ProjectOnboardingTests(unittest.TestCase):
         finally:
             worker.close()
         self.assertEqual(blocked_client.create_calls, 0)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             store = ProjectOnboardingStore(state)
             blocked = store.get(workflow_id)
@@ -528,7 +528,7 @@ class ProjectOnboardingTests(unittest.TestCase):
             worker.close()
         self.assertEqual(blocked_client.create_calls, 1)
 
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             store = ProjectOnboardingStore(state)
             blocked = store.get(workflow_id)
@@ -553,14 +553,14 @@ class ProjectOnboardingTests(unittest.TestCase):
         finally:
             worker.close()
         self.assertEqual(resumed.create_calls, 0)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             self.assertEqual(ProjectOnboardingStore(state).get(workflow_id).stage, "completed")
         finally:
             state.close()
 
     def test_expired_confirmation_cannot_queue_external_work(self) -> None:
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             store = ProjectOnboardingStore(state)
             workflow = store.start(owner_user_id=42, allowed_roots=(self.allowed,))
@@ -579,7 +579,7 @@ class ProjectOnboardingTests(unittest.TestCase):
             state.close()
 
     def test_folder_cannot_escape_allowed_root(self) -> None:
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             store = ProjectOnboardingStore(state)
             workflow = store.start(owner_user_id=42, allowed_roots=(self.allowed,))
@@ -597,7 +597,7 @@ class ProjectOnboardingTests(unittest.TestCase):
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
         controller.config = self.config
         controller.registry = load_registry(self.registry_path)
-        controller.state = HubState.open(self.config.state_path)
+        controller.state = HubState.open(self.config.state_path, codex_permission_profile=None)
         self.addCleanup(controller.state.close)
         controller.agent = self.config.agents[0]
         controller.telegram = FakeTelegram()
@@ -661,7 +661,7 @@ class ProjectOnboardingTests(unittest.TestCase):
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
         controller.config = config
         controller.registry = load_registry(self.registry_path)
-        controller.state = HubState.open(config.state_path)
+        controller.state = HubState.open(config.state_path, codex_permission_profile=None)
         self.addCleanup(controller.state.close)
         controller.agent = config.agents[0]
         controller.telegram = FakeTelegram()
@@ -703,7 +703,7 @@ class ProjectOnboardingTests(unittest.TestCase):
 
     def test_stale_network_boundary_becomes_unknown_instead_of_retryable(self) -> None:
         workflow_id = self.prepare_workflow()
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             store = ProjectOnboardingStore(state)
             leased = store.claim_next("crashed-worker")
@@ -726,7 +726,7 @@ class ProjectOnboardingTests(unittest.TestCase):
 
     def test_only_one_provisioning_workflow_is_leased_at_a_time(self) -> None:
         first_id = self.prepare_workflow()
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             store = ProjectOnboardingStore(state)
             second = store.start(owner_user_id=42, allowed_roots=(self.allowed,))
@@ -744,7 +744,7 @@ class ProjectOnboardingTests(unittest.TestCase):
 
     def test_lease_heartbeat_fences_a_second_worker_during_slow_create(self) -> None:
         workflow_id = self.prepare_workflow()
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             store = ProjectOnboardingStore(state)
             second = store.start(owner_user_id=43, allowed_roots=(self.allowed,))
@@ -802,7 +802,9 @@ class ProjectOnboardingTests(unittest.TestCase):
                 self.assertTrue(any(item >= renew_point for item in renewed_at))
                 # Past the claim's original two-minute lease.
                 virtual["now"] = start + WORKER_LEASE + timedelta(seconds=30)
-                competing_state = HubState.open(self.config.state_path)
+                competing_state = HubState.open(
+                    self.config.state_path, codex_permission_profile=None
+                )
                 try:
                     competing_store = ProjectOnboardingStore(competing_state, clock=clock)
                     self.assertIsNone(competing_store.claim_next("competing-worker"))

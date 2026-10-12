@@ -10,11 +10,31 @@ from pathlib import Path
 from typing import Iterator, Literal, Mapping, Sequence
 
 from .artifacts import ValidatedArtifact
+from .assessment_inputs import OutcomeAssessmentInput
+from .codex_control_predicates import control_owner_for_topic
+from .codex_ingress_assessments import CodexIngressAssessments
+from .codex_ingress_control import CodexIngressControl
+from .codex_permission_refusals import CodexPermissionInputState, PermissionInputDisposition
+from .codex_permissions import (
+    MISSING_PERMISSION_CONTEXT,
+    MissingPermissionContext,
+    validate_permission_profile_id,
+)
+from .codex_retry_policy import PreparationRetryBinding
+from .codex_turn_controls import CodexTurnControls
+from .delivery_control_predicates import result_ready_control_reconciled
+from .delivery_control_state import (
+    DeliveryControlDisposition,
+    DeliveryControlPreview,
+    DeliveryControlState,
+)
+from .delivery_hold_state import DeliveryHoldDisposition, DeliveryHoldPreview, DeliveryHoldState
 from .incoming_materials import (
     IncomingMaterialDraft,
     IncomingMaterialRecord,
 )
 from .migrations import LATEST_SCHEMA_VERSION, migrate_connection, migrate_database
+from .outcome_assessment_state import OutcomeAssessmentDisposition, record_assessment
 from .provider_queue_capacity import QueueCapacityConfig
 from .queue_visibility import QueueVisibilityState
 from .release_identity import CURRENT_RELEASE, ReleaseIdentity
@@ -25,7 +45,10 @@ from .state_delivery import (
     TelegramOutboxPartRecord,
     TelegramOutboxRecord,
 )
+from .state_errors import StateError
 from .state_incoming_materials import IncomingMaterialsStateFacade
+from .state_lanes import LaneState
+from .state_outcomes import OutcomeJournalStateFacade, ProviderJobOutcome
 from .state_provider_jobs import (
     ProviderChatActivity,
     ProviderJobRecord,
@@ -44,16 +67,15 @@ from .state_sessions import (
     WriterTransferSnapshot,
 )
 from .state_stop import StopState
+from .state_values import _bounded, _now, _optional_bounded, _timestamp
 from .task_lifecycle import TaskLifecycleState
+from .telegram_ingress_ledger import TelegramIngressLedger
+from .telegram_turn_provenance import TelegramTurnProvenance, validate_ingress_identity
 
 MAX_PROVIDER_RESPONSE_LENGTH = 200_000
 RECOVERED_RESULT_METADATA_JSON = '{"hub_recovered":true}'
 RUNTIME_EVENT_MAX_AGE = timedelta(days=30)
 RUNTIME_EVENT_MAX_COUNT = 10_000
-
-
-class StateError(RuntimeError):
-    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,30 +111,6 @@ class ProviderJobResultRecord:
     created_at: str
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _timestamp(value: datetime | None = None) -> str:
-    current = value or datetime.now(timezone.utc)
-    if current.tzinfo is None:
-        raise StateError("timestamp must be timezone-aware")
-    return current.astimezone(timezone.utc).isoformat()
-
-
-def _bounded(value: str, *, name: str, maximum: int) -> str:
-    normalized = value.strip()
-    if not normalized or len(normalized) > maximum:
-        raise StateError(f"invalid {name}")
-    return normalized
-
-
-def _optional_bounded(value: str | None, *, name: str, maximum: int) -> str | None:
-    if value is None:
-        return None
-    return _bounded(value, name=name, maximum=maximum)
-
-
 def _visible_excerpt(value: str) -> str:
     """Keep the newest bounded portion of a provider prompt for visible history."""
     normalized = value.strip()
@@ -132,12 +130,33 @@ def _parse_timestamp(value: str, *, name: str) -> datetime:
 
 
 class HubState:
-    def __init__(self, connection: sqlite3.Connection, state_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        state_path: Path | None = None,
+        *,
+        codex_permission_profile: str
+        | None
+        | MissingPermissionContext = MISSING_PERMISSION_CONTEXT,
+    ) -> None:
+        self._codex_permission_profile_context = (
+            codex_permission_profile
+            if codex_permission_profile is MISSING_PERMISSION_CONTEXT
+            else validate_permission_profile_id(codex_permission_profile)
+        )
         self._connection = connection
         self._connection.row_factory = sqlite3.Row
         self._state_path = state_path
         self._root_blocker_state = RootBlockerState(
             connection, self._immediate_transaction, StateError
+        )
+        self.codex_controls = CodexTurnControls(connection, transaction=self._immediate_transaction)
+        self.telegram_turn_provenance = TelegramTurnProvenance(connection)
+        self.telegram_ingress = TelegramIngressLedger(
+            connection, transaction=self._immediate_transaction
+        )
+        self.telegram_ingress_assessments = CodexIngressAssessments(
+            connection, transaction=self._immediate_transaction, ledger=self.telegram_ingress
         )
         self._incoming_material_state = IncomingMaterialsStateFacade(
             connection,
@@ -152,7 +171,17 @@ class HubState:
             state_error=StateError,
         )
         self.task_notices = TaskLifecycleState(
-            connection, transaction=self._immediate_transaction, state_error=StateError
+            connection,
+            transaction=self._immediate_transaction,
+            state_error=StateError,
+            selected_codex_profile=lambda: self.codex_permission_profile,
+        )
+        self.codex_ingress_control = CodexIngressControl(
+            connection,
+            transaction=self._immediate_transaction,
+            controls=self.codex_controls,
+            assessments=self.telegram_ingress_assessments,
+            notices=self.task_notices,
         )
         self.queue_visibility = QueueVisibilityState(
             connection, self.task_notices, state_error=StateError
@@ -164,6 +193,7 @@ class HubState:
             state_error=StateError,
             job_has_materials=self._incoming_material_state.job_has_materials,
             queue_visibility=self.queue_visibility,
+            selected_codex_profile=lambda: self.codex_permission_profile,
         )
         self._stop_state = StopState(
             connection,
@@ -172,6 +202,7 @@ class HubState:
             notices=self.task_notices,
             state_error=StateError,
         )
+        self._lane_state = LaneState(connection)
         self._sessions_state = SessionsStateFacade(
             connection,
             transaction=self._immediate_transaction,
@@ -186,6 +217,7 @@ class HubState:
             activate_origin=self._activate_session_origin,
             hold_scope_before_return=self._root_blocker_state.hold_scope_before_return,
             notice_released_scope=self._root_blocker_state.notice_released_scope,
+            selected_codex_profile=lambda: self.codex_permission_profile,
         )
         self._runtime_health_state = RuntimeHealthStateFacade(
             connection,
@@ -194,7 +226,14 @@ class HubState:
         )
 
     @classmethod
-    def open(cls, path: Path) -> "HubState":
+    def open(
+        cls,
+        path: Path,
+        *,
+        codex_permission_profile: str
+        | None
+        | MissingPermissionContext = MISSING_PERMISSION_CONTEXT,
+    ) -> "HubState":
         path = path.expanduser().resolve()
         parent_existed = path.parent.exists()
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -213,7 +252,7 @@ class HubState:
         try:
             os.chmod(path, 0o600)
             migrate_connection(connection)
-            return cls(connection, path)
+            return cls(connection, path, codex_permission_profile=codex_permission_profile)
         except BaseException:
             try:
                 connection.close()
@@ -227,9 +266,31 @@ class HubState:
         return cls(*connect_existing(path, writable=False, state_error=StateError))
 
     @classmethod
-    def open_existing(cls, path: Path) -> "HubState":
+    def open_existing(
+        cls,
+        path: Path,
+        *,
+        codex_permission_profile: str
+        | None
+        | MissingPermissionContext = MISSING_PERMISSION_CONTEXT,
+        contention_timeout_seconds: float | None = None,
+    ) -> "HubState":
         """Open an existing current-schema database for writing; never create or migrate it."""
-        return cls(*connect_existing(path, writable=True, state_error=StateError))
+        return cls(
+            *connect_existing(
+                path,
+                writable=True,
+                state_error=StateError,
+                contention_timeout_seconds=contention_timeout_seconds,
+            ),
+            codex_permission_profile=codex_permission_profile,
+        )
+
+    @property
+    def codex_permission_profile(self) -> str | None:
+        if isinstance(self._codex_permission_profile_context, MissingPermissionContext):
+            raise StateError("Codex permission configuration is unavailable")
+        return self._codex_permission_profile_context
 
     @property
     def schema_version(self) -> int:
@@ -245,11 +306,10 @@ class HubState:
         self._connection.execute("BEGIN IMMEDIATE")
         try:
             yield
+            self._connection.commit()
         except BaseException:
             self._connection.rollback()
             raise
-        else:
-            self._connection.commit()
 
     @contextmanager
     def _connection_transaction(self) -> Iterator[None]:
@@ -553,8 +613,10 @@ class HubState:
                                FROM provider_jobs jobs
                                JOIN provider_execution_checkpoints checkpoints
                                  ON checkpoints.job_id = jobs.job_id
-                               WHERE jobs.topic_id = ?""",
-                        (row["topic_id"], row["topic_id"]),
+                               WHERE jobs.topic_id = ?
+                               UNION SELECT controls.project_root AS root
+                               FROM codex_turn_controls controls WHERE controls.topic_id = ?""",
+                        (row["topic_id"], row["topic_id"], row["topic_id"]),
                     ).fetchall()
                 }
                 if len(evidence) > 1:
@@ -569,12 +631,13 @@ class HubState:
                     )
                 if expected is None:
                     active = self._connection.execute(
-                        """SELECT 1 FROM agent_sessions
+                        f"""SELECT 1 FROM agent_sessions
                                WHERE topic_id = ? AND status IN ('active', 'satellite')
                                  AND writer_mode != 'telegram'
                                UNION SELECT 1 FROM provider_jobs
                                WHERE topic_id = ? AND (
-                                 status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                                 (status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
+                                  AND NOT {result_ready_control_reconciled("provider_jobs")})
                                  OR (status = 'indeterminate' AND NOT EXISTS (
                                    SELECT 1 FROM provider_job_resolutions resolutions
                                    WHERE resolutions.job_id = provider_jobs.job_id
@@ -632,6 +695,9 @@ class HubState:
 
     def active_session(self, topic_id: int) -> SessionRecord | None:
         return self._sessions_state.active_session(topic_id)
+
+    def retained_session(self, topic_id: int, agent_id: str) -> SessionRecord | None:
+        return self._sessions_state.retained_session(topic_id, agent_id)
 
     def get_session(self, session_id: str) -> SessionRecord:
         return self._sessions_state.get_session(session_id)
@@ -727,14 +793,41 @@ class HubState:
         return self._provider_job_state.topic_has_unheld(topic_id)
 
     def nonterminal_provider_job_counts(self, agent_ids: Sequence[str]) -> dict[str, int]:
-        """Count accepted work that must be drained before runtime ownership changes."""
+        """Raw accepted nonterminal work, including historical result-ready delivery."""
         return self._provider_job_state.nonterminal_counts(agent_ids)
+
+    def effective_nonterminal_provider_job_counts(self, agent_ids: Sequence[str]) -> dict[str, int]:
+        """Runtime-drain blockers after exact full-control delivery consent only."""
+        return self._provider_job_state.effective_nonterminal_counts(agent_ids)
 
     def provider_chat_activities(
         self, agent_ids: Sequence[str]
     ) -> tuple[ProviderChatActivity, ...]:
         """Return each topic whose head job should display provider activity."""
         return self._provider_job_state.chat_activities(agent_ids)
+
+    def reject_changed_codex_input(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        thread_id: int,
+        topic_id: int,
+        session_id: str | None = None,
+        session_generation: int | None = None,
+    ) -> PermissionInputDisposition:
+        return CodexPermissionInputState(
+            self._connection,
+            self._immediate_transaction,
+            lambda: self.codex_permission_profile,
+        ).reject_changed_input(
+            chat_id=chat_id,
+            message_id=message_id,
+            thread_id=thread_id,
+            topic_id=topic_id,
+            session_id=session_id,
+            session_generation=session_generation,
+        )
 
     def reject_blocked_provider_input(
         self,
@@ -819,239 +912,36 @@ class HubState:
         expected_transfer: WriterTransferSnapshot | None = None,
         prepare_task_notices: bool = False,
         queue_capacity: QueueCapacityConfig | None = None,
+        telegram_ingress_identity: str | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
-        """Atomically accept one bounded provider request.
+        """Atomically accept one provider input and its receipt/notices."""
+        from .provider_admission_state import ProviderAdmissionState
 
-        This method is deliberately local-only: callers must finish Telegram
-        admission and content redaction before calling it. It performs no
-        network or provider operation. A duplicate idempotency key returns the
-        original immutable snapshot without allocating another topic sequence.
-        """
-        from .session_adoption_state import CodexSessionOrigins
-
-        key = _bounded(idempotency_key, name="idempotency key", maximum=256)
-        target_agent = _bounded(agent_id, name="agent id", maximum=64)
-        target_session = _bounded(session_id, name="session id", maximum=128)
-        selected_model = _bounded(model, name="model", maximum=200)
-        selected_effort = _bounded(effort, name="effort", maximum=64)
-        payload = _bounded(payload_text, name="payload", maximum=20000)
-        requested_provider_session = (
-            _bounded(provider_session_id, name="provider session id", maximum=256)
-            if provider_session_id is not None
-            else None
-        )
-        handoff = (
-            _bounded(handoff_id, name="handoff id", maximum=128) if handoff_id is not None else None
-        )
-        group_key = _optional_bounded(input_group_key, name="input group key", maximum=256)
-        if chat_id == 0 or message_id <= 0 or session_generation <= 0:
-            raise StateError("invalid provider job identity")
-        if context_watermark is not None and context_watermark < 0:
-            raise StateError("invalid context watermark")
-        if not 1 <= max_attempts <= 20:
-            raise StateError("invalid max attempts")
-
-        created = False
         with self._immediate_transaction():
-            existing = self._connection.execute(
-                "SELECT * FROM provider_jobs WHERE idempotency_key = ?", (key,)
-            ).fetchone()
-            if existing is not None:
-                if int(existing["chat_id"]) != chat_id or int(existing["message_id"]) != message_id:
-                    raise StateError("idempotency key belongs to another Telegram message")
-                return self._provider_job(existing), False
-
-            topic = self._connection.execute(
-                "SELECT chat_id, thread_id FROM topics WHERE topic_id = ?", (topic_id,)
-            ).fetchone()
-            if topic is None:
-                raise StateError(f"unknown topic_id: {topic_id}")
-            if int(topic["chat_id"]) != chat_id:
-                raise StateError("provider job chat does not match topic")
-            session = self._connection.execute(
-                """SELECT topic_id, agent_id, generation, status, writer_mode, model, effort,
-                          provider_session_id
-                   FROM agent_sessions
-                   WHERE session_id = ?""",
-                (target_session,),
-            ).fetchone()
-            if (
-                session is None
-                or int(session["topic_id"]) != topic_id
-                or str(session["agent_id"]) != target_agent
-                or int(session["generation"]) != session_generation
-            ):
-                raise StateError("provider job session snapshot does not match persisted session")
-            if str(session["status"]) not in {"active", "satellite"}:
-                raise StateError("provider job session is not routable")
-            CodexSessionOrigins(self).require_admission(target_session, message_id)
-            expected_writer = "local" if take_local_writer else "telegram"
-            if str(session["writer_mode"]) != expected_writer:
-                raise StateError(f"provider job session writer is not {expected_writer}")
-            if (
-                not take_local_writer
-                and persistent_root_blocker(self._connection, topic_id=topic_id) is not None
-            ):
-                raise StateError("execution root has a persistent local writer or uncertainty")
-            if str(session["model"]) != selected_model or str(session["effort"]) != selected_effort:
-                raise StateError("provider job model or effort does not match persisted session")
-            persisted_provider_session = session["provider_session_id"]
-            if (
-                requested_provider_session is not None
-                and requested_provider_session != persisted_provider_session
-            ):
-                raise StateError("provider job provider session does not match persisted session")
-            if context_watermark is not None:
-                context_turn = self._connection.execute(
-                    """SELECT 1 FROM external_turn_excerpts
-                       WHERE turn_id = ? AND topic_id = ?""",
-                    (context_watermark, topic_id),
-                ).fetchone()
-                if context_turn is None:
-                    raise StateError(
-                        "provider job context watermark is not a visible turn for topic"
-                    )
-            if handoff is not None:
-                pending = self._connection.execute(
-                    """SELECT 1 FROM pending_handoffs
-                       WHERE handoff_id = ? AND topic_id = ? AND target_agent_id = ?""",
-                    (handoff, topic_id, target_agent),
-                ).fetchone()
-                if pending is None:
-                    raise StateError("provider job handoff snapshot is not pending")
-
-            if take_local_writer:
-                if (
-                    expected_transfer is None
-                    or expected_transfer.session.session_id != target_session
-                ):
-                    raise StateError("local writer transfer requires a validated snapshot")
-                self._require_writer_transfer_snapshot(expected_transfer)
-                pending_job = self._connection.execute(
-                    """SELECT 1 FROM provider_jobs
-                       WHERE topic_id = ? AND status IN
-                         ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
-                       LIMIT 1""",
-                    (topic_id,),
-                ).fetchone()
-                if pending_job is not None:
-                    raise StateError("provider work is already pending for this topic")
-                cursor = self._connection.execute(
-                    """UPDATE agent_sessions SET writer_mode = 'telegram', updated_at = ?
-                       WHERE session_id = ? AND writer_mode = 'local'""",
-                    (_now(), target_session),
-                )
-                if cursor.rowcount != 1:
-                    raise StateError("local writer ownership changed during provider admission")
-
-            now = _now()
-            ready_at = _timestamp(available_at) if available_at is not None else None
-            self._connection.execute(
-                """INSERT OR IGNORE INTO observed_messages
-                   (chat_id, message_id, observer_agent_id, observed_at)
-                   VALUES (?, ?, 'hub', ?)""",
-                (chat_id, message_id, now),
-            )
-            self._connection.execute(
-                """INSERT INTO topic_queue_counters(topic_id, next_sequence, updated_at)
-                   VALUES (?, 1, ?)
-                   ON CONFLICT(topic_id) DO NOTHING""",
-                (topic_id, now),
-            )
-            counter = self._connection.execute(
-                "SELECT next_sequence FROM topic_queue_counters WHERE topic_id = ?",
-                (topic_id,),
-            ).fetchone()
-            if counter is None:
-                raise StateError("failed to allocate provider job sequence")
-            topic_sequence = int(counter["next_sequence"])
-            self._connection.execute(
-                """UPDATE topic_queue_counters
-                   SET next_sequence = next_sequence + 1, updated_at = ?
-                   WHERE topic_id = ?""",
-                (now, topic_id),
-            )
-            job_id = str(uuid.uuid4())
-            try:
-                self._connection.execute(
-                    """INSERT INTO provider_jobs (
-                         job_id, idempotency_key, chat_id, message_id, topic_id,
-                         topic_sequence, agent_id, session_id, session_generation,
-                         provider_session_id, model, effort, payload_text,
-                         context_watermark, handoff_id, input_group_key, status, attempt_count,
-                         max_attempts, next_attempt_at, created_at, updated_at
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                 'queued', 0, ?, ?, ?, ?)""",
-                    (
-                        job_id,
-                        key,
-                        chat_id,
-                        message_id,
-                        topic_id,
-                        topic_sequence,
-                        target_agent,
-                        target_session,
-                        session_generation,
-                        persisted_provider_session,
-                        selected_model,
-                        selected_effort,
-                        payload,
-                        context_watermark,
-                        handoff,
-                        group_key,
-                        max_attempts,
-                        ready_at,
-                        now,
-                        now,
-                    ),
-                )
-            except sqlite3.IntegrityError as exc:
-                duplicate = self._connection.execute(
-                    """SELECT * FROM provider_jobs
-                       WHERE idempotency_key = ? OR (chat_id = ? AND message_id = ?)""",
-                    (key, chat_id, message_id),
-                ).fetchone()
-                if duplicate is None:
-                    raise
-                if str(duplicate["idempotency_key"]) != key:
-                    raise StateError("Telegram message already has another provider job") from exc
-                return self._provider_job(duplicate), False
-            self._connection.execute(
-                """INSERT INTO provider_job_inputs (
-                       job_id, chat_id, message_id, part_index, input_text, received_at
-                   ) VALUES (?, ?, ?, 1, ?, ?)""",
-                (job_id, chat_id, message_id, payload, now),
-            )
-            self._attach_forwarded_materials(
-                job_id=job_id,
-                topic_id=topic_id,
-                agent_id=target_agent,
-                session_id=target_session,
-                session_generation=session_generation,
-            )
-            self._insert_incoming_materials(
-                job_id=job_id,
-                topic_id=topic_id,
+            return ProviderAdmissionState(self).admit_in_transaction(
+                idempotency_key=idempotency_key,
                 chat_id=chat_id,
                 message_id=message_id,
-                agent_id=target_agent,
-                session_id=target_session,
+                topic_id=topic_id,
+                agent_id=agent_id,
+                session_id=session_id,
                 session_generation=session_generation,
+                model=model,
+                effort=effort,
+                payload_text=payload_text,
+                provider_session_id=provider_session_id,
+                context_watermark=context_watermark,
+                handoff_id=handoff_id,
                 materials=materials,
-                timestamp=now,
+                input_group_key=input_group_key,
+                max_attempts=max_attempts,
+                take_local_writer=take_local_writer,
+                available_at=available_at,
+                expected_transfer=expected_transfer,
+                prepare_task_notices=prepare_task_notices,
+                queue_capacity=queue_capacity,
+                telegram_ingress_identity=telegram_ingress_identity,
             )
-            created = True
-            row = self._connection.execute(
-                "SELECT * FROM provider_jobs WHERE job_id = ?", (job_id,)
-            ).fetchone()
-            if row is None:
-                raise StateError("failed to persist provider job")
-            job = self._provider_job(row)
-            if prepare_task_notices:
-                self.queue_visibility.admitted_in_transaction(
-                    job_id, now=datetime.fromisoformat(now), capacity=queue_capacity
-                )
-        return job, created
 
     def enqueue_or_append_provider_job(
         self,
@@ -1076,6 +966,7 @@ class HubState:
         max_ms: int,
         prepare_task_notices: bool = False,
         queue_capacity: QueueCapacityConfig | None = None,
+        telegram_ingress_identity: str | None = None,
     ) -> tuple[ProviderJobRecord, bool]:
         """Durably collect one compatible Telegram burst into one queued turn.
 
@@ -1086,6 +977,7 @@ class HubState:
         """
         from .session_adoption_state import CodexSessionOrigins
 
+        ingress = validate_ingress_identity(telegram_ingress_identity)
         if quiet_ms <= 0:
             return self.enqueue_provider_job(
                 idempotency_key=idempotency_key,
@@ -1105,6 +997,7 @@ class HubState:
                 input_group_key=input_group_key,
                 prepare_task_notices=prepare_task_notices,
                 queue_capacity=queue_capacity,
+                telegram_ingress_identity=ingress,
             )
         user_text = _bounded(appended_user_text, name="batch input", maximum=20000)
         group_key = _optional_bounded(input_group_key, name="input group key", maximum=256)
@@ -1139,6 +1032,7 @@ class HubState:
                 or self.get_topic(topic_id).chat_id != chat_id
             ):
                 raise StateError("provider batch session snapshot changed")
+            self._sessions_state.require_codex_selection(session)
             if persistent_root_blocker(self._connection, topic_id=topic_id) is not None:
                 raise StateError("execution root has a persistent local writer or uncertainty")
             candidate = self._connection.execute(
@@ -1146,6 +1040,9 @@ class HubState:
                    WHERE topic_id = ? AND agent_id = ? AND session_id = ?
                      AND session_generation = ? AND model = ? AND effort = ?
                      AND input_group_key IS ?
+                     AND codex_permission_profile IS ?
+                     AND (SELECT ingress_identity FROM provider_job_telegram_ingress ingress
+                          WHERE ingress.job_id=provider_jobs.job_id) IS ?
                      AND status = 'queued' AND next_attempt_at > ?
                      AND created_at >= ?
                      AND topic_sequence = (
@@ -1161,6 +1058,8 @@ class HubState:
                     model,
                     effort,
                     group_key,
+                    session.codex_permission_profile,
+                    ingress,
                     timestamp,
                     absolute_floor,
                 ),
@@ -1240,9 +1139,13 @@ class HubState:
             materials=materials,
             input_group_key=group_key,
             available_at=quiet_until,
+            telegram_ingress_identity=ingress,
             prepare_task_notices=prepare_task_notices,
             queue_capacity=queue_capacity,
         )
+
+    def queued_input_group(self, topic_id: int, input_group_key: str) -> ProviderJobRecord | None:
+        return self._provider_job_state.queued_input_group(topic_id, input_group_key)
 
     def hold_queued_input_group(
         self,
@@ -1254,6 +1157,7 @@ class HubState:
         agent_id: str | None = None,
         session_id: str | None = None,
         session_generation: int | None = None,
+        expected_job_id: str | None = None,
     ) -> ProviderJobRecord | None:
         """Keep an exact queued tail group unavailable during part download."""
         target_agent = (
@@ -1278,47 +1182,41 @@ class HubState:
         current = datetime.now(timezone.utc)
         timestamp = _timestamp(current)
         with self._immediate_transaction():
-            candidate = self._connection.execute(
-                """SELECT * FROM provider_jobs
-                   WHERE topic_id = ? AND input_group_key = ?
-                     AND status = 'queued'
-                     AND topic_sequence = (
-                         SELECT MAX(tail.topic_sequence) FROM provider_jobs tail
-                         WHERE tail.topic_id = provider_jobs.topic_id
-                     )
-                   ORDER BY topic_sequence DESC LIMIT 1""",
-                (
-                    topic_id,
-                    group_key,
-                ),
-            ).fetchone()
-            if candidate is None:
-                return None
-            if target_agent is not None and (
-                str(candidate["agent_id"]) != target_agent
-                or str(candidate["session_id"]) != target_session
-                or int(candidate["session_generation"]) != session_generation
+            candidate = self._provider_job_state.queued_input_group(topic_id, group_key)
+            if candidate is None or (
+                expected_job_id is not None and candidate.job_id != expected_job_id
             ):
                 return None
-            hard_deadline = datetime.fromisoformat(str(candidate["created_at"])) + timedelta(
+            if target_agent is not None and (
+                str(candidate.agent_id) != target_agent
+                or str(candidate.session_id) != target_session
+                or int(candidate.session_generation) != session_generation
+            ):
+                return None
+            if (
+                candidate.agent_id == "codex"
+                and candidate.codex_permission_profile != self.codex_permission_profile
+            ):
+                return None  # Preserve stale work; do not extend its queue hold.
+            hard_deadline = datetime.fromisoformat(str(candidate.created_at)) + timedelta(
                 milliseconds=max_ms
             )
             held_until = min(current + timedelta(milliseconds=hold_ms), hard_deadline)
             if held_until <= current:
                 return None
-            existing = candidate["next_attempt_at"]
+            existing = candidate.next_attempt_at
             if existing is not None and datetime.fromisoformat(str(existing)) >= held_until:
-                return self._provider_job(candidate)
+                return candidate
             cursor = self._connection.execute(
                 """UPDATE provider_jobs
                    SET next_attempt_at = ?, updated_at = ?
                    WHERE job_id = ? AND status = 'queued'""",
-                (_timestamp(held_until), timestamp, candidate["job_id"]),
+                (_timestamp(held_until), timestamp, candidate.job_id),
             )
             if cursor.rowcount != 1:
                 return None
             held = self._connection.execute(
-                "SELECT * FROM provider_jobs WHERE job_id = ?", (candidate["job_id"],)
+                "SELECT * FROM provider_jobs WHERE job_id = ?", (candidate.job_id,)
             ).fetchone()
             return self._provider_job(held) if held is not None else None
 
@@ -1576,6 +1474,8 @@ class HubState:
         expected_status: str = "executing",
         error_detail: str | None = None,
         terminal_turn_status: str | None = None,
+        preparation_retry: PreparationRetryBinding | None = None,
+        provider_runtime: str | None = None,
         now: datetime | None = None,
     ) -> ProviderJobRecord:
         """Terminalize work with one failure notice, or cancel it for a covering stop."""
@@ -1602,6 +1502,22 @@ class HubState:
         detail = error_detail.strip()[:1000] if error_detail else None
         timestamp = _timestamp(now)
         with self._immediate_transaction():
+            from .preexecution_retry_state import PreexecutionRetryState
+
+            retry = PreexecutionRetryState(self)
+            contradictory = (
+                status == "failed"
+                and failure_class == "pre_execution"
+                and provider_runtime == "codex"
+                and retry.has_execution_evidence(job_id)
+            )
+            if contradictory:
+                status, failure_class = "indeterminate", "ambiguous_execution"
+                html = (
+                    "Codex preparation failure conflicts with saved execution evidence. "
+                    "The outcome is unconfirmed; Hub kept the evidence and did not retry. "
+                    "Inspect /status before continuing."
+                )
             if status == "failed" and self._provider_job_state.honor_stop(
                 job_id, lease_token, expected_status
             ):
@@ -1617,6 +1533,13 @@ class HubState:
                 raise StateError("provider job lease is missing or invalid")
             if sender != str(row["agent_id"]):
                 raise StateError("Telegram outbox sender does not match provider job agent")
+            if (
+                status == "failed"
+                and failure_class == "pre_execution"
+                and provider_runtime == "codex"
+            ):
+                if preparation_retry is not None and code == "CodexPreparationError":
+                    html += retry.record_ticket_in_transaction(row, preparation_retry, timestamp)
             if terminal_turn_status is not None:
                 checkpoint = self._connection.execute(
                     "SELECT provider_thread_id, provider_turn_id, project_root "
@@ -1717,7 +1640,11 @@ class HubState:
                 job_id, now=datetime.fromisoformat(timestamp)
             )
             self._provider_job_state.complete_finished_stops(int(row["topic_id"]), timestamp)
-            if status == "indeterminate" and terminal_turn_status is None and sender == "codex":
+            if (
+                status == "indeterminate"
+                and terminal_turn_status is None
+                and (provider_runtime or sender) == "codex"
+            ):
                 accepted_turn = self._connection.execute(
                     "SELECT provider_turn_id FROM provider_execution_checkpoints WHERE job_id = ?",
                     (job_id,),
@@ -1733,6 +1660,11 @@ class HubState:
 
     def cancel_provider_job(self, job_id: str) -> ProviderJobRecord:
         return self._provider_job_state.cancel(job_id)
+
+    def provider_job_outcome(self, job_id: str) -> ProviderJobOutcome:
+        return OutcomeJournalStateFacade(self._connection, StateError, LATEST_SCHEMA_VERSION).read(
+            job_id
+        )
 
     def recover_stale_provider_jobs(
         self, *, agent_id: str | None = None, now: datetime | None = None
@@ -1949,11 +1881,108 @@ class HubState:
     def get_telegram_outbox(self, outbox_id: str) -> TelegramOutboxRecord:
         return self._delivery_state.get_outbox(outbox_id)
 
+    def record_outcome_assessment(
+        self,
+        request: OutcomeAssessmentInput,
+        *,
+        project_id: str,
+        owner_user_ids: Sequence[int],
+        now: datetime | None = None,
+    ) -> tuple[OutcomeAssessmentDisposition, bool]:
+        with self._immediate_transaction():
+            disposition, created = record_assessment(
+                self._connection,
+                self.task_notices,
+                request,
+                project_id=project_id,
+                owner_user_ids=owner_user_ids,
+                now=now or datetime.now(timezone.utc),
+                state_error=StateError,
+            )
+            if created and disposition.topic_id is not None:
+                self._provider_job_state.flush_batch_in_transaction(
+                    disposition.topic_id, disposition.created_at
+                )
+            return disposition, created
+
+    def preview_delivery_hold(self, outbox_id: str) -> DeliveryHoldPreview:
+        """One coherent read-only snapshot; no implicit initialization or migration."""
+        if self._connection.in_transaction:
+            raise StateError("cannot nest a delivery hold preview transaction")
+        self._connection.execute("BEGIN")
+        try:
+            preview = DeliveryHoldState(self._connection, StateError).preview(outbox_id)
+            self._connection.commit()
+            return preview
+        except BaseException:
+            self._connection.rollback()
+            raise
+
+    def preview_delivery_control(self, target_kind: str, target_id: str) -> DeliveryControlPreview:
+        """Coherent local preview without migration, transport or invocation."""
+        if self._connection.in_transaction:
+            raise StateError("cannot nest a delivery control preview transaction")
+        self._connection.execute("BEGIN")
+        try:
+            preview = DeliveryControlState(self._connection).preview(target_kind, target_id)
+            self._connection.commit()
+            return preview
+        except BaseException:
+            self._connection.rollback()
+            raise
+
+    def reconcile_delivery_control(
+        self,
+        target_kind: str,
+        target_id: str,
+        *,
+        expected_snapshot: str,
+        accept_unconfirmed_delivery: bool,
+        now: datetime | None = None,
+    ) -> DeliveryControlDisposition:
+        """Local-owner CAS inserts only consent; each consumer retains its other guards."""
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            raise StateError("delivery control time must be timezone-aware")
+        with self._immediate_transaction():
+            return DeliveryControlState(self._connection).apply_in_transaction(
+                target_kind,
+                target_id,
+                expected_snapshot,
+                accept_unconfirmed_delivery,
+                current.isoformat(),
+            )
+
+    def release_delivery_hold(
+        self,
+        outbox_id: str,
+        *,
+        expected_snapshot: str,
+        continue_without_confirmed_delivery: bool,
+        now: datetime | None = None,
+    ) -> DeliveryHoldDisposition:
+        """Local owner action, serialized CAS; inserts only an immutable disposition."""
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            raise StateError("delivery hold time must be timezone-aware")
+        with self._immediate_transaction():
+            return DeliveryHoldState(self._connection, StateError).release(
+                outbox_id,
+                expected_snapshot,
+                continue_without_confirmed_delivery,
+                current.astimezone(timezone.utc).isoformat(),
+            )
+
     def get_telegram_outbox_for_job(self, job_id: str) -> TelegramOutboxRecord:
         return self._delivery_state.get_outbox_for_job(job_id)
 
     def get_telegram_outbox_parts(self, outbox_id: str) -> tuple[TelegramOutboxPartRecord, ...]:
         return self._delivery_state.get_outbox_parts(outbox_id)
+
+    @property
+    def delivery(self) -> DeliveryStateFacade:
+        """Delivery domain on this connection, retaining HubState transaction ownership."""
+        return self._delivery_state
 
     def next_telegram_outbox_part(
         self,
@@ -2262,6 +2291,7 @@ class HubState:
         effort: str,
         *,
         expected_session_id: str | None = None,
+        control_only: bool = False,
     ) -> SessionRecord:
         return self._sessions_state.activate_agent(
             topic_id,
@@ -2269,6 +2299,7 @@ class HubState:
             model,
             effort,
             expected_session_id=expected_session_id,
+            control_only=control_only,
         )
 
     def ensure_satellite(
@@ -2285,13 +2316,20 @@ class HubState:
         )
 
     def replace_active_session(
-        self, topic_id: int, *, model: str, effort: str, expected_session_id: str | None = None
+        self,
+        topic_id: int,
+        *,
+        model: str,
+        effort: str,
+        expected_session_id: str | None = None,
+        runtime: str | None = None,
     ) -> SessionRecord:
         return self._sessions_state.replace_active_session(
             topic_id,
             model=model,
             effort=effort,
             expected_session_id=expected_session_id,
+            runtime=runtime,
         )
 
     def claim_message(self, chat_id: int, message_id: int, *, observer_agent_id: str) -> bool:
@@ -2627,6 +2665,7 @@ class HubState:
             "stalled_provider_work": stalled_provider_work,
             "pending_delivery": pending_delivery,
             "pending_progress_delivery": pending_progress_delivery,
+            **self._delivery_state.uncertain_counts(),
             "oldest_queue_age_seconds": age_seconds(oldest_queue),
             "oldest_delivery_age_seconds": age_seconds(oldest_delivery),
             "oldest_progress_delivery_age_seconds": age_seconds(oldest_progress_delivery),
@@ -2643,7 +2682,9 @@ class HubState:
     ) -> str:
         dispatch_id = str(uuid.uuid4())
         now = _now()
-        with self._connection:
+        with self._immediate_transaction():
+            if control_owner_for_topic(self._connection, topic_id) is not None:
+                raise StateError("native control operation has not confirmed quiescence")
             self._connection.execute(
                 """INSERT INTO turn_dispatches
                    (dispatch_id, chat_id, message_id, topic_id, agent_id, status,
@@ -2833,198 +2874,48 @@ class HubState:
         now = _now()
         resolved_path = str(worktree_path.resolve(strict=True))
         with self._immediate_transaction():
-            self._connection.execute(
-                """INSERT INTO worktree_lanes
-                   (lane_id, project_id, topic_id, worktree_path, branch_name,
-                    status, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, 'active', ?, ?)""",
-                (
-                    lane_id,
-                    project_id,
-                    None,
-                    resolved_path,
-                    branch_name,
-                    now,
-                    now,
-                ),
+            self._lane_state.register_in_transaction(
+                lane_id=lane_id,
+                project_id=project_id,
+                worktree_path=resolved_path,
+                branch_name=branch_name,
+                topic_id=topic_id,
+                now=now,
             )
-            if topic_id is not None:
-                self._bind_lane_locked(lane_id, topic_id, now=now)
 
-    def archive_lane(self, lane_id: str) -> None:
+    def archive_lane(
+        self,
+        lane_id: str,
+        *,
+        project_id: str | None = None,
+        project_root: Path | None = None,
+    ) -> None:
+        """Archive into the current registered root validated by the local caller."""
         with self._immediate_transaction():
-            lane = self._connection.execute(
-                "SELECT * FROM worktree_lanes WHERE lane_id = ? AND status = 'active'",
-                (lane_id,),
-            ).fetchone()
-            if lane is None:
-                raise StateError(f"unknown or inactive lane_id: {lane_id}")
-            topic_id = lane["topic_id"]
-            if topic_id is not None:
-                self._require_topic_execution_idle_locked(int(topic_id))
-                self._require_execution_scope_idle_locked(f"root:{lane['worktree_path']}")
-            cursor = self._connection.execute(
-                "UPDATE worktree_lanes SET status = 'archived', updated_at = ? WHERE lane_id = ?",
-                (_now(), lane_id),
+            self._lane_state.archive_in_transaction(
+                lane_id, project_id=project_id, project_root=project_root
             )
-            if cursor.rowcount != 1:
-                raise StateError(f"unknown lane_id: {lane_id}")
-            if topic_id is not None:
-                self._connection.execute(
-                    """UPDATE topics SET execution_scope = 'project:' || project_id,
-                              updated_at = ? WHERE topic_id = ?""",
-                    (_now(), topic_id),
-                )
+
+    def require_lane_cleanup(self, lane_id: str) -> None:
+        with self._immediate_transaction():
+            self._lane_state.require_cleanup(lane_id)
 
     def mark_lane_cleaned(self, lane_id: str) -> None:
-        with self._connection:
-            cursor = self._connection.execute(
-                """UPDATE worktree_lanes SET cleaned_at = ?, updated_at = ?
-                   WHERE lane_id = ? AND status = 'archived' AND cleaned_at IS NULL""",
-                (_now(), _now(), lane_id),
-            )
-        if cursor.rowcount != 1:
+        with self._immediate_transaction():
+            changed = self._lane_state.mark_cleaned(lane_id)
+        if changed != 1:
             raise StateError(f"lane is unknown, active, or already cleaned: {lane_id}")
 
     def bind_lane(self, lane_id: str, topic_id: int) -> dict[str, object]:
         with self._immediate_transaction():
-            self._bind_lane_locked(lane_id, topic_id, now=_now())
-        bound = self._connection.execute(
-            "SELECT * FROM worktree_lanes WHERE lane_id = ?", (lane_id,)
-        ).fetchone()
-        if bound is None:
-            raise StateError(f"unknown lane_id: {lane_id}")
-        return dict(bound)
-
-    def _bind_lane_locked(self, lane_id: str, topic_id: int, *, now: str) -> None:
-        lane = self._connection.execute(
-            "SELECT * FROM worktree_lanes WHERE lane_id = ?", (lane_id,)
-        ).fetchone()
-        if lane is None or lane["status"] != "active":
-            raise StateError(f"unknown or inactive lane_id: {lane_id}")
-        if lane["topic_id"] is not None:
-            raise StateError("active lane is already bound")
-        topic = self._connection.execute(
-            "SELECT * FROM topics WHERE topic_id = ?", (topic_id,)
-        ).fetchone()
-        if topic is None:
-            raise StateError(f"unknown topic_id: {topic_id}")
-        if lane["project_id"] != topic["project_id"]:
-            raise StateError("lane and Telegram topic belong to different projects")
-        conflict = self._connection.execute(
-            """SELECT lane_id FROM worktree_lanes
-               WHERE topic_id = ? AND lane_id != ? AND status = 'active'""",
-            (topic_id, lane_id),
-        ).fetchone()
-        if conflict is not None:
-            raise StateError("Telegram topic is already bound to another active lane")
-        self._require_topic_execution_idle_locked(topic_id)
-        self._require_execution_scope_idle_locked(f"root:{lane['worktree_path']}")
-        self._connection.execute(
-            "UPDATE worktree_lanes SET topic_id = ?, updated_at = ? WHERE lane_id = ?",
-            (topic_id, now, lane_id),
-        )
-        self._connection.execute(
-            "UPDATE topics SET execution_scope = ?, updated_at = ? WHERE topic_id = ?",
-            (f"root:{lane['worktree_path']}", now, topic_id),
-        )
-
-    def _require_topic_execution_idle_locked(self, topic_id: int) -> None:
-        job = self._connection.execute(
-            """SELECT 1 FROM provider_jobs jobs
-               WHERE jobs.topic_id = ? AND (
-                 jobs.status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
-                 OR (jobs.status = 'indeterminate' AND NOT EXISTS (
-                   SELECT 1 FROM provider_job_resolutions resolutions
-                   WHERE resolutions.job_id = jobs.job_id
-                 ) AND NOT EXISTS (
-                   SELECT 1 FROM provider_turn_terminal_evidence evidence
-                   WHERE evidence.job_id = jobs.job_id
-                 ))
-               ) LIMIT 1""",
-            (topic_id,),
-        ).fetchone()
-        dispatch = self._connection.execute(
-            """SELECT 1 FROM turn_dispatches
-               WHERE topic_id = ? AND status IN ('queued', 'running') LIMIT 1""",
-            (topic_id,),
-        ).fetchone()
-        writer = self._connection.execute(
-            """SELECT 1 FROM agent_sessions
-               WHERE topic_id = ? AND status IN ('active', 'satellite')
-                 AND writer_mode != 'telegram' LIMIT 1""",
-            (topic_id,),
-        ).fetchone()
-        bound_session = self._connection.execute(
-            """SELECT 1 FROM agent_sessions
-               WHERE topic_id = ? AND status IN ('active', 'satellite')
-                 AND provider_session_id IS NOT NULL LIMIT 1""",
-            (topic_id,),
-        ).fetchone()
-        if any(item is not None for item in (job, dispatch, writer, bound_session)):
-            raise StateError("Telegram topic has active or unresolved execution")
-
-    def _require_execution_scope_idle_locked(self, execution_scope: str) -> None:
-        job = self._connection.execute(
-            """SELECT 1 FROM provider_jobs jobs
-               JOIN topics ON topics.topic_id = jobs.topic_id
-               WHERE COALESCE(topics.execution_scope, 'project:' || topics.project_id) = ?
-                 AND (
-                   jobs.status IN ('queued', 'leased', 'executing', 'retry_wait', 'result_ready')
-                   OR (jobs.status = 'indeterminate' AND NOT EXISTS (
-                     SELECT 1 FROM provider_job_resolutions resolutions
-                     WHERE resolutions.job_id = jobs.job_id
-                   ) AND NOT EXISTS (
-                     SELECT 1 FROM provider_turn_terminal_evidence evidence
-                     WHERE evidence.job_id = jobs.job_id
-                   ))
-                 ) LIMIT 1""",
-            (execution_scope,),
-        ).fetchone()
-        dispatch = self._connection.execute(
-            """SELECT 1 FROM turn_dispatches dispatches
-               JOIN topics ON topics.topic_id = dispatches.topic_id
-               WHERE COALESCE(topics.execution_scope, 'project:' || topics.project_id) = ?
-                 AND dispatches.status IN ('queued', 'running') LIMIT 1""",
-            (execution_scope,),
-        ).fetchone()
-        writer = self._connection.execute(
-            """SELECT 1 FROM agent_sessions sessions
-               JOIN topics ON topics.topic_id = sessions.topic_id
-               WHERE COALESCE(topics.execution_scope, 'project:' || topics.project_id) = ?
-                 AND sessions.status IN ('active', 'satellite')
-                 AND sessions.writer_mode != 'telegram' LIMIT 1""",
-            (execution_scope,),
-        ).fetchone()
-        bound_session = self._connection.execute(
-            """SELECT 1 FROM agent_sessions sessions
-               JOIN topics ON topics.topic_id = sessions.topic_id
-               WHERE COALESCE(topics.execution_scope, 'project:' || topics.project_id) = ?
-                 AND sessions.status IN ('active', 'satellite')
-                 AND sessions.provider_session_id IS NOT NULL LIMIT 1""",
-            (execution_scope,),
-        ).fetchone()
-        if any(item is not None for item in (job, dispatch, writer, bound_session)):
-            raise StateError("execution scope has active or unresolved execution")
+            self._lane_state.bind_in_transaction(lane_id, topic_id, now=_now())
+        return self._lane_state.get_lane(lane_id)
 
     def active_lane_for_topic(self, topic_id: int) -> dict[str, object] | None:
-        row = self._connection.execute(
-            """SELECT * FROM worktree_lanes
-               WHERE topic_id = ? AND status = 'active'""",
-            (topic_id,),
-        ).fetchone()
-        return None if row is None else dict(row)
+        return self._lane_state.active_lane_for_topic(topic_id)
 
     def get_lane(self, lane_id: str) -> dict[str, object]:
-        row = self._connection.execute(
-            "SELECT * FROM worktree_lanes WHERE lane_id = ?", (lane_id,)
-        ).fetchone()
-        if row is None:
-            raise StateError(f"unknown lane_id: {lane_id}")
-        return dict(row)
+        return self._lane_state.get_lane(lane_id)
 
     def list_lanes(self) -> list[dict[str, object]]:
-        rows = self._connection.execute(
-            "SELECT * FROM worktree_lanes ORDER BY created_at"
-        ).fetchall()
-        return [dict(row) for row in rows]
+        return self._lane_state.list_lanes()

@@ -4,6 +4,7 @@ import hashlib
 import sqlite3
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
@@ -62,7 +63,7 @@ class DurableAdmissionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.state_path = Path(self.tempdir.name) / "private" / "hub.db"
-        self.state = HubState.open(self.state_path)
+        self.state = HubState.open(self.state_path, codex_permission_profile=None)
         self.topic = self.state.observe_topic(
             project_id="example-project",
             chat_id=-1001234567890,
@@ -85,6 +86,20 @@ class DurableAdmissionTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.state.close()
         self.tempdir.cleanup()
+
+    def test_permission_preflight_snapshot_race_keeps_input_unclaimed_and_retryable(self) -> None:
+        request = self.request(self.message(1))
+        self.state.new_active_session(self.topic.topic_id)
+        result = self.admission.admit(request)
+        self.assertIsInstance(result, DurableAdmissionFailure)
+        assert isinstance(result, DurableAdmissionFailure)
+        self.assertEqual(result.reason, "enqueue_uncommitted")
+        self.assertFalse(self.state.message_already_observed(self.topic.chat_id, 1))
+        self.assertEqual(self.state.provider_jobs_for_topic(self.topic.topic_id), ())
+        current = self.state.active_session(self.topic.topic_id)
+        assert current is not None
+        retry = self.admission.admit(replace(request, session=current))
+        self.assertIsInstance(retry, CommittedAdmission)
 
     def message(
         self,

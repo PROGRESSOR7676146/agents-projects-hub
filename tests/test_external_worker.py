@@ -33,6 +33,7 @@ from hermes_codex_router.root_blockers import persistent_root_blocker
 from hermes_codex_router.service import ProjectHubService, QueueAcceptanceError, ServiceError
 from hermes_codex_router.state import HubState
 from hermes_codex_router.telegram import TopicMessage
+from tests.delivery_fixture import complete_final_delivery
 from tests.git_fixtures import init_git_root
 from tests.stop_fixtures import pending_stop
 
@@ -99,6 +100,73 @@ class InterruptibleAdapter(Adapter):
 
 
 class ExternalQueueWorkerTests(unittest.TestCase):
+    def test_idle_codex_worker_discards_cached_fallback_after_socket_recovery(self) -> None:
+        class OldClient:
+            closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        class Supervisor:
+            recovered = False
+
+            def restore_socket_at_idle(self) -> bool:
+                return self.recovered
+
+        worker = cast(Any, ExternalQueueWorker.__new__(ExternalQueueWorker))
+        worker.supervisor = Supervisor()
+        old = OldClient()
+        worker._codex_client = old
+        worker._restore_codex_socket_at_idle()
+        self.assertFalse(old.closed)
+        self.assertIs(worker._codex_client, old)
+
+        worker.supervisor.recovered = True
+        worker._restore_codex_socket_at_idle()
+        self.assertTrue(old.closed)
+        self.assertIsNone(worker._codex_client)
+
+    def test_worker_health_names_missing_human_approval_transport(self) -> None:
+        codex = AgentDefinition(
+            "codex",
+            "Codex",
+            "example_codex_bot",
+            "codex",
+            None,
+            True,
+            False,
+            "gpt-5.6-sol",
+            "high",
+        )
+        config = replace(
+            self.config,
+            agents=(codex, *self.config.agents),
+            external_worker_agent_ids=("codex", *self.config.external_worker_agent_ids),
+        )
+        worker = ExternalQueueWorker(config, "codex", registry=self.registry)
+        self.addCleanup(worker.close)
+        assert worker.supervisor is not None
+        worker.supervisor.transport_mode = "stdio-fallback"
+        worker._publish_health()
+        health = worker.state.get_runtime_health("provider_worker", worker.worker_id)
+        assert health is not None
+        self.assertEqual(health.error_code, "codex_approvals_unavailable")
+
+        worker.supervisor.transport_mode = "socket"
+        with patch.object(Path, "is_socket", return_value=True):
+            worker._publish_health()
+        health = worker.state.get_runtime_health("provider_worker", worker.worker_id)
+        assert health is not None
+        self.assertIsNone(health.error_code)
+
+        # Before any turn: an invisible shared socket is already approval loss.
+        worker.supervisor.transport_mode = None
+        with patch.object(Path, "is_socket", return_value=False):
+            worker._publish_health()
+        health = worker.state.get_runtime_health("provider_worker", worker.worker_id)
+        assert health is not None
+        self.assertEqual(health.error_code, "codex_approvals_unavailable")
+
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         base = Path(self.tempdir.name)
@@ -174,7 +242,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         provider_session_id: str | None = None,
         thread_id: int | None = None,
     ) -> str:
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",
@@ -218,7 +286,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             }
         )
         self.config.registry_path.write_text(json.dumps(document))
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             with state._immediate_transaction():
                 state._connection.execute(
@@ -241,7 +309,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             state.close()
 
     def test_running_worker_resolves_relocated_root_before_new_execution(self) -> None:
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             edit = ProjectEditStore(state, self.config.registry_path)
             workflow = edit.start(owner_user_id=42, project_ids=("example-project",))
@@ -365,7 +433,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             agents=(*self.config.agents, claude),
             external_worker_agent_ids=(*self.config.external_worker_agent_ids, "claude"),
         )
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",
@@ -413,7 +481,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         dynamic_root.mkdir()
         subprocess.run(("git", "init", "-q", str(dynamic_root)), check=True)
         self.bind_dynamic_project("dynamic", dynamic_root, -1002222222222)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="dynamic", chat_id=-1002222222222, thread_id=7, title="Dynamic"
@@ -443,7 +511,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
 
     def test_owner_direct_message_job_reaches_provider_with_exact_project(self) -> None:
         config = replace(self.config, direct_message_project_id="example-project")
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project", chat_id=42, thread_id=1, title="Direct"
@@ -482,7 +550,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         self.bind_dynamic_project("dynamic", dynamic_root, -1002222222222)
         adapter = Adapter("opencode")
         worker = ExternalQueueWorker(self.config, "opencode", adapter=cast(Any, adapter))
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="dynamic", chat_id=-1002222222222, thread_id=7, title="Dynamic"
@@ -574,8 +642,8 @@ class ExternalQueueWorkerTests(unittest.TestCase):
 
             outbox = worker.state.lease_telegram_outbox("opencode", "sender")
             assert outbox is not None and outbox.lease_token is not None
-            worker.state.mark_telegram_outbox_delivered(
-                outbox.outbox_id, outbox.lease_token, telegram_message_id=400
+            complete_final_delivery(
+                worker.state, outbox.outbox_id, outbox.lease_token, telegram_message_id=400
             )
             session = worker.state.get_session(job.session_id)
             second, _ = worker.state.enqueue_provider_job(
@@ -610,7 +678,8 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             self.assertIn("current network location", outbox.telegram_html)
             leased = worker.state.lease_telegram_outbox("antigravity", "test-sender")
             assert leased is not None and leased.lease_token is not None
-            worker.state.mark_telegram_outbox_delivered(
+            complete_final_delivery(
+                worker.state,
                 leased.outbox_id,
                 leased.lease_token,
                 telegram_message_id=123,
@@ -789,7 +858,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         def request_stop() -> None:
             if not entered.wait(2):
                 return
-            state = HubState.open(self.config.state_path)
+            state = HubState.open(self.config.state_path, codex_permission_profile=None)
             try:
                 job = state.get_provider_job(job_id)
                 state.request_emergency_stop(
@@ -828,7 +897,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
 
     def test_an_unfinished_older_stop_never_interrupts_or_cancels_later_work(self) -> None:
         old_id = self.enqueue("opencode", 32, thread_id=132)
-        state = HubState.open(self.config.state_path)
+        state = HubState.open(self.config.state_path, codex_permission_profile=None)
         try:
             leased = state.lease_provider_job("opencode", "crashed-worker")
             assert leased is not None and leased.lease_token is not None
@@ -926,7 +995,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             self.config,
             agents=self.config.agents + (nonisolated,),
         )
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",
@@ -979,7 +1048,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         self.assertTrue(controller.run_embedded_queue_cycle())
         self.assertEqual(isolated_adapter.calls, 0)
         self.assertEqual(embedded_adapter.calls, 1)
-        verification = HubState.open(config.state_path)
+        verification = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             self.assertEqual(verification.get_provider_job(isolated_job).status, "queued")
         finally:
@@ -1011,7 +1080,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
         controller.config = config
         controller.registry = self.registry
-        controller.state = HubState.open(config.state_path)
+        controller.state = HubState.open(config.state_path, codex_permission_profile=None)
         controller.agent = codex
         controller.telegram = Sender()
         controller.usernames = {agent.agent_id: agent.telegram_username for agent in config.agents}
@@ -1076,7 +1145,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
         controller.config = config
         controller.registry = self.registry
-        controller.state = HubState.open(config.state_path)
+        controller.state = HubState.open(config.state_path, codex_permission_profile=None)
         controller.agent = codex
         controller.telegram = Sender()
         controller.usernames = {agent.agent_id: agent.telegram_username for agent in config.agents}
@@ -1177,7 +1246,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
         controller = cast(Any, ProjectHubService.__new__(ProjectHubService))
         controller.config = config
         controller.registry = self.registry
-        controller.state = HubState.open(config.state_path)
+        controller.state = HubState.open(config.state_path, codex_permission_profile=None)
         controller.agent = codex
         controller.telegram = Sender()
         controller.usernames = {agent.agent_id: agent.telegram_username for agent in config.agents}
@@ -1424,7 +1493,7 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             "high",
         )
         config = replace(self.config, agents=(codex, hermes))
-        state = HubState.open(config.state_path)
+        state = HubState.open(config.state_path, codex_permission_profile=None)
         try:
             topic = state.observe_topic(
                 project_id="example-project",

@@ -21,7 +21,7 @@ class RuntimeHealthStateFacadeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.base = Path(self.tempdir.name)
-        self.state = HubState.open(self.base / "private" / "hub.db")
+        self.state = HubState.open(self.base / "private" / "hub.db", codex_permission_profile=None)
         self.now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 
     def tearDown(self) -> None:

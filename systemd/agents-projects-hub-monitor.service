@@ -2,6 +2,8 @@
 Description=Agents Projects Hub operational alert check
 After=network-online.target agents-projects-hub.service
 Wants=network-online.target
+Wants=agents-projects-hub-codex-socket-dir.service
+After=agents-projects-hub-codex-socket-dir.service
 
 [Service]
 Type=oneshot
