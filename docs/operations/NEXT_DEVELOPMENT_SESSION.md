@@ -1,5 +1,8 @@
 # Next session: Claude parity and visible task states
 
+Maintenance-release checkpoint: [0.7.1](STABILIZATION_RELEASE_0_7_1.md).
+Its packaging gates are separate from provider activation and the later stack.
+
 Status: native Claude and schema-37 visibility merged; human approval boundary in progress.
 Date: 2026-10-04.
 Decision owner: repository owner. Integration owner: lead development agent.

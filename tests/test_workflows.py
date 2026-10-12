@@ -273,8 +273,31 @@ def _assert_validation_contract(workflows: Path) -> None:
         "git rev-parse HEAD" in command and "RELEASE_TAG" in command for command in release_commands
     ):
         raise AssertionError("release must verify event SHA and peeled tag before publication")
-    if 'gh release create "$RELEASE_TAG" --verify-tag --generate-notes' not in release_commands:
+    publication = next(
+        (
+            command
+            for command in release_commands
+            if 'gh release create "$RELEASE_TAG" --verify-tag --generate-notes' in command
+        ),
+        "",
+    )
+    if not publication or not all(
+        name in publication
+        for name in (
+            "*.whl",
+            "*.tar.gz",
+            "requirements-release.lock",
+            "uv.lock",
+            "release-info.json",
+            "SHA256SUMS",
+        )
+    ):
         raise AssertionError("release publication command changed")
+    if (
+        '.venv/bin/python scripts/release_assets.py --output "$RUNNER_TEMP/hub-release-assets"'
+        not in release_commands
+    ):
+        raise AssertionError("release must verify clean-SHA assets before publication")
 
     validator = " ".join((ROOT / "scripts" / "validate.py").read_text(encoding="utf-8").split())
     for required_stage in (

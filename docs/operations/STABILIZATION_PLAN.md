@@ -1,5 +1,7 @@
 # Stabilization plan
 
+Bounded maintenance-release checkpoint: [0.7.1](STABILIZATION_RELEASE_0_7_1.md).
+
 Status: active; stages 0–2 and 3b done, stage 3 in progress
 Date: 2026-09-27; updated 2026-10-04
 Owner: repository owner (decisions and merges); lead development agent integrates

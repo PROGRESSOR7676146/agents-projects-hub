@@ -40,6 +40,14 @@ run this audit.
    release. Promotion then uses the immutable artifact and records its exact SHA
    in private deployment evidence.
 
+The tag workflow builds its wheel directly from the clean Git checkout, then
+builds the source archive separately. A wheel rebuilt from the source archive
+has no verified Git identity. `scripts/release_assets.py` checks the wheel's
+version, clean assertion and exact SHA, refuses a contaminated asset directory,
+and seals the wheel, source archive and checked-in runtime locks with a public
+inventory and `SHA256SUMS`. The public inventory contains no deployment paths,
+configuration or state and never substitutes for the private deployment manifest.
+
 If a tag is missing, leave the debt visible until tag creation is explicitly
 authorized. If an existing tag is wrong, stop: do not retarget or delete it as
 an automatic repair. Publish a corrective version through an owner-reviewed

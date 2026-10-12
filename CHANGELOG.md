@@ -5,6 +5,16 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-12
+
+- Publish an immutable clean-SHA wheel, source archive, exact runtime locks,
+  public artifact inventory and SHA-256 checksums with every release.
+- Freeze the schema-41 compatibility baseline for recovery packaging; keep
+  Claude file tools, role orchestration and newer incident/control candidates
+  outside this stabilization acceptance claim.
+- Retain exact-session connection, bounded Codex transport/control waits,
+  explicit saved-task retry and managed-profile continuity fixes.
+
 - Keep Hermes out of Hub project groups' commands: the Hermes plugin stops
   bare commands there (they belong to the Hub bot), passes only commands
   addressed to Hermes, and deletes the command menu Hermes used to register
