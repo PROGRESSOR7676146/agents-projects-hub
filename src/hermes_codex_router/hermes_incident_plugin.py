@@ -12,13 +12,12 @@ import importlib
 import json
 import os
 import re
-from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 from .diagnostic_log import configure_process_logging, survived
 from .hermes_incident_cursor import NoticeSettings, _pairs
-from .hermes_incident_notices import HermesIncidentNotices, NoticeRejected, file_call
+from .hermes_incident_notices import HermesIncidentNotices, file_call
 from .incident_journal import IncidentJournalError, _read
 
 CONFIG_ENV = "HERMES_PROJECT_HUB_INCIDENT_NOTICES_CONFIG"
@@ -98,30 +97,27 @@ class _Integration:
             # No network request, but preserve the pre-existing attempted fence.
             raise RuntimeError("incident_notices_retired")
         telegram = importlib.import_module("telegram")
-        errors = importlib.import_module("telegram.error")
         owner = self.consumer.settings.owner
         markup = telegram.InlineKeyboardMarkup(
             [[telegram.InlineKeyboardButton("Скрыть", callback_data=f"hubinc:hide:{token}")]]
         )
-        try:
-            message = await self.application.bot.send_message(
-                chat_id=owner,
-                text=text,
-                parse_mode=None,
-                reply_markup=markup,
-                disable_web_page_preview=True,
-                read_timeout=2,
-                write_timeout=2,
-                connect_timeout=1,
-                pool_timeout=1,
-            )
-        except errors.RetryAfter as error:
-            delay = error.retry_after
-            if isinstance(delay, timedelta):
-                delay = delay.total_seconds()
-            raise NoticeRejected(int(delay)) from None
-        except (errors.BadRequest, errors.Forbidden):
-            raise NoticeRejected(60) from None
+        # PTB's error classes do not retain validated rejection-body proof:
+        # BadRequest/Forbidden may follow malformed or contradictory HTTP bodies,
+        # and RetryAfter may follow any non-2xx status with retry parameters.
+        # Leave all native SDK failures unknown; never infer safe resend from
+        # class names or exception text. NoticeRejected is reserved for transports
+        # with independent proof, exercised by the engine's offline fixtures.
+        message = await self.application.bot.send_message(
+            chat_id=owner,
+            text=text,
+            parse_mode=None,
+            reply_markup=markup,
+            disable_web_page_preview=True,
+            read_timeout=2,
+            write_timeout=2,
+            connect_timeout=1,
+            pool_timeout=1,
+        )
         chat = getattr(message, "chat", None)
         chat_id = getattr(chat, "id", None)
         if type(chat_id) is not int or chat_id != owner or getattr(chat, "type", None) != "private":

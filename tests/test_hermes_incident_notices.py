@@ -5,6 +5,7 @@ import json
 import tempfile
 import threading
 import unittest
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -424,6 +425,58 @@ class IncidentNoticeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.sent, [])
         finally:
             self.root.chmod(0o700)
+
+    async def test_tick_acquires_and_releases_file_lock_off_control_loop(self) -> None:
+        self.project(())
+        main = threading.get_ident()
+        threads: list[int] = []
+        original = self.consumer.store.locked
+
+        @contextmanager
+        def observed():
+            threads.append(threading.get_ident())
+            with original():
+                try:
+                    yield
+                finally:
+                    threads.append(threading.get_ident())
+
+        self.consumer.store.locked = observed
+        self.assertEqual(await self.tick(), "sent")
+        self.assertEqual(len(threads), 2)
+        self.assertNotIn(main, threads)
+
+    async def test_cancelled_lock_acquisition_is_joined_and_releases_its_descriptor(self) -> None:
+        self.project(())
+        entered, release = asyncio.Event(), threading.Event()
+        original = self.consumer.store.locked
+        loop = asyncio.get_running_loop()
+
+        @contextmanager
+        def delayed():
+            with original():
+                loop.call_soon_threadsafe(entered.set)
+                if not release.wait(5):
+                    raise TimeoutError("fixture release")
+                yield
+
+        self.consumer.store.locked = delayed
+        task = asyncio.create_task(self.consumer.tick(self.send, now=NOW))
+        await asyncio.wait_for(entered.wait(), 3)
+        try:
+            task.cancel()
+            await asyncio.sleep(0.01)
+            self.assertFalse(task.done())
+            self.assertEqual(
+                await HermesIncidentNotices(self.settings).tick(self.send, now=NOW), "busy"
+            )
+        finally:
+            release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.consumer = HermesIncidentNotices(self.settings)
+        self.assertEqual(await self.tick(), "sent")
+        self.assertEqual(len(self.sent), 1)
 
 
 if __name__ == "__main__":

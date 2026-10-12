@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import partial
-from typing import Any, Awaitable, Callable, TypeVar
+from typing import Any, AsyncIterator, Awaitable, Callable, TypeVar
 
 from .hermes_incident_cursor import MAX_DELIVERIES, CursorBusy, NoticeCursor, NoticeSettings
 from .incident_journal import IncidentJournalError, _time, read_incident_snapshot
@@ -40,6 +41,18 @@ async def file_call(call: Callable[..., T], *args: Any) -> T:
     if cancelled:
         raise asyncio.CancelledError()
     return result
+
+
+@asynccontextmanager
+async def _file_lock(store: NoticeCursor) -> AsyncIterator[None]:
+    manager = store.locked()
+    try:
+        await file_call(manager.__enter__)
+        yield
+    finally:
+        # __enter__ can finish acquiring while its await is cancelled. Joining
+        # it, then always exiting the manager, releases that descriptor too.
+        await file_call(manager.__exit__, None, None, None)
 
 
 class NoticeRejected(RuntimeError):
@@ -201,7 +214,7 @@ class HermesIncidentNotices:
             if now.tzinfo is None:
                 raise IncidentJournalError()
             now = now.astimezone(timezone.utc)
-            with self.store.locked():
+            async with _file_lock(self.store):
                 value = await file_call(self._prepare, now)
                 outcomes = {"idle"}
                 for row in value["deliveries"]:

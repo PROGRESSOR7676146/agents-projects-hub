@@ -262,6 +262,9 @@ receipt commit retain attempted/unknown with no automatic resend. Proven
 rejections alone get up to three deadline-bound attempts; exhausted rejection
 is distinguishable from unknown. Storm coalescing changes only never-attempted
 notices, never a retry's exact text/token or uncertainty evidence.
+The current PTB adapter cannot prove rejection from an SDK class name and treats
+all SDK failures as unknown; the engine's bounded proven-rejection seam remains
+synthetic coverage until independent raw rejection proof is available.
 
 An absent cursor cold-seeds one summary. Unreadable existing evidence is
 preserved/refused, superseding the earlier unreadable-cursor cold-seed proposal:

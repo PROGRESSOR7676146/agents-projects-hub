@@ -181,12 +181,12 @@ class HermesIncidentPluginTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.bot.calls, [])
         self.assertFalse(self.cursor.exists())
 
-    async def test_only_explicit_sdk_rejection_is_retryable(self) -> None:
+    async def test_sdk_error_labels_are_unknown_without_rejection_body_proof(self) -> None:
         install_incident_notices(self.application)
         self.bot.error = Retry("private details")
         await self.run_job()
         saved = json.loads(self.cursor.read_text())
-        self.assertEqual(saved["deliveries"][0]["state"], "pending")
+        self.assertEqual(saved["deliveries"][0]["state"], "unknown")
         self.assertNotIn("private details", self.cursor.read_text())
         self.cursor.unlink()
         self.bot.error = OSError("private details")

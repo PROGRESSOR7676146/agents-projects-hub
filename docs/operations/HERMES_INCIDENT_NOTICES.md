@@ -67,6 +67,13 @@ Inspect only the local private cursor and bounded package diagnostics:
 | `rejected` | All three attempts proved rejected; no further automatic retry. |
 | Unavailable/refused | Preserve files; inspect safety/schema, destination binding, clock and capacity locally. |
 
+The current PTB adapter treats every SDK error as unknown. PTB error classes do
+not retain validated rejection-body proof and can classify contradictory HTTP
+bodies as `BadRequest`. The bounded rejection branch is reserved for a transport
+with independent proof and covered by synthetic engine fixtures; an SDK class
+name never enables resend. This favors a missed notice over a duplicate after
+an ambiguous response. Adding raw rejection proof is separate transport work.
+
 The cursor has at most 500 seen episodes, 128 delivery records and 1 MiB.
 Old `sent` records may be retired, invalidating their controls. Unknown and
 exhausted rows are never automatically erased; a saturated cursor refuses new
@@ -92,8 +99,9 @@ contention, config retirement and scoped controls. Existing Hermes admission
 and Operations fallback regressions remain required. Reviewers read source;
 automated tests do not establish human approval or Telegram delivery.
 
-The optional real SDK fixture uses a fake Bot and no network. It verifies
-Application start/stop, active-callback join and reconnect without post hooks:
+The optional real SDK fixture uses a fake Bot/Request and no network. It verifies
+Application start/stop, active-callback join, reconnect without post hooks,
+core-callback exclusion and conservative contradictory-response handling:
 
 ```bash
 HUB_REQUIRE_HERMES_NOTICE_SDK=1 PYTHONPATH=src \

@@ -25,6 +25,68 @@ REQUIRED = os.getenv("HUB_REQUIRE_HERMES_NOTICE_SDK") == "1"
 
 @unittest.skipUnless(AVAILABLE or REQUIRED, "optional PTB 22.8 + APScheduler fixture")
 class RealNoticeLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sdk_error_label_is_not_proof_of_rejected_delivery(self) -> None:
+        import telegram
+        from telegram.ext import Application, ExtBot
+        from telegram.request import BaseRequest
+
+        class OfflineRequest(BaseRequest):
+            @property
+            def read_timeout(self) -> float:
+                return 1
+
+            async def initialize(self) -> None:
+                return None
+
+            async def shutdown(self) -> None:
+                return None
+
+            async def do_request(self, *args: Any, **kwargs: Any) -> tuple[int, bytes]:
+                # PTB still raises BadRequest despite this contradictory body.
+                return 400, b'{"ok":true,"result":{"message_id":1}}'
+
+        class OfflineBot(ExtBot):
+            async def initialize(self) -> None:
+                self._bot_user = telegram.User(987654321, "Example Bot", True)
+                self._initialized = True
+
+            async def shutdown(self) -> None:
+                self._initialized = False
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            journal, cursor, config = (
+                root / "incident-journal.json",
+                root / "hermes-incident-cursor.json",
+                root / "notices.json",
+            )
+            config.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "journal": str(journal),
+                        "cursor": str(cursor),
+                        "owner": 123456789,
+                    }
+                )
+            )
+            config.chmod(0o600)
+            with IncidentJournal(journal).cycle() as writer:
+                writer.project((), now=datetime.now(timezone.utc))
+            bot = OfflineBot("123456789:EXAMPLE_NOT_A_REAL_TOKEN", request=OfflineRequest())
+            app = Application.builder().bot(bot).updater(None).build()
+            with mock.patch.dict(os.environ, {CONFIG_ENV: str(config)}):
+                self.assertTrue(install_incident_notices(app))
+                await app.initialize()
+                try:
+                    integration = app.bot_data["hub_incident_notices_v1"]
+                    await integration.tick(None)
+                    self.assertEqual(
+                        json.loads(cursor.read_text())["deliveries"][0]["state"], "unknown"
+                    )
+                finally:
+                    await app.shutdown()
+
     async def test_real_dispatch_stops_own_stale_controls_before_core(self) -> None:
         import telegram
         from telegram.ext import Application, CallbackQueryHandler, ExtBot
