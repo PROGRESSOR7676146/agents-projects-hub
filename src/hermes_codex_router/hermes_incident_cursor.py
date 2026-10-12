@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import re
-import stat
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -15,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from .incident_journal import IncidentJournalError, _private_stat, _read, _time
+from .incident_journal import IncidentJournalError, _private_parent, _private_stat, _read, _time
 
 MAX_CURSOR_BYTES = 1024 * 1024
 MAX_DELIVERIES = 128
@@ -38,14 +37,7 @@ class NoticeSettings:
         if type(self.owner) is not int or not 0 < self.owner < 2**52:
             raise ValueError("incident_notice_configuration_invalid")
         for path in (self.journal, self.cursor):
-            if not path.is_absolute() or path.parent.resolve() != path.parent:
-                raise ValueError("incident_notice_configuration_invalid")
-            parent = path.parent.stat()
-            if (
-                not stat.S_ISDIR(parent.st_mode)
-                or parent.st_uid != os.geteuid()
-                or parent.st_mode & 0o077
-            ):
+            if not path.is_absolute() or ".." in path.parts:
                 raise ValueError("incident_notice_configuration_invalid")
         journal_paths = {
             self.journal,
@@ -74,6 +66,25 @@ class NoticeSettings:
 
 class CursorBusy(RuntimeError):
     pass
+
+
+class NoticeCapacity(IncidentJournalError):
+    """Projection cannot fit without erasing unreceipted delivery evidence."""
+
+
+def _encoded(value: dict[str, Any]) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
+
+
+def fit_deliveries(value: dict[str, Any]) -> None:
+    # Reserve room for longer attempted/unknown labels and later timestamps.
+    # Only proven sent rows may be evicted, oldest first, at either bound.
+    rows = value["deliveries"]
+    while len(rows) > MAX_DELIVERIES or len(_encoded(value)) > MAX_CURSOR_BYTES - 4096:
+        removable = next((row for row in rows if row["state"] == "sent"), None)
+        if removable is None:
+            raise NoticeCapacity()
+        rows.remove(removable)
 
 
 def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -191,7 +202,7 @@ class NoticeCursor:
 
     @contextmanager
     def locked(self) -> Iterator[None]:
-        self.settings.__post_init__()
+        _private_parent(self.path)
         fd = os.open(
             self.path.with_suffix(".lock"),
             os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
@@ -217,10 +228,9 @@ class NoticeCursor:
         return _validate(value, self.settings)
 
     def write(self, value: dict[str, Any]) -> None:
+        fit_deliveries(value)
         _validate(value, self.settings)
-        raw = (json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
-        if len(raw) > MAX_CURSOR_BYTES:
-            raise IncidentJournalError()
+        raw = _encoded(value)
         fd, name = tempfile.mkstemp(prefix=".hermes-incident-", suffix=".tmp", dir=self.path.parent)
         try:
             with os.fdopen(fd, "wb") as output:

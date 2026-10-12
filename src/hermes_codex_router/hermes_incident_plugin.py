@@ -12,6 +12,7 @@ import importlib
 import json
 import os
 import re
+import weakref
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from .incident_journal import IncidentJournalError, _read
 
 CONFIG_ENV = "HERMES_PROJECT_HUB_INCIDENT_NOTICES_CONFIG"
 _KEY = "hub_incident_notices_v1"
+_INTEGRATIONS: weakref.WeakKeyDictionary[Any, _Integration] = weakref.WeakKeyDictionary()
 _HIDE = re.compile(r"hubinc:hide:([0-9a-f]{32})\Z")
 
 
@@ -62,8 +64,11 @@ def _load(path: Path) -> tuple[NoticeSettings, str]:
 
 
 class _Integration:
-    def __init__(self, application: Any, path: Path, settings: NoticeSettings, digest: str) -> None:
-        self.application, self.path, self.digest = application, path, digest
+    def __init__(
+        self, application: Any, raw_path: str, settings: NoticeSettings, digest: str
+    ) -> None:
+        self.application = weakref.proxy(application)
+        self.raw_path, self.path, self.digest = raw_path, Path(raw_path), digest
         self.consumer = HermesIncidentNotices(settings)
         self.retired = False
         self.job: Any = None
@@ -72,7 +77,10 @@ class _Integration:
         if self.retired:
             return False
         try:
-            if os.getenv(CONFIG_ENV) != str(self.path) or _load(self.path)[1] != self.digest:
+            if (
+                os.getenv(CONFIG_ENV) != self.raw_path
+                or hashlib.sha256(_read(self.path, 16384)).hexdigest() != self.digest
+            ):
                 raise ValueError("incident_notice_configuration_changed")
         except (
             OSError,
@@ -98,8 +106,12 @@ class _Integration:
             raise RuntimeError("incident_notices_retired")
         telegram = importlib.import_module("telegram")
         owner = self.consumer.settings.owner
-        markup = telegram.InlineKeyboardMarkup(
-            [[telegram.InlineKeyboardButton("Скрыть", callback_data=f"hubinc:hide:{token}")]]
+        markup = (
+            telegram.InlineKeyboardMarkup(
+                [[telegram.InlineKeyboardButton("Скрыть", callback_data=f"hubinc:hide:{token}")]]
+            )
+            if await file_call(self.consumer.has_open_members, token)
+            else None
         )
         # PTB's error classes do not retain validated rejection-body proof:
         # BadRequest/Forbidden may follow malformed or contradictory HTTP bodies,
@@ -184,7 +196,7 @@ def install_incident_notices(application: Any) -> bool:
     if not raw:
         return False
     configure_process_logging()
-    if _KEY in application.bot_data:
+    if application in _INTEGRATIONS:
         return True
     try:
         settings, digest = _load(Path(raw))
@@ -192,7 +204,7 @@ def install_incident_notices(application: Any) -> bool:
         if telegram.__version__ != "22.8" or application.job_queue is None:
             raise ValueError("incident_notice_lifecycle_unavailable")
         ext = importlib.import_module("telegram.ext")
-        integration = _Integration(application, Path(raw), settings, digest)
+        integration = _Integration(application, raw, settings, digest)
         # This native scheduler is started/stopped by Application, including
         # disconnect/reconnect. No post hooks, create_task loop or new service.
         integration.job = application.job_queue.run_repeating(
@@ -210,7 +222,7 @@ def install_incident_notices(application: Any) -> bool:
         except Exception:
             integration._remove()
             raise
-        application.bot_data[_KEY] = integration
+        _INTEGRATIONS[application] = integration
         return True
     except Exception as error:
         survived("hermes_plugin.incident_registration", error)

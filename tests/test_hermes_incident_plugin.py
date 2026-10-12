@@ -71,6 +71,16 @@ class Bot:
         )
 
 
+class Application:
+    def __init__(
+        self, bot: Bot, job_queue: Queue, bot_data: dict[str, Any], add_handler: Any
+    ) -> None:
+        self.bot = bot
+        self.job_queue: Queue | None = job_queue
+        self.bot_data = bot_data
+        self.add_handler = add_handler
+
+
 def sdk() -> dict[str, Any]:
     telegram = types.ModuleType("telegram")
     telegram.__dict__.update(
@@ -114,7 +124,7 @@ class HermesIncidentPluginTests(unittest.IsolatedAsyncioTestCase):
         self.queue = Queue()
         self.handlers: list[tuple[Handler, int]] = []
         self.bot = Bot()
-        self.application = types.SimpleNamespace(
+        self.application = Application(
             bot=self.bot,
             job_queue=self.queue,
             bot_data={},
@@ -143,6 +153,20 @@ class HermesIncidentPluginTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.queue.jobs), 1)
         self.assertEqual(self.queue.kwargs["job_kwargs"], {"max_instances": 1, "coalesce": True})
         self.assertEqual(self.handlers[0][1], -30)
+        self.assertEqual(self.application.bot_data, {})
+        with IncidentJournal(self.journal).cycle() as writer:
+            from datetime import datetime, timezone
+
+            from hermes_codex_router.operational_alert import OperationalAlert
+
+            writer.project(
+                (
+                    OperationalAlert(
+                        "example:a", "provider_work_stalled", "warning", "Example signal"
+                    ),
+                ),
+                now=datetime.now(timezone.utc),
+            )
         await self.run_job()
         self.assertEqual(len(self.bot.calls), 1)
         call = self.bot.calls[0]
@@ -180,6 +204,68 @@ class HermesIncidentPluginTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.queue.jobs[0].removed)
         self.assertEqual(self.bot.calls, [])
         self.assertFalse(self.cursor.exists())
+
+    async def test_storage_outages_recover_without_retiring_native_job(self) -> None:
+        journal_dir, cursor_dir = self.root / "journal", self.root / "cursor"
+        journal_dir.mkdir(mode=0o700)
+        cursor_dir.mkdir(mode=0o700)
+        self.journal.rename(journal_dir / self.journal.name)
+        self.data.update(
+            journal=str(journal_dir / self.journal.name), cursor=str(cursor_dir / self.cursor.name)
+        )
+        self.config.write_text(json.dumps(self.data))
+        self.cursor = Path(self.data["cursor"])
+        self.assertTrue(install_incident_notices(self.application))
+        await self.run_job()
+        journal_dir.chmod(0o755)
+        try:
+            await self.run_job()
+            await self.run_job()
+            self.assertFalse(self.queue.jobs[0].removed)
+            self.assertEqual(len(self.bot.calls), 2)
+            self.assertIn("недоступен", self.bot.calls[-1]["text"])
+        finally:
+            journal_dir.chmod(0o700)
+        await self.run_job()
+        self.assertIn("снова обновляется", self.bot.calls[-1]["text"])
+        for storage in (journal_dir, cursor_dir):
+            before = self.cursor.read_bytes()
+            renamed = storage.with_name(storage.name + "-unavailable")
+            storage.rename(renamed)
+            try:
+                await self.run_job()
+                self.assertFalse(self.queue.jobs[0].removed)
+                if storage == cursor_dir:
+                    self.assertEqual((renamed / self.cursor.name).read_bytes(), before)
+            finally:
+                renamed.rename(storage)
+            await self.run_job()
+        before = self.cursor.read_bytes()
+        cursor_dir.chmod(0o755)
+        try:
+            await self.run_job()
+            self.assertFalse(self.queue.jobs[0].removed)
+            self.assertEqual(self.cursor.read_bytes(), before)
+        finally:
+            cursor_dir.chmod(0o700)
+        await self.run_job()
+        self.assertNotEqual(self.cursor.read_bytes(), before)
+        self.assertFalse(self.queue.jobs[0].removed)
+
+    async def test_health_and_empty_summary_omit_inactive_dismiss_button(self) -> None:
+        install_incident_notices(self.application)
+        await self.run_job()
+        self.assertIsNone(self.bot.calls[-1]["reply_markup"])
+        self.journal.chmod(0o644)
+        await self.run_job()
+        self.assertIsNone(self.bot.calls[-1]["reply_markup"])
+
+    async def test_raw_config_path_spelling_does_not_retire_unchanged_opt_in(self) -> None:
+        with mock.patch.dict("os.environ", {CONFIG_ENV: str(self.root) + "//notices.json"}):
+            self.assertTrue(install_incident_notices(self.application))
+            await self.run_job()
+            self.assertFalse(self.queue.jobs[0].removed)
+            self.assertEqual(len(self.bot.calls), 1)
 
     async def test_sdk_error_labels_are_unknown_without_rejection_body_proof(self) -> None:
         install_incident_notices(self.application)
@@ -220,7 +306,7 @@ class HermesIncidentPluginTests(unittest.IsolatedAsyncioTestCase):
     async def test_control_rechecks_config_and_owner_before_dismiss(self) -> None:
         install_incident_notices(self.application)
         await self.run_job()
-        integration = self.application.bot_data["hub_incident_notices_v1"]
+        integration = self.queue.jobs[0].callback.__self__
         dismiss = mock.Mock(return_value=True)
         integration.consumer.dismiss = dismiss
         token = json.loads(self.cursor.read_text())["deliveries"][0]["token"]

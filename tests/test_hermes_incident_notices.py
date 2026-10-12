@@ -402,6 +402,65 @@ class IncidentNoticeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.cursor.read_bytes(), before)
         self.assertEqual(len(self.sent), 1)
 
+    async def test_never_attempted_health_backlog_keeps_only_latest_edge(self) -> None:
+        self.settings = NoticeSettings(
+            self.journal, self.cursor, OWNER, max_cards=1, window_seconds=3600
+        )
+        self.consumer = HermesIncidentNotices(self.settings)
+        self.project(())
+        await self.tick()
+        for second in range(180, 3600, 180):
+            await self.tick(second)
+            self.project((), NOW + timedelta(seconds=second + 1))
+            await self.tick(second + 1)
+            pending = [r for r in self.saved()["deliveries"] if r["state"] == "pending"]
+            self.assertEqual(len(pending), 1)
+            self.assertIn("снова обновляется", pending[0]["text"])
+        self.project((), NOW + timedelta(seconds=3600))
+        self.assertEqual(await self.tick(3600), "sent")
+        self.assertEqual(len(self.sent), 2)
+
+    async def test_full_projection_still_drains_saved_due_notice_without_advancing_seen(
+        self,
+    ) -> None:
+        self.project(())
+        await self.tick()
+        value = self.saved()
+        template = value["deliveries"][0]
+        value["deliveries"] = [
+            {**template, "token": f"{n:032x}", "state": "unknown", "message_id": None}
+            for n in range(127)
+        ] + [{**template, "token": f"{127:032x}", "state": "pending", "message_id": None}]
+        self.consumer.store.write(value)
+        self.project(("example:new",), NOW + timedelta(seconds=1))
+        self.assertEqual(await self.tick(1), "unavailable")
+        saved = self.saved()
+        self.assertEqual(saved["seen"], value["seen"])
+        self.assertEqual(saved["quiet"], value["quiet"])
+        self.assertEqual(saved["deliveries"][-1]["state"], "sent")
+        self.assertEqual(self.sent[-1][1], f"{127:032x}")
+        self.assertEqual(sum(r["state"] == "unknown" for r in saved["deliveries"]), 127)
+        await self.tick(2)
+        self.assertEqual(len(self.sent), 3)
+        self.assertEqual(len(self.saved()["seen"]), 1)
+
+    async def test_receipted_summaries_are_pruned_to_byte_budget(self) -> None:
+        self.project(tuple(f"example:{n}" for n in range(500)))
+        await self.tick()
+        value = self.saved()
+        template = value["deliveries"][0]
+        value["deliveries"] = [
+            {**template, "token": f"{n:032x}", "message_id": n + 1} for n in range(30)
+        ]
+        unknown = {**template, "token": "f" * 32, "state": "unknown", "message_id": None}
+        value["deliveries"].insert(0, unknown)
+        self.consumer.store.write(value)
+        self.assertLessEqual(len(self.cursor.read_bytes()), 1024 * 1024)
+        saved = self.saved()["deliveries"]
+        self.assertEqual(saved[0], unknown)
+        self.assertLess(len(saved), 31)
+        self.assertEqual(saved[-1]["token"], f"{29:032x}")
+
     async def test_storm_cannot_change_a_rejected_retrys_exact_notice(self) -> None:
         self.project(())
 

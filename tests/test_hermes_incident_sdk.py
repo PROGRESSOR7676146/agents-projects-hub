@@ -27,7 +27,7 @@ REQUIRED = os.getenv("HUB_REQUIRE_HERMES_NOTICE_SDK") == "1"
 class RealNoticeLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_sdk_error_label_is_not_proof_of_rejected_delivery(self) -> None:
         import telegram
-        from telegram.ext import Application, ExtBot
+        from telegram.ext import ExtBot
         from telegram.request import BaseRequest
 
         class OfflineRequest(BaseRequest):
@@ -73,19 +73,96 @@ class RealNoticeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             config.chmod(0o600)
             with IncidentJournal(journal).cycle() as writer:
                 writer.project((), now=datetime.now(timezone.utc))
-            bot = OfflineBot("123456789:EXAMPLE_NOT_A_REAL_TOKEN", request=OfflineRequest())
-            app = Application.builder().bot(bot).updater(None).build()
-            with mock.patch.dict(os.environ, {CONFIG_ENV: str(config)}):
-                self.assertTrue(install_incident_notices(app))
-                await app.initialize()
-                try:
-                    integration = app.bot_data["hub_incident_notices_v1"]
-                    await integration.tick(None)
-                    self.assertEqual(
-                        json.loads(cursor.read_text())["deliveries"][0]["state"], "unknown"
-                    )
-                finally:
-                    await app.shutdown()
+            request = OfflineRequest()
+            do_request = mock.AsyncMock(wraps=request.do_request)
+            with mock.patch.object(request, "do_request", do_request):
+                await self._exercise_sdk_request(OfflineBot, request, config, cursor, "unknown")
+            do_request.assert_awaited_once()
+
+    async def test_real_sdk_success_records_positive_receipt(self) -> None:
+        import telegram
+        from telegram.ext import ExtBot
+        from telegram.request import BaseRequest
+
+        class OfflineRequest(BaseRequest):
+            @property
+            def read_timeout(self) -> float:
+                return 1
+
+            async def initialize(self) -> None:
+                return None
+
+            async def shutdown(self) -> None:
+                return None
+
+            async def do_request(self, *args: Any, **kwargs: Any) -> tuple[int, bytes]:
+                return 200, json.dumps(
+                    {
+                        "ok": True,
+                        "result": {
+                            "message_id": 41,
+                            "date": 1767225600,
+                            "chat": {"id": 123456789, "type": "private"},
+                            "text": "Example summary",
+                        },
+                    }
+                ).encode()
+
+        class OfflineBot(ExtBot):
+            async def initialize(self) -> None:
+                self._bot_user = telegram.User(987654321, "Example Bot", True)
+                self._initialized = True
+
+            async def shutdown(self) -> None:
+                self._initialized = False
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            journal, cursor, config = (
+                root / "journal.json",
+                root / "cursor.json",
+                root / "notices.json",
+            )
+            config.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "journal": str(journal),
+                        "cursor": str(cursor),
+                        "owner": 123456789,
+                    }
+                )
+            )
+            config.chmod(0o600)
+            with IncidentJournal(journal).cycle() as writer:
+                writer.project((), now=datetime.now(timezone.utc))
+            request = OfflineRequest()
+            do_request = mock.AsyncMock(wraps=request.do_request)
+            with mock.patch.object(request, "do_request", do_request):
+                await self._exercise_sdk_request(OfflineBot, request, config, cursor, "sent")
+            do_request.assert_awaited_once()
+            self.assertTrue(do_request.call_args.kwargs["url"].endswith("/sendMessage"))
+            self.assertEqual(do_request.call_args.kwargs["method"], "POST")
+            parameters = do_request.call_args.kwargs["request_data"].json_parameters
+            self.assertEqual(parameters["chat_id"], "123456789")
+            self.assertEqual(json.loads(cursor.read_text())["deliveries"][0]["message_id"], 41)
+
+    async def _exercise_sdk_request(
+        self, bot_type: Any, request: Any, config: Path, cursor: Path, state: str
+    ) -> None:
+        from telegram.ext import Application
+
+        bot = bot_type("123456789:EXAMPLE_NOT_A_REAL_TOKEN", request=request)
+        app = Application.builder().bot(bot).updater(None).build()
+        with mock.patch.dict(os.environ, {CONFIG_ENV: str(config)}):
+            self.assertTrue(install_incident_notices(app))
+            await app.initialize()
+            try:
+                integration = app.job_queue.jobs()[0].callback.__self__
+                await integration.tick(None)
+                self.assertEqual(json.loads(cursor.read_text())["deliveries"][0]["state"], state)
+            finally:
+                await app.shutdown()
 
     async def test_real_dispatch_stops_own_stale_controls_before_core(self) -> None:
         import telegram
@@ -206,12 +283,22 @@ class RealNoticeLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     queue = app.job_queue
                     self.assertIsNotNone(queue)
                     assert queue is not None
+                    job = queue.jobs()[0]
+                    completed = asyncio.Event()
+                    callback = job.callback
+
+                    async def observed(context: Any) -> None:
+                        try:
+                            await callback(context)
+                        finally:
+                            completed.set()
+
+                    job.callback = observed
                     await app.initialize()
                     try:
                         self.assertFalse(queue.scheduler.running)
                         await app.start()
                         self.assertTrue(queue.scheduler.running)
-                        job = queue.jobs()[0]
                         job.job.modify(next_run_time=datetime.now(timezone.utc))
                         if cycle == 0:
                             await asyncio.wait_for(entered.wait(), 5)
@@ -222,7 +309,7 @@ class RealNoticeLifecycleTests(unittest.IsolatedAsyncioTestCase):
                             await asyncio.wait_for(stopping, 5)
                         else:
                             # A restarted exact cursor sends no historical summary.
-                            await asyncio.sleep(0.15)
+                            await asyncio.wait_for(completed.wait(), 5)
                             await app.stop()
                         self.assertFalse(queue.scheduler.running)
                     finally:

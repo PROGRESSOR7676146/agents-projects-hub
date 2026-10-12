@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any, AsyncIterator, Awaitable, Callable, TypeVar
 
-from .hermes_incident_cursor import MAX_DELIVERIES, CursorBusy, NoticeCursor, NoticeSettings
+from .hermes_incident_cursor import (
+    CursorBusy,
+    NoticeCapacity,
+    NoticeCursor,
+    NoticeSettings,
+    fit_deliveries,
+)
 from .incident_journal import IncidentJournalError, _time, read_incident_snapshot
 from .incident_runbooks import incident_runbook
 
@@ -93,11 +100,14 @@ class HermesIncidentNotices:
         kind: str = "episode",
     ) -> None:
         deliveries = value["deliveries"]
-        while len(deliveries) >= MAX_DELIVERIES:
-            removable = next((row for row in deliveries if row["state"] == "sent"), None)
-            if removable is None:
-                raise IncidentJournalError()
-            deliveries.remove(removable)
+        if kind == "health":
+            deliveries[:] = [
+                row
+                for row in deliveries
+                if not (
+                    row["kind"] == "health" and row["state"] == "pending" and not row["attempts"]
+                )
+            ]
         if len(text) > 3500:
             raise IncidentJournalError()
         deliveries.append(
@@ -112,6 +122,7 @@ class HermesIncidentNotices:
                 "kind": kind,
             }
         )
+        fit_deliveries(value)
 
     def _project(self, value: dict[str, Any], now: datetime) -> None:
         try:
@@ -215,9 +226,9 @@ class HermesIncidentNotices:
                 raise IncidentJournalError()
             now = now.astimezone(timezone.utc)
             async with _file_lock(self.store):
-                value = await file_call(self._prepare, now)
-                outcomes = {"idle"}
-                for row in value["deliveries"]:
+                value, saturated = await file_call(self._prepare, now)
+                outcomes = {"unavailable" if saturated else "idle"}
+                for row in tuple(value["deliveries"]):
                     if value["window_used"] >= self.settings.max_cards:
                         break
                     if row["state"] != "pending" or _time(row["retry_at"]) > now:
@@ -248,7 +259,11 @@ class HermesIncidentNotices:
                             row["state"] = "unknown"
                             outcomes.add("unknown")
                     await file_call(self.store.write, value)
-                return next(s for s in ("unknown", "rejected", "sent", "idle") if s in outcomes)
+                return next(
+                    s
+                    for s in ("unavailable", "unknown", "rejected", "sent", "idle")
+                    if s in outcomes
+                )
         except CursorBusy:
             return "busy"
         except (
@@ -261,8 +276,7 @@ class HermesIncidentNotices:
         ):
             return "unavailable"
 
-    def _prepare(self, now: datetime) -> dict[str, Any]:
-        self.settings.__post_init__()
+    def _prepare(self, now: datetime) -> tuple[dict[str, Any], bool]:
         value = self.store.read(now)
         if _time(value["updated_at"]) > now:
             raise IncidentJournalError()
@@ -272,9 +286,27 @@ class HermesIncidentNotices:
         for row in value["deliveries"]:
             if row["state"] == "attempted":
                 row["state"] = "unknown"
-        self._project(value, now)
-        self.store.write(value)
-        return value
+        candidate = copy.deepcopy(value)
+        try:
+            self._project(candidate, now)
+            self.store.write(candidate)
+        except NoticeCapacity:
+            # Do not advance seen/quiet on a refused projection. Existing due
+            # pending rows can still drain and free receipted capacity.
+            return value, True
+        return candidate, False
+
+    def has_open_members(self, token: str) -> bool:
+        # Called only inside tick's full-cycle lock, after the attempted fence.
+        value = self.store.read(datetime.now(timezone.utc))
+        return any(
+            row["token"] == token
+            and any(
+                member in value["seen"] and not value["seen"][member]["resolved"]
+                for member in row["members"]
+            )
+            for row in value["deliveries"]
+        )
 
     def dismiss(self, token: str, actor: int, chat: int, message: int) -> bool:
         if (
@@ -298,7 +330,9 @@ class HermesIncidentNotices:
                     ),
                     None,
                 )
-                if row is None or not any(m in value["seen"] for m in row["members"]):
+                if row is None or not any(
+                    m in value["seen"] and not value["seen"][m]["resolved"] for m in row["members"]
+                ):
                     return False
                 for identifier in row["members"]:
                     if identifier in value["seen"]:

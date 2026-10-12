@@ -73,6 +73,15 @@ def _read(path: Path, limit: int) -> bytes:
         os.close(fd)
 
 
+def _private_parent(path: Path) -> None:
+    parent = path.parent
+    if not path.is_absolute() or parent.resolve() != parent:
+        raise IncidentJournalError()
+    value = parent.stat()
+    if not stat.S_ISDIR(value.st_mode) or value.st_uid != os.geteuid() or value.st_mode & 0o077:
+        raise IncidentJournalError()
+
+
 def _time(value: object) -> datetime:
     if not isinstance(value, str) or len(value) > 64:
         raise IncidentJournalError()
@@ -141,6 +150,7 @@ def _load(raw: bytes) -> dict[str, Any]:
 def read_incident_snapshot(path: Path) -> dict[str, Any]:
     """Read one validated private projection without touching seed, lock or state."""
     try:
+        _private_parent(path)
         return _load(_read(path, MAX_BYTES))
     except (OSError, ValueError, TypeError, RecursionError, OverflowError):
         raise IncidentJournalError() from None
