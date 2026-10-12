@@ -3,6 +3,11 @@
 Status: source-release scope; deployment and live acceptance remain open
 Date: 2026-10-13. Owner: Hub maintainer (integration), repository owner (promotion).
 
+The 0.8.1 package continuation fixes CVE-2026-104874 by pinning multidict 6.9.1
+and regenerating the runtime export. The existing 0.8.0 source tag is retained.
+The source scope, schema range and live gates below remain unchanged; the
+full publication privacy/history gate still applies without a new exception.
+
 This release integrates the latest schema-53 source stack based on `f2dcfdf`,
 the immutable packaging published in `v0.7.1` at `ba0181a`, and the saved-session
 placeholder correction from `6555911`. The release uses the standard
