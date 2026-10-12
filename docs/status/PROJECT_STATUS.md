@@ -45,6 +45,7 @@ owning modules.
 | Immutable releases and rollback rehearsal | Implemented offline | Deployment-owned | [REQ-OPS-010](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0012](../decisions/0012-verifiable-immutable-deployments.md) |
 | Codex multi-auth account pool and rotation | Retired | Not applicable | [ADR 0047](../decisions/0047-retire-codex-multi-auth.md) |
 | Off-machine recovery | Planned | Drill pending | [REQ-OPS-012](../product/PERSISTENCE_AND_RECOVERY.md) |
+| Passive incident journal/catalogue | Bounded offline candidate; exact publication evidence belongs to its PR | Pending; cards, drift and updates remain separate | [REQ-OPS-013](../product/PERSISTENCE_AND_RECOVERY.md), [runbook](../operations/INCIDENT_JOURNAL.md) |
 
 ## Quality checkpoint
 
@@ -73,10 +74,6 @@ offline coverage. Remaining publication/review/live gates for retry and
 preacceptance are tracked in the [continuation plan](../operations/NEXT_DEVELOPMENT_SESSION.md).
 Claude remains text-only pending its protected editor gates.
 
-Participant evaluation and resource-aware task allocation are an accepted
-product foundation; implementation and acceptance remain pending. See
-[the owning requirements](../product/EVALUATION_AND_ALLOCATION.md) and
-[ADR 0037](../decisions/0037-evidence-based-task-allocation.md).
 Hub lead/advisor roles and their review workflow are retired by
 [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md), not implemented.
 Independent cross-provider project review remains outside Hub orchestration.

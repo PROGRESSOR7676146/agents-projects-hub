@@ -89,10 +89,12 @@ is introduced. Source owner: Hub maintainer, lane
 integrate and revalidate the combined revision before the two-worker canary.
 Inspect tracked, staged and untracked lane state before any post-merge cleanup.
 
-Custody, broader progress, Claude editor/route acceptance, outcome journal,
-three-project/restart acceptance, Hermes operations, off-machine restore and
-release 0.8 remain open. Claude native transfer/connect are deferred. Restart
-does not close the notification incident or payload recovery.
+## Passive incident journal candidate
+
+Offline journal/catalogue, sole maintainer lane `feat/passive-incident-journal`,
+base `019633df`. The [source checkpoint](INCIDENT_JOURNAL.md#source-checkpoint)
+owns scope and closure; owner integration follows exact-source PR gates.
+Other ADR 0048 stages and live acceptance remain open.
 
 ## Read-only outcome projection candidate
 

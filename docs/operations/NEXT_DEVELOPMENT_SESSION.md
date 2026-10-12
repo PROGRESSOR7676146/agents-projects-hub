@@ -9,6 +9,12 @@ Native local/return, saved-session connect, images and full Claude parity are
 deferred until a new owner-triggered extension. Existing safety gates and other
 goal milestones remain. Hub roles stay retired; source work remains sole-writer.
 Decision owner: repository owner. Integration owner: primary development agent.
+Independent operations follow-up: the passive incident journal/catalogue source
+slice uses lane `feat/passive-incident-journal`, base `019633df`, without live
+services or inference. Finish its exact-source review/publication gates before
+Hermes cards or stack drift; see the
+[current checkpoint](INCIDENT_JOURNAL.md#source-checkpoint).
+This does not replace the bounded Claude editor priority or reactivate roles.
 Current source increment: the pinned offline native editor fixture passes
 Write Allow, exact resume with previous visible history, a fresh Deny for Write
 to the same file, Read, Edit Allow and another fresh Edit Deny. Four distinct
