@@ -107,7 +107,7 @@ class ReleaseAssetsTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "changed"):
                     build_assets(self.root, self.base / "new-assets")
 
-    def test_build_backend_is_hash_constrained_for_each_distribution(self) -> None:
+    def test_build_backend_is_hash_constrained_and_archive_uses_exact_commit(self) -> None:
         from scripts.release_assets import build_assets
 
         with patch("scripts.release_assets.clean_revision", return_value="a" * 40):

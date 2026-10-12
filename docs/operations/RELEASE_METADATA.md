@@ -42,7 +42,8 @@ run this audit.
 
 The tag workflow builds its wheel directly from a fresh clean Git checkout with
 a hash-pinned backend from `requirements-build.lock`. The publication checkout
-does not persist write credentials. `git archive` exports the exact revision's
+does not persist write credentials; its uv version and downloaded archive checksum
+are pinned in the release workflow. `git archive` exports the exact revision's
 complete tracked source separately. A wheel rebuilt from the source archive
 has no verified Git identity. `scripts/release_assets.py` checks the wheel's
 version, clean assertion and exact SHA, refuses a contaminated asset directory,

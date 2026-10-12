@@ -32,6 +32,8 @@ After hosted publication, download the assets into a fresh directory, verify
 For a release built on a maintenance branch, no `main` merge is implied.
 The rollback uses a separately verified baseline build (for example, the clean
 source SHA above); older published versions do not provide schema-41 rollback.
+Select and verify it by embedded source SHA and artifact digest, never by package
+version alone: the baseline also uses version 0.7.0.
 
 ## Scope
 
