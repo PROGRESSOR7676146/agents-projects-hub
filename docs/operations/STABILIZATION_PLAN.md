@@ -68,7 +68,7 @@ Clean `98c78fcfc40a3fba79a3cdecc2db8b609dabb78a` passed canonical validation
 hosted checks. It integrates notification conservation, connection retirement,
 RPC deadlines, schema41 retry, managed profiles, preacceptance observations,
 Claude selection/continuation and native-transfer refusal. Earlier publication
-statements below are superseded; integration review, owner merge and live
+statements below are superseded for these integrated slices; integration review, owner merge and live
 acceptance remain open.
 
 The stacked provider-neutral namespace extraction at clean

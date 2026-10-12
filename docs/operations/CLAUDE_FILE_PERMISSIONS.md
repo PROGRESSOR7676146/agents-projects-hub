@@ -40,7 +40,8 @@ installed custody remains an independent gate.
    nonrecursive readonly root remount; explicit project, session home and temporary mounts keep
    their own access modes. For a narrow runtime, mount canonical `/usr/bin/dash`
    explicitly: a recognized host `/usr/bin/sh` alias is recreated only for that
-   already-pinned target. Other shell layouts are not silently substituted.
+   already-pinned target. This supplies the CLI hook-runtime shell; it does not
+   expose a shell tool to the provider. Other shell layouts are not silently substituted.
    Bubblewrap must
    advertise `--bind-fd` and `--ro-bind-fd`; missing support refuses invocation.
    These options are present in upstream 0.10.0 and Ubuntu's 0.9.0 security

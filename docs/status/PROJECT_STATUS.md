@@ -56,7 +56,7 @@ and [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md).
 
 Claude's text-only default has offline identity, streaming and recovery coverage
 under [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md).
-The source [native editor fixture](../testing/CLAUDE_NATIVE_EDITOR.md)
+The source [native editor fixture](../testing/CLAUDE_NATIVE_EDITOR.md#recorded-offline-evidence)
 passes Write/Edit Allow/Deny and exact resume with four fresh fictional receipts
 on pinned CLI 2.1.285. Human approvals, custody and subscription acceptance remain
 pending under [REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
@@ -69,7 +69,9 @@ Schema37 queue snapshots and accepted Codex activity follow
 Integrated `3750ccfb0f8eb98333f9219f3a697d6328890d04` passed canonical/hosted
 gates after independent candidate reviews. Wider visibility and live acceptance remain open;
 [notice-bound retry](../decisions/0054-notice-bound-work-retry-reports.md) has
-offline coverage. Claude remains text-only pending its protected editor gates.
+offline coverage. Remaining publication/review/live gates for retry and
+preacceptance are tracked in the [continuation plan](../operations/NEXT_DEVELOPMENT_SESSION.md).
+Claude remains text-only pending its protected editor gates.
 
 Participant evaluation and resource-aware task allocation are an accepted
 product foundation; implementation and acceptance remain pending. See

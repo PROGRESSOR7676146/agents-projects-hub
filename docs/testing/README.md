@@ -10,7 +10,8 @@ python scripts/validate.py --profile focused tests.test_documentation_contract
 
 With no test selectors, `--profile focused` runs only static preflight checks.
 It omits Git history scanning, whole-project Pyright and full test discovery: its output explicitly
-says **not canonical acceptance**. Select the tests affected by the change;
+says **not canonical acceptance**. Test selectors are accepted only by the focused
+profile. Select the tests affected by the change;
 the profile does not guess test coverage from a diff.
 
 The full canonical command remains:

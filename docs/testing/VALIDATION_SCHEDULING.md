@@ -20,7 +20,8 @@ HUB_VALIDATION_TEST_JOBS=4 git push
 
 An explicit `--jobs` takes precedence. Without either input, CPU count capped
 at eight remains the default. Focused runs ignore this environment setting.
-Invalid environment values in canonical/commit runs fail before any stages.
+Invalid environment values in canonical/commit runs fail before any stages,
+unless an explicit `--jobs` overrides the environment setting.
 
 Lower concurrency can help short fixture waits under load. It changes no test
 selection, discovery check, deadline, failure policy or required gate; it is

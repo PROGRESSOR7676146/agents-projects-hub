@@ -57,7 +57,8 @@ This normative module is part of the
   native transfer, saved-session connect and image enablement are deferred;
   their absence MUST NOT block acceptance of the bounded editor. Expansion
   requires a new owner decision based on observed need. Text-only remains the
-  default until the protected editor's existing live gates pass.
+  default. File tools require explicit local opt-in and the protected editor's
+  existing live gates to pass; passing those gates MUST NOT change the default.
 
 ### Compact control surface
 
