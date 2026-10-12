@@ -93,10 +93,10 @@ three-project/restart acceptance, Hermes operations, off-machine restore and
 release 0.8 remain open. Claude native transfer/connect are deferred. Restart
 does not close the notification incident or payload recovery.
 
-## Passive incident journal candidate
+## Incident candidates
 
-Offline lane `feat/passive-incident-journal`, base `019633df`: see the
-[scope, owner and PR gates](INCIDENT_JOURNAL.md#source-checkpoint).
+Journal: [checkpoint](INCIDENT_JOURNAL.md#source-checkpoint).
+Hermes notices: [checkpoint](HERMES_INCIDENT_NOTICES.md); live/Analyze open.
 
 ## Read-only outcome projection candidate
 
