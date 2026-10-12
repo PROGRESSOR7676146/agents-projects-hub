@@ -270,6 +270,22 @@ def _assert_validation_contract(workflows: Path) -> None:
         raise AssertionError("release checkout must retain complete history")
     if "ref" in release_checkout_with:
         raise AssertionError("release checkout must use the event commit")
+    if release_checkout_with.get("persist-credentials") is not False:
+        raise AssertionError("release checkout must not persist write credentials")
+    installers = [
+        step for step in release_steps if step.get("uses", "").startswith("astral-sh/setup-uv@")
+    ]
+    if len(installers) != 1 or not re.fullmatch(
+        r"astral-sh/setup-uv@[a-f0-9]{40}", installers[0].get("uses", "")
+    ):
+        raise AssertionError("release requires exactly one uv installer pinned by commit SHA")
+    build_setup = installers[0].get("with", {})
+    if not re.fullmatch(r"\d+\.\d+\.\d+", build_setup.get("version", "")) or not re.fullmatch(
+        r"[a-f0-9]{64}", build_setup.get("checksum", "")
+    ):
+        raise AssertionError("release uv must use an exact version and archive checksum")
+    if build_setup.get("enable-cache") is not False:
+        raise AssertionError("release uv cache must be disabled")
     release_commands: list[str] = [
         cast(str, step["run"])
         for step in release_steps
@@ -279,8 +295,32 @@ def _assert_validation_contract(workflows: Path) -> None:
         "git rev-parse HEAD" in command and "RELEASE_TAG" in command for command in release_commands
     ):
         raise AssertionError("release must verify event SHA and peeled tag before publication")
-    if 'gh release create "$RELEASE_TAG" --verify-tag --generate-notes' not in release_commands:
+    publication = next(
+        (
+            command
+            for command in release_commands
+            if 'gh release create "$RELEASE_TAG" --verify-tag --generate-notes' in command
+        ),
+        "",
+    )
+    if not publication or not all(
+        name in publication
+        for name in (
+            "*.whl",
+            "*.tar.gz",
+            "requirements-release.lock",
+            "requirements-build.lock",
+            "uv.lock",
+            "release-info.json",
+            "SHA256SUMS",
+        )
+    ):
         raise AssertionError("release publication command changed")
+    if (
+        'python scripts/release_assets.py --output "$RUNNER_TEMP/hub-release-assets"'
+        not in release_commands
+    ):
+        raise AssertionError("release must verify clean-SHA assets before publication")
 
     validator = " ".join((ROOT / "scripts" / "validate.py").read_text(encoding="utf-8").split())
     for required_stage in (
@@ -521,6 +561,53 @@ class WorkflowContractTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(AssertionError, "depend on validation"):
                 _assert_validation_contract(workflows)
+
+    def test_contract_rejects_persisted_write_credentials_and_missing_assets(self) -> None:
+        for mutation, error in (
+            ("credentials", "persist write credentials"),
+            ("build", "clean-SHA assets"),
+            ("lock", "publication command"),
+            ("uv", "exact version"),
+            ("uv_tag", "pinned by commit SHA"),
+            ("uv_duplicate", "exactly one"),
+            ("uv_cache", "cache must be disabled"),
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                workflows = Path(directory) / "workflows"
+                shutil.copytree(WORKFLOWS, workflows)
+                release = workflows / "release.yml"
+                workflow = _workflow(release)
+                steps = workflow["jobs"]["release"]["steps"]
+                if mutation == "credentials":
+                    steps[0]["with"]["persist-credentials"] = True
+                elif mutation == "build":
+                    steps[:] = [
+                        step
+                        for step in steps
+                        if step.get("name") != "Build and verify immutable release assets"
+                    ]
+                elif mutation.startswith("uv"):
+                    installer = next(
+                        step
+                        for step in steps
+                        if step.get("uses", "").startswith("astral-sh/setup-uv@")
+                    )
+                    if mutation == "uv":
+                        installer["with"]["version"] = "latest"
+                    elif mutation == "uv_tag":
+                        installer["uses"] = "astral-sh/setup-uv@v7"
+                    elif mutation == "uv_duplicate":
+                        steps.append(copy.deepcopy(installer))
+                    else:
+                        installer["with"]["enable-cache"] = True
+                else:
+                    publication = steps[-1]
+                    publication["run"] = publication["run"].replace(
+                        "requirements-build.lock", "omitted.lock"
+                    )
+                release.write_text(yaml.safe_dump(workflow), encoding="utf-8")
+                with self.assertRaisesRegex(AssertionError, error):
+                    _assert_validation_contract(workflows)
 
     def test_contract_rejects_release_bypass_condition(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

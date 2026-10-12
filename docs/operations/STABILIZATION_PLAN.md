@@ -1,17 +1,20 @@
 # Stabilization plan
 
+Source checkpoint: [0.8.0](RELEASE_0_8_0.md). Earlier source entries are historical;
+the PR/tag own combined gates. Live acceptance remains open.
+
+Maintenance: [0.7.1](STABILIZATION_RELEASE_0_7_1.md).
+
 Status: active; stages 0–2 and 3b done, stage 3 in progress
 Date: 2026-09-27; scope updated 2026-10-10
 Owner: repository owner (decisions and merges); integration owner implements
-Last verified integrated repository revision:
-`3750ccfb0f8eb98333f9219f3a697d6328890d04` for stop, native Claude and schema-37
-visibility (canonical and hosted checks, after independent candidate reviews).
-The schema-38 protected file-tool candidate is implemented offline; follow
+Pre-0.8 integrated checkpoint: `3750ccfb0f8eb98333f9219f3a697d6328890d04`.
+The schema-38 protected file tools are implemented offline; follow
 [ADR 0052](../decisions/0052-protected-claude-file-permissions.md) and the
 [candidate runbook](CLAUDE_FILE_PERMISSIONS.md). Publication/review gates and
 separately authorized native/Telegram acceptance remain open. Authority-isolation
-candidate `6a848c7a326b35e4c3ea552339e8c5c3d7beba53` has passed canonical,
-independent review and hosted checks but remains unmerged and undeployed.
+source `6a848c7a326b35e4c3ea552339e8c5c3d7beba53` is included in 0.8;
+activation remains separate.
 Actual authority custody is still open. Assess the existing narrow boundary and
 actual launch/service exposure first; a dedicated VM remains a reserve option,
 not a selected prerequisite. The revised preparation decision is in
@@ -394,7 +397,7 @@ accumulated without live acceptance, contrary to product principle 10.
 | 2c | Capability summary table in project status; closure sections for six completed plans | Done: #86 | Prose still to move into owning modules |
 | 3 | Extract `_handle_update`, `load_hub_config`, `cli.main`; remove dead code; tests for weak modules; injected clocks in timing tests | In progress: read-only `status`, `doctor` and monitor (#97); `cli.main` split into command handlers (#99); `run_monitor_once` and `evaluate_operational_alerts` below the hotspot line (#100); onboarding lease test on an injected clock (#101); `load_hub_config` split into section parsers (#103) | Dispatcher coverage 316 → 359 of 421 (#89) |
 | 3b | Retire the multi-auth integration (reliability package B): migration contract, retired keys rejected before helper access, superseded ADRs | Done: #100 | ADR 0047; no schema change; host leftovers are a separate authorized task |
-| 4 | Release 0.8.0; branch and worktree hygiene | Planned; each action needs owner approval | — |
+| 4 | Release 0.8.0; branch and worktree hygiene | Source promotion authorized; cleanup separate | Release PR/tag |
 
 ## Live-acceptance backlog
 
@@ -607,7 +610,7 @@ acceptance.
   `fc1265286ab8b56b730cb371008ab9cc29d7a93b` completed. Its follow-up now
   protects failure publication when root resolution fails, derives Codex runtime
   from trusted configuration while retaining aliases, rechecks child selections
-  and materials, and makes tickets update-immutable in unreleased migration 41.
+  and materials, and makes tickets update-immutable in migration 41.
   Astra reviewed the domain/transaction ownership and direct failure paths.
   Lease-crash and execution-crash regressions retain their distinct certainty;
   a real 65-source chain refuses at the ancestry bound without invocation.

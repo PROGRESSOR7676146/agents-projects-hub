@@ -1,5 +1,12 @@
 # Next session: Claude project editor and visible task states
 
+Source-release checkpoint: [0.8.0](RELEASE_0_8_0.md), following published 0.7.1.
+It supersedes historical pending source-integration checkpoints for the included
+stack; activation, live acceptance and the independent updater remain open.
+
+Maintenance-release checkpoint: [0.7.1](STABILIZATION_RELEASE_0_7_1.md).
+Its packaging gates are separate from provider activation and the later stack.
+
 Status: native Claude and schema-37 visibility merged; human approval boundary in progress.
 Date: 2026-10-11 (editor-first scope under ADR 0067).
 Current priority: [Claude project reading/editing](../decisions/0067-claude-editor-first.md).

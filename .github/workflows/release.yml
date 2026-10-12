@@ -21,6 +21,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Verify release revision
         env:
           EVENT_SHA: ${{ github.sha }}
@@ -28,12 +29,30 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$EVENT_SHA"
           test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$EVENT_SHA"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.11.7"
+          checksum: "6681d691eb7f9c00ac6a3af54252f7ab29ae72f0c8f95bdc7f9d1401c23ea868"
+          enable-cache: false
       - name: Verify release metadata and tag
         env:
           PYTHONPATH: src
         run: python -m hermes_codex_router.release_metadata .
+      - name: Build and verify immutable release assets
+        run: python scripts/release_assets.py --output "$RUNNER_TEMP/hub-release-assets"
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" --verify-tag --generate-notes
+        run: |
+          gh release create "$RELEASE_TAG" --verify-tag --generate-notes \
+            "$RUNNER_TEMP/hub-release-assets/"*.whl \
+            "$RUNNER_TEMP/hub-release-assets/"*.tar.gz \
+            "$RUNNER_TEMP/hub-release-assets/requirements-release.lock" \
+            "$RUNNER_TEMP/hub-release-assets/requirements-build.lock" \
+            "$RUNNER_TEMP/hub-release-assets/uv.lock" \
+            "$RUNNER_TEMP/hub-release-assets/release-info.json" \
+            "$RUNNER_TEMP/hub-release-assets/SHA256SUMS"

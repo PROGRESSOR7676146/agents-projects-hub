@@ -1,5 +1,7 @@
 # Documentation map
 
+Source-release checkpoint: [0.8.0](operations/RELEASE_0_8_0.md).
+
 This repository documents only reusable product behavior. Deployment inventory,
 operator identities, real project names, session exports, and live transcripts
 are intentionally excluded.
@@ -37,6 +39,7 @@ live acceptance.
 - [Queue and process recovery](operations/QUEUE_RECOVERY.md)
 - [Live canary and rollback](operations/LIVE_CANARY.md)
 - [Release metadata synchronization](operations/RELEASE_METADATA.md)
+- [Stabilization release 0.7.1](operations/STABILIZATION_RELEASE_0_7_1.md)
 - [Recovery plane](RECOVERY_PLANE.ru.md)
 - [Reciprocal recovery capsules](operations/RECOVERY_CAPSULES.md)
 - [Off-machine WSL recovery plan](operations/WSL_OFF_MACHINE_RECOVERY.md)

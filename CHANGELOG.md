@@ -5,11 +5,31 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
-- Persist a bounded private passive incident journal before Operations delivery
-  and ship fixed recovery guidance for every alert code; keep journal failures
-  isolated from notifications. Operations trigger text now uses anonymous
-  descriptions; inspect local diagnostics to identify affected bots/topics
-  ([ADR 0048](docs/decisions/0048-out-of-band-update-and-incident-plane.md#passive-journal-implementation-clarification)).
+## [0.8.0] - 2026-10-13
+
+- Integrate the schema-53 source stack and the immutable release packaging
+  established in 0.7.1; keep source publication separate from live acceptance.
+- Strengthen Codex transport deadlines, frame attribution, backpressure,
+  immutable ingress receipts and control-loss fences around invocation.
+- Preserve uncertain stop and delivery outcomes; add exact human-consent
+  reconciliation and notice-bound retries without automatic replay.
+- Retain the opt-in protected Claude editor, native approval and namespace
+  custody implementation with text-only execution as the default.
+- Add a bounded passive incident journal and fixed action runbooks; optional
+  Hermes cards use a native periodic lifecycle with no model inference.
+- Retire Hub lead/advisor orchestration while retaining dormant shared
+  primitives and their regression guards.
+- Fix saved-session connection over historical Codex placeholders.
+
+## [0.7.1] - 2026-10-12
+
+- Publish an immutable clean-SHA wheel, source archive, exact runtime locks,
+  public artifact inventory and SHA-256 checksums with every release.
+- Freeze the schema-41 compatibility baseline for recovery packaging; keep
+  Claude file tools, role orchestration and newer incident/control candidates
+  outside this stabilization acceptance claim.
+- Retain exact-session connection, bounded Codex transport/control waits,
+  explicit saved-task retry and managed-profile continuity fixes.
 
 - Keep Hermes out of Hub project groups' commands: the Hermes plugin stops
   bare commands there (they belong to the Hub bot), passes only commands
