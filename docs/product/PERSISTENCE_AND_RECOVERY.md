@@ -106,9 +106,23 @@ This normative module is part of the
   A cold start without the Hermes cursor MUST send one summary of open episodes,
   not a card per historical episode. Only an authorized owner's press of the
   analyze control MAY start a Hermes model turn, which receives the incident as
-  lower-priority data, never as instructions. Enabling cards MUST stop the
-  monitor's direct Hermes recovery push in the same release. Hermes-owned cards
-  do not replace the Operations topic of REQ-OPS-006.
+  lower-priority data, never as instructions. Hermes-owned cards do not replace
+  the Operations topic or its same-topic Hermes transport fallback of REQ-OPS-006.
+  A default-off notices-only increment MAY omit analysis while its supported
+  authorized native-turn entry remains unproved; it MUST NOT offer a functioning
+  analyze control or claim this requirement complete. Notices require a separate
+  private configuration with one exact numeric owner/private destination, a
+  supported Gateway-owned periodic lifecycle and a Hermes-owned private cursor.
+  Missing lifecycle support MUST refuse opt-in; a configuration change MUST
+  retire the task and controls rather than retarget existing delivery evidence.
+  The cursor MUST persist attempted delivery before sending, require a positive
+  exact-destination receipt to establish delivery, and retain unknown outcomes
+  without automatic resend. Only proven rejection MAY retry, with bounded
+  attempts and deadlines. Unreadable or unsafe existing delivery evidence MUST
+  be preserved and refused; only an absent cursor cold-seeds. Dismiss MUST bind
+  the exact owner, private chat, opaque token and saved delivered message, and
+  MUST NOT execute recovery, update or approval actions. Shutdown MUST join its
+  callbacks and file work without leaving a competing writer on reconnect.
 - **REQ-OPS-015 (Planned; ADR 0048):** Every component that the update tool
   manages MUST run from immutable per-version directories behind a switchable
   link recorded in a private stack manifest. `doctor` and the monitor MUST

@@ -31,6 +31,7 @@ live acceptance.
 - [Claude authority custody preparation](operations/CLAUDE_CUSTODY.md)
 - [Exact-job outcome diagnostics](operations/OUTCOME_JOURNAL.md)
 - [Passive incident journal and runbook catalogue](operations/INCIDENT_JOURNAL.md)
+- [Hermes incident notices and dismiss](operations/HERMES_INCIDENT_NOTICES.md)
 - [Inbound materials implementation plan](operations/INBOUND_MATERIALS_PLAN.md)
 - [Operations](operations/README.md)
 - [Queue and process recovery](operations/QUEUE_RECOVERY.md)

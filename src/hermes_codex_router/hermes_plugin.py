@@ -157,6 +157,10 @@ def register(ctx: Any) -> None:
     def wire(application: Any, adapter: Any) -> None:
         from telegram.ext import ApplicationHandlerStop, MessageHandler, filters
 
+        from .hermes_incident_plugin import install_incident_notices
+
+        install_incident_notices(application)
+
         menu = _HubMenuGuard(adapter)
         adapter._ensure_forum_commands = menu.ensure_forum_commands
 

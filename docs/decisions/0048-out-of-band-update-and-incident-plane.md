@@ -85,7 +85,7 @@ It reports each resolution once.
 - **Hermes-side cursor.** The plugin keeps its cursor (the episodes it has
   carded and their message IDs) in a private file in the Hermes state
   directory, replaced atomically. It never writes the journal or Hub state for
-  this. On a cold start with a missing or unreadable cursor, it marks every
+  this. On a cold start with a missing cursor, it marks every
   existing episode as seen and sends one summary card of the open episodes,
   never a card per historical episode.
 - **Silent Hub.** A journal not updated for three monitor intervals produces a
@@ -94,13 +94,13 @@ It reports each resolution once.
   summary card.
 - **Operations unchanged.** The Operations topic stays the Hub-owned channel of
   REQ-OPS-006; cards do not replace it.
-- **Transition from `hermes send`.** Until stage 3, the monitor's existing
-  `hermes send` recovery push to the Hermes chat stays as it is, and no cards
-  exist. Stage 3 adds one explicit configuration switch. When it enables cards,
-  the same release stops the monitor's `hermes send` push, so the owner never
-  gets the same alert twice. When it is off, the old push works unchanged. After
-  cards pass acceptance, the push and its `hermes_notify_target` cooldown claims
-  are removed, and the Hub stops depending on the Hermes CLI.
+- **Existing fallback preserved (correction).** Source inspection found no
+  direct recovery push to the owner's Hermes private chat: `hermes_notify_target`
+  is parsed/stored but has no runtime consumer. The sole `hermes send` path is
+  fallback to the same Operations topic after Hub transport failure. It remains
+  required by REQ-OPS-006. Private Hermes cards are an additional presentation
+  plane; enabling them must not remove that independent fallback. The earlier
+  home-push migration premise was incorrect and is superseded here.
 
 ### 3. Analysis only on explicit request
 
@@ -203,7 +203,7 @@ the owner is informed even while Hermes is down.
 2. Passive observation in Hub: the drift check in `doctor` and the monitor, the
    incident journal, and the runbook catalogue.
 3. Hermes integration: cards, «Разобрать», the `plan` tool, the approval and
-   rollback controls, and the switch away from `hermes send`.
+   rollback controls; the same-Operations-topic fallback is retained.
 4. The Hermes self-update watchdog.
 
 Each stage is deployed only with the owner's authorization. Moving an
@@ -239,6 +239,39 @@ does not suppress independent Operations delivery and degrades monitor health.
 The journal, seed and lock are derived sidecars, not migrated SQLite authority.
 The [journal runbook](../operations/INCIDENT_JOURNAL.md) owns inspection and
 failure procedures. Activation remains separately authorized.
+
+### Independent notices-only increment
+
+Stage 3 can first deliver default-off deterministic notices and dismiss,
+separate from Analyze, drift and update actions. This does not complete
+REQ-OPS-014 or stage 3. Analyze needs a separately proved authorized native-turn
+entry; no model dispatcher or inactive Analyze button ships in this increment.
+
+Use the supported Telegram handler factory to register a bounded repeating
+native JobQueue task before Application start. Application owns timer startup,
+callback completion and shutdown; refuse opt-in when the tested SDK or JobQueue
+is absent. No new service, lifecycle monkeypatch, post hook or endless
+Application task is needed. Off means no notice-specific file or network access.
+
+The private config and cursor bind the journal, numeric owner/private chat,
+paths and policy. Config change retires this registration and its controls;
+it does not retarget saved receipts. A delivery intent and attempted fence are
+fsynced before the send. Only a positive exact-destination integer message ID
+establishes delivery. Timeout, cancellation, malformed receipt and failed
+receipt commit retain attempted/unknown with no automatic resend. Proven
+rejections alone get up to three deadline-bound attempts; exhausted rejection
+is distinguishable from unknown. Storm coalescing changes only never-attempted
+notices, never a retry's exact text/token or uncertainty evidence.
+
+An absent cursor cold-seeds one summary. Unreadable existing evidence is
+preserved/refused, superseding the earlier unreadable-cursor cold-seed proposal:
+discarding it could discard an attempted-send fence. Unknown/exhausted evidence
+is never pruned automatically; saturation fails visibly and needs local review.
+Disk operations run off the Gateway control loop and are joined even on
+cancellation; a stalled filesystem can still delay shutdown. This is a local
+same-user private-file boundary, not proof of OS custody against model processes.
+The [notice runbook](../operations/HERMES_INCIDENT_NOTICES.md) owns prerequisites,
+bounds, failure handling and the remaining live acceptance.
 
 ## Alternatives rejected
 

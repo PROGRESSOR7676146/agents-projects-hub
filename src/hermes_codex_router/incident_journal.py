@@ -138,6 +138,14 @@ def _load(raw: bytes) -> dict[str, Any]:
     return value
 
 
+def read_incident_snapshot(path: Path) -> dict[str, Any]:
+    """Read one validated private projection without touching seed, lock or state."""
+    try:
+        return _load(_read(path, MAX_BYTES))
+    except (OSError, ValueError, TypeError, RecursionError, OverflowError):
+        raise IncidentJournalError() from None
+
+
 class IncidentJournal:
     def __init__(self, path: Path) -> None:
         self.path = path
