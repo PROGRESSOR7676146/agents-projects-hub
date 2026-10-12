@@ -30,6 +30,7 @@ live acceptance.
 - [Claude protected file-tool candidate](operations/CLAUDE_FILE_PERMISSIONS.md)
 - [Claude authority custody preparation](operations/CLAUDE_CUSTODY.md)
 - [Exact-job outcome diagnostics](operations/OUTCOME_JOURNAL.md)
+- [Passive incident journal and runbook catalogue](operations/INCIDENT_JOURNAL.md)
 - [Inbound materials implementation plan](operations/INBOUND_MATERIALS_PLAN.md)
 - [Operations](operations/README.md)
 - [Queue and process recovery](operations/QUEUE_RECOVERY.md)

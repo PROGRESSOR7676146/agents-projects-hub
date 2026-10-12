@@ -210,6 +210,36 @@ Each stage is deployed only with the owner's authorization. Moving an
 in-place-installed component into version directories on a host is a separate
 authorized deployment task.
 
+### Passive journal implementation clarification
+
+The journal/catalogue slice of stage 2 can be delivered independently of stage
+1. It gives bounded local history without enabling cards, stack drift, update
+actions or a new service. It does not complete this decision.
+
+The stored message is the exact evaluated per-alert Operations trigger before
+transport, not a Telegram delivery receipt. Live alert templates omit project,
+topic and configured agent identities; their private deduplication keys retain
+the existing bindings. Runtime component/status labels come from closed sets.
+The existing composite Operations message can still be clipped at the transport
+bound; journal presence must not claim that the owner received every trigger.
+
+Above 500 simultaneous keys, keeping every open episode conflicts with the
+hard bound. Select current open keys in stable opaque order first, then newest
+resolved episodes within 30 days; report omitted open/resolved counts. Eviction
+does not mean recovery. Open episodes never expire solely from age. A private
+random writer seed produces keyed opaque correlation prefixes; a random suffix
+distinguishes recurrences. Neither the seed nor raw keys enter the journal.
+
+A persistent private nonblocking lock serializes complete monitor cycles before
+health publication/evaluation. Contention reports busy without a competing
+cycle. Publication uses a private same-directory temporary and atomic replacement.
+Malformed, unsafe, oversized or unsupported existing files are preserved and
+reported unavailable; no silent continuity rebuild occurs. Projection failure
+does not suppress independent Operations delivery and degrades monitor health.
+The journal, seed and lock are derived sidecars, not migrated SQLite authority.
+The [journal runbook](../operations/INCIDENT_JOURNAL.md) owns inspection and
+failure procedures. Activation remains separately authorized.
+
 ## Alternatives rejected
 
 - **Hub as the updater:** circular. The broken component would own its own

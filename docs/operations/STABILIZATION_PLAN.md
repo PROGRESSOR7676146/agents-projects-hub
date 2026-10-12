@@ -19,7 +19,7 @@ not a selected prerequisite. The revised preparation decision is in
 [custody preparation runbook](CLAUDE_CUSTODY.md).
 Next trigger: [revised delivery scope](#revised-delivery-scope) and the
 [continuation plan](NEXT_DEVELOPMENT_SESSION.md); live/ADR 0048 work stays separate.
-Deployment identity and private acceptance records remain outside this plan.
+Keep deployment and live evidence private.
 
 ## Revised delivery scope
 
@@ -57,9 +57,9 @@ Owner: Hub maintainer, sole writer. Next trigger: the checked
 | 7 — operations/release | Hermes incidents and controlled updates, off-machine restore drill, remaining refactoring and release 0.8 |
 | Added footer visibility | [Existing /goal and /fast follow-up](#planned-final-response-mode-indicators) |
 
-Role work is closed by withdrawal; the remaining goal is open. Preserve source
-and tests; independent review remains required. No merge, deletion or live action
-follows. Scoring, judges and parallel writers stay excluded.
+Roles are withdrawn; the goal stays open. Preserve source/tests and independent
+review. No merge, deletion or live action follows. Scoring, judges and parallel
+writers stay excluded.
 
 ## Current source integration checkpoint
 
@@ -67,9 +67,8 @@ Clean `98c78fcfc40a3fba79a3cdecc2db8b609dabb78a` passed canonical validation
 (2,035 tests/185 modules, zero typing errors, privacy/history/static) and seven
 hosted checks. It integrates notification conservation, connection retirement,
 RPC deadlines, schema41 retry, managed profiles, preacceptance observations,
-Claude selection/continuation and native-transfer refusal. Earlier publication
-statements below are superseded for these integrated slices; integration review, owner merge and live
-acceptance remain open.
+Claude selection/continuation and native-transfer refusal. This supersedes older evidence for these slices; integration review, owner
+merge and live acceptance remain open.
 
 The stacked provider-neutral namespace extraction at clean
 `fcc755fe4d70ddbff6b544c2a1a7b09d4b27e0ac` passed canonical validation
@@ -93,6 +92,11 @@ Custody, broader progress, Claude editor/route acceptance, outcome journal,
 three-project/restart acceptance, Hermes operations, off-machine restore and
 release 0.8 remain open. Claude native transfer/connect are deferred. Restart
 does not close the notification incident or payload recovery.
+
+## Passive incident journal candidate
+
+Offline lane `feat/passive-incident-journal`, base `019633df`: see the
+[scope, owner and PR gates](INCIDENT_JOURNAL.md#source-checkpoint).
 
 ## Read-only outcome projection candidate
 

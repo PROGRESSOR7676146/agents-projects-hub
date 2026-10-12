@@ -19,6 +19,14 @@ This is not installed custody, human Telegram provenance or CPA billing proof.
 Finish review/source gates for this bounded increment, then assess existing-host
 applicability and prepare separately authorized live acceptance. Do not restore
 deferred parity or treat direct hook tests as native evidence.
+
+Independent operations follow-up: the passive incident journal/catalogue source
+slice uses lane `feat/passive-incident-journal`, base `019633df`, without live
+services or inference. Finish its exact-source review/publication gates before
+Hermes cards or stack drift; see the
+[current checkpoint](INCIDENT_JOURNAL.md#source-checkpoint).
+This does not replace the bounded Claude editor priority or reactivate roles.
+
 Last verified integrated revision: `3750ccfb0f8eb98333f9219f3a697d6328890d04`.
 The stop/native/visibility stack passed exact-candidate independent reviews;
 the merged revision passed canonical validation (1,488 tests in 135 modules,

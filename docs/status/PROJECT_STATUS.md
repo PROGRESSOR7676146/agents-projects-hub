@@ -8,12 +8,8 @@ operator deployment inventory or live conversation evidence.
 
 ## Capability summary
 
-Highest evidence for every row is automated offline tests at the stated
-schema unless the row says otherwise; no row is live-accepted by this
-repository. Live items are tracked in the
-[stabilization backlog](../operations/STABILIZATION_PLAN.md#live-acceptance-backlog).
-The prose sections below keep the detailed history until it moves into the
-owning modules.
+Rows describe offline evidence unless stated otherwise. Live acceptance stays
+separate in the [backlog](../operations/STABILIZATION_PLAN.md#live-acceptance-backlog).
 
 | Capability | Repository state | Live acceptance | Contract |
 | --- | --- | --- | --- |
@@ -45,6 +41,7 @@ owning modules.
 | Immutable releases and rollback rehearsal | Implemented offline | Deployment-owned | [REQ-OPS-010](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0012](../decisions/0012-verifiable-immutable-deployments.md) |
 | Codex multi-auth account pool and rotation | Retired | Not applicable | [ADR 0047](../decisions/0047-retire-codex-multi-auth.md) |
 | Off-machine recovery | Planned | Drill pending | [REQ-OPS-012](../product/PERSISTENCE_AND_RECOVERY.md) |
+| Passive incident journal/catalogue | Offline candidate | Pending | [REQ-OPS-013](../product/PERSISTENCE_AND_RECOVERY.md), [checkpoint/runbook](../operations/INCIDENT_JOURNAL.md) |
 
 ## Quality checkpoint
 

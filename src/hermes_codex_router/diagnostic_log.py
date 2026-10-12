@@ -90,6 +90,8 @@ SITES = frozenset(
         "external_worker.runtime_event_record",
         "hermes_plugin.menu_clear",
         "monitoring.error_health_publish",
+        "monitoring.incident_lock",
+        "monitoring.incident_projection",
         "outbox_sender.health_publish",
         "outbox_sender.message_draft",
         "outbox_sender.runtime_event_record",
