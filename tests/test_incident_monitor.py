@@ -95,7 +95,9 @@ class IncidentMonitorTests(unittest.TestCase):
             ):
                 first = run_monitor_once(config, notify=False)
                 bot.send_html.assert_not_called()
-                self.assertEqual(first["incident_journal"]["status"], "updated")
+                journal_status = first["incident_journal"]
+                assert isinstance(journal_status, dict)
+                self.assertEqual(journal_status["status"], "updated")
                 run_monitor_once(config, notify=True)
                 run_monitor_once(config, notify=True)
             bot.send_html.assert_called_once()
@@ -184,9 +186,11 @@ class IncidentMonitorTests(unittest.TestCase):
                 result = run_monitor_once(config, notify=False)
             journal = config.state_path.with_name("incident-journal.json").read_text()
             self.assertNotIn(canary, journal)
+            observed_alerts = result["alerts"]
+            assert isinstance(observed_alerts, list)
             self.assertEqual(
                 {row["message"] for row in json.loads(journal)["episodes"]},
-                {row["message"] for row in result["alerts"]},
+                {row["message"] for row in observed_alerts},
             )
 
     def test_every_literal_emitted_code_and_runtime_variant_has_runbook(self) -> None:
@@ -194,7 +198,9 @@ class IncidentMonitorTests(unittest.TestCase):
         # A new literal alert fails this contract even without a new scenario fixture.
         codes = set()
         for module in (alert_module, monitoring, reliability_alerts):
-            tree = ast.parse(Path(module.__file__).read_text())
+            module_file = module.__file__
+            assert module_file is not None
+            tree = ast.parse(Path(module_file).read_text())
             for node in ast.walk(tree):
                 if (
                     isinstance(node, ast.Call)
