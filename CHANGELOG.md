@@ -11,6 +11,8 @@ and releases use semantic versioning while the public API is still evolving.
   CVE-2026-104874 (GHSA-54p9-h82j-f925), an items-view reference leak.
 - Synchronize the package metadata and complete runtime dependency export;
   retain the 0.8 source scope, schema-53 compatibility and live gates.
+- Align the recovery capsule's maintained release with the packaged version;
+  preserve its existing recovery procedures and schema-53 boundary.
 
 ## [0.8.0] - 2026-10-13
 
