@@ -6,6 +6,7 @@ from typing import Any
 
 from .hub_config import HubConfig
 from .state import HubState, RuntimeHealthStatus
+from .worker_identity import worker_instance_id
 
 CONTROLLER_INSTANCE_ID = "project-hub-controller"
 SENDER_INSTANCE_ID = "telegram-outbox-sender"
@@ -114,7 +115,7 @@ def project_runtime_health(
             agent = config.require_agent(agent_id)
             slot_count = config.worker_count_for_agent(agent_id)
             for slot in range(1, slot_count + 1):
-                instance_id = f"{agent_id}-worker" if slot == 1 else f"{agent_id}-worker-{slot}"
+                instance_id = worker_instance_id(agent_id, slot)
                 workers.append(
                     _project(
                         state.runtime_health_status("provider_worker", instance_id, now=now),

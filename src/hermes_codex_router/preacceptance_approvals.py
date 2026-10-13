@@ -18,6 +18,7 @@ from .approval_observations import (
 from .codex_activity import CodexActivityEvent
 from .preacceptance_binding import PREPARED_BINDING, current_prepared_binding, epoch_is_current
 from .state_errors import StateError
+from .worker_identity import MAX_PROVIDER_WORKER_SLOTS
 
 if TYPE_CHECKING:
     from .state import HubState
@@ -98,7 +99,7 @@ class PreacceptanceApprovalState:
             or not IDENTITY.fullmatch(instance_token)
             or not isinstance(worker_slot, int)
             or isinstance(worker_slot, bool)
-            or not 1 <= worker_slot <= 16
+            or not 1 <= worker_slot <= MAX_PROVIDER_WORKER_SLOTS
         ):
             raise StateError("invalid early approval runtime identity")
         slot_key = json.dumps(["external-worker", agent_id, worker_slot], separators=(",", ":"))
