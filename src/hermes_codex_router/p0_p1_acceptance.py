@@ -5,7 +5,7 @@ import re
 import tempfile
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -301,6 +301,64 @@ async def _verify_accounts_reply(
         raise AcceptanceActorError("/accounts shows a Codex account section")
 
 
+async def _check_read_only_controls(
+    client: Any,
+    config: AcceptanceActorConfig,
+    state: ReadOnlyAcceptanceState,
+    target: str,
+) -> AcceptanceCheckResult:
+    """Observe exact-input job absence after each expected control reply."""
+    input_ids: tuple[int, ...] = ()
+    observed: bool | None = None
+    response_id: int | None = None
+    try:
+        status_request = await client.send_message(
+            config.telegram_chat_id,
+            f"/status@{config.hub_username}",
+            reply_to=config.telegram_thread_id,
+        )
+        input_ids += (int(status_request.id),)
+        status_response = await _wait_for_markers(
+            client,
+            config,
+            after_id=int(status_request.id),
+            username=config.hub_username,
+            markers=("Context",),
+        )
+        if state.jobs_for_input(config.telegram_chat_id, int(status_request.id)):
+            observed = True
+            raise AcceptanceActorError("/status input has a durable provider job")
+        accounts_request = await client.send_message(
+            config.telegram_chat_id,
+            f"/accounts@{config.hub_username}",
+            reply_to=config.telegram_thread_id,
+        )
+        input_ids += (int(accounts_request.id),)
+        await _verify_accounts_reply(client, config, after_id=int(accounts_request.id))
+        if state.jobs_for_input(config.telegram_chat_id, int(accounts_request.id)):
+            observed = True
+            raise AcceptanceActorError("/accounts input has a durable provider job")
+        observed = False
+        response_id = int(status_response.id)
+        ok = True
+        detail = "status and accounts replies verified; no exact-input durable jobs observed"
+    except (AcceptanceActorError, AcceptanceRuntimeError) as exc:
+        ok = False
+        detail = str(exc)
+    except OSError as exc:
+        ok = False
+        detail = f"bounded local acceptance operation failed: {type(exc).__name__}"
+    return AcceptanceCheckResult(
+        P0_P1_CHECKS[6],
+        target,
+        ok,
+        response_id,
+        detail,
+        input_message_ids=input_ids,
+        provider_job_observed=observed,
+    )
+
+
 async def run_p0_p1_live_scenario(
     context: P0P1ScenarioContext,
     target: str,
@@ -563,25 +621,10 @@ async def run_p0_p1_live_scenario(
             passed(current_check, int(p1_response.id), "numeric context and quota label verified")
 
             current_check = P0_P1_CHECKS[6]
-            status_request = await client.send_message(
-                config.telegram_chat_id,
-                f"/status@{config.hub_username}",
-                reply_to=config.telegram_thread_id,
-            )
-            status_response = await _wait_for_markers(
-                client,
-                config,
-                after_id=int(status_request.id),
-                username=config.hub_username,
-                markers=("Context",),
-            )
-            accounts_request = await client.send_message(
-                config.telegram_chat_id,
-                f"/accounts@{config.hub_username}",
-                reply_to=config.telegram_thread_id,
-            )
-            await _verify_accounts_reply(client, config, after_id=int(accounts_request.id))
-            passed(current_check, int(status_response.id), "read-only status and accounts verified")
+            controls = await _check_read_only_controls(client, config, state, target)
+            results.append(controls)
+            if not controls.ok:
+                failure = (current_check, controls.detail)
     except (AcceptanceActorError, AcceptanceRuntimeError) as exc:
         failure = (current_check, str(exc))
     except OSError as exc:
@@ -605,7 +648,7 @@ async def run_p0_p1_live_scenario(
         replacement = AcceptanceCheckResult(failed_check, target, False, None, detail)
         for index, result in enumerate(results):
             if result.check == failed_check:
-                results[index] = replacement
+                results[index] = replace(result, ok=False, response_message_id=None, detail=detail)
                 break
         else:
             results.append(replacement)

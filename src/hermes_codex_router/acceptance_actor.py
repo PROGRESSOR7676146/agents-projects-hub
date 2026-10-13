@@ -741,6 +741,13 @@ async def _run_check(
             int(response.id),
             "response received" if ok else "unexpected response",
         )
+    return await _run_response_check(client, config, check, target)
+
+
+async def _run_response_check(
+    client: Any, config: AcceptanceActorConfig, check: str, target: str
+) -> AcceptanceCheckResult:
+    """Run the simple response checks and retain their sent input identities."""
     if check == "provider_ping":
         text = f"@{target} Reply with exactly E2E_OK. This is a connectivity check; use no tools."
         require_buttons = False
@@ -759,6 +766,7 @@ async def _run_check(
         text,
         reply_to=config.telegram_thread_id,
     )
+    input_ids = (int(sent.id),)
     try:
         response = await _wait_for_response(
             client,
@@ -768,14 +776,18 @@ async def _run_check(
             require_buttons=require_buttons,
         )
     except AcceptanceActorError as exc:
-        return AcceptanceCheckResult(check, target, False, None, str(exc))
+        return AcceptanceCheckResult(
+            check, target, False, None, str(exc), input_message_ids=input_ids
+        )
     response_text = str(getattr(response, "raw_text", "")).strip()
     ok = bool(response_text) or require_buttons
     if check == "model_menu":
         try:
             response = await _complete_model_selection(client, config, response)
         except AcceptanceActorError as exc:
-            return AcceptanceCheckResult(check, target, False, None, str(exc))
+            return AcceptanceCheckResult(
+                check, target, False, None, str(exc), input_message_ids=input_ids
+            )
         response_text = str(getattr(response, "raw_text", "")).strip()
         ok = any(
             phrase in response_text
@@ -790,6 +802,7 @@ async def _run_check(
                 "Reply with exactly REPLY_CHILD_OK. Use no tools.",
                 reply_to=int(response.id),
             )
+            input_ids += (int(follow_up.id),)
             try:
                 response = await _wait_for_response(
                     client,
@@ -798,7 +811,9 @@ async def _run_check(
                     username=target,
                 )
             except AcceptanceActorError as exc:
-                return AcceptanceCheckResult(check, target, False, None, str(exc))
+                return AcceptanceCheckResult(
+                    check, target, False, None, str(exc), input_message_ids=input_ids
+                )
             response_text = str(getattr(response, "raw_text", "")).strip()
             ok = "REPLY_CHILD_OK" in response_text
     if check == "provider_ping":
@@ -809,6 +824,7 @@ async def _run_check(
         ok,
         int(response.id),
         "response received" if ok else "unexpected response",
+        input_message_ids=input_ids,
     )
 
 

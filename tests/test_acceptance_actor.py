@@ -131,6 +131,8 @@ class StatefulAcceptanceProbe(ReadOnlyAcceptanceState):
                 [("recovery", "queued")],
                 [("recovery", "completed")],
             ],
+            109: [[]],
+            110: [[]],
         }
 
     def jobs_for_input(self, chat_id: int, message_id: int) -> list[tuple[str, str]]:
@@ -697,6 +699,7 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(client.sent[1][1]["reply_to"], 10)
         self.assertNotIn("@example_provider_bot", str(client.sent[1][0][1]))
+        self.assertEqual(result.input_message_ids, (1, 2))
 
     def test_burst_route_sends_one_instruction_as_three_immediate_messages(self) -> None:
         config = AcceptanceActorConfig(
@@ -1061,7 +1064,7 @@ class AcceptanceActorConfigTests(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            {101, 102, 103, 104, 105, 106},
+            {101, 102, 103, 104, 105, 106, 109, 110},
             {message_id for kind, message_id in probe.calls if kind == "jobs"},
         )
         job_calls = [message_id for kind, message_id in probe.calls if kind == "jobs"]
