@@ -88,6 +88,7 @@ from .worker_execution import (
     worker_needs_full_telegram_contract,
 )
 from .worker_failure_notice import commit_worker_failure_notice
+from .worker_identity import worker_instance_id
 
 
 class ExternalQueueWorkerError(RuntimeError):
@@ -148,11 +149,7 @@ class ExternalQueueWorker:
         except BaseException:
             self.state.close()
             raise
-        self.worker_id = worker_id or (
-            f"{self.agent.agent_id}-worker"
-            if worker_slot == 1
-            else f"{self.agent.agent_id}-worker-{worker_slot}"
-        )
+        self.worker_id = worker_id or worker_instance_id(self.agent.agent_id, worker_slot)
         self._started_at = datetime.now(timezone.utc)
         self._process_start_marker = uuid.uuid4().hex
         self._preacceptance_epoch = None

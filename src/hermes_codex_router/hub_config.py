@@ -10,6 +10,7 @@ from .claude_catalog import CLAUDE_EFFORTS, parse_claude_catalog
 from .claude_permissions_config import ClaudeFilePermissionsConfig, parse_claude_file_permissions
 from .codex_permissions import validate_permission_profile_id
 from .provider_catalog import ProviderModel
+from .worker_identity import MAX_PROVIDER_WORKER_SLOTS
 
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
@@ -827,7 +828,7 @@ def _parse_runtime_topology(
     if (
         not isinstance(codex_worker_count, int)
         or isinstance(codex_worker_count, bool)
-        or not 1 <= codex_worker_count <= 16
+        or not 1 <= codex_worker_count <= MAX_PROVIDER_WORKER_SLOTS
     ):
         raise HubConfigError("codex_worker_count must be an integer from 1 to 16")
     if codex_worker_count > 1:
@@ -843,7 +844,7 @@ def _parse_runtime_topology(
     if (
         not isinstance(claude_worker_count, int)
         or isinstance(claude_worker_count, bool)
-        or not 1 <= claude_worker_count <= 16
+        or not 1 <= claude_worker_count <= MAX_PROVIDER_WORKER_SLOTS
     ):
         raise HubConfigError("claude_worker_count must be an integer from 1 to 16")
     if claude_worker_count > 1:
