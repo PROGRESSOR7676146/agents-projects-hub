@@ -128,6 +128,9 @@ Opener-level form/multipart rejection tests cover real HTTP400/403, malformed or
 conflicting bodies, HTTP408/5xx and incomplete HTTP200 responses. Unknown-head
 fixtures prove same-topic execution/delivery remain blocked while another topic
 can deliver. The explicit reconciliation deployment gate remains open.
+Native pre-connect fixtures (`tests.test_telegram_not_sent`,
+`tests.test_not_sent_delivery_retry`) cover fake socket phases and durable retry;
+source evidence/limits: [ADR 0068](../decisions/0068-proven-not-sent-telegram-retry.md).
 Schema44 delivery-hold fixtures (`tests.test_delivery_hold` and
 `tests.test_delivery_hold_migration`) additionally cover full-manifest stale
 tokens beyond 64 parts, receipt provenance, competing connections, immutable

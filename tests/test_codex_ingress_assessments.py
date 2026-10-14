@@ -212,7 +212,10 @@ class CodexIngressAssessmentTests(unittest.TestCase):
         self.addCleanup(lambda: self.assertTrue(other.doCleanups()))
         job, _ = other.enqueue("hub")
         other.accept(job)
-        other.state.telegram_ingress_assessments.assess(job.job_id, now=self.now)
+        control = other.state.codex_controls.read(job.job_id)
+        assert control is not None
+        other_now = datetime.fromisoformat(control["accepted_at"])
+        other.state.telegram_ingress_assessments.assess(job.job_id, now=other_now)
         absent = other.state.telegram_ingress_assessments.read(job.job_id)
         assert absent is not None
         self.assertIsNone(absent["last_read_epoch"])

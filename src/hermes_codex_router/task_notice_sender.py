@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
 
-from .delivery_retry import delivery_retry_delay, proven_delivery_rejection
+from .delivery_retry import delivery_retry_delay, retryable_delivery_failure
 from .task_lifecycle import TaskLifecycleState
 from .telegram import TelegramError
 
@@ -60,7 +60,7 @@ def deliver_task_notice(
         )
     except Exception as exc:
         timestamp = current_time()
-        if proven_delivery_rejection(exc):
+        if retryable_delivery_failure(exc):
             assert isinstance(exc, TelegramError)
             state.retry_rejected(
                 notice.notice_id,
