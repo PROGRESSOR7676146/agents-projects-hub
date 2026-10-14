@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from .telegram_transport import InitialConnectNotSent, urlopen_with_send_proof
+from .telegram_transport import _InitialConnectNotSent, urlopen_with_send_proof
 
 TELEGRAM_HEALTH_FAILURE_THRESHOLD = 3
 TELEGRAM_FILE_DOWNLOAD_TIMEOUT_SECONDS = 60.0
@@ -111,8 +111,12 @@ class TelegramError(RuntimeError):
         return ";".join(fields)
 
 
-class TelegramNotSentError(TelegramError):
+class _TelegramNotSentError(TelegramError):
     """Native socket creation failed before any HTTP transmission in this call."""
+
+
+def has_native_not_sent_proof(error: Exception) -> bool:
+    return isinstance(error, _TelegramNotSentError) and error.status_code is None
 
 
 def _operation(method: str) -> str:
@@ -160,12 +164,16 @@ def _api_result(method: str, document: object) -> Any:
     )
 
 
-def _transport_error(method: str, exc: Exception) -> TelegramError:
+def _transport_error(
+    method: str, exc: Exception, *, native_send_proof: bool = False
+) -> TelegramError:
     operation = _operation(method)
     status_code: int | None = None
     retry_after: int | None = None
-    not_sent = isinstance(exc, urllib.error.URLError) and isinstance(
-        exc.reason, InitialConnectNotSent
+    not_sent = (
+        native_send_proof
+        and isinstance(exc, urllib.error.URLError)
+        and isinstance(exc.reason, _InitialConnectNotSent)
     )
     if isinstance(exc, urllib.error.HTTPError):
         status_code = exc.code if 100 <= exc.code <= 599 else None
@@ -184,7 +192,7 @@ def _transport_error(method: str, exc: Exception) -> TelegramError:
             else "api_http"
         )
     elif isinstance(exc, urllib.error.URLError):
-        reason = exc.reason.error if isinstance(exc.reason, InitialConnectNotSent) else exc.reason
+        reason = exc.reason.error if isinstance(exc.reason, _InitialConnectNotSent) else exc.reason
         if isinstance(reason, (TimeoutError, socket.timeout)):
             failure_class = "network_timeout"
         elif isinstance(reason, socket.gaierror):
@@ -203,7 +211,7 @@ def _transport_error(method: str, exc: Exception) -> TelegramError:
         failure_class = "invalid_response"
     else:
         failure_class = "unexpected_transport"
-    error_type = TelegramNotSentError if not_sent else TelegramError
+    error_type = _TelegramNotSentError if not_sent else TelegramError
     return error_type(
         "Telegram transport request failed",
         operation=operation,
@@ -707,13 +715,16 @@ class TelegramBotApi:
     def _call_with_timeout(self, method: str, *, request_timeout: float, **params: Any) -> Any:
         body = urllib.parse.urlencode(params).encode("utf-8")
         request = urllib.request.Request(self._base + method, data=body, method="POST")
+        opener = self._opener
         try:
-            with self._opener(request, timeout=request_timeout) as response:
+            with opener(request, timeout=request_timeout) as response:
                 document = json.load(response)
         except Exception as exc:
             # The original urllib exception may contain the token-bearing URL.
             # Preserve only the explicitly bounded classification above.
-            raise _transport_error(method, exc) from None
+            raise _transport_error(
+                method, exc, native_send_proof=opener is urlopen_with_send_proof
+            ) from None
         return _api_result(method, document)
 
     def updates(self, *, offset: int | None, timeout: int = 50) -> list[dict[str, Any]]:
@@ -877,11 +888,14 @@ class TelegramBotApi:
             headers=headers,
             method="POST",
         )
+        opener = self._opener
         try:
-            with self._opener(request, timeout=request_timeout) as response:
+            with opener(request, timeout=request_timeout) as response:
                 document = json.load(response)
         except Exception as exc:
-            raise _transport_error(method, exc) from None
+            raise _transport_error(
+                method, exc, native_send_proof=opener is urlopen_with_send_proof
+            ) from None
         return _api_result(method, document)
 
     def send_document(

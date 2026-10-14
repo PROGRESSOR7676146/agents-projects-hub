@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import Literal
 
-from .telegram import TelegramError, TelegramNotSentError
+from .telegram import TelegramError, has_native_not_sent_proof
 
 
 def delivery_failure_phase(
     error: Exception,
 ) -> Literal["proven_not_sent", "proven_rejected", "unknown"]:
-    if isinstance(error, TelegramNotSentError) and error.status_code is None:
+    if has_native_not_sent_proof(error):
         return "proven_not_sent"
     return "proven_rejected" if proven_delivery_rejection(error) else "unknown"
 

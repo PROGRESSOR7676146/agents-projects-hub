@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol, cast
 
 
-class InitialConnectNotSent(OSError):
+class _InitialConnectNotSent(OSError):
     def __init__(self, error: OSError) -> None:
         super().__init__("initial connection failed before HTTP transmission")
         self.error = error
@@ -37,7 +37,7 @@ def _observe(
             return create_connection(*args, **kwargs)
         except OSError as error:
             if not attempt.http_started:
-                raise InitialConnectNotSent(error) from None
+                raise _InitialConnectNotSent(error) from None
             raise
 
     def observed_send(data: Any) -> None:

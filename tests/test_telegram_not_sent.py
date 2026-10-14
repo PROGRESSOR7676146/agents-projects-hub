@@ -14,6 +14,7 @@ from unittest.mock import Mock, patch
 
 from hermes_codex_router.delivery_retry import delivery_failure_phase, retryable_delivery_failure
 from hermes_codex_router.telegram import TelegramBotApi, TelegramError
+from hermes_codex_router.telegram_transport import _InitialConnectNotSent, urlopen_with_send_proof
 
 
 def response_socket(body: bytes = b'{"ok":true,"result":{"message_id":71}}') -> Mock:
@@ -60,6 +61,53 @@ class NativeNotSentTests(unittest.TestCase):
                 with self.assertRaises(TelegramError) as caught:
                     bot.send_html(-1001234567890, 77, "Example")
                 self.assertFalse(retryable_delivery_failure(caught.exception))
+
+    def test_custom_opener_cannot_supply_native_error_label(self) -> None:
+        for document in (False, True):
+            with self.subTest(document=document), tempfile.TemporaryDirectory() as directory:
+                bot = TelegramBotApi(
+                    "123456:example",
+                    opener=Mock(
+                        side_effect=urllib.error.URLError(_InitialConnectNotSent(socket.gaierror()))
+                    ),
+                )
+                path = Path(directory) / "example.md"
+                path.write_text("Example")
+                with self.assertRaises(TelegramError) as caught:
+                    if document:
+                        bot.send_document(-1001234567890, 77, path)
+                    else:
+                        bot.send_html(-1001234567890, 77, "Example")
+                self.assertEqual(delivery_failure_phase(caught.exception), "unknown")
+
+    def test_custom_retry_wrapper_cannot_prove_unsent_original_request(self) -> None:
+        def retrying_opener(request, *, timeout):
+            try:
+                return urlopen_with_send_proof(request, timeout=timeout)
+            except OSError:
+                return urlopen_with_send_proof(request, timeout=timeout)
+
+        for document in (False, True):
+            sock = response_socket()
+            sock.makefile.side_effect = TimeoutError("read after sending")
+            with (
+                self.subTest(document=document),
+                tempfile.TemporaryDirectory() as directory,
+                patch.dict(os.environ, {}, clear=True),
+                patch("socket.create_connection", side_effect=[sock, socket.gaierror()]) as connect,
+                patch("ssl.SSLContext.wrap_socket", return_value=sock),
+            ):
+                bot = TelegramBotApi("123456:example", opener=retrying_opener)
+                path = Path(directory) / "example.md"
+                path.write_text("Example")
+                with self.assertRaises(TelegramError) as caught:
+                    if document:
+                        bot.send_document(-1001234567890, 77, path)
+                    else:
+                        bot.send_html(-1001234567890, 77, "Example")
+                self.assertEqual(connect.call_count, 2)
+                self.assertGreater(sock.sendall.call_count, 0)
+                self.assertEqual(delivery_failure_phase(caught.exception), "unknown")
 
     def test_after_connection_or_transmission_errors_remain_unknown(self) -> None:
         for failure in (socket.gaierror("DNS"), ConnectionRefusedError(), TimeoutError()):

@@ -19,7 +19,9 @@ Both HTTP and HTTPS handlers wrap native connection creation and send, sharing
 the witness across all redirects and proxy steps. Only an OSError from initial
 socket creation before any HTTP send produces the typed not-sent error. Native
 TLS verification, proxy handling, redirects and request timeouts remain in the
-standard library. A custom opener has no inferred phase proof. The witness is
+standard library. The API adapter binds projection to the exact default opener
+captured for that request; a custom opener or retry wrapper cannot supply proof
+by raising the same private error type. A custom opener has no inferred phase proof. The witness is
 not a reusable permission, persistent control or exactly-once delivery claim.
 
 The shared classifier returns `proven_not_sent`, `proven_rejected` or `unknown`.
@@ -44,6 +46,9 @@ retain the existing unknown policy. Neither current network recovery nor this
 source change releases historical unknown rows. Notice FIFO bypass, ledger
 dispositions and session/root/control authority remain separate work; this
 increment implements none of them. Hermes PTB notice certainty remains unchanged.
+Existing attempt caps and notice-obsolescence rules still apply: retries consume
+attempts, and exhaustion follows the existing terminal delivery-failure policy.
+This increment adds no unlimited outage retry or stale-notice policy.
 
 Offline tests use real urllib/http.client orchestration with fake sockets and
 temporary SQLite state. They must cover initial DNS/refusal/timeout, text and
