@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from .telegram_transport import InitialConnectNotSent, urlopen_with_send_proof
+
 TELEGRAM_HEALTH_FAILURE_THRESHOLD = 3
 TELEGRAM_FILE_DOWNLOAD_TIMEOUT_SECONDS = 60.0
 
@@ -109,6 +111,10 @@ class TelegramError(RuntimeError):
         return ";".join(fields)
 
 
+class TelegramNotSentError(TelegramError):
+    """Native socket creation failed before any HTTP transmission in this call."""
+
+
 def _operation(method: str) -> str:
     return {
         "getUpdates": "poll",
@@ -158,6 +164,9 @@ def _transport_error(method: str, exc: Exception) -> TelegramError:
     operation = _operation(method)
     status_code: int | None = None
     retry_after: int | None = None
+    not_sent = isinstance(exc, urllib.error.URLError) and isinstance(
+        exc.reason, InitialConnectNotSent
+    )
     if isinstance(exc, urllib.error.HTTPError):
         status_code = exc.code if 100 <= exc.code <= 599 else None
         try:
@@ -175,7 +184,7 @@ def _transport_error(method: str, exc: Exception) -> TelegramError:
             else "api_http"
         )
     elif isinstance(exc, urllib.error.URLError):
-        reason = exc.reason
+        reason = exc.reason.error if isinstance(exc.reason, InitialConnectNotSent) else exc.reason
         if isinstance(reason, (TimeoutError, socket.timeout)):
             failure_class = "network_timeout"
         elif isinstance(reason, socket.gaierror):
@@ -194,7 +203,8 @@ def _transport_error(method: str, exc: Exception) -> TelegramError:
         failure_class = "invalid_response"
     else:
         failure_class = "unexpected_transport"
-    return TelegramError(
+    error_type = TelegramNotSentError if not_sent else TelegramError
+    return error_type(
         "Telegram transport request failed",
         operation=operation,
         failure_class=failure_class,
@@ -563,7 +573,7 @@ class TelegramBotApi:
         self,
         token: str,
         *,
-        opener: Callable[..., Any] = urllib.request.urlopen,
+        opener: Callable[..., Any] = urlopen_with_send_proof,
     ) -> None:
         if not token.strip() or ":" not in token or "\n" in token:
             raise TelegramError("invalid bot token")

@@ -232,9 +232,11 @@ This normative module is part of the
   or tray alerts.
   Final and progress sends MUST commit an exact current-lease send-start fence
   immediately before transport. A final fence MUST bind the first unreceipted
-  part. Receipts MUST be positive integers, excluding booleans; no missing or
-  malformed receipt may be replaced by a fabricated ID. Only a proven transport
-  rejection permits a begun send to retry. Network ambiguity, malformed success
+  part. Receipts MUST be positive non-boolean integers, never fabricated.
+  Retry requires proven rejection or default-transport
+  initial socket failure before any HTTP send in a call, including redirects
+  and proxy CONNECT; labels/custom openers alone MUST NOT prove phase.
+  Network ambiguity, malformed success
   and receipt-commit faults MUST retain unknown delivery without changing provider
   certainty, releasing native/root uncertainty or discarding saved results,
   multipart prefix receipts and artifact references. Expired unattempted leases
@@ -467,7 +469,7 @@ This normative module is part of the
   MUST durably mark the beginning of a send before contacting Telegram. An
   expired unattempted lease MAY retry delivery; an attempted send without a
   positive persisted receipt MUST become unknown and MUST NOT be blindly resent.
-  Only an explicit Telegram API rejection proves a delivery attempt retryable.
+  Retry requires the transport proof of REQ-QUEUE-005.
   A control-delivery failure MUST NOT change job, session or root ownership.
   Database deduplication MUST NOT be described as exactly-once Telegram delivery.
 - **REQ-QUEUE-014 (Accepted; staged implementation under validation):** Loss of
