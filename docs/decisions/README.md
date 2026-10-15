@@ -12,6 +12,7 @@ with a new record.
 
 | Decision | Current outcome | Source |
 | --- | --- | --- |
+| Proven-not-sent Telegram retry | Native initial socket failures may retry through existing fenced delivery; post-connect and historical unknown evidence stays conservative. | [ADR 0068](0068-proven-not-sent-telegram-retry.md) |
 | Product identity | Agents Projects Hub; internal `hermes_codex_router` remains for compatibility. | Product requirements |
 | Project topology | One private forum group per registered local project; numeric topic identity. | Product requirements and tests |
 | Routing | One central ingress; ordinary → active, Reply → author, mention → target, selected/pasted quote → active. | Product requirements; tests and commit history |

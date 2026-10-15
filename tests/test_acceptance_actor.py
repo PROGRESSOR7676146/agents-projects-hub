@@ -131,6 +131,8 @@ class StatefulAcceptanceProbe(ReadOnlyAcceptanceState):
                 [("recovery", "queued")],
                 [("recovery", "completed")],
             ],
+            109: [[]],
+            110: [[]],
         }
 
     def jobs_for_input(self, chat_id: int, message_id: int) -> list[tuple[str, str]]:
@@ -153,12 +155,19 @@ class StatefulServiceSupervisor(FixedServiceSupervisor):
         worker_active: bool = True,
         fail_action: str | None = None,
         fail_restore: bool = False,
+        reject_topology_check: int | None = None,
     ) -> None:
         self.controller_active = controller_active
         self.worker_active = worker_active
         self.fail_action = fail_action
         self.fail_restore = fail_restore
         self.actions: list[str] = []
+        self.reject_topology_check = reject_topology_check
+
+    def require_single_codex_worker(self) -> None:
+        self.actions.append("verify_topology")
+        if self.actions.count("verify_topology") == self.reject_topology_check:
+            raise AcceptanceRuntimeError("p0_p1_live requires a single Codex worker")
 
     def capture_active_state(self) -> ServiceSnapshot:
         self.actions.append("capture")
@@ -697,6 +706,7 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(client.sent[1][1]["reply_to"], 10)
         self.assertNotIn("@example_provider_bot", str(client.sent[1][0][1]))
+        self.assertEqual(result.input_message_ids, (1, 2))
 
     def test_burst_route_sends_one_instruction_as_three_immediate_messages(self) -> None:
         config = AcceptanceActorConfig(
@@ -1050,18 +1060,23 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         self.assertEqual(
             supervisor.actions,
             [
+                "verify_topology",
                 "capture",
+                "verify_topology",
                 "stop_worker",
                 "check_worker",
+                "verify_topology",
                 "restart_controller",
                 "check_controller",
+                "verify_topology",
                 "start_worker",
                 "check_worker",
+                "verify_topology",
                 "restore",
             ],
         )
         self.assertEqual(
-            {101, 102, 103, 104, 105, 106},
+            {101, 102, 103, 104, 105, 106, 109, 110},
             {message_id for kind, message_id in probe.calls if kind == "jobs"},
         )
         job_calls = [message_id for kind, message_id in probe.calls if kind == "jobs"]
@@ -1121,7 +1136,62 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         self.assertEqual([result.check for result in results], [P0_P1_CHECKS[0]])
         self.assertFalse(results[0].ok)
         self.assertIn("requires the Controller and Codex worker", results[0].detail)
-        self.assertEqual(supervisor.actions, ["capture", "restore"])
+        self.assertEqual(supervisor.actions, ["verify_topology", "capture", "restore"])
+
+    def test_p0_p1_topology_veto_precedes_all_canary_effects(self) -> None:
+        config = self.p0_config(self.base / "unused.db")
+        client = FakeP0P1Client()
+        probe = StatefulAcceptanceProbe()
+        supervisor = StatefulServiceSupervisor(reject_topology_check=1)
+        with patch(
+            "hermes_codex_router.p0_p1_acceptance._select_provider",
+            new=AsyncMock(side_effect=AssertionError("canary started before topology guard")),
+        ) as select:
+            results = asyncio.run(
+                run_p0_p1_live_scenario(
+                    P0P1ScenarioContext(client, config, probe, supervisor), "example_codex_bot"
+                )
+            )
+        select.assert_not_awaited()
+        self.assertEqual(client.sent, [])
+        self.assertEqual(client.uploaded_payloads, [])
+        self.assertEqual(probe.calls, [])
+        self.assertEqual(supervisor.actions, ["verify_topology"])
+        self.assertEqual(len(results), 1)
+        self.assertFalse(results[0].ok)
+        self.assertIn("single Codex worker", results[0].detail)
+
+    def test_p0_p1_detects_topology_drift_at_each_recovery_boundary(self) -> None:
+        for check in (2, 3, 4, 5):
+            with self.subTest(check=check):
+                client = FakeP0P1Client()
+                probe = StatefulAcceptanceProbe()
+                supervisor = StatefulServiceSupervisor(reject_topology_check=check)
+                context = P0P1ScenarioContext(
+                    client, self.p0_config(self.base / "unused.db"), probe, supervisor
+                )
+                with (
+                    patch("hermes_codex_router.p0_p1_acceptance._select_provider", new=AsyncMock()),
+                    patch(
+                        "hermes_codex_router.p0_p1_acceptance._wait_for_markers",
+                        new=AsyncMock(side_effect=[FakeMessage(200 + n) for n in range(5)]),
+                    ),
+                ):
+                    results = asyncio.run(run_p0_p1_live_scenario(context, "example_codex_bot"))
+                self.assertEqual([result.check for result in results], list(P0_P1_CHECKS[:4]))
+                self.assertTrue(all(result.ok for result in results[:3]))
+                self.assertFalse(results[-1].ok)
+                self.assertIn("single Codex worker", results[-1].detail)
+                self.assertEqual(supervisor.actions[-1], "restore")
+                self.assertTrue(supervisor.worker_active)
+                self.assertTrue(supervisor.controller_active)
+                if check == 2:
+                    self.assertNotIn("stop_worker", supervisor.actions)
+                if check <= 3:
+                    self.assertNotIn("restart_controller", supervisor.actions)
+                    self.assertNotIn(("jobs", 106), probe.calls)
+                if check <= 4:
+                    self.assertNotIn("start_worker", supervisor.actions)
 
     def test_p0_p1_live_restores_worker_after_failure_following_stop(self) -> None:
         state_path = self.base / "state.db"

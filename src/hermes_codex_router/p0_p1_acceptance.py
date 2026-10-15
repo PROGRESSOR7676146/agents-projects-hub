@@ -5,7 +5,7 @@ import re
 import tempfile
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -301,6 +301,118 @@ async def _verify_accounts_reply(
         raise AcceptanceActorError("/accounts shows a Codex account section")
 
 
+async def _check_read_only_controls(
+    client: Any,
+    config: AcceptanceActorConfig,
+    state: ReadOnlyAcceptanceState,
+    target: str,
+) -> AcceptanceCheckResult:
+    """Observe exact-input job absence after each expected control reply."""
+    input_ids: tuple[int, ...] = ()
+    observed: bool | None = None
+    response_id: int | None = None
+    try:
+        status_request = await client.send_message(
+            config.telegram_chat_id,
+            f"/status@{config.hub_username}",
+            reply_to=config.telegram_thread_id,
+        )
+        input_ids += (int(status_request.id),)
+        status_response = await _wait_for_markers(
+            client,
+            config,
+            after_id=int(status_request.id),
+            username=config.hub_username,
+            markers=("Context",),
+        )
+        if state.jobs_for_input(config.telegram_chat_id, int(status_request.id)):
+            observed = True
+            raise AcceptanceActorError("/status input has a durable provider job")
+        accounts_request = await client.send_message(
+            config.telegram_chat_id,
+            f"/accounts@{config.hub_username}",
+            reply_to=config.telegram_thread_id,
+        )
+        input_ids += (int(accounts_request.id),)
+        await _verify_accounts_reply(client, config, after_id=int(accounts_request.id))
+        if state.jobs_for_input(config.telegram_chat_id, int(accounts_request.id)):
+            observed = True
+            raise AcceptanceActorError("/accounts input has a durable provider job")
+        observed = False
+        response_id = int(status_response.id)
+        ok = True
+        detail = "status and accounts replies verified; no exact-input durable jobs observed"
+    except (AcceptanceActorError, AcceptanceRuntimeError) as exc:
+        ok = False
+        detail = str(exc)
+    except OSError as exc:
+        ok = False
+        detail = f"bounded local acceptance operation failed: {type(exc).__name__}"
+    return AcceptanceCheckResult(
+        P0_P1_CHECKS[6],
+        target,
+        ok,
+        response_id,
+        detail,
+        input_message_ids=input_ids,
+        provider_job_observed=observed,
+    )
+
+
+async def _verify_restart_recovery(
+    context: P0P1ScenarioContext, target: str, path: Path, recovery_token: str
+) -> Any:
+    """Verify one fixed-worker recovery; the scenario retains restoration ownership."""
+    client, config = context.client, context.config
+    state, services = context.state_probe, context.service_supervisor
+    services.require_single_codex_worker()
+    services.stop_codex_worker()
+    if services.is_codex_worker_active():
+        raise AcceptanceActorError("Codex worker did not stop for recovery check")
+    services.require_single_codex_worker()
+    recovery = await _send_input_document(
+        client,
+        config,
+        path,
+        f"@{target} Read the attached UTF-8 document after recovery. Reply with "
+        "RECOVERY_FILE_OK followed by the exact token found only inside it. "
+        "Use no tools.",
+    )
+    queued = await _wait_for_job(
+        state,
+        config.telegram_chat_id,
+        int(recovery.id),
+        {"queued"},
+    )
+    recovery_job_id = queued[0][0]
+    services.restart_controller()
+    if not services.is_controller_active():
+        raise AcceptanceActorError("Controller did not restart")
+    if len(state.jobs_for_input(config.telegram_chat_id, int(recovery.id))) != 1:
+        raise AcceptanceActorError("Controller restart duplicated durable admission")
+    services.require_single_codex_worker()
+    services.start_codex_worker()
+    if not services.is_codex_worker_active():
+        raise AcceptanceActorError("Codex worker did not recover")
+    recovery_response = await _wait_for_markers(
+        client,
+        config,
+        after_id=int(recovery.id),
+        username=target,
+        markers=("RECOVERY_FILE_OK", recovery_token),
+    )
+    recovery_jobs = await _wait_for_job(
+        state,
+        config.telegram_chat_id,
+        int(recovery.id),
+        {"completed"},
+    )
+    if len(recovery_jobs) != 1 or state.material_count(recovery_job_id) != 1:
+        raise AcceptanceActorError("recovery produced duplicate job or material rows")
+    services.require_single_codex_worker()
+    return recovery_response
+
+
 async def run_p0_p1_live_scenario(
     context: P0P1ScenarioContext,
     target: str,
@@ -319,6 +431,7 @@ async def run_p0_p1_live_scenario(
         results.append(AcceptanceCheckResult(check, target, True, response_id, detail))
 
     try:
+        services.require_single_codex_worker()
         initial_services = services.capture_active_state()
         if not initial_services.all_active:
             raise AcceptanceActorError(
@@ -476,47 +589,9 @@ async def run_p0_p1_live_scenario(
             )
 
             current_check = P0_P1_CHECKS[3]
-            services.stop_codex_worker()
-            if services.is_codex_worker_active():
-                raise AcceptanceActorError("Codex worker did not stop for recovery check")
-            recovery = await _send_input_document(
-                client,
-                config,
-                paths["recovery"],
-                f"@{target} Read the attached UTF-8 document after recovery. Reply with "
-                "RECOVERY_FILE_OK followed by the exact token found only inside it. "
-                "Use no tools.",
+            recovery_response = await _verify_restart_recovery(
+                context, target, paths["recovery"], recovery_token
             )
-            queued = await _wait_for_job(
-                state,
-                config.telegram_chat_id,
-                int(recovery.id),
-                {"queued"},
-            )
-            recovery_job_id = queued[0][0]
-            services.restart_controller()
-            if not services.is_controller_active():
-                raise AcceptanceActorError("Controller did not restart")
-            if len(state.jobs_for_input(config.telegram_chat_id, int(recovery.id))) != 1:
-                raise AcceptanceActorError("Controller restart duplicated durable admission")
-            services.start_codex_worker()
-            if not services.is_codex_worker_active():
-                raise AcceptanceActorError("Codex worker did not recover")
-            recovery_response = await _wait_for_markers(
-                client,
-                config,
-                after_id=int(recovery.id),
-                username=target,
-                markers=("RECOVERY_FILE_OK", recovery_token),
-            )
-            recovery_jobs = await _wait_for_job(
-                state,
-                config.telegram_chat_id,
-                int(recovery.id),
-                {"completed"},
-            )
-            if len(recovery_jobs) != 1 or state.material_count(recovery_job_id) != 1:
-                raise AcceptanceActorError("recovery produced duplicate job or material rows")
             passed(current_check, int(recovery_response.id), "restart recovery stayed exactly once")
 
             current_check = P0_P1_CHECKS[4]
@@ -563,25 +638,10 @@ async def run_p0_p1_live_scenario(
             passed(current_check, int(p1_response.id), "numeric context and quota label verified")
 
             current_check = P0_P1_CHECKS[6]
-            status_request = await client.send_message(
-                config.telegram_chat_id,
-                f"/status@{config.hub_username}",
-                reply_to=config.telegram_thread_id,
-            )
-            status_response = await _wait_for_markers(
-                client,
-                config,
-                after_id=int(status_request.id),
-                username=config.hub_username,
-                markers=("Context",),
-            )
-            accounts_request = await client.send_message(
-                config.telegram_chat_id,
-                f"/accounts@{config.hub_username}",
-                reply_to=config.telegram_thread_id,
-            )
-            await _verify_accounts_reply(client, config, after_id=int(accounts_request.id))
-            passed(current_check, int(status_response.id), "read-only status and accounts verified")
+            controls = await _check_read_only_controls(client, config, state, target)
+            results.append(controls)
+            if not controls.ok:
+                failure = (current_check, controls.detail)
     except (AcceptanceActorError, AcceptanceRuntimeError) as exc:
         failure = (current_check, str(exc))
     except OSError as exc:
@@ -605,7 +665,7 @@ async def run_p0_p1_live_scenario(
         replacement = AcceptanceCheckResult(failed_check, target, False, None, detail)
         for index, result in enumerate(results):
             if result.check == failed_check:
-                results[index] = replacement
+                results[index] = replace(result, ok=False, response_message_id=None, detail=detail)
                 break
         else:
             results.append(replacement)

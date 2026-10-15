@@ -128,6 +128,9 @@ Opener-level form/multipart rejection tests cover real HTTP400/403, malformed or
 conflicting bodies, HTTP408/5xx and incomplete HTTP200 responses. Unknown-head
 fixtures prove same-topic execution/delivery remain blocked while another topic
 can deliver. The explicit reconciliation deployment gate remains open.
+Native pre-connect fixtures (`tests.test_telegram_not_sent`,
+`tests.test_not_sent_delivery_retry`) cover fake socket phases and durable retry;
+source evidence/limits: [ADR 0068](../decisions/0068-proven-not-sent-telegram-retry.md).
 Schema44 delivery-hold fixtures (`tests.test_delivery_hold` and
 `tests.test_delivery_hold_migration`) additionally cover full-manifest stale
 tokens beyond 64 parts, receipt provenance, competing connections, immutable
@@ -743,12 +746,10 @@ the authenticated numeric user ID locally; immediately add it to both the actor
 config and the matching Hub `acceptance_actors` entry. `e2e-validate` and
 `e2e-run` fail closed until that identity is pinned.
 
-Treat the canary topic as exclusive for the duration of a run. The runner fails
-fast when it observes in-topic traffic from a sender outside the pinned actor,
-Hub identity, and configured provider identities. Re-run only after the topic is
-quiet; an interrupted or contaminated artifact is not acceptance evidence.
-The runner stops after its first failed check; diagnose and drain that bounded
-scenario before starting another run.
+Reserve the canary topic for the run. Traffic from outside the pinned actor,
+Hub and configured provider identities fails the check and ends the run.
+Interrupted or contaminated results are not acceptance evidence; diagnose and
+drain the failed scenario before re-running in a quiet topic.
 
 The optional `p0_p1_live` check is the disruptive seven-result P0/P1 suite.
 Add `state_path` (an absolute mode-`0600` live SQLite file) and
@@ -760,10 +761,14 @@ the initially active units on failure, and writes no live evidence to Git.
 Successful repository tests prove this control flow only; `e2e-run` against a
 specific deployed revision is the live evidence.
 
-The `model_menu` check follows the complete callback ladder in the dedicated
-topic: it selects the first provider, first model, and first effort exposed by
-the Hub, then requires the deterministic final confirmation. This changes only
-the canary topic's active session and never sends a productive model prompt.
+The private report records sent input IDs and bounded P0/P1 job observations;
+see [evidence fields and regression coverage](ACCEPTANCE_INPUT_EVIDENCE.md).
+Follow the [worker-topology preflight](ACCEPTANCE_WORKER_TOPOLOGY.md) before the
+restart scenario; an undrained worker pool is unsupported.
+
+The `model_menu` check selects the first provider, model and effort through the
+complete callback ladder, then requires the deterministic final confirmation.
+It changes only the canary topic's active session, without a productive prompt.
 The `reply_route` check first obtains a response through an explicit provider
 mention, then sends a real Telegram Reply without another mention and requires
 the response to come from the original provider identity.

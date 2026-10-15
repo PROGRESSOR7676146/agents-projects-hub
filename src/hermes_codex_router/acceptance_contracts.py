@@ -33,3 +33,7 @@ class AcceptanceCheckResult:
     ok: bool
     response_message_id: int | None
     detail: str
+    input_message_ids: tuple[int, ...] = ()
+    # False requires all control inputs to have verified replies and empty
+    # exact-input state reads. Partial/absent observation remains None.
+    provider_job_observed: bool | None = None

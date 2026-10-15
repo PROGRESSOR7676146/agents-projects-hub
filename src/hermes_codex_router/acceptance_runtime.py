@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import subprocess
 from collections.abc import Callable, Iterator
@@ -12,6 +13,7 @@ from .schema_compatibility import TARGET_SCHEMA_VERSION
 
 _CONTROLLER_UNIT = "agents-projects-hub.service"
 _CODEX_WORKER_UNIT = "agents-projects-hub-worker@codex.service"
+_CODEX_SLOT_PATTERN = "agents-projects-hub-codex-worker@*.service"
 _ACCEPTANCE_STATE_SCHEMA = TARGET_SCHEMA_VERSION
 
 
@@ -87,6 +89,66 @@ class FixedServiceSupervisor:
         run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
     ) -> None:
         self._run = run
+
+    def require_single_codex_worker(self) -> None:
+        """Veto numbered consumers; this does not authorize controlling them.
+
+        The maintenance window must also exclude manual/custom consumers and
+        concurrent topology changes. A service snapshot cannot fence those.
+        """
+        error = "Codex worker topology could not be verified"
+        try:
+            result = self._run(
+                (
+                    "systemctl",
+                    "--user",
+                    "list-units",
+                    "--all",
+                    "--type=service",
+                    "--output=json",
+                    "--no-pager",
+                    _CODEX_WORKER_UNIT,
+                    _CODEX_SLOT_PATTERN,
+                ),
+                check=True,
+                timeout=10,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                encoding="utf-8",
+            )
+            if not isinstance(result.stdout, str) or len(result.stdout) > 65536:
+                raise AcceptanceRuntimeError(error)
+            rows = json.loads(result.stdout)
+        except (OSError, subprocess.SubprocessError, UnicodeError, ValueError) as exc:
+            raise AcceptanceRuntimeError(error) from exc
+        if not isinstance(rows, list) or not 1 <= len(rows) <= 17:
+            raise AcceptanceRuntimeError(error)
+        seen: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                raise AcceptanceRuntimeError(error)
+            unit, active = row.get("unit"), row.get("active")
+            if (
+                not isinstance(unit, str)
+                or unit in seen
+                or not isinstance(active, str)
+                or not (
+                    unit == _CODEX_WORKER_UNIT
+                    or (
+                        unit.startswith("agents-projects-hub-codex-worker@")
+                        and unit.endswith(".service")
+                    )
+                )
+            ):
+                raise AcceptanceRuntimeError(error)
+            seen.add(unit)
+            if unit != _CODEX_WORKER_UNIT and active not in {"inactive", "failed"}:
+                raise AcceptanceRuntimeError(
+                    "p0_p1_live supports only the fixed single Codex worker; "
+                    "additional slots require a separately authorized drained maintenance window"
+                )
+        if _CODEX_WORKER_UNIT not in seen:
+            raise AcceptanceRuntimeError(error)
 
     def _active(self, unit: str) -> bool:
         try:

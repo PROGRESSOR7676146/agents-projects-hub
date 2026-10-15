@@ -7,13 +7,17 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Mapping
 
+from .worker_identity import MAX_PROVIDER_WORKER_SLOTS, worker_instance_id
+
 PROVIDER_WORKER_FAIRNESS_FRESHNESS = timedelta(minutes=2)
 
 
 def parallel_worker_declarations(agent_id: str) -> tuple[str, ...]:
     if agent_id not in {"codex", "claude"}:
         return ()
-    return (f"{agent_id}-worker",) + tuple(f"{agent_id}-worker-{slot}" for slot in range(2, 17))
+    return tuple(
+        worker_instance_id(agent_id, slot) for slot in range(1, MAX_PROVIDER_WORKER_SLOTS + 1)
+    )
 
 
 @dataclass(frozen=True, slots=True)

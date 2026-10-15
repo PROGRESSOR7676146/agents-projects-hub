@@ -118,6 +118,9 @@ revision and highest proven level.
   state, worker lifecycle, security, trust boundaries or release gates, needs an
   independent review by an agent that did not write it (Claude for Codex work
   and the reverse) or by the owner. Record the findings in the pull request.
+- Invoke independent Claude source review directly through CPA HTTP, without
+  Claude CLI, following [the review runbook](docs/operations/CLAUDE_SOURCE_REVIEW.md).
+  Resolve the exact provider/model route before inferring reviewer availability.
 - Only the owner merges into `main`. Agents open pull requests and may push
   their own branches; tags, branch deletion and deployment need the owner's
   explicit authorization each time.

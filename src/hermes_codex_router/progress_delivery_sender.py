@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Callable, Protocol
 
-from .delivery_retry import delivery_retry_delay, proven_delivery_rejection
+from .delivery_retry import delivery_retry_delay, retryable_delivery_failure
 from .final_delivery import FinalDeliveryResult, delivery_error_code, utc_now
 from .state_delivery import DeliveryStateFacade, ProgressDeliveryRecord
 
@@ -39,7 +39,7 @@ def deliver_progress(
             progress.chat_id, progress.thread_id, progress.telegram_html, disable_notification=True
         )
     except Exception as error:
-        if proven_delivery_rejection(error):
+        if retryable_delivery_failure(error):
             delivery.retry_progress(
                 progress.progress_id,
                 token,
