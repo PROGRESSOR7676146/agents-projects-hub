@@ -6,8 +6,11 @@ consumer: stopping one worker cannot hold a recovery input queued while other
 workers can lease it.
 
 Before any canary action and at recovery boundaries, a passive systemd check
-rejects active or transitional numbered Codex slots, missing topology and
-unreadable metadata. It never stops additional slots or accepts configurable
+rejects active or transitional numbered Codex slots and unreadable metadata.
+The fixed worker must be listed at active boundaries. While deliberately stopped,
+it may be absent because systemd collected the unloaded unit; an empty valid
+listing then passes. A listed fixed worker must remain inactive/failed at those
+stopped boundaries. The guard never stops additional slots or accepts configurable
 service names. The parent scenario retains restoration of its fixed units.
 
 An owner-coordinated maintenance window must drain/exclude other consumers,

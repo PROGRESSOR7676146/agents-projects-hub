@@ -47,6 +47,7 @@ from hermes_codex_router.p0_p1_acceptance import (
 from hermes_codex_router.p0_p1_acceptance import (
     _wait_for_response as _p0_wait_for_response,
 )
+from tests.test_acceptance_runtime import StatefulSystemctl
 
 
 class FakeButton:
@@ -163,9 +164,11 @@ class StatefulServiceSupervisor(FixedServiceSupervisor):
         self.fail_restore = fail_restore
         self.actions: list[str] = []
         self.reject_topology_check = reject_topology_check
+        self.topology_stopped_expectations: list[bool] = []
 
-    def require_single_codex_worker(self) -> None:
+    def require_single_codex_worker(self, *, worker_stopped: bool = False) -> None:
         self.actions.append("verify_topology")
+        self.topology_stopped_expectations.append(worker_stopped)
         if self.actions.count("verify_topology") == self.reject_topology_check:
             raise AcceptanceRuntimeError("p0_p1_live requires a single Codex worker")
 
@@ -1051,6 +1054,9 @@ class AcceptanceActorConfigTests(unittest.TestCase):
             ],
         )
         self.assertTrue(all(result.ok for result in results))
+        self.assertEqual(
+            supervisor.topology_stopped_expectations, [False, False, True, True, False]
+        )
         self.assertEqual(wait.await_args_list[-1].kwargs["username"], config.hub_username)
         self.assertEqual(wait.await_args_list[-1].kwargs["markers"], ("Context",))
         self.assertEqual(accounts_wait.await_args_list[-1].kwargs["username"], config.hub_username)
@@ -1085,6 +1091,43 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         self.assertEqual(
             [call for call in probe.calls if call[0] == "materials"],
             [("materials", "album"), ("materials", "recovery")],
+        )
+
+    def test_p0_p1_restart_accepts_garbage_collected_stopped_unit(self) -> None:
+        client = FakeP0P1Client()
+        systemctl = StatefulSystemctl(unload_stopped_worker=True)
+        context = P0P1ScenarioContext(
+            client,
+            self.p0_config(self.base / "unused.db"),
+            StatefulAcceptanceProbe(),
+            FixedServiceSupervisor(run=systemctl),
+        )
+        responses = [FakeMessage(201 + n, "done") for n in range(6)] + [
+            FakeMessage(207, "Context remaining: 88.5%\nWeekly remaining: 42%"),
+            FakeMessage(208, "Context remaining: 88.5%"),
+        ]
+        with (
+            patch("hermes_codex_router.p0_p1_acceptance._select_provider", new=AsyncMock()),
+            patch(
+                "hermes_codex_router.p0_p1_acceptance._wait_for_markers",
+                new=AsyncMock(side_effect=responses),
+            ),
+            patch(
+                "hermes_codex_router.p0_p1_acceptance._wait_for_matching",
+                new=AsyncMock(return_value=FakeMessage(209, "OpenCode Go")),
+            ),
+        ):
+            results = asyncio.run(run_p0_p1_live_scenario(context, "example_codex_bot"))
+        self.assertTrue(all(result.ok for result in results), results)
+        self.assertEqual(len(results), 7)
+        self.assertEqual(systemctl.topology_sizes, [1, 1, 0, 0, 1])
+        self.assertEqual(
+            systemctl.actions,
+            [
+                "stop:agents-projects-hub-worker@codex.service",
+                "restart:agents-projects-hub.service",
+                "start:agents-projects-hub-worker@codex.service",
+            ],
         )
 
     def test_p0_p1_live_rejects_a_codex_account_section(self) -> None:

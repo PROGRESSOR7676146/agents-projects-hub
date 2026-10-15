@@ -369,7 +369,7 @@ async def _verify_restart_recovery(
     services.stop_codex_worker()
     if services.is_codex_worker_active():
         raise AcceptanceActorError("Codex worker did not stop for recovery check")
-    services.require_single_codex_worker()
+    services.require_single_codex_worker(worker_stopped=True)
     recovery = await _send_input_document(
         client,
         config,
@@ -390,7 +390,7 @@ async def _verify_restart_recovery(
         raise AcceptanceActorError("Controller did not restart")
     if len(state.jobs_for_input(config.telegram_chat_id, int(recovery.id))) != 1:
         raise AcceptanceActorError("Controller restart duplicated durable admission")
-    services.require_single_codex_worker()
+    services.require_single_codex_worker(worker_stopped=True)
     services.start_codex_worker()
     if not services.is_codex_worker_active():
         raise AcceptanceActorError("Codex worker did not recover")

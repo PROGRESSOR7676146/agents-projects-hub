@@ -90,7 +90,7 @@ class FixedServiceSupervisor:
     ) -> None:
         self._run = run
 
-    def require_single_codex_worker(self) -> None:
+    def require_single_codex_worker(self, *, worker_stopped: bool = False) -> None:
         """Veto numbered consumers; this does not authorize controlling them.
 
         The maintenance window must also exclude manual/custom consumers and
@@ -121,7 +121,7 @@ class FixedServiceSupervisor:
             rows = json.loads(result.stdout)
         except (OSError, subprocess.SubprocessError, UnicodeError, ValueError) as exc:
             raise AcceptanceRuntimeError(error) from exc
-        if not isinstance(rows, list) or not 1 <= len(rows) <= 17:
+        if not isinstance(rows, list) or len(rows) > 17:
             raise AcceptanceRuntimeError(error)
         seen: set[str] = set()
         for row in rows:
@@ -142,12 +142,20 @@ class FixedServiceSupervisor:
             ):
                 raise AcceptanceRuntimeError(error)
             seen.add(unit)
+            if (
+                unit == _CODEX_WORKER_UNIT
+                and worker_stopped
+                and active not in {"inactive", "failed"}
+            ):
+                raise AcceptanceRuntimeError("fixed Codex worker did not stay stopped")
             if unit != _CODEX_WORKER_UNIT and active not in {"inactive", "failed"}:
                 raise AcceptanceRuntimeError(
                     "p0_p1_live supports only the fixed single Codex worker; "
                     "additional slots require a separately authorized drained maintenance window"
                 )
-        if _CODEX_WORKER_UNIT not in seen:
+        # list-units reports only loaded units: a deliberately stopped, unreferenced
+        # fixed unit may have been collected. Never relax this at active boundaries.
+        if not worker_stopped and _CODEX_WORKER_UNIT not in seen:
             raise AcceptanceRuntimeError(error)
 
     def _active(self, unit: str) -> bool:
