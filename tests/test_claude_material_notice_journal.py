@@ -7,6 +7,7 @@ from unittest.mock import patch
 from hermes_codex_router import migrations
 from hermes_codex_router.state import StateError
 from tests import test_claude_invocation_journal as fixtures
+from tests.schema_fixtures import remove_delivery_receipts_schema
 
 
 class ClaudeMaterialNoticeJournalTests(unittest.TestCase):
@@ -68,6 +69,7 @@ class ClaudeMaterialNoticeJournalTests(unittest.TestCase):
     def legacy(self) -> None:
         f = self.fixture
         with f.state._connection:
+            remove_delivery_receipts_schema(f.state._connection)
             f.state._connection.execute(
                 "UPDATE provider_execution_checkpoints SET completed_text='Example legacy completion'"
             )
@@ -82,7 +84,10 @@ class ClaudeMaterialNoticeJournalTests(unittest.TestCase):
         f = self.fixture
         jobs = f.state._connection.execute("SELECT * FROM provider_jobs").fetchall()
         result = migrations.migrate_database(f.path)
-        self.assertEqual((result.previous_version, result.current_version), (52, 53))
+        self.assertEqual(
+            (result.previous_version, result.current_version),
+            (52, migrations.LATEST_SCHEMA_VERSION),
+        )
         self.assertIsNotNone(result.backup_path)
         assert result.backup_path is not None
         with sqlite3.connect(result.backup_path) as backup:

@@ -134,6 +134,24 @@ def legacy_selection_columns(path: Path):
                 connection.execute(f"ALTER TABLE {table} DROP COLUMN codex_permission_profile")
 
 
+def remove_delivery_receipts_schema(connection: sqlite3.Connection) -> None:
+    """Remove only empty schema54 proof from fictional historical fixtures."""
+    tables = ("telegram_send_receipts", "telegram_send_attempts")
+    existing = {
+        row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    for table in tables:
+        if table in existing:
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    connection.execute("DROP TRIGGER IF EXISTS telegram_outbox_purpose_immutable")
+    connection.execute("DROP TRIGGER IF EXISTS telegram_outbox_purpose_replace")
+    if "purpose" in {row[1] for row in connection.execute("PRAGMA table_info(telegram_outbox)")}:
+        connection.execute("ALTER TABLE telegram_outbox DROP COLUMN purpose")
+    for table in tables:
+        if table in existing:
+            connection.execute(f"DROP TABLE {table}")
+
+
 def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
     """Remove empty lifecycle/archive structures from fictional historical fixtures."""
     tables = (
@@ -160,6 +178,7 @@ def remove_task_lifecycle_schema(connection: sqlite3.Connection) -> None:
     for table in tables:
         if table in existing:
             assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    remove_delivery_receipts_schema(connection)
     for trigger in (
         "provider_job_telegram_identity_fence",
         "provider_job_telegram_no_replace",
