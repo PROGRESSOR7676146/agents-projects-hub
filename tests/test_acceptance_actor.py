@@ -20,6 +20,7 @@ from hermes_codex_router.acceptance_actor import (
     _run_check,
     _run_configured_checks,
     _run_p0_p1_live_checks,
+    _stop_acknowledged,
     _targets_for_check,
     _wait_for_response,
     load_acceptance_actor_config,
@@ -757,7 +758,13 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         )
         client = FakeClient()
         responses = (
-            FakeMessage(10, "Останавливаю активную работу."),
+            FakeMessage(
+                10,
+                "Остановка в теме 77. Прерывание запрошено; завершение ещё не подтверждено. "
+                "При неизвестном исходе каталог останется заблокирован.\n"
+                "Отменено в очереди: 0. Ожидают решения владельца: 0.\n"
+                "Задач в других темах без изменений: 2. Проверить состояние: /status.",
+            ),
             FakeMessage(12, "AFTER_STOP_E2E_OK"),
         )
         with (
@@ -789,7 +796,12 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         )
         client = FakeClient()
         responses = (
-            FakeMessage(10, "Активной работы нет; отменено задач в очереди: 1."),
+            FakeMessage(
+                10,
+                "Остановка в теме 77. Активного выполнения нет.\n"
+                "Отменено в очереди: 1. Ожидают решения владельца: 0.\n"
+                "Задач в других темах без изменений: 2. Проверить состояние: /status.",
+            ),
             FakeMessage(12, "AFTER_STOP_E2E_OK"),
         )
         with (
@@ -802,6 +814,23 @@ class AcceptanceActorConfigTests(unittest.TestCase):
             result = asyncio.run(_run_check(client, config, "stop_route", "example_provider_bot"))
 
         self.assertTrue(result.ok)
+
+    def test_stop_acknowledgement_does_not_accept_idle_or_unrelated_counts(self) -> None:
+        for cancelled in ("0", "-1", "01", "unknown"):
+            with self.subTest(cancelled=cancelled):
+                self.assertFalse(
+                    _stop_acknowledged(
+                        "Остановка в теме 77. Активного выполнения нет.\n"
+                        f"Отменено в очереди: {cancelled}. Ожидают решения владельца: 1.\n"
+                        "Задач в других темах без изменений: 2. Проверить состояние: /status."
+                    )
+                )
+        self.assertFalse(_stop_acknowledged("Accepted by Hub and saved in the queue."))
+
+    def test_stop_acknowledgement_keeps_legacy_response_support(self) -> None:
+        self.assertTrue(_stop_acknowledged("Останавливаю активную работу."))
+        self.assertTrue(_stop_acknowledged("Активной работы нет; отменено задач в очереди: 12."))
+        self.assertFalse(_stop_acknowledged("Активной работы нет; отменено задач в очереди: 0."))
 
     def test_forwarded_quote_is_passive_then_visible_as_context(self) -> None:
         config = AcceptanceActorConfig(

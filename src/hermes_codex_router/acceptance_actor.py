@@ -327,6 +327,14 @@ async def _click_callback_exact(message: Any, data: bytes) -> None:
 
 
 def _stop_acknowledged(text: str) -> bool:
+    if re.match(r"Остановка в теме [0-9]+\. Прерывание запрошено;", text):
+        return True
+    if re.match(
+        r"Остановка в теме [0-9]+\. Активного выполнения нет\.\n"
+        r"Отменено в очереди: [1-9][0-9]*\.",
+        text,
+    ):
+        return True
     if "Останавливаю активную работу" in text:
         return True
     return (
