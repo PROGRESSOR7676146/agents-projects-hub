@@ -773,11 +773,12 @@ The `reply_route` check first obtains a response through an explicit provider
 mention, then sends a real Telegram Reply without another mention and requires
 the response to come from the original provider identity.
 The `forwarded_quote` check forwards a harmless provider marker back into the
-topic, verifies that the forward alone receives no provider answer, then checks
-that it is visible to the next explicit turn as quoted context.
+topic, observes a bounded quiet window, then checks the explicit context reply.
+See [failure handling and evidence limits](ACCEPTANCE_FORWARD_SILENCE.md).
 
-The `burst_route` check sends one harmless instruction as three concurrent
-Telegram API requests and requires one coherent provider answer. The
+The `burst_route` check sends one harmless instruction as three consecutive
+Telegram API requests without an intentional delay and checks a coherent provider
+answer. That marker does not establish the number of native invocations. The
 `stop_route` check must appear after `model_menu`: it mentions the first
 provider selected there, starts a harmless wait, sends deterministic `stop`,
 requires the Hub acknowledgement, and proves that a new turn works afterward.

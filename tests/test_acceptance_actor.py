@@ -16,6 +16,7 @@ from hermes_codex_router.acceptance_actor import (
     AcceptanceCheckResult,
     _click_callback_exact,
     _forward_to_topic,
+    _ResponseTimeout,
     _run_check,
     _run_configured_checks,
     _run_p0_p1_live_checks,
@@ -820,7 +821,7 @@ class AcceptanceActorConfigTests(unittest.TestCase):
         source = FakeMessage(10, "FORWARD_SOURCE_OK")
         responses = (
             source,
-            AcceptanceActorError("timed out as expected"),
+            _ResponseTimeout("timed out as expected"),
             FakeMessage(13, "FORWARD_CONTEXT_OK"),
         )
         with (
