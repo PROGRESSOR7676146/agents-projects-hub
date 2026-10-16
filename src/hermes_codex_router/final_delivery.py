@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from .artifacts import artifact_spool_root, remove_spooled_artifact, verify_spooled_artifact
-from .delivery_retry import delivery_retry_delay, proven_delivery_rejection
+from .delivery_retry import delivery_retry_delay, retryable_delivery_failure
 from .state_delivery import DeliveryStateFacade, TelegramOutboxRecord
 from .telegram import TelegramError
 
@@ -103,7 +103,7 @@ def deliver_final_part(
         else:
             message_id = telegram.send_html(outbox.chat_id, outbox.thread_id, part.telegram_html)
     except Exception as error:
-        if proven_delivery_rejection(error):
+        if retryable_delivery_failure(error):
             delivery.retry_outbox(
                 outbox.outbox_id,
                 token,

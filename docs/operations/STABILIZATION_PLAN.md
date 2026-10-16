@@ -548,7 +548,7 @@ acceptance.
   native transfer is deferred under ADR 0067.
 - `codex-worker@1` / `claude-worker@1` duplicate slot 1 of `worker@codex` /
   `worker@claude` (PR #80 review, item 5).
-- Slot identity format and bounds are duplicated in four modules (PR #80 review, items 7–8).
+- Slot identity/bound duplication (PR #80, items 7–8): consolidated in `worker_identity.py`.
 - Real-clock lease tests fail when the host suspends (R-018).
 - Emergency stop: R-021 closed on 2026-09-28. The result and failure commits
   are the last stop check, so a stop recorded after the worker's final check

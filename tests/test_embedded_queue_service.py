@@ -4,6 +4,7 @@ import json
 import tempfile
 import threading
 import unittest
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -119,6 +120,20 @@ def update(message_id: int, text: str) -> dict[str, object]:
             "text": text,
         },
     }
+
+
+@contextmanager
+def frozen_queue_clock(instant: datetime):
+    # Arrival times belong to the scenario, not to parallel test-runner load.
+    # Wrap the real datetime class to retain parsing/arithmetic behavior.
+    with (
+        patch("hermes_codex_router.state.datetime", wraps=datetime) as state_clock,
+        patch("hermes_codex_router.state_values.datetime", wraps=datetime) as value_clock,
+        patch("hermes_codex_router.state_provider_jobs.datetime", wraps=datetime) as job_clock,
+    ):
+        for clock in (state_clock, value_clock, job_clock):
+            clock.now.return_value = instant
+        yield
 
 
 class EmbeddedQueueServiceTests(unittest.TestCase):
@@ -407,18 +422,31 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
         service.config = replace(
             service.config, message_batch_quiet_ms=1500, message_batch_max_ms=8000
         )
-        self.assertTrue(service.handle_update(update(1, "first part")))
-        self.assertTrue(service.handle_update(update(2, "second part")))
-        topic = service.state.find_topic(-1001234567890, 77)
-        assert topic is not None
-        jobs = service.state.provider_jobs_for_topic(topic.topic_id)
-        self.assertEqual(len(jobs), 1)
-        self.assertIn("first part", jobs[0].payload_text)
-        self.assertIn(
-            "FOLLOW-UP USER MESSAGE (same Telegram burst):\nsecond part", jobs[0].payload_text
-        )
-        self.assertFalse(service.run_embedded_queue_cycle())
-        service.close()
+        arrival = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        try:
+            with frozen_queue_clock(arrival):
+                self.assertTrue(service.handle_update(update(1, "first part")))
+            with frozen_queue_clock(arrival + timedelta(milliseconds=100)):
+                self.assertTrue(service.handle_update(update(2, "second part")))
+                topic = service.state.find_topic(-1001234567890, 77)
+                assert topic is not None
+                jobs = service.state.provider_jobs_for_topic(topic.topic_id)
+                self.assertEqual(len(jobs), 1)
+                self.assertIn("first part", jobs[0].payload_text)
+                self.assertIn(
+                    "FOLLOW-UP USER MESSAGE (same Telegram burst):\nsecond part",
+                    jobs[0].payload_text,
+                )
+                self.assertFalse(service.run_embedded_queue_cycle())
+            with frozen_queue_clock(arrival + timedelta(seconds=2)):
+                self.assertTrue(service.handle_update(update(3, "separate part")))
+                later_jobs = service.state.provider_jobs_for_topic(topic.topic_id)
+                self.assertEqual(len(later_jobs), 2)
+                self.assertIn("separate part", later_jobs[1].payload_text)
+                self.assertNotIn("FOLLOW-UP USER MESSAGE", later_jobs[1].payload_text)
+                self.assertEqual(client.turn_threads, [])
+        finally:
+            service.close()
 
     def test_satellite_mention_keeps_its_target_for_the_rest_of_the_burst(self) -> None:
         client = QueueClient()
@@ -446,16 +474,22 @@ class EmbeddedQueueServiceTests(unittest.TestCase):
             "antigravity": "example_antigravity_bot",
         }
 
-        self.assertTrue(service.handle_update(update(1, "@example_antigravity_bot do this")))
-        self.assertTrue(service.handle_update(update(2, "using this second part")))
-
-        topic = service.state.find_topic(-1001234567890, 77)
-        assert topic is not None
-        jobs = service.state.provider_jobs_for_topic(topic.topic_id)
-        self.assertEqual(len(jobs), 1)
-        self.assertEqual(jobs[0].agent_id, "antigravity")
-        self.assertIn("FOLLOW-UP USER MESSAGE", jobs[0].payload_text)
-        service.close()
+        arrival = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        try:
+            with frozen_queue_clock(arrival):
+                self.assertTrue(
+                    service.handle_update(update(1, "@example_antigravity_bot do this"))
+                )
+            with frozen_queue_clock(arrival + timedelta(milliseconds=100)):
+                self.assertTrue(service.handle_update(update(2, "using this second part")))
+                topic = service.state.find_topic(-1001234567890, 77)
+                assert topic is not None
+                jobs = service.state.provider_jobs_for_topic(topic.topic_id)
+                self.assertEqual(len(jobs), 1)
+                self.assertEqual(jobs[0].agent_id, "antigravity")
+                self.assertIn("FOLLOW-UP USER MESSAGE", jobs[0].payload_text)
+        finally:
+            service.close()
 
     def test_plain_emergency_word_cancels_queued_work_without_provider_call(self) -> None:
         client = QueueClient()

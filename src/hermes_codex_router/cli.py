@@ -55,6 +55,7 @@ from .release_identity import CURRENT_RELEASE
 from .runtime_health import project_runtime_health
 from .service import ProjectHubService
 from .state import HubState, StateError
+from .worker_identity import worker_instance_id
 from .worker_process_lock import worker_process_lock
 from .worktrees import WorktreeError, cleanup_worktree, create_worktree
 
@@ -563,7 +564,7 @@ def _worker_command(args: argparse.Namespace) -> int:
     slot_count = config.worker_count_for_agent(args.agent)
     if not 1 <= args.slot <= slot_count:
         raise HubConfigError("worker slot is not configured for this agent")
-    worker_id = f"{args.agent}-worker" if args.slot == 1 else f"{args.agent}-worker-{args.slot}"
+    worker_id = worker_instance_id(args.agent, args.slot)
     with worker_process_lock(config.state_path, worker_id):
         if args.slot == 1:
             worker = ExternalQueueWorker(config, args.agent)
