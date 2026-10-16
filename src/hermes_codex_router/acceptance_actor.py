@@ -55,6 +55,10 @@ SUPPORTED_CHECKS = (
 )
 
 
+class _ResponseTimeout(AcceptanceActorError):
+    """A completed response-observation window with no matching message."""
+
+
 def _private_file(path: Path, label: str) -> None:
     if not path.is_file():
         raise AcceptanceActorError(f"{label} is not a file")
@@ -258,11 +262,13 @@ async def _wait_for_response(
     config: AcceptanceActorConfig,
     *,
     after_id: int,
-    username: str,
+    username: str | tuple[str, ...],
     require_buttons: bool = False,
     require_document: bool = False,
     timeout_seconds: int | None = None,
 ) -> Any:
+    usernames = (username,) if isinstance(username, str) else username
+    expected_usernames = {value.casefold() for value in usernames}
     deadline = asyncio.get_running_loop().time() + (
         config.timeout_seconds if timeout_seconds is None else timeout_seconds
     )
@@ -275,7 +281,7 @@ async def _wait_for_response(
                 continue
             sender = await message.get_sender()
             sender_username = str(getattr(sender, "username", "")).casefold()
-            if sender_username == username.casefold():
+            if sender_username in expected_usernames:
                 if (
                     found is None
                     and (not require_buttons or getattr(message, "buttons", None))
@@ -291,7 +297,7 @@ async def _wait_for_response(
         if found is not None:
             return found
         await asyncio.sleep(0.5)
-    raise AcceptanceActorError(f"timed out waiting for @{username}")
+    raise _ResponseTimeout("timed out waiting for " + ", ".join(f"@{name}" for name in usernames))
 
 
 async def _click_callback_prefix(message: Any, prefix: bytes) -> None:
@@ -630,10 +636,10 @@ async def _run_check(
                     client,
                     config,
                     after_id=forwarded_id,
-                    username=target,
+                    username=config.provider_usernames,
                     timeout_seconds=5,
                 )
-            except AcceptanceActorError:
+            except _ResponseTimeout:
                 unexpected = None
             if unexpected is not None:
                 return AcceptanceCheckResult(
