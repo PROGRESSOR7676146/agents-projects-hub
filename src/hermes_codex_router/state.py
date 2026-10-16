@@ -1602,8 +1602,8 @@ class HubState:
             self._connection.execute(
                 """INSERT INTO telegram_outbox (
                      outbox_id, job_id, sender_agent_id, chat_id, thread_id,
-                     telegram_html, status, available_at, created_at, updated_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
+                     telegram_html, status, available_at, created_at, updated_at, purpose
+                   ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, 'execution_notice')""",
                 (
                     outbox_id,
                     job_id,
@@ -1841,8 +1841,8 @@ class HubState:
             self._connection.execute(
                 """INSERT INTO telegram_outbox (
                      outbox_id, job_id, sender_agent_id, chat_id, thread_id,
-                     telegram_html, status, available_at, created_at, updated_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
+                     telegram_html, status, available_at, created_at, updated_at, purpose
+                   ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, 'provider_result')""",
                 (
                     outbox_id,
                     job_id,

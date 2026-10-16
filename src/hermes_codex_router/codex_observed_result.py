@@ -262,8 +262,8 @@ class ObservedTurnResults:
             self.db.execute(
                 """INSERT INTO telegram_outbox
                    (outbox_id, job_id, sender_agent_id, chat_id, thread_id,
-                    telegram_html, status, available_at, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
+                    telegram_html, status, available_at, created_at, updated_at, purpose)
+                   VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)""",
                 (
                     new_outbox_id,
                     job_id,
@@ -274,6 +274,9 @@ class ObservedTurnResults:
                     now,
                     now,
                     now,
+                    "provider_result"
+                    if outcome.status == "completed" and not stopped_completion
+                    else "execution_notice",
                 ),
             )
             self.state._insert_telegram_outbox_parts(

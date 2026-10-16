@@ -133,6 +133,7 @@ class MonitorHealthTests(unittest.TestCase):
                     "unknown_delivery": 0,
                     "unknown_progress_delivery": 0,
                     "outstanding_delivery_holds": 0,
+                    "nonblocking_notice_delivery": 0,
                     "released_delivery_holds": 0,
                     "reconciled_final_controls": 0,
                     "reconciled_progress_controls": 0,

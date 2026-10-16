@@ -595,6 +595,13 @@ gateway and a local worker as competing consumers for the same provider.
 
 ## Telegram outbox recovery
 
+- Schema54 records exact send attempts and positive receipts separately. Ordinary
+  sender maintenance can finish delivery bookkeeping from a durable receipt,
+  without HTTP or a provider call. A late receipt does not replace an existing
+  owner-pinned snapshot. New unconfirmed execution notices have a separate status
+  count and warning; legacy or true-final holds still need exact reconciliation.
+  See [the delivery contract](../product/DELIVERY_AND_RECEIPTS.md) and
+  [ADR 0069](../decisions/0069-late-receipts-and-notice-ordering.md).
 - Diagnose the cached sender health before changing queue state. A current
   `transport_operation` plus `transport_failure_class` distinguishes delivery
   timeout/DNS/TLS/I/O from an API rejection; safe status and retry-after may be

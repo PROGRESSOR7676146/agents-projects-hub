@@ -125,9 +125,10 @@ artifacts without a substitute send. A sending notice defers reconciliation unti
 receipt, proven rejection or unknown recovery settles it; normal replacement
 archives every original part atomically, including after a receipted prefix.
 Opener-level form/multipart rejection tests cover real HTTP400/403, malformed or
-conflicting bodies, HTTP408/5xx and incomplete HTTP200 responses. Unknown-head
-fixtures prove same-topic execution/delivery remain blocked while another topic
-can deliver. The explicit reconciliation deployment gate remains open.
+conflicting bodies, HTTP408/5xx and incomplete HTTP200 responses. Legacy/final
+unknown heads block same-topic delivery; another topic can deliver.
+The reconciliation deployment gate remains open.
+Schema54 coverage and its evidence limits: [late receipts](DELIVERY_RECEIPTS.md).
 Native pre-connect fixtures (`tests.test_telegram_not_sent`,
 `tests.test_not_sent_delivery_retry`) cover fake socket phases and durable retry;
 source evidence/limits: [ADR 0068](../decisions/0068-proven-not-sent-telegram-retry.md).
@@ -773,11 +774,12 @@ The `reply_route` check first obtains a response through an explicit provider
 mention, then sends a real Telegram Reply without another mention and requires
 the response to come from the original provider identity.
 The `forwarded_quote` check forwards a harmless provider marker back into the
-topic, verifies that the forward alone receives no provider answer, then checks
-that it is visible to the next explicit turn as quoted context.
+topic, observes a bounded quiet window, then checks the explicit context reply.
+See [failure handling and evidence limits](ACCEPTANCE_FORWARD_SILENCE.md).
 
-The `burst_route` check sends one harmless instruction as three concurrent
-Telegram API requests and requires one coherent provider answer. The
+The `burst_route` check sends one harmless instruction as three consecutive
+Telegram API requests without an intentional delay and checks a coherent provider
+answer. That marker does not establish the number of native invocations. The
 `stop_route` check must appear after `model_menu`: it mentions the first
 provider selected there, starts a harmless wait, sends deterministic `stop`,
 requires the Hub acknowledgement, and proves that a new turn works afterward.

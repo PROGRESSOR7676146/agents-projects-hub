@@ -24,6 +24,7 @@ reading never exempts an implementation from any requirement.
 - [Accounts, control, and security](ACCOUNTS_CONTROL_AND_SECURITY.md)
 - [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md)
 - [Durable queue and control](DURABLE_QUEUE_AND_CONTROL.md)
+- [Telegram delivery and receipts](DELIVERY_AND_RECEIPTS.md)
 - [Onboarding and acceptance](ONBOARDING_AND_ACCEPTANCE.md)
 - [Maintenance](MAINTENANCE.md)
 - [Evaluation and resource-aware task allocation](EVALUATION_AND_ALLOCATION.md)

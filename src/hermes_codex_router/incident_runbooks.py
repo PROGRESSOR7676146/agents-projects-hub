@@ -83,6 +83,9 @@ _ENTRIES = {
     ),
     "telegram_delivery_age_exceeded": _runbook("Final delivery is delayed", _DELIVERY, _INSPECT),
     "progress_delivery_age_exceeded": _runbook("Progress delivery is delayed", _DELIVERY, _INSPECT),
+    "unknown_notice_delivery": _runbook(
+        "Service notice delivery is unconfirmed", _DELIVERY, _INSPECT
+    ),
     "unknown_delivery": _runbook("Final delivery outcome is unknown", _DELIVERY, _INSPECT),
     "unknown_progress_delivery": _runbook(
         "Progress delivery outcome is unknown", _DELIVERY, _INSPECT

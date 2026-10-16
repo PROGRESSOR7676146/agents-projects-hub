@@ -11,7 +11,8 @@ from typing import Callable, Sequence
 
 from .artifacts import ValidatedArtifact
 from .delivery_control_predicates import final_control_reconciled, progress_control_reconciled
-from .delivery_hold_predicates import outbox_delivery_hold_released
+from .delivery_hold_predicates import nonblocking_execution_notice, outbox_delivery_hold_released
+from .delivery_receipts import DeliveryReceipts
 from .telegram_multipart import split_telegram_html
 
 MAX_PROGRESS_ATTEMPTS = 20
@@ -99,6 +100,7 @@ class DeliveryStateFacade:
         self._transaction = transaction
         self._write_transaction = write_transaction
         self._state_error = state_error
+        self._receipts = DeliveryReceipts(connection, state_error)
 
     def _bounded(self, value: str, *, name: str, maximum: int) -> str:
         normalized = value.strip()
@@ -299,7 +301,8 @@ class DeliveryStateFacade:
                          AND earlier_job.topic_sequence < job.topic_sequence
                          AND earlier_outbox.status NOT IN ('delivered', 'failed')
                          AND NOT ({outbox_delivery_hold_released("earlier_outbox")}
-                                  OR {final_control_reconciled("earlier_outbox")})
+                                  OR {final_control_reconciled("earlier_outbox")}
+                                  OR {nonblocking_execution_notice("earlier_outbox")})
                      )
                    ORDER BY outbox.created_at, outbox.outbox_id LIMIT 1""",
                 (sender, timestamp),
@@ -417,94 +420,37 @@ class DeliveryStateFacade:
         part_index: int | None = None,
         now: datetime | None = None,
     ) -> TelegramOutboxRecord:
-        if type(telegram_message_id) is not int or telegram_message_id <= 0:
-            raise self._state_error("invalid Telegram message id")
         timestamp = self._timestamp(now)
+        # Durable evidence commits before any mutable projection/bookkeeping.
         with self._transaction():
-            row = self._connection.execute(
-                """SELECT job_id, sender_agent_id FROM telegram_outbox
-                   WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
-                     AND lease_expires_at > ? AND send_started_at IS NOT NULL""",
-                (outbox_id, lease_token, timestamp),
-            ).fetchone()
-            if row is None:
-                raise self._state_error("Telegram outbox lease is missing or invalid")
-            part = self._connection.execute(
-                """SELECT part_index FROM telegram_outbox_parts
-                   WHERE outbox_id = ? AND telegram_message_id IS NULL
-                   ORDER BY part_index LIMIT 1""",
-                (outbox_id,),
-            ).fetchone()
-            if part is None:
-                raise self._state_error("Telegram outbox has no undelivered part")
-            if part_index is not None and part_index != part["part_index"]:
-                raise self._state_error("Telegram outbox part changed")
-            self._connection.execute(
-                """UPDATE telegram_outbox_parts
-                   SET telegram_message_id = ?, delivered_at = ?, receipt_validation_version = 1
-                   WHERE outbox_id = ? AND part_index = ? AND telegram_message_id IS NULL""",
-                (telegram_message_id, timestamp, outbox_id, part["part_index"]),
+            self._receipts.record(
+                "final", outbox_id, lease_token, part_index, telegram_message_id, timestamp
             )
-            remaining = self._connection.execute(
-                """SELECT 1 FROM telegram_outbox_parts
-                   WHERE outbox_id = ? AND telegram_message_id IS NULL LIMIT 1""",
-                (outbox_id,),
-            ).fetchone()
-            if remaining is not None:
-                self._connection.execute(
-                    """UPDATE telegram_outbox
-                       SET status = 'pending', attempt_count = MAX(attempt_count - 1, 0),
-                           available_at = ?, lease_owner = NULL,
-                           lease_token = NULL, lease_expires_at = NULL, error_code = NULL,
-                           send_started_at = NULL,
-                           updated_at = ? WHERE outbox_id = ? AND status = 'sending'
-                             AND lease_token = ? AND lease_expires_at > ?""",
-                    (timestamp, timestamp, outbox_id, lease_token, timestamp),
-                )
-            else:
-                self._connection.execute(
-                    """UPDATE telegram_outbox
-                       SET status = 'delivered', telegram_message_id = ?, delivered_at = ?,
-                           lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
-                           updated_at = ? WHERE outbox_id = ? AND status = 'sending'
-                             AND lease_token = ? AND lease_expires_at > ?""",
-                    (
-                        telegram_message_id,
-                        timestamp,
-                        timestamp,
-                        outbox_id,
-                        lease_token,
-                        timestamp,
-                    ),
-                )
-                cursor = self._connection.execute(
-                    """UPDATE provider_jobs SET status = 'completed', updated_at = ?
-                       WHERE job_id = ? AND status = 'result_ready'""",
-                    (timestamp, row["job_id"]),
-                )
-                if cursor.rowcount != 1:
-                    terminal = self._connection.execute(
-                        "SELECT status FROM provider_jobs WHERE job_id = ?",
-                        (row["job_id"],),
-                    ).fetchone()
-                    allowed_terminal = {"failed", "indeterminate"}
-                    if str(row["sender_agent_id"]) == "hub":
-                        allowed_terminal.add("cancelled")
-                    if terminal is None or str(terminal["status"]) not in allowed_terminal:
-                        raise self._state_error("provider job is not ready for Telegram completion")
-            delivered = self._connection.execute(
-                "SELECT * FROM telegram_outbox WHERE outbox_id = ?", (outbox_id,)
-            ).fetchone()
-            if delivered is None:
-                raise self._state_error("delivered Telegram outbox row disappeared")
-            result = self.outbox_record(delivered)
-        return result
+        with self._transaction():
+            self._receipts.settle(lease_token)
+        return self.get_outbox(outbox_id)
 
     def begin_outbox_send(
-        self, outbox_id: str, lease_token: str, part_index: int, *, now: datetime | None = None
+        self,
+        outbox_id: str,
+        lease_token: str,
+        part_index: int,
+        *,
+        now: datetime | None = None,
+        expected_outbox: TelegramOutboxRecord | None = None,
+        expected_part: TelegramOutboxPartRecord | None = None,
     ) -> None:
         timestamp = self._timestamp(now)
         with self._transaction():
+            if expected_outbox is not None:
+                current = self.get_outbox(outbox_id)
+                fields = ("outbox_id", "job_id", "sender_agent_id", "chat_id", "thread_id")
+                if any(getattr(current, k) != getattr(expected_outbox, k) for k in fields):
+                    raise self._state_error("Telegram send destination changed")
+            if expected_part is not None:
+                current_part = self.next_outbox_part(outbox_id, lease_token, now=now)
+                if current_part != expected_part:
+                    raise self._state_error("Telegram send payload changed")
             cursor = self._connection.execute(
                 """UPDATE telegram_outbox SET send_started_at = ?, updated_at = ?
                    WHERE outbox_id = ? AND status = 'sending' AND lease_token = ?
@@ -515,6 +461,7 @@ class DeliveryStateFacade:
             )
             if cursor.rowcount != 1:
                 raise self._state_error("Telegram send fence or expected part changed")
+            self._receipts.begin("final", outbox_id, lease_token, part_index, timestamp)
 
     def mark_outbox_unknown(
         self,
@@ -574,6 +521,7 @@ class DeliveryStateFacade:
                    WHERE status = 'sending' AND lease_expires_at <= ?{agent_filter}""",
                 (timestamp, timestamp, timestamp, *parameters[1:]),
             )
+        self.recover_receipts("final", sender_agent_ids)
         return tuple(str(row["outbox_id"]) for row in rows)
 
     def get_progress(self, progress_id: str) -> ProgressDeliveryRecord:
@@ -604,12 +552,17 @@ class DeliveryStateFacade:
                       (SELECT COUNT(*) FROM provider_progress_deliveries p WHERE p.status='unknown'
                        AND {progress_control_reconciled("p")}),
                       (SELECT COUNT(*) FROM telegram_outbox WHERE status='failed'),
-                      (SELECT COUNT(*) FROM provider_progress_deliveries WHERE status='failed')"""
+                      (SELECT COUNT(*) FROM provider_progress_deliveries WHERE status='failed'),
+                      (SELECT COUNT(*) FROM telegram_outbox o WHERE {nonblocking_execution_notice("o")}),
+                      (SELECT COUNT(*) FROM telegram_outbox o WHERE o.status='unknown'
+                       AND ({outbox_delivery_hold_released("o")} OR {final_control_reconciled("o")}
+                            OR {nonblocking_execution_notice("o")}))"""
         ).fetchone()
         return {
             "unknown_delivery": int(row[0]),
             "unknown_progress_delivery": int(row[1]),
-            "outstanding_delivery_holds": int(row[0]) - int(row[2]),
+            "outstanding_delivery_holds": int(row[0]) - int(row[9]),
+            "nonblocking_notice_delivery": int(row[8]),
             "released_delivery_holds": int(row[2]),
             "reconciled_final_controls": int(row[3]),
             "reconciled_progress_controls": int(row[4]),
@@ -635,8 +588,16 @@ class DeliveryStateFacade:
                  WHERE j.topic_id=? AND o.status='unknown'),
                 (SELECT COUNT(*) FROM telegram_outbox o JOIN provider_jobs j ON j.job_id=o.job_id
                  WHERE j.topic_id=? AND o.status='unknown'
-                 AND ({outbox_delivery_hold_released("o")} OR {final_control_reconciled("o")}))""",
-            (topic_id,) * 5,
+                 AND ({outbox_delivery_hold_released("o")} OR {final_control_reconciled("o")})),
+                (SELECT COUNT(*) FROM telegram_outbox o JOIN provider_jobs j ON j.job_id=o.job_id
+                 WHERE j.topic_id=? AND {nonblocking_execution_notice("o")}),
+                (SELECT COUNT(*) FROM telegram_outbox o JOIN provider_jobs j ON j.job_id=o.job_id
+                 WHERE j.topic_id=? AND o.status='unknown'
+                 AND ({outbox_delivery_hold_released("o")} OR {final_control_reconciled("o")}
+                      OR {nonblocking_execution_notice("o")})),
+                (SELECT COUNT(*) FROM provider_jobs j JOIN provider_job_results r USING(job_id)
+                 WHERE j.topic_id=? AND j.status='result_ready')""",
+            (topic_id,) * 8,
         ).fetchone()
         # One SELECT pins every delivery count to the same SQLite snapshot.
         return {
@@ -644,7 +605,9 @@ class DeliveryStateFacade:
             "progress_reconciled": int(row[1]),
             "unknown_final_reconciled": int(row[2]),
             "unknown_final": int(row[3]),
-            "outstanding": int(row[3]) - int(row[4]),
+            "outstanding": int(row[3]) - int(row[6]),
+            "nonblocking_notices": int(row[5]),
+            "saved_results_awaiting_delivery": int(row[7]),
             "released": int(row[4]),
             "queue_only": int(row[4]) - int(row[2]),
         }
@@ -759,7 +722,9 @@ class DeliveryStateFacade:
                 "AND lease_expires_at <= ?",
                 (current, *sender_agent_ids, current),
             )
-            return changed.rowcount
+            count = changed.rowcount
+        self.recover_receipts("progress", tuple(sender_agent_ids))
+        return count
 
     def supersede_terminal_progress(
         self, sender_agent_ids: Sequence[str], *, now: datetime | None = None
@@ -879,26 +844,37 @@ class DeliveryStateFacade:
         telegram_message_id: int,
         now: datetime | None = None,
     ) -> None:
-        if type(telegram_message_id) is not int or telegram_message_id <= 0:
-            raise self._state_error("progress Telegram message id must be positive")
-        current = self._utc_now(now).isoformat()
+        current = self._timestamp(now)
         with self._transaction():
-            changed = self._connection.execute(
-                "UPDATE provider_progress_deliveries SET status = 'delivered', "
-                "telegram_message_id = ?, delivered_at = ?, updated_at = ?, "
-                "lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, error_code = NULL "
-                "WHERE progress_id = ? AND status = 'sending' AND lease_token = ? "
-                "AND lease_expires_at > ? AND send_started_at IS NOT NULL",
-                (telegram_message_id, current, current, progress_id, lease_token, current),
+            self._receipts.record(
+                "progress", progress_id, lease_token, 1, telegram_message_id, current
             )
-            if changed.rowcount != 1:
-                raise self._state_error("progress delivery lease changed")
+        with self._transaction():
+            self._receipts.settle(lease_token)
 
     def begin_progress_send(
-        self, progress_id: str, lease_token: str, *, now: datetime | None = None
+        self,
+        progress_id: str,
+        lease_token: str,
+        *,
+        now: datetime | None = None,
+        expected_progress: ProgressDeliveryRecord | None = None,
     ) -> None:
         current = self._timestamp(now)
         with self._transaction():
+            if expected_progress is not None:
+                saved = self.get_progress(progress_id)
+                fields = (
+                    "progress_id",
+                    "job_id",
+                    "item_sequence",
+                    "sender_agent_id",
+                    "chat_id",
+                    "thread_id",
+                    "telegram_html",
+                )
+                if any(getattr(saved, k) != getattr(expected_progress, k) for k in fields):
+                    raise self._state_error("progress send payload or destination changed")
             cursor = self._connection.execute(
                 """UPDATE provider_progress_deliveries SET send_started_at = ?, updated_at = ?
                    WHERE progress_id = ? AND status = 'sending' AND lease_token = ?
@@ -907,6 +883,7 @@ class DeliveryStateFacade:
             )
             if cursor.rowcount != 1:
                 raise self._state_error("progress send fence changed")
+            self._receipts.begin("progress", progress_id, lease_token, 1, current)
 
     def mark_progress_unknown(
         self, progress_id: str, lease_token: str, *, error_code: str, now: datetime | None = None
@@ -923,3 +900,14 @@ class DeliveryStateFacade:
                 (code, current, progress_id, lease_token),
             )
             return cursor.rowcount == 1
+
+    def recover_receipts(self, kind: str, senders: tuple[str, ...] | None) -> None:
+        if senders is None:
+            table = "telegram_outbox" if kind == "final" else "provider_progress_deliveries"
+            senders = tuple(
+                str(r[0])
+                for r in self._connection.execute(f"SELECT DISTINCT sender_agent_id FROM {table}")
+            )
+        for token in self._receipts.pending(kind, senders):
+            with self._transaction():
+                self._receipts.settle(token)

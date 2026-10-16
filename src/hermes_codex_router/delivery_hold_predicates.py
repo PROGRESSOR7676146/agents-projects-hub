@@ -3,6 +3,14 @@
 from .delivery_control_predicates import result_ready_control_reconciled
 
 
+def nonblocking_execution_notice(outbox: str) -> str:
+    """New explicitly classified notices only; legacy and real results stay conservative."""
+    return f"""({outbox}.status='unknown' AND {outbox}.purpose='execution_notice'
+        AND NOT EXISTS (SELECT 1 FROM provider_job_results r WHERE r.job_id={outbox}.job_id)
+        AND EXISTS (SELECT 1 FROM provider_jobs j WHERE j.job_id={outbox}.job_id
+                    AND j.status IN ('failed','cancelled','indeterminate')))"""
+
+
 def outbox_delivery_hold_released(outbox: str) -> str:
     """Trusted internal SQL alias; match the immutable target and saved result."""
     return f"""({outbox}.status='unknown' AND EXISTS (

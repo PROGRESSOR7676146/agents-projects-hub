@@ -7,6 +7,7 @@ from typing import Callable, Protocol
 
 from .delivery_retry import delivery_retry_delay, retryable_delivery_failure
 from .final_delivery import FinalDeliveryResult, delivery_error_code, utc_now
+from .receipt_commit import commit_receipt
 from .state_delivery import DeliveryStateFacade, ProgressDeliveryRecord
 
 
@@ -31,7 +32,9 @@ def deliver_progress(
     if token is None:
         raise ValueError("progress delivery requires an existing lease")
     try:
-        delivery.begin_progress_send(progress.progress_id, token, now=current_time())
+        delivery.begin_progress_send(
+            progress.progress_id, token, now=current_time(), expected_progress=progress
+        )
     except Exception as error:
         return FinalDeliveryResult(error=error)
     try:
@@ -56,8 +59,10 @@ def deliver_progress(
             )
         return FinalDeliveryResult(error=error)
     try:
-        delivery.mark_progress_delivered(
-            progress.progress_id, token, telegram_message_id=message_id, now=current_time()
+        commit_receipt(
+            lambda: delivery.mark_progress_delivered(
+                progress.progress_id, token, telegram_message_id=message_id, now=current_time()
+            )
         )
     except Exception as error:
         delivery.mark_progress_unknown(

@@ -9,6 +9,7 @@ from typing import Callable, Protocol
 
 from .artifacts import artifact_spool_root, remove_spooled_artifact, verify_spooled_artifact
 from .delivery_retry import delivery_retry_delay, retryable_delivery_failure
+from .receipt_commit import commit_receipt
 from .state_delivery import DeliveryStateFacade, TelegramOutboxRecord
 from .telegram import TelegramError
 
@@ -87,7 +88,14 @@ def deliver_final_part(
         )
         return FinalDeliveryResult(error=error)
     try:
-        delivery.begin_outbox_send(outbox.outbox_id, token, part.part_index, now=current_time())
+        delivery.begin_outbox_send(
+            outbox.outbox_id,
+            token,
+            part.part_index,
+            now=current_time(),
+            expected_outbox=outbox,
+            expected_part=part,
+        )
     except Exception as error:
         # A fence-commit failure may itself be ambiguous; never assume it did not commit.
         return FinalDeliveryResult(error=error)
@@ -121,12 +129,14 @@ def deliver_final_part(
             )
         return FinalDeliveryResult(error=error)
     try:
-        delivery.mark_outbox_delivered(
-            outbox.outbox_id,
-            token,
-            telegram_message_id=message_id,
-            part_index=part.part_index,
-            now=current_time(),
+        delivered = commit_receipt(
+            lambda: delivery.mark_outbox_delivered(
+                outbox.outbox_id,
+                token,
+                telegram_message_id=message_id,
+                part_index=part.part_index,
+                now=current_time(),
+            )
         )
     except Exception as error:
         delivery.mark_outbox_unknown(
@@ -138,7 +148,13 @@ def deliver_final_part(
         )
         return FinalDeliveryResult(error=error)
     # Cleanup is outside transport/receipt catches: a fault cannot retry an accepted part.
-    if file_path is not None:
+    receipted = any(
+        p.part_index == part.part_index
+        and p.telegram_message_id == message_id
+        and p.receipt_validation_version == 1
+        for p in delivery.get_outbox_parts(delivered.outbox_id)
+    )
+    if file_path is not None and receipted:
         try:
             remove_spooled_artifact(file_path, artifact_spool_root(state_path))
         except Exception as error:

@@ -19,12 +19,9 @@ from tests.test_delivery_certainty_migration import snapshot
 class DeliveryHoldMigrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fixture = fixtures.TelegramOutboxSenderTests()
-        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
-            self.fixture.setUp()
-            migrations.migrate_database(self.fixture.config.state_path, create_backup=False)
+        self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
-        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
-            self.job_id = self.fixture.ready_outbox("opencode", 91)
+        self.job_id = self.fixture.ready_outbox("opencode", 91)
         source_path = self.fixture.config.state_path
         self.path = source_path.with_name("example-historical.db")
         project_historical_database(source_path, self.path, 43)

@@ -24,7 +24,10 @@ This normative module is part of the
   authorizing resend. Total unknown final delivery MUST remain visible after an
   owner disposition; outstanding and owner-released delivery holds MUST be
   counted separately, and only outstanding final holds keep the blocking alert
-  active. The passive alert evaluator MUST report provider work with an expired execution
+  active. Explicitly classified nonblocking unknown notices MUST remain visible in
+  separate counts and a deduplicated warning. Status MUST distinguish saved results
+  awaiting delivery from blocking unknown delivery and nonblocking notices.
+  The passive alert evaluator MUST report provider work with an expired execution
   lease, or due and unblocked queued work waiting over 15 minutes without an
   active worker lease. A healthy long-running execution MUST NOT alert solely
   because its original queue timestamp is old. The evaluator MUST also report

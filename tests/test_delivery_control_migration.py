@@ -17,17 +17,12 @@ from tests.test_delivery_certainty_migration import snapshot
 class DeliveryControlMigrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fixture = fixtures.TelegramOutboxSenderTests()
-        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
-            self.fixture.setUp()
-            migrations.migrate_database(self.fixture.config.state_path, create_backup=False)
-            self.addCleanup(self.fixture.tearDown)
-            self.job_id = self.fixture.ready_outbox("opencode", 161)
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.tearDown)
+        self.job_id = self.fixture.ready_outbox("opencode", 161)
         source_path = self.fixture.config.state_path
         self.path = source_path.with_name("example-historical.db")
-        with (
-            patch.object(migrations, "LATEST_SCHEMA_VERSION", 48),
-            closing(HubState.open(source_path, codex_permission_profile=None)) as state,
-        ):
+        with closing(HubState.open(source_path, codex_permission_profile=None)) as state:
             db = state._connection
             with db:
                 db.execute("UPDATE topics SET execution_scope='root:/home/example/project'")
