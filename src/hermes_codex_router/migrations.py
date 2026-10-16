@@ -26,6 +26,7 @@ from .schema_delivery_certainty import DELIVERY_CERTAINTY_SCHEMA as MIGRATION_43
 from .schema_delivery_control import DELIVERY_CONTROL_SCHEMA as MIGRATION_46
 from .schema_delivery_control_activation import DELIVERY_CONTROL_ACTIVATION_SCHEMA as MIGRATION_47
 from .schema_delivery_holds import DELIVERY_HOLD_SCHEMA as MIGRATION_44
+from .schema_delivery_receipts import DELIVERY_RECEIPTS_SCHEMA as MIGRATION_54
 from .schema_ingress_assessments import INGRESS_ASSESSMENT_SCHEMA as MIGRATION_51
 from .schema_ingress_control import INGRESS_CONTROL_SCHEMA as MIGRATION_52
 from .schema_outcome_assessments import OUTCOME_ASSESSMENT_SCHEMA as MIGRATION_45
@@ -1517,6 +1518,7 @@ def migrate_connection(connection: sqlite3.Connection) -> tuple[int, int]:
         MIGRATION_51,
         MIGRATION_52,
         MIGRATION_53,
+        MIGRATION_54,
     )
     if previous < LATEST_SCHEMA_VERSION:
         try:
