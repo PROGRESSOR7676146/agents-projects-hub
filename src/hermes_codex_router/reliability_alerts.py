@@ -56,6 +56,18 @@ def evaluate_reliability_alerts(
             )
         )
     unresolved = _positive_int(telemetry.get("unresolved_uncertain_execution"))
+    notices = _positive_int(telemetry.get("nonblocking_notice_delivery"))
+    if notices is not None:
+        alerts.append(
+            OperationalAlert(
+                "reliability:unknown-notice-delivery",
+                "unknown_notice_delivery",
+                "warning",
+                f"Hub has {notices} unconfirmed Telegram service notice(s). Later saved results "
+                "may be delivered. Preserve the notice evidence without resending or replaying work; "
+                "native execution uncertainty and other safety boundaries remain independent.",
+            )
+        )
     for key, severity, label in (
         ("unknown_delivery", "error", "final result"),
         ("unknown_progress_delivery", "warning", "progress"),

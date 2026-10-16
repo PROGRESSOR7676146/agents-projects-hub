@@ -209,6 +209,8 @@ class DeliveryControlState:
         origin = self.db.execute(
             "SELECT * FROM codex_session_origins WHERE session_id=?", (job["session_id"],)
         ).fetchone()
+        from .delivery_receipts import DeliveryReceipts
+
         snapshot = dict(
             action=ACTION,
             version=1,
@@ -223,6 +225,9 @@ class DeliveryControlState:
             terminal_evidence=evidence,
             resolution=resolution,
             origin=dict(origin) if origin is not None else None,
+            send_evidence=DeliveryReceipts(self.db, StateError).snapshot(
+                "final" if kind == "final_outbox" else "progress", target_id
+            ),
         )
         return binding, snapshot
 

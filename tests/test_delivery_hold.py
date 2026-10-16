@@ -378,7 +378,7 @@ class DeliveryHoldTests(unittest.TestCase):
                 )
         self.assertEqual(self.release(token=record.snapshot), record)
 
-    def test_failed_notice_release_unblocks_only_delivery_and_lane_binding_is_retained(
+    def test_new_notice_bypass_and_explicit_consent_retain_lane_binding(
         self,
     ) -> None:
         self.release()
@@ -410,7 +410,10 @@ class DeliveryHoldTests(unittest.TestCase):
             sender_agent_id="opencode",
             telegram_html="Example tail",
         )
-        self.assertIsNone(self.state.lease_telegram_outbox("opencode", "example-sender"))
+        unblocked = self.state.lease_telegram_outbox("opencode", "example-sender")
+        assert unblocked is not None and unblocked.lease_token is not None
+        self.assertEqual(unblocked.job_id, tail.job_id)
+        self.state.release_telegram_outbox_lease(unblocked.outbox_id, unblocked.lease_token)
         preview = self.state.preview_delivery_hold(notice.outbox_id)
         self.assertIsNone(preview.result_id)
         self.assertEqual(

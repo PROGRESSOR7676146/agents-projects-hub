@@ -105,6 +105,14 @@ class IngressAssessmentMigrationTests(unittest.TestCase):
                         columns(current)[value[1]],
                         self.old_columns[value[1]] + ("claude_material_notice",),
                     )
+                elif value[:2] == ("table", "telegram_outbox"):
+                    self.assertEqual(
+                        columns(current)[value[1]], self.old_columns[value[1]] + ("purpose",)
+                    )
+                    self.assertEqual(
+                        current.execute("SELECT DISTINCT purpose FROM telegram_outbox").fetchall(),
+                        [("legacy",)] if self.before["telegram_outbox"] else [],
+                    )
                 elif value[:2] != ("table", "codex_turn_controls"):
                     self.assertIn(value, current_objects)
             for table in ("telegram_ingress_watermarks", "codex_telegram_ingress_assessments"):

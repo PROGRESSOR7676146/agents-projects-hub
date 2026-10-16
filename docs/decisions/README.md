@@ -12,6 +12,7 @@ with a new record.
 
 | Decision | Current outcome | Source |
 | --- | --- | --- |
+| Late receipts and notice ordering | Exact late receipt evidence survives lease expiry; new unknown execution notices do not block later saved finals. | [ADR 0069](0069-late-receipts-and-notice-ordering.md) |
 | Proven-not-sent Telegram retry | Native initial socket failures may retry through existing fenced delivery; post-connect and historical unknown evidence stays conservative. | [ADR 0068](0068-proven-not-sent-telegram-retry.md) |
 | Product identity | Agents Projects Hub; internal `hermes_codex_router` remains for compatibility. | Product requirements |
 | Project topology | One private forum group per registered local project; numeric topic identity. | Product requirements and tests |

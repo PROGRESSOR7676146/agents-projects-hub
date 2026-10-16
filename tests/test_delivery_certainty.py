@@ -94,7 +94,7 @@ class DeliveryCertaintyTests(unittest.TestCase):
             self.assertFalse(service._deliver_embedded_outbox(state, "opencode"))
             self.assertEqual(len(bot.documents), 1)
 
-    def test_clock_after_http_detects_expiry_and_unknown_parking_accepts_old_exact_token(
+    def test_clock_after_http_preserves_late_exact_positive_receipt(
         self,
     ) -> None:
         from hermes_codex_router.final_delivery import deliver_final_part
@@ -115,8 +115,8 @@ class DeliveryCertaintyTests(unittest.TestCase):
                 state_path=self.fixture.config.state_path,
                 clock=lambda: next(ticks),
             )
-            self.assertFalse(result.receipt_committed)
-            self.assertEqual(state.get_telegram_outbox_for_job(job_id).status, "unknown")
+            self.assertTrue(result.receipt_committed)
+            self.assertEqual(state.get_telegram_outbox_for_job(job_id).status, "delivered")
             self.assertEqual(len(bot.sent), 1)
 
     def test_commit_then_raise_cannot_overwrite_committed_prefix(self) -> None:

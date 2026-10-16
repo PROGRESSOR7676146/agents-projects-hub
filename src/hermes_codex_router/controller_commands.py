@@ -126,6 +126,18 @@ class ControllerCommandOrchestrator:
                 )
         held_jobs = self.state.held_provider_job_count(topic.topic_id)
         delivery_controls = self.state.delivery.topic_delivery_controls(topic.topic_id)
+        if delivery_controls["saved_results_awaiting_delivery"]:
+            detail += (
+                f"\nSaved final result(s) awaiting Telegram delivery: "
+                f"{delivery_controls['saved_results_awaiting_delivery']}. "
+                "Provider work is finished; delivery does not rerun it."
+            )
+        if delivery_controls["nonblocking_notices"]:
+            detail += (
+                f"\nUnconfirmed service notice(s): {delivery_controls['nonblocking_notices']}. "
+                "Saved final results may still be delivered; notices are not resent. "
+                "Execution uncertainty and other safety checks remain independent."
+            )
         if delivery_controls["outstanding"]:
             detail += (
                 f"\nUnknown Telegram delivery hold(s): {delivery_controls['outstanding']}. "

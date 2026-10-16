@@ -1,7 +1,7 @@
 # Stabilization plan
 
-Source checkpoint: [0.8.0](RELEASE_0_8_0.md). Earlier source entries are historical;
-the PR/tag own combined gates. Live acceptance remains open.
+Source: [0.8.0](RELEASE_0_8_0.md); PR/tag record gates. Earlier entries: historical.
+Live acceptance open. [Delivery](DELIVERY_RELIABILITY.md).
 
 Maintenance: [0.7.1](STABILIZATION_RELEASE_0_7_1.md).
 

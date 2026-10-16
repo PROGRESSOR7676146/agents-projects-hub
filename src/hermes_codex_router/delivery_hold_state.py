@@ -122,6 +122,8 @@ class DeliveryHoldState:
                 (outbox_id,),
             )
         ]
+        from .delivery_receipts import DeliveryReceipts
+
         snapshot = dict(
             action=ACTION,
             version=1,
@@ -133,6 +135,7 @@ class DeliveryHoldState:
                 key: session[key] for key in ("session_id", "topic_id", "agent_id", "generation")
             },
             parts=parts,
+            send_evidence=DeliveryReceipts(self.db, self.error).snapshot("final", outbox_id),
         )
         return binding, snapshot
 

@@ -262,11 +262,16 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
                 "telegram_outbox",
             )
             before = {
-                table: state._connection.execute(f"SELECT * FROM {table}").fetchall()
+                table: [tuple(row) for row in state._connection.execute(f"SELECT * FROM {table}")]
                 for table in preserved_tables
             }
             state.close()
             if schema == 30:
+                # Historical projection intentionally removes the trusted purpose;
+                # migration restores conservative legacy, never infers a notice.
+                before["telegram_outbox"] = [
+                    (*row[:-1], "legacy") for row in before["telegram_outbox"]
+                ]
                 historical_path = harness.config.state_path.with_name("example-historical47.db")
                 project_historical_database(harness.config.state_path, historical_path, 47)
                 harness.config = replace(harness.config, state_path=historical_path)
@@ -311,7 +316,7 @@ class LegacyScopeEvidenceTests(unittest.TestCase):
                 self.assertEqual(state.get_topic(old.topic_id).execution_scope, f"root:{root}")
                 for table in preserved_tables:
                     self.assertEqual(
-                        state._connection.execute(f"SELECT * FROM {table}").fetchall(),
+                        [tuple(row) for row in state._connection.execute(f"SELECT * FROM {table}")],
                         before[table],
                     )
                 with self.assertRaises(ExecutionRootError):

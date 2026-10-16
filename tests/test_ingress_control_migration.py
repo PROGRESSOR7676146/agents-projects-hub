@@ -103,6 +103,15 @@ class IngressControlMigrationTests(unittest.TestCase):
                         columns(current)[definition[1]],
                         self.old_columns[definition[1]] + ("claude_material_notice",),
                     )
+                elif definition[:2] == ("table", "telegram_outbox"):
+                    self.assertEqual(
+                        columns(current)[definition[1]],
+                        self.old_columns[definition[1]] + ("purpose",),
+                    )
+                    self.assertEqual(
+                        current.execute("SELECT DISTINCT purpose FROM telegram_outbox").fetchall(),
+                        [("legacy",)] if self.before["telegram_outbox"] else [],
+                    )
                 else:
                     self.assertIn(definition, current_objects)
             self.assertEqual(

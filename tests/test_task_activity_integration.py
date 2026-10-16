@@ -82,36 +82,35 @@ class TaskActivityDatabaseIntegrationTests(unittest.TestCase):
 
         source_path = self.path.with_name("example-current-seed.db")
         self.fixture.config = replace(self.fixture.config, state_path=source_path)
-        with patch.object(migrations, "LATEST_SCHEMA_VERSION", 48):
-            self.fixture.ready_outbox("antigravity", 501)
-            state = HubState.open(source_path, codex_permission_profile=None)
-            try:
-                job = self.enqueue(state, 502)
-                leased = state.lease_provider_job("opencode", "example-worker")
-                assert leased is not None and leased.lease_token is not None
-                state.mark_provider_job_executing(job.job_id, leased.lease_token)
-                self.enqueue(state, 503)
-                notices = TaskLifecycleState(
-                    state._connection,
-                    transaction=state._immediate_transaction,
-                    state_error=ValueError,
+        self.fixture.ready_outbox("antigravity", 501)
+        state = HubState.open(source_path, codex_permission_profile=None)
+        try:
+            job = self.enqueue(state, 502)
+            leased = state.lease_provider_job("opencode", "example-worker")
+            assert leased is not None and leased.lease_token is not None
+            state.mark_provider_job_executing(job.job_id, leased.lease_token)
+            self.enqueue(state, 503)
+            notices = TaskLifecycleState(
+                state._connection,
+                transaction=state._immediate_transaction,
+                state_error=ValueError,
+            )
+            with state._immediate_transaction():
+                notice, _ = notices.prepare_notice_in_transaction(
+                    event_key="unknown-example",
+                    kind="no_progress",
+                    job_id=job.job_id,
+                    chat_id=-1001234567890,
+                    thread_id=7,
+                    telegram_html="Fictional warning",
+                    now=datetime.now(timezone.utc),
                 )
-                with state._immediate_transaction():
-                    notice, _ = notices.prepare_notice_in_transaction(
-                        event_key="unknown-example",
-                        kind="no_progress",
-                        job_id=job.job_id,
-                        chat_id=-1001234567890,
-                        thread_id=7,
-                        telegram_html="Fictional warning",
-                        now=datetime.now(timezone.utc),
-                    )
-                    state._connection.execute(
-                        "UPDATE task_lifecycle_notices SET status='unknown',attempt_count=1 WHERE notice_id=?",
-                        (notice.notice_id,),
-                    )
-            finally:
-                state.close()
+                state._connection.execute(
+                    "UPDATE task_lifecycle_notices SET status='unknown',attempt_count=1 WHERE notice_id=?",
+                    (notice.notice_id,),
+                )
+        finally:
+            state.close()
         project_historical_database(source_path, self.path, 36)
         self.fixture.config = replace(self.fixture.config, state_path=self.path)
 

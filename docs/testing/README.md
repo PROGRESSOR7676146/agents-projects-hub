@@ -125,9 +125,10 @@ artifacts without a substitute send. A sending notice defers reconciliation unti
 receipt, proven rejection or unknown recovery settles it; normal replacement
 archives every original part atomically, including after a receipted prefix.
 Opener-level form/multipart rejection tests cover real HTTP400/403, malformed or
-conflicting bodies, HTTP408/5xx and incomplete HTTP200 responses. Unknown-head
-fixtures prove same-topic execution/delivery remain blocked while another topic
-can deliver. The explicit reconciliation deployment gate remains open.
+conflicting bodies, HTTP408/5xx and incomplete HTTP200 responses. Legacy/final
+unknown heads block same-topic delivery; another topic can deliver.
+The reconciliation deployment gate remains open.
+Schema54 coverage and its evidence limits: [late receipts](DELIVERY_RECEIPTS.md).
 Native pre-connect fixtures (`tests.test_telegram_not_sent`,
 `tests.test_not_sent_delivery_retry`) cover fake socket phases and durable retry;
 source evidence/limits: [ADR 0068](../decisions/0068-proven-not-sent-telegram-retry.md).
