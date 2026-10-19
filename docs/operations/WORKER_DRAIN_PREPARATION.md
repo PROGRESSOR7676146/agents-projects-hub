@@ -1,9 +1,10 @@
 # Worker operations drain preparation
 
-Status: internal runtime foundation; external maintenance control and live
-acceptance remain open. Owner: Hub maintainer. Source base: `200616c`.
-Next trigger: independently review this source, then implement an exact-incarnation
-local request/receipt boundary before proposing any maintenance deployment.
+Status: internal barrier plus default-off local control candidate; stronger
+maintenance proof and live acceptance remain open. Owner: Hub maintainer.
+Last verified barrier source: `4eb9b53`; local control is a stacked source candidate.
+Next trigger: exact-candidate independent review and publication, then prepare the
+separate native/client/history/custody boundary before any maintenance deployment.
 
 ## Purpose and extraction
 
@@ -50,16 +51,51 @@ precede this boundary; a request before run_forever prevents runtime startup onl
 
 ## Remaining maintenance integration
 
-The current change adds no CLI, signals, socket, request file or durable receipt.
-No process can remotely drain a stock installed worker using this API alone.
-Before a live use, an independently reviewed exact-incarnation control must bind
-the request and acknowledgement to the worker epoch; close/verify cached clients;
+The local source interface is owned by
+[REQ-QUEUE-015](../product/DURABLE_QUEUE_AND_CONTROL.md) and
+[ADR 0070](../decisions/0070-worker-operations-drain-control.md).
+Installed workers gain no endpoint without explicit deployment opt-in.
+Before a live use, the maintenance owner must close/verify cached clients;
 verify exact native/control terminality and preserved history; and keep independent
 restoration custody until original-process death and replacement convergence.
 Timeout, stale acknowledgement or lost custody must refuse activation without
 force or an inferred success. Existing uncertainty and human approval ownership
 remain governed by the [queue contract](../product/DURABLE_QUEUE_AND_CONTROL.md)
 and [security requirements](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
+
+## Explicit local candidate workflow
+
+An authorized immutable worker may be launched with `--drain-control-socket` and
+a fresh socket path inside an existing private canonical directory. Enabling it
+on an installed worker is a separate deployment task. A development checkout
+without verified build identity refuses opt-in. Do not place the endpoint inside
+provider-accessible project mounts or infer same-UID isolation from permissions.
+Startup never removes a stale path. Preserve it and choose a fresh path or obtain
+separate exact reconciliation authority.
+
+The local client has no configuration discovery or credential/state reads:
+
+1. `worker-control inspect SOCKET` prints the observed binding. Independently
+   compare it with the planned unit/process/release and private runtime marker.
+   Save this exact output in an owner-held mode-0600 file; discovery alone does
+   not select a maintenance target.
+2. `worker-control prepare BINDING_FILE --request-id NONCE --ttl-seconds 30`
+   prints a bounded request, without connecting or mutating. NONCE is a fresh
+   32-character lowercase hexadecimal identifier. Save the exact output privately
+   before transmission; never regenerate a request after an uncertain response.
+3. Only with independent restoration custody and exact maintenance permission,
+   `worker-control request SOCKET REQUEST_FILE` sends that request once. An
+   accepted response may still report `operations_drained: false`.
+4. `worker-control status SOCKET REQUEST_FILE` observes the original digest
+   without mutation. Retain the exact response and its local observation time in
+   the maintenance evidence store. No automatic retry, wait loop, target refresh,
+   signal or activation follows. Errors return code 2 with an unconfirmed result.
+
+Expiry after acceptance does not resume work. Losing the socket or observing a
+new PID/nonce invalidates observation of the old request; it does not prove death,
+completion or authority to restore. The in-memory acknowledgement is not a durable
+maintenance ledger; private evidence persistence remains the maintenance owner's
+responsibility. A receipt never replaces the stronger prerequisites above.
 
 ## Verification and closure
 

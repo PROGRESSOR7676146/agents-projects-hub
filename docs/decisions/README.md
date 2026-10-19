@@ -84,6 +84,8 @@ with a new record.
 | Final/progress delivery certainty | Schema43 fences sends, preserves unknown outcomes and multipart receipts, and separates late native proof from delivery replacement. | [ADR 0060](0060-final-and-progress-delivery-certainty.md) |
 | Local owner delivery holds | Schema44 records exact immutable permission to continue past unknown delivery, preserving receipts, results and independent safety boundaries. | [ADR 0061](0061-owner-delivery-hold-dispositions.md) |
 
+| Worker operations-drain control | Default-off bounded local socket binds one exact incarnation and request; operation-only receipts grant no native or deployment authority. | [ADR 0070](0070-worker-operations-drain-control.md) |
+
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or
 introduces a durable trade-off whose rationale must outlive its implementation.

@@ -55,6 +55,8 @@ from .release_identity import CURRENT_RELEASE
 from .runtime_health import project_runtime_health
 from .service import ProjectHubService
 from .state import HubState, StateError
+from .worker_control_cli import add_worker_parsers, worker_control_command
+from .worker_control_socket import worker_control_session
 from .worker_identity import worker_instance_id
 from .worker_process_lock import worker_process_lock
 from .worktrees import WorktreeError, cleanup_worktree, create_worktree
@@ -125,11 +127,7 @@ def _parser() -> argparse.ArgumentParser:
     controller = commands.add_parser("controller", help="run central Hub group ingress")
     controller.add_argument("config", type=Path)
 
-    worker = commands.add_parser("worker", help="run one isolated provider queue worker")
-    worker.add_argument("config", type=Path)
-    worker.add_argument("--agent", default="codex")
-    worker.add_argument("--slot", type=int, default=1)
-    worker.add_argument("--poll-seconds", type=float, default=0.2)
+    add_worker_parsers(commands)
 
     sender = commands.add_parser("sender", help="deliver external-worker Telegram outbox")
     sender.add_argument("config", type=Path)
@@ -571,7 +569,12 @@ def _worker_command(args: argparse.Namespace) -> int:
         else:
             worker = ExternalQueueWorker(config, args.agent, worker_slot=args.slot)
         try:
-            with stop_on_signals(worker):
+            with (
+                stop_on_signals(worker),
+                worker_control_session(
+                    args.drain_control_socket, worker_id=worker_id, worker=worker
+                ),
+            ):
                 worker.run_forever(poll_seconds=args.poll_seconds)
         finally:
             worker.close()
@@ -855,6 +858,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "serve": _serve_command,
     "controller": _controller_command,
     "worker": _worker_command,
+    "worker-control": worker_control_command,
     "sender": _sender_command,
     "pilot": _pilot_command,
     "doctor": _doctor_command,

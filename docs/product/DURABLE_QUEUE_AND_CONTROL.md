@@ -214,6 +214,39 @@ This normative module is part of the
   final safe-boundary check; work past that boundary is treated as potentially
   started and remains subject to the existing `indeterminate`/outbox ambiguity
   rules rather than being made automatically retryable.
+- **REQ-QUEUE-015 (Source candidate; live acceptance pending):** An external
+  worker MAY explicitly enable a private Linux operations-drain socket under
+  its existing slot-process lock. Default workers MUST perform no additional
+  control-file, socket or process-identity I/O. The bounded local protocol MUST
+  offer only inspect, close admission and observe that exact request. It MUST
+  bind worker ID, kernel peer PID/UID, Linux process-start ticks, boot ID, runtime
+  nonce and complete verified clean-release identity. Inspect discovers an
+  incarnation; it MUST NOT select a maintenance target or authorize service
+  actions. One request ID and canonical digest MUST identify the accepted request
+  for that incarnation. First acceptance MUST require a future monotonic expiry
+  no more than 60 seconds away. Expiry, disconnect or lost reply after acceptance
+  MUST NOT reopen admission. Exact repeated requests MAY return the same status;
+  conflicting requests MUST NOT replace the original. Status MUST remain read-only.
+  Already admitted whole operations and cleanup MUST finish normally; no new
+  pass may claim work. The dedicated bounded listener MUST own no SQLite,
+  provider, approval or worker-stop operation and MUST NOT count itself as
+  productive activity. Messages MUST be bounded to 4 KiB and transport waits
+  finite; there is no blocking wait, resume, cancellation, SQL or provider command.
+  The canonical parent MUST be owned mode 0700 and the socket mode 0600;
+  descriptor-relative custody checks MUST refuse replacement. Existing paths,
+  including stale sockets, MUST NOT be overwritten or automatically unlinked.
+  Cleanup MAY remove only the socket inode created by that endpoint. A timed
+  join MUST NOT establish physical listener shutdown. Positive responses MUST
+  revalidate exact process, request and path identity and explicitly limit their
+  evidence to tracked operations. They MUST NOT establish cached-client closure,
+  native terminality, durable settlement, retained-history preservation or
+  permission to stop, restart or activate. Unconfirmed responses MUST NOT cause
+  automatic mutation retry or retargeting to another incarnation. This boundary
+  assumes trusted local same-UID authority, not Telegram authentication or
+  isolation from a hostile process sharing the UID. Installed activation MUST
+  independently exclude untrusted provider/helper access to the endpoint and
+  preserve the separate native, custody and restoration gates. Source publication
+  MUST NOT authorize deployment. See [ADR 0070](../decisions/0070-worker-operations-drain-control.md).
 - **REQ-QUEUE-008 (Implemented):** While the head job of a Telegram topic is
   queued, leased, executing, or awaiting outbox delivery, the standalone sender
   SHOULD refresh Telegram's `typing` chat action through the target provider bot
