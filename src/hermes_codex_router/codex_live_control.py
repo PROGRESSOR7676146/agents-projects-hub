@@ -23,6 +23,7 @@ from .execution_journal import ExecutionJournal
 from .hub_config import HubConfig
 from .sqlite_contention import is_sqlite_contention
 from .state import HubState, ProviderJobRecord
+from .worker_activity_barrier import WorkerActivityBarrier
 
 
 class ControlClient(Protocol):
@@ -82,6 +83,7 @@ class CodexLiveControl:
         close_owned_turn_client: Callable[[], None],
         poll_seconds: float = 0.2,
         stop_retry_seconds: float = 5,
+        activity: WorkerActivityBarrier | None = None,
     ) -> None:
         self.state_factory = state_factory
         self.config = config
@@ -94,6 +96,7 @@ class CodexLiveControl:
         self.close_owned_turn_client = close_owned_turn_client
         self.poll_seconds = poll_seconds
         self.stop_retry_seconds = stop_retry_seconds
+        self.activity = activity
         self.confirmed_interrupt_request: str | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -113,7 +116,8 @@ class CodexLiveControl:
     def start(self) -> None:
         if self._thread is not None:
             raise CodexLiveControlError("control observer already started")
-        self._thread = threading.Thread(target=self._run, name="codex-live-control", daemon=True)
+        thread_factory = self.activity.thread if self.activity is not None else threading.Thread
+        self._thread = thread_factory(target=self._run, name="codex-live-control", daemon=True)
         self._thread.start()
 
     @contextmanager

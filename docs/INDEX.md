@@ -38,6 +38,7 @@ live acceptance.
 - [Inbound materials implementation plan](operations/INBOUND_MATERIALS_PLAN.md)
 - [Operations](operations/README.md)
 - [Queue and process recovery](operations/QUEUE_RECOVERY.md)
+- [Worker operations drain preparation](operations/WORKER_DRAIN_PREPARATION.md)
 - [Live canary and rollback](operations/LIVE_CANARY.md)
 - [Release metadata synchronization](operations/RELEASE_METADATA.md)
 - [Stabilization release 0.7.1](operations/STABILIZATION_RELEASE_0_7_1.md)

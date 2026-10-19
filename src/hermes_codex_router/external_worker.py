@@ -63,6 +63,7 @@ from .telegram_interaction import (
 )
 from .turn_observation import TurnObservation
 from .worker_activity import codex_activity_for_turn
+from .worker_activity_barrier import WorkerActivityBarrier
 from .worker_execution import (
     ProviderSessionPreparationError,
     ProviderTurnStopped,
@@ -192,6 +193,7 @@ class ExternalQueueWorker:
                 runtime_home=self.agent.runtime_home,
             )
         self._stop = threading.Event()
+        self.activity = WorkerActivityBarrier()
         self._publish_health()
 
     def close(self) -> None:
@@ -203,6 +205,10 @@ class ExternalQueueWorker:
 
     def stop(self) -> None:
         self._stop.set()
+
+    def request_drain(self) -> None:
+        """Close this incarnation's admission; let admitted operations finish."""
+        self.activity.request_drain()
 
     def _client(self) -> CodexAppServerClient:
         if self.supervisor is None:
@@ -295,36 +301,40 @@ class ExternalQueueWorker:
     def run_forever(self, *, poll_seconds: float = 0.2) -> None:
         if poll_seconds <= 0:
             raise ExternalQueueWorkerError("poll_seconds must be positive")
-        if self.supervisor is not None:
-            self.supervisor.start()
         connect_thread: threading.Thread | None = None
         control_thread: threading.Thread | None = None
         maintenance: CodexControlMaintenance | None = None
-        if self.agent.runtime == "codex":
-            assert self.supervisor is not None
-            supervisor = self.supervisor
-            maintenance = CodexControlMaintenance(
-                self.config,
-                worker_id=self.worker_id,
-                agent_id=self.agent.agent_id,
-                client_factory=lambda deadline: supervisor.client(
-                    allow_fallback=False, deadline=deadline
-                ),
-                stop=self._stop,
-            )
-            control_thread = threading.Thread(
-                target=maintenance.run_forever,
-                name=f"{self.worker_id}-control",
-                daemon=True,
-            )
-            control_thread.start()
-            connect_thread = threading.Thread(
-                target=self._run_connect_forever,
-                name=f"{self.worker_id}-connect",
-                daemon=True,
-            )
-            connect_thread.start()
         try:
+            with self.activity.operation() as admitted:
+                if not admitted:
+                    return
+                if self.supervisor is not None:
+                    self.supervisor.start()
+                if self.agent.runtime == "codex":
+                    assert self.supervisor is not None
+                    supervisor = self.supervisor
+                    maintenance = CodexControlMaintenance(
+                        self.config,
+                        worker_id=self.worker_id,
+                        agent_id=self.agent.agent_id,
+                        client_factory=lambda deadline: supervisor.client(
+                            allow_fallback=False, deadline=deadline
+                        ),
+                        stop=self._stop,
+                        activity=self.activity,
+                    )
+                    control_thread = self.activity.thread(
+                        target=maintenance.run_forever,
+                        name=f"{self.worker_id}-control",
+                        daemon=True,
+                    )
+                    control_thread.start()
+                    connect_thread = self.activity.thread(
+                        target=self._run_connect_forever,
+                        name=f"{self.worker_id}-connect",
+                        daemon=True,
+                    )
+                    connect_thread.start()
             while not self._stop.is_set():
                 try:
                     worked = self.run_cycle()
@@ -349,14 +359,14 @@ class ExternalQueueWorker:
 
     def _run_connect_forever(self) -> None:
         """Serve metadata requests while the productive worker waits on a turn."""
-        while not self._stop.is_set():
+        while not self._stop.is_set() and not self.activity.draining:
             try:
                 state = HubState.open(
                     self.config.state_path,
                     codex_permission_profile=self.config.codex_permission_profile,
                 )
                 try:
-                    while not self._stop.is_set():
+                    while not self._stop.is_set() and not self.activity.draining:
                         worked = self._run_connect_cycle(state=state)
                         self._stop.wait(0.01 if worked else 0.2)
                 finally:
@@ -367,6 +377,10 @@ class ExternalQueueWorker:
 
     def run_cycle(self) -> bool:
         """Lease and execute at most one job for this worker's sole agent."""
+        with self.activity.operation() as admitted:
+            return self._run_admitted_cycle() if admitted else False
+
+    def _run_admitted_cycle(self) -> bool:
         if self._stop.is_set():
             return False
         if isinstance(self.supervisor, CodexAppServerSupervisor):
@@ -422,6 +436,10 @@ class ExternalQueueWorker:
 
     def _run_connect_cycle(self, *, state: HubState | None = None) -> bool:
         """Handle one leased metadata request with an independent Codex client."""
+        with self.activity.operation() as admitted:
+            return self._run_admitted_connect_cycle(state=state) if admitted else False
+
+    def _run_admitted_connect_cycle(self, *, state: HubState | None = None) -> bool:
         current_state = state or self.state
         store = SessionConnectStore(current_state)
         workflow = store.lease_worker(self.worker_id)
@@ -547,7 +565,7 @@ class ExternalQueueWorker:
             finally:
                 heartbeat_state.close()
 
-        heartbeat = threading.Thread(
+        heartbeat = self.activity.thread(
             target=maintain_lease,
             name=f"{self.agent.agent_id}-worker-heartbeat",
             daemon=True,
@@ -945,6 +963,7 @@ class ExternalQueueWorker:
                 client_factory=lambda: supervisor.client(
                     allow_fallback=False, deadline=time.monotonic() + 2
                 ),
+                activity=self.activity,
             )
         post_completion_context(self.state, job.session_id, result)
         limits = post_completion_limits(client)
@@ -1075,7 +1094,7 @@ class ExternalQueueWorker:
             finally:
                 monitor_state.close()
 
-        monitor = threading.Thread(
+        monitor = self.activity.thread(
             target=monitor_interrupt,
             name=f"{self.agent.agent_id}-emergency-stop",
             daemon=True,
