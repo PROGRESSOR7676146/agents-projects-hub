@@ -6,6 +6,7 @@ worker stop event. Local same-UID authority is assumed, not hostile-UID isolatio
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import socket
@@ -32,9 +33,13 @@ from .worker_drain_protocol import (
 )
 
 _IO_SECONDS = 0.5
+_TRANSIENT_ACCEPT_ERRORS = frozenset(
+    (errno.EINTR, errno.ECONNABORTED, errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM)
+)
 
 
 class DrainableWorker(Protocol):
+    worker_id: str
     activity: WorkerActivityBarrier
     _process_start_marker: str
 
@@ -173,8 +178,12 @@ class WorkerControlEndpoint:
                 connection, _ = self._socket.accept()
             except TimeoutError:
                 continue
-            except OSError:
-                return
+            except OSError as error:
+                if error.errno not in _TRANSIENT_ACCEPT_ERRORS or self._stop.wait(0.1):
+                    return
+                # Resource pressure must not silently strand an accepted request.
+                # This retries accept only; it never replays a drain operation.
+                continue
             with connection:
                 try:
                     _peer_identity(connection)
@@ -350,6 +359,8 @@ def worker_control_session(
     if path is None:
         yield
         return
+    if worker_id != worker.worker_id:
+        raise ControlError("worker_identity_mismatch")
     endpoint = WorkerControlEndpoint(
         path, current_binding(worker_id, worker._process_start_marker), worker.activity
     )

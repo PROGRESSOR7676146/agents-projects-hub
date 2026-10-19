@@ -124,6 +124,8 @@ class WorkerControlCliTests(unittest.TestCase):
 
     def test_cli_endpoint_lifecycle_remains_inside_slot_lock(self) -> None:
         events: list[str] = []
+        captured: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        workers: list[object] = []
 
         @contextlib.contextmanager
         def lock(*_args: object):
@@ -132,7 +134,8 @@ class WorkerControlCliTests(unittest.TestCase):
             events.append("unlock")
 
         @contextlib.contextmanager
-        def control(*_args: object, **_kwargs: object):
+        def control(*args: object, **kwargs: object):
+            captured.append((args, kwargs))
             events.append("control_start")
             yield
             events.append("control_close")
@@ -140,6 +143,7 @@ class WorkerControlCliTests(unittest.TestCase):
         class Worker:
             def __init__(self, *_args: object) -> None:
                 events.append("construct")
+                workers.append(self)
 
             def stop(self) -> None:
                 pass
@@ -185,3 +189,6 @@ class WorkerControlCliTests(unittest.TestCase):
                 "unlock",
             ],
         )
+        self.assertEqual(captured[0][0], (Path("/tmp/example/control.sock"),))
+        self.assertEqual(captured[0][1]["worker_id"], "codex-worker")
+        self.assertIs(captured[0][1]["worker"], workers[0])

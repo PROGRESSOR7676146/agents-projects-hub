@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import socket
@@ -214,6 +215,7 @@ class WorkerControlSocketTests(unittest.TestCase):
     def test_session_uses_real_worker_nonce_and_actual_binding_builder(self) -> None:
         fixture = fixtures.ExternalQueueWorkerTests()
         fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
         self.addCleanup(fixture.tearDown)
         worker = fixture.worker("opencode", fixtures.Adapter("opencode"))
         self.addCleanup(worker.close)
@@ -234,6 +236,43 @@ class WorkerControlSocketTests(unittest.TestCase):
             self.assertFalse(worker.activity.draining)
         self.assertFalse(self.path.exists())
 
+    def test_session_refuses_worker_id_mismatch_before_binding_or_socket_io(self) -> None:
+        fixture = fixtures.ExternalQueueWorkerTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.addCleanup(fixture.tearDown)
+        worker = fixture.worker("opencode", fixtures.Adapter("opencode"))
+        self.addCleanup(worker.close)
+        with (
+            patch(
+                "hermes_codex_router.worker_control_socket.current_binding",
+                side_effect=AssertionError("binding must not be read"),
+            ),
+            self.assertRaises(ControlError),
+            worker_control_session(self.path, worker_id="wrong-worker", worker=worker),
+        ):
+            self.fail("mismatched worker entered")
+        self.assertFalse(self.path.exists())
+        self.assertFalse(worker.activity.draining)
+
+    def test_post_bind_identity_failure_preserves_unproven_socket(self) -> None:
+        original = os.stat
+        rejected = False
+
+        def stat_path(path, *args, **kwargs):
+            nonlocal rejected
+            if path == self.path.name and "dir_fd" in kwargs and not rejected:
+                rejected = True
+                raise OSError("fictional failure before inode capture")
+            return original(path, *args, **kwargs)
+
+        with patch("hermes_codex_router.worker_control_socket.os.stat", stat_path):
+            with self.assertRaises(ControlError):
+                self.endpoint()
+        self.assertTrue(rejected)
+        self.assertTrue(self.path.is_socket())
+        self.assertFalse(self.activity.draining)
+
     def test_unsupported_no_follow_chmod_refuses_opt_in_and_cleans_created_socket(self) -> None:
         with (
             patch(
@@ -249,10 +288,52 @@ class WorkerControlSocketTests(unittest.TestCase):
     def test_partial_client_cannot_block_listener_indefinitely(self) -> None:
         self.endpoint()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as slow:
+            slow.settimeout(2)
             slow.connect(str(self.path))
             slow.sendall(b"{")
-            time.sleep(0.6)
+            self.assertFalse(json.loads(slow.recv(4096))["ok"])
             self.assertFalse(inspect_control(self.path)["accepted"])
+
+    def test_transient_accept_failure_after_drain_preserves_exact_status(self) -> None:
+        endpoint = self.endpoint()
+        request = self.request()
+        exchange_control(self.path, self.binding, request)
+        failed = threading.Event()
+        original = socket.socket.accept
+
+        def accept(listener: socket.socket):
+            if listener is endpoint._socket and not failed.is_set():
+                failed.set()
+                raise OSError(errno.EMFILE, "fictional transient descriptor pressure")
+            return original(listener)
+
+        with patch.object(socket.socket, "accept", accept):
+            self.assertTrue(failed.wait(2))
+            result = exchange_control(self.path, self.binding, status_request(request))
+        self.assertTrue(result["accepted"])
+        self.assertTrue(result["operations_drained"])
+        self.assertEqual(result["request_digest"], request_digest(request))
+
+    def test_repeated_transient_accept_failure_can_still_close_listener(self) -> None:
+        endpoint = self.endpoint()
+        twice = threading.Event()
+        attempts = 0
+        original = socket.socket.accept
+
+        def accept(listener: socket.socket):
+            nonlocal attempts
+            if listener is endpoint._socket:
+                attempts += 1
+                if attempts >= 2:
+                    twice.set()
+                raise OSError(errno.ENOBUFS, "fictional persistent buffer pressure")
+            return original(listener)
+
+        with patch.object(socket.socket, "accept", accept):
+            self.assertTrue(twice.wait(2))
+            endpoint.close()
+        self.assertFalse(endpoint.alive)
+        self.assertFalse(self.path.exists())
 
     def test_existing_path_is_preserved_and_replaced_path_is_not_unlinked(self) -> None:
         self.path.write_text("foreign")
@@ -289,6 +370,7 @@ class WorkerControlSocketTests(unittest.TestCase):
     def test_real_worker_persists_current_result_and_never_claims_tail(self) -> None:
         fixture = fixtures.ExternalQueueWorkerTests()
         fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
         self.addCleanup(fixture.tearDown)
         head, tail = fixture.enqueue("opencode", 601), fixture.enqueue("opencode", 602)
         adapter = fixtures.Adapter("opencode")
@@ -335,13 +417,18 @@ class WorkerControlSocketTests(unittest.TestCase):
 
     def test_expiry_applies_only_to_first_acceptance(self) -> None:
         self.endpoint()
-        request = self.request(expires_ns=time.monotonic_ns() + 150_000_000)
-        exchange_control(self.path, self.binding, request)
-        time.sleep(0.16)
-        self.assertTrue(exchange_control(self.path, self.binding, request)["operations_drained"])
-        self.assertTrue(
-            exchange_control(self.path, self.binding, status_request(request))["accepted"]
-        )
+        now = time.monotonic_ns()
+        request = self.request(expires_ns=now + 30_000_000_000)
+        with patch("hermes_codex_router.worker_control_socket.time.monotonic_ns") as clock:
+            clock.return_value = now
+            exchange_control(self.path, self.binding, request)
+            clock.return_value = now + 31_000_000_000
+            self.assertTrue(
+                exchange_control(self.path, self.binding, request)["operations_drained"]
+            )
+            self.assertTrue(
+                exchange_control(self.path, self.binding, status_request(request))["accepted"]
+            )
 
     def test_wrong_digest_and_forged_positive_reply_are_unconfirmed(self) -> None:
         endpoint = self.endpoint()

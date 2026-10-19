@@ -72,11 +72,16 @@ without verified build identity refuses opt-in. Do not place the endpoint inside
 provider-accessible project mounts or infer same-UID isolation from permissions.
 Startup never removes a stale path. Preserve it and choose a fresh path or obtain
 separate exact reconciliation authority.
+Startup may leave an unproven socket if it fails after bind but before recording
+the inode. This path is preserved; choose a fresh path rather than retrying or
+removing uncertain evidence automatically.
 The host must support descriptor-relative, no-follow chmod on Unix sockets;
 unsupported platforms refuse opt-in startup and leave the default worker path
 unchanged. Cleanup checks the created inode immediately before unlinking; these
 are separate calls under the trusted same-UID assumption, not an isolation
 guarantee against concurrent hostile same-UID replacement.
+Prepare and send from the worker's Linux time namespace: the protocol compares
+monotonic deadlines, and matching boot IDs alone do not prove equal clock offsets.
 
 The local client has no configuration discovery or credential/state reads:
 
@@ -95,12 +100,20 @@ The local client has no configuration discovery or credential/state reads:
    without mutation. Retain the exact response and its local observation time in
    the maintenance evidence store. No automatic retry, wait loop, target refresh,
    signal or activation follows. Errors return code 2 with an unconfirmed result.
+   This conservative result also covers local prepare validation failures; those
+   perform no socket exchange. Record the attempted phase separately. A shutdown
+   failure may take precedence over the original exception; it does not prove
+   successful cleanup.
 
 Expiry after acceptance does not resume work. Losing the socket or observing a
 new PID/nonce invalidates observation of the old request; it does not prove death,
 completion or authority to restore. The in-memory acknowledgement is not a durable
 maintenance ledger; private evidence persistence remains the maintenance owner's
 responsibility. A receipt never replaces the stronger prerequisites above.
+Recognized transient accept failures use a short stop-aware backoff without
+repeating any operation. A fatal listener error, persistent resource pressure or
+a stalled same-UID client can still make observation unconfirmed. Accepted drain
+remains closed; bounded I/O is not a guarantee of availability.
 
 ## Verification and closure
 
