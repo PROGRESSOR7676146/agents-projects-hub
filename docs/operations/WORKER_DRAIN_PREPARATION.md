@@ -65,6 +65,13 @@ field covers only tracked socket transport threads, not cached-object closure,
 client helpers, peer state or native work. Old version-1 frames/files are refused;
 do not reinterpret or regenerate an uncertain old request against version 2.
 
+Trusted test instrumentation may pass an alternate primary socket path to the
+same supervisor transport factory. This retains its admission and physical-thread
+accounting without changing the configured upstream used by control, recovery
+and idle probes. Constructing a bridge transport directly bypasses that accounting
+and cannot support the socket-thread observation. The internal path argument is
+not a Telegram/configuration input or permission to instrument an installed worker.
+
 Before a live use, the maintenance owner must independently verify any remaining
 client resources, exact native/control terminality and preserved history; and keep independent
 restoration custody until original-process death and replacement convergence.

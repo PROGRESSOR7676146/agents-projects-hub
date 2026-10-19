@@ -84,18 +84,21 @@ class CodexAppServerSupervisor:
         if self._socket_activity.draining:
             raise AppServerRetiringError("Codex client admission is retired")
 
-    def _socket_transport(self, *, timeout: float | None = None) -> UnixWebSocketTransport:
+    def _socket_transport(
+        self, *, timeout: float | None = None, socket_path: Path | None = None
+    ) -> UnixWebSocketTransport:
         # One mandatory owner/factory for ordinary, control and idle-probe paths.
+        # Trusted instrumentation may select one primary bridge without changing
+        # this supervisor's upstream address used by control and recovery.
         self._require_client_admission()
         with self._socket_activity.operation() as admitted:
             if not admitted:
                 raise AppServerRetiringError("Codex client admission is retired")
+            path = self.socket_path if socket_path is None else socket_path
             if timeout is None:
-                return UnixWebSocketTransport(
-                    self.socket_path, thread_factory=self._socket_activity.thread
-                )
+                return UnixWebSocketTransport(path, thread_factory=self._socket_activity.thread)
             return UnixWebSocketTransport(
-                self.socket_path, timeout=timeout, thread_factory=self._socket_activity.thread
+                path, timeout=timeout, thread_factory=self._socket_activity.thread
             )
 
     def _acquire_socket_ownership(self) -> None:

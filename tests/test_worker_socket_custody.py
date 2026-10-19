@@ -25,14 +25,20 @@ class SocketCustodyTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="example-socket-custody-")
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.socket = self.root / "example.sock"
         self.socket.touch()
         self.supervisor = CodexAppServerSupervisor(self.socket, manage_process=False)
         self.supervisor.transport_mode = "socket"
 
     def connect(
-        self, *, fail_initialize=False, stall_cleanup=False, supervisor=None, idle_probe=False
+        self,
+        *,
+        fail_initialize=False,
+        stall_cleanup=False,
+        supervisor=None,
+        idle_probe=False,
+        socket_path=None,
     ):
         owner = supervisor or self.supervisor
         entered, release = threading.Event(), threading.Event()
@@ -99,12 +105,91 @@ class SocketCustodyTests(unittest.TestCase):
                     threading.Thread, "join", lambda thread, timeout=None: original_join(thread, 0)
                 ):
                     with self.assertRaisesRegex(ValueError, "initialization failure"):
-                        owner.client(allow_fallback=False)
+                        if socket_path is None:
+                            owner.client(allow_fallback=False)
+                        else:
+                            owner._initialized_client(
+                                owner._socket_transport(socket_path=socket_path),
+                                transport_mode="socket",
+                                retire_completed_connection=True,
+                            )
                 client = None
+            elif socket_path is not None:
+                client = owner._initialized_client(
+                    owner._socket_transport(socket_path=socket_path),
+                    transport_mode="socket",
+                    retire_completed_connection=True,
+                )
             else:
                 client = owner.client(allow_fallback=False, deadline=time.monotonic() + 2)
         self.assertEqual(len(transports), 1)
         return client, transports[0], entered, release
+
+    def test_alternate_primary_is_tracked_without_retargeting_control(self):
+        bridge = self.root / "example-bridge.sock"
+        bridge.touch()
+        client, transport, entered, release = self.connect(socket_path=bridge, stall_cleanup=True)
+        assert client is not None
+        self.assertEqual(transport._socket_path, bridge)
+        self.assertEqual(self.supervisor.socket_path, self.socket)
+        self.supervisor.retire_socket_admission()
+        self.assertFalse(self.supervisor.socket_threads_drained)
+        join = transport._thread.join
+        with patch.object(transport._thread, "join", lambda timeout: join(0)):
+            with self.assertRaisesRegex(RpcError, "unconfirmed"):
+                client.close()
+        self.assertTrue(entered.wait(2))
+        self.assertFalse(self.supervisor.socket_threads_drained)
+        release.set()
+        join(2)
+        self.assertFalse(transport._thread.is_alive())
+        self.assertTrue(self.supervisor.socket_threads_drained)
+
+    def test_failed_alternate_initialization_retains_detached_thread(self):
+        bridge = self.root / "example-bridge.sock"
+        bridge.touch()
+        _, transport, entered, release = self.connect(
+            socket_path=bridge, fail_initialize=True, stall_cleanup=True
+        )
+        self.assertTrue(entered.wait(2))
+        self.supervisor.retire_socket_admission()
+        self.assertFalse(self.supervisor.socket_threads_drained)
+        release.set()
+        transport._thread.join(2)
+        self.assertTrue(self.supervisor.socket_threads_drained)
+
+    def test_alternate_factory_refuses_retirement_before_construction(self):
+        self.supervisor.retire_socket_admission()
+        with patch("hermes_codex_router.supervisor.UnixWebSocketTransport") as constructor:
+            with self.assertRaisesRegex(RuntimeError, "retir"):
+                self.supervisor._socket_transport(socket_path=self.root / "example-bridge.sock")
+            constructor.assert_not_called()
+
+    def test_primary_and_control_connections_retain_one_owner_and_distinct_routes(self):
+        bridge = self.root / "example-bridge.sock"
+        bridge.touch()
+        primary, primary_transport, _, _ = self.connect(socket_path=bridge)
+        control, control_transport, _, _ = self.connect()
+        assert primary is not None and control is not None
+        self.assertEqual(primary_transport._socket_path, bridge)
+        self.assertEqual(control_transport._socket_path, self.socket)
+        self.supervisor.retire_socket_admission()
+        primary.close()
+        self.assertFalse(self.supervisor.socket_threads_drained)
+        control.close()
+        self.assertTrue(self.supervisor.socket_threads_drained)
+
+    def test_alternate_path_preserves_timeout_and_permanent_stdio_ineligibility(self):
+        bridge = self.root / "example-bridge.sock"
+        self.supervisor._socket_ineligible.set()
+        with patch("hermes_codex_router.supervisor.UnixWebSocketTransport") as constructor:
+            self.supervisor._socket_transport(socket_path=bridge, timeout=0.25)
+            constructor.assert_called_once_with(
+                bridge, timeout=0.25, thread_factory=self.supervisor._socket_activity.thread
+            )
+        self.assertEqual(self.supervisor.socket_path, self.socket)
+        self.supervisor.retire_socket_admission()
+        self.assertIsNone(self.supervisor.socket_threads_drained)
 
     def test_detached_unconfirmed_transport_remains_pending_until_physical_exit(self):
         _, transport, entered, release = self.connect(stall_cleanup=True)
