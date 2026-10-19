@@ -12,6 +12,7 @@ from pathlib import Path
 from .worker_control_socket import exchange_control, inspect_control
 from .worker_drain_protocol import (
     FRAME_LIMIT,
+    PROTOCOL_VERSION,
     ControlBinding,
     ControlError,
     decode_document,
@@ -100,5 +101,7 @@ def worker_control_command(args: argparse.Namespace) -> int:
         print(json.dumps(result, indent=2))
         return 0
     except (OSError, ValueError, RuntimeError):
-        print(json.dumps({"version": 1, "ok": False, "reason": "control_unconfirmed"}))
+        print(
+            json.dumps({"version": PROTOCOL_VERSION, "ok": False, "reason": "control_unconfirmed"})
+        )
         return 2

@@ -252,7 +252,12 @@ class UnixWebSocketTransport:
     """Synchronous facade over Codex's WebSocket-over-Unix transport."""
 
     def __init__(
-        self, socket_path: Path, *, timeout: float = 20.0, max_pending_frames: int = 1024
+        self,
+        socket_path: Path,
+        *,
+        timeout: float = 20.0,
+        max_pending_frames: int = 1024,
+        thread_factory: Callable[..., threading.Thread] = threading.Thread,
     ) -> None:
         self._socket_path = socket_path.expanduser().resolve(strict=True)
         self._timeout = timeout
@@ -264,7 +269,7 @@ class UnixWebSocketTransport:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._task: asyncio.Task[None] | None = None
         self._closed = False
-        self._thread = threading.Thread(target=self._thread_main, daemon=True)
+        self._thread = thread_factory(target=self._thread_main, daemon=True)
         self._thread.start()
         if not self._ready.wait(timeout):
             self.close()

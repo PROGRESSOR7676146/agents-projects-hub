@@ -236,17 +236,32 @@ This normative module is part of the
   descriptor-relative custody checks MUST refuse replacement. Existing paths,
   including stale sockets, MUST NOT be overwritten or automatically unlinked.
   Cleanup MAY remove only the socket inode created by that endpoint. A timed
-  join MUST NOT establish physical listener shutdown. Positive responses MUST
-  revalidate exact process, request and path identity and explicitly limit their
-  evidence to tracked operations. They MUST NOT establish cached-client closure,
-  native terminality, durable settlement, retained-history preservation or
-  permission to stop, restart or activate. Unconfirmed responses MUST NOT cause
+  join MUST NOT establish physical listener shutdown. Version 2 MUST reject
+  version-1 frames and saved files without fallback. Positive responses MUST
+  revalidate exact process, request and path identity and distinguish
+  `operations_drained` from `socket_threads_drained`. The latter MUST be null
+  before acceptance or for unsupported ownership, false while pending, and true
+  only after accepted operations drain, closed socket-client admission and
+  physical exit of every socket transport thread tracked by this supervisor
+  incarnation, including failed construction and detached unconfirmed cleanup.
+  Only an exact supervisor constructed exclusively by this worker MAY supply
+  non-null evidence; injected/shared/subclass supervisors, managed-server
+  ownership and any prior stdio selection MUST remain unsupported. Eligibility
+  MUST NOT recover after socket restoration. The productive owner MUST retire
+  its eligible idle cached client once after admitted cleanup, including an
+  empty pre-startup drain; the listener MUST never close it. Unknown startup and
+  still-live threads MUST retain pending proof without repeated cancellation.
+  This field MUST NOT establish cached-client object closure, other client
+  helper threads, server-side connection state, stdio-peer exit, exact native
+  terminality, durable settlement, retained-history preservation or permission
+  to stop, restart or activate. Unconfirmed responses MUST NOT cause
   automatic mutation retry or retargeting to another incarnation. This boundary
   assumes trusted local same-UID authority, not Telegram authentication or
   isolation from a hostile process sharing the UID. Installed activation MUST
   independently exclude untrusted provider/helper access to the endpoint and
   preserve the separate native, custody and restoration gates. Source publication
-  MUST NOT authorize deployment. See [ADR 0070](../decisions/0070-worker-operations-drain-control.md).
+  MUST NOT authorize deployment. See [ADR 0070](../decisions/0070-worker-operations-drain-control.md)
+  and [ADR 0071](../decisions/0071-worker-socket-thread-custody.md).
 - **REQ-QUEUE-008 (Implemented):** While the head job of a Telegram topic is
   queued, leased, executing, or awaiting outbox delivery, the standalone sender
   SHOULD refresh Telegram's `typing` chat action through the target provider bot

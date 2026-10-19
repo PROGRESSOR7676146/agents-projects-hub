@@ -180,6 +180,37 @@ class WorkerDrainTests(unittest.TestCase):
 
 
 class MaintenanceDrainTests(unittest.TestCase):
+    def test_completed_operations_do_not_fabricate_durable_interrupt_settlement(self) -> None:
+        from hermes_codex_router.codex_appserver import StoredTurnOutcome
+        from hermes_codex_router.codex_turn_controls import CodexTurnControls
+        from hermes_codex_router.worker_activity_barrier import WorkerActivityBarrier
+        from tests import test_codex_late_control as late
+
+        fixture = late.LateCodexControlTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        activity = WorkerActivityBarrier()
+        client = late.Client(StoredTurnOutcome("active"), StoredTurnOutcome("interrupted"))
+        maintenance = CodexControlMaintenance(
+            fixture.fixture.fixture.config,
+            worker_id="example-worker",
+            agent_id="codex",
+            client_factory=lambda _: cast(Any, client),
+            stop=threading.Event(),
+            activity=activity,
+        )
+        with patch.object(
+            CodexTurnControls,
+            "finish_interrupt",
+            side_effect=RuntimeError("fictional storage fault"),
+        ):
+            self.assertTrue(maintenance.run_once(fixture.state))
+        activity.request_drain()
+        self.assertTrue(activity.drained)
+        self.assertIsNotNone(fixture.row()["send_started_at"])
+        self.assertIsNone(fixture.row()["owner_quiesced_at"])
+        self.assertEqual([call[0] for call in client.calls].count("interrupt"), 1)
+
     def test_drain_preserves_inflight_interrupt_and_its_settlement(self) -> None:
         from hermes_codex_router.codex_appserver import StoredTurnOutcome
         from hermes_codex_router.worker_activity_barrier import WorkerActivityBarrier

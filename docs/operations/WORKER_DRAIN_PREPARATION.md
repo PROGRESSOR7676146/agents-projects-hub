@@ -1,6 +1,6 @@
 # Worker operations drain preparation
 
-Status: internal barrier plus default-off local control candidate; stronger
+Status: internal barrier plus default-off version-2 local control candidate; stronger
 maintenance proof and live acceptance remain open. Owner: Hub maintainer.
 Last verified barrier source: `4eb9b53`; local control is a stacked source candidate.
 Next trigger: exact-candidate independent review and publication, then prepare the
@@ -55,8 +55,18 @@ The local source interface is owned by
 [REQ-QUEUE-015](../product/DURABLE_QUEUE_AND_CONTROL.md) and
 [ADR 0070](../decisions/0070-worker-operations-drain-control.md).
 Installed workers gain no endpoint without explicit deployment opt-in.
-Before a live use, the maintenance owner must close/verify cached clients;
-verify exact native/control terminality and preserved history; and keep independent
+Version 2 separately observes supervisor-owned socket transport threads, following
+[ADR 0071](../decisions/0071-worker-socket-thread-custody.md). The productive owner
+retires its eligible idle client after operations drain; the listener never closes
+it. An unknown startup or stuck transport keeps this proof pending. Unsupported
+ownership or prior stdio selection remains null, even after socket restoration.
+The getter does no I/O; it may prune dead thread references in memory. A positive
+field covers only tracked socket transport threads, not cached-object closure,
+client helpers, peer state or native work. Old version-1 frames/files are refused;
+do not reinterpret or regenerate an uncertain old request against version 2.
+
+Before a live use, the maintenance owner must independently verify any remaining
+client resources, exact native/control terminality and preserved history; and keep independent
 restoration custody until original-process death and replacement convergence.
 Timeout, stale acknowledgement or lost custody must refuse activation without
 force or an inferred success. Existing uncertainty and human approval ownership
@@ -96,6 +106,8 @@ The local client has no configuration discovery or credential/state reads:
 3. Only with independent restoration custody and exact maintenance permission,
    `worker-control request SOCKET REQUEST_FILE` sends that request once. An
    accepted response may still report `operations_drained: false`.
+   `socket_threads_drained` is independent: false is pending and null unsupported;
+   true is not native/control settlement or maintenance permission.
 4. `worker-control status SOCKET REQUEST_FILE` observes the original digest
    without mutation. Retain the exact response and its local observation time in
    the maintenance evidence store. No automatic retry, wait loop, target refresh,

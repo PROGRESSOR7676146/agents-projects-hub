@@ -38,7 +38,9 @@ class SupervisorFallbackTests(unittest.TestCase):
             patch("hermes_codex_router.supervisor.StdioJsonLineTransport.start") as fallback,
         ):
             self.assertIs(supervisor.client(allow_fallback=False, deadline=22), client)
-            connect.assert_called_once_with(supervisor.socket_path, timeout=2)
+            connect.assert_called_once_with(
+                supervisor.socket_path, timeout=2, thread_factory=supervisor._socket_activity.thread
+            )
             client.initialize.assert_called_once_with(deadline=22)
             client.initialize.side_effect = TimeoutError("Example initialize timeout")
             with self.assertRaises(TimeoutError):
@@ -222,7 +224,9 @@ class SupervisorFallbackTests(unittest.TestCase):
         ):
             self.assertIs(supervisor.client(allow_fallback=False), client.return_value)
             client.return_value.initialize.assert_called_once()
-            unix.assert_called_once_with(supervisor.socket_path)
+            unix.assert_called_once_with(
+                supervisor.socket_path, thread_factory=supervisor._socket_activity.thread
+            )
             stdio.assert_not_called()
         self.assertEqual(supervisor.transport_mode, "socket")
 

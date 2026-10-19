@@ -61,6 +61,8 @@ I/O, path custody and cleanup. Fixtures invoke no installed service, Telegram or
 provider. Source tests and independent review do not establish installed custody.
 
 An operations-drained response proves only tracked operation/thread completion.
+The version-2 extension in [ADR 0071](0071-worker-socket-thread-custody.md) adds a
+separate socket transport thread observation without broadening that property.
 Cached transports, exact native terminality, durable control settlement, history
 and independent restoration custody still require their own proof. Do not wire
 this receipt directly to a native-quiet predicate or process-stop authorization.

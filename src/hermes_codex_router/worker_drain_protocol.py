@@ -12,6 +12,8 @@ from pathlib import Path
 from .release_identity import CURRENT_RELEASE, ReleaseIdentity
 
 FRAME_LIMIT = 4096
+PROTOCOL_VERSION = 2
+EVIDENCE_SCOPE = "tracked_operations_and_socket_transport_threads"
 MAX_REQUEST_LIFETIME_NS = 60_000_000_000
 
 
@@ -152,7 +154,7 @@ def decode_document(data: bytes) -> dict[str, object]:
     if (
         not isinstance(result, dict)
         or type(result.get("version")) is not int
-        or result["version"] != 1
+        or result["version"] != PROTOCOL_VERSION
     ):
         raise ControlError("invalid_frame")
     return result
@@ -182,7 +184,7 @@ def drain_request(
     binding: ControlBinding, *, request_id: str, expires_ns: int
 ) -> dict[str, object]:
     request: dict[str, object] = {
-        "version": 1,
+        "version": PROTOCOL_VERSION,
         "operation": "drain",
         "binding": binding.as_dict(),
         "request_id": request_id,
@@ -194,7 +196,7 @@ def drain_request(
 
 def status_request(request: dict[str, object]) -> dict[str, object]:
     return {
-        "version": 1,
+        "version": PROTOCOL_VERSION,
         "operation": "status",
         "binding": request["binding"],
         "request_id": request["request_id"],
@@ -203,7 +205,7 @@ def status_request(request: dict[str, object]) -> dict[str, object]:
 
 
 def validate_request(request: dict[str, object]) -> None:
-    if type(request.get("version")) is not int or request["version"] != 1:
+    if type(request.get("version")) is not int or request["version"] != PROTOCOL_VERSION:
         raise ControlError("invalid_request")
     operation = request.get("operation")
     if operation == "inspect" and set(request) == {"version", "operation"}:
