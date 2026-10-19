@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -14,6 +15,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from hermes_codex_router.command_menu import GROUP_COMMANDS
+from hermes_codex_router.diagnostic_log import reset_repeat_state
 from hermes_codex_router.hub_config import (
     AgentDefinition,
     HubConfig,
@@ -843,6 +845,131 @@ class ProjectOnboardingTests(unittest.TestCase):
             self.assertFalse(asyncio.run(worker.run_cycle_async()))
             self.assertEqual((client.connect_calls, client.create_calls), (0, 0))
             self.assertEqual(worker.store.get(workflow_id).stage, "queued")
+        finally:
+            worker.close()
+
+    def test_claim_lock_waits_for_next_poll_then_completes_once(self) -> None:
+        workflow_id = self.prepare_workflow()
+        client = FakeProvisioningClient()
+        worker = ProjectProvisioner(self.config, client=client)
+        worker.state._connection.execute("PRAGMA busy_timeout=0")
+        blocker = sqlite3.connect(self.config.state_path)
+        blocker.execute("BEGIN IMMEDIATE")
+        before = worker.store.get(workflow_id)
+        delays: list[float] = []
+        cycle = worker.run_cycle_async
+
+        async def release_on_poll(delay: float) -> None:
+            delays.append(delay)
+            self.assertEqual(delays, [0.1])
+            self.assertEqual(worker.store.get(workflow_id), before)
+            self.assertEqual((client.connect_calls, client.create_calls, client.closed), (0, 0, 0))
+            self.assertFalse((self.allowed / "example-project").exists())
+            self.assertFalse(worker.state._connection.in_transaction)
+            blocker.rollback()
+
+        async def stop_after_work() -> bool:
+            worked = await cycle()
+            if worked:
+                worker.request_stop()
+            return worked
+
+        try:
+            with (
+                patch.object(worker, "run_cycle_async", side_effect=stop_after_work),
+                patch("hermes_codex_router.project_provisioner.asyncio.sleep", release_on_poll),
+            ):
+                worker.run_forever(poll_seconds=0.1)
+            self.assertEqual(delays, [0.1])
+            self.assertEqual((client.connect_calls, client.create_calls, client.closed), (1, 1, 1))
+            self.assertEqual(worker.store.get(workflow_id).stage, "completed")
+            self.assertIsNone(worker._last_error_code)
+        finally:
+            blocker.close()
+            worker.close()
+
+    def test_claim_contention_codes_back_off_without_external_work(self) -> None:
+        client = FakeProvisioningClient()
+        worker = ProjectProvisioner(self.config, client=client)
+        try:
+            for code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED, sqlite3.SQLITE_BUSY_SNAPSHOT):
+                with self.subTest(code=code):
+                    reset_repeat_state()
+                    error = sqlite3.OperationalError("private error text")
+                    error.sqlite_errorcode = code
+                    with (
+                        patch.object(worker.store, "claim_next", side_effect=error),
+                        patch.object(
+                            worker, "_publish_health", side_effect=AssertionError("contended write")
+                        ),
+                        self.assertLogs("hermes_codex_router", level="WARNING") as logs,
+                    ):
+                        self.assertFalse(asyncio.run(worker.run_cycle_async()))
+                    self.assertNotIn("private error text", "\n".join(logs.output))
+                    self.assertIn("project_provisioner.claim_contention", "\n".join(logs.output))
+                    self.assertEqual(worker._last_error_code, "sqlite_contention")
+            self.assertEqual((client.connect_calls, client.create_calls, client.closed), (0, 0, 0))
+            self.assertFalse(asyncio.run(worker.run_cycle_async()))
+            health = worker.state.get_runtime_health(
+                "project_provisioner", "project-group-provisioner"
+            )
+            assert health is not None
+            self.assertIsNone(health.error_code)
+        finally:
+            worker.close()
+
+    def test_stop_during_claim_contention_prevents_next_claim(self) -> None:
+        client = FakeProvisioningClient()
+        worker = ProjectProvisioner(self.config, client=client)
+        error = sqlite3.OperationalError("database is locked")
+        error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+
+        def stop_while_claiming(_worker_id: str) -> None:
+            worker.request_stop()
+            raise error
+
+        try:
+            with patch.object(worker.store, "claim_next", side_effect=stop_while_claiming) as claim:
+                self.assertFalse(asyncio.run(worker.run_cycle_async()))
+                self.assertFalse(asyncio.run(worker.run_cycle_async()))
+            self.assertEqual(claim.call_count, 1)
+            self.assertEqual((client.connect_calls, client.create_calls), (0, 0))
+        finally:
+            worker.close()
+
+    def test_claim_noncontention_errors_propagate_even_with_lock_text(self) -> None:
+        client = FakeProvisioningClient()
+        worker = ProjectProvisioner(self.config, client=client)
+        try:
+            errors = [sqlite3.OperationalError("database is locked")]
+            io_error = sqlite3.OperationalError("database is locked")
+            io_error.sqlite_errorcode = sqlite3.SQLITE_IOERR
+            errors.append(io_error)
+            for error in errors:
+                with self.subTest(error=error):
+                    with patch.object(worker.store, "claim_next", side_effect=error):
+                        with self.assertRaises(sqlite3.OperationalError) as raised:
+                            asyncio.run(worker.run_cycle_async())
+                    self.assertIs(raised.exception, error)
+            self.assertEqual((client.connect_calls, client.create_calls), (0, 0))
+        finally:
+            worker.close()
+
+    def test_lock_after_group_creation_propagates_and_never_repeats_create(self) -> None:
+        workflow_id = self.prepare_workflow()
+        client = FakeProvisioningClient()
+        worker = ProjectProvisioner(self.config, client=client)
+        error = sqlite3.OperationalError("database is locked")
+        error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+        try:
+            with patch.object(worker.store, "mark_group_created", side_effect=error):
+                with self.assertRaises(sqlite3.OperationalError) as raised:
+                    asyncio.run(worker.run_cycle_async())
+            self.assertIs(raised.exception, error)
+            self.assertEqual(worker.store.get(workflow_id).stage, "creating_group")
+            self.assertFalse(asyncio.run(worker.run_cycle_async()))
+            self.assertEqual((client.connect_calls, client.create_calls), (1, 1))
+            self.assertIsNone(client.configured)
         finally:
             worker.close()
 
