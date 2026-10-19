@@ -72,6 +72,11 @@ without verified build identity refuses opt-in. Do not place the endpoint inside
 provider-accessible project mounts or infer same-UID isolation from permissions.
 Startup never removes a stale path. Preserve it and choose a fresh path or obtain
 separate exact reconciliation authority.
+The host must support descriptor-relative, no-follow chmod on Unix sockets;
+unsupported platforms refuse opt-in startup and leave the default worker path
+unchanged. Cleanup checks the created inode immediately before unlinking; these
+are separate calls under the trusted same-UID assumption, not an isolation
+guarantee against concurrent hostile same-UID replacement.
 
 The local client has no configuration discovery or credential/state reads:
 

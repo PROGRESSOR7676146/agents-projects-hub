@@ -5,7 +5,9 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +17,7 @@ from unittest.mock import patch
 from hermes_codex_router.cli import main
 from hermes_codex_router.worker_activity_barrier import WorkerActivityBarrier
 from hermes_codex_router.worker_control_socket import WorkerControlEndpoint, worker_control_session
+from hermes_codex_router.worker_drain_protocol import current_binding, drain_request
 from tests.test_worker_control_socket import RELEASE
 
 
@@ -93,8 +96,10 @@ class WorkerControlCliTests(unittest.TestCase):
     def test_unsafe_or_oversized_input_file_cannot_trigger_transport(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "request.json"
-            path.write_text("x" * 5000)
-            path.chmod(0o600)
+            binding = current_binding("example-worker", "b" * 32, release=RELEASE)
+            content = json.dumps(
+                drain_request(binding, request_id="c" * 32, expires_ns=time.monotonic_ns() + 10**9)
+            )
             with (
                 patch(
                     "hermes_codex_router.worker_control_cli.exchange_control",
@@ -102,15 +107,20 @@ class WorkerControlCliTests(unittest.TestCase):
                 ),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
-                self.assertEqual(
-                    main(["worker-control", "request", "/tmp/example.sock", str(path)]), 2
-                )
-            path.write_text("{}")
-            path.chmod(0o644)
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(
-                    main(["worker-control", "request", "/tmp/example.sock", str(path)]), 2
-                )
+                for name, text, mode, linked in (
+                    ("oversized", content + " " * 5000, 0o600, False),
+                    ("unsafe_mode", content, 0o644, False),
+                    ("multiple_links", content, 0o600, True),
+                ):
+                    with self.subTest(name=name):
+                        path.write_text(text)
+                        path.chmod(mode)
+                        if linked:
+                            os.link(path, path.with_name("second.json"))
+                        self.assertEqual(
+                            main(["worker-control", "request", "/tmp/example.sock", str(path)]),
+                            2,
+                        )
 
     def test_cli_endpoint_lifecycle_remains_inside_slot_lock(self) -> None:
         events: list[str] = []

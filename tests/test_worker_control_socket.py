@@ -12,6 +12,7 @@ import threading
 import time
 import unittest
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,11 +22,13 @@ from hermes_codex_router.worker_control_socket import (
     WorkerControlEndpoint,
     exchange_control,
     inspect_control,
+    worker_control_session,
 )
 from hermes_codex_router.worker_drain_protocol import (
     ControlBinding,
     ControlError,
     current_binding,
+    decode_document,
     drain_request,
     encode_frame,
     request_digest,
@@ -179,9 +182,14 @@ class WorkerControlSocketTests(unittest.TestCase):
             self.assertRaises(ControlError),
         ):
             exchange_control(self.path, self.binding, self.request())
+        valid = encode_frame(self.request())
+        duplicate = b'{"request_id":"' + b"d" * 32 + b'",' + valid[1:]
+        oversized = valid[:-1] + b" " * 4096 + b"\n"
+        # Both would close admission if accepted; rejection cannot rely on a
+        # missing binding, an invalid operation, or malformed JSON syntax.
         for frame in (
-            b'{"version":1,"version":1,"operation":"drain"}\n',
-            b"x" * 4097 + b"\n",
+            duplicate,
+            oversized,
             b"[]\n",
             b'{"version":true,"operation":"inspect"}\n',
             b'{"version":1,"operation":"resume"}\n',
@@ -195,6 +203,48 @@ class WorkerControlSocketTests(unittest.TestCase):
                 except ConnectionResetError:
                     pass
             self.assertFalse(self.activity.draining)
+
+    def test_document_bound_rejects_otherwise_valid_json(self) -> None:
+        request = self.request()
+        data = encode_frame(request)
+        self.assertEqual(decode_document(data), request)
+        with self.assertRaises(ControlError):
+            decode_document(data + b" " * 4096)
+
+    def test_session_uses_real_worker_nonce_and_actual_binding_builder(self) -> None:
+        fixture = fixtures.ExternalQueueWorkerTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        worker = fixture.worker("opencode", fixtures.Adapter("opencode"))
+        self.addCleanup(worker.close)
+        # Substitute only build identity, keeping the real builder, worker,
+        # constructor-generated nonce, process identity and endpoint lifecycle.
+        with (
+            patch(
+                "hermes_codex_router.worker_control_socket.current_binding",
+                partial(current_binding, release=RELEASE),
+            ),
+            worker_control_session(self.path, worker_id=worker.worker_id, worker=worker),
+        ):
+            binding = ControlBinding.parse(inspect_control(self.path)["binding"])
+            self.assertEqual(binding.instance_nonce, worker._process_start_marker)
+            self.assertEqual(binding.worker_id, worker.worker_id)
+            self.assertEqual(binding.pid, os.getpid())
+            self.assertEqual(binding.release, RELEASE)
+            self.assertFalse(worker.activity.draining)
+        self.assertFalse(self.path.exists())
+
+    def test_unsupported_no_follow_chmod_refuses_opt_in_and_cleans_created_socket(self) -> None:
+        with (
+            patch(
+                "hermes_codex_router.worker_control_socket.os.chmod",
+                side_effect=NotImplementedError("fictional unsupported host"),
+            ),
+            self.assertRaises(ControlError),
+        ):
+            self.endpoint()
+        self.assertFalse(self.path.exists())
+        self.assertFalse(self.activity.draining)
 
     def test_partial_client_cannot_block_listener_indefinitely(self) -> None:
         self.endpoint()

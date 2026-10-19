@@ -30,7 +30,9 @@ The endpoint refuses every existing socket path. Holding a slot lock does not
 prove custody of an arbitrary configured path shared with another namespace.
 The owner may select a fresh path or separately reconcile stale evidence; startup
 never repairs it automatically. Directory descriptors pin lookup and cleanup;
-only the endpoint's own socket inode can be removed.
+cleanup verifies the endpoint's own socket inode immediately before unlinking.
+This check and unlink are separate system calls; concurrent hostile same-UID
+replacement is outside the stated trusted-local-authority boundary.
 
 ## Ownership and architecture review
 
