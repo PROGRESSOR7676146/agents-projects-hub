@@ -1,4 +1,4 @@
-"""Default-off Linux control endpoint. Receipts concern tracked operations only.
+"""Default-off Linux control endpoint with separate operation/socket observations.
 
 The listener never touches SQLite, provider clients, job/approval policy or the
 worker stop event. Local same-UID authority is assumed, not hostile-UID isolation.
@@ -13,7 +13,7 @@ import socket
 import stat
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Protocol
@@ -21,8 +21,10 @@ from typing import Protocol
 from .unix_peer import _peer_credentials
 from .worker_activity_barrier import WorkerActivityBarrier
 from .worker_drain_protocol import (
+    EVIDENCE_SCOPE,
     FRAME_LIMIT,
     MAX_REQUEST_LIFETIME_NS,
+    PROTOCOL_VERSION,
     ControlBinding,
     ControlError,
     current_binding,
@@ -42,6 +44,9 @@ class DrainableWorker(Protocol):
     worker_id: str
     activity: WorkerActivityBarrier
     _process_start_marker: str
+
+    @property
+    def socket_threads_drained(self) -> bool | None: ...
 
 
 def _peer_identity(connection: socket.socket) -> tuple[int, int]:
@@ -129,9 +134,15 @@ def _send_frame(connection: socket.socket, response: dict[str, object]) -> None:
 
 class WorkerControlEndpoint:
     def __init__(
-        self, path: Path, binding: ControlBinding, activity: WorkerActivityBarrier
+        self,
+        path: Path,
+        binding: ControlBinding,
+        activity: WorkerActivityBarrier,
+        *,
+        socket_observation: Callable[[], bool | None] | None = None,
     ) -> None:
         self.path, self.binding, self.activity = path, binding, activity
+        self._socket_observation = socket_observation
         self._directory: _PrivateSocketPath | None = None
         self._socket: socket.socket | None = None
         self._socket_inode: tuple[int, int] | None = None
@@ -195,7 +206,8 @@ class WorkerControlEndpoint:
                     # fields or exception details are reflected in error output.
                     try:
                         _send_frame(
-                            connection, {"version": 1, "ok": False, "reason": "unconfirmed"}
+                            connection,
+                            {"version": PROTOCOL_VERSION, "ok": False, "reason": "unconfirmed"},
                         )
                     except (OSError, ValueError, RuntimeError):
                         self.unconfirmed_replies = min(self.unconfirmed_replies + 1, 2**31 - 1)
@@ -228,15 +240,24 @@ class WorkerControlEndpoint:
                 self._request = key
             if operation == "drain" and not self.activity.draining:
                 self.activity.request_drain()
+        accepted = self._request is not None and self.activity.draining
+        operations_drained = accepted and self.activity.drained
+        socket_drained = None
+        if accepted and self._socket_observation is not None:
+            observation = self._socket_observation()
+            if observation is not None and type(observation) is not bool:
+                raise ControlError("invalid_socket_observation")
+            socket_drained = observation if operations_drained or observation is None else False
         return {
-            "version": 1,
+            "version": PROTOCOL_VERSION,
             "ok": True,
             "binding": self.binding.as_dict(),
-            "scope": "tracked_operations_only",
-            "accepted": self._request is not None and self.activity.draining,
+            "scope": EVIDENCE_SCOPE,
+            "accepted": accepted,
             "request_id": self._request[0] if self._request else None,
             "request_digest": self._request[1] if self._request else None,
-            "operations_drained": self._request is not None and self.activity.drained,
+            "operations_drained": operations_drained,
+            "socket_threads_drained": socket_drained,
         }
 
     def close(self) -> None:
@@ -291,9 +312,10 @@ def _exchange(
                     "request_id",
                     "request_digest",
                     "operations_drained",
+                    "socket_threads_drained",
                 }
                 or response.get("ok") is not True
-                or response.get("scope") != "tracked_operations_only"
+                or response.get("scope") != EVIDENCE_SCOPE
             ):
                 raise ControlError("control_response_unknown")
             binding = ControlBinding.parse(response.get("binding"))
@@ -305,6 +327,13 @@ def _exchange(
             if (
                 type(response.get("accepted")) is not bool
                 or type(response.get("operations_drained")) is not bool
+            ):
+                raise ControlError("invalid_response")
+            socket_drained = response["socket_threads_drained"]
+            if (
+                (socket_drained is not None and type(socket_drained) is not bool)
+                or (socket_drained is not None and not response["accepted"])
+                or (socket_drained is True and not response["operations_drained"])
             ):
                 raise ControlError("invalid_response")
             if response["accepted"]:
@@ -342,7 +371,7 @@ def _exchange(
 
 def inspect_control(path: Path) -> dict[str, object]:
     """Discover only. The maintenance owner must independently select/verify it."""
-    return _exchange(path, {"version": 1, "operation": "inspect"}, None)
+    return _exchange(path, {"version": PROTOCOL_VERSION, "operation": "inspect"}, None)
 
 
 def exchange_control(
@@ -362,7 +391,10 @@ def worker_control_session(
     if worker_id != worker.worker_id:
         raise ControlError("worker_identity_mismatch")
     endpoint = WorkerControlEndpoint(
-        path, current_binding(worker_id, worker._process_start_marker), worker.activity
+        path,
+        current_binding(worker_id, worker._process_start_marker),
+        worker.activity,
+        socket_observation=lambda: worker.socket_threads_drained,
     )
     try:
         endpoint.start()

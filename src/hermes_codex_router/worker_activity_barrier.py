@@ -17,7 +17,7 @@ class WorkerActivityBarrier:
         self._local = threading.local()
         self._draining = False
         self._active = 0
-        self._threads: set[threading.Thread] = set()
+        self._threads: set[_ActivityThread] = set()
 
     def request_drain(self) -> None:
         with self._lock:
@@ -31,7 +31,9 @@ class WorkerActivityBarrier:
     @property
     def drained(self) -> bool:
         with self._lock:
-            self._threads = {thread for thread in self._threads if thread.is_alive()}
+            self._threads = {
+                thread for thread in self._threads if not thread._run_finished or thread.is_alive()
+            }
             return self._draining and self._active == 0 and not self._threads
 
     def _retain(self) -> bool:
@@ -84,6 +86,7 @@ class _ActivityThread(threading.Thread):
         self._work = target
         self._start_lock = threading.Lock()
         self._attempted = False
+        self._run_finished = False
 
     def start(self) -> None:
         with self._start_lock:
@@ -94,7 +97,9 @@ class _ActivityThread(threading.Thread):
                 raise RuntimeError("worker is draining")
             with self._activity._lock:
                 self._activity._threads = {
-                    thread for thread in self._activity._threads if thread.is_alive()
+                    thread
+                    for thread in self._activity._threads
+                    if not thread._run_finished or thread.is_alive()
                 }
                 self._activity._threads.add(self)
             # An exception can occur after the OS thread was created. Only
@@ -106,4 +111,6 @@ class _ActivityThread(threading.Thread):
         try:
             self._work()
         finally:
+            with self._activity._lock:
+                self._run_finished = True
             self._activity._release()

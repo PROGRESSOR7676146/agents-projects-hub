@@ -178,6 +178,8 @@ class ExternalQueueWorker:
         self.adapter: ExternalCliAdapter | None = None
         self._codex_client: CodexAppServerClient | None = None
         self._codex_transport_mode: str | None = None
+        self._owned_supervisor: CodexAppServerSupervisor | None = None
+        self._socket_retirement_started = False
         if self.agent.runtime == "codex":
             self.supervisor = supervisor or CodexAppServerSupervisor(
                 config.codex_socket_path,
@@ -186,6 +188,8 @@ class ExternalQueueWorker:
                 model_provider=config.codex_model_provider,
                 permission_profile=config.codex_permission_profile,
             )
+            if supervisor is None:
+                self._owned_supervisor = self.supervisor
         else:
             self.adapter = adapter or ExternalCliAdapter(
                 self.agent.runtime,
@@ -209,6 +213,34 @@ class ExternalQueueWorker:
     def request_drain(self) -> None:
         """Close this incarnation's admission; let admitted operations finish."""
         self.activity.request_drain()
+
+    @property
+    def socket_threads_drained(self) -> bool | None:
+        """In-process observation; an injected/shared owner cannot supply proof."""
+        supervisor = self.supervisor
+        if (
+            supervisor is not self._owned_supervisor
+            or type(supervisor) is not CodexAppServerSupervisor
+        ):
+            return None
+        return supervisor.socket_threads_drained
+
+    def _retire_idle_socket_client(self) -> None:
+        # Called only by the productive owner after all admitted cleanup exits.
+        if self._socket_retirement_started or not self.activity.drained:
+            return
+        self._socket_retirement_started = True
+        supervisor = self.supervisor
+        if (
+            supervisor is not self._owned_supervisor
+            or type(supervisor) is not CodexAppServerSupervisor
+        ):
+            return
+        supervisor.retire_socket_admission()
+        if supervisor.socket_threads_drained is not None:
+            # An unconfirmed close remains accounted for by socket activity.
+            # Never close a stdio peer or an injected supervisor for this proof.
+            self._discard_client()
 
     def _client(self) -> CodexAppServerClient:
         if self.supervisor is None:
@@ -307,6 +339,7 @@ class ExternalQueueWorker:
         try:
             with self.activity.operation() as admitted:
                 if not admitted:
+                    self._retire_idle_socket_client()
                     return
                 if self.supervisor is not None:
                     self.supervisor.start()
@@ -341,6 +374,8 @@ class ExternalQueueWorker:
                 except Exception as exc:
                     self._record_event("error", "worker_cycle_error", type(exc).__name__)
                     worked = False
+                if self.activity.draining:
+                    self._retire_idle_socket_client()
                 self._stop.wait(0.01 if worked else poll_seconds)
         except KeyboardInterrupt:
             return

@@ -134,6 +134,35 @@ class WorkerActivityBarrierTests(unittest.TestCase):
         with activity.operation() as admitted:
             self.assertFalse(admitted)
 
+    def test_start_window_pruning_retains_thread_until_physical_exit(self) -> None:
+        from unittest.mock import patch
+
+        original_start = threading.Thread.start
+        for pruning in ("observer", "another_start"):
+            with self.subTest(pruning=pruning):
+                activity = WorkerActivityBarrier()
+                first = activity.thread(target=lambda: None)
+                second = activity.thread(target=lambda: None)
+
+                def start(thread):
+                    if thread is first:
+                        activity.request_drain()
+                        if pruning == "observer":
+                            self.assertFalse(activity.drained)
+                        else:
+                            second.start()
+                            second.join(2)
+                            self.assertFalse(second.is_alive())
+                    original_start(thread)
+
+                with activity.operation(), patch.object(threading.Thread, "start", start):
+                    first.start()
+                    first.join(2)
+                    self.assertFalse(first.is_alive())
+                with patch.object(first, "is_alive", return_value=True):
+                    self.assertFalse(activity.drained)
+                self.assertTrue(activity.drained)
+
 
 if __name__ == "__main__":
     unittest.main()

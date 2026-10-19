@@ -91,7 +91,7 @@ class WorkerControlSocketTests(unittest.TestCase):
         result = exchange_control(self.path, self.binding, request)
         self.assertTrue(result["accepted"])
         self.assertFalse(result["operations_drained"])
-        self.assertEqual(result["scope"], "tracked_operations_only")
+        self.assertEqual(result["scope"], "tracked_operations_and_socket_transport_threads")
         self.assertEqual(result["request_digest"], request_digest(request))
         with self.activity.operation() as admitted:
             self.assertFalse(admitted)
@@ -193,7 +193,8 @@ class WorkerControlSocketTests(unittest.TestCase):
             oversized,
             b"[]\n",
             b'{"version":true,"operation":"inspect"}\n',
-            b'{"version":1,"operation":"resume"}\n',
+            b'{"version":2,"operation":"resume"}\n',
+            b'{"version":1,"operation":"inspect"}\n',
         ):
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
                 client.settimeout(2)
