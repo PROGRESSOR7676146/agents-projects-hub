@@ -955,6 +955,32 @@ class ProjectOnboardingTests(unittest.TestCase):
         finally:
             worker.close()
 
+    def test_claim_contention_preserves_prior_failed_workflow_health(self) -> None:
+        workflow_id = self.prepare_workflow()
+        client = FakeProvisioningClient()
+        worker = ProjectProvisioner(self.config, client=client)
+        error = sqlite3.OperationalError("database is locked")
+        error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+        try:
+            with patch(
+                "hermes_codex_router.project_provisioner.ensure_project", side_effect=OSError()
+            ):
+                self.assertTrue(asyncio.run(worker.run_cycle_async()))
+            self.assertEqual(worker.store.get(workflow_id).stage, "failed")
+            self.assertEqual(worker._last_error_code, "OSError")
+            with patch.object(worker.store, "claim_next", side_effect=error):
+                self.assertFalse(asyncio.run(worker.run_cycle_async()))
+            self.assertFalse(asyncio.run(worker.run_cycle_async()))
+            health = worker.state.get_runtime_health(
+                "project_provisioner", "project-group-provisioner"
+            )
+            assert health is not None
+            self.assertEqual(health.error_code, "OSError")
+            self.assertEqual(client.create_calls, 1)
+            self.assertEqual(worker.store.get(workflow_id).stage, "failed")
+        finally:
+            worker.close()
+
     def test_lock_after_group_creation_propagates_and_never_repeats_create(self) -> None:
         workflow_id = self.prepare_workflow()
         client = FakeProvisioningClient()

@@ -975,7 +975,8 @@ class ProjectProvisioner:
                 raise
             # No external operation has begun. Let the normal idle poll back off;
             # a second health write would wait on the same contended database.
-            self._last_error_code = "sqlite_contention"
+            if self._last_error_code is None:
+                self._last_error_code = "sqlite_contention"
             survived("project_provisioner.claim_contention", error)
             return False
         if self._last_error_code == "sqlite_contention":
