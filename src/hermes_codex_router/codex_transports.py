@@ -422,16 +422,19 @@ class UnixWebSocketTransport:
         return message
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        self._inbound.finish(EOFError("Codex WebSocket closed"))
-        self._receiver_done.set()
-        self._wake_event(self._outbound_event)
-        loop, task = self._loop, self._task
-        if loop is not None and task is not None and not loop.is_closed():
-            try:
-                loop.call_soon_threadsafe(task.cancel)
-            except RuntimeError:
-                pass  # The loop completed between inspection and notification.
+        if not self._closed:
+            self._closed = True
+            self._inbound.finish(EOFError("Codex WebSocket closed"))
+            self._receiver_done.set()
+            self._wake_event(self._outbound_event)
+            loop, task = self._loop, self._task
+            if loop is not None and task is not None and not loop.is_closed():
+                try:
+                    loop.call_soon_threadsafe(task.cancel)
+                except RuntimeError:
+                    pass  # The loop completed between inspection and notification.
+        # Refusing new sends is not proof that the owning loop has exited.
+        # A later close can confirm delayed cleanup without cancelling it again.
         self._thread.join(timeout=5)
+        if self._thread.is_alive():
+            raise RpcError("Codex Unix WebSocket shutdown is unconfirmed")
