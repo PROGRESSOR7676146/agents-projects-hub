@@ -233,6 +233,8 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
                 now=datetime.now(timezone.utc) + timedelta(minutes=5),
             )
             self.assertEqual(recovered, (outbox.outbox_id,))
+            expected_outbox = state.get_telegram_outbox_for_job(job_id)
+            expected_parts = state.get_telegram_outbox_parts(outbox.outbox_id)
         finally:
             state.close()
 
@@ -245,6 +247,8 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
         try:
             self.assertEqual(state.get_provider_job(job_id).status, "result_ready")
             saved = state.get_telegram_outbox_for_job(job_id)
+            self.assertEqual(saved, expected_outbox)
+            self.assertEqual(state.get_telegram_outbox_parts(saved.outbox_id), expected_parts)
             self.assertEqual(saved.status, "unknown")
             self.assertIsNone(saved.telegram_message_id)
             self.assertTrue(
@@ -259,6 +263,17 @@ class ProcessBoundaryFaultInjectionTests(unittest.TestCase):
             self.assertEqual(
                 provider_invocation.read_text(encoding="utf-8").splitlines(), ["invoked"]
             )
+            notices = state._connection.execute(
+                "SELECT * FROM task_lifecycle_notices WHERE event_key=?",
+                (f"delivery-wait:{saved.outbox_id}",),
+            ).fetchall()
+            self.assertEqual(len(notices), 1)
+            notice = notices[0]
+            self.assertEqual(notice["kind"], "delivery_wait")
+            self.assertEqual(notice["job_id"], job_id)
+            self.assertEqual((notice["chat_id"], notice["thread_id"]), (self.harness.chat_id, 804))
+            self.assertEqual(notice["status"], "delivered")
+            self.assertGreater(notice["telegram_message_id"], 0)
         finally:
             state.close()
 

@@ -13,6 +13,8 @@ from .artifacts import ValidatedArtifact
 from .delivery_control_predicates import final_control_reconciled, progress_control_reconciled
 from .delivery_hold_predicates import nonblocking_execution_notice, outbox_delivery_hold_released
 from .delivery_receipts import DeliveryReceipts
+from .delivery_wait import prepare_delivery_waits
+from .task_lifecycle import TaskLifecycleState
 from .telegram_multipart import split_telegram_html
 
 MAX_PROGRESS_ATTEMPTS = 20
@@ -101,6 +103,23 @@ class DeliveryStateFacade:
         self._write_transaction = write_transaction
         self._state_error = state_error
         self._receipts = DeliveryReceipts(connection, state_error)
+
+    def prepare_delivery_wait_notices(
+        self,
+        notices: TaskLifecycleState,
+        *,
+        sender_agent_ids: tuple[str, ...],
+        now: datetime,
+    ) -> int:
+        if notices.db is not self._connection:
+            raise self._state_error("delivery notices require the owning state connection")
+        if not sender_agent_ids:
+            return 0
+        agents = tuple(
+            self._bounded(agent, name="sender agent", maximum=64) for agent in sender_agent_ids
+        )
+        with self._transaction():
+            return prepare_delivery_waits(self._connection, notices, agents, now=now)
 
     def _bounded(self, value: str, *, name: str, maximum: int) -> str:
         normalized = value.strip()
