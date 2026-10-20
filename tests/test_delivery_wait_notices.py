@@ -136,6 +136,7 @@ class DeliveryWaitNoticeTests(TestCase):
         topic, session = self.fixture.topic_session("example-project-other", 8)
         healthy, _ = self.fixture.enqueue(20, enabled=False, topic=topic, session=session)
         executing = self.fixture.start(healthy)
+        assert executing.lease_token is not None
         self.state.commit_provider_result(
             healthy.job_id,
             executing.lease_token,
