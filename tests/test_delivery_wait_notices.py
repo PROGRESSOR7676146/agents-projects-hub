@@ -121,6 +121,42 @@ class DeliveryWaitNoticeTests(TestCase):
         self.assertEqual(self.prepare(), 0)
         self.assertEqual(self.state.get_telegram_outbox_for_job(self.job.job_id).status, "unknown")
 
+    def test_legacy_invalid_destination_does_not_starve_another_topics_notice(self):
+        # Fault injection only: normal current-schema writes reject this old shape.
+        self.state._connection.execute("PRAGMA ignore_check_constraints=ON")
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE topics SET thread_id=0 WHERE topic_id=?", (self.fixture.topic.topic_id,)
+            )
+            self.state._connection.execute(
+                "UPDATE telegram_outbox SET thread_id=0 WHERE outbox_id=?",
+                (self.outbox.outbox_id,),
+            )
+        self.state._connection.execute("PRAGMA ignore_check_constraints=OFF")
+        topic, session = self.fixture.topic_session("example-project-other", 8)
+        healthy, _ = self.fixture.enqueue(20, enabled=False, topic=topic, session=session)
+        executing = self.fixture.start(healthy)
+        self.state.commit_provider_result(
+            healthy.job_id,
+            executing.lease_token,
+            visible_response="Fictional other result",
+            sender_agent_id="codex",
+            telegram_html="Fictional other result",
+        )
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE telegram_outbox SET status='unknown' WHERE job_id=?", (healthy.job_id,)
+            )
+        self.assertEqual(self.prepare(), 1)
+        telegram = Mock()
+        telegram.send_html.return_value = 902
+        self.assertTrue(
+            deliver_task_notice(
+                self.state.task_notices, telegram, "example-sender", now=self.now
+            ).delivered
+        )
+        self.assertEqual(telegram.send_html.call_args.args[:2], (topic.chat_id, topic.thread_id))
+
 
 class DeliveryWaitSenderTests(TestCase):
     def setUp(self):

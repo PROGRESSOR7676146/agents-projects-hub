@@ -7,15 +7,17 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from html import escape
-from typing import Callable, Sequence
+from typing import TYPE_CHECKING, Callable, Sequence
 
 from .artifacts import ValidatedArtifact
 from .delivery_control_predicates import final_control_reconciled, progress_control_reconciled
 from .delivery_hold_predicates import nonblocking_execution_notice, outbox_delivery_hold_released
 from .delivery_receipts import DeliveryReceipts
 from .delivery_wait import prepare_delivery_waits
-from .task_lifecycle import TaskLifecycleState
 from .telegram_multipart import split_telegram_html
+
+if TYPE_CHECKING:
+    from .task_lifecycle import TaskLifecycleState
 
 MAX_PROGRESS_ATTEMPTS = 20
 PROGRESS_INTERVAL_SECONDS = 120

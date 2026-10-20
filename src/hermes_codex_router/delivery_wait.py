@@ -27,6 +27,7 @@ def _blocking_result() -> str:
         "o.status='unknown' AND j.status='result_ready' "
         "AND o.sender_agent_id=j.agent_id AND o.chat_id=j.chat_id "
         "AND t.chat_id=o.chat_id AND t.thread_id=o.thread_id "
+        "AND t.thread_id>0 AND j.message_id>0 AND o.chat_id!=0 "
         "AND EXISTS (SELECT 1 FROM provider_job_results r WHERE r.job_id=j.job_id) "
         f"AND {job_blocks_topic_fifo('j')}"
     )
