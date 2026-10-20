@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import os
+import sqlite3
 import threading
 import uuid
 from contextlib import contextmanager
@@ -19,6 +20,7 @@ from .project_admin import ensure_project, prepare_project_root
 from .project_onboarding import OnboardingWorkflow, ProjectOnboardingStore
 from .registry import RegistryError, load_registry
 from .runtime_health import PROJECT_PROVISIONER_INSTANCE_ID
+from .sqlite_contention import is_sqlite_contention
 from .state import HubState, StateError
 
 
@@ -966,7 +968,19 @@ class ProjectProvisioner:
         if self._stop.is_set():
             self._publish_health()
             return False
-        workflow = self.store.claim_next(self.worker_id)
+        try:
+            workflow = self.store.claim_next(self.worker_id)
+        except sqlite3.OperationalError as error:
+            if not is_sqlite_contention(error):
+                raise
+            # No external operation has begun. Let the normal idle poll back off;
+            # a second health write would wait on the same contended database.
+            if self._last_error_code is None:
+                self._last_error_code = "sqlite_contention"
+            survived("project_provisioner.claim_contention", error)
+            return False
+        if self._last_error_code == "sqlite_contention":
+            self._last_error_code = None
         if workflow is None:
             self._publish_health()
             return False

@@ -67,6 +67,21 @@ class IncidentJournalTests(unittest.TestCase):
         self.assertEqual(changed["episodes"][0]["code"], "deployment_revision_mixed")
         self.assertNotEqual(empty["updated_at"], changed["updated_at"])
 
+    def test_unobserved_keys_preserve_only_existing_open_episodes(self) -> None:
+        self.project((alert("example:pending"), alert("example:resolved")))
+        # Resolve one row normally, then keep the remaining row unobserved.
+        second = self.project((alert("example:pending"),), now=NOW + timedelta(seconds=1))
+        pending = next(row.copy() for row in second["episodes"] if row["resolved_at"] is None)
+        with IncidentJournal(self.path).cycle() as journal:
+            third = journal.project(
+                (),
+                now=NOW + timedelta(days=31),
+                unobserved_keys=("example:pending", "example:resolved", "example:never-seen"),
+            )
+        self.assertEqual(third["episodes"], [pending])
+        self.assertNotEqual(third["updated_at"], second["updated_at"])
+        self.assertNotIn("example:pending", self.path.read_text())
+
     def test_duplicate_keys_refuse_conflicts_without_replacing_snapshot(self) -> None:
         self.project((alert(), alert()))
         before = self.path.read_bytes()

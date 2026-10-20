@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import BinaryIO, Literal
@@ -15,10 +16,15 @@ from .codex_appserver import (
 )
 from .codex_permissions import validate_permission_profile_id
 from .diagnostic_log import survived
+from .worker_activity_barrier import WorkerActivityBarrier
 
 
 class AppServerError(RuntimeError):
     pass
+
+
+class AppServerRetiringError(AppServerError):
+    """This supervisor has permanently closed client admission."""
 
 
 def _process_start_marker() -> str:
@@ -56,6 +62,44 @@ class CodexAppServerSupervisor:
         self.transport_mode: str | None = None
         self._ownership_file: BinaryIO | None = None
         self._next_idle_socket_probe = 0.0
+        # Persistent transport threads must not prevent worker operation drain.
+        self._socket_activity = WorkerActivityBarrier()
+        self._socket_ineligible = threading.Event()
+        if manage_process:
+            self._socket_ineligible.set()
+
+    @property
+    def socket_threads_drained(self) -> bool | None:
+        """Observe only this owner's tracked socket transport threads, without I/O."""
+        drained = self._socket_activity.drained
+        if self._socket_ineligible.is_set():
+            return None
+        return drained
+
+    def retire_socket_admission(self) -> None:
+        """Owner-only fence; neither closes clients nor stops their peer."""
+        self._socket_activity.request_drain()
+
+    def _require_client_admission(self) -> None:
+        if self._socket_activity.draining:
+            raise AppServerRetiringError("Codex client admission is retired")
+
+    def _socket_transport(
+        self, *, timeout: float | None = None, socket_path: Path | None = None
+    ) -> UnixWebSocketTransport:
+        # One mandatory owner/factory for ordinary, control and idle-probe paths.
+        # Trusted instrumentation may select one primary bridge without changing
+        # this supervisor's upstream address used by control and recovery.
+        self._require_client_admission()
+        with self._socket_activity.operation() as admitted:
+            if not admitted:
+                raise AppServerRetiringError("Codex client admission is retired")
+            path = self.socket_path if socket_path is None else socket_path
+            if timeout is None:
+                return UnixWebSocketTransport(path, thread_factory=self._socket_activity.thread)
+            return UnixWebSocketTransport(
+                path, timeout=timeout, thread_factory=self._socket_activity.thread
+            )
 
     def _acquire_socket_ownership(self) -> None:
         if self._ownership_file is not None:
@@ -97,10 +141,18 @@ class CodexAppServerSupervisor:
             ownership_file.close()
 
     def start(self, *, timeout: float = 15.0) -> None:
+        self._require_client_admission()
+        with self._socket_activity.operation() as admitted:
+            if not admitted:
+                raise AppServerRetiringError("Codex client admission is retired")
+            self._start_admitted(timeout=timeout)
+
+    def _start_admitted(self, *, timeout: float) -> None:
         if not self.manage_process and self._shared_socket_present():
             self.transport_mode = "socket"
             return
         if self.stdio_executable is not None:
+            self._socket_ineligible.set()
             self.transport_mode = "stdio-fallback"
             return
         if not self.manage_process:
@@ -175,6 +227,26 @@ class CodexAppServerSupervisor:
     def client(
         self, *, allow_fallback: bool = True, deadline: float | None = None
     ) -> CodexAppServerClient:
+        self._require_client_admission()
+        with self._socket_activity.operation() as admitted:
+            if not admitted:
+                raise AppServerRetiringError("Codex client admission is retired")
+            return self._client_admitted(allow_fallback=allow_fallback, deadline=deadline)
+
+    def _stdio_client(self, *, deadline: float | None) -> CodexAppServerClient:
+        self._require_client_admission()
+        self._socket_ineligible.set()
+        assert self.stdio_executable is not None
+        return self._initialized_client(
+            StdioJsonLineTransport.start(str(self.stdio_executable)),
+            transport_mode="stdio-fallback",
+            approval_policy="never",
+            deadline=deadline,
+        )
+
+    def _client_admitted(
+        self, *, allow_fallback: bool, deadline: float | None
+    ) -> CodexAppServerClient:
         if self.transport_mode is None:
             if not allow_fallback:
                 if self.manage_process or not self._shared_socket_present():
@@ -185,13 +257,7 @@ class CodexAppServerSupervisor:
         if self.transport_mode == "stdio-fallback":
             if not allow_fallback:
                 raise AppServerError("shared Codex control transport is unavailable")
-            assert self.stdio_executable is not None
-            return self._initialized_client(
-                StdioJsonLineTransport.start(str(self.stdio_executable)),
-                transport_mode="stdio-fallback",
-                approval_policy="never",
-                deadline=deadline,
-            )
+            return self._stdio_client(deadline=deadline)
         if self.transport_mode == "managed-socket" and (
             self.process is None or self.process.poll() is not None
         ):
@@ -199,12 +265,8 @@ class CodexAppServerSupervisor:
         if self.transport_mode == "socket" and not self._shared_socket_present():
             raise AppServerError("shared Codex app-server socket is unavailable")
         try:
-            transport = (
-                UnixWebSocketTransport(self.socket_path)
-                if deadline is None
-                else UnixWebSocketTransport(
-                    self.socket_path, timeout=max(0.001, deadline - time.monotonic())
-                )
+            transport = self._socket_transport(
+                timeout=None if deadline is None else max(0.001, deadline - time.monotonic())
             )
             return self._initialized_client(
                 transport,
@@ -212,20 +274,19 @@ class CodexAppServerSupervisor:
                 deadline=deadline,
                 retire_completed_connection=True,
             )
+        except AppServerRetiringError:
+            raise
         except Exception:
             if (
                 not allow_fallback
                 or self.stdio_executable is None
                 or self.transport_mode == "managed-socket"
+                or self._socket_activity.draining
             ):
                 raise
+            self._socket_ineligible.set()
             self.transport_mode = "stdio-fallback"
-            return self._initialized_client(
-                StdioJsonLineTransport.start(str(self.stdio_executable)),
-                transport_mode="stdio-fallback",
-                approval_policy="never",
-                deadline=deadline,
-            )
+            return self._stdio_client(deadline=deadline)
 
     def _shared_socket_present(self) -> bool:
         try:
@@ -250,6 +311,13 @@ class CodexAppServerSupervisor:
         client must not change the mode used by an active turn's stop handler.
         A socket inode alone is not readiness: initialize before switching.
         """
+        self._require_client_admission()
+        with self._socket_activity.operation() as admitted:
+            if not admitted:
+                raise AppServerRetiringError("Codex client admission is retired")
+            return self._restore_socket_admitted()
+
+    def _restore_socket_admitted(self) -> bool:
         if self.manage_process or self.transport_mode != "stdio-fallback":
             return False
         if not self._shared_socket_present():
@@ -260,7 +328,7 @@ class CodexAppServerSupervisor:
         self._next_idle_socket_probe = now + 5.0
         try:
             probe = self._initialized_client(
-                UnixWebSocketTransport(self.socket_path, timeout=2.0),
+                self._socket_transport(timeout=2.0),
                 transport_mode="socket",
                 deadline=time.monotonic() + 2.0,
             )

@@ -522,7 +522,7 @@ acceptance.
   and a native offline ingress witness are under final validation. Next: exact
   reviews/publication, then separately authorized live acceptance. Inspect all
   lane changes before cleanup. Incident closure stays open under [ADR 0064](../decisions/0064-codex-control-loss.md).
-  No replay; terminality or expiry cannot quiesce an unknown sender.
+  No replay; [drain](WORKER_DRAIN_PREPARATION.md): source; native/live open.
 - **Lane cleanup admission race:** a preflight root guard and post-Git recheck
   do not reserve maintenance during physical cleanup. Lead owns the existing
   follow-up: add a scoped maintenance reservation before extending cleanup,

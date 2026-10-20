@@ -228,13 +228,25 @@ class IncidentJournal:
         finally:
             Path(name).unlink(missing_ok=True)
 
-    def project(self, alerts: tuple[OperationalAlert, ...], *, now: datetime) -> dict[str, Any]:
+    def project(
+        self,
+        alerts: tuple[OperationalAlert, ...],
+        *,
+        now: datetime,
+        unobserved_keys: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
         try:
-            return self._project(alerts, now=now)
+            return self._project(alerts, now=now, unobserved_keys=unobserved_keys)
         except (OSError, ValueError, TypeError, RecursionError, OverflowError):
             raise IncidentJournalError() from None
 
-    def _project(self, alerts: tuple[OperationalAlert, ...], *, now: datetime) -> dict[str, Any]:
+    def _project(
+        self,
+        alerts: tuple[OperationalAlert, ...],
+        *,
+        now: datetime,
+        unobserved_keys: tuple[str, ...],
+    ) -> dict[str, Any]:
         if not self._locked or now.tzinfo is None:
             raise IncidentJournalError()
         now = now.astimezone(timezone.utc)
@@ -249,6 +261,10 @@ class IncidentJournal:
         if previous is not None and not hmac.compare_digest(previous["seed_binding"], seed_binding):
             raise IncidentJournalError()
         current: dict[str, OperationalAlert] = {}
+        unobserved = {
+            hmac.new(seed, key.encode("utf-8"), hashlib.sha256).hexdigest()
+            for key in unobserved_keys
+        }
         for alert in alerts:
             if not _valid_message(alert.code, alert.severity, alert.message):
                 raise IncidentJournalError()
@@ -262,7 +278,7 @@ class IncidentJournal:
         resolved: list[dict[str, Any]] = []
         for row in old_rows:
             token = row["id"].split(".")[0]
-            if row["resolved_at"] is None and token in current:
+            if row["resolved_at"] is None and (token in current or token in unobserved):
                 active[token] = row
                 continue
             if row["resolved_at"] is None:
@@ -270,9 +286,14 @@ class IncidentJournal:
             if _time(row["resolved_at"]) >= now - RETENTION:
                 resolved.append(row)
         # Select opaque keys before creating rows: unchanged storms retain IDs.
-        selected = sorted(current)[:MAX_EPISODES]
+        selected = sorted(current.keys() | active.keys())[:MAX_EPISODES]
         open_rows: list[dict[str, Any]] = []
         for token in selected:
+            if token not in current:
+                # Unknown is neither a fresh failure observation nor recovery.
+                # Preserve the episode, including the old last_seen_at.
+                open_rows.append(active[token])
+                continue
             alert = current[token]
             row = active.get(token) or {"id": token + "." + uuid.uuid4().hex, "opened_at": stamp}
             row.update(
@@ -289,7 +310,7 @@ class IncidentJournal:
             "schema_version": 1,
             "seed_binding": seed_binding,
             "updated_at": stamp,
-            "omitted_open_count": len(current) - len(open_rows),
+            "omitted_open_count": len(current.keys() | active.keys()) - len(open_rows),
             "omitted_resolved_count": len(resolved) - len(keep_resolved),
             "episodes": open_rows + keep_resolved,
         }

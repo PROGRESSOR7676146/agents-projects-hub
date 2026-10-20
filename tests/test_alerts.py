@@ -134,7 +134,9 @@ class OperationalAlertTests(unittest.TestCase):
             return Result()
 
         _send_hermes("telegram", "safe alert", run=run)
-        self.assertEqual(calls[0][0], ("hermes", "send", "--to", "telegram", "--quiet", "-"))
+        self.assertEqual(
+            calls[0][0], ("hermes", "send", "--to", "telegram", "--quiet", "--file", "-")
+        )
         self.assertEqual(calls[0][1]["input"], "safe alert")
         self.assertNotIn("shell", calls[0][1])
 
