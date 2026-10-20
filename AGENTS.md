@@ -121,9 +121,13 @@ revision and highest proven level.
 - Invoke independent Claude source review directly through CPA HTTP, without
   Claude CLI, following [the review runbook](docs/operations/CLAUDE_SOURCE_REVIEW.md).
   Resolve the exact provider/model route before inferring reviewer availability.
-- Only the owner merges into `main`. Agents open pull requests and may push
-  their own branches; tags, branch deletion and deployment need the owner's
-  explicit authorization each time.
+- The owner delegates merging ready pull requests into `main` to the primary
+  development agent within the authorized task scope; no per-PR confirmation
+  is required. Required canonical validation, exact-head hosted checks and
+  applicable independent review MUST pass first, with findings recorded in the
+  PR. Recheck the current head and base, pin the expected head when merging,
+  and satisfy branch protection without administrative bypasses. Tags, branch
+  deletion and deployment still need the owner's explicit authorization each time.
 - Provider work may proceed while live acceptance is pending (ADR 0045), but
   never present repository evidence as deployment evidence; track open live
   acceptance in `docs/operations/STABILIZATION_PLAN.md`.

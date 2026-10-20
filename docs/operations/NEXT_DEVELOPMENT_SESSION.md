@@ -190,10 +190,12 @@ accepted editor result. Full Claude parity is no longer its completion gate. Tra
 in the [stabilization plan](STABILIZATION_PLAN.md); do not repeat completed stages.
 
 The owner authorized repository implementation, offline tests and delegated
-work. Live-state changes, credentials, service restarts, deployment, tags, branch
-deletion and merging into `main` are not authorized by this task. Prepare concrete
-checks/artifacts before requesting separately scoped live actions. Private handoff
-claims are pointers to recheck, never facts to copy into Git.
+work. The primary development agent may merge ready PRs under the standing
+[review and merge policy](../../AGENTS.md#review-merge-and-scope), without asking
+for each PR. Live-state changes, credentials, service restarts, deployment, tags
+and branch deletion still require separately scoped authorization. Prepare concrete
+checks/artifacts before requesting those live actions. Private handoff claims
+are pointers to recheck, never facts to copy into Git.
 
 The owner accepted initial no-progress thresholds of **300 seconds** for an
 ordinary active turn and **1,200 seconds** for an active tool/build. Both must be
@@ -383,7 +385,8 @@ longer release acceptance requirements.
 Follow the [testing guide](../testing/README.md): focused iteration, history/privacy
 before every commit, pre-commit hook, canonical gate on the publication revision,
 required hosted checks and independent exact-revision review. Never bypass hooks
-or publish a red suite. Open focused PRs; merging remains the owner's action.
+or publish a red suite. Open focused PRs and merge under the standing
+[review and merge policy](../../AGENTS.md#review-merge-and-scope).
 Offline tests do not establish deployed Telegram behavior or a subscription route.
 
 Prepare bounded live scenarios with exact candidate/rollback revisions, commands,
@@ -399,7 +402,7 @@ Source owner: Hub maintainer; sole writer. Schema50 source at clean
 Pyright zero, privacy/history, independent Astra and actual Claude Opus 5.5/high
 reviews and all seven exact-head hosted checks. It retains fresh immutable
 admission/acceptance provenance and first-input/control fences; no automatic
-precaution is enabled. Owner merge and live acceptance remain separate.
+precaution is enabled. Source integration and live acceptance remain separate.
 
 Schema51 in lane `feat/codex-ingress-episodes` is published at
 `506f3bf765ae477bc1945c6317214a3d86fcec6c`, with canonical 2,683 tests in 242
