@@ -185,7 +185,7 @@ credentials, приватные приглашения и environment dumps в �
 - [Bot API: изменения 8 мая 2026](https://core.telegram.org/bots/api#may-8-2026).
 - [Bot API: getFile](https://core.telegram.org/bots/api#getfile) и
   [Sending files](https://core.telegram.org/bots/api#sending-files).
-- [Telegram FAQ: прежнее ограничение](https://core.telegram.org/bots/faq#why-doesn-39t-my-bot-see-messages-from-other-bots).
+- [Telegram FAQ: прежнее ограничение](https://core.telegram.org/bots/faq#why-doesnt-my-bot-see-messages-from-other-bots).
 
 Источники прочитаны 20 октября 2026. Уровень доказательства — официальная
 документация и исходники Hub; настройки и фактическая двусторонняя доставка
