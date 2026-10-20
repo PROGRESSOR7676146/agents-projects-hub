@@ -105,7 +105,9 @@ class HubConfigTests(unittest.TestCase):
                 patch("hermes_codex_router.supervisor.CodexAppServerClient") as client,
             ):
                 self.assertTrue(supervisor.restore_socket_at_idle())
-                transport.assert_called_once_with(logical, timeout=2.0)
+                transport.assert_called_once_with(
+                    logical, timeout=2.0, thread_factory=supervisor._socket_activity.thread
+                )
                 client.return_value.initialize.assert_called_once()
                 client.return_value.close.assert_called_once()
         self.assertEqual(config.codex_socket_path, logical)

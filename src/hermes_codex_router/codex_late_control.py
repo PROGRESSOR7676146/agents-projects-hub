@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from .hub_config import HubConfig
 from .project_resolution import resolve_project_context
 from .state import HubState, StateError
 from .topic_execution import resolve_topic_execution_root
+from .worker_activity_barrier import WorkerActivityBarrier
 
 
 def run_late_control_once(
@@ -197,17 +199,27 @@ class CodexControlMaintenance:
         agent_id: str,
         client_factory: Callable[[float], RecoveryControlClient],
         stop: threading.Event,
+        activity: WorkerActivityBarrier | None = None,
     ) -> None:
         self.config = config
         self.worker_id = worker_id
         self.agent_id = agent_id
         self.client_factory = client_factory
         self.stop = stop
+        self.activity = activity
         self.lock = threading.Lock()
         self.control_path: ControlSendPath | None = None
         self.ingress = CodexIngressSweep()
 
     def run_once(self, state: HubState) -> bool:
+        with (
+            self.activity.operation()
+            if self.activity is not None
+            else nullcontext(True) as admitted
+        ):
+            return self._run_admitted_once(state) if admitted else False
+
+    def _run_admitted_once(self, state: HubState) -> bool:
         def ingress() -> bool:
             try:
                 return self.ingress.run_once(
@@ -251,7 +263,7 @@ class CodexControlMaintenance:
             path.request_close()
 
     def run_forever(self) -> None:
-        while not self.stop.is_set():
+        while not self.stop.is_set() and not (self.activity and self.activity.draining):
             try:
                 state = HubState.open_existing(
                     self.config.state_path,
@@ -259,7 +271,7 @@ class CodexControlMaintenance:
                     contention_timeout_seconds=0.1,
                 )
                 try:
-                    while not self.stop.is_set():
+                    while not self.stop.is_set() and not (self.activity and self.activity.draining):
                         worked = self.run_once(state)
                         self.stop.wait(0.01 if worked else 0.2)
                 finally:

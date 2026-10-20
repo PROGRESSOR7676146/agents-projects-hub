@@ -9,6 +9,7 @@ from .codex_live_control import CodexLiveControl, ControlClient
 from .execution_journal import ExecutionJournal
 from .hub_config import HubConfig
 from .state import HubState, ProviderJobRecord
+from .worker_activity_barrier import WorkerActivityBarrier
 from .worker_execution import ProviderTurnStopped, wait_for_codex_provider_turn
 
 
@@ -24,6 +25,7 @@ def wait_for_controlled_codex_turn(
     turn_id: str,
     transport_mode: str | None,
     client_factory: Callable[[], ControlClient],
+    activity: WorkerActivityBarrier | None = None,
 ) -> TurnResult:
     token = job.lease_token
     assert token is not None
@@ -41,6 +43,7 @@ def wait_for_controlled_codex_turn(
         turn_id=turn_id,
         transport_mode=transport_mode,
         close_owned_turn_client=client.close,
+        activity=activity,
     )
     with control.running():
         client.on_visible_item = lambda item_id, text, phase: journal.record_item(
