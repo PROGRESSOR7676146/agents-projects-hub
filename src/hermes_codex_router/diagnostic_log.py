@@ -86,6 +86,7 @@ SITES = frozenset(
         "outbox_sender.claude_activity",
         "outbox_sender.delivery_wait_notices",
         "external_worker.client_close",
+        "external_worker.shutdown",
         "external_worker.failure_notice_record",
         "external_worker.health_publish",
         "external_worker.runtime_event_record",

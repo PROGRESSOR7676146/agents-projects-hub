@@ -403,6 +403,9 @@ class ExternalQueueWorkerTests(unittest.TestCase):
             def close(self) -> None:
                 pass
 
+            def shutdown_receipt(self) -> dict[str, object]:
+                return {"event": "worker_shutdown_complete"}
+
         with (
             patch("hermes_codex_router.cli.load_external_worker_config", return_value=config),
             patch("hermes_codex_router.cli.ExternalQueueWorker", FakeWorker),
@@ -1559,6 +1562,9 @@ class ExternalQueueWorkerTests(unittest.TestCase):
 
             def close(self) -> None:
                 self.closed = True
+
+            def shutdown_receipt(self) -> dict[str, object]:
+                return {"event": "worker_shutdown_complete"}
 
         with patch("hermes_codex_router.cli.ExternalQueueWorker", FakeWorker):
             self.assertEqual(main(["worker", str(config_path), "--agent", "opencode"]), 0)

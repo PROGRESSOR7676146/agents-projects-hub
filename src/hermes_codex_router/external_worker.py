@@ -198,14 +198,51 @@ class ExternalQueueWorker:
             )
         self._stop = threading.Event()
         self.activity = WorkerActivityBarrier()
+        self._closed = False
         self._publish_health()
 
     def close(self) -> None:
+        if self._closed:
+            return
         self.stop()
-        self._discard_client()
+        self.request_drain()
+        # A timeout is not permission to close resources beneath live owners.
+        # Includes control/connect cleanup and children of admitted operations.
+        while not self.activity.drained:
+            time.sleep(0.05)
+        supervisor = self._owned_supervisor
+        if supervisor is not None:
+            supervisor.retire_socket_admission()
+        client = self._codex_client
+        try:
+            self._discard_client(report_close_error=True)
+        except Exception:
+            # Ordinary result retirement must detach a broken client. During
+            # final shutdown only, retain its identity for an explicit recheck.
+            self._codex_client = client
+            raise
+        finally:
+            # Includes clients already discarded after an unconfirmed close,
+            # even when earlier fallback makes socket-only proof ineligible.
+            if supervisor is not None:
+                supervisor.wait_for_socket_threads()
         if self.supervisor is not None:
             self.supervisor.stop()
         self.state.close()
+        self._closed = True
+
+    def shutdown_receipt(self) -> dict[str, object]:
+        if not self._closed:
+            raise ExternalQueueWorkerError("worker cleanup is unconfirmed")
+        return {
+            "event": "worker_shutdown_complete",
+            "scope": "owned_worker_resources",
+            "worker_id": self.worker_id,
+            "pid": os.getpid(),
+            "process_start_marker": self._process_start_marker,
+            "started_at": self._started_at.isoformat(),
+            "socket_threads_drained": self.socket_threads_drained,
+        }
 
     def stop(self) -> None:
         self._stop.set()
@@ -381,16 +418,13 @@ class ExternalQueueWorker:
             return
         finally:
             self._stop.set()
-            if maintenance is not None:
-                maintenance.close_client()
-            if control_thread is not None:
-                control_thread.join(timeout=20)
-                if control_thread.is_alive():
-                    self._record_event(
-                        "error", "codex_control_shutdown_unconfirmed", self.agent.agent_id
-                    )
-            if connect_thread is not None:
-                connect_thread.join(timeout=40)
+            try:
+                if maintenance is not None:
+                    maintenance.close_client()
+            finally:
+                for thread in (control_thread, connect_thread):
+                    if thread is not None and thread.ident is not None:
+                        thread.join()
 
     def _run_connect_forever(self) -> None:
         """Serve metadata requests while the productive worker waits on a turn."""

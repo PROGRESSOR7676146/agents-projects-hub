@@ -80,6 +80,17 @@ class CodexAppServerSupervisor:
         """Owner-only fence; neither closes clients nor stops their peer."""
         self._socket_activity.request_drain()
 
+    def wait_for_socket_threads(self) -> None:
+        """Retain the owner until all tracked factories and socket loops exit.
+
+        A prior stdio fallback still makes the public socket-only observation
+        ineligible, but cannot excuse abandoning subsequently created sockets.
+        The caller must first finish operations and request client closure.
+        """
+        self.retire_socket_admission()
+        while not self._socket_activity.drained:
+            time.sleep(0.05)
+
     def _require_client_admission(self) -> None:
         if self._socket_activity.draining:
             raise AppServerRetiringError("Codex client admission is retired")

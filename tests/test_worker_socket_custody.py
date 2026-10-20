@@ -449,10 +449,11 @@ class WorkerSocketRetirementTests(unittest.TestCase):
         client.close.assert_called_once()
         self.assertTrue(worker.socket_threads_drained)
 
-    def test_ordinary_close_without_retirement_does_not_create_a_proof(self):
+    def test_successful_close_confirms_owned_resources_without_native_proof(self):
         worker = self.worker()
         worker.close()
-        self.assertFalse(worker.socket_threads_drained)
+        self.assertTrue(worker.socket_threads_drained)
+        self.assertEqual(worker.shutdown_receipt()["scope"], "owned_worker_resources")
 
     def test_loop_retains_unconfirmed_retirement_without_repeated_close_or_cancel(self):
         worker = self.worker()

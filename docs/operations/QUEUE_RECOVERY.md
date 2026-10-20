@@ -158,6 +158,19 @@ observed after stop but before invocation is returned without consuming an
 attempt. A signal can race after the final safe boundary; work past that point
 uses the conservative rules below.
 
+External workers retain their resources until tracked control/connect operations
+and owned socket transport threads physically finish. Cleanup may wait without a
+deadline; the service manager's stop timeout can still kill that process. For a
+force-free maintenance window, configure the supervisor policy separately and
+verify physical process exit and an empty recursive cgroup. The worker CLI emits
+`worker_shutdown_complete` with incarnation and release metadata only after its
+normal cleanup succeeds. This receipt covers owned worker resources, not native
+turn terminality or system-wide quiescence. Its `socket_threads_drained` field is
+null for injected/shared supervisors, managed peers, non-Codex workers or any
+prior stdio fallback; such a receipt cannot prove a socket-only maintenance gate.
+Cleanup errors produce no success receipt. Never interpret a receipt, an inactive
+unit or a successful stop request alone as permission to terminate the host.
+
 ## Provider-job recovery
 
 ### Codex preparation notification overflow

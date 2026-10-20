@@ -993,6 +993,9 @@ class CodexQueueWorkerTests(unittest.TestCase):
             def close(self) -> None:
                 pass
 
+            def shutdown_receipt(self) -> dict[str, object]:
+                return {"event": "worker_shutdown_complete"}
+
         with (
             patch("hermes_codex_router.cli.load_external_worker_config", return_value=config),
             patch("hermes_codex_router.cli.ExternalQueueWorker", FakeWorker),
