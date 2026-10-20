@@ -63,6 +63,9 @@ live acceptance.
 - [Multi-provider agent collaboration](research/MULTI_AGENT_COLLABORATION.ru.md)
   — non-normative research on team chat, coordination protocols, isolated work,
   delegation, and acceptance; not an implemented or accepted product contract.
+- [Agent message and file visibility](research/AGENT_MESSAGE_FILE_VISIBILITY.ru.md)
+  — non-normative current Telegram options and proposed bounded context/file sharing;
+  owner design selection, implementation and live acceptance remain open.
 
 ## Truth rules
 
