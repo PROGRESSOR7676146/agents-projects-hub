@@ -79,6 +79,9 @@ class GracefulLifecycleTests(unittest.TestCase):
             def close(self) -> None:
                 self.closed = True
 
+            def shutdown_receipt(self) -> dict[str, object]:
+                return {"event": "worker_shutdown_complete"}
+
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         # The worker command reads its slot capacity and takes a private

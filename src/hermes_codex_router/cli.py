@@ -19,7 +19,7 @@ from .deployment_manifest import (
     create_deployment_manifest,
     verify_deployment_manifest,
 )
-from .diagnostic_log import configure_process_logging
+from .diagnostic_log import configure_process_logging, survived
 from .diagnostics import run_doctor
 from .external_service import ExternalAgentService
 from .external_worker import ExternalQueueWorker
@@ -568,16 +568,19 @@ def _worker_command(args: argparse.Namespace) -> int:
             worker = ExternalQueueWorker(config, args.agent)
         else:
             worker = ExternalQueueWorker(config, args.agent, worker_slot=args.slot)
-        try:
-            with (
-                stop_on_signals(worker),
-                worker_control_session(
+        with stop_on_signals(worker):
+            try:
+                with worker_control_session(
                     args.drain_control_socket, worker_id=worker_id, worker=worker
-                ),
-            ):
-                worker.run_forever(poll_seconds=args.poll_seconds)
-        finally:
-            worker.close()
+                ):
+                    worker.run_forever(poll_seconds=args.poll_seconds)
+            finally:
+                try:
+                    worker.close()
+                except Exception as error:
+                    survived("external_worker.shutdown", error)
+                    raise RuntimeError("worker cleanup is unconfirmed") from None
+        _print({**worker.shutdown_receipt(), "release": asdict(CURRENT_RELEASE)})
     return 0
 
 

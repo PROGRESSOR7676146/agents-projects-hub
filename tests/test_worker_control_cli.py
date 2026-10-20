@@ -154,6 +154,9 @@ class WorkerControlCliTests(unittest.TestCase):
             def close(self) -> None:
                 events.append("worker_close")
 
+            def shutdown_receipt(self) -> dict[str, object]:
+                return {"event": "worker_shutdown_complete"}
+
         with (
             patch(
                 "hermes_codex_router.cli.load_external_worker_config",
