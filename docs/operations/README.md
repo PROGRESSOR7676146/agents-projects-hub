@@ -71,6 +71,10 @@ Operational truth is split by purpose:
   [REQ-OPS-006](../product/PERSISTENCE_AND_RECOVERY.md). Hermes fallback uses
   `hermes send --to DESTINATION --quiet --file -` with the body on stdin;
   a positional `-` is literal message text in the supported CLI.
+  An authentication rejection (401) also leaves group access unknown; its safe
+  status/class remains in cached monitor health, and sustained failure degrades
+  the monitor. HTTP 400/403 without a recognized Telegram rejection body is a
+  failed probe, including responses from a proxy or network filter.
 - External queue delivery: run one `agents-projects-hub sender HUB_CONFIG`
   alongside the selected provider workers, then set `outbox_runtime` to
   `external`. The default `controller` value preserves the previous deployment

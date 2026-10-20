@@ -116,7 +116,9 @@ class MonitorAccessTests(unittest.TestCase):
     def test_only_confirmed_group_rejections_mean_inaccessible(self) -> None:
         cases = [
             ("api_rejection", 400, False),
-            ("api_http", 403, False),
+            ("api_rejection", 403, False),
+            ("api_http", 403, None),
+            ("api_http", 400, None),
             ("api_http", 502, None),
             ("api_rejection", 429, None),
             ("api_rejection", 401, None),
@@ -210,11 +212,36 @@ class MonitorAccessTests(unittest.TestCase):
 
     def test_unknown_does_not_fabricate_recovery_when_notify_is_disabled(self) -> None:
         self.cycle(
-            TelegramError("example denial", failure_class="api_http", status_code=403), notify=False
+            TelegramError("example denial", failure_class="api_rejection", status_code=403),
+            notify=False,
         )
         original = self.journal()["episodes"][0]
         self.cycle(TelegramError("example timeout", failure_class="network_timeout"), notify=False)
         self.assertEqual(self.journal()["episodes"][0], original)
+
+    def test_non_telegram_http_denial_does_not_clear_transport_outage(self) -> None:
+        for _ in range(3):
+            self.cycle(TelegramError("example timeout", failure_class="network_timeout"))
+        for status in (400, 403):
+            result = self.cycle(
+                TelegramError(
+                    "example proxy response",
+                    operation="api_call",
+                    failure_class="api_http",
+                    status_code=status,
+                )
+            )
+            self.assertEqual(
+                result["telegram_access"], {"available": 0, "unavailable": 0, "unknown": 1}
+            )
+        health = self.read_health()
+        self.assertEqual(health.transport_consecutive_failures, 5)
+        self.assertIsNone(health.transport_success_at)
+        self.bot.send_html.assert_called_once()
+        with closing(HubState.open_existing(self.config.state_path)) as state:
+            events = state.status_snapshot()["runtime_events"]
+        assert isinstance(events, list)
+        self.assertFalse(any(row["code"] == "telegram_recovered" for row in events))
 
     def test_many_failed_probes_in_one_cycle_count_as_one_failure(self) -> None:
         self.config = replace(

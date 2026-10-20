@@ -106,10 +106,10 @@ def _telegram_access(
             try:
                 result = telegram.call("getChat", chat_id=project.telegram_chat_id)
             except TelegramError as error:
-                rejected = error.failure_class in {
-                    "api_http",
-                    "api_rejection",
-                } and error.status_code in {400, 403}
+                rejected = error.failure_class == "api_rejection" and error.status_code in {
+                    400,
+                    403,
+                }
                 access[(agent.agent_id, project.project_id)] = False if rejected else None
                 if not rejected and errors is not None:
                     errors.append(error)

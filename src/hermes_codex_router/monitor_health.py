@@ -60,7 +60,7 @@ class MonitorHealth:
                         "monitor",
                         "info",
                         "telegram_recovered",
-                        "Passive Telegram group checks succeeded.",
+                        "Passive Telegram checks returned determinate responses.",
                     )
 
     def publish(self, *, success_at: datetime | None = None, error_code: str | None = None) -> None:
