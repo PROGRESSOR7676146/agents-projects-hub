@@ -5,6 +5,10 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Explain unconfirmed saved-result delivery in its source topic through an
+  independent Hub notice, with explicit owner recovery choices and no resend.
+- Update the locked aiohttp runtime to 3.14.4 and its yarl dependency to 1.25.1.
+
 - Preserve Operations alert bodies through Hermes stdin delivery, and distinguish
   failed Telegram access checks from confirmed group rejection. Retain unresolved
   episodes across unknown observations and report sustained probe failures through

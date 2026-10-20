@@ -264,6 +264,76 @@ class QueueVisibilityTests(unittest.TestCase):
         self.assertIn("topic_fifo", queued["event_key"])
         self.assertIn("delivery", queued["telegram_html"])
 
+    def saved_result(self, delivery_status: str):
+        earlier, _ = self.enqueue(10, enabled=False)
+        executing = self.start(earlier)
+        assert executing.lease_token is not None
+        self.state.commit_provider_result(
+            earlier.job_id,
+            executing.lease_token,
+            visible_response="Fictional saved result",
+            sender_agent_id="codex",
+            telegram_html="Fictional saved result",
+        )
+        outbox = self.state.get_telegram_outbox_for_job(earlier.job_id)
+        if delivery_status != "pending":
+            with self.state._connection:
+                self.state._connection.execute(
+                    "UPDATE telegram_outbox SET status=? WHERE outbox_id=?",
+                    (delivery_status, outbox.outbox_id),
+                )
+        return earlier, outbox
+
+    def test_unknown_result_delivery_explains_owner_choice_without_changing_work(self) -> None:
+        earlier, _ = self.saved_result("unknown")
+        job_before = self.state.get_provider_job(earlier.job_id)
+        outbox_before = self.state.get_telegram_outbox_for_job(earlier.job_id)
+        tail, _ = self.enqueue(11)
+        notice = next(row for row in self.notices(tail.job_id) if row["kind"] == "queued")
+        self.assertIn("delivery_unknown", notice["event_key"])
+        self.assertIn("saved", notice["telegram_html"])
+        self.assertIn("unconfirmed", notice["telegram_html"])
+        self.assertIn("continue without confirmed delivery", notice["telegram_html"])
+        self.assertIn("investigate", notice["telegram_html"])
+        self.assertIn("not resend", notice["telegram_html"])
+        self.assertNotIn("Wait or use /stop", notice["telegram_html"])
+        self.assertEqual(self.state.get_provider_job(earlier.job_id), job_before)
+        self.assertEqual(self.state.get_telegram_outbox_for_job(earlier.job_id), outbox_before)
+        self.assertIsNone(self.state.lease_provider_job("codex", "fictional-worker"))
+
+    def test_pending_delivery_keeps_waiting_and_earliest_blocker_is_selected(self) -> None:
+        earlier, outbox = self.saved_result("pending")
+        pending, _ = self.enqueue(11)
+        self.assertEqual(self.capacity_reason(pending.job_id), "topic_fifo")
+        with self.state._connection:
+            self.state._connection.execute(
+                "UPDATE telegram_outbox SET status='unknown' WHERE outbox_id=?",
+                (outbox.outbox_id,),
+            )
+        # The pending successor remains ahead of this one, but the first actual
+        # FIFO blocker is the earlier saved result, not an arbitrary row.
+        blocked, _ = self.enqueue(12)
+        self.assertEqual(self.capacity_reason(blocked.job_id), "delivery_unknown")
+        self.assertEqual(self.state.get_provider_job(earlier.job_id).status, "result_ready")
+
+    def test_reconciled_unknown_delivery_does_not_report_a_delivery_blocker(self) -> None:
+        self.state.reconcile_legacy_execution_scopes({"example-project": Path(self.tempdir.name)})
+        earlier, outbox = self.saved_result("unknown")
+        preview = self.state.preview_delivery_control("final_outbox", outbox.outbox_id)
+        self.state.reconcile_delivery_control(
+            "final_outbox",
+            outbox.outbox_id,
+            expected_snapshot=preview.snapshot,
+            accept_unconfirmed_delivery=True,
+        )
+        tail, _ = self.enqueue(11)
+        self.assertEqual(self.capacity_reason(tail.job_id), "worker_unknown")
+        self.assertEqual(self.state.get_provider_job(earlier.job_id).status, "result_ready")
+        self.assertEqual(self.state.get_telegram_outbox_for_job(earlier.job_id).status, "unknown")
+        lease = self.state.lease_provider_job("codex", "fictional-worker")
+        assert lease is not None
+        self.assertEqual(lease.job_id, tail.job_id)
+
     def test_active_root_snapshot_uses_numeric_owner_topic_link(self) -> None:
         earlier, _ = self.enqueue(10, enabled=False)
         self.start(earlier)

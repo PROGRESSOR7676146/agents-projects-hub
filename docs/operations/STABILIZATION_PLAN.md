@@ -7,7 +7,8 @@ Maintenance: [0.7.1](STABILIZATION_RELEASE_0_7_1.md).
 
 Status: active; stages 0–2 and 3b done, stage 3 in progress
 Date: 2026-09-27; scope updated 2026-10-10
-Owner: repository owner (decisions and merges); integration owner implements
+Owner: repository owner (decisions); primary agent implements/merges under
+[AGENTS.md](../../AGENTS.md#review-merge-and-scope).
 Pre-0.8 integrated checkpoint: `3750ccfb0f8eb98333f9219f3a697d6328890d04`.
 The schema-38 protected file tools are implemented offline; follow
 [ADR 0052](../decisions/0052-protected-claude-file-permissions.md) and the
@@ -51,7 +52,7 @@ Owner: Hub maintainer, sole writer. Next trigger: the checked
 
 | Original goal item | Remaining scope |
 | --- | --- |
-| 1 — integration | Owner merge, dependency selection, separately authorized exact-revision rollout and post-restart acceptance |
+| 1 — integration | Reviewed source integration, dependency selection, separately authorized exact-revision rollout and post-restart acceptance |
 | 2 — authority | Managed permissions and project/service-data custody across productive launches, helpers, MCP, local and recovery paths |
 | 3 — visible control | Remaining provider progress, approvals, retry/stop and live control-loss acceptance |
 | 4 — Claude project editor | Protected Read/Glob/Grep/Write/Edit, configured model/effort, exact Hub-owned sessions, human write approvals, stop/results/recovery and subscription without paid fallback; full parity deferred |
@@ -61,17 +62,15 @@ Owner: Hub maintainer, sole writer. Next trigger: the checked
 | Added footer visibility | [Existing /goal and /fast follow-up](#planned-final-response-mode-indicators) |
 
 Roles are withdrawn; the goal stays open. Preserve source/tests and independent
-review. No merge, deletion or live action follows. Scoring, judges and parallel
-writers stay excluded.
+review. Scoring, judges and parallel writers stay excluded.
 
 ## Current source integration checkpoint
 
-Clean `98c78fcfc40a3fba79a3cdecc2db8b609dabb78a` passed canonical validation
-(2,035 tests/185 modules, zero typing errors, privacy/history/static) and seven
-hosted checks. It integrates notification conservation, connection retirement,
-RPC deadlines, schema41 retry, managed profiles, preacceptance observations,
-Claude selection/continuation and native-transfer refusal. This supersedes older evidence for these slices; integration review, owner
-merge and live acceptance remain open.
+Merged source `b2494bfb134d57571d5d54f1e16018dcc2a3d79e` includes Operations,
+drain, the aiohttp patch and source-topic delivery notices. PRs 212/214 own
+review and exact-head gates; merge CI is separate. Owner: Hub maintainer, sole
+writer. Next: authorized rollout, compatible rollback and live acceptance.
+Older evidence is historical; closure is open.
 
 The stacked provider-neutral namespace extraction at clean
 `fcc755fe4d70ddbff6b544c2a1a7b09d4b27e0ac` passed canonical validation
@@ -140,7 +139,7 @@ ADRs 0056/0057 own the descriptor, alias and caller-authorization boundaries;
 scripted lookup/FD fixtures are not real casefold/XFS or installed custody proof.
 Advisor material/workflow and inference transport follow-ups are withdrawn by
 ADR 0065. Retain shared Claude/security fixes on independent merits. Private
-networking still blocks host loopback; owner merge/deployment remain separate.
+networking still blocks host loopback; integration and deployment remain separate.
 Inspect all lane state before any post-merge cleanup; cancellation is not
 productive acceptance.
 
@@ -196,7 +195,8 @@ Fixtures track owned allocations; the earlier FD-count discrepancy is unattribut
 The [testing guide](../testing/README.md#offline-review-pipe-primitives) owns
 commands and limits; offline fixtures establish no live acceptance.
 ADR 0065 withdraws advisor integration. Retain tests/cleanup, do not repeat gates;
-owner merge/deployment and post-merge worktree inspection remain required.
+reviewed source integration, separately authorized deployment and post-merge
+worktree inspection remain required.
 
 ## Claude process observations
 
@@ -378,8 +378,8 @@ accumulated without live acceptance, contrary to product principle 10.
   The owner later withdrew the provider-expansion gate (ADR 0045): Claude work
   continues as editor-first under ADR 0067; the backlog below is tracked debt.
 - Large or lifecycle/security pull requests receive an independent review by
-  an agent that did not write them, recorded in the pull request. Only the
-  owner merges into `main`.
+  an agent that did not write them, recorded in the pull request. Merge authority
+  now follows [AGENTS.md](../../AGENTS.md#review-merge-and-scope).
 - Hotspot growth is enforced by an automated ratchet, not a report.
 - Diagnostics record exception class and a static site, never exception text.
 

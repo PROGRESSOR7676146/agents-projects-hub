@@ -139,10 +139,9 @@ def sender_actor(harness: FaultMatrixHarness, mode: str, arguments: list[str]) -
     marker = Path(arguments[0])
     clock_offset_seconds = int(arguments[1]) if len(arguments) > 1 else 0
     now = datetime.now(timezone.utc) + timedelta(seconds=clock_offset_seconds)
-    bot: object = (
-        BlockingBot(marker) if mode == "sender-block-after-acceptance" else MarkerBot(marker)
-    )
-    sender = harness.sender(opencode=bot, antigravity=bot, codex=bot)
+    bot = BlockingBot(marker) if mode == "sender-block-after-acceptance" else MarkerBot(marker)
+    hub = RecordingBot()
+    sender = harness.sender(opencode=bot, antigravity=bot, codex=bot, hub=hub)
     try:
         if mode == "sender-block-before-send":
             lease = sender.state.lease_telegram_outbox("opencode", sender.sender_id, now=now)
@@ -152,8 +151,10 @@ def sender_actor(harness: FaultMatrixHarness, mode: str, arguments: list[str]) -
             threading.Event().wait()
         delivered = sender.run_cycle(now=now)
         if mode == "sender-idle":
-            if delivered:
+            if bot.sent:
                 raise RuntimeError("fictional sender unexpectedly retried unknown delivery")
+            if not delivered or len(hub.sent) != 1 or "unconfirmed" not in hub.sent[0][2]:
+                raise RuntimeError("fictional sender did not publish the independent Hub notice")
             marker.write_text("idle", encoding="utf-8")
         elif not delivered:
             raise RuntimeError("fictional sender found no prepared outbox")
