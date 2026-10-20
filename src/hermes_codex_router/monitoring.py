@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import html
-import os
 import subprocess
 import time
 import uuid
@@ -26,8 +25,9 @@ from .hermes_health import (
 )
 from .hub_config import HubConfig, OperationalAlertSettings, read_telegram_token
 from .incident_journal import IncidentJournal, IncidentJournalBusy, IncidentJournalError
+from .monitor_health import MonitorHealth
 from .provider_catalog_cache import ProviderCatalogCache
-from .runtime_health import MONITOR_INSTANCE_ID, project_runtime_health
+from .runtime_health import project_runtime_health
 from .state import HubState
 from .telegram import TelegramBotApi, TelegramError
 
@@ -62,10 +62,12 @@ def _claim_operational_alert(
 
 
 def _release_resolved_operational_alerts(
-    state: HubState, alerts: tuple[OperationalAlert, ...]
+    state: HubState, alerts: tuple[OperationalAlert, ...], *, unobserved_keys: tuple[str, ...] = ()
 ) -> None:
     state.reconcile_alert_transitions(
-        active_keys=tuple(f"{alert.key}:operations" for alert in alerts),
+        active_keys=tuple(
+            f"{key}:operations" for key in (*[alert.key for alert in alerts], *unobserved_keys)
+        ),
         suffix=":operations",
     )
 
@@ -77,7 +79,7 @@ def _send_hermes(
     run: Callable[..., Any] = subprocess.run,
 ) -> None:
     completed = run(
-        ("hermes", "send", "--to", target, "--quiet", "-"),
+        ("hermes", "send", "--to", target, "--quiet", "--file", "-"),
         input=message,
         text=True,
         stdout=subprocess.DEVNULL,
@@ -89,8 +91,11 @@ def _send_hermes(
         raise RuntimeError("Hermes recovery-channel delivery failed")
 
 
-def _telegram_access(config: HubConfig) -> dict[tuple[str, str], bool]:
-    access: dict[tuple[str, str], bool] = {}
+def _telegram_access(
+    config: HubConfig, *, errors: list[TelegramError] | None = None
+) -> dict[tuple[str, str], bool | None]:
+    """True/False require a response; transport and invalid responses are unknown."""
+    access: dict[tuple[str, str], bool | None] = {}
     for agent in config.agents:
         if agent.managed_externally or agent.token_file is None:
             continue
@@ -100,10 +105,29 @@ def _telegram_access(config: HubConfig) -> dict[tuple[str, str], bool]:
                 continue
             try:
                 result = telegram.call("getChat", chat_id=project.telegram_chat_id)
-            except TelegramError:
-                access[(agent.agent_id, project.project_id)] = False
+            except TelegramError as error:
+                rejected = error.failure_class in {
+                    "api_http",
+                    "api_rejection",
+                } and error.status_code in {400, 403}
+                access[(agent.agent_id, project.project_id)] = False if rejected else None
+                if not rejected and errors is not None:
+                    errors.append(error)
             else:
-                access[(agent.agent_id, project.project_id)] = isinstance(result, dict)
+                valid = (
+                    isinstance(result, dict)
+                    and type(result.get("id")) is int
+                    and result["id"] == project.telegram_chat_id
+                )
+                access[(agent.agent_id, project.project_id)] = True if valid else None
+                if not valid and errors is not None:
+                    errors.append(
+                        TelegramError(
+                            "Invalid getChat result",
+                            operation="api_call",
+                            failure_class="invalid_response",
+                        )
+                    )
     return access
 
 
@@ -157,12 +181,17 @@ def run_monitor_once(
 
 
 def _project_incidents(
-    journal: IncidentJournal | None, alerts: tuple[OperationalAlert, ...]
+    journal: IncidentJournal | None,
+    alerts: tuple[OperationalAlert, ...],
+    *,
+    unobserved_keys: tuple[str, ...] = (),
 ) -> dict[str, object]:
     try:
         if journal is None:
             raise IncidentJournalError()
-        snapshot = journal.project(alerts, now=datetime.now(timezone.utc))
+        snapshot = journal.project(
+            alerts, now=datetime.now(timezone.utc), unobserved_keys=unobserved_keys
+        )
     except IncidentJournalError as error:
         survived("monitoring.incident_projection", error)
         return {"status": "unavailable", "error_code": "incident_journal_unavailable"}
@@ -187,14 +216,8 @@ def _run_monitor_once(
     monitor_started = datetime.now(timezone.utc)
     monitor_marker = uuid.uuid4().hex
     monitor_completed = False
-    state.upsert_runtime_health(
-        component="monitor",
-        instance_id=MONITOR_INSTANCE_ID,
-        pid=os.getpid(),
-        process_start_marker=monitor_marker,
-        started_at=monitor_started,
-        heartbeat_at=monitor_started,
-    )
+    health = MonitorHealth(state, started=monitor_started, marker=monitor_marker)
+    health.publish()
     try:
         snapshot = state.status_snapshot()
         catalog_refresh = refresh_provider_catalogs(config)
@@ -257,11 +280,20 @@ def _run_monitor_once(
             recovery_status["hermes"] = bool(
                 recovery_status.get("hermes", False) and policy.ok and heartbeat.ok and api.ok
             )
+        probe_errors: list[TelegramError] = []
+        access = _telegram_access(config, errors=probe_errors)
+        unobserved_keys = tuple(
+            f"telegram:{agent}:{project}"
+            for (agent, project), value in access.items()
+            if value is None
+        )
+        health.observe(probe_errors, checked=bool(access))
+        health.publish()
         alerts = evaluate_operational_alerts(
             state_snapshot=snapshot,
             doctor_ok=bool(doctor["ok"]),
             recovery_status=recovery_status or None,
-            telegram_access=_telegram_access(config),
+            telegram_access=access,
             hermes_telegram=hermes_telegram,
             runtime_health=project_runtime_health(state, config),
             codex_config_proxy_ok=next(
@@ -286,10 +318,10 @@ def _run_monitor_once(
             )
             for agent_id in stale_catalogs
         )
-        incident_status = _project_incidents(journal, alerts)
+        incident_status = _project_incidents(journal, alerts, unobserved_keys=unobserved_keys)
         delivered: list[str] = []
         if notify:
-            _release_resolved_operational_alerts(state, alerts)
+            _release_resolved_operational_alerts(state, alerts, unobserved_keys=unobserved_keys)
         if notify and alerts:
             destination = _destination(config.operational_alerts)
             operations_due = tuple(
@@ -330,15 +362,13 @@ def _run_monitor_once(
             "catalog_refresh": asdict(catalog_refresh),
             "reliability": snapshot["reliability"],
             "incident_journal": incident_status,
+            "telegram_access": {
+                name: sum(value is status for value in access.values())
+                for name, status in (("available", True), ("unavailable", False), ("unknown", None))
+            },
         }
         completed_at = datetime.now(timezone.utc)
-        state.upsert_runtime_health(
-            component="monitor",
-            instance_id=MONITOR_INSTANCE_ID,
-            pid=os.getpid(),
-            process_start_marker=monitor_marker,
-            started_at=monitor_started,
-            heartbeat_at=completed_at,
+        health.publish(
             success_at=completed_at if incident_status["status"] == "updated" else None,
             error_code=None
             if incident_status["status"] == "updated"
@@ -349,14 +379,6 @@ def _run_monitor_once(
     finally:
         if not monitor_completed:
             try:
-                state.upsert_runtime_health(
-                    component="monitor",
-                    instance_id=MONITOR_INSTANCE_ID,
-                    pid=os.getpid(),
-                    process_start_marker=monitor_marker,
-                    started_at=monitor_started,
-                    heartbeat_at=datetime.now(timezone.utc),
-                    error_code="monitor_cycle_error",
-                )
+                health.publish(error_code="monitor_cycle_error")
             except Exception as survived_error:
                 survived("monitoring.error_health_publish", survived_error)

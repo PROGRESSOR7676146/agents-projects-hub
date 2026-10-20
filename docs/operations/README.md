@@ -62,6 +62,15 @@ Operational truth is split by purpose:
   same bounded events in their isolated state database. Raw exception text,
   token-bearing URLs, payloads, local paths, and chat identifiers are
   intentionally unavailable; do not reconstruct them in shared logs.
+- For group-access warnings, inspect the monitor result's aggregate
+  `telegram_access` counts and cached monitor transport fields. `unknown` means
+  the check could not establish access; it preserves any prior open access
+  episode without a fresh observation or a recovery claim. The monitor persists
+  failed-cycle counts across its one-shot runs using the existing health row.
+  Confirmed group rejection and a failed probe are separate diagnostics under
+  [REQ-OPS-006](../product/PERSISTENCE_AND_RECOVERY.md). Hermes fallback uses
+  `hermes send --to DESTINATION --quiet --file -` with the body on stdin;
+  a positional `-` is literal message text in the supported CLI.
 - External queue delivery: run one `agents-projects-hub sender HUB_CONFIG`
   alongside the selected provider workers, then set `outbox_runtime` to
   `external`. The default `controller` value preserves the previous deployment

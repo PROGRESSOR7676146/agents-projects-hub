@@ -5,6 +5,11 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Preserve Operations alert bodies through Hermes stdin delivery, and distinguish
+  failed Telegram access checks from confirmed group rejection. Retain unresolved
+  episodes across unknown observations and report sustained probe failures through
+  cached monitor health.
+
 ## [0.8.1] - 2026-10-13
 
 - Update the locked multidict runtime dependency from 6.7.1 to 6.9.1 to fix
