@@ -224,7 +224,7 @@ def evaluate_operational_alerts(
     state_snapshot: Mapping[str, object],
     doctor_ok: bool,
     recovery_status: Mapping[str, bool] | None = None,
-    telegram_access: Mapping[tuple[str, str], bool] | None = None,
+    telegram_access: Mapping[tuple[str, str], bool | None] | None = None,
     hermes_telegram: Mapping[str, object] | None = None,
     runtime_health: Mapping[str, object] | None = None,
     codex_config_proxy_ok: bool | None = None,
@@ -330,7 +330,7 @@ def evaluate_operational_alerts(
             )
     if telegram_access is not None:
         for (agent_id, project_id), accessible in telegram_access.items():
-            if accessible:
+            if accessible is not False:
                 continue
             alerts.append(
                 OperationalAlert(
