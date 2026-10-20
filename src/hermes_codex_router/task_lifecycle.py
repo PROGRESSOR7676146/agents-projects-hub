@@ -11,6 +11,7 @@ from typing import Callable
 
 from .claude_activity_binding import claude_activity_notice_is_current
 from .claude_permission_binding import permission_notice_is_current
+from .delivery_wait import delivery_wait_notice_is_current
 from .preacceptance_binding import preacceptance_notice_is_current
 from .task_activity_binding import activity_notice_is_current
 
@@ -271,6 +272,14 @@ class TaskLifecycleState:
             }.get(notice.kind)
             obsolete = False
             if notice.attempt_count == 0 and notice.stop_request_id is None:
+                if notice.kind == "delivery_wait":
+                    obsolete = not delivery_wait_notice_is_current(
+                        self.db,
+                        event_key=notice.event_key,
+                        job_id=notice.job_id,
+                        chat_id=notice.chat_id,
+                        thread_id=notice.thread_id,
+                    )
                 if notice.kind == "claude_no_progress":
                     obsolete = not claude_activity_notice_is_current(
                         self.db,

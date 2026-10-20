@@ -66,12 +66,12 @@ writers stay excluded.
 
 ## Current source integration checkpoint
 
-Clean `98c78fcfc40a3fba79a3cdecc2db8b609dabb78a` passed canonical validation
-(2,035 tests/185 modules, zero typing errors, privacy/history/static) and seven
-hosted checks. It integrates notification conservation, connection retirement,
-RPC deadlines, schema41 retry, managed profiles, preacceptance observations,
-Claude selection/continuation and native-transfer refusal. This supersedes older evidence for these slices; integration review, owner
-merge and live acceptance remain open.
+Merged source `5252f72185128f02f9641d44fa72f42b6adfa586` integrates Operations,
+provisioner and worker-drain fixes; PR 212 records review and source gates.
+Next candidate: the aiohttp security lock and independent source-topic notices
+for unknown saved-result delivery. Owner: Hub maintainer, sole writer; base above.
+Review/publication, authorized rollout with compatible rollback, and live
+acceptance remain open. Earlier evidence below is historical; closure is open.
 
 The stacked provider-neutral namespace extraction at clean
 `fcc755fe4d70ddbff6b544c2a1a7b09d4b27e0ac` passed canonical validation

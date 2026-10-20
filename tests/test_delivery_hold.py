@@ -534,12 +534,14 @@ class DeliveryHoldTests(unittest.TestCase):
         now = datetime.now(timezone.utc) + timedelta(seconds=1000)
         with self.state._immediate_transaction():
             self.assertEqual(
-                self.state.queue_visibility.wait_snapshot(tail.job_id, now=now).reason, "topic_fifo"
+                self.state.queue_visibility.wait_snapshot(tail.job_id, now=now).reason,
+                "delivery_unknown",
             )
         self.release()
         with self.state._immediate_transaction():
-            self.assertNotEqual(
-                self.state.queue_visibility.wait_snapshot(tail.job_id, now=now).reason, "topic_fifo"
+            self.assertEqual(
+                self.state.queue_visibility.wait_snapshot(tail.job_id, now=now).reason,
+                "worker_unknown",
             )
         activity = self.state.provider_chat_activities(("opencode",))
         self.assertEqual([a.message_id for a in activity], [82])

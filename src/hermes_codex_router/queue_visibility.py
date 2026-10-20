@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from .delivery_hold_predicates import job_blocks_topic_fifo
+from .delivery_wait import DELIVERY_WAIT_EXPLANATION
 from .provider_queue_capacity import QueueCapacityConfig, read_queue_capacity
 from .task_lifecycle import TaskLifecycleState
 
@@ -171,11 +172,19 @@ class QueueVisibilityState:
         )
         if not continuation:
             earlier = self.db.execute(
-                "SELECT 1 FROM provider_jobs earlier WHERE earlier.topic_id=? AND earlier.topic_sequence<? "
-                f"AND {job_blocks_topic_fifo('earlier')} LIMIT 1",
+                "SELECT earlier.job_id,earlier.status FROM provider_jobs earlier "
+                "WHERE earlier.topic_id=? AND earlier.topic_sequence<? "
+                f"AND {job_blocks_topic_fifo('earlier')} ORDER BY earlier.topic_sequence LIMIT 1",
                 (job["topic_id"], job["topic_sequence"]),
             ).fetchone()
             if earlier is not None:
+                if earlier["status"] == "result_ready":
+                    delivery = self.db.execute(
+                        "SELECT status FROM telegram_outbox WHERE job_id=?",
+                        (earlier["job_id"],),
+                    ).fetchone()
+                    if delivery is not None and delivery["status"] == "unknown":
+                        return QueueWaitSnapshot("delivery_unknown", DELIVERY_WAIT_EXPLANATION)
                 return QueueWaitSnapshot(
                     "topic_fifo",
                     "An earlier job in this topic must finish, including result delivery. "

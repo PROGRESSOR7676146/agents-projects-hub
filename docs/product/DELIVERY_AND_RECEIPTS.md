@@ -168,3 +168,20 @@ This normative module is part of the
   requires separate exact-revision owner authorization and compatible rollback.
   The staged decision and activation boundary are recorded in
   [ADR 0063](../decisions/0063-delivery-control-reconciliation.md).
+  With a configured Hub bot and external queue/outbox ownership, an unknown
+  saved-result delivery that effectively blocks topic FIFO MUST prepare one
+  independent durable Hub notice in that numeric source topic, even without a
+  queued successor. Discovery MUST be bounded, deduplicate by the exact outbox
+  across restarts, validate sender/job/destination/result binding, and skip
+  malformed legacy destinations without starving valid topics. Before its first
+  send, the notice MUST recheck that binding and effective FIFO blocker; receipt
+  or owner consent MUST suppress a stale never-attempted notice. Attempted and
+  unknown notice evidence retains REQ-QUEUE-013 delivery rules. Preparation faults
+  MUST NOT block unrelated result delivery. Queue snapshots MUST distinguish this
+  delivery blocker from ordinary FIFO and explain investigation or the existing
+  exact local-owner consent, including queue-only restrictions. Copy MUST identify
+  an observation and direct the owner to current status, remaining truthful if a
+  compatible older runtime later sends a retained notice. This notice MUST NOT
+  mutate saved work or grant resend, replay, delivery confirmation or control
+  authority. Compatibility paths without this independent notice retain their
+  admission-time explanation and existing delivery safety rules.

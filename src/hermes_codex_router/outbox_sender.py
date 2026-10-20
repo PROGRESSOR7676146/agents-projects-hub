@@ -147,6 +147,7 @@ class TelegramOutboxSender:
             notices_enabled=config.hub_bot is not None,
         )
         self._delivery_class_cursor = 0
+        self._next_delivery_wait_refresh = 0.0
         self._progress_cursor = 0
         self._stop = threading.Event()
         self._started_at = datetime.now(timezone.utc)
@@ -346,6 +347,16 @@ class TelegramOutboxSender:
         self.progress.supersede_terminal(self.provider_agent_ids, now=now)
         self.state.materialize_held_provider_jobs()
         self.state.materialize_released_uncertainty_notices()
+        if self.config.hub_bot is not None and time.monotonic() >= self._next_delivery_wait_refresh:
+            self._next_delivery_wait_refresh = time.monotonic() + 5.0
+            try:
+                self.state.delivery.prepare_delivery_wait_notices(
+                    self.state.task_notices,
+                    sender_agent_ids=self.agent_ids,
+                    now=now if now is not None else datetime.now(timezone.utc),
+                )
+            except Exception as error:
+                survived("outbox_sender.delivery_wait_notices", error)
         self.task_activity.evaluate(
             now=now if now is not None else datetime.now(timezone.utc),
             ordinary_seconds=self.config.task_no_progress_seconds,
