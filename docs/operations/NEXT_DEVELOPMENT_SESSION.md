@@ -1,5 +1,22 @@
 # Next session: Claude project editor and visible task states
 
+
+## Current execution: trusted installation
+
+Follow [P1–P7 and fixed checkpoint reporting](STABILIZATION_PLAN.md#trusted-installation-execution)
+under [ADR 0072](../decisions/0072-trusted-personal-installation.md).
+This section supersedes older next triggers. Historical "no live authorization"
+statements describe their own increments; they neither grant nor revoke current
+scope. Check actual valid owner grants before effects.
+P1 is the precise normative amendment; P2 is a finite existing-check/gap pass,
+not another global custody inventory. Preserve source evidence and useful controls.
+The first editor closes on one ordinary root; three roots are separate core work.
+Hermes retains native independence, project participation and reciprocal repair.
+Live candidate/schema/rollback/consumer identities belong in private handoff;
+verify them rather than inferring installation from these historical source notes.
+
+The following chronology is retained evidence, not a queue of instructions.
+
 Source-release checkpoint: [0.8.0](RELEASE_0_8_0.md), following published 0.7.1.
 It supersedes historical pending source-integration checkpoints for the included
 stack; activation, live acceptance and the independent updater remain open.
@@ -46,12 +63,11 @@ schema-38 receipt journal and worker-owned socket/namespace wiring; see
 The authority-isolation source candidate at
 `6a848c7a326b35e4c3ea552339e8c5c3d7beba53` passed canonical validation
 (1,613 tests in 149 modules), independent review and hosted checks, including
-both required real namespace scenarios; it remains unmerged and undeployed.
-Next trigger: assess the existing narrow Claude boundary and actual agent
-launch/service exposure, then choose the smallest enforceable custody candidate in
-[ADR 0053](../decisions/0053-claude-custody-reference-deployment.md) and its
-[runbook](CLAUDE_CUSTODY.md). A dedicated VM is a reserve option requiring a
-demonstrated need; a separate UID is not yet accepted or proven. Preserve the
+both required real namespace scenarios. It is included in the 0.8 source stack;
+that historical evidence does not establish current deployment.
+Current trigger: [ADR 0072](../decisions/0072-trusted-personal-installation.md) and
+the [finite installation checklist](CLAUDE_CUSTODY.md). The global UID/VM study is
+stopped; scoped installed/native/human checks remain. Preserve the
 adversarial corpus and mandatory CI checks, and reuse completed mount, peer,
 runtime and receipt controls. Then separately authorize and verify the
 native/Telegram human approval boundary described in the

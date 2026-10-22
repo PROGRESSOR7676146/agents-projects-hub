@@ -17,6 +17,26 @@ Project Hub, Hermes Gateway и tlive не должны образовывать 
 - отказ tlive не разрешает действия автоматически: approval остаётся локальным
   и fail-closed.
 
+Независимость каналов не отменяет совместимость optional Hub plugin/hook:
+Gateway импортирует Hub-код и потребляет SQLite. Source/environment pin и schema
+нужно согласовать при rollout/rollback по
+[recovery capsules](operations/RECOVERY_CAPSULES.md#schema-consumers-and-optional-model-proxies).
+Hermes сохраняет native providers/tools/channels и участие в проектах.
+По [ADR 0072](decisions/0072-trusted-personal-installation.md) взаимный ремонт
+доверенными ассистентами сохраняется, но не даёт права одобрять друг друга.
+
+Шаблон monitor уже использует `--notify --repair`: разрешённый установкой
+детерминированный repair может синхронизировать policy и рестартовать Gateway
+с cooldown, без модели. Это operational coupling, а не обязательная service
+dependency. В recovery drill записывать реальное состояние timer и его
+вмешательство; изменение repair policy требует соответствующего разрешения.
+Monitor repair не переключает версии, links или source/environment pins и не
+выполняет rollback. Взаимный repair также не является разрешением на такое
+переключение: согласование pin/версий выполняется отдельно разрешённой процедурой
+владельца соответствующего release. Плановый updater сохраняет REQ-OPS-015;
+Hub releases — REQ-OPS-010/011. Рестарт Gateway применяет текущее environment,
+поэтому изменения/потерю pin нужно учитывать и в окне rollback.
+
 ## Что хранится где
 
 - В Git: systemd-шаблоны, интеграционный Hermes plugin/hook, проверки, alert

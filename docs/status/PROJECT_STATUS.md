@@ -17,10 +17,11 @@ separate in the [backlog](../operations/STABILIZATION_PLAN.md#live-acceptance-ba
 | Capability | Repository state | Live acceptance | Contract |
 | --- | --- | --- | --- |
 | Multiple Codex worker slots | Implemented | Pending (three projects) | [REQ-QUEUE-002](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md) |
-| Claude Code CPA worker | Text-only default; protected files (schema 38); native editor source fixture | Pending: human Telegram approvals, installed custody and subscription; parity deferred | [REQ-AUTH-009/SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0067](../decisions/0067-claude-editor-first.md) |
-| Managed Codex permission-profile continuity | External queue slice and immutable schema-39 snapshots; native offline adapter coverage | Pending; custody, helpers and local boundaries remain open | [REQ-SEC-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0055](../decisions/0055-managed-codex-profile-continuity.md) |
+| Claude Code CPA worker | Text-only default; protected files (schema 38); native editor source fixture | Pending: human Telegram approvals, scoped installation and subscription; global same-UID/admin isolation not claimed; parity deferred | [REQ-AUTH-009/SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0067](../decisions/0067-claude-editor-first.md) |
+| Managed Codex permission-profile continuity | External queue slice and immutable schema-39 snapshots; native offline adapter coverage | Pending scoped live checks; global helper/admin isolation not claimed; unsupported local boundaries remain refused | [REQ-SEC-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0055](../decisions/0055-managed-codex-profile-continuity.md) |
 | Claude/Codex lead and advisor | Retired from Hub scope; not implemented | Not required | [Retired IDs](../product/IDENTITY_AND_INTERACTION.md#explicit-claude-codecodex-collaboration), [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md) |
-| Participant evaluation and allocation | Accepted foundation; not implemented | — | [Requirements](../product/EVALUATION_AND_ALLOCATION.md), [ADR 0037](../decisions/0037-evidence-based-task-allocation.md) |
+| Minimal outcome journal | Read-only projection and schema-45 owner assessments implemented offline | Assessment/correction canary pending | [REQ-EVAL-010](../product/EVALUATION_AND_ALLOCATION.md), [ADR 0062](../decisions/0062-owner-outcome-assessments.md) |
+| Participant evaluation and allocation | Broader scoring/allocation foundation accepted; not implemented | — | [Requirements](../product/EVALUATION_AND_ALLOCATION.md), [ADR 0037](../decisions/0037-evidence-based-task-allocation.md) |
 | Stop certainty and independent notices (schema 36) | Implemented; canonical checks and independent review at `d3be874` | Pending | [REQ-QUEUE-005/013](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0049](../decisions/0049-task-visibility-and-stop-certainty.md) |
 | Final/progress send certainty (schema 43) | Included in 0.8 source gates | Pending | [REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0060](../decisions/0060-final-and-progress-delivery-certainty.md) |
 | Exact delivery control (schema 47) | Explicit consent and consumers included in 0.8 source gates | Activation pending | [REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0063](../decisions/0063-delivery-control-reconciliation.md) |
@@ -43,7 +44,7 @@ separate in the [backlog](../operations/STABILIZATION_PLAN.md#live-acceptance-ba
 | Scoped acceptance actor | Implemented | Live authorization pending | [AC-F-011](../product/ONBOARDING_AND_ACCEPTANCE.md), [ADR 0003](../decisions/0003-scoped-telegram-acceptance-actor.md) |
 | Immutable releases and rollback rehearsal | Implemented offline | Deployment-owned | [REQ-OPS-010](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0012](../decisions/0012-verifiable-immutable-deployments.md) |
 | Codex multi-auth account pool and rotation | Retired | Not applicable | [ADR 0047](../decisions/0047-retire-codex-multi-auth.md) |
-| Off-machine recovery | Planned | Drill pending | [REQ-OPS-012](../product/PERSISTENCE_AND_RECOVERY.md) |
+| Application recovery/handoff | Planned; full-host infrastructure externally owned | Bounded Hub restore pending; host drill not claimed | [REQ-OPS-012](../product/PERSISTENCE_AND_RECOVERY.md) |
 | Incidents | Journal + default-off notices/dismiss; Analyze open | Pending | [REQ-OPS-013/014](../product/PERSISTENCE_AND_RECOVERY.md), [runbook](../operations/HERMES_INCIDENT_NOTICES.md) |
 
 ## Quality checkpoint
@@ -58,7 +59,7 @@ Claude's text-only default has offline identity, streaming and recovery coverage
 under [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md).
 The source [native editor fixture](../testing/CLAUDE_NATIVE_EDITOR.md#recorded-offline-evidence)
 passes Write/Edit Allow/Deny and exact resume with four fresh fictional receipts
-on pinned CLI 2.1.285. Human approvals, custody and subscription acceptance remain
+on pinned CLI 2.1.285. Human approvals, scoped installation and subscription acceptance remain
 pending under [REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
 Schema-53 [image/notice source](../decisions/0066-verified-claude-image-input.md)
 is published at `25866e1`; images, native transfer and saved-session connect are
@@ -80,9 +81,14 @@ product foundation; implementation and acceptance remain pending. See
 Hub lead/advisor roles and their review workflow are retired by
 [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md), not implemented.
 Independent cross-provider project review remains outside Hub orchestration.
-The minimal outcome journal stays an independent milestone. Standalone
-[Claude editor](../operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md), custody and live
-acceptance remain open; full parity, scoring and parallel writers remain deferred.
+The minimal outcome journal stays an independent milestone; source baseline
+`c55ef97eca700c6728e26ee3f82adb5ec8cba0e2` includes the bounded projection and
+schema45 owner assessments under ADR 0062. P6 retains provenance/live closure.
+Standalone
+[Claude editor](../operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md), scoped installation and
+live acceptance remain open; full parity, scoring and parallel writers remain
+deferred. [ADR 0072](../decisions/0072-trusted-personal-installation.md) stops the
+global same-UID/admin custody study; that stronger claim is not pending.
 
 Schema35 root-blocker admission is implemented offline; deployment/live
 acceptance remain pending under
@@ -124,25 +130,15 @@ without duplication. Local CPA/direct profile isolation remains deployment-owned
 each deployment must prove migration, atomic settings persistence and a same-session
 Telegram/TUI/Telegram round trip separately from these offline regressions.
 
-Native Codex catalog discovery no longer requires the retired multi-auth helper.
-The monitor reads `model/list`; isolated Controller refresh callbacks request
-asynchronous discovery and retain last-good selectable models without provider RPC.
-When a proxy returns a union catalog, the Codex selector admits only OpenAI
-GPT/o-series identifiers, including through an explicitly configured route.
-It sanitizes older cached snapshots on display and refreshes snapshots created
-before this boundary; discovery failure cannot re-expose foreign models.
+Native Codex catalog discovery, union-catalog filtering and cached Controller
+refresh are implemented under [REQ-CMD-002](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
+Discovery failure preserves the last good catalog; no retired account helper runs.
 Codex `/local` now emits a native TUI attach to the configured shared Unix socket,
 preserving the same persisted thread instead of opening a competing standalone writer.
-Package F is repository-complete at schema 32. `max_parallel_roots` defaults to
-one and transactionally bounds active Hub worker scopes across provider workers;
-values up to 16 require external queue mode. Durable least-recently-granted
-selection prevents a continuously polling live worker from starving another,
-while a stale worker leaves consideration after two minutes. Lowering capacity
-drains current turns without cancelling them. Expired execution becomes
-root-local uncertainty: it still excludes its own canonical root but no longer
-occupies a global slot or blocks an independent root. Cache-only status exposes
-only capacity totals, bounded worker/agent/phase owners and an aggregate
-uncertain-scope count.
+Schema32 root capacity/fairness is implemented; its owning contract is
+[REQ-QUEUE-003](../product/DURABLE_QUEUE_AND_CONTROL.md). Lower capacity drains
+without cancellation; uncertainty retains root exclusion independently of global
+capacity. Cache-only summaries remain bounded and contain no model calls.
 
 Explicit local worktree binding now atomically moves an idle topic to the lane's
 canonical scope. Bind and archive refuse pending, active, local-writer and
@@ -648,12 +644,10 @@ repository.
 
 ## Planned recovery exercise
 
-- The separate off-machine WSL recovery plan defines encrypted versioned
-  application snapshots, periodic cold exports stored away from the physical
-  source machine, exact recovery-set inventory, network/service isolation,
-  preservation of all indeterminate work, and measurable cold-restore gates.
-  Backup automation, WSL shutdown/export, and the first private timed drill were
-  intentionally not executed during v0.7.0 repository preparation.
+- REQ-OPS-012 separates bounded Hub application restore/handoff from externally
+  owned host/WSL export, storage, keys and full-host drill. The retained external
+  recovery guide is interface context, not unfinished Hub automation or proof of
+  a cold restore. Hub restore must preserve captured scope and uncertainty.
 
 ## Deferred
 

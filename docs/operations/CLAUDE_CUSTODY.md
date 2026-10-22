@@ -1,92 +1,42 @@
-# Claude authority custody preparation
+# Claude scoped installation checklist
 
-Status: existing-host assessment first; infrastructure and live acceptance pending.
-Original file-tool baseline: `6a848c7a326b35e4c3ea552339e8c5c3d7beba53`.
-The launch map below describes retained source candidate
-`851714b5005553906b29c771fcd095de133f776b`, not main or installed state; see the
-[dependency inventory](RETAINED_PROVIDER_DEPENDENCIES.md).
-Integration owner: Hub maintainer. Last verified baseline is source evidence;
-candidate changes require their own publication checks.
+Status: finite trusted-installation preparation; installed/native acceptance open.
 Contract: [REQ-SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
-Design: [ADR 0053](../decisions/0053-claude-custody-reference-deployment.md).
-Keep the existing [file-tool runbook](CLAUDE_FILE_PERMISSIONS.md) for its
-runtime, mount, key, tlive and native permission procedures.
+Scope amendment: [ADR 0072](../decisions/0072-trusted-personal-installation.md).
+Runtime, mount, key, tlive and native permission procedures remain in the
+[file-tool runbook](CLAUDE_FILE_PERMISSIONS.md).
 
-## Assess the existing boundary first
+## Stopped global study
 
-The revised ADR keeps a VM as a reserve option. Start with the narrow implemented
-boundary, then inspect actual launch and service exposure. Do not select a UID
-layout, relax the live gate or migrate platforms merely to finish this plan.
-This is a source assessment, not an inventory of any installed host:
+ADR 0072 supersedes the former whole-host launch/service inventory, UID/VM
+selection and exclusion of every same-UID helper as mandatory editor gates.
+The earlier finding remains true: an unconfined same-UID process can read
+mode-0600 keys and forge symmetric receipts. It is an accepted limitation, not
+an isolation pass or an unfinished requirement of this installation. Do not
+repeat a global inventory to start the editor; no new launcher is needed.
 
-| Launch path | Current source evidence | Remaining custody question |
-| --- | --- | --- |
-| Claude file-tool turn | `claude_file_sandbox.py` preserves Claude policy through the pinned provider-neutral `process_namespace.py` builder: explicit mounts, hidden host files/PIDs, dropped capabilities and one per-turn permission socket. | Shared network exposure remains; installed descriptor closure and authority-service exclusion need evidence. Prompt-based review does not exempt any launch from the authority-data boundary. |
-| Text-only Claude | `external_runtime.py` disables tools/customizations and runs the CLI without the file-tool namespace. | Trusted CLI/dependency and host execution authority need separate assessment; text-only flags do not prove OS custody. |
-| Codex shared/stdio app-server | `codex_appserver.py` checks legacy sandbox and approval policy; the external queue route also supports explicitly configured managed selection, bounded metadata rechecks, immutable selection snapshots and drift refusal. See [ADR 0055](../decisions/0055-managed-codex-profile-continuity.md). | Native metadata does not expose the complete managed definition or establish filesystem custody. Managed local/tmux, steering and inline routes remain refused; helpers and outside review launches need separate boundaries. Neither app-server route uses the Claude wrapper. Verify effective access to authority files, processes, endpoints and host management, then complete coordinated live acceptance. |
-| Hermes native Gateway | `hermes_plugin.py` adds Hub admission and visible-context integration; Gateway owns native execution. | The plugin does not establish an OS boundary. Inspect the Gateway's actual tools, children, MCP and recovery paths independently. |
-| OpenCode/Antigravity | `external_runtime.py` owns their CLI invocation and safe argument construction. | Provider sandbox flags are not evidence of Hub/tlive authority exclusion. Inspect actual execution identities and access. |
-| Native/local transfer | `local_transfer.py` builds Codex remote attach and OpenCode/Antigravity resume commands; Claude transfer is unsupported. | Writer leases prevent competing Hub writers, not credential access. Local tools/hooks/children must retain the chosen custody boundary. |
-| Helpers and outside assistants | No host-wide model-process launcher is implemented by this custody slice. | Inventory every actual helper, development and recovery launch; a read-only role or Plan mode does not prevent key reads. |
-| Passive capability checks | `claude_cli_capabilities.py` runs CLI metadata without inference. | Verify executable provenance and launch authority; distinguish trusted metadata execution from model-controlled code. |
+## Finite evidence bundle
 
-For each actual path, record the effective identity, enforced filesystem/PID
-boundary, accessible local services and management capability. Use fictional
-sentinels to test denied authority reads/writes and permitted project/session
-access. Keep absent, unsupported and untested paths explicit. A process snapshot
-or declared setting cannot prove future starts and resumes stay confined.
-Cross-provider review launched through project instructions is a helper/outside
-launch and remains subject to this assessment.
+Prepare privately; no real roots, identities, credentials or receipts in Git.
+Check valid existing grants before requesting uncovered live effects. A source
+check, generated manifest or completed checklist does not authorize deployment.
 
-The narrow mount-role guard rejects a session HOME using the same canonical
-source as the project, or the same pinned directory inode as the project or its
-ordinary `.git`. Such an alias could otherwise expose writable Git through HOME
-despite the project's read-only Git overlay. The guard uses device/inode identity,
-not equal mount IDs. Descriptor-level regressions model top-level bind aliases;
-they do not perform host bind mounts or establish complete alias exclusion.
-The existing bounded descriptor scans also collect each root and its non-symlink
-descendant device/inode identities, refusing intersecting project/HOME trees.
-This detects pre-existing deeper directory aliases, including empty `.git/objects`,
-without another walk or an intersection allocation. Each set has at most 100,001
-identities. Symlinks remain references through the namespace's existing mount
-policy; their targets are not traversed or treated as inode aliases. Scan failure
-returns no partial set, and launch retains its final pin recheck and cleanup.
-These checks do not freeze directory contents or exclude an unconfined host actor
-changing them between or after scans. The [neutral namespace extraction](../decisions/0056-provider-neutral-process-namespace.md)
-also has a provider-free read-only/private-network consumer. It does not enable
-an inference transport or establish installed custody. Hub advisor development
-is withdrawn by [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md); the
-ordinary provider/helper custody assessment remains open.
-
-Choose the smallest candidate that can meet REQ-SEC-008 with those facts. Assess
-separate Linux identities only under an independently trusted management boundary;
-current hook/tlive peer checks are not compatible with arbitrary UID changes.
-If smaller options cannot close a named exposure, document the reason and cost
-before recommending the reserve VM. The architecture and remaining live gate
-are owned by ADR 0053 and the product contract, not this source matrix.
-
-## Prepare a reviewable deployment bundle
-
-Prepare the following privately before requesting any live action. Do not put
-inventory, credentials, receipts or administrative identities in the checkout.
-
-| Artifact | Required content and stop condition |
+| Item | Required evidence and stop condition |
 | --- | --- |
-| Management map | Every relevant host admin, backup/recovery access path and agent execution identity; include hypervisor/disk/snapshot/guest access only for a VM candidate. Stop if a model-controlled path can regain authority. |
-| Launch map | Productive start/resume, text-only CLI, shared/stdio app-server, local transfer, direct-message, helper, hook, MCP, recovery and capability-probe paths. Mark each trusted-only, technically confined, or blocked; a missing path blocks cutover. |
-| Service map | Reachable TCP listeners, pathname and abstract Unix sockets, system/user buses, forwarding and descriptor-passing services. Record intended agent exposure and authentication; unknown or unintended authority-bearing exposure blocks activation. |
-| Release bundle | Exact clean candidate, root-owned runtime/hook artifacts and hashes, dependency provenance, pinned tlive build, schema-compatible rollback wheel, private release manifest and consistent backup. |
-| Data/identity map | Exact canonical roots, allowed roots, native session identities/modes/homes, leases and unresolved jobs. Any changed binding requires its existing explicit workflow; copying state is not a root migration. |
-| Acceptance plan | Disposable project/topic, fictional OS sentinels, exact expected effects, bounded waits, cleanup ownership, success/failure evidence and no-inference checks. |
+| Candidate and consumers | Exact clean revision, immutable artifact/dependency/tlive hashes and current schema; every required Hub component reports that revision. Include idle Hermes Gateway as a source/schema consumer. |
+| Compatible rollback | Distinct clean runtime supporting retained current-schema state, coordinated Hermes source/environment pin, release manifest and offline rehearsal. Never put an older DB over accepted work. |
+| Supported launch | Exact installed CLI/digest and namespace/runtime/filesystem applicability; ordinary disposable Git root, separate session HOME, read-only `.git` and runtime. Unsupported linked worktree or failed boundary refuses before invocation. |
+| Private paths and endpoints | Existing descriptor/mount/private-path negative checks; keys/state and operations-drain endpoint absent from confined provider/hook views. Filesystem IPC visibility is limited to the exact per-turn permission socket; shared networking leaves loopback/abstract sockets reachable. Check the confined launch's reachable authority listeners, including FD transfer/signing/management; unknown authority-bearing exposure blocks activation. Use fictional sentinels with positive controls at intended authority locations, never real keys or destructive controls. No host-wide same-UID exclusion claim. |
+| Identity and recovery | Canonical root, native session/mode/home, generation, lease and unresolved jobs; SQLite-consistent backup plus matching retained spool/history/config. Preserve uncertainty and original delivery evidence. |
+| Acceptance scope | One disposable root/topic, finite native calls/effects/waits, four fresh human Write/Edit Allow/Deny decisions, stop/restart/stale tests, result/delivery recovery and cleanup ownership. Three roots belong to separate core acceptance. |
+| Subscription | Private CPA upstream attestation and installed CLI→CPA→subscription observation; no paid/API/extra-usage fallback. The exposed client credential must grant no CPA management or host-control capability. Loopback configuration or a review call is insufficient. |
 
-The current source does not provide a complete provider-domain launcher or an
-automated host administration collector. This bundle is a prerequisite, not a
-generated approval token. Preparing the bundle grants no access to live state.
+No automatic reset, replay, reconciliation or approval is used to make the gate
+green. Any unknown required result remains open with its exact evidence limit.
 
 ## Automated offline rehearsal
 
-Run the normal focused profile and the strict namespace corpus on a host whose
-immutable system Python and bubblewrap fixtures are available:
+Run the focused profile and strict namespace scenarios on a supported host:
 
 ```sh
 python scripts/validate.py --profile focused \
@@ -97,79 +47,60 @@ HUB_REQUIRE_NAMESPACE_TESTS=1 python -m unittest -v \
   tests.test_claude_custody_rehearsal.ClaudeCustodyRehearsalTests.test_namespace_blocks_authority_aliases_and_privilege_but_shares_network
 ```
 
-The last test first proves that an unconfined same-UID subprocess can read a
-fictional mode-0600 key. Through the production namespace it then verifies
-direct/symlink/proc-root/cwd and accidentally inheritable descriptor denial,
-zero effective capabilities, denied namespace/mount/chroot operations and real
-readonly Git/runtime open failures. Project reads/writes and private session
-writes are positive controls. The original descriptor-table test and signed
-socket/SQLite Allow/Deny test remain required alongside it.
+These fixtures use fictional keys/state and no inference or Telegram. They test
+private/symlink/proc/cwd/descriptor access, Git/runtime writes, capabilities,
+project/session positive controls and signed hook/SQLite Allow/Deny. Existing
+mount-role guards detect project/HOME and ordinary Git inode aliases, including
+pre-existing descendant directory intersections; they do not freeze contents.
+Provider-neutral extraction and sealed-material primitives remain useful shared
+source; retired advisor work is not revived.
 
-The rehearsal also deliberately connects to fictional loopback and abstract
-Unix listeners. The abstract listener transfers the fictional key descriptor
-and the child reads it. This success demonstrates the exposure the deployment
-service map must exclude; it is not a passed custody-denial check. A hidden
-pathname socket remains unreachable. No model, Telegram, VM manager, real
-credential or live service is called. Missing fixtures fail the strict job;
-developer-mode skips are not namespace evidence.
+The custody rehearsal intentionally demonstrates reachable loopback and abstract
+Unix listeners, including fictional descriptor transfer. That success is an
+exposure witness, not a passed denial test. The scoped installed check must
+exclude authority endpoints from the confined launch; it does not require an
+inventory proving isolation of every trusted unconfined provider. Developer-mode
+skips are not namespace evidence; strict required fixtures must actually run.
 
-## Installed acceptance after separate authorization
+## Installed acceptance
 
-1. Recheck the exact running revision, state schema, leases, queue, outbox and
-   unresolved outcomes using the installed schema-compatible read-only tools.
-   Preserve unknown work; do not replay, release roots or move sessions to
-   obtain a clean canary. Prepare a consistent backup and rollback artifact.
-2. An administrator outside every model-controlled domain prepares only the
-   separately authorized topology, immutable artifacts and identities from the
-   reviewed bundle. No privileged bootstrap credential is handed to a model
-   process. Verify host administration, privilege, forwarding and recovery
-   access independently; for a VM candidate also verify hypervisor ACLs and
-   virtual disk/snapshot permissions. Preparing this bundle does not select a VM.
-3. From each real agent identity and its actual launch boundary, run bounded
-   automated OS checks against fictional sentinels at the intended authority
-   locations. Attempt reads, writes, proc aliases, ptrace, inherited/described
-   descriptors, management access, nested namespaces and unintended endpoints.
-   Privileged attacks must have a positive fixture control so a missing target
-   cannot masquerade as denial. Never probe real keys or destructive controls.
-4. Observe the entire trusted-UID process population and every launch path.
-   Record installed executable hashes and namespaces, not merely absent PIDs
-   in one snapshot. Any unconfined model-controlled process, undeclared launch
-   or FD-sharing service blocks activation. Rehearse controlled launch/restart
-   of each eligible path; reject paths without an enforced boundary. The offline
-   corpus does not implement this inventory or prove its completeness.
-5. Run the three strict scenarios using the exact installed kernel/bubblewrap
-   and compatible fixtures. Then perform the separately authorized native
-   Claude and real human callback cases in the file-tool runbook, including
-   stop, restart and stale/duplicate decisions. Automate the actor where
-   possible; do not ask the owner to perform repetitive terminal or button QA.
-6. Confirm the actual CPA upstream subscription route and no paid fallback
-   independently. Require exact clean revision convergence for every required
-   long-running component and compatibility of independent consumers. Record
-   OS custody, adapter evidence and native/Telegram acceptance as distinct
-   results; no one result implies the others.
+1. Recheck exact revision/schema, consumers, leases/queue/outbox and unresolved
+   outcomes through compatible read-only tooling. Do not release roots or alter
+   uncertain history for a canary. Verify backup/rollback before cutover.
+2. Apply only the authorized candidate/configuration using the existing release
+   procedures. Verify immutable runtime/hooks, namespace applicability and
+   descriptor closure on the exact installed kernel/bubblewrap/CLI. Run all three
+   strict namespace scenarios above on that installed kernel/bubblewrap. Use
+   fictional sentinels at intended authority locations and positive fixture
+   controls so an absent target cannot pass as denial; never probe real keys or
+   destructive controls. Record listeners reachable from this confined namespace
+   and verify that no authority-bearing listener yields private files/FDs, signing,
+   management or host control without a secret unavailable to it. Check the CPA
+   client credential cannot perform management/host control. Unknown authority
+   exposure stops activation; this is a scoped point-in-time check, not proof
+   of all future trusted host launches. Retain the
+   separate native-terminal, physical-exit and durable-history checks for any
+   maintenance drain; an ACK is not permission to stop.
+3. Run the bounded native/human scenarios in the file-tool runbook on the exact
+   installed CLI/digest and fresh production launch. Confirm Read/Glob/Grep,
+   fresh Write/Edit Allow/Deny, exact resume, identity, stop, restart, stale/
+   duplicate refusal and result/delivery recovery. Synthetic receipts are not
+   human acceptance. Automate deterministic checks, never the human decisions.
+4. Confirm the actual CPA subscription route and required component revision
+   convergence. Record offline, scoped installed, native and human/Telegram
+   evidence separately. The accepted same-UID/admin risk cannot become a pass.
 
-## Stop and rollback
+## Stop, rollback and closure
 
-Any uncertain action, failed check or unexpected agent privilege stops promotion.
-Before first productive activation, discard only the staged activation decision;
-keep the existing deployment and candidate artifacts untouched. Staging a second
-environment must not start another Controller/poller or writer on the live state.
+Unknown effects or a failed scoped check stop promotion. Keep text-only/default
+behavior and existing uncertain evidence. Staging must not create another live
+poller or writer. After authorized cutover, stop new admission and preserve
+executing/indeterminate work before selecting the compatible rollback runtime.
+Never restart the old environment until the new pollers/writers have physically
+stopped and ownership has been independently checked. Do not restore an old
+database, automatically replay a task or silently copy sessions across homes. Keep artifacts and receipts private. Key rotation is a
+separate credential task.
 
-After a separately authorized cutover, stop new admission through the service
-manager and preserve executing/indeterminate work and receipt history. Return to
-the distinct schema-compatible rollback runtime using the existing release
-manifest procedure; do not restore an older database over accepted work. Restore
-text-only behavior only for new sessions, using the existing explicit session
-mode transition. Never restart the old environment until the new pollers/writers
-are stopped and ownership is independently checked. Keep both artifacts, keys
-and recovery evidence private; revoke or rotate keys only in an explicitly
-authorized credential task.
-
-## Closure
-
-Open. The installed launch/service assessment, selection of the smallest
-enforceable custody boundary, missing controls and native/Telegram acceptance
-remain pending. Next trigger is a reviewed assessment of the existing host's
-actual exposure, followed by bounded controls and a complete deployment bundle.
-VM staging is conditional on a justified, separately authorized selection.
-A successful offline corpus closes only its named synthetic tests.
+Close only the named finite installed/native/human checks at the exact revision;
+editor closure is owned by the [matrix](CLAUDE_LEAD_REVIEW_PLAN.ru.md).
+Global infrastructure selection and hostile-same-UID isolation are not pending.

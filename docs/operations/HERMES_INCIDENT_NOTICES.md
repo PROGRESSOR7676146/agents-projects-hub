@@ -42,8 +42,9 @@ collide. Use one Gateway and one unchanged bot identity per cursor; concurrent
 Applications or a bot replacement require a separately reviewed deployment.
 Config accepts only the fields above; duplicate/unknown keys, unsafe
 files and unsupported schemas refuse. The plugin does not read Hub config,
-SQLite, tokens or the monitor seed. Whole-launch authority custody remains an
-independent deployment gate; same-UID privacy checks do not prove it.
+SQLite, tokens or the monitor seed. Same-UID privacy checks do not prove host-wide authority custody; that global
+claim is not made under ADR 0072. Scoped configuration/lifecycle/receipt checks
+and separately authorized live acceptance remain mandatory.
 
 ## Operation and failure inspection
 

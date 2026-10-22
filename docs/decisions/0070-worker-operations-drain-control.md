@@ -4,6 +4,14 @@ Status: accepted source design; deployment and live acceptance remain separate.
 Owner: Hub maintainer. Date: 2026-10-19.
 Contract: [REQ-QUEUE-015](../product/DURABLE_QUEUE_AND_CONTROL.md).
 
+## 2026-10-22 trusted-installation amendment
+
+[ADR 0072](0072-trusted-personal-installation.md) amends only the scope described here.
+Installed/restoration custody below means scoped endpoint protection and
+physical ownership evidence, not exclusion of every trusted same-UID assistant.
+Native terminality, durable/history preservation and authorization remain separate.
+The older rationale below is historical where it conflicts with this amendment.
+
 ## Context and decision
 
 The in-process operation barrier closes admission without cancelling admitted

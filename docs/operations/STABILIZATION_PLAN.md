@@ -16,14 +16,19 @@ The schema-38 protected file tools are implemented offline; follow
 separately authorized native/Telegram acceptance remain open. Authority-isolation
 source `6a848c7a326b35e4c3ea552339e8c5c3d7beba53` is included in 0.8;
 activation remains separate.
-Actual authority custody is still open. Assess the existing narrow boundary and
-actual launch/service exposure first; a dedicated VM remains a reserve option,
-not a selected prerequisite. The revised preparation decision is in
-[ADR 0053](../decisions/0053-claude-custody-reference-deployment.md) and the
-[custody preparation runbook](CLAUDE_CUSTODY.md).
+Scoped installed/native checks remain open under
+[ADR 0072](../decisions/0072-trusted-personal-installation.md) and the
+[finite installation checklist](CLAUDE_CUSTODY.md). Global same-UID/admin custody
+is not claimed; the former infrastructure study is stopped.
 Next trigger: [revised delivery scope](#revised-delivery-scope) and the
 [continuation plan](NEXT_DEVELOPMENT_SESSION.md); live/ADR 0048 work stays separate.
 Keep deployment and live evidence private.
+
+## Trusted-installation execution
+
+Current sequence and fixed checkpoint weights: [P1–P7 execution plan](TRUSTED_INSTALLATION_PLAN.md).
+It supersedes older global-custody, UID/VM-study and source-integration next
+triggers below. Historical evidence is not current deployment acceptance.
 
 ## Revised delivery scope
 
@@ -47,18 +52,19 @@ release scope; cross-provider review belongs to project rules. See
 [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md). This section supersedes
 older role/transport next triggers below; historical source evidence remains.
 Last inspected source base: `851714b5005553906b29c771fcd095de133f776b`.
-Owner: Hub maintainer, sole writer. Next trigger: the checked
-[dependency inventory](RETAINED_PROVIDER_DEPENDENCIES.md), then Claude/custody.
+Owner: Hub maintainer, sole writer. Current trigger: P1–P7 above; retain the
+[dependency inventory](RETAINED_PROVIDER_DEPENDENCIES.md) without repeating it. The
+source base below is historical and does not select an installed candidate.
 
 | Original goal item | Remaining scope |
 | --- | --- |
 | 1 — integration | Reviewed source integration, dependency selection, separately authorized exact-revision rollout and post-restart acceptance |
-| 2 — authority | Managed permissions and project/service-data custody across productive launches, helpers, MCP, local and recovery paths |
+| 2 — authority | Managed-profile continuity and scoped launch/live checks; global same-UID/admin/helper custody is not claimed. Unsupported local/steering routes remain refused |
 | 3 — visible control | Remaining provider progress, approvals, retry/stop and live control-loss acceptance |
 | 4 — Claude project editor | Protected Read/Glob/Grep/Write/Edit, configured model/effort, exact Hub-owned sessions, human write approvals, stop/results/recovery and subscription without paid fallback; full parity deferred |
 | 5 — roles | Withdrawn, not implemented; general outcome/time/usage journal remains an independent supporting milestone |
 | 6 — live acceptance | Three independent projects, queue/approvals/stop, restarts and denied-access scenarios; connect and Telegram ↔ CLI for supported providers, deferred for Claude |
-| 7 — operations/release | Hermes incidents and controlled updates, off-machine restore drill, remaining refactoring and release 0.8 |
+| 7 — operations/release | Hermes incidents/controlled updates, bounded Hub restore and external recovery handoff (REQ-OPS-012), remaining refactoring/release; full-host drill externally owned |
 | Added footer visibility | [Existing /goal and /fast follow-up](#planned-final-response-mode-indicators) |
 
 Roles are withdrawn; the goal stays open. Preserve source/tests and independent
@@ -102,27 +108,14 @@ Hermes notices: [checkpoint](HERMES_INCIDENT_NOTICES.md); live/Analyze open.
 
 ## Read-only outcome projection candidate
 
-Current state: bounded offline implementation in lane
-`feat/outcome-journal-projection`, based on source `93577e5`. Clean candidate
-`dcc650794719a1be6c4143766bdb007265352471` passed the local canonical publication
-gate on Python 3.11 (2,085 tests in 189 modules, zero typing errors, and passed
-privacy/history gates). Astra and Claude Opus independently reviewed the runtime
-at `1164770`; Opus found a supported-Python-3.13 test-gate failure. The `dcc6507`
-test/documentation follow-up fixes it and received a separate Opus review with
-no blocker/high/medium finding. All seven hosted checks at exact head `dcc6507`
-passed, including the Python 3.11/3.12/3.13 matrix and required namespace job.
-This remains repository evidence. The
-[local diagnostic](OUTCOME_JOURNAL.md) projects one saved job without a migration,
-provider invocation or new writer/decision authority. Requested/stored/observed
-model provenance, result/delivery, direct lineage and source-bound time intervals
-remain distinct. Acceptance, native durations and per-job usage stay unknown
-where the existing records cannot establish them. This does not close
-[REQ-EVAL-010](../product/EVALUATION_AND_ALLOCATION.md).
-Source owner: Hub maintainer; next trigger: integrate the reviewed foundations,
-then separately design authenticated immutable owner decisions and corrections.
-Inspect tracked, staged and untracked lane state before any post-merge cleanup.
-Closure of the independent outcome journal remains open; there is no deployed
-acceptance journal or complete accounting claim. Hub roles are retired by ADR 0065.
+The bounded projection and schema-45 owner assessments are implemented in source;
+see the [journal runbook](OUTCOME_JOURNAL.md) and
+[REQ-EVAL-010](../product/EVALUATION_AND_ALLOCATION.md). Projection foundation
+`dcc650794719a1be6c4143766bdb007265352471` passed its canonical and seven hosted
+gates after independent review; that historical result is not live acceptance.
+Requested/stored/observed provenance remains distinct; missing native time/usage
+stays unknown. P6 closes remaining provenance and the real assessment/correction
+canary rather than reimplementing this journal. Roles remain retired.
 
 ## Advisor foundations integration candidate
 
@@ -480,7 +473,7 @@ acceptance.
 | Inbound materials and context/quota labels | REQ-UX-009, REQ-QUEUE-010, REQ-CMD-001 | Acceptance actor `p0_p1_live` in a maintenance window |
 | Restart continuity and exactly-once processing | AC-F-005, AC-F-010 | Controlled restart during queued and active work |
 | Summary-free Codex `/local` → `/return` | REQ-WRITER-006, REQ-WRITER-007 | Telegram → native CLI → Telegram on the same thread |
-| Managed Codex profile continuity and custody (schema 39) | REQ-SEC-001, ADR 0055 | Exact start/resume/restart selection, approvals, negative project/service-data access; local routes remain unsupported pending their own boundary evidence; helpers retain independent custody checks |
+| Managed Codex profile continuity (schema 39) | REQ-SEC-001, ADR 0055/0072 | Exact start/resume/restart selection, approvals and scoped negative checks; local routes remain unsupported; global helper/admin isolation is not claimed |
 | Saved-session `/connect` | REQ-CMD-008, REQ-WRITER-012, AC-F-013 | Topic, Hub-private and local-code entry paths |
 | Accepted-turn activity and queue snapshots (schema 37) | REQ-QUEUE-012, REQ-QUEUE-013 | Queue blocker, long tool, approval resolution, restart and ambiguous delivery at the exact deployed revision |
 | Preacceptance Codex approval observations (schema 40) | REQ-QUEUE-012, REQ-QUEUE-013 | Human wait before native acknowledgement, exact promotion, worker-epoch restart and preserved unknown sends |
@@ -490,7 +483,7 @@ acceptance.
 | Codex preparation notification conservation | REQ-QUEUE-004, REQ-QUEUE-012 | Keep one exact turn active on root A while root B starts or resumes; preserve both finals, early/late human approvals, context and account quota observations, with no additional invocation or unrelated-worker restart |
 | Project-group provisioning | REQ-ONBOARD-003, REQ-ONBOARD-006 | New project canary |
 | Registered-project editing | REQ-PROJECT-EDIT-001..004 | Rename and relocation canary |
-| Machine-loss recovery drill | REQ-OPS-012 | Private cold-restore drill |
+| Hub application recovery/handoff | REQ-OPS-012 | Bounded Hub-consistent restore; full-host/WSL drill externally owned, not claimed by handoff |
 | Unauthorized access and disclosure | REQ-SEC-006, AC-F-007, AC-NF-001 | Outsider-account negative checklist |
 
 ## Follow-ups found during execution
@@ -723,4 +716,5 @@ The plan closes when stages 0–3 are merged into `main`, the hotspot ratchet
 runs in the canonical gate, and the owner has either completed or explicitly
 re-scoped every backlog item. Record the closing revision here.
 
-Claude live tools retain [ADR 0052's custody gate](../decisions/0052-protected-claude-file-permissions.md).
+Claude live tools retain the scoped installation/human gates under
+[ADR 0072](../decisions/0072-trusted-personal-installation.md), amending ADR 0052.

@@ -3,6 +3,13 @@
 Status: accepted implementation choice; deployment/live acceptance pending.
 Date: 2026-10-03.
 
+## 2026-10-22 trusted-installation amendment
+
+[ADR 0072](0072-trusted-personal-installation.md) amends only the scope described here.
+The global authority-custody prerequisite is superseded; the protected human
+permission protocol and scoped launch controls remain.
+The older rationale below is historical where it conflicts with this amendment.
+
 ## 2026-10-09 scope amendment
 
 [ADR 0065](0065-retire-hub-lead-advisor.md) withdraws the lead/advisor milestone

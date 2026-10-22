@@ -5,6 +5,12 @@ Date: 2026-10-09
 Supersedes: [ADR 0040](0040-bounded-claude-codex-lead-advisor.md), for the
 Hub-managed collaboration milestone only.
 
+## 2026-10-22 trusted-installation amendment
+
+[ADR 0072](0072-trusted-personal-installation.md) supersedes only legacy global
+same-UID/helper authority-custody prerequisites below. Scoped launch/human checks,
+shared primitives and retirement of Hub roles remain unchanged.
+
 ## Context
 
 Independent cross-provider review can be organized by project instructions and
