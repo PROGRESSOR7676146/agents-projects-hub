@@ -2,7 +2,7 @@
 
 This diagnostic and the bounded owner-command slice support the private outcome
 journal in [REQ-EVAL-010](../product/EVALUATION_AND_ALLOCATION.md). They do not
-complete usage provenance or deployed custody. Hub roles are retired by
+complete usage provenance or deployed scoped checks. Hub roles are retired by
 [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md); the journal remains independent.
 
 ```bash
@@ -125,5 +125,8 @@ retain a schema44 backup and schema45-compatible rollback runtime. Source tests
 cover all notice states, positive receipts, foreign keys, DDL rollback,
 two-connection first/correction races, commit and notice faults, unchanged
 execution evidence and unknown acknowledgement after restart. Activation and
-Telegram acceptance require separate authorization on the exact reviewed release,
-including proof that productive models cannot modify authoritative journal data.
+Telegram acceptance require separate authorization on the exact reviewed release.
+Verify human-only assessment provenance and exclude the journal's private state
+from the confined Claude launch under
+[REQ-EVAL-010](../product/EVALUATION_AND_ALLOCATION.md). Global same-UID/admin
+exclusion is not claimed under REQ-SEC-008 and is not an additional journal gate.
