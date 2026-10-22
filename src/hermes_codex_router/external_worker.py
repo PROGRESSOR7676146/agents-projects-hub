@@ -222,11 +222,16 @@ class ExternalQueueWorker:
             self._codex_client = client
             raise
         finally:
-            # Includes clients already discarded after an unconfirmed close,
-            # even when earlier fallback makes socket-only proof ineligible.
             if supervisor is not None:
-                supervisor.wait_for_socket_threads()
-        if self.supervisor is not None:
+                try:
+                    # Admitted operations have finished. A failed client close
+                    # must not leave owned socket loops waiting on a live peer.
+                    supervisor.stop()
+                finally:
+                    # Also retain custody if peer stop fails or earlier stdio
+                    # makes the socket-only observation permanently ineligible.
+                    supervisor.wait_for_socket_threads()
+        if self.supervisor is not None and supervisor is None:
             self.supervisor.stop()
         self.state.close()
         self._closed = True

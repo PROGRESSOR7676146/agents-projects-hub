@@ -171,15 +171,15 @@ prior stdio fallback; such a receipt cannot prove a socket-only maintenance gate
 Cleanup errors produce no success receipt. Never interpret a receipt, an inactive
 unit or a successful stop request alone as permission to terminate the host.
 
-For a managed Codex peer, a final client-close failure can leave the worker waiting
-for socket threads before it reaches the owned peer's stop operation. If that
-wait finishes, the propagated close error can instead skip peer shutdown, leaving
-the peer and its socket path behind. Both branches deny the success receipt;
-neither establishes native terminality. Preserve the failed incarnation and its
-evidence. Before a replacement start or socket removal, independently establish
-the old peer's ownership and physical exit. Do not force a stuck cleanup to make
-the maintenance gate pass. Managed peers and prior stdio fallback remain outside
-socket-only maintenance proof.
+After admitted operations finish, final cleanup requests client closure, stops
+the worker-owned supervisor, and then waits for its socket threads, including
+when client closure failed. A client-close error leaves the client identity and
+SQLite state available for an explicit recheck and still denies the success receipt.
+An unmanaged supervisor never stops the shared peer. Preserve a failed
+incarnation and its evidence; before a replacement start or socket removal,
+independently establish the old peer's ownership and physical exit. Do not force
+a stuck cleanup to make the maintenance gate pass. Managed peers and prior stdio
+fallback remain outside socket-only maintenance proof.
 
 ## Provider-job recovery
 

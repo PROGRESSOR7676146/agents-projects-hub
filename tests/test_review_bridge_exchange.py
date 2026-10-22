@@ -19,6 +19,10 @@ from tests.review_bridge_pipe_fixture import _run_pipe_exchange, actor_argv, run
 from tests.test_claude_native_pipe_contract import capsule_bytes
 from tests.test_claude_native_request_contract import EXAMPLE_ENVIRONMENT
 
+# These assert exchange semantics, not startup latency. Keep a finite budget
+# within the fixture's ten-second limit when other test modules share the host.
+EXCHANGE_TIMEOUT_SECONDS = 8
+
 
 @dataclass(frozen=True)
 class Observation:
@@ -58,7 +62,9 @@ class ReviewBridgeExchangeTests(unittest.TestCase):
         response = os.urandom(1000)
         owner = PreparedAttempt(response)
         with assert_descriptor_cleanup(self):
-            exchange = _run_pipe_exchange(actor_argv(sys.executable), {}, owner, timeout=3)
+            exchange = _run_pipe_exchange(
+                actor_argv(sys.executable), {}, owner, timeout=EXCHANGE_TIMEOUT_SECONDS
+            )
         result = exchange.result
         self.assertTrue(exchange.complete, result.error)
         self.assertTrue(result.cleanup_eof)
@@ -89,7 +95,9 @@ class ReviewBridgeExchangeTests(unittest.TestCase):
         ):
             # Patch the shared json module only after argv construction. The
             # independent child imports its own module; only host parsing fails.
-            exchange = _run_pipe_exchange(argv, {}, PreparedAttempt(b"example-response"))
+            exchange = _run_pipe_exchange(
+                argv, {}, PreparedAttempt(b"example-response"), timeout=EXCHANGE_TIMEOUT_SECONDS
+            )
         self.assertTrue(exchange.complete, exchange.result.error)
         self.assertTrue(exchange.result.cleanup_eof)
 
@@ -98,7 +106,11 @@ class ReviewBridgeExchangeTests(unittest.TestCase):
             owner = PreparedAttempt(b"example-response")
             with self.subTest(stage=stage), assert_descriptor_cleanup(self):
                 exchange = _run_pipe_exchange(
-                    actor_argv(sys.executable), {}, owner, cancel_at=stage
+                    actor_argv(sys.executable),
+                    {},
+                    owner,
+                    cancel_at=stage,
+                    timeout=EXCHANGE_TIMEOUT_SECONDS,
                 )
             self.assertFalse(exchange.complete)
             self.assertEqual(exchange.result.attempted, attempted)
@@ -111,7 +123,11 @@ class ReviewBridgeExchangeTests(unittest.TestCase):
     def test_transport_completion_does_not_validate_a_forged_receipt(self) -> None:
         owner = PreparedAttempt(os.urandom(1000))
         exchange = _run_pipe_exchange(
-            actor_argv(sys.executable), {}, owner, scenario="bad_receipt", timeout=3
+            actor_argv(sys.executable),
+            {},
+            owner,
+            scenario="bad_receipt",
+            timeout=EXCHANGE_TIMEOUT_SECONDS,
         )
         self.assertTrue(exchange.complete, exchange.result.error)
         self.assertEqual(json.loads(exchange.stdout)["response_sha256"], "0" * 64)
@@ -122,7 +138,7 @@ class ReviewBridgeExchangeTests(unittest.TestCase):
             {},
             PreparedAttempt(owner.response),
             scenario="bad_receipt",
-            timeout=3,
+            timeout=EXCHANGE_TIMEOUT_SECONDS,
         )
         self.assertFalse(legacy.success)
         self.assertEqual(legacy.error, "example_receipt_invalid")
@@ -138,7 +154,9 @@ class ReviewBridgeExchangeTests(unittest.TestCase):
         )
         with assert_descriptor_cleanup(self):
             # Old fictional actor sends capsule bytes, not a native envelope.
-            exchange = _run_pipe_exchange(actor_argv(sys.executable), {}, owner, timeout=3)
+            exchange = _run_pipe_exchange(
+                actor_argv(sys.executable), {}, owner, timeout=EXCHANGE_TIMEOUT_SECONDS
+            )
         self.assertFalse(exchange.complete)
         self.assertFalse(exchange.result.attempted)
         self.assertEqual(exchange.result.error, "example_native_attempt_refused")
@@ -152,7 +170,11 @@ class ReviewBridgeExchangeTests(unittest.TestCase):
             owner = PreparedAttempt(b"example-response")
             with self.subTest(scenario=scenario), assert_descriptor_cleanup(self):
                 exchange = _run_pipe_exchange(
-                    actor_argv(sys.executable), {}, owner, scenario=scenario, timeout=3
+                    actor_argv(sys.executable),
+                    {},
+                    owner,
+                    scenario=scenario,
+                    timeout=EXCHANGE_TIMEOUT_SECONDS,
                 )
             self.assertFalse(exchange.complete)
             self.assertEqual(exchange.result.attempted, expected)

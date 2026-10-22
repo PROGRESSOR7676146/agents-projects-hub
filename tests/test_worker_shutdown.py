@@ -127,14 +127,14 @@ class WorkerShutdownTests(unittest.TestCase):
                     process.kill()
                     process.communicate()
 
-    def worker(self):
+    def worker(self, *, manage_process=False):
         fixture = fixtures.ExternalQueueWorkerTests()
         fixture.setUp()
         self.addCleanup(fixture.tearDown)
         worker = fixture.worker("opencode", fixtures.Adapter("opencode"))
         self.addCleanup(worker.close)
         supervisor = CodexAppServerSupervisor(
-            fixture.config.codex_socket_path, manage_process=False
+            fixture.config.codex_socket_path, manage_process=manage_process
         )
         worker.supervisor = worker._owned_supervisor = supervisor
         return worker, supervisor
@@ -187,6 +187,99 @@ class WorkerShutdownTests(unittest.TestCase):
         worker.state.status_snapshot()  # The original SQLite connection is still usable.
         worker.close()
         self.assertTrue(worker.shutdown_receipt()["socket_threads_drained"])
+
+    def test_failed_close_stops_owned_peer_before_waiting_for_socket_threads(self):
+        for pending_socket in (False, True):
+            with self.subTest(pending_socket=pending_socket):
+                worker, supervisor = self.worker(manage_process=True)
+                supervisor._acquire_socket_ownership()
+                peer = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import socket, sys, time; "
+                        "s = socket.socket(socket.AF_UNIX); "
+                        "s.bind(sys.argv[1]); s.listen(); time.sleep(60)",
+                        str(supervisor.socket_path),
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                )
+                supervisor.process = peer  # type: ignore[assignment]
+                supervisor.transport_mode = "managed-socket"
+                close_requested = threading.Event()
+                failures: list[Exception] = []
+
+                class Client:
+                    def close(self):
+                        close_requested.set()
+                        raise RpcError("fictional managed close failure")
+
+                client = Client()
+                worker._codex_client = client  # type: ignore[assignment]
+                socket_owner = supervisor._socket_activity.thread(target=peer.wait)
+
+                def close():
+                    try:
+                        worker.close()
+                    except Exception as error:
+                        failures.append(error)
+
+                closer = threading.Thread(target=close)
+                try:
+                    self.wait_file(supervisor.socket_path, peer)
+                    if pending_socket:
+                        socket_owner.start()
+                    closer.start()
+                    self.assertTrue(close_requested.wait(2))
+                    closer.join(2)
+                    self.assertFalse(closer.is_alive(), "peer exit must precede socket wait")
+                    self.assertIsNotNone(peer.poll(), "owned peer survived failed client close")
+                    self.assertIsNone(supervisor.process)
+                    self.assertIsNone(supervisor._ownership_file)
+                    self.assertFalse(supervisor.socket_path.exists())
+                    self.assertTrue(supervisor._socket_activity.drained)
+                    self.assertEqual(len(failures), 1)
+                    self.assertIsInstance(failures[0], RpcError)
+                    self.assertIs(worker._codex_client, client)
+                    self.assertFalse(worker._closed)
+                    with self.assertRaisesRegex(RuntimeError, "unconfirmed"):
+                        worker.shutdown_receipt()
+                    worker.state.status_snapshot()
+                finally:
+                    supervisor.stop()
+                    if pending_socket and socket_owner.ident is not None:
+                        socket_owner.join(2)
+                    if closer.ident is not None:
+                        closer.join(2)
+                    worker._codex_client = None
+                worker.close()
+                self.assertIsNone(worker.shutdown_receipt()["socket_threads_drained"])
+
+    def test_peer_stop_failure_preserves_state_and_denies_success_receipt(self):
+        worker, supervisor = self.worker(manage_process=True)
+        with patch.object(supervisor, "stop", side_effect=OSError("fictional peer stop fault")):
+            with self.assertRaisesRegex(OSError, "fictional peer stop fault"):
+                worker.close()
+        self.assertTrue(supervisor._socket_activity.drained)
+        self.assertFalse(worker._closed)
+        worker.state.status_snapshot()
+        with self.assertRaisesRegex(RuntimeError, "unconfirmed"):
+            worker.shutdown_receipt()
+
+    def test_failed_close_does_not_stop_an_injected_supervisor(self):
+        worker, supervisor = self.worker()
+        worker._owned_supervisor = None
+        with (
+            patch.object(worker, "_discard_client", side_effect=RpcError("fictional close fault")),
+            patch.object(supervisor, "stop") as stop,
+        ):
+            with self.assertRaisesRegex(RpcError, "fictional close fault"):
+                worker.close()
+        stop.assert_not_called()
+        self.assertFalse(worker._closed)
+        worker.state.status_snapshot()
 
     def test_stdio_is_never_reported_as_socket_cleanup_proof(self):
         worker, supervisor = self.worker()
