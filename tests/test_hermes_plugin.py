@@ -172,6 +172,33 @@ class HermesPluginTests(unittest.TestCase):
         self.assertEqual(self.adapter.registered, [OTHER_CHAT])
         self.assertEqual(self.adapter._bot.deleted, [HUB_CHAT])
 
+    def test_unreadable_state_stops_unmentioned_text_without_dispatch(self) -> None:
+        update = types.SimpleNamespace(message=_message(HUB_CHAT))
+        with (
+            mock.patch.object(Path, "resolve", side_effect=PermissionError("parent unavailable")),
+            mock.patch.object(
+                hermes_plugin, "_dispatch_active_text", new_callable=mock.AsyncMock
+            ) as dispatch,
+        ):
+            with self.assertRaises(_Stop):
+                asyncio.run(self.handler("TEXT")(update, None))
+        dispatch.assert_not_awaited()
+
+    def test_unreadable_hub_state_does_not_block_native_private_text(self) -> None:
+        update = types.SimpleNamespace(message=_message(12345))
+        with mock.patch.object(hermes_plugin, "_state_path", side_effect=AssertionError):
+            asyncio.run(self.handler("TEXT")(update, None))
+
+    def test_unreadable_hub_state_does_not_block_explicit_native_mentions(self) -> None:
+        update = types.SimpleNamespace(message=_message(HUB_CHAT))
+        with (
+            mock.patch.object(
+                self.adapter, "_extract_bot_mention_usernames", return_value=["hermes_bot"]
+            ),
+            mock.patch.object(hermes_plugin, "_state_path", side_effect=AssertionError),
+        ):
+            asyncio.run(self.handler("TEXT")(update, None))
+
     def test_an_inaccessible_state_still_stops_bare_commands(self) -> None:
         locked = self.state.parent / "locked"
         locked.mkdir()
