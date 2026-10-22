@@ -118,18 +118,18 @@ def is_active_agent(
     """Fail-closed admission lookup for externally managed agent adapters."""
     if chat_id >= 0 or thread_id <= 0 or not agent_id:
         return False
-    path = state_path.expanduser().resolve()
-    if not path.is_file():
-        return False
     connection: sqlite3.Connection | None = None
     try:
+        path = state_path.expanduser().resolve()
+        if not path.is_file():
+            return False
         connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.2)
         row = connection.execute(
             "SELECT active_agent_id FROM topics WHERE chat_id = ? AND thread_id = ?",
             (chat_id, thread_id),
         ).fetchone()
         return row is not None and row[0] == agent_id
-    except (OSError, sqlite3.Error, StateError):
+    except (OSError, RuntimeError, sqlite3.Error, StateError):
         return False
     finally:
         if connection is not None:

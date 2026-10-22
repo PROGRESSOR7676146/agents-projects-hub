@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from hermes_codex_router.external_admission import (
     acknowledge_telegram_contract_for_topic,
@@ -50,6 +51,18 @@ class ExternalAdmissionTests(unittest.TestCase):
         broken = Path(self.tempdir.name) / "broken.db"
         broken.write_text("not sqlite", encoding="utf-8")
         self.assertFalse(is_active_agent(broken, -1001234567890, 73, agent_id="hermes"))
+
+    def test_inaccessible_or_unresolvable_state_refuses_admission(self) -> None:
+        for operation, error in (
+            ("resolve", PermissionError("parent unavailable")),
+            ("resolve", RuntimeError("symlink loop")),
+            ("is_file", PermissionError("state unavailable")),
+        ):
+            with self.subTest(operation=operation, error=type(error).__name__):
+                with mock.patch.object(Path, operation, side_effect=error):
+                    self.assertFalse(
+                        is_active_agent(self.path, -1001234567890, 73, agent_id="hermes")
+                    )
 
     def test_visible_context_is_read_only_after_explicit_request(self) -> None:
         state = HubState.open(self.path, codex_permission_profile=None)
