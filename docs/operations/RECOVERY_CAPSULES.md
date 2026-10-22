@@ -30,6 +30,23 @@ release/schema, restore commands, or safety boundaries change. Installer
 publication plus peer-side daily auditing provides the normal exchange loop;
 Git review remains the maintenance and provenance boundary.
 
+## Trusted reciprocal repair
+
+[ADR 0072](../decisions/0072-trusted-personal-installation.md) keeps Hermes as an
+independent native product and project participant. The peer may perform assigned
+administrative repair within granted scope, preserving queue/outbox/uncertainty
+and coordinating native/admin writers on the same root. Hub lease protection is
+not host-wide enforcement over arbitrary native Hermes. A capsule grants no
+human approval or uncertain-work replay.
+
+The checked-in monitor unit's model-free `--notify --repair` is retained as an
+installation-authorized deterministic mechanism. Record its actual timer state,
+expected Gateway restart/cooldown and interventions in reciprocal drills; any
+policy change needs appropriate authorization. An unavailable Hub import/DB must
+be tested for bounded project-integration failure while the native/private channel
+remains usable; loader behavior needs separate evidence, not an independence claim
+from unit topology alone. The installer is bootstrap-only, not a repair tool.
+
 ## Schema consumers and optional model proxies
 
 The Hermes Hub plugin and turn-export hook are database consumers, even though

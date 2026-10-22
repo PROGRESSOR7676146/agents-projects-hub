@@ -5,6 +5,14 @@ Date: 2026-10-10. Decision owner: repository owner.
 Supersedes the full-parity delivery priority in the Claude continuation plan;
 does not supersede security or other providers' contracts.
 
+## 2026-10-22 trusted-installation amendment
+
+[ADR 0072](0072-trusted-personal-installation.md) amends only the scope described here.
+The global custody/no-trust-exception clauses below are superseded by the
+trusted personal scope. Editor closure requires its finite matrix on one ordinary
+disposable root; three-root/core acceptance remains a separate milestone.
+The older rationale below is historical where it conflicts with this amendment.
+
 ## Context
 
 Full Claude parity combines project editing, remote permissions, native frontend

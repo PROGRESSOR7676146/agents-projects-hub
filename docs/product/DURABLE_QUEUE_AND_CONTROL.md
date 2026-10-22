@@ -257,9 +257,13 @@ This normative module is part of the
   to stop, restart or activate. Unconfirmed responses MUST NOT cause
   automatic mutation retry or retargeting to another incarnation. This boundary
   assumes trusted local same-UID authority, not Telegram authentication or
-  isolation from a hostile process sharing the UID. Installed activation MUST
-  independently exclude untrusted provider/helper access to the endpoint and
-  preserve the separate native, custody and restoration gates. Source publication
+  isolation from a hostile process sharing the UID. The operations endpoint
+  MUST be absent from the confined Claude namespace and MUST NOT be supplied
+  as a provider capability by existing launches; the permitted per-turn human
+  permission-hook IPC remains distinct. Activation MUST preserve scoped endpoint
+  checks, exact native terminality and restoration gates. Global exclusion of
+  every unconfined same-UID provider/helper/admin process is not claimed under
+  REQ-SEC-008 and MUST NOT become a separate activation prerequisite. Source publication
   MUST NOT authorize deployment. See [ADR 0070](../decisions/0070-worker-operations-drain-control.md)
   and [ADR 0071](../decisions/0071-worker-socket-thread-custody.md).
 - **REQ-QUEUE-008 (Implemented):** While the head job of a Telegram topic is

@@ -339,14 +339,16 @@ single-writer checks remain mandatory. See
   inline/pilot execution and local/tmux transfer MUST refuse before their effects
   until separately supported. Metadata proves selection continuity only; it
   does not expose the full managed definition or establish read isolation,
-  authority-data custody or helper isolation. Those claims
-  require independent OS-boundary and negative access evidence.
+  authority-data custody or helper isolation. Host-wide exclusion of trusted
+  administrative/helper processes is not claimed under the personal-installation
+  scope in REQ-SEC-008; this is not an additional pending release gate.
 - **REQ-SEC-002 (Implemented):** Hermes and Hub are not approval authorities.
   Codex/tlive retains approval ownership and first-valid-answer-wins behavior.
 - **REQ-SEC-003 (Accepted):** Timeout, restart, ambiguity, missing state, and
   channel failure MUST resolve to deny/no action, never approval.
-  Neither provider MAY approve the other's actions; enforcement against
-  provider/helper access to approval channels remains subject to REQ-SEC-008 custody.
+  Neither provider MAY approve the other's actions. The human-only protocol and
+  scoped launch checks remain mandatory; they MUST NOT be represented as
+  tamper-proof against a trusted same-UID/admin assistant (REQ-SEC-008).
 - **REQ-SEC-004 (Implemented):** Tokens MUST live in private local files, not
   command arguments, JSON examples, logs, Git, documents, or Telegram content.
 - **REQ-SEC-005 (Implemented):** State and secret files MUST use restrictive
@@ -380,9 +382,21 @@ single-writer checks remain mandatory. See
   subscription routing or local-transfer parity.
   The trusted worker and tlive host remain the receipt trust base; this slice
   MUST NOT claim isolation from an unconfined hostile process sharing their UID.
-  Live activation MUST exclude such principals from signing keys, Hub state and
-  transport endpoints through independently verified OS isolation. Prompt-based
-  review MUST NOT exempt helpers or other launch paths from this custody gate.
+  The supported scope is a personal single-owner trusted installation.
+  Administrative, helper and recovery assistants MAY perform explicitly assigned
+  work with their granted rights; global exclusion of every unconfined same-UID
+  or privileged process from signing keys, state and transport endpoints is not
+  claimed and MUST NOT be an editor release prerequisite. Such a process can
+  technically read authority data, forge symmetric receipts or interfere with
+  execution. Mode 0600, review instructions and metadata MUST NOT be presented
+  as protection against it. Shared networking does not establish exfiltration
+  isolation. Existing namespace, immutable runtime/hook, separate session HOME,
+  private-path exclusions and per-operation human checks MUST remain enforced
+  for the confined Claude launch; a failed boundary MUST NOT fall back to an
+  unconfined launch. Other providers retain their supported tools and policies.
+  Backups recover only their captured scope, not disclosures, external effects
+  or forged authority. Stronger hostile-agent isolation requires a separate
+  scope decision; it is not pending acceptance of this trusted installation.
 
 The detailed threat model in `docs/SECURITY.ru.md` remains normative where it is
 more specific and consistent with this baseline.

@@ -106,7 +106,9 @@ the current provider-parity release.
   Cross-project aggregation and transfer to an external evaluator require
   explicit data scope; ordinary context isolation remains in force. Models
   MUST NOT edit their own authoritative grades, usage or allocation receipts.
-- **REQ-EVAL-010 (Accepted independent milestone; implementation pending):**
+  This product rule and scoped access checks do not claim tamper-proof evidence
+  against a trusted same-UID/admin assistant (REQ-SEC-008).
+- **REQ-EVAL-010 (Bounded projection and owner assessments implemented offline; live acceptance pending):**
   Hub MUST provide a minimal
   private outcome journal: task, participant/model/effort, result or artifact,
   accepted/rework/unknown decision with a short reason, and observable elapsed
@@ -148,8 +150,11 @@ the current provider-parity release.
   Assessments are journal evidence only: `rework` MUST NOT enqueue execution,
   `accepted` MUST NOT grant tools or release uncertainty, and `unknown` MUST NOT
   overwrite usage, model or timing evidence. Source publication MUST NOT claim
-  deployed authority-data custody from Telegram authentication or SQL triggers;
-  untrusted model access to this journal remains an independent OS-boundary gate.
+  deployed authority-data custody from Telegram authentication or SQL triggers.
+  The confined Claude launch MUST exclude the journal's private state. Global
+  same-UID/admin exclusion is not claimed under REQ-SEC-008 and MUST NOT become
+  an additional journal gate. Provenance and human-only assessment checks remain
+  mandatory; trusted administrative access is not acceptance evidence.
 
 ### Acceptance boundaries
 

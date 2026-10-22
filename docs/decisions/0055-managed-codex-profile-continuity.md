@@ -3,6 +3,13 @@
 Status: accepted implementation slice; live acceptance pending
 Date: 2026-10-06
 
+## 2026-10-22 trusted-installation amendment
+
+[ADR 0072](0072-trusted-personal-installation.md) amends only the scope described here.
+The global helper/tool authority-custody follow-up is superseded. Managed
+selection continuity, policy checks and unsupported local-route refusals remain.
+The older rationale below is historical where it conflicts with this amendment.
+
 ## 2026-10-09 scope amendment
 
 [ADR 0065](0065-retire-hub-lead-advisor.md) withdraws the advisor-isolation

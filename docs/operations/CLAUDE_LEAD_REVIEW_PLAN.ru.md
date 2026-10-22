@@ -1,6 +1,6 @@
 # Claude Code: чтение и правка проекта через Hub
 
-Дата пересмотра: 2026-10-12. Статус: принят объём первого файлового этапа;
+Дата пересмотра: 2026-10-22. Статус: принят объём первого файлового этапа;
 реализация и native/Telegram приёмка остаются открытыми. Владелец решения: владелец репозитория.
 Решение об объёме: [ADR 0067](../decisions/0067-claude-editor-first.md).
 Последняя проверенная исходная основа editor fixture: `e5dc14830ee76215c19566f4afc36397687da257`.
@@ -42,17 +42,20 @@ off-machine backup/restore, рефакторинг и выпуск остают�
 
 Повторно используем Controller, workers, SQLite queue/outbox, namespace и
 существующий protected permission host. Не добавляем broker, БД, общий launcher
-или agent framework ради этого этапа. Если текущая custody требует платформенной
-миграции или переделки внешних запусков, фиксируем конкретный blocker и стоимость
-для отдельного решения владельца. Уменьшение объёма не ослабляет trust model.
+или agent framework ради этого этапа. По
+[ADR 0072](../decisions/0072-trusted-personal-installation.md) принимаем личную
+trusted installation: изоляция всех same-UID/admin помощников не заявляется
+и не блокирует редактор. Namespace и human-only protocol конкретного запуска
+сохраняются. Общий UID/VM/launcher study остановлен; новые границы требуют
+отдельного решения, а не становятся скрытым условием редактора.
 
 ## Следующая граница разрешений
 
 Проверить применимость уже созданной границы на поддерживаемом filesystem,
 обычном Git root, immutable runtime и отдельном provider home по
 [file-tool runbook](CLAUDE_FILE_PERMISSIONS.md) и
-[existing-host-first custody](CLAUDE_CUSTODY.md). Source fixtures не доказывают
-installed custody, реальный human callback или upstream billing.
+[конечному installation checklist](CLAUDE_CUSTODY.md). Source fixtures не доказывают
+scoped installed checks, реальный human callback или upstream billing.
 
 Решающий native сценарий: Read → предложение изменения → Write/Edit request →
 точное новое решение человека → ровно разрешённая правка. Deny не меняет файл.
@@ -75,20 +78,23 @@ SDK не является автоматическим обходом подпи
 | Полномочия | Отрицательные project/private-state/key/runtime/`.git` проверки; stale/duplicate receipt, timeout, missing host, restart и stop не дают permission |
 | Выполнение и сессия | Новая Hub-owned сессия и exact resume; один writer; stop; completed/partial результаты сохранены; unknown outcome не replay |
 | Telegram и маршрут | Владелец видит запрос, ожидание, результат и отказ; реальный подписочный route исключает paid/API/extra-usage fallback |
-| Завершение | Независимое review, обязательные source gates и отдельно разрешённая приёмка трёх проектов на точной чистой ревизии с compatible rollback |
+| Завершение | Независимое review, обязательные source gates и отдельно разрешённая матрица на одном ordinary disposable root, точной чистой ревизии с compatible rollback; три roots относятся к отдельной core-приёмке |
 
 Для каждой строки сохранять одно из состояний: проверено offline, проверено
-native/live, blocker или неизвестно. В отчётах владельцу давать примерный процент
-по сокращённому общему goal с явным диапазоном неопределённости; сохранять тот же
-объём оценки между отчётами и отдельно называть завершённые и открытые этапы.
-Это оценка объёма работы, а не acceptance evidence или автоматический скоринг.
+native/live, blocker или неизвестно. Прогресс выполнения плана считать по заранее
+зафиксированным чекпоинтам с постоянными весами и знаменателем: баллы получает
+только завершённый результат с evidence. Подготовка и повторные проверки сами
+по себе баллы не добавляют. При опровержении результата снять его вес; изменение
+scope/весов показывать явно. В периодическом отчёте назвать текущие баллы из 100,
+изменение, следующий чекпоинт и причину задержки. Это отчёт о выполнении нового
+плана, не процент готовности продукта и не замена acceptance evidence.
 Source publication не закрывает native/Telegram строки.
 Новые функции не добавляются в эту матрицу как условия завершения.
 
 Текущий исходный [native fixture](../testing/CLAUDE_NATIVE_EDITOR.md#recorded-offline-evidence)
 проверил Write/Edit Allow/Deny, повторную запись того же файла после exact resume
 с сохранённой историей и четыре свежих фиктивных receipts. Это закрывает узкий
-offline CLI вопрос строки «Чтение и правка»; human Telegram, installed custody
+offline CLI вопрос строки «Чтение и правка»; human Telegram, scoped installation
 и подписочный route остаются отдельными непроверенными условиями.
 
 ## Что означает сопоставимая поддержка с Codex
@@ -105,4 +111,5 @@ Editor milestone открыт до прохождения конечной ма�
 точную ревизию, разрешённые ограничения и отдельно доказанные live результаты.
 После этого дальнейший Claude объём выбирает владелец по практическому опыту.
 Роли закрыты отменой; остальные этапы goal сохраняют собственные критерии.
-Merge и deployment остаются отдельными owner actions.
+Merge выполняется по действующей делегации в AGENTS.md после review и gates;
+deployment требует собственного разрешённого scope.

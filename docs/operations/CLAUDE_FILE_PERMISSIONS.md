@@ -4,23 +4,20 @@ Contract: [REQ-SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
 Choice and limitations: [ADR 0052](../decisions/0052-protected-claude-file-permissions.md).
 This runbook prepares a candidate; it does not authorize deployment or provider calls.
 
-Live activation remains blocked until untrusted processes are demonstrably
-excluded from the worker/tlive keys, state and endpoints. A same-UID process
-outside the Claude namespace can read mode-0600 keys and forge symmetric
-receipts. Do not treat this slice as advisor isolation. Dedicated key custody,
-separate OS identities and asymmetric result signing require a follow-up design
-and acceptance before broadening this trust claim.
-The existing-host-first assessment and conditional infrastructure options are
-in [ADR 0053](../decisions/0053-claude-custody-reference-deployment.md) and the
-[custody preparation runbook](CLAUDE_CUSTODY.md). No VM or UID layout is selected;
-installed custody remains an independent gate.
+Use the trusted personal-installation scope in
+[ADR 0072](../decisions/0072-trusted-personal-installation.md). A same-UID/admin
+process outside the Claude namespace can read mode-0600 keys and forge symmetric
+receipts; exclusion of all such assistants is not claimed or a release gate.
+The confined launch's private-path, immutable-runtime and human-permission checks
+remain mandatory. The finite [installation checklist](CLAUDE_CUSTODY.md) replaces
+the former global inventory/UID/VM study. No new infrastructure is required here.
 
 ## Prepare an isolated candidate
 
 1. Keep the existing text-only configuration as rollback behavior. Build an
    immutable Hub artifact containing the hook module. Use a compatible runtime
-   rollback artifact supporting schema 38; a schema-37-only executable cannot
-   roll back against migrated state. Use the ordinary release manifest/backup
+   rollback artifact supporting the candidate's retained current schema; merely
+   supporting the original schema 38 is insufficient after later migrations. Use the ordinary release manifest/backup
    gates before any separately authorized migration or activation.
    Native sessions pin mode and a home digest. Use `/new` before enabling or
    disabling file tools or moving the session store; transcripts are not silently
@@ -135,7 +132,7 @@ UTF-8, empty interior records/tokens and unsupported tail shapes refuse invocati
 The initial boundary refuses private authority paths containing descendant
 mounts rather than omit their separate filesystems. Unavailable, ambiguous,
 malformed or mismatching mount provenance also refuses invocation. These checks
-do not freeze contents or remove the separate host-custody/live gates.
+do not freeze contents or remove the scoped installed/native/live gates.
 The fresh per-turn socket is also checked against private authority; it cannot
 substitute a protected transport endpoint. Strict provenance parsing can refuse
 unusual unrelated kernel mount records; such layouts require offline investigation,
@@ -227,7 +224,9 @@ same-filesystem project still starts. Private descendant mounts must refuse;
 missing authority prefixes that appear or change during preparation must refuse.
 Confirm no Stop hook, continuation or second writer, and no real model calls
 from monitoring. The worker process and the hook must have different visible
-authority: keys/state are available only to the worker and tlive.
+authority inside that launch: keys/state must be absent from the hook/provider
+namespace and available to the worker/tlive trust base. This is no claim about
+unconfined trusted administrative processes outside it.
 
 Confirm the actual CPA subscription route and absence of paid fallback separately.
 The source patch/build checks do not pin downloaded dependencies or attest to

@@ -182,7 +182,7 @@ necessary but not sufficient for items marked live.
   retain the old root.
 - **AC-F-015 (Retired by ADR 0065):** Lead/advisor role and review-workflow
   acceptance is removed, not passed. The ID remains reserved. Independent
-  subscription/CPA routing, human approvals, Telegram behavior, custody and
+  subscription/CPA routing, human approvals, Telegram behavior, scoped installation and
   exact-session local return still require their existing separate acceptance
   before Claude parity is claimed; REQ-EVAL-010 remains an independent milestone.
   Its acceptance is owned by the
@@ -245,5 +245,5 @@ necessary but not sufficient for items marked live.
 | Automatic OS terminal window/PID management | Rejected | Explicit resume commands and writer leases are simpler and safer. |
 | Message-by-message CLI transcript mirroring | Rejected | Provider sessions plus explicit bounded history retrieval are sufficient. |
 | Automatic approval or security relaxation | Rejected | Violates the trust model. |
-| Claude Code CLI worker | Repository scaffold; live acceptance pending | Text-only adapter behind a loopback CPA route with independent slots; approvals, authority custody and parity work continue (REQ-AUTH-009, ADR 0039, ADR 0045). |
+| Claude Code CLI worker | Repository scaffold; live acceptance pending | Text-only adapter behind a loopback CPA route with independent slots; human approvals, scoped installation and subscription acceptance remain open; global same-UID/admin isolation is not claimed; parity is deferred (REQ-AUTH-009/SEC-008, ADR 0067/0072). |
 | Out-of-band update and incident plane | Planned | Hub keeps a passive incident journal and stack drift check; Hermes sends model-free incident cards and analyzes only on the owner's press; a deterministic tool switches the stack only from an owner-confirmed plan (REQ-OPS-013..015, ADR 0048). |
