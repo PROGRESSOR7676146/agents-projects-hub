@@ -26,10 +26,10 @@ check, generated manifest or completed checklist does not authorize deployment.
 | Candidate and consumers | Exact clean revision, immutable artifact/dependency/tlive hashes and current schema; every required Hub component reports that revision. Include idle Hermes Gateway as a source/schema consumer. |
 | Compatible rollback | Distinct clean runtime supporting retained current-schema state, coordinated Hermes source/environment pin, release manifest and offline rehearsal. Never put an older DB over accepted work. |
 | Supported launch | Exact installed CLI/digest and namespace/runtime/filesystem applicability; ordinary disposable Git root, separate session HOME, read-only `.git` and runtime. Unsupported linked worktree or failed boundary refuses before invocation. |
-| Private paths and endpoints | Existing descriptor/mount/private-path negative checks; keys/state and operations-drain endpoint absent from confined provider/hook views. Only the exact per-turn permission IPC is exposed. No host-wide same-UID exclusion claim. |
+| Private paths and endpoints | Existing descriptor/mount/private-path negative checks; keys/state and operations-drain endpoint absent from confined provider/hook views. Filesystem IPC visibility is limited to the exact per-turn permission socket; shared networking leaves loopback/abstract sockets reachable. Check the confined launch's reachable authority listeners, including FD transfer/signing/management; unknown authority-bearing exposure blocks activation. Use fictional sentinels with positive controls at intended authority locations, never real keys or destructive controls. No host-wide same-UID exclusion claim. |
 | Identity and recovery | Canonical root, native session/mode/home, generation, lease and unresolved jobs; SQLite-consistent backup plus matching retained spool/history/config. Preserve uncertainty and original delivery evidence. |
 | Acceptance scope | One disposable root/topic, finite native calls/effects/waits, four fresh human Write/Edit Allow/Deny decisions, stop/restart/stale tests, result/delivery recovery and cleanup ownership. Three roots belong to separate core acceptance. |
-| Subscription | Private CPA upstream attestation and installed CLI→CPA→subscription observation; no paid/API/extra-usage fallback. Loopback configuration or a review call is insufficient. |
+| Subscription | Private CPA upstream attestation and installed CLI→CPA→subscription observation; no paid/API/extra-usage fallback. The exposed client credential must grant no CPA management or host-control capability. Loopback configuration or a review call is insufficient. |
 
 No automatic reset, replay, reconciliation or approval is used to make the gate
 green. Any unknown required result remains open with its exact evidence limit.
@@ -69,7 +69,16 @@ skips are not namespace evidence; strict required fixtures must actually run.
    uncertain history for a canary. Verify backup/rollback before cutover.
 2. Apply only the authorized candidate/configuration using the existing release
    procedures. Verify immutable runtime/hooks, namespace applicability and
-   descriptor closure on the exact installed kernel/bubblewrap/CLI. Retain the
+   descriptor closure on the exact installed kernel/bubblewrap/CLI. Run all three
+   strict namespace scenarios above on that installed kernel/bubblewrap. Use
+   fictional sentinels at intended authority locations and positive fixture
+   controls so an absent target cannot pass as denial; never probe real keys or
+   destructive controls. Record listeners reachable from this confined namespace
+   and verify that no authority-bearing listener yields private files/FDs, signing,
+   management or host control without a secret unavailable to it. Check the CPA
+   client credential cannot perform management/host control. Unknown authority
+   exposure stops activation; this is a scoped point-in-time check, not proof
+   of all future trusted host launches. Retain the
    separate native-terminal, physical-exit and durable-history checks for any
    maintenance drain; an ACK is not permission to stop.
 3. Run the bounded native/human scenarios in the file-tool runbook on the exact
@@ -87,8 +96,9 @@ Unknown effects or a failed scoped check stop promotion. Keep text-only/default
 behavior and existing uncertain evidence. Staging must not create another live
 poller or writer. After authorized cutover, stop new admission and preserve
 executing/indeterminate work before selecting the compatible rollback runtime.
-Do not restore an old database, automatically replay a task or silently copy
-sessions across homes. Keep artifacts and receipts private. Key rotation is a
+Never restart the old environment until the new pollers/writers have physically
+stopped and ownership has been independently checked. Do not restore an old
+database, automatically replay a task or silently copy sessions across homes. Keep artifacts and receipts private. Key rotation is a
 separate credential task.
 
 Close only the named finite installed/native/human checks at the exact revision;

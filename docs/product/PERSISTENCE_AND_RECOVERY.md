@@ -84,14 +84,21 @@ This normative module is part of the
   rollback artifact against the retained target state, and prove queued work, prepared outbox delivery, and an
   indeterminate job remain unchanged. It MUST NOT read deployment state, invoke
   a provider, contact Telegram, or control a service.
-- **REQ-OPS-012 (Planned):** Machine-loss recovery MUST use encrypted versioned
-  application snapshots and periodic cold WSL exports stored off the physical
-  source machine, with recovery keys held separately. A scheduled isolated
-  cold-restore drill MUST verify immutable artifacts, SQLite integrity/schema,
-  project and provider-session stores, outbox spool bindings, and unchanged
-  indeterminate work before any restored service or network access. Backup
-  automation, WSL shutdown/export, and private-data drills require separate
-  deployment authorization.
+- **REQ-OPS-012 (Hub application recovery planned; host recovery externally owned):**
+  Hub MUST define an encrypted versioned application recovery set with compatible
+  immutable artifacts, SQLite-consistent state, captured project/provider-session
+  stores, matching spool/history/config and explicit capture limits. A bounded
+  isolated application restore MUST verify artifacts, SQLite integrity/schema,
+  captured stores, outbox spool bindings and unchanged indeterminate work before
+  restored consumers or network access. It MUST NOT replay uncertain work or
+  claim recovery of uncaptured data. Hub MUST hand off that set and its restore
+  procedure to external infrastructure, with off-machine storage and separately
+  held recovery keys identified as external prerequisites. Host/WSL export,
+  shutdown, infrastructure scheduling, external storage/key administration and
+  full-host cold-restore drills belong to that external infrastructure, not Hub
+  implementation. Hub handoff MUST NOT claim those drills passed or make them a
+  first-editor prerequisite. Backup automation and private-data restore/drills
+  require their existing separate deployment authorization.
 - **REQ-OPS-013 (Planned; ADR 0048):** On every cycle, before Operations
   delivery, the monitor MUST project each evaluated operational alert into a
   private, atomically replaced incident journal. An episode carries an opaque

@@ -15,9 +15,10 @@ This normative module is part of the
 - Antigravity automatic rotation is unavailable without a supported headless
   account-pool interface.
 - The current recovery plane handles component/service failure on the existing
-  machine. An off-machine WSL backup and cold-restore drill is now specified,
-  but its automation and first private drill remain planned; exact recovery of
-  an in-flight provider turn remains impossible.
+  machine. Hub application snapshots, bounded restore and recovery handoff remain
+  planned under REQ-OPS-012. Full-host/WSL export, off-machine infrastructure and
+  cold-host drills are externally owned, not unfinished Hub implementation;
+  handoff does not prove them. Exact recovery of an in-flight turn is impossible.
 - OpenCode and Antigravity have one worker slot each. Codex and Claude default
   to one each; extra processes require an explicit external-worker rollout.
   Claude defaults to text-only queue execution. The opt-in protected file-tool

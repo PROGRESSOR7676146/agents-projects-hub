@@ -3,6 +3,12 @@
 Status: repository scaffold; deployment acceptance pending
 Date: 2026-09-27
 
+## 2026-10-22 trusted-installation amendment
+
+[ADR 0072](0072-trusted-personal-installation.md) supersedes only legacy global
+same-UID/helper authority-custody prerequisites below. Scoped launch/human checks,
+shared primitives and retirement of Hub roles remain unchanged.
+
 ## 2026-10-09 scope amendment
 
 [ADR 0065](0065-retire-hub-lead-advisor.md) withdraws the planned lead/advisor

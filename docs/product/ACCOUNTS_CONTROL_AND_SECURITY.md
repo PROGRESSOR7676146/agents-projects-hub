@@ -389,8 +389,17 @@ single-writer checks remain mandatory. See
   claimed and MUST NOT be an editor release prerequisite. Such a process can
   technically read authority data, forge symmetric receipts or interfere with
   execution. Mode 0600, review instructions and metadata MUST NOT be presented
-  as protection against it. Shared networking does not establish exfiltration
-  isolation. Existing namespace, immutable runtime/hook, separate session HOME,
+  as protection against it. Trust here is operational, not prompt-injection
+  resistance: any model turn outside the confined Claude namespace, including
+  Codex workspace-write, OpenCode, Antigravity and native Hermes tools, is within
+  this accepted risk. Their sandbox/tool flags MUST NOT establish exclusion from
+  Hub/tlive authority. Shared networking does not establish exfiltration isolation.
+  Scoped installed acceptance MUST identify authority-bearing listeners reachable
+  from the confined launch and verify that private files/FDs, signing, management
+  and host control require a secret unavailable to it; the CPA client credential
+  MUST grant no management or host-control capability. Unknown authority-bearing
+  exposure MUST refuse activation. This is a scoped point-in-time check, not a
+  host-wide guarantee against future trusted launches. Existing namespace, immutable runtime/hook, separate session HOME,
   private-path exclusions and per-operation human checks MUST remain enforced
   for the confined Claude launch; a failed boundary MUST NOT fall back to an
   unconfined launch. Other providers retain their supported tools and policies.

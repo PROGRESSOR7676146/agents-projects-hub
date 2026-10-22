@@ -42,7 +42,12 @@ human approval or uncertain-work replay.
 The checked-in monitor unit's model-free `--notify --repair` is retained as an
 installation-authorized deterministic mechanism. Record its actual timer state,
 expected Gateway restart/cooldown and interventions in reciprocal drills; any
-policy change needs appropriate authorization. An unavailable Hub import/DB must
+policy change needs appropriate authorization. Monitor repair does not change
+versions, links or source/environment pins or perform rollback. Reciprocal repair
+is not authorization for such a switch; pin/version coordination uses the separately
+authorized owning release procedure (planned updater REQ-OPS-015; Hub releases
+REQ-OPS-010/011). A Gateway restart applies its current environment, including a
+changed/missing source pin during rollback. An unavailable Hub import/DB must
 be tested for bounded project-integration failure while the native/private channel
 remains usable; loader behavior needs separate evidence, not an independence claim
 from unit topology alone. The installer is bootstrap-only, not a repair tool.

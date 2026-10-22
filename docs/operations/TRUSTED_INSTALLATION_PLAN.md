@@ -29,7 +29,10 @@ one ordinary disposable root; broader core acceptance stays in P5. Full host
 cold restore belongs to external infrastructure; P7 hands off the Hub-owned
 recovery set without claiming that restore passed. The updater increment is a
 bounded audit and finite remaining scope under REQ-OPS-015, not a general update
-framework or removal of its human-confirmed stage/apply rules. Valid grants are
+framework or amendment of REQ-OPS-015. For that planned updater, a model turn
+cannot stage, apply or roll back; serialized apply/rollback need single-use owner
+control bound to exact plan/current links, expiry and Gateway restart. Hub releases
+keep REQ-OPS-010/011. Valid grants are
 reused; uncovered deployment/live effects need a concrete reviewed scope.
 
 

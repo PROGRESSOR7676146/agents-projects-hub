@@ -61,7 +61,7 @@ with a new record.
 | Evidence-based task allocation | Accepted foundation for participant evaluation and resource-aware allocation; implementation pending, optional judges and bounded experiments. | [ADR 0037](0037-evidence-based-task-allocation.md) |
 | Multiple Codex worker slots | Separate Codex processes share a bounded queue while retaining one client/connection per slot, root exclusion, fairness and exact revision health. | [ADR 0038](0038-multiple-codex-worker-slots.md) |
 | Limited Claude CPA workers | Separate Claude CLI slots share queue bounds; the initial adapter is text-only until human/native and scoped installation gates pass (ADR 0072). | [ADR 0039](0039-claude-cpa-worker-scaffold.md) |
-| Bounded Claude/Codex collaboration (retired) | Hub role and review orchestration withdrawn; project instructions own independent review. Claude parity remains deferred; scoped installation and the general journal remain. | [ADR 0065](0065-retire-hub-lead-advisor.md), superseding [ADR 0040](0040-bounded-claude-codex-lead-advisor.md) |
+| Bounded Claude/Codex collaboration (retired) | Hub role and review orchestration withdrawn; project instructions own independent review. Claude parity remains deferred; scoped installation and the general journal remain. | [ADR 0065](0065-retire-hub-lead-advisor.md), [ADR 0072](0072-trusted-personal-installation.md), superseding [ADR 0040](0040-bounded-claude-codex-lead-advisor.md) |
 | Parallel isolated test modules | Canonical tests run every module in its own discovery process in parallel; focused selectors import sibling fixtures as discovery does. | [ADR 0041](0041-parallel-isolated-test-modules.md) |
 | Pre-commit gate | A versioned pre-commit hook refuses unvalidated working-tree content and runs cheap contracts, the history scan and the full parallel suite; Pyright stays at push. | [ADR 0042](0042-pre-commit-gate.md) |
 | Survived-failure diagnostics | Deliberately survived failures log only exception class and a static site label, rate-limited, to stderr/journald; Ruff S110/S112 forbid new silent handlers. | [ADR 0043](0043-bounded-diagnostics-for-survived-failures.md) |
@@ -84,7 +84,6 @@ with a new record.
 | Final/progress delivery certainty | Schema43 fences sends, preserves unknown outcomes and multipart receipts, and separates late native proof from delivery replacement. | [ADR 0060](0060-final-and-progress-delivery-certainty.md) |
 | Local owner delivery holds | Schema44 records exact immutable permission to continue past unknown delivery, preserving receipts, results and independent safety boundaries. | [ADR 0061](0061-owner-delivery-hold-dispositions.md) |
 | Worker operations-drain control | Default-off bounded local socket binds one exact incarnation and request; operation-only receipts grant no native or deployment authority. | [ADR 0070](0070-worker-operations-drain-control.md) |
-
 | Trusted personal installation | Accept trusted same-UID/admin residual risk; keep scoped controls and human permissions, one-root editor closure and independent reciprocal Hermes repair. | [ADR 0072](0072-trusted-personal-installation.md) |
 
 The table is an index, not a substitute for the normative product requirements.

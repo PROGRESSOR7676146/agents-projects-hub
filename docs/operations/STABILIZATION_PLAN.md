@@ -64,7 +64,7 @@ source base below is historical and does not select an installed candidate.
 | 4 — Claude project editor | Protected Read/Glob/Grep/Write/Edit, configured model/effort, exact Hub-owned sessions, human write approvals, stop/results/recovery and subscription without paid fallback; full parity deferred |
 | 5 — roles | Withdrawn, not implemented; general outcome/time/usage journal remains an independent supporting milestone |
 | 6 — live acceptance | Three independent projects, queue/approvals/stop, restarts and denied-access scenarios; connect and Telegram ↔ CLI for supported providers, deferred for Claude |
-| 7 — operations/release | Hermes incidents and controlled updates, off-machine restore drill, remaining refactoring and release 0.8 |
+| 7 — operations/release | Hermes incidents/controlled updates, bounded Hub restore and external recovery handoff (REQ-OPS-012), remaining refactoring/release; full-host drill externally owned |
 | Added footer visibility | [Existing /goal and /fast follow-up](#planned-final-response-mode-indicators) |
 
 Roles are withdrawn; the goal stays open. Preserve source/tests and independent
@@ -483,7 +483,7 @@ acceptance.
 | Codex preparation notification conservation | REQ-QUEUE-004, REQ-QUEUE-012 | Keep one exact turn active on root A while root B starts or resumes; preserve both finals, early/late human approvals, context and account quota observations, with no additional invocation or unrelated-worker restart |
 | Project-group provisioning | REQ-ONBOARD-003, REQ-ONBOARD-006 | New project canary |
 | Registered-project editing | REQ-PROJECT-EDIT-001..004 | Rename and relocation canary |
-| Machine-loss recovery drill | REQ-OPS-012 | Private cold-restore drill |
+| Hub application recovery/handoff | REQ-OPS-012 | Bounded Hub-consistent restore; full-host/WSL drill externally owned, not claimed by handoff |
 | Unauthorized access and disclosure | REQ-SEC-006, AC-F-007, AC-NF-001 | Outsider-account negative checklist |
 
 ## Follow-ups found during execution

@@ -5,8 +5,9 @@
 
 Follow [P1–P7 and fixed checkpoint reporting](STABILIZATION_PLAN.md#trusted-installation-execution)
 under [ADR 0072](../decisions/0072-trusted-personal-installation.md).
-This section supersedes older next triggers and blanket "no live authorization"
-statements below; check the actual owner's scoped grants before effects.
+This section supersedes older next triggers. Historical "no live authorization"
+statements describe their own increments; they neither grant nor revoke current
+scope. Check actual valid owner grants before effects.
 P1 is the precise normative amendment; P2 is a finite existing-check/gap pass,
 not another global custody inventory. Preserve source evidence and useful controls.
 The first editor closes on one ordinary root; three roots are separate core work.

@@ -1,6 +1,6 @@
 # ADR 0053: Evidence before selecting Claude authority custody infrastructure
 
-Status: revised preparation decision; infrastructure selection and acceptance pending.
+Status: global infrastructure/custody study stopped by ADR 0072; scoped acceptance open.
 Date: 2026-10-04.
 Owner: Hub maintainer; deployment authorization remains with the repository owner.
 

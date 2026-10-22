@@ -22,7 +22,12 @@ Hub предназначен для личной установки одного
 читать authority-файлы, подменять state/receipts и вмешиваться в процессы.
 Режим 0600 и симметричная подпись от этого не защищают. Этот риск принят;
 hostile-same-UID/admin isolation не заявляется и не блокирует первый редактор.
-Общее сетевое пространство также не гарантирует запрет передачи доступных данных.
+Доверие установки не означает устойчивость к prompt injection. В принятый риск
+входят любые ходы вне confined Claude namespace: в том числе Codex workspace-write,
+OpenCode, Antigravity и native tools Hermes. Их sandbox/tool flags не доказывают
+исключение из Hub/tlive authority. Общее сетевое пространство также не гарантирует
+запрет передачи доступных данных; scoped проверка authority-bearing endpoints
+конкретного запуска остаётся обязательной по REQ-SEC-008.
 
 Запрет модельного approval сохраняется как правило продукта. Human-only receipts,
 namespace, immutable runtime, private-state/key exclusion и существующие

@@ -44,7 +44,7 @@ separate in the [backlog](../operations/STABILIZATION_PLAN.md#live-acceptance-ba
 | Scoped acceptance actor | Implemented | Live authorization pending | [AC-F-011](../product/ONBOARDING_AND_ACCEPTANCE.md), [ADR 0003](../decisions/0003-scoped-telegram-acceptance-actor.md) |
 | Immutable releases and rollback rehearsal | Implemented offline | Deployment-owned | [REQ-OPS-010](../product/PERSISTENCE_AND_RECOVERY.md), [ADR 0012](../decisions/0012-verifiable-immutable-deployments.md) |
 | Codex multi-auth account pool and rotation | Retired | Not applicable | [ADR 0047](../decisions/0047-retire-codex-multi-auth.md) |
-| Off-machine recovery | Planned | Drill pending | [REQ-OPS-012](../product/PERSISTENCE_AND_RECOVERY.md) |
+| Application recovery/handoff | Planned; full-host infrastructure externally owned | Bounded Hub restore pending; host drill not claimed | [REQ-OPS-012](../product/PERSISTENCE_AND_RECOVERY.md) |
 | Incidents | Journal + default-off notices/dismiss; Analyze open | Pending | [REQ-OPS-013/014](../product/PERSISTENCE_AND_RECOVERY.md), [runbook](../operations/HERMES_INCIDENT_NOTICES.md) |
 
 ## Quality checkpoint
@@ -81,7 +81,10 @@ product foundation; implementation and acceptance remain pending. See
 Hub lead/advisor roles and their review workflow are retired by
 [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md), not implemented.
 Independent cross-provider project review remains outside Hub orchestration.
-The minimal outcome journal stays an independent milestone. Standalone
+The minimal outcome journal stays an independent milestone; source baseline
+`c55ef97eca700c6728e26ee3f82adb5ec8cba0e2` includes the bounded projection and
+schema45 owner assessments under ADR 0062. P6 retains provenance/live closure.
+Standalone
 [Claude editor](../operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md), scoped installation and
 live acceptance remain open; full parity, scoring and parallel writers remain
 deferred. [ADR 0072](../decisions/0072-trusted-personal-installation.md) stops the
@@ -641,12 +644,10 @@ repository.
 
 ## Planned recovery exercise
 
-- The separate off-machine WSL recovery plan defines encrypted versioned
-  application snapshots, periodic cold exports stored away from the physical
-  source machine, exact recovery-set inventory, network/service isolation,
-  preservation of all indeterminate work, and measurable cold-restore gates.
-  Backup automation, WSL shutdown/export, and the first private timed drill were
-  intentionally not executed during v0.7.0 repository preparation.
+- REQ-OPS-012 separates bounded Hub application restore/handoff from externally
+  owned host/WSL export, storage, keys and full-host drill. The retained external
+  recovery guide is interface context, not unfinished Hub automation or proof of
+  a cold restore. Hub restore must preserve captured scope and uncertainty.
 
 ## Deferred
 

@@ -30,6 +30,12 @@ Hermes сохраняет native providers/tools/channels и участие в �
 с cooldown, без модели. Это operational coupling, а не обязательная service
 dependency. В recovery drill записывать реальное состояние timer и его
 вмешательство; изменение repair policy требует соответствующего разрешения.
+Monitor repair не переключает версии, links или source/environment pins и не
+выполняет rollback. Взаимный repair также не является разрешением на такое
+переключение: согласование pin/версий выполняется отдельно разрешённой процедурой
+владельца соответствующего release. Плановый updater сохраняет REQ-OPS-015;
+Hub releases — REQ-OPS-010/011. Рестарт Gateway применяет текущее environment,
+поэтому изменения/потерю pin нужно учитывать и в окне rollback.
 
 ## Что хранится где
 

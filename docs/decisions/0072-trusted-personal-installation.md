@@ -25,11 +25,20 @@ model launcher is added to satisfy it. The global inventory/study is stopped.
 An unconfined same-UID or privileged process can read private authority, forge
 symmetric receipts or interfere with execution. Mode 0600 and prompt policy do
 not prevent that. Shared networking does not guarantee exfiltration isolation.
+Trust is operational, not prompt-injection resistance. Model turns outside the
+confined Claude namespace, including Codex workspace-write, OpenCode, Antigravity
+and native Hermes tools, remain within this risk; their sandbox/tool flags do not
+prove Hub/tlive authority exclusion. Scoped installed authority-listener and CPA
+client/management separation checks remain mandatory under REQ-SEC-008.
 These are accepted residual risks, never passed isolation evidence.
 
 This partially supersedes ADRs [0052](0052-protected-claude-file-permissions.md)
 and [0053](0053-claude-custody-reference-deployment.md) only for the global custody
-prerequisite; ADR [0055](0055-managed-codex-profile-continuity.md) only for global
+prerequisite, including the corresponding legacy custody statements in ADRs
+[0039](0039-claude-cpa-worker-scaffold.md),
+[0056](0056-provider-neutral-process-namespace.md) and
+[0065](0065-retire-hub-lead-advisor.md); their adapters/shared primitives and role
+retirement remain unchanged. ADR [0055](0055-managed-codex-profile-continuity.md) only for global
 helper/tool custody; ADR [0067](0067-claude-editor-first.md) for its no-trust-exception
 clauses and editor closure. ADRs [0070](0070-worker-operations-drain-control.md)
 and [0071](0071-worker-socket-thread-custody.md) retain physical endpoint/thread
@@ -76,8 +85,13 @@ Hub-consistent restore stays a Hub milestone. Runtime rollback uses a distinct
 compatible executable against retained current-schema state, never an older DB
 over accepted jobs and deliveries.
 
-Manual administrative repair does not cancel REQ-OPS-015's separate prohibition
-on model-triggered stage/apply of the planned updater. No new framework, schema,
+REQ-OPS-015 remains unchanged for the planned independent stack updater: a model
+turn cannot stage, apply or roll back; apply/rollback require serialized single-use
+owner control bound to the exact plan/current links with bounded expiry and no
+survival across Gateway restart. Hub releases retain REQ-OPS-010/011. Ordinary
+monitor/reciprocal repair is not a version/link/source-pin switch authorization;
+that coordination uses the separately authorized owning release procedure.
+No new framework, schema,
 scheduler, live call, installation or deployment is authorized by this ADR.
 Source review, canonical/hosted gates and scoped live authorization stay separate.
 The [stabilization plan](../operations/STABILIZATION_PLAN.md#trusted-installation-execution)
