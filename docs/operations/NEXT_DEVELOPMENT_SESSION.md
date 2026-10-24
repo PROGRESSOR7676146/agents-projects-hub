@@ -479,6 +479,9 @@ blocking later work. The candidate carries exact-session termination evidence
 only after process and sandbox cleanup, and consumes it only with a covering
 owner stop. State retains cancellation/stop transaction ownership; generic or
 unmatched interruption and failed cleanup remain uncertain, without replay.
+The first native attempt remains uncertain: process exit alone cannot prove
+that the CLI saved a resumable conversation. Existing-session stop tests must
+also execute the later job with the same resume binding.
 
 Focused regressions cover process cleanup, exact-session/stop matching, root
 release and failure preservation. Canonical publication and independent Claude

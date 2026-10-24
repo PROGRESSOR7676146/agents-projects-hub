@@ -72,7 +72,8 @@ class ClaudeProcessStopped(ExternalTurnInterrupted):
     """The owned local Claude runner completed cleanup for this session.
 
     This proves local process termination, never successful work or rollback.
-    Only a matching, covering owner stop may consume this evidence.
+    Identity binds the owned invocation, not native conversation materialization.
+    Only a matching, covering owner stop for an established session may consume it.
     """
 
     def __init__(self, session_id: str | None) -> None:

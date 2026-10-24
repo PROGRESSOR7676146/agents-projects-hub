@@ -483,6 +483,7 @@ def invoke_external_provider_turn(
         except ClaudeProcessStopped as exc:
             if (
                 exc.session_id == claude_session_binding.session_id
+                and not claude_session_binding.is_new
                 and pending_stop_request is not None
                 and (request_id := pending_stop_request()) is not None
             ):

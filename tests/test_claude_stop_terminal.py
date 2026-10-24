@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 from hermes_codex_router import external_runtime
 from hermes_codex_router.external_runtime import ExternalCliAdapter, ExternalTurnInterrupted
 from hermes_codex_router.root_blockers import persistent_root_blocker
+from hermes_codex_router.state_errors import StateError
 from tests import test_claude_native_worker as native_fixtures
 from tests.test_external_runtime import fictional_claude_source
 
@@ -84,7 +85,24 @@ class ClaudeStopTerminalTests(unittest.TestCase):
                 fixture = native_fixtures.ClaudeNativeWorkerTests()
                 fixture.setUp()
                 try:
-                    job_id = fixture.enqueue(1)
+                    initial_id = fixture.enqueue(1)
+                    initial_adapter = native_fixtures.ObservingClaudeAdapter(fixture.path)
+                    initial_worker = fixture.worker(initial_adapter)
+                    self.assertTrue(initial_worker.run_cycle())
+                    native = initial_worker.state.get_provider_result(
+                        initial_id
+                    ).provider_session_id
+                    # Fixture delivery acknowledges the established native conversation.
+                    with initial_worker.state._connection:
+                        initial_worker.state._connection.execute(
+                            "UPDATE provider_jobs SET status='completed' WHERE job_id=?",
+                            (initial_id,),
+                        )
+                        initial_worker.state._connection.execute(
+                            "UPDATE telegram_outbox SET status='delivered' WHERE job_id=?",
+                            (initial_id,),
+                        )
+                    job_id = fixture.enqueue(2)
 
                     class Adapter(native_fixtures.ObservingClaudeAdapter):
                         def run_turn(self, **kwargs: Any) -> Any:
@@ -114,13 +132,14 @@ class ClaudeStopTerminalTests(unittest.TestCase):
                             persistent_root_blocker(worker.state._connection, topic_id=job.topic_id)
                         )
                         # Later work keeps the native session and can acquire the root.
-                        later = fixture.enqueue(2)
-                        leased = worker.state.lease_provider_job("claude", "example-next-worker")
-                        assert leased is not None
-                        self.assertEqual(leased.job_id, later)
+                        later = fixture.enqueue(3)
+                        resumed_adapter = native_fixtures.ObservingClaudeAdapter(fixture.path)
+                        resumed_worker = fixture.worker(resumed_adapter)
+                        self.assertTrue(resumed_worker.run_cycle())
+                        self.assertEqual(resumed_adapter.calls[0]["session_id"], native)
+                        self.assertIsNone(resumed_adapter.calls[0]["new_session_id"])
                         self.assertEqual(
-                            leased.provider_session_id,
-                            worker.state.get_session(job.session_id).provider_session_id,
+                            resumed_worker.state.get_provider_job(later).status, "result_ready"
                         )
                     else:
                         self.assertEqual(job.status, "indeterminate")
@@ -133,6 +152,52 @@ class ClaudeStopTerminalTests(unittest.TestCase):
                     self.assertEqual(len(adapter.calls), 1)
                 finally:
                     fixture.doCleanups()
+
+    def test_stop_on_first_native_attempt_cannot_create_an_unresumable_binding(self) -> None:
+        fixture = native_fixtures.ClaudeNativeWorkerTests()
+        fixture.setUp()
+        try:
+            first = fixture.enqueue(1)
+
+            class Adapter(native_fixtures.ObservingClaudeAdapter):
+                def run_turn(self, **kwargs: Any) -> Any:
+                    result = super().run_turn(**kwargs)
+                    raise external_runtime.ClaudeProcessStopped(result.provider_session_id)
+
+            adapter = Adapter(fixture.path, stop=True)
+            worker = fixture.worker(adapter)
+            self.assertTrue(worker.run_cycle())
+            self.assertIsNone(adapter.calls[0]["session_id"])
+            self.assertIsNotNone(adapter.calls[0]["new_session_id"])
+            fixture.assert_uncertain_and_not_replayed(worker, adapter, first)
+            job = worker.state.get_provider_job(first)
+            with self.assertRaisesRegex(StateError, "uncertainty"):
+                worker.state.enqueue_provider_job(
+                    idempotency_key="example-after-incomplete-session",
+                    chat_id=job.chat_id,
+                    message_id=2,
+                    topic_id=job.topic_id,
+                    agent_id=job.agent_id,
+                    session_id=job.session_id,
+                    session_generation=job.session_generation,
+                    provider_session_id=worker.state.get_session(
+                        job.session_id
+                    ).provider_session_id,
+                    model=job.model,
+                    effort=job.effort,
+                    payload_text="Fictional later request",
+                )
+            self.assertFalse(worker.run_cycle())
+            self.assertEqual(len(adapter.calls), 1)
+            self.assertEqual(
+                worker.state._connection.execute(
+                    "SELECT status FROM provider_stop_requests WHERE topic_id=?",
+                    (worker.state.get_provider_job(first).topic_id,),
+                ).fetchone()[0],
+                "pending",
+            )
+        finally:
+            fixture.doCleanups()
 
     def test_failed_owned_cleanup_cannot_be_promoted_to_stop_proof(self) -> None:
         adapter = ExternalCliAdapter("claude")
@@ -188,6 +253,9 @@ class ClaudeStopTerminalTests(unittest.TestCase):
                 original_cleanup(process, graceful=graceful)
                 raise RuntimeError("Process cleanup unconfirmed")
 
+            def stop(_item: object) -> None:
+                adapter.interrupt()
+
             with (
                 patch.dict(
                     "os.environ",
@@ -205,7 +273,7 @@ class ClaudeStopTerminalTests(unittest.TestCase):
                     prompt="Fictional work",
                     new_session_id=SESSION,
                     timeout=5,
-                    on_visible_assistant=lambda _: adapter.interrupt(),
+                    on_visible_assistant=stop,
                 )
             self.assertIsNone(adapter._active_process)
 
