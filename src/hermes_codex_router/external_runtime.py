@@ -9,9 +9,10 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 from urllib.parse import urlsplit
 
 from .antigravity_model import model_arguments
@@ -65,6 +66,18 @@ class ProviderUnavailableError(ExternalRuntimeError):
 
 class ExternalTurnInterrupted(ExternalRuntimeError):
     pass
+
+
+class ClaudeProcessStopped(ExternalTurnInterrupted):
+    """The owned local Claude runner completed cleanup for this session.
+
+    This proves local process termination, never successful work or rollback.
+    Only a matching, covering owner stop may consume this evidence.
+    """
+
+    def __init__(self, session_id: str | None) -> None:
+        super().__init__("owned Claude process stopped")
+        self.session_id = session_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,7 +379,8 @@ class ExternalCliAdapter:
         antigravity_log = ""
         owned_antigravity_log = False
         active_antigravity_log_path: Path | None = None
-        if self._uses_default_runner and self.runtime == "claude":
+        owned_claude = self._uses_default_runner and self.runtime == "claude"
+        if owned_claude:
             result = self._run_owned_claude_turn(
                 argv,
                 cwd=cwd,
@@ -504,7 +518,7 @@ class ExternalCliAdapter:
                 )
                 reader.feed(result.stdout.encode("utf-8"))
                 reader.finish()
-        if self._interrupt_requested.is_set():
+        if self._interrupt_requested.is_set() and not owned_claude:
             raise ExternalTurnInterrupted(f"{self.runtime} turn interrupted by user")
         if detected_limit:
             raise ProviderLimitError(detected_limit[0])
@@ -547,6 +561,17 @@ class ExternalCliAdapter:
                 "Claude image input failed bounded preparation; the turn was not started.",
             ) from None
 
+    @contextmanager
+    def _claude_stop_proof(self, session_id: str | None) -> Iterator[None]:
+        """Promote an interrupt only after owned process and mount cleanup."""
+        try:
+            yield
+        except ExternalTurnInterrupted:
+            # Cleanup errors supersede interruption and remain uncertain.
+            raise ClaudeProcessStopped(session_id) from None
+        if self._interrupt_requested.is_set():
+            raise ClaudeProcessStopped(session_id)
+
     def _run_owned_claude_turn(
         self,
         argv: tuple[str, ...],
@@ -581,17 +606,18 @@ class ExternalCliAdapter:
             argv = self._verified_claude_argv(
                 argv, cwd=cwd, environment=environment, image_input=input_data is not None
             )
-            return self._run_claude_process(
-                argv,
-                cwd=cwd,
-                environment=environment,
-                timeout=timeout,
-                expected_session_id=expected_session_id,
-                on_visible_assistant=on_visible_assistant,
-                on_process_started=on_process_started,
-                input_data=input_data,
-                image_receipt=receipt,
-            )
+            with self._claude_stop_proof(expected_session_id):
+                return self._run_claude_process(
+                    argv,
+                    cwd=cwd,
+                    environment=environment,
+                    timeout=timeout,
+                    expected_session_id=expected_session_id,
+                    on_visible_assistant=on_visible_assistant,
+                    on_process_started=on_process_started,
+                    input_data=input_data,
+                    image_receipt=receipt,
+                )
         try:
             argv = (str(sandbox.claude_executable), *argv[1:])
             launch = wrap_file_tool_argv(argv, environment, cwd, sandbox)
@@ -600,7 +626,7 @@ class ExternalCliAdapter:
                 "claude_permission_host_unverified",
                 "Claude file-tool isolation could not be verified. The productive turn was not started.",
             ) from None
-        with launch:
+        with self._claude_stop_proof(expected_session_id), launch:
             verified = self._verified_claude_argv(
                 argv, cwd=cwd, environment=environment, file_tools=True
             )

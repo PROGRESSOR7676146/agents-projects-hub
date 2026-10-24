@@ -109,7 +109,7 @@ Hermes notices: [checkpoint](HERMES_INCIDENT_NOTICES.md); live/Analyze open.
 The [tlive subscription fix](../../integrations/tlive/README.md) has offline
 stalled-history, card and disconnect regressions. The
 [Claude parent UID policy](CLAUDE_FILE_PERMISSIONS.md) restores runtime validation.
-Independent review is pending; live acceptance remains deployment-owned.
+Source reviewed; [stop follow-up](NEXT_DEVELOPMENT_SESSION.md#owned-claude-stop-certainty-follow-up) and live gates remain open.
 Combine Claude editor acceptance with Hub queue, delivery, stop and exact-session
 recovery checks, preserving uncertain work and genuine human Write/Edit decisions.
 
