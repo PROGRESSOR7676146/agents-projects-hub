@@ -19,6 +19,7 @@ from .codex_failure import CodexPreparationError, CodexRetryBindingError
 from .codex_permissions import CodexPermissionProfileError
 from .execution_journal import CLAUDE_PRE_INVOCATION_ERROR_CODES, ClaudeSessionBinding
 from .external_runtime import (
+    ClaudeProcessStopped,
     ExternalCliAdapter,
     ExternalTurnResult,
     ProviderLimitError,
@@ -452,6 +453,7 @@ def invoke_external_provider_turn(
     on_claude_process_started: Callable[[], None] | None = None,
     claude_sandbox: FileToolSandboxConfig | None = None,
     claude_images: tuple[VerifiedClaudeImage, ...] = (),
+    pending_stop_request: Callable[[], str | None] | None = None,
 ) -> ExternalTurnResult:
     """Invoke one external CLI turn from an immutable job snapshot."""
     if getattr(adapter, "runtime", None) == "claude" and claude_session_binding is None:
@@ -478,6 +480,15 @@ def invoke_external_provider_turn(
                 claude_sandbox=claude_sandbox,
                 claude_images=claude_images,
             )
+        except ClaudeProcessStopped as exc:
+            if (
+                exc.session_id == claude_session_binding.session_id
+                and not claude_session_binding.is_new
+                and pending_stop_request is not None
+                and (request_id := pending_stop_request()) is not None
+            ):
+                raise ProviderTurnStopped(request_id) from exc
+            raise
         except ClaudeTerminalFailure as exc:
             if exc.session_id != claude_session_binding.session_id:
                 raise ClaudeStreamError("claude returned a different failed session") from exc

@@ -469,3 +469,24 @@ Update the matrix and next trigger as evidence changes. Owner-facing reports
 include an approximate overall-goal completion percentage with an uncertainty
 range, a stable reduced scope, and concrete completed/open milestones. Treat it
 as a planning estimate, separate from acceptance evidence and automatic scoring.
+
+### Owned Claude stop certainty follow-up
+
+Source lane `fix/claude-stop-certainty-20261024`, base `17e4d9b`; owner: Hub
+maintainer, sole writer. A local Claude interruption currently loses the owned
+process cleanup evidence and can retain an indeterminate job and pending stop,
+blocking later work. The candidate carries exact-session termination evidence
+only after process and sandbox cleanup, and consumes it only with a covering
+owner stop. State retains cancellation/stop transaction ownership; generic or
+unmatched interruption and failed cleanup remain uncertain, without replay.
+The first native attempt remains uncertain: process exit alone cannot prove
+that the CLI saved a resumable conversation. Existing-session stop tests must
+also execute the later job with the same resume binding.
+
+Focused regressions cover process cleanup, exact-session/stop matching, root
+release and failure preservation. Canonical publication and independent Claude
+review are pending. Next: those exact-source gates, separately authorized
+deployment, then human Edit/Deny, stop and exact-session restart acceptance.
+Existing uncertain jobs are preserved; this candidate is not a retrospective
+resolution of their outcome. Inspect tracked, staged and untracked lane state
+after owner integration before cleanup. Live acceptance remains open.
