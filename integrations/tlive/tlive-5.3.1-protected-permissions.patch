@@ -433,3 +433,17 @@
    | { kind: 'daemon.status'; uptimeMs: number; pid: number; codex?: 'running' | 'degraded' | 'off' }
    | { kind: 'daemon.stopped' }
    | { kind: 'ack' }
+diff --git a/src/kernel/codex/companion.ts b/src/kernel/codex/companion.ts
+--- a/src/kernel/codex/companion.ts
++++ b/src/kernel/codex/companion.ts
+@@ -172,7 +172,9 @@
+       if (resumed.has(threadId)) return;
+       resumed.add(threadId);
+     }
+-    rpc.call('thread/resume', { threadId }).then(
++    // Subscribe to live events without hydrating potentially unbounded history.
++    // The companion needs metadata only; execution policy stays server-owned.
++    rpc.call('thread/resume', { threadId, excludeTurns: true }).then(
+       (res) => {
+         const cwd = (res as { cwd?: unknown } | undefined)?.cwd;
+         if (typeof cwd === 'string' && cwd) threadCwds.set(threadId, cwd);

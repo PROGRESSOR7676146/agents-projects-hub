@@ -106,6 +106,13 @@ does not close the notification incident or payload recovery.
 Journal: [checkpoint](INCIDENT_JOURNAL.md#source-checkpoint).
 Hermes notices: [checkpoint](HERMES_INCIDENT_NOTICES.md); live/Analyze open.
 
+The [tlive subscription fix](../../integrations/tlive/README.md) has offline
+stalled-history, card and disconnect regressions. The
+[Claude parent UID policy](CLAUDE_FILE_PERMISSIONS.md) restores runtime validation.
+Independent review is pending; live acceptance remains deployment-owned.
+Combine Claude editor acceptance with Hub queue, delivery, stop and exact-session
+recovery checks, preserving uncertain work and genuine human Write/Edit decisions.
+
 ## Read-only outcome projection candidate
 
 The bounded projection and schema-45 owner assessments are implemented in source;
