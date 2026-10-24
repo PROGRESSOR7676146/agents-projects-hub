@@ -135,6 +135,7 @@ class BundledPackageTest(unittest.TestCase):
             set(manifest["patched_files"]),
             {
                 "src/adapters/im/telegram.ts",
+                "src/kernel/codex/companion.ts",
                 "src/kernel/contracts/protected-permission.ts",
                 "src/kernel/daemon/bootstrap.ts",
                 "src/kernel/daemon/protected-permissions.ts",

@@ -20,6 +20,7 @@ python3 -m venv "$data_root/venv"
 
 install -d -m 700 \
   "$config_root" \
+  "$systemd_root/agents-projects-hub-worker@claude.service.d" \
   "$systemd_root/hermes-gateway.service.d"
 if [[ ! -e "$config_root/hub.json" ]]; then
   install -m 600 "$repo_root/config/hub.example.json" "$config_root/hub.json"
@@ -37,6 +38,8 @@ install -m 644 "$repo_root/systemd/agents-projects-hub@.service" \
   "$systemd_root/agents-projects-hub@.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-worker@.service" \
   "$systemd_root/agents-projects-hub-worker@.service"
+install -m 644 "$repo_root/systemd/agents-projects-hub-worker@claude.service.d/zz-claude-host-uid.conf" \
+  "$systemd_root/agents-projects-hub-worker@claude.service.d/zz-claude-host-uid.conf"
 install -m 644 "$repo_root/systemd/agents-projects-hub-codex-socket-dir.service" \
   "$systemd_root/agents-projects-hub-codex-socket-dir.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-codex-worker@.service" \
