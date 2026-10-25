@@ -66,6 +66,10 @@ class ClaudeCliUnavailableError(ClaudeCliCapabilityError):
     """The configured executable cannot be resolved before inspection."""
 
 
+class ClaudeCliCleanupError(ClaudeCliCapabilityError):
+    """The owned help process did not establish successful cleanup."""
+
+
 def _fingerprint(path: str) -> tuple[int, int, int, int, int]:
     info = os.stat(path)
     if not stat.S_ISREG(info.st_mode):
@@ -193,7 +197,10 @@ def _read_help(
             raise ClaudeCliCapabilityError()
         return bytes(output)
     finally:
-        _kill_and_reap(process)
+        try:
+            _kill_and_reap(process)
+        except Exception as exc:
+            raise ClaudeCliCleanupError() from exc
 
 
 class ClaudeCliCapabilities:

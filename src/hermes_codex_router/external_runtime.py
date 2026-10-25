@@ -19,6 +19,7 @@ from .antigravity_model import model_arguments
 from .claude_cli_capabilities import (
     ClaudeCliCapabilities,
     ClaudeCliCapabilityError,
+    ClaudeCliCleanupError,
     ClaudeCliUnavailableError,
 )
 from .claude_file_policy import file_tool_argv, require_file_tool_event, wrap_file_tool_argv
@@ -570,8 +571,6 @@ class ExternalCliAdapter:
         except ExternalTurnInterrupted:
             # Cleanup errors supersede interruption and remain uncertain.
             raise ClaudeProcessStopped(session_id) from None
-        if self._interrupt_requested.is_set():
-            raise ClaudeProcessStopped(session_id)
 
     def _run_owned_claude_turn(
         self,
@@ -604,10 +603,10 @@ class ExternalCliAdapter:
                     "claude_image_input_unverified",
                     "Claude image input failed bounded preparation.",
                 ) from None
-            argv = self._verified_claude_argv(
-                argv, cwd=cwd, environment=environment, image_input=input_data is not None
-            )
             with self._claude_stop_proof(expected_session_id):
+                argv = self._verified_claude_argv(
+                    argv, cwd=cwd, environment=environment, image_input=input_data is not None
+                )
                 return self._run_claude_process(
                     argv,
                     cwd=cwd,
@@ -673,6 +672,9 @@ class ExternalCliAdapter:
             raise ProviderUnavailableError(
                 "claude_cli_unavailable", "Claude CLI could not be started."
             ) from None
+        except ClaudeCliCleanupError:
+            # A stop flag cannot turn unconfirmed help-process cleanup into proof.
+            raise
         except ClaudeCliCapabilityError:
             if self._interrupt_requested.is_set():
                 raise ExternalTurnInterrupted("claude turn interrupted by user") from None
@@ -774,6 +776,10 @@ class ExternalCliAdapter:
                             except (BlockingIOError, InterruptedError):
                                 continue
                             except BrokenPipeError:
+                                if self._interrupt_requested.is_set():
+                                    raise ExternalTurnInterrupted(
+                                        "claude turn interrupted by user"
+                                    ) from None
                                 raise ClaudeStreamError(
                                     "claude input transfer incomplete"
                                 ) from None
@@ -808,6 +814,8 @@ class ExternalCliAdapter:
                     if remaining <= 0:
                         raise subprocess.TimeoutExpired(argv, timeout)
                     self._interrupt_requested.wait(min(0.05, remaining))
+            if self._interrupt_requested.is_set():
+                raise ExternalTurnInterrupted("claude turn interrupted by user")
             stdout = reader.finish()
             if time.monotonic() >= deadline:
                 raise subprocess.TimeoutExpired(argv, timeout)
@@ -817,10 +825,6 @@ class ExternalCliAdapter:
             if self._interrupt_requested.is_set():
                 raise ExternalTurnInterrupted("claude turn interrupted by user") from None
             raise ExternalRuntimeError("claude timed out safely") from None
-        except Exception:
-            if self._interrupt_requested.is_set():
-                raise ExternalTurnInterrupted("claude turn interrupted by user") from None
-            raise
         finally:
             # Kill the owned group even if its leader exited while a descendant
             # retained a pipe. Never leave children after protocol/callback errors.
