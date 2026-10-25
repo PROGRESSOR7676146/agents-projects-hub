@@ -37,6 +37,9 @@ install -m 644 "$repo_root/systemd/agents-projects-hub@.service" \
   "$systemd_root/agents-projects-hub@.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-worker@.service" \
   "$systemd_root/agents-projects-hub-worker@.service"
+# Stage the independent unit only; migration and tlive opt-in are operator-owned.
+install -m 644 "$repo_root/systemd/agents-projects-hub-codex-app-server.service" \
+  "$systemd_root/agents-projects-hub-codex-app-server.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-codex-socket-dir.service" \
   "$systemd_root/agents-projects-hub-codex-socket-dir.service"
 install -m 644 "$repo_root/systemd/agents-projects-hub-codex-worker@.service" \

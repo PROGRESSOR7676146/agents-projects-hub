@@ -50,7 +50,8 @@ cat >"$rules_file" <<'JSON'
           {"context": "validation / validate (3.11)"},
           {"context": "validation / validate (3.12)"},
           {"context": "validation / validate (3.13)"},
-          {"context": "validation / namespace"}
+          {"context": "validation / namespace"},
+          {"context": "validation / tlive"}
         ]
       }
     }

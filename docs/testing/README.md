@@ -20,15 +20,11 @@ The full canonical command remains:
 python scripts/validate.py
 ```
 
-Both profiles run documentation/release metadata contracts, publishable
-configuration, release-lock verification, formatting, Ruff, and tree privacy.
-Canonical additionally scans all reachable Git history before running
-whole-project Pyright and all unit/integration tests. The full privacy/history
-scan remains mandatory before every commit, even after focused checks pass.
-Each stage reports elapsed time and stops on failure; exit 0 means the selected
-profile passed, 1 means a failed/unavailable stage, and 2 means invalid arguments.
-Focused selectors import sibling fixtures from `tests/` exactly as discovery
-does. The full test stage runs every discovered module in its own process;
+Both profiles check docs, release metadata/lock, configuration, format, lint and
+privacy. Canonical adds history, whole-project Pyright and full tests. Focused
+selectors import sibling fixtures as discovery does. Stages stop on failure:
+exit 0 means the selected profile passed, 1 failed/unavailable, 2 invalid arguments.
+The full test stage runs every discovered module in its own process;
 [scheduling and completeness checks](VALIDATION_SCHEDULING.md) also apply
 through the installed Git hooks.
 Automated tests
@@ -785,3 +781,8 @@ provider selected there, starts a harmless wait, sends deterministic `stop`,
 requires the Hub acknowledgement, and proves that a new turn works afterward.
 The stop applies to the whole topic, so it interrupts the mentioned provider
 even when an earlier check left another agent active.
+
+## Carried tlive source regressions
+
+CI's `tlive` job and `scripts/tlive_extension.py build SOURCE` run the carried
+Node/IPC gate: [commands, Python selectors and evidence limits](../operations/TLIVE_RELIABILITY.md).

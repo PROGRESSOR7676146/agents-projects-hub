@@ -1,0 +1,121 @@
+# tlive approval evidence and independent Codex lifecycle
+
+Status: source candidate. Owner: Hub maintainer. Last verified base: `19e9c2704119e71deabcd59ea4c331a00cac54c6`.
+Next trigger: independent exact-candidate review and canonical/hosted gates,
+then separately authorized migration and live acceptance. Closure remains open.
+The behavior is owned by [REQ-OPS-005](../product/PERSISTENCE_AND_RECOVERY.md)
+and [ADR 0073](../decisions/0073-tlive-approval-evidence-and-server-custody.md).
+
+## Offline source gate
+
+Use the pinned archive, combined patch and build/test command in
+[integration instructions](../../integrations/tlive/README.md). The owning CI
+`tlive` job verifies the archive before extraction, applies the patch, builds and
+executes the carried Node regressions, protected-host smoke and IPC adversarial
+suite. Tests use fictional providers/adapters. IPC tests require socket binding;
+a sandbox refusal is a failed/unavailable check, never a skip or passing E2E.
+Focused Python selectors are `tests.test_tlive_extension`,
+`tests.test_approval_surface`, `tests.test_approval_surface_state`,
+`tests.test_approval_surface_monitor`, `tests.test_approval_surface_ipc` and
+`tests.test_codex_server_service`.
+The published npm archive lacks tsconfig and plugin-lock tooling, so this is not
+a full upstream typecheck/test claim. Dependency resolution is separate from
+source-byte verification; CI installs dependencies with lifecycle scripts disabled.
+
+Hub monitor output includes aggregate `approval_surface` counts when tlive
+recovery is configured. It reads only `daemon.sock` beside that explicit tlive
+configuration; it does not open the configuration or signing keys. A private
+canonical parent and owned socket are required. The response budget is two
+seconds and 128 KiB; snapshots older than five seconds, truncated output, changed
+socket inode and malformed identities remain unknown. A native wait receives
+30 seconds of initial diagnostic grace; a matched snapshot also preserves the
+actual configured send grace (bounded to one day). Neither grace claims delivery.
+A missing snapshot cannot establish recovery. An unchanged actionable condition
+uses the existing operational-alert episode; it re-arms after confirmed recovery.
+
+## Explicit independent-server migration
+
+This procedure is local operator work. Source publication does not authorize
+service actions, native calls, credential access or state mutation. Preserve
+private exact-source, backup and rollback receipts outside Git.
+
+1. Pin the candidate and compatible rollback artifacts, the native executable,
+   Codex HOME, owning control socket and tlive daemon. Pinned runtime files must
+   be read-only. Verify existing effective
+   service units and namespace/force-free settings. Inventory all clients,
+   worker slots, pending approvals, retained control sends and outboxes. Close
+   native interactive clients explicitly. A green doctor or an idle heartbeat
+   cannot prove this boundary. Use the existing worker drain procedure plus exact
+   terminal/control and history evidence; unknown native controls block migration.
+2. At a separately approved idle boundary, close admission and stop the old
+   client/old server through their actual service ownership. Confirm original
+   process incarnations and cgroup have exited and retained native history is
+   intact. Do not use arbitrary process kills, SIGKILL, socket removal or automatic
+   retry. If the old server leaves its socket, stop here for separate ownership
+   reconciliation; the start guard preserves the path and refuses it.
+3. Prepare a private mode-0600 `codex-server.json` with this shape (all values
+   below are fictional placeholders):
+
+   ```json
+   {
+     "version": 1,
+     "hub_git_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "state_path": "/home/example/.local/state/agents-projects-hub/state.db",
+     "codex_home": "/home/example/.codex",
+     "socket_path": "/home/example/.codex/app-server-control/app-server-control.sock",
+     "codex_binary": {"path": "/home/example/runtime/codex", "sha256": "REPLACE_WITH_EXACT_SHA256"},
+     "tlive_daemon": {"path": "/home/example/runtime/tlive/dist/src/tlive-daemon.mjs", "sha256": "REPLACE_WITH_EXACT_SHA256"}
+   }
+   ```
+
+   The guard opens only existing current-schema Hub state read-only. It refuses
+   queued/in-flight work and saved results awaiting delivery, indeterminate work lacking exact retained
+   terminal proof, unsettled control owners/claims, local writers, existing
+   sockets or same-UID app-servers, unknown process custody and pin mismatches.
+   An owner resolution alone does not substitute for native terminal evidence.
+   It does not discover private configuration or read credentials.
+4. Stage the independent unit (the installer only copies it) and explicitly
+   install the reviewed `systemd/tlive.service.d/30-external-codex.conf` opt-in
+   in the operator's unit drop-in directory. Preserve any stronger local
+   namespace/permission restrictions. Align every client with the same explicit
+   Codex HOME/socket. The service intentionally has no automatic restart or
+   install target; tlive neither starts nor stops it.
+5. With old clients still quiesced, generate an exact start receipt from the
+   installed clean Hub runtime and save stdout privately with umask 077:
+
+   ```sh
+   python -m hermes_codex_router.codex_server_service plan \
+     --manifest /home/example/.config/agents-projects-hub/codex-server.json \
+     --assert-native-clients-closed
+   ```
+
+   Save it as `codex-server-start.json` beside the manifest. It expires after
+   60 seconds and binds the complete manifest; it is a local assertion, not
+   independent native idle proof. Explicitly start only
+   `agents-projects-hub-codex-app-server.service` within that interval. Its
+   start path checks the receipt, pins, exact clean Hub revision and idle
+   preconditions again before exec. A refused or unknown outcome requires
+   inspection, never a blind repeat or new receipt against unknown work.
+6. Verify the new server's exact executable/process/cgroup/socket custody before
+   starting the attach-only tlive client. Confirm every required component's
+   exact revision, retained thread/history and unknown-control fences. A client
+   reconnect does not establish pending approval recovery. Perform the separately
+   authorized bounded human Allow/Deny and client-restart acceptance; preserve
+   request/item identities, actual card receipts and denied effects privately.
+
+## Rollback and acceptance limits
+
+Stop admission first. Keep the external server running when rolling back only
+tlive; its attach-only setting must remain enabled, and a compatible old client
+must not spawn a competitor. Retain current SQLite state and unknown evidence;
+do not restore a pre-change database over newer work. Never roll back the server
+while work or send ownership is active/unknown. Server rollback requires a new
+idle/custody gate, exact retained compatible executable/history and fresh receipt.
+A stale socket or surviving process blocks it just as it blocks forward startup.
+
+Required live evidence remains: real permission-card receipt/visibility, human
+Allow-once/Deny, duplicate/stale controls, send outage/ambiguity, tlive-only restart
+preserving the exact external server incarnation and history, fresh daemon epoch,
+and unchanged native uncertainty/no replay. Offline fixtures establish source and
+synthetic-fault behavior only. This procedure does not claim a host migration,
+recovered pending approvals, live subscription billing or cold-boot acceptance.

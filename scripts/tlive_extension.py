@@ -135,6 +135,33 @@ def apply(source: Path, manifest: dict) -> None:
         # staged now holds the original tree; TemporaryDirectory removes it.
 
 
+def regression_tests(source: Path, manifest: dict) -> None:
+    verify_tree(source, manifest, patched=True)
+    environment = os.environ.copy()
+    environment["TLIVE_SOURCE"] = str(source)
+    for name, loader in (
+        ("codex-approval-identity.test.mjs", "ts-source-loader.mjs"),
+        ("codex-subscription.test.mjs", "ts-source-loader.mjs"),
+        ("approval-surface.test.mjs", "ts-source-loader.mjs"),
+        ("host-smoke.mjs", "ts-source-loader.mjs"),
+        ("ipc-adversarial.mjs", "ipc-test-loader.mjs"),
+    ):
+        subprocess.run(
+            [
+                "node",
+                "--experimental-transform-types",
+                "--loader",
+                str(PACKAGE / loader),
+                str(PACKAGE / name),
+            ],
+            cwd=source,
+            env=environment,
+            check=True,
+            timeout=90,
+        )
+    verify_tree(source, manifest, patched=True)
+
+
 def build(source: Path, manifest: dict) -> None:
     verify_tree(source, manifest, patched=True)
     subprocess.run(["node", "scripts/build.mjs"], cwd=source, check=True)
@@ -143,13 +170,14 @@ def build(source: Path, manifest: dict) -> None:
     cli = source / "dist" / "src" / "tlive-cli.mjs"
     if not daemon.is_file() or not cli.is_file():
         raise SourceMismatch("tlive build did not produce daemon and CLI")
+    regression_tests(source, manifest)
     if b"hub.permission.hello" not in daemon.read_bytes():
         raise SourceMismatch("daemon build lacks protected capability")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("check-base", "apply", "verify", "build"))
+    parser.add_argument("action", choices=("check-base", "apply", "verify", "test", "build"))
     parser.add_argument("source", help="caller-selected unpacked tlive 5.3.1 package directory")
     parser.add_argument("--archive", type=Path, help="optional original tgz to SHA-256 verify")
     args = parser.parse_args(argv)
@@ -163,6 +191,8 @@ def main(argv: list[str] | None = None) -> int:
             apply(source, manifest)
         elif args.action == "verify":
             verify_tree(source, manifest, patched=True)
+        elif args.action == "test":
+            regression_tests(source, manifest)
         else:
             build(source, manifest)
     except (SourceMismatch, OSError, subprocess.CalledProcessError, KeyError, ValueError) as error:

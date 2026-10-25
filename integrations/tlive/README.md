@@ -48,3 +48,21 @@ against its live job, session, generation, root, lease, writer, and stop state.
 The card shows the complete input for the five bounded tools or denies without
 sending. This package does not enable Claude tools, alter an installation, or
 establish native/Telegram/live security acceptance.
+
+The combined patch also scopes native approval cancellation to exact item/request
+identity and makes companion subscriptions metadata-only (`excludeTurns: true`).
+It includes the tlive subscription prerequisite from ADR 0073's source review;
+no unrelated Claude runtime slice is included.
+`build` now runs every carried offline regression and protected-host/IPC suite.
+`test` runs those suites without rebuilding. Socket denial fails the gate.
+The release archive omits upstream tsconfig/plugin-lock tooling; these checks
+must not be described as full upstream CI or typecheck.
+
+`TLIVE_CODEX_APP_SERVER_MODE=attach-only` disables server spawning at startup and
+on every reconnect/probe failure. Stopping the client never stops the external
+server. `auto` retains upstream custody for installations that have not opted in;
+unknown mode values fail. Use the explicit
+[migration and rollback procedure](../../docs/operations/TLIVE_RELIABILITY.md).
+The passive `approval.snapshot` IPC exposes only bounded native identities,
+delivery states and fresh daemon epoch/timestamps. It grants no approval or
+replay authority and does not expose protected Claude requests.

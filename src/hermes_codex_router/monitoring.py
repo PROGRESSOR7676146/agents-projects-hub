@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from .alerts import OperationalAlert, evaluate_operational_alerts
+from .approval_surface import assess_surface, read_snapshot, surface_alerts
 from .catalog_refresh import refresh_provider_catalogs
 from .diagnostic_log import survived
 from .diagnostics import run_doctor
@@ -305,6 +306,19 @@ def _run_monitor_once(
                 None,
             ),
         )
+        approval_surface = None
+        if config.recovery_plane.enabled and config.recovery_plane.tlive_config_path is not None:
+            waits, truncated = state.pending_codex_approvals(now=monitor_started)
+            approval_surface = assess_surface(
+                waits,
+                read_snapshot(config.recovery_plane.tlive_config_path.parent / "daemon.sock")
+                if waits
+                else None,
+                now=datetime.now(timezone.utc),
+            )
+            if truncated:
+                approval_surface["unknown"] += 1
+            alerts += surface_alerts(approval_surface)
         stale_catalogs = ProviderCatalogCache(
             config.state_path.with_name("provider-model-catalogs.json")
         ).stale_agents()
@@ -361,6 +375,7 @@ def _run_monitor_once(
             "repairs": repairs,
             "catalog_refresh": asdict(catalog_refresh),
             "reliability": snapshot["reliability"],
+            "approval_surface": approval_surface,
             "incident_journal": incident_status,
             "telegram_access": {
                 name: sum(value is status for value in access.values())

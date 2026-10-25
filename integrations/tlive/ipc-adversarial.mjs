@@ -60,6 +60,15 @@ function verifyReceipt(t,r){
 try {
   await boot();
   await test('authenticated version/capability handshake',()=>hello());
+  await test('read-only snapshot derives sent from the actual adapter and omits protected input', async()=>{
+    const pending=handle.permissionRouter.requestPermission({key:'codex:example-thread',cwd:'/home/example/project',sessionId:'example-thread',providerTurnId:'example-turn',providerRequestId:7,itemIdentity:'example-item',toolName:'Bash',input:{command:'FICTIONAL_SECRET_INPUT'}});
+    await until(()=>handle.permissionRouter.approvalSnapshot().entries[0]?.delivery==='sent');
+    const snapshot=await ipc({kind:'approval.snapshot'});
+    assert.equal(snapshot.entries[0].delivery,'sent');assert.equal(snapshot.entries[0].providerRequestId,7);
+    assert.equal(JSON.stringify(snapshot).includes('FICTIONAL_SECRET_INPUT'),false);
+    handle.permissionRouter.cancel({key:'codex:example-thread',providerRequestId:7});await pending;
+    assert.deepEqual((await ipc({kind:'approval.snapshot'})).entries,[]);
+  });
   await test('mixed protocol version refuses capability',async()=>assert.equal((await ipc({kind:'hub.permission.hello',version:2,challenge:randomUUID()})).decision,'deny'));
   await test('first authenticated owner callback allows exact synchronous invocation once',async()=>{const t=launch();const c=await card(t);fire(c);const r=await t.result;assert.equal(verifyReceipt(t,r).decision,'allow');fire(c);});
   await test('generic IPC answer cannot approve protected request',async()=>{const t=launch();const c=await card(t);const id=c.opts.reply_markup.inline_keyboard[0][0].callback_data.split(':')[1];await ipc({kind:'hook.permission.answer',requestId:id,approved:true,message:'human'});assert.equal(handle.permissionRouter.answer(id,true,undefined,{answers:{example:'yes'}}),false);fire(c);verifyReceipt(t,await t.result);});
