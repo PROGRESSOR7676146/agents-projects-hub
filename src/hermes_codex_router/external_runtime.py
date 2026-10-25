@@ -833,8 +833,8 @@ class ExternalCliAdapter:
             return subprocess.CompletedProcess(argv, exit_code, stdout, "")
         except subprocess.TimeoutExpired:
             self._terminate_claude_process(process, graceful=True)
-            if self._interrupt_requested.is_set() and not reader.terminal_seen:
-                raise ExternalTurnInterrupted("claude turn interrupted by user") from None
+            # A deadline does not prove EOF or complete reap/drain. A stop flag
+            # must not promote unobserved buffered output into a stopped turn.
             raise ExternalRuntimeError("claude timed out safely") from None
         finally:
             # Kill the owned group even if its leader exited while a descendant

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 import time
 import unittest
 from pathlib import Path
@@ -12,8 +14,10 @@ from unittest.mock import patch
 from hermes_codex_router import claude_cli_capabilities
 from hermes_codex_router.execution_journal import ExecutionJournal
 from hermes_codex_router.external_runtime import ExternalCliAdapter
+from hermes_codex_router.owned_process_exit import peek_exit_code
 from hermes_codex_router.root_blockers import persistent_root_blocker
 from tests import test_claude_native_worker as fixtures
+from tests.native_process_capture import owned_fixture_process
 from tests.test_external_runtime import fictional_claude_source
 
 
@@ -250,8 +254,6 @@ class ClaudeStopPrecedenceTests(unittest.TestCase):
                 self._stop_while_draining_terminal(established=True, outcome=outcome)
 
     def _stop_while_draining_terminal(self, *, established: bool, outcome: str) -> None:
-        from hermes_codex_router.owned_process_exit import peek_exit_code
-
         fixture, job_id = self.fixture(established=established)
         event = {
             "type": "assistant",
@@ -304,3 +306,99 @@ class ClaudeStopPrecedenceTests(unittest.TestCase):
         checkpoint = ExecutionJournal(worker.state).read(job_id)
         assert checkpoint is not None
         self.assertEqual(checkpoint["completed_text"], "Fictional final" if completed else None)
+
+    def test_stop_drain_timeout_keeps_outside_group_pipe_holder_uncertain(self) -> None:
+        fixture, job_id = self.fixture()
+        event = {
+            "type": "assistant",
+            "uuid": fixtures.OTHER_UUID,
+            "parent_tool_use_id": None,
+            "message": {"content": [{"type": "text", "text": "Fictional partial"}]},
+        }
+        adapter = self.adapter(
+            fixture.root,
+            f'event={event!r}\nevent["session_id"]=native\n'
+            'os.write(1,(json.dumps(event)+"\\n").encode())\n'
+            "time.sleep(30)\n",
+        )
+        worker = fixture.worker(cast(Any, adapter))
+        original = ExecutionJournal.record_claude_item
+        holders = []
+
+        def record(journal: Any, *args: Any, **kwargs: Any) -> None:
+            original(journal, *args, **kwargs)
+            process = adapter._active_process
+            assert process is not None and process.stdout is not None
+            # The fixture owns this exact live CLI. Duplicate its pipe writer
+            # into a separately owned child, reproducing a setsid pipe holder
+            # without orphaning a process or relying on optional pidfd APIs.
+            writer = os.open(f"/proc/{process.pid}/fd/1", os.O_WRONLY)
+            try:
+                expected = os.fstat(process.stdout.fileno())
+                observed = os.fstat(writer)
+                self.assertEqual(
+                    (observed.st_dev, observed.st_ino), (expected.st_dev, expected.st_ino)
+                )
+                holder = self.enterContext(
+                    owned_fixture_process(
+                        [sys.executable, "-I", "-c", "import time; time.sleep(60)"],
+                        {},
+                        pass_fds=(writer,),
+                    )
+                )
+                holders.append(holder)
+            finally:
+                os.close(writer)
+            self.request_stop(worker, job_id, adapter)
+
+        with patch.object(ExecutionJournal, "record_claude_item", new=record):
+            self.assertTrue(worker.run_cycle())
+        self.assertEqual(len(holders), 1)
+        self.assertIsNone(peek_exit_code(holders[0]))
+        self.assert_state(worker, job_id, uncertain=True)
+        self.assertIsNone(adapter._active_process)
+
+    def test_stop_reap_timeout_does_not_skip_buffered_stream_validation(self) -> None:
+        fixture, job_id = self.fixture()
+        marker = fixture.root / "fictional-buffered"
+        adapter = self.adapter(
+            fixture.root,
+            "from pathlib import Path\n"
+            f'os.write(1,(json.dumps({{"type":"system","session_id":{fixtures.OTHER_UUID!r}}})+"\\n").encode())\n'
+            f"Path({str(marker)!r}).touch()\n"
+            "time.sleep(30)\n",
+        )
+        worker = fixture.worker(cast(Any, adapter))
+        run = adapter._run_claude_process
+        terminate = adapter._terminate_claude_process
+        calls = []
+
+        def run_with_stop(*args: Any, **kwargs: Any) -> Any:
+            started = kwargs.get("on_process_started")
+
+            def buffered() -> None:
+                if started is not None:
+                    started()
+                deadline = time.monotonic() + 5
+                while not marker.exists():
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.001)
+                self.request_stop(worker, job_id, adapter)
+
+            kwargs["on_process_started"] = buffered
+            return run(*args, **kwargs)
+
+        def slow_reap(process: Any, *, graceful: bool) -> None:
+            calls.append(graceful)
+            if len(calls) == 1:
+                raise subprocess.TimeoutExpired("fictional-cleanup", 5)
+            terminate(process, graceful=graceful)
+
+        with (
+            patch.object(adapter, "_run_claude_process", side_effect=run_with_stop),
+            patch.object(adapter, "_terminate_claude_process", side_effect=slow_reap),
+        ):
+            self.assertTrue(worker.run_cycle())
+        self.assertTrue(calls)
+        self.assert_state(worker, job_id, uncertain=True)
+        self.assertIsNone(adapter._active_process)
