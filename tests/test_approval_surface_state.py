@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import closing
 from datetime import timedelta
 
 from hermes_codex_router.approval_observations import identity_digest
@@ -109,6 +110,16 @@ class PreparedApprovalSurfaceTests(unittest.TestCase):
         self.f = early.PreacceptanceApprovalTests()
         self.f.setUp()
         self.addCleanup(self.f.doCleanups)
+
+    def test_missing_profile_context_retains_unknown_projection(self):
+        from hermes_codex_router.state import HubState
+
+        f = self.f
+        f.observe(f.scope())
+        with closing(HubState.open_existing(f.root / "state.db")) as state:
+            waits, incomplete = state.pending_codex_approvals(now=f.now)
+        self.assertEqual(waits, ())
+        self.assertTrue(incomplete)
 
     def test_exact_early_identity_resolves_and_old_runtime_never_reopens(self):
         f = self.f

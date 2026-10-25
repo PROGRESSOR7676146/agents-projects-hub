@@ -54,7 +54,8 @@ def pending_approval_waits(
     try:
         profile = selected_profile()
     except StateError:
-        return tuple(result), truncated
+        # Missing configuration cannot prove there are no prepared waits.
+        return tuple(result), True
     early = db.execute(
         "SELECT s.*,r.identity,r.item_identity,r.observed_turn_id,r.created_at AS observed_at "
         "FROM preacceptance_scopes s JOIN preacceptance_requests r ON r.scope_id=s.scope_id "

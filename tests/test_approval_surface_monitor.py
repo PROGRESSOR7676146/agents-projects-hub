@@ -14,9 +14,39 @@ from hermes_codex_router.approval_observations import identity_digest
 from hermes_codex_router.approval_surface import ApprovalWait
 from hermes_codex_router.state import HubState
 from tests import test_incident_monitor as fixtures
+from tests import test_preacceptance_approvals as early_fixtures
 
 
 class ApprovalSurfaceMonitorTests(unittest.TestCase):
+    def test_real_early_wait_is_observed_by_monitor_with_configured_profile(self):
+        early = early_fixtures.PreacceptanceApprovalTests()
+        early.setUp()
+        self.addCleanup(early.doCleanups)
+        early.observe(early.scope())
+        f = fixtures.IncidentMonitorTests()
+        cfg = f.config(str(early.root))
+        cfg = replace(
+            cfg,
+            recovery_plane=replace(
+                cfg.recovery_plane,
+                enabled=True,
+                tlive_config_path=early.root / "tlive/config.json",
+            ),
+        )
+        sender = Mock()
+        with (
+            f.monitor(alerts=()),
+            patch.object(monitoring, "datetime", wraps=datetime) as clock,
+            patch.object(monitoring, "_hermes_health", return_value=None),
+            patch.object(monitoring, "read_snapshot", return_value=None),
+            patch.object(monitoring, "_operational_telegram", return_value=(sender, "hub")),
+        ):
+            clock.now.return_value = early.now + timedelta(seconds=60)
+            result = monitoring.run_monitor_once(cfg, notify=True)
+        self.assertEqual(result["approval_surface"]["waiting"], 1)
+        self.assertEqual(result["approval_surface"]["unknown"], 1)
+        sender.send_html.assert_called_once()
+
     def test_unknown_deduplicates_and_recovery_rearms_without_native_calls(self):
         f = fixtures.IncidentMonitorTests()
         with tempfile.TemporaryDirectory() as directory:

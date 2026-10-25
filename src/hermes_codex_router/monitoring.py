@@ -157,7 +157,9 @@ def run_monitor_once(
     repair: bool = False,
     cooldown_seconds: int = 60 * 60,
 ) -> dict[str, object]:
-    state = HubState.open_existing(config.state_path)
+    state = HubState.open_existing(
+        config.state_path, codex_permission_profile=config.codex_permission_profile
+    )
     journal = IncidentJournal(config.state_path.resolve().with_name("incident-journal.json"))
     try:
         with ExitStack() as cycle:
