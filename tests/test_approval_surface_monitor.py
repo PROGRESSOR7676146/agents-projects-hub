@@ -43,8 +43,10 @@ class ApprovalSurfaceMonitorTests(unittest.TestCase):
         ):
             clock.now.return_value = early.now + timedelta(seconds=60)
             result = monitoring.run_monitor_once(cfg, notify=True)
-        self.assertEqual(result["approval_surface"]["waiting"], 1)
-        self.assertEqual(result["approval_surface"]["unknown"], 1)
+        surface = result["approval_surface"]
+        assert isinstance(surface, dict)
+        self.assertEqual(surface["waiting"], 1)
+        self.assertEqual(surface["unknown"], 1)
         sender.send_html.assert_called_once()
 
     def test_unknown_deduplicates_and_recovery_rearms_without_native_calls(self):
