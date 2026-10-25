@@ -66,6 +66,9 @@ _ENTRIES = {
     ),
     "codex_config_proxy_unavailable": _runbook("Configured local Codex proxy is unavailable"),
     "hermes_recovery_unavailable": _runbook("Independent Hermes channel is unavailable"),
+    "tlive_approval_surface_unconfirmed": _runbook(
+        "Remote permission card delivery is unconfirmed", second=_AUDIT
+    ),
     "tlive_recovery_unavailable": _runbook("Independent remote-approval channel is unavailable"),
     "recovery_plane_unavailable": _runbook(
         "Both independent recovery channels are unavailable", second=_RESTORE

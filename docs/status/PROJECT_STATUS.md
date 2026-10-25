@@ -11,8 +11,7 @@ operator deployment inventory or live conversation evidence.
 
 ## Capability summary
 
-Rows describe offline evidence unless stated otherwise. Live acceptance stays
-separate in the [backlog](../operations/STABILIZATION_PLAN.md#live-acceptance-backlog).
+Offline evidence only; live checks: [backlog](../operations/STABILIZATION_PLAN.md#live-acceptance-backlog).
 
 | Capability | Repository state | Live acceptance | Contract |
 | --- | --- | --- | --- |
@@ -26,6 +25,7 @@ separate in the [backlog](../operations/STABILIZATION_PLAN.md#live-acceptance-ba
 | Final/progress send certainty (schema 43) | Included in 0.8 source gates | Pending | [REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0060](../decisions/0060-final-and-progress-delivery-certainty.md) |
 | Exact delivery control (schema 47) | Explicit consent and consumers included in 0.8 source gates | Activation pending | [REQ-QUEUE-005](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0063](../decisions/0063-delivery-control-reconciliation.md) |
 | Queue snapshots and accepted Codex activity (schema 37) | Implemented slice; focused offline validation, final canonical evidence and required review pending | Pending | [REQ-QUEUE-012](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md) |
+| tlive card/server lifecycle | Source candidate | Pending | [ADR 0073](../decisions/0073-tlive-approval-evidence-and-server-custody.md) |
 | Codex approvals observed before acceptance (schema 40) | Separate fenced observation slice under validation; accepted execution authority is unchanged | Pending | [REQ-QUEUE-012/013](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md) |
 | Claude process observations (schema 42) | Ordinary quiet notices implemented; offline candidate under publication validation | Pending | [REQ-QUEUE-012](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0059](../decisions/0059-claude-process-observation-notices.md) |
 | Durable local-root blockers (schema 35) | Implemented | Pending | [REQ-WRITER-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0036](../decisions/0036-durable-local-root-blockers.md) |
@@ -49,9 +49,8 @@ separate in the [backlog](../operations/STABILIZATION_PLAN.md#live-acceptance-ba
 
 ## Quality checkpoint
 
-Multiple Codex worker slots are implemented behind external queue configuration;
-offline admission, root exclusion, fairness and health checks are covered.
-Deployment and live three-project acceptance remain pending. See
+External Codex slots have offline admission, root-exclusion, fairness and health
+coverage; deployment and live three-project acceptance remain pending. See
 [REQ-QUEUE-002](../product/DURABLE_QUEUE_AND_CONTROL.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
 and [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md).
 

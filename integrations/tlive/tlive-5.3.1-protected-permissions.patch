@@ -1,3 +1,4 @@
+diff --git a/src/adapters/im/telegram.ts b/src/adapters/im/telegram.ts
 --- a/src/adapters/im/telegram.ts
 +++ b/src/adapters/im/telegram.ts
 @@ -13,6 +13,7 @@
@@ -86,7 +87,358 @@
 +
    isConnected(): 'connected' | 'idle' | 'failed' { return this.connected; }
  }
---- a/src/kernel/contracts/protected-permission.ts
+diff --git a/src/kernel/codex/__tests__/companion.test.ts b/src/kernel/codex/__tests__/companion.test.ts
+--- a/src/kernel/codex/__tests__/companion.test.ts
++++ b/src/kernel/codex/__tests__/companion.test.ts
+@@ -134,11 +134,11 @@
+     await Promise.resolve();
+     const events = getEvents();
+ 
+-    events.onNotify('item/completed', { threadId: 't1', item: { type: 'commandExecution' } });
+-    expect(router.cancel).toHaveBeenCalledWith({ key: 'codex:t1', toolName: 'Bash', sessionId: 't1' });
+-
+-    events.onNotify('turn/completed', { threadId: 't1' });
+-    expect(router.cancel).toHaveBeenCalledWith({ key: 'codex:t1' });
++    events.onNotify('item/completed', { threadId: 't1', turnId: 'u1', item: { id: 'i1', type: 'commandExecution' } });
++    expect(router.cancel).toHaveBeenCalledWith({ key: 'codex:t1', toolName: 'Bash', sessionId: 't1', itemIdentity: 'i1', providerTurnId: 'u1' });
++
++    events.onNotify('turn/completed', { threadId: 't1', turn: { id: 'u1' } });
++    expect(router.cancel).toHaveBeenCalledWith({ key: 'codex:t1', providerTurnId: 'u1' });
+     comp.stop();
+   });
+ 
+@@ -208,7 +208,7 @@
+     await Promise.resolve();
+     await Promise.resolve();
+     const events = getEvents();
+-    events.onNotify('turn/started', { threadId: 't1' });
++    events.onNotify('turn/started', { threadId: 't1', turn: { id: 'u1' } });
+     expect(onMonitor).toHaveBeenCalledWith({ event: 'activity', cwd: 'codex:t1', sessionId: 't1', toolName: '(turn)', result: {} }, 'codex:t1');
+     comp.stop();
+   });
+@@ -237,7 +237,7 @@
+     await Promise.resolve();
+ 
+     events.onNotify('item/completed', { threadId: 't1', item: { type: 'agentMessage', text: 'final answer' } });
+-    events.onNotify('turn/completed', { threadId: 't1' });
++    events.onNotify('turn/completed', { threadId: 't1', turn: { id: 'u1' } });
+ 
+     expect(onMonitor).toHaveBeenCalledWith(
+       { event: 'attention', cwd: 'codex:t1', sessionId: 't1', message: 'Turn finished — reply to continue', lastMessage: 'final answer' },
+@@ -248,7 +248,7 @@
+     // An empty agentMessage must not clobber the real last message — the
+     // continue card's excerpt would collapse to a bare "Reply to continue".
+     events.onNotify('item/completed', { threadId: 't1', item: { type: 'agentMessage', text: '' } });
+-    events.onNotify('turn/completed', { threadId: 't1' });
++    events.onNotify('turn/completed', { threadId: 't1', turn: { id: 'u1' } });
+     expect(onResumePrompt).toHaveBeenLastCalledWith({ threadId: 't1', key: 'codex:t1', lastMessage: 'final answer', outcome: 'completed' });
+     comp.stop();
+   });
+@@ -266,7 +266,7 @@
+       const { events, onMonitor, comp } = await live();
+       events.onNotify('turn/completed', {
+         threadId: 't1',
+-        turn: { status: 'failed', error: { message: '401 Unauthorized: Invalid API key' } },
++        turn: { id: 'u1', status: 'failed', error: { message: '401 Unauthorized: Invalid API key' } },
+       });
+       expect(onMonitor).toHaveBeenLastCalledWith(
+         { event: 'attention', cwd: 'codex:t1', sessionId: 't1', message: 'Codex turn failed: 401 Unauthorized: Invalid API key' },
+@@ -286,7 +286,7 @@
+         threadId: 't1', turnId: 'u1', willRetry: false,
+         error: { message: 'unexpected status 401 Unauthorized' },
+       });
+-      events.onNotify('turn/completed', { threadId: 't1', turn: { status: 'interrupted', error: null } });
++      events.onNotify('turn/completed', { threadId: 't1', turn: { id: 'u1', status: 'interrupted', error: null } });
+       expect(lastResume()).toMatchObject({ outcome: 'failed', errorMessage: 'unexpected status 401 Unauthorized' });
+       comp.stop();
+     });
+@@ -297,7 +297,7 @@
+       // the empty-card flood again with a different payload.
+       const { events, comp, lastResume } = await live();
+       events.onNotify('error', { threadId: 't1', turnId: 'u1', willRetry: true, error: { message: 'transient' } });
+-      events.onNotify('turn/completed', { threadId: 't1', turn: { status: 'interrupted', error: null } });
++      events.onNotify('turn/completed', { threadId: 't1', turn: { id: 'u1', status: 'interrupted', error: null } });
+       expect(lastResume()).toMatchObject({ outcome: 'interrupted' });
+       expect(lastResume().errorMessage).toBeUndefined();
+       comp.stop();
+@@ -305,7 +305,7 @@
+ 
+     it('a bare interrupt stays an interrupt — you pressed Esc, you already know', async () => {
+       const { events, comp, lastResume } = await live();
+-      events.onNotify('turn/completed', { threadId: 't1', turn: { status: 'interrupted', error: null } });
++      events.onNotify('turn/completed', { threadId: 't1', turn: { id: 'u1', status: 'interrupted', error: null } });
+       expect(lastResume()).toMatchObject({ outcome: 'interrupted' });
+       comp.stop();
+     });
+@@ -313,19 +313,21 @@
+     it('a recorded error does not leak into the next turn', async () => {
+       const { events, comp, lastResume } = await live();
+       events.onNotify('error', { threadId: 't1', turnId: 'u1', willRetry: false, error: { message: 'old failure' } });
+-      events.onNotify('turn/completed', { threadId: 't1', turn: { status: 'failed', error: null } });
++      events.onNotify('turn/completed', { threadId: 't1', turn: { id: 'u1', status: 'failed', error: null } });
+       expect(lastResume()).toMatchObject({ outcome: 'failed', errorMessage: 'old failure' });
+-      events.onNotify('turn/started', { threadId: 't1' });
+-      events.onNotify('turn/completed', { threadId: 't1', turn: { status: 'interrupted', error: null } });
++      events.onNotify('turn/started', { threadId: 't1', turn: { id: 'u1' } });
++      events.onNotify('turn/completed', { threadId: 't1', turn: { id: 'u1', status: 'interrupted', error: null } });
+       expect(lastResume()).toMatchObject({ outcome: 'interrupted' });
+       expect(lastResume().errorMessage).toBeUndefined();
+       comp.stop();
+     });
+ 
+-    it('an app-server that sends no turn payload is treated as a normal completion', async () => {
+-      const { events, comp, lastResume } = await live();
++    it('a completion without turn identity cannot retire or present a turn', async () => {
++      const { events, comp, router, onMonitor, onResumePrompt } = await live();
+       events.onNotify('turn/completed', { threadId: 't1' });
+-      expect(lastResume()).toMatchObject({ outcome: 'completed' });
++      expect(router.cancel).not.toHaveBeenCalled();
++      expect(onMonitor).not.toHaveBeenCalled();
++      expect(onResumePrompt).not.toHaveBeenCalled();
+       comp.stop();
+     });
+   });
+@@ -434,7 +436,7 @@
+     const { comp, router, getEvents } = harness();
+     await vi.runOnlyPendingTimersAsync(); await Promise.resolve(); await Promise.resolve();
+     getEvents().onNotify('serverRequest/resolved', { threadId: 't1', requestId: 7 });
+-    expect(router.cancel).toHaveBeenCalledWith({ key: 'codex:t1' });
++    expect(router.cancel).toHaveBeenCalledWith({ key: 'codex:t1', providerRequestId: 7 });
+     comp.stop();
+   });
+ 
+@@ -484,13 +486,13 @@
+       const { comp, router, onNativePrompt, onNativePromptResolved, getEvents } = rig('notify');
+       await vi.runOnlyPendingTimersAsync(); await Promise.resolve(); await Promise.resolve();
+       const respond = vi.fn();
+-      getEvents().onServerRequest(1, 'item/commandExecution/requestApproval', { threadId: 't1', command: 'rm -rf /', reason: 'because' }, respond);
++      getEvents().onServerRequest(1, 'item/commandExecution/requestApproval', { threadId: 't1', turnId: 'u1', itemId: 'i1', command: 'rm -rf /', reason: 'because' }, respond);
+       await Promise.resolve(); await Promise.resolve();
+       expect(router.requestPermission).not.toHaveBeenCalled();
+       expect(respond).not.toHaveBeenCalled();
+       expect(onNativePrompt).toHaveBeenCalledWith(expect.objectContaining({ key: 'codex:t1', detail: expect.stringContaining('rm -rf /') }));
+       // …and it retires when the command runs, so the dashboard card cannot strand.
+-      getEvents().onNotify('item/completed', { threadId: 't1', item: { type: 'commandExecution' } });
++      getEvents().onNotify('item/completed', { threadId: 't1', turnId: 'u1', item: { id: 'i1', type: 'commandExecution' } });
+       expect(onNativePromptResolved).toHaveBeenCalledWith({ key: 'codex:t1' });
+       comp.stop();
+     });
+diff --git a/src/kernel/codex/companion.ts b/src/kernel/codex/companion.ts
+--- a/src/kernel/codex/companion.ts
++++ b/src/kernel/codex/companion.ts
+@@ -122,7 +122,11 @@
+   /** Threads with an outstanding NATIVE prompt we merely pointed at. Only the
+    *  `notify` posture puts anything here; it exists so the dashboard card is
+    *  retired by the same events that would have released a held card. */
+-  const nativePrompts = new Set<string>();
++  const nativePrompts = new Map<string, { turnId?: string; itemId?: string; requestId: number | string }>();
++  // Completion presentation is thread-wide, so a late prior turn must not
++  // consume the current turn's error/message or offer a premature continuation.
++  const currentTurns = new Map<string, string>();
++  const validId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(value);
+   // Threads we've already (attempted to) resume on the current connection.
+   // Cleared on disconnect — a reconnect doesn't preserve app-server subscriptions.
+   let resumed = new Set<string>();
+@@ -172,7 +176,7 @@
+       if (resumed.has(threadId)) return;
+       resumed.add(threadId);
+     }
+-    rpc.call('thread/resume', { threadId }).then(
++    rpc.call('thread/resume', { threadId, excludeTurns: true }).then(
+       (res) => {
+         const cwd = (res as { cwd?: unknown } | undefined)?.cwd;
+         if (typeof cwd === 'string' && cwd) threadCwds.set(threadId, cwd);
+@@ -289,7 +293,11 @@
+     startPolling();
+   }
+ 
+-  function retireNativePrompt(threadId: string): void {
++  function retireNativePrompt(threadId: string, owner: { turnId?: string; itemId?: string; requestId?: number | string }): void {
++    const prompt = nativePrompts.get(threadId);
++    if (!prompt || (owner.turnId !== undefined && prompt.turnId !== owner.turnId)
++      || (owner.itemId !== undefined && prompt.itemId !== owner.itemId)
++      || (owner.requestId !== undefined && prompt.requestId !== owner.requestId)) return;
+     if (nativePrompts.delete(threadId)) deps.onNativePromptResolved?.({ key: threadKey(threadId) });
+   }
+ 
+@@ -326,6 +334,10 @@
+     if (method === 'turn/started') {
+       const threadId = (p.threadId as string | undefined) ?? '';
+       if (!threadId) return;
++      const turnId = (p.turn as { id?: unknown } | undefined)?.id;
++      if (!validId(turnId)) return;
++      currentTurns.set(threadId, turnId);
++      lastMessages.delete(threadId);
+       // A new turn owns its own verdict: a stale error would make the next
+       // turn's clean interrupt read as a failure.
+       lastErrors.delete(threadId);
+@@ -351,11 +363,13 @@
+     if (method === 'item/completed') {
+       const threadId = (p.threadId as string | undefined) ?? '';
+       const item = (p.item ?? {}) as Record<string, unknown>;
+-      if (threadId && item.type === 'commandExecution') {
+-        deps.permissionRouter.cancel({ key: threadKey(threadId), toolName: 'Bash', sessionId: threadId });
+-        retireNativePrompt(threadId);
+-      }
+-      if (threadId && item.type === 'agentMessage') {
++      const turnId = p.turnId;
++      if (threadId && validId(turnId) && validId(item.id)
++        && (item.type === 'commandExecution' || item.type === 'fileChange')) {
++        deps.permissionRouter.cancel({ key: threadKey(threadId), toolName: item.type === 'fileChange' ? 'apply_patch' : 'Bash', sessionId: threadId, providerTurnId: turnId, itemIdentity: item.id });
++        retireNativePrompt(threadId, { turnId, itemId: item.id });
++      }
++      if (threadId && item.type === 'agentMessage' && (!currentTurns.has(threadId) || currentTurns.get(threadId) === turnId)) {
+         // An empty agentMessage must not clobber the previous real one — the
+         // continue card's excerpt comes from here, and '' renders as a bare
+         // "Reply to continue" with the actual last words lost.
+@@ -366,9 +380,11 @@
+     }
+     if (method === 'turn/completed') {
+       const threadId = (p.threadId as string | undefined) ?? '';
+-      if (threadId) {
+-        deps.permissionRouter.cancel({ key: threadKey(threadId) });
+-        retireNativePrompt(threadId);
++      const turnId = (p.turn as { id?: unknown } | undefined)?.id;
++      if (threadId && validId(turnId)) {
++        deps.permissionRouter.cancel({ key: threadKey(threadId), providerTurnId: turnId });
++        retireNativePrompt(threadId, { turnId });
++        if (currentTurns.has(threadId) && currentTurns.get(threadId) !== turnId) return;
+         const key = threadKey(threadId);
+         const lastMessage = lastMessages.get(threadId);
+         const { outcome, errorMessage } = resolveOutcome(p.turn, lastErrors.get(threadId));
+@@ -403,7 +419,11 @@
+       // is the event that says so, and it also fires when the app-server
+       // cancels a thread's requests on shutdown.
+       const threadId = (p.threadId as string | undefined) ?? '';
+-      if (threadId) deps.permissionRouter.cancel({ key: threadKey(threadId) });
++      const requestId = p.requestId;
++      if (threadId && (typeof requestId === 'string' || typeof requestId === 'number')) {
++        deps.permissionRouter.cancel({ key: threadKey(threadId), providerRequestId: requestId });
++        retireNativePrompt(threadId, { requestId });
++      }
+       return;
+     }
+     if (method === 'thread/closed' || method === 'thread/archived') {
+@@ -425,6 +445,8 @@
+         const key = threadKey(threadId);
+         const cwd = cwdOf(threadId);
+         deps.permissionRouter.cancel({ key });
++        retireNativePrompt(threadId, {});
++        currentTurns.delete(threadId);
+         lastMessages.delete(threadId);
+         lastErrors.delete(threadId);
+         lastHeard.delete(threadId);
+@@ -439,20 +461,21 @@
+     }
+   }
+ 
+-  function handleServerRequest(_id: number | string, method: string, params: unknown, respond: (result: unknown) => void): void {
++  function handleServerRequest(id: number | string, method: string, params: unknown, respond: (result: unknown) => void): void {
+     const p = (params ?? {}) as Record<string, unknown>;
+     if (method === 'item/commandExecution/requestApproval') {
+       const threadId = (p.threadId as string | undefined) ?? '';
+       const command = p.command;
+       const cwd = p.cwd;
+       const reason = p.reason;
++      if (validId(p.turnId)) currentTurns.set(threadId, p.turnId);
+       const policy = deps.approvalPolicy?.() ?? 'hold';
+       // Never responding is the pass-through: the app-server keeps the request
+       // pending and the native prompt remains the only answer, which is exactly
+       // what "as if tlive were not installed" means here.
+       if (policy === 'ignore') return;
+       if (policy === 'notify') {
+-        nativePrompts.add(threadId);
++        nativePrompts.set(threadId, { turnId: validId(p.turnId) ? p.turnId : undefined, itemId: validId(p.itemId) ? p.itemId : undefined, requestId: id });
+         deps.onNativePrompt?.({ key: threadKey(threadId), cwd: cwdOf(threadId), detail: describeCommand(command, reason) });
+         return;
+       }
+@@ -468,6 +491,9 @@
+           // registry's label = basename(cwd).
+           cwd: cwdOf(threadId),
+           toolName: 'Bash',
++          itemIdentity: typeof p.itemId === 'string' ? p.itemId : undefined,
++          providerRequestId: id,
++          providerTurnId: typeof p.turnId === 'string' ? p.turnId : undefined,
+           input: { command, cwd, reason },
+           timeoutSec: deps.windowSec(),
+           sessionId: threadId,
+@@ -523,9 +549,11 @@
+       // the default rung a write approval came out `reason: "held"`, which is
+       // the one thing `notify` promises never happens. `off` never answers at
+       // all; `notify` reports to the machine and holds nothing.
++      if (validId(p.turnId)) currentTurns.set(threadId, p.turnId);
+       const policy = deps.approvalPolicy?.() ?? 'hold';
+       if (policy === 'ignore') return;
+       if (policy === 'notify') {
++        nativePrompts.set(threadId, { turnId: validId(p.turnId) ? p.turnId : undefined, itemId: validId(p.itemId) ? p.itemId : undefined, requestId: id });
+         deps.onNativePrompt?.({ key: threadKey(threadId), cwd: cwdOf(threadId), detail: summarizeToolCall('apply_patch', { command: patch }) });
+         return;
+       }
+@@ -535,6 +563,9 @@
+           key: threadKey(threadId),
+           cwd: cwdOf(threadId),
+           toolName: 'apply_patch',
++          itemIdentity: typeof p.itemId === 'string' ? p.itemId : undefined,
++          providerRequestId: id,
++          providerTurnId: typeof p.turnId === 'string' ? p.turnId : undefined,
+           input: { command: patch, ...(reason ? { reason } : {}) },
+           timeoutSec: deps.windowSec(),
+           sessionId: threadId,
+@@ -584,6 +615,10 @@
+         resumed = new Set();
+         resumeFailureLogged = new Set();
+         itemChanges = new Map();
++        for (const threadId of nativePrompts.keys()) retireNativePrompt(threadId, {});
++        currentTurns.clear();
++        lastMessages.clear();
++        lastErrors.clear();
+         lastHeard.clear();
+         released.clear();
+         // Before clearing: every approval still waiting on this connection has
+diff --git a/src/kernel/codex/spawn.ts b/src/kernel/codex/spawn.ts
+--- a/src/kernel/codex/spawn.ts
++++ b/src/kernel/codex/spawn.ts
+@@ -88,12 +88,16 @@
+ 
+ export async function ensureCodexAppServer(opts: {
+   logPath: string;
++  attachOnly?: boolean;
+   probe?: (sockPath: string) => Promise<boolean>;
+   spawnFn?: (logPath: string) => ChildLike;
+   onStateChange?: (s: 'running' | 'degraded' | 'off') => void;
+   platform?: NodeJS.Platform;
+   hasCodex?: () => boolean;
+ }): Promise<AppServerCustody | null> {
++  const mode = process.env.TLIVE_CODEX_APP_SERVER_MODE;
++  if (mode !== undefined && mode !== 'attach-only' && mode !== 'auto') throw new Error('invalid Codex app-server mode');
++  const attachOnly = opts.attachOnly ?? mode === 'attach-only';
+   const platform = opts.platform ?? process.platform;
+   const hasCodex = opts.hasCodex ?? (() => commandOnPath('codex'));
+   // win32 only: `codex app-server` is not wired up there, so there is nothing
+@@ -170,6 +174,9 @@
+       if (listening) {
+         failures = 0;
+         setState('running');
++      } else if (attachOnly) {
++        // The independent service owns the server. Never spawn a competitor.
++        setState('degraded');
+       } else if (!hasCodex()) {
+         // Nothing to spawn: stay quiet and keep looking, so an install or a
+         // reinstall recovers on its own instead of requiring
+diff --git a/src/kernel/contracts/approval-snapshot.ts b/src/kernel/contracts/approval-snapshot.ts
+new file mode 100644
+--- /dev/null
++++ b/src/kernel/contracts/approval-snapshot.ts
+@@ -0,0 +1,6 @@
++/** Bounded read-only native Codex card evidence. No control capability or payload. */
++export interface ApprovalSnapshot {
++  kind: 'approval.snapshot'; version: 1; epoch: string; epochStartedAt: number; capturedAt: number; truncated: boolean;
++  entries: Array<{ threadId: string; turnId?: string; providerRequestId: string | number; itemId: string;
++    observedAt: number; graceUntil: number; deliveryAt: number; delivery: 'pending' | 'sending' | 'sent' | 'unknown' | 'failed' }>;
++}
+diff --git a/src/kernel/contracts/protected-permission.ts b/src/kernel/contracts/protected-permission.ts
+new file mode 100644
+--- /dev/null
 +++ b/src/kernel/contracts/protected-permission.ts
 @@ -0,0 +1,42 @@
 +// Additive, private Hub permission channel. The public IMAdapter is unchanged.
@@ -131,6 +483,7 @@
 +  | { kind: 'hub.permission.capability'; version: 1; epoch: string; tag: string }
 +  | { kind: 'hub.permission.result'; decision: 'allow' | 'deny'; epoch?: string;
 +      payload?: string; actor?: ProtectedCallback | null; tag?: string };
+diff --git a/src/kernel/daemon/bootstrap.ts b/src/kernel/daemon/bootstrap.ts
 --- a/src/kernel/daemon/bootstrap.ts
 +++ b/src/kernel/daemon/bootstrap.ts
 @@ -5,6 +5,8 @@
@@ -159,7 +512,29 @@
    // Read once, here, for the toast alone — see detectLang's doc for why this
    // is a startup snapshot rather than a live read.
    const lang = detectLang(process.env);
-@@ -1306,6 +1318,11 @@
+@@ -485,7 +497,7 @@
+   const sendToChat = async (
+     target: PermChat,
+     msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string; ask?: AskContext; agentId?: string; buttons?: Array<{ id: string; label: string }>; onSent?: (s: { channel: string; messageId: string }) => void },
+-  ): Promise<void> => {
++  ): Promise<void | { messageId: string }> => {
+     const adapter = (opts.imAdapters ?? []).find((a) => a.channel === target.channel);
+     if (!adapter) return;
+     const tag = sessionTag(msg.cwd);
+@@ -554,9 +566,10 @@
+       }
+     }
+     if (msg.cwd) rememberMsg(target.channel, sent.messageId, msg.cwd);
+-    // Reported rather than returned: the return type is part of the router's dep
+-    // contract (Promise<void>), and only this one caller needs the id back.
++    // Preserve the callback caller while returning the adapter receipt for
++    // passive permission-card delivery evidence.
+     msg.onSent?.({ channel: target.channel, messageId: sent.messageId });
++    return sent;
+   };
+ 
+   /** Sub-agent pass-through notices, so each can retire itself when that
+@@ -1306,6 +1319,14 @@
        };
        logJson('ipc.request', { kind: req.kind, callerPid: ctx.callerPid ?? null, ...idOf(req) });
        switch (req.kind) {
@@ -168,10 +543,13 @@
 +          reply(protectedPermissions ? await protectedPermissions.handle(req,ctx.onDisconnect)
 +            : {kind:'error',message:'protected permission host unavailable'});
 +          return;
++        case 'approval.snapshot':
++          reply(permissionRouter.approvalSnapshot());
++          return;
          case 'daemon.status':
            reply({ kind: 'daemon.status', uptimeMs: Date.now() - startedAt, pid: process.pid, codex: codexState });
            return;
-@@ -1757,6 +1774,7 @@
+@@ -1757,6 +1778,7 @@
        // an in-flight request and it rejects (IpcConnectionClosedError). Flush a
        // tick so the replies write out before we start closing.
        permissionRouter.settleAllPending();
@@ -179,7 +557,148 @@
        continueBroker.settleAllPending();
        await new Promise((r) => setImmediate(r));
        codexCompanion?.stop();
---- a/src/kernel/daemon/protected-permissions.ts
+diff --git a/src/kernel/daemon/permission-router.ts b/src/kernel/daemon/permission-router.ts
+--- a/src/kernel/daemon/permission-router.ts
++++ b/src/kernel/daemon/permission-router.ts
+@@ -1,5 +1,6 @@
+ // src/kernel/daemon/permission-router.ts
+ import { randomUUID } from 'node:crypto';
++import type { ApprovalSnapshot } from '../contracts/approval-snapshot.js';
+ import type { AskBatch } from '../permission/ask-renderer.js';
+ 
+ /** Everything an AskUserQuestion card needs, carried as one unit: the whole
+@@ -24,7 +25,7 @@
+    *  (Task 10) additionally selects the checkbox/Submit(N)/Skip layout over
+    *  the single-pick numbered buttons — both are opaque booleans/arrays to
+    *  this vendor-neutral layer, it never inspects toolName itself. */
+-  sendToChat: (target: PermChat, card: { title: string; body: string; requestId: string; toolName: string; cwd: string; ask?: AskContext; agentId?: string }) => Promise<void>;
++  sendToChat: (target: PermChat, card: { title: string; body: string; requestId: string; toolName: string; cwd: string; ask?: AskContext; agentId?: string }) => Promise<void | { messageId: string }>;
+   /** `key` — the session's registry identity (see requestPermission's `key` opt), NOT the real cwd.
+    *  Mutes the IM card ONLY (desktop toast / dashboard stay live) — it no longer
+    *  defers the whole approval on its own (see requestPermission). */
+@@ -121,8 +122,15 @@
+   resolve: (d: { decision: Decision; message?: string; updatedInput?: unknown }) => void;
+   key: string;
+   toolName: string;
++  itemIdentity?: string;
++  providerRequestId?: number | string;
+   sessionId?: string;
+   agentId?: string;
++  providerTurnId?: string;
++  observedAt: number;
++  graceUntil: number;
++  deliveryAt: number;
++  delivery: 'pending' | 'sending' | 'sent' | 'unknown' | 'failed';
+ }
+ 
+ /** 关联字段匹配:双方都带且非空才比较;任一侧缺失 = 通配(保守,宁可多释放
+@@ -137,7 +145,34 @@
+   /** requestId → which surface settled it, read once by requestPermission when
+    *  its await returns. Set by whoever resolves; absent means nothing claimed it. */
+   private resolvedBy = new Map<string, string>();
++  private readonly epoch = randomUUID();
++  private readonly epochStartedAt = Date.now();
+   constructor(private deps: PermissionRouterDeps) {}
++
++  /** Passive only. No tool inputs, paths, chat identities or control tokens. */
++  approvalSnapshot(): ApprovalSnapshot {
++    const entries: ApprovalSnapshot['entries'] = [];
++    let bytes = 0;
++    let truncated = false;
++    const identity = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(v);
++    let examined = 0;
++    for (const e of this.pending.values()) {
++      if (++examined > 256 || entries.length >= 128) { truncated = true; break; }
++      // Only native Codex requests; the protected Claude namespace is separate.
++      if (e.providerRequestId === undefined) continue;
++      if (entries.length >= 128 || !identity(e.sessionId) || !identity(e.itemIdentity)
++          || !(identity(e.providerRequestId) || (typeof e.providerRequestId === 'number' && Number.isSafeInteger(e.providerRequestId)))) {
++        truncated = true; continue;
++      }
++      const record = { threadId: e.sessionId, providerRequestId: e.providerRequestId, itemId: e.itemIdentity, ...(identity(e.providerTurnId) ? {turnId: e.providerTurnId} : {}),
++        observedAt: e.observedAt, graceUntil: e.graceUntil, deliveryAt: e.deliveryAt, delivery: e.delivery };
++      bytes += JSON.stringify(record).length;
++      if (bytes > 100000) { truncated = true; break; }
++      entries.push(record);
++    }
++    return { kind: 'approval.snapshot' as const, version: 1 as const, epoch: this.epoch,
++      epochStartedAt: this.epochStartedAt, capturedAt: Date.now(), truncated, entries };
++  }
+ 
+   /** `key` is the session's registry identity — used for pending-map matching
+    *  (cancel/mute/card-routing) exactly like `cancel()`'s `key` opt. `cwd` is
+@@ -147,7 +182,7 @@
+    *  Keeping them as two required, separate fields is the whole point of this
+    *  split — collapsing them back into one is the bug (see bootstrap.ts's
+    *  resolveKey doc comment). */
+-  async requestPermission(opts: { key: string; cwd: string; toolName: string; input: unknown; permissionMode?: string; timeoutSec?: number; sessionId?: string; agentId?: string; onAbandoned?: (cb: () => void) => void }): Promise<{ decision: Decision; message?: string; updatedInput?: unknown }> {
++  async requestPermission(opts: { key: string; cwd: string; toolName: string; input: unknown; permissionMode?: string; timeoutSec?: number; sessionId?: string; agentId?: string; itemIdentity?: string; providerTurnId?: string; providerRequestId?: number | string; onAbandoned?: (cb: () => void) => void }): Promise<{ decision: Decision; message?: string; updatedInput?: unknown }> {
+     // Identity only — the tool input can carry secrets and never goes to the log.
+     const who = {
+       key: opts.key,
+@@ -206,6 +241,10 @@
+         resolve,
+         key: opts.key,
+         toolName: opts.toolName,
++        itemIdentity: opts.itemIdentity,
++        providerRequestId: opts.providerRequestId,
++        providerTurnId: opts.providerTurnId,
++        observedAt: Date.now(), graceUntil: Date.now() + Math.max(0, this.deps.graceSec()) * 1000, deliveryAt: Date.now(), delivery: 'pending',
+         ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+         ...(opts.agentId ? { agentId: opts.agentId } : {}),
+       });
+@@ -241,6 +280,18 @@
+       const push = (): void => {
+         if (!this.pending.has(requestId)) return;
+         if (this.deps.isMuted(opts.key)) return; // grace 期间 mute 了 → 尊重
++        const entry = this.pending.get(requestId)!;
++        const telegram = targets.filter(t => t.channel === 'telegram');
++        if (telegram.length === 0) { entry.delivery = 'failed'; entry.deliveryAt = Date.now(); }
++        let remaining = telegram.length;
++        const settled = (sent: boolean): void => {
++          if (this.pending.get(requestId) !== entry) return;
++          remaining -= 1;
++          if (sent) entry.delivery = 'sent';
++          else if (remaining === 0 && entry.delivery !== 'sent') entry.delivery = 'unknown';
++          entry.deliveryAt = Date.now();
++        };
++        if (remaining) { entry.delivery = 'sending'; entry.deliveryAt = Date.now(); }
+         for (const t of targets) {
+           // card.cwd carries `key` (not the real directory) — the label tag
+           // lookup and reply-routing map (bootstrap.ts's sessionTag/rememberMsg)
+@@ -254,7 +305,12 @@
+           // went unnoticed. Still non-fatal: the local dialog is unaffected and
+           // the other targets/dashboard may well have gone out.
+           void this.deps.sendToChat(t, { title, body, requestId, toolName: opts.toolName, cwd: opts.key, ...(ask ? { ask } : {}), ...(opts.agentId ? { agentId: opts.agentId } : {}) })
++            .then((receipt) => {
++              if (t.channel === 'telegram') settled(!!receipt && typeof receipt.messageId === 'string'
++                && /^[1-9][0-9]{0,19}$/.test(receipt.messageId));
++            })
+             .catch((e: unknown) => {
++              if (t.channel === 'telegram') settled(false);
+               this.deps.log?.('permission.card.undelivered', {
+                 ...who, requestId, channel: t.channel, error: e instanceof Error ? e.message : String(e),
+               });
+@@ -371,11 +427,15 @@
+    *  matchAgent 三态:undefined = 任意 agent(prompt/stop 清场);null = 仅主
+    *  会话的卡(回答者是主会话,不得误放子 agent 的同 tool 卡);字符串 = 仅该
+    *  agent 的卡。Never auto-allows —— 释放只是 {} pass-through。 */
+-  cancel(opts: { key: string; toolName?: string; sessionId?: string; matchAgent?: string | null }): number {
++  cancel(opts: { key: string; toolName?: string; sessionId?: string; matchAgent?: string | null; itemIdentity?: string; providerTurnId?: string; providerRequestId?: number | string }): number {
+     let n = 0;
+     for (const [rid, e] of [...this.pending]) {
+       if (e.key !== opts.key) continue;
+       if (opts.toolName !== undefined && e.toolName !== opts.toolName) continue;
++      // Native item identities are exact, never wildcard-match missing fields.
++      if (opts.providerTurnId !== undefined && e.providerTurnId !== opts.providerTurnId) continue;
++      if (opts.itemIdentity !== undefined && e.itemIdentity !== opts.itemIdentity) continue;
++      if (opts.providerRequestId !== undefined && e.providerRequestId !== opts.providerRequestId) continue;
+       if (!fieldMatches(e.sessionId, opts.sessionId)) continue;
+       if (opts.matchAgent !== undefined && e.agentId !== (opts.matchAgent ?? undefined)) continue;
+       this.pending.delete(rid);
+diff --git a/src/kernel/daemon/protected-permissions.ts b/src/kernel/daemon/protected-permissions.ts
+new file mode 100644
+--- /dev/null
 +++ b/src/kernel/daemon/protected-permissions.ts
 @@ -0,0 +1,225 @@
 +// Protected decisions never enter the ordinary permission router or IM inbound path.
@@ -407,6 +926,7 @@
 +    for (const nonce of this.#pending.keys()) this.settle(nonce, 'deny', null);
 +  }
 +}
+diff --git a/src/kernel/ipc/protocol.ts b/src/kernel/ipc/protocol.ts
 --- a/src/kernel/ipc/protocol.ts
 +++ b/src/kernel/ipc/protocol.ts
 @@ -1,6 +1,7 @@
@@ -417,18 +937,20 @@
  import type { MonitorEvent, SessionError, LocalWaiting } from '../hook/normalizer.js';
  
  export interface SessionMeta {
-@@ -14,6 +15,7 @@
+@@ -14,6 +15,8 @@
  }
  
  export type IpcRequest =
 +  | ProtectedRequest
++  | { kind: 'approval.snapshot' }
    | { kind: 'daemon.status' }
    | { kind: 'daemon.stop' }
    // Runtime toggle. `enabled` = "this switch is ON" (for `mute`, on = muted).
-@@ -67,6 +69,7 @@
+@@ -67,6 +70,8 @@
    | { kind: 'session.list' };
  
  export type IpcResponse =
++  | import('../contracts/approval-snapshot.js').ApprovalSnapshot
 +  | ProtectedResponse
    | { kind: 'daemon.status'; uptimeMs: number; pid: number; codex?: 'running' | 'degraded' | 'off' }
    | { kind: 'daemon.stopped' }

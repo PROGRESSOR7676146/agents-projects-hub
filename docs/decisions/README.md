@@ -89,3 +89,5 @@ with a new record.
 The table is an index, not a substitute for the normative product requirements.
 Create an individual decision record when a future change supersedes any row or
 introduces a durable trade-off whose rationale must outlive its implementation.
+
+- [0073: Passive card evidence and independent Codex custody](0073-tlive-approval-evidence-and-server-custody.md) — source candidate; live acceptance pending.

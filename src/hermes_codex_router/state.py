@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator, Literal, Mapping, Sequence
 
+from .approval_surface import ApprovalWait
+from .approval_surface_state import pending_approval_waits
 from .artifacts import ValidatedArtifact
 from .assessment_inputs import OutcomeAssessmentInput
 from .codex_control_predicates import control_owner_for_topic
@@ -295,6 +297,12 @@ class HubState:
     @property
     def schema_version(self) -> int:
         return int(self._connection.execute("PRAGMA user_version").fetchone()[0])
+
+    def pending_codex_approvals(self, *, now: datetime) -> tuple[tuple[ApprovalWait, ...], bool]:
+        with self._connection_transaction():
+            return pending_approval_waits(
+                self._connection, now=now, selected_profile=lambda: self.codex_permission_profile
+            )
 
     def close(self) -> None:
         self._connection.close()

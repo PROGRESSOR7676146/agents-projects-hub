@@ -83,3 +83,34 @@ jobs:
           tests.test_process_namespace_topology
           tests.test_review_materials_namespace
           tests.test_review_bridge_namespace
+
+  tlive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Fetch and verify pinned source archive before unpacking
+        run: |
+          npm pack tlive@5.3.1 --ignore-scripts --pack-destination "$RUNNER_TEMP"
+          python - <<'PY'
+          import hashlib, json, os, pathlib, tarfile
+          archive = pathlib.Path(os.environ["RUNNER_TEMP"]) / "tlive-5.3.1.tgz"
+          manifest = json.loads(pathlib.Path("integrations/tlive/source-manifest.json").read_text())
+          assert hashlib.sha256(archive.read_bytes()).hexdigest() == manifest["archive_sha256"]
+          with tarfile.open(archive) as source:
+              source.extractall(path=pathlib.Path(os.environ["RUNNER_TEMP"]) / "tlive", filter="data")
+          PY
+      - name: Apply pinned patch and prepare build dependencies
+        run: |
+          python scripts/tlive_extension.py check-base "$RUNNER_TEMP/tlive/package" --archive "$RUNNER_TEMP/tlive-5.3.1.tgz"
+          python scripts/tlive_extension.py apply "$RUNNER_TEMP/tlive/package"
+          # npm 10.9.9 bundled with Node 22 fails clean Arborist resolution (edgesOut).
+          # Pin the tested resolver without changing the runner's global npm.
+          npm exec --yes --package=npm@12.0.2 -- npm install --prefix "$RUNNER_TEMP/tlive/package" --ignore-scripts --include=dev
+      - name: Build and run carried offline regressions
+        run: python scripts/tlive_extension.py build "$RUNNER_TEMP/tlive/package"

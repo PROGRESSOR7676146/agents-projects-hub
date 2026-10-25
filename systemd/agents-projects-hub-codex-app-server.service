@@ -1,0 +1,17 @@
+[Unit]
+Description=Independently owned pinned Codex app-server (explicit start receipt)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.config/agents-projects-hub/environment
+ExecStart=%h/.local/share/agents-projects-hub/venv/bin/python -m hermes_codex_router.codex_server_service run --manifest %h/.config/agents-projects-hub/codex-server.json --receipt %h/.config/agents-projects-hub/codex-server-start.json
+Restart=no
+KillMode=mixed
+SendSIGKILL=no
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+# Keep the owning socket visible to existing private-tmp clients.
+PrivateTmp=false

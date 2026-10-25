@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from .alerts import OperationalAlert, evaluate_operational_alerts
+from .approval_surface import assess_surface, read_snapshot, surface_alerts
 from .catalog_refresh import refresh_provider_catalogs
 from .diagnostic_log import survived
 from .diagnostics import run_doctor
@@ -156,7 +157,9 @@ def run_monitor_once(
     repair: bool = False,
     cooldown_seconds: int = 60 * 60,
 ) -> dict[str, object]:
-    state = HubState.open_existing(config.state_path)
+    state = HubState.open_existing(
+        config.state_path, codex_permission_profile=config.codex_permission_profile
+    )
     journal = IncidentJournal(config.state_path.resolve().with_name("incident-journal.json"))
     try:
         with ExitStack() as cycle:
@@ -305,6 +308,24 @@ def _run_monitor_once(
                 None,
             ),
         )
+        approval_surface = None
+        if config.recovery_plane.enabled and config.recovery_plane.tlive_config_path is not None:
+            waits, truncated = state.pending_codex_approvals(now=monitor_started)
+            approval_surface = assess_surface(
+                waits,
+                read_snapshot(config.recovery_plane.tlive_config_path.parent / "daemon.sock")
+                if waits
+                else None,
+                now=datetime.now(timezone.utc),
+            )
+            if truncated:
+                approval_surface["unknown"] += 1
+            alerts += surface_alerts(approval_surface)
+        # Only positive exact delivery for every observed wait proves recovery.
+        # Grace and absent waits carry no delivery evidence; retain the existing
+        # incident and notification edge until the surface is actually observed.
+        if approval_surface is None or not approval_surface["waiting"] or approval_surface["grace"]:
+            unobserved_keys += ("tlive:approval-surface",)
         stale_catalogs = ProviderCatalogCache(
             config.state_path.with_name("provider-model-catalogs.json")
         ).stale_agents()
@@ -361,6 +382,7 @@ def _run_monitor_once(
             "repairs": repairs,
             "catalog_refresh": asdict(catalog_refresh),
             "reliability": snapshot["reliability"],
+            "approval_surface": approval_surface,
             "incident_journal": incident_status,
             "telegram_access": {
                 name: sum(value is status for value in access.values())

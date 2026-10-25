@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from hermes_codex_router import alerts as alert_module
-from hermes_codex_router import monitoring, reliability_alerts
+from hermes_codex_router import approval_surface, monitoring, reliability_alerts
 from hermes_codex_router.alerts import evaluate_operational_alerts
 from hermes_codex_router.catalog_refresh import CatalogRefreshResult
 from hermes_codex_router.hub_config import HubConfig, OperationalAlertSettings, TerminalSettings
@@ -197,7 +197,7 @@ class IncidentMonitorTests(unittest.TestCase):
         # Audit all constructor sites, including helpers not selected by a monitor cycle.
         # A new literal alert fails this contract even without a new scenario fixture.
         codes = set()
-        for module in (alert_module, monitoring, reliability_alerts):
+        for module in (alert_module, approval_surface, monitoring, reliability_alerts):
             module_file = module.__file__
             assert module_file is not None
             tree = ast.parse(Path(module_file).read_text())

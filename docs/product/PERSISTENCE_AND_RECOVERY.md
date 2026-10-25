@@ -38,6 +38,21 @@ This normative module is part of the
 - **REQ-OPS-005 (Implemented):** Hermes Gateway and tlive MUST be monitored as
   independent, non-mandatory recovery channels. Fresh local heartbeat/status
   markers provide liveness evidence without exposing URLs or tokens.
+  For configured tlive recovery, a passive approval-surface projection MUST compare
+  the exact persisted native thread, turn, typed request and item identity with a
+  fresh bounded daemon snapshot. A Hub approval-wait notice is not card evidence.
+  Only the adapter's positive delivery reference MAY establish sent; queueing,
+  absent/stale/ambiguous/truncated evidence and daemon restart MUST NOT establish
+  health. New waits have a 30-second diagnostic grace, distinct from delivery.
+  A continuing unconfirmed wait MUST raise one deduplicated operational alert,
+  without inference, replay, permission decisions or automatic service repair.
+  The snapshot MUST omit inputs, prompts, credentials, paths and callback tokens.
+  Supported independent Codex service custody MUST offer explicit attach-only
+  tlive operation that never spawns or stops the server. Migration/start tooling
+  MUST refuse active or unknown work, unsettled controls, unowned existing
+  socket/server and mismatched artifact pins; it MUST NOT kill processes, delete
+  sockets or infer native idle from general diagnostics. Operator-native custody,
+  exact source/rollback identities and separate live acceptance remain required.
 - **REQ-OPS-006 (Implemented):** General operational alerts are bounded,
   deduplicated, and delivered
   only to one explicitly configured Hub Operations/Alerts topic. The configured

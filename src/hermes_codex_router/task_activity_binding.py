@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from .stop_coverage import pending_stop_for_job
+from .stop_coverage import stop_covers
 
 ACTIVITY_BINDING = (
     "lease_token",
@@ -22,31 +22,43 @@ ACTIVITY_BINDING = (
 )
 
 
+CURRENT_ACTIVITY_BINDINGS_SQL = f"""
+SELECT job.job_id,job.lease_token,job.topic_id,topic.project_id,
+       COALESCE(topic.execution_scope,'project:'||topic.project_id) AS execution_scope,
+       job.chat_id,topic.thread_id,job.session_id,
+       job.session_generation,job.agent_id,
+       checkpoint.provider_thread_id,checkpoint.provider_turn_id,
+       checkpoint.project_root
+FROM provider_jobs job
+JOIN topics topic ON topic.topic_id=job.topic_id
+AND topic.chat_id=job.chat_id
+JOIN agent_sessions session ON session.session_id=job.session_id
+AND session.topic_id=job.topic_id
+AND session.agent_id=job.agent_id
+AND session.generation=job.session_generation
+JOIN provider_execution_checkpoints checkpoint ON checkpoint.job_id=job.job_id
+AND checkpoint.provider_thread_id=session.provider_session_id
+WHERE job.status='executing'
+AND job.lease_expires_at>?
+AND session.writer_mode='telegram'
+AND session.status IN ('active','satellite')
+AND checkpoint.provider_turn_id IS NOT NULL
+AND checkpoint.completed_text IS NULL
+AND (COALESCE(topic.execution_scope,'project:'||topic.project_id)='root:'||checkpoint.project_root
+OR COALESCE(topic.execution_scope,'project:'||topic.project_id)='project:'||topic.project_id)
+AND NOT EXISTS (SELECT 1
+FROM provider_stop_requests stop
+WHERE stop.status='pending'
+AND {stop_covers("stop", "job")})
+"""
+
+
 def current_activity_binding(
     connection: sqlite3.Connection, job_id: str, token: str, timestamp: str
 ) -> sqlite3.Row | None:
-    if pending_stop_for_job(connection, job_id) is not None:
-        return None
     row = connection.execute(
-        "SELECT job.lease_token,job.topic_id,topic.project_id,"
-        "COALESCE(topic.execution_scope,'project:'||topic.project_id) AS execution_scope,"
-        "job.chat_id,topic.thread_id,job.session_id,"
-        "job.session_generation,job.agent_id,checkpoint.provider_thread_id,"
-        "checkpoint.provider_turn_id,checkpoint.project_root FROM provider_jobs job "
-        "JOIN topics topic ON topic.topic_id=job.topic_id AND topic.chat_id=job.chat_id "
-        "JOIN agent_sessions session ON session.session_id=job.session_id "
-        "AND session.topic_id=job.topic_id AND session.agent_id=job.agent_id "
-        "AND session.generation=job.session_generation "
-        "JOIN provider_execution_checkpoints checkpoint ON checkpoint.job_id=job.job_id "
-        "AND checkpoint.provider_thread_id=session.provider_session_id "
-        "WHERE job.job_id=? AND job.status='executing' AND job.lease_token=? "
-        "AND job.lease_expires_at>? AND session.writer_mode='telegram' "
-        "AND session.status IN ('active','satellite') "
-        "AND checkpoint.provider_turn_id IS NOT NULL AND checkpoint.completed_text IS NULL "
-        "AND (COALESCE(topic.execution_scope,'project:'||topic.project_id)="
-        "'root:'||checkpoint.project_root OR "
-        "COALESCE(topic.execution_scope,'project:'||topic.project_id)='project:'||topic.project_id)",
-        (job_id, token, timestamp),
+        CURRENT_ACTIVITY_BINDINGS_SQL + " AND job.job_id=? AND job.lease_token=?",
+        (timestamp, job_id, token),
     ).fetchone()
     return row
 

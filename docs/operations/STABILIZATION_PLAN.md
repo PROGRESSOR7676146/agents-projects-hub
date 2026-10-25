@@ -394,6 +394,12 @@ accumulated without live acceptance, contrary to product principle 10.
 
 ## Live-acceptance backlog
 
+- tlive approval surface and independent Codex server custody: exact-source review,
+  canonical/CI gates, then separately authorized migration, genuine human card
+  delivery and tlive-only restart with unchanged external server and retained
+  unknown controls. Offline tests do not close this item. See the
+  [operator procedure](TLIVE_RELIABILITY.md).
+
 Each item needs deployment-local evidence at an exact clean revision, recorded
 privately (see [live canary](LIVE_CANARY.md)). Repository tests are not
 acceptance.

@@ -123,6 +123,10 @@ class TliveExtensionTest(unittest.TestCase):
 
 
 class BundledPackageTest(unittest.TestCase):
+    def test_external_tlive_startup_uses_private_umask(self) -> None:
+        dropin = extension.PACKAGE.parents[1] / "systemd/tlive.service.d/30-external-codex.conf"
+        self.assertIn("\nUMask=0077\n", dropin.read_text())
+
     def test_patch_manifest_scope_and_attribution(self) -> None:
         package = extension.PACKAGE
         manifest = json.loads((package / "source-manifest.json").read_text())
@@ -136,13 +140,18 @@ class BundledPackageTest(unittest.TestCase):
             {
                 "src/adapters/im/telegram.ts",
                 "src/kernel/contracts/protected-permission.ts",
+                "src/kernel/contracts/approval-snapshot.ts",
+                "src/kernel/codex/spawn.ts",
+                "src/kernel/codex/companion.ts",
+                "src/kernel/codex/__tests__/companion.test.ts",
+                "src/kernel/daemon/permission-router.ts",
                 "src/kernel/daemon/bootstrap.ts",
                 "src/kernel/daemon/protected-permissions.ts",
                 "src/kernel/ipc/protocol.ts",
             },
         )
         self.assertIn("src/kernel/daemon/permission-router.ts", manifest["base_files"])
-        self.assertNotIn("src/kernel/daemon/permission-router.ts", manifest["patched_files"])
+        self.assertIn("src/kernel/daemon/permission-router.ts", manifest["patched_files"])
         self.assertTrue((package / "LICENSE.upstream").read_bytes().startswith(b"MIT License\n"))
 
 

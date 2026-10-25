@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import {mkdtempSync,writeFileSync,readFileSync,chmodSync,renameSync,symlinkSync,unlinkSync} from 'node:fs';
 import {randomBytes,randomUUID,createHmac,createHash} from 'node:crypto';
 import {connect} from 'node:net';
+import {spawn} from 'node:child_process';
+import {tmpdir} from 'node:os';
 import {setTimeout as delay} from 'node:timers/promises';
 import {join} from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 const selected = process.env.TLIVE_SOURCE;
 if (!selected) throw Error('TLIVE_SOURCE is required');
 const fromSource = path => import(pathToFileURL(join(selected,path)).href);
@@ -19,15 +21,22 @@ const test = async (name, fn) => {await fn(); passes++; console.log('PASS',name)
 const until = async (fn) => {for(let i=0;i<300;i++){if(fn())return;await delay(5);} throw Error('wait expired');};
 const cfg={version:1,chatId:'12345',ownerId:'67890',requestKey:randomBytes(32).toString('hex'),resultKey:randomBytes(32).toString('hex')};
 const reqKey=Buffer.from(cfg.requestKey,'hex'), resKey=Buffer.from(cfg.resultKey,'hex');
-const home=mkdtempSync('/tmp/hub-tlive-candidate-offline-');
+// Reproduce an ordinary launcher umask; apply the actual production drop-in
+// as systemd does before exec. Missing privacy configuration must fail IPC.
+process.umask(0o022);
+const dropin=readFileSync(new URL('../../systemd/tlive.service.d/30-external-codex.conf',import.meta.url),'utf8');
+const serviceUmask=dropin.match(/^UMask=([0-7]{4})$/m);
+if(serviceUmask)process.umask(parseInt(serviceUmask[1],8));
+const home=mkdtempSync(join(tmpdir(),'hub-tlive-candidate-offline-'));
 writeFileSync(join(home,'config.json'),JSON.stringify({web:{enabled:true,bind:'127.0.0.1',port:0},mode:'all',allowedSenders:[{channel:'telegram',userId:cfg.ownerId}],adapters:{telegram:{token:'FICTIONAL_OFFLINE_TOKEN',chatIdAllowList:[cfg.chatId]}},approvals:{autoApprove:'readonly',approvalGraceSec:0}}),{mode:0o600});
 writeFileSync(join(home,'protected-permissions.json'),JSON.stringify(cfg),{mode:0o600});
-let handle, bot, epoch;
+let handle, bot, epoch, codexEvents;
+const nativeReplies=[];
 
 let state={jobId:'example-job',sessionId:randomUUID(),generation:1,rootDigest:createHash('sha256').update('/home/example/project').digest('hex'),leaseId:randomUUID(),launchEpoch:randomUUID(),writer:'telegram'};
 const ipc=msg=>request(msg,{socketPath:handle.ipcSocketPath,timeoutMs:3000});
 async function boot(){
-  handle=await bootstrapDaemon({home,imAdapters:[new TelegramAdapter({token:'FICTIONAL_OFFLINE_TOKEN',allowedChatIds:[cfg.chatId]})],ensureAppServer:async()=>null,desktopNotifier:{notify:async()=>{}}});
+  handle=await bootstrapDaemon({home,imAdapters:[new TelegramAdapter({token:'FICTIONAL_OFFLINE_TOKEN',allowedChatIds:[cfg.chatId]})],ensureAppServer:async o=>{o.onStateChange?.('running');return {adopted:true,stop(){}};},connectCodex:async events=>{codexEvents=events;return {call:async()=>({data:[]}),notify(){},close(){}};},desktopNotifier:{notify:async()=>{}}});
   bot=bots.at(-1);
 }
 async function hello(version=1){
@@ -60,6 +69,33 @@ function verifyReceipt(t,r){
 try {
   await boot();
   await test('authenticated version/capability handshake',()=>hello());
+  await test('read-only snapshot derives sent from the actual adapter and omits protected input', async()=>{
+    const pending=handle.permissionRouter.requestPermission({key:'codex:example-thread',cwd:'/home/example/project',sessionId:'example-thread',providerTurnId:'example-turn',providerRequestId:7,itemIdentity:'example-item',toolName:'Bash',input:{command:'FICTIONAL_SECRET_INPUT'}});
+    await until(()=>handle.permissionRouter.approvalSnapshot().entries[0]?.delivery==='sent');
+    const snapshot=await ipc({kind:'approval.snapshot'});
+    assert.equal(snapshot.entries[0].delivery,'sent');assert.equal(snapshot.entries[0].providerRequestId,7);
+    assert.equal(JSON.stringify(snapshot).includes('FICTIONAL_SECRET_INPUT'),false);
+    handle.permissionRouter.cancel({key:'codex:example-thread',providerRequestId:7});await pending;
+    assert.deepEqual((await ipc({kind:'approval.snapshot'})).entries,[]);
+  });
+  for(const id of [7,'7'])await test(`real Python IPC matches parsed ${typeof id} native approval`,async()=>{
+    const frame={jsonrpc:'2.0',id,method:'item/commandExecution/requestApproval',params:{threadId:'example-ipc-thread',turnId:'example-ipc-turn',itemId:'example-ipc-item',command:'FICTIONAL_INPUT',cwd:'/home/example/project'}};
+    codexEvents.onServerRequest(frame.id,frame.method,frame.params,r=>nativeReplies.push(r));
+    await until(()=>handle.permissionRouter.approvalSnapshot().entries[0]?.delivery==='sent');
+    const child=spawn(process.env.HUB_PYTHON??'python3',[fileURLToPath(new URL('./approval-surface-reader.py',import.meta.url)),join(home,'config.json'),handle.ipcSocketPath],{stdio:['pipe','pipe','pipe']});
+    let stdout='',stderr='';
+    child.stdout.on('data',data=>stdout+=data);child.stderr.on('data',data=>stderr+=data);
+    const exited=new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',(code,signal)=>resolve({code,signal}));});
+    child.stdin.end(JSON.stringify(frame));
+    const result=await exited; // Asynchronous: daemon's event loop stays live.
+    assert.equal(result.code,0,`${stdout}\n${stderr}`);assert.equal(result.signal,null);
+    assert.equal(JSON.parse(stdout).sent,1);
+    assert.equal(serviceUmask?.[1],'0077');
+    codexEvents.onNotify('serverRequest/resolved',{threadId:frame.params.threadId,requestId:frame.id});
+    await Promise.resolve();await Promise.resolve();
+    assert.equal(handle.permissionRouter.pendingCount(),0);
+    assert.deepEqual(nativeReplies,[],'observation must send no native answer');
+  });
   await test('mixed protocol version refuses capability',async()=>assert.equal((await ipc({kind:'hub.permission.hello',version:2,challenge:randomUUID()})).decision,'deny'));
   await test('first authenticated owner callback allows exact synchronous invocation once',async()=>{const t=launch();const c=await card(t);fire(c);const r=await t.result;assert.equal(verifyReceipt(t,r).decision,'allow');fire(c);});
   await test('generic IPC answer cannot approve protected request',async()=>{const t=launch();const c=await card(t);const id=c.opts.reply_markup.inline_keyboard[0][0].callback_data.split(':')[1];await ipc({kind:'hook.permission.answer',requestId:id,approved:true,message:'human'});assert.equal(handle.permissionRouter.answer(id,true,undefined,{answers:{example:'yes'}}),false);fire(c);verifyReceipt(t,await t.result);});

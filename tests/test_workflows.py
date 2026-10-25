@@ -136,6 +136,7 @@ def _assert_ruleset_required_checks(script: str, workflows: Path) -> None:
         for version in validation_jobs["validate"]["strategy"]["matrix"]["python-version"]
     }
     expected.add(f"{ci_job} / namespace")
+    expected.add(f"{ci_job} / tlive")
     actual = set(re.findall(r'"context": "([^"]+)"', script))
     if actual != expected:
         raise AssertionError(f"ruleset required checks mismatch: {actual ^ expected}")
@@ -149,10 +150,26 @@ def _assert_validation_contract(workflows: Path) -> None:
         raise AssertionError("validation workflow must have read-only contents permission")
 
     validation_jobs = _jobs(validation)
-    if set(validation_jobs) != {"validate", "namespace"}:
+    if set(validation_jobs) != {"validate", "namespace", "tlive"}:
         raise AssertionError("validation workflow must have matrix and namespace jobs")
     validate_job = validation_jobs["validate"]
     _assert_namespace_job(validation_jobs["namespace"])
+    tlive = validation_jobs["tlive"]
+    _assert_required_execution(tlive)
+    steps = tlive.get("steps", [])
+    if not any(step.get("with", {}).get("node-version") == "22" for step in steps):
+        raise AssertionError("tlive gate requires Node 22")
+    commands = "\n".join(step.get("run", "") for step in steps)
+    for required in (
+        "archive_sha256",
+        'filter="data"',
+        "check-base",
+        "--package=npm@12.0.2",
+        "--ignore-scripts",
+        "tlive_extension.py build",
+    ):
+        if required not in commands:
+            raise AssertionError("tlive gate must verify, patch, build and run regressions")
     _assert_required_execution(validate_job)
     if validate_job.get("runs-on") != "ubuntu-latest":
         raise AssertionError("validation job runner changed")
