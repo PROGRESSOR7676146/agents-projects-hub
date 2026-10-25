@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Callable
 
 from .state_errors import StateError
-from .stop_coverage import pending_stop_for_job
+from .stop_coverage import stop_covers
 from .task_activity_binding import activity_notice_is_current
 
 PREPARED_BINDING = (
@@ -25,6 +25,39 @@ PREPARED_BINDING = (
 )
 
 
+CURRENT_PREPARED_BINDINGS_SQL = f"""
+SELECT job.job_id,job.lease_token,job.topic_id,topic.project_id,
+       COALESCE(topic.execution_scope,'project:'||topic.project_id) AS execution_scope,
+       job.chat_id,topic.thread_id,job.session_id,
+       job.session_generation,job.agent_id,
+       checkpoint.provider_thread_id,checkpoint.provider_turn_id,
+       checkpoint.project_root,checkpoint.codex_permission_profile
+FROM provider_jobs job
+JOIN topics topic ON topic.topic_id=job.topic_id
+AND topic.chat_id=job.chat_id
+JOIN agent_sessions session ON session.session_id=job.session_id
+AND session.topic_id=job.topic_id
+AND session.agent_id=job.agent_id
+AND session.generation=job.session_generation
+JOIN provider_execution_checkpoints checkpoint ON checkpoint.job_id=job.job_id
+AND checkpoint.provider_thread_id=session.provider_session_id
+WHERE job.status='executing'
+AND job.lease_expires_at>?
+AND session.writer_mode='telegram'
+AND session.status IN ('active','satellite')
+AND checkpoint.completed_text IS NULL
+AND checkpoint.codex_permission_profile IS job.codex_permission_profile
+AND job.codex_permission_profile IS session.codex_permission_profile
+AND session.codex_permission_profile IS ?
+AND (COALESCE(topic.execution_scope,'project:'||topic.project_id)='root:'||checkpoint.project_root
+OR COALESCE(topic.execution_scope,'project:'||topic.project_id)='project:'||topic.project_id)
+AND NOT EXISTS (SELECT 1
+FROM provider_stop_requests stop
+WHERE stop.status='pending'
+AND {stop_covers("stop", "job")})
+"""
+
+
 def current_prepared_binding(
     db: sqlite3.Connection,
     job_id: str,
@@ -32,34 +65,15 @@ def current_prepared_binding(
     timestamp: str,
     selected_profile: Callable[[], str | None] | None,
 ) -> sqlite3.Row | None:
-    if selected_profile is None or pending_stop_for_job(db, job_id) is not None:
+    if selected_profile is None:
         return None
     try:
         profile = selected_profile()
     except StateError:
         return None
     return db.execute(
-        "SELECT job.job_id,job.lease_token,job.topic_id,topic.project_id,"
-        "COALESCE(topic.execution_scope,'project:'||topic.project_id) AS execution_scope,"
-        "job.chat_id,topic.thread_id,job.session_id,job.session_generation,job.agent_id,"
-        "checkpoint.provider_thread_id,checkpoint.provider_turn_id,checkpoint.project_root,"
-        "checkpoint.codex_permission_profile FROM provider_jobs job "
-        "JOIN topics topic ON topic.topic_id=job.topic_id AND topic.chat_id=job.chat_id "
-        "JOIN agent_sessions session ON session.session_id=job.session_id "
-        "AND session.topic_id=job.topic_id AND session.agent_id=job.agent_id "
-        "AND session.generation=job.session_generation "
-        "JOIN provider_execution_checkpoints checkpoint ON checkpoint.job_id=job.job_id "
-        "AND checkpoint.provider_thread_id=session.provider_session_id "
-        "WHERE job.job_id=? AND job.status='executing' AND job.lease_token=? "
-        "AND job.lease_expires_at>? AND session.writer_mode='telegram' "
-        "AND session.status IN ('active','satellite') AND checkpoint.completed_text IS NULL "
-        "AND checkpoint.codex_permission_profile IS job.codex_permission_profile "
-        "AND job.codex_permission_profile IS session.codex_permission_profile "
-        "AND session.codex_permission_profile IS ? "
-        "AND (COALESCE(topic.execution_scope,'project:'||topic.project_id)="
-        "'root:'||checkpoint.project_root OR "
-        "COALESCE(topic.execution_scope,'project:'||topic.project_id)='project:'||topic.project_id)",
-        (job_id, token, timestamp, profile),
+        CURRENT_PREPARED_BINDINGS_SQL + " AND job.job_id=? AND job.lease_token=?",
+        (timestamp, profile, job_id, token),
     ).fetchone()
 
 

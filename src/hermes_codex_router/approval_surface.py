@@ -112,9 +112,7 @@ def assess_surface(
     entries = snapshot["entries"] if valid and snapshot else []
     for wait in waits:
         age = (now - wait.observed_at).total_seconds()
-        if 0 <= age < grace_seconds:
-            result["grace"] += 1
-            continue
+        unresolved = "grace" if 0 <= age < grace_seconds else "unknown"
         matches = []
         for entry in entries:
             if not isinstance(entry, dict):
@@ -134,7 +132,7 @@ def assess_surface(
             ):
                 matches.append(entry)
         if len(matches) != 1:
-            result["unknown"] += 1
+            result[unresolved] += 1
             continue
         entry = matches[0]
         assert snapshot is not None
@@ -147,9 +145,11 @@ def assess_surface(
         if not all(_number(value) for value in times) or not all(
             a <= b for a, b in zip(times, times[1:])
         ):
-            result["unknown"] += 1
+            result[unresolved] += 1
         elif entry.get("delivery") == "sent":
             result["sent"] += 1
+        elif entry.get("delivery") == "failed":
+            result["unavailable"] += 1
         elif (
             entry.get("delivery") == "pending"
             and _number(entry.get("graceUntil"))
@@ -159,10 +159,10 @@ def assess_surface(
             <= entry["observedAt"] + 86400000
         ):
             result["grace"] += 1
-        elif entry.get("delivery") in ("pending", "sending", "failed"):
-            result["unavailable"] += 1
+        elif entry.get("delivery") in ("pending", "sending"):
+            result["grace" if unresolved == "grace" else "unavailable"] += 1
         else:
-            result["unknown"] += 1
+            result[unresolved] += 1
     return result
 
 

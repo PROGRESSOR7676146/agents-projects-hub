@@ -123,6 +123,10 @@ class TliveExtensionTest(unittest.TestCase):
 
 
 class BundledPackageTest(unittest.TestCase):
+    def test_external_tlive_startup_uses_private_umask(self) -> None:
+        dropin = extension.PACKAGE.parents[1] / "systemd/tlive.service.d/30-external-codex.conf"
+        self.assertIn("\nUMask=0077\n", dropin.read_text())
+
     def test_patch_manifest_scope_and_attribution(self) -> None:
         package = extension.PACKAGE
         manifest = json.loads((package / "source-manifest.json").read_text())

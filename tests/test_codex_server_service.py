@@ -4,6 +4,7 @@ import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -129,9 +130,57 @@ class CodexServerServiceTests(unittest.TestCase):
             service.refuse_existing_servers(root)
         (p / "cmdline").write_bytes(b"fictional-client\0")
         service.refuse_existing_servers(root)
+        with patch.object(Path, "read_bytes", side_effect=ProcessLookupError("vanished")):
+            service.refuse_existing_servers(root)
         with patch.object(Path, "read_bytes", side_effect=PermissionError("unavailable")):
             with self.assertRaisesRegex(ValueError, "custody unavailable"):
                 service.refuse_existing_servers(root)
+
+    def test_plan_rejects_dirty_or_mismatched_immutable_release_before_receipt(self):
+        for clean, sha in ((False, "a" * 40), (True, "b" * 40)):
+            with (
+                self.subTest(clean=clean, sha=sha),
+                patch.object(service, "private_json", return_value=self.manifest),
+                patch.object(
+                    service, "CURRENT_RELEASE", SimpleNamespace(clean_tree=clean, git_sha=sha)
+                ),
+                patch.object(service, "prepare", return_value={}) as prepare,
+            ):
+                self.assertEqual(
+                    service.main(
+                        [
+                            "plan",
+                            "--manifest",
+                            "/tmp/example-manifest",
+                            "--assert-native-clients-closed",
+                        ]
+                    ),
+                    1,
+                )
+                prepare.assert_not_called()
+
+    def test_wrong_schema_is_already_refused_without_migration(self):
+        import sqlite3
+
+        with sqlite3.connect(self.state) as db:
+            db.execute("PRAGMA user_version=1")
+        before = self.state.read_bytes()
+        with self.assertRaises(service.StateError):
+            service.require_idle_state(self.state)
+        self.assertEqual(self.state.read_bytes(), before)
+
+    def test_stale_passive_early_history_does_not_block_idle_start(self):
+        from tests.test_preacceptance_approvals import PreacceptanceApprovalTests
+
+        f = PreacceptanceApprovalTests()
+        f.setUp()
+        self.addCleanup(f.doCleanups)
+        scope = f.scope()
+        f.observe(scope)
+        with self.assertRaisesRegex(ValueError, "active or unknown"):
+            service.require_idle_state(f.root / "state.db")
+        f.state.cancel_active_provider_job(f.job.job_id, f.token)
+        service.require_idle_state(f.root / "state.db")
 
     def test_service_and_client_have_independent_force_free_custody(self):
         root = Path(__file__).resolve().parents[1]

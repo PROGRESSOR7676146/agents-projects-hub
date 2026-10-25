@@ -6,6 +6,9 @@ Release: v0.8.1
 Source checkpoint: [0.8.0](../operations/RELEASE_0_8_0.md); earlier entries
 are historical. The PR/tag own combined source gates; live acceptance is separate.
 
+This file describes repository capabilities only. It intentionally contains no
+operator deployment inventory or live conversation evidence.
+
 ## Capability summary
 
 Offline evidence only; live checks: [backlog](../operations/STABILIZATION_PLAN.md#live-acceptance-backlog).
@@ -46,9 +49,8 @@ Offline evidence only; live checks: [backlog](../operations/STABILIZATION_PLAN.m
 
 ## Quality checkpoint
 
-Multiple Codex worker slots are implemented behind external queue configuration;
-offline admission, root exclusion, fairness and health checks are covered.
-Deployment and live three-project acceptance remain pending. See
+External Codex slots have offline admission, root-exclusion, fairness and health
+coverage; deployment and live three-project acceptance remain pending. See
 [REQ-QUEUE-002](../product/DURABLE_QUEUE_AND_CONTROL.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
 and [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md).
 

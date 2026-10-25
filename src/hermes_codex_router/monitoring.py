@@ -319,6 +319,11 @@ def _run_monitor_once(
             if truncated:
                 approval_surface["unknown"] += 1
             alerts += surface_alerts(approval_surface)
+        # Only positive exact delivery for every observed wait proves recovery.
+        # Grace and absent waits carry no delivery evidence; retain the existing
+        # incident and notification edge until the surface is actually observed.
+        if approval_surface is None or not approval_surface["waiting"] or approval_surface["grace"]:
+            unobserved_keys += ("tlive:approval-surface",)
         stale_catalogs = ProviderCatalogCache(
             config.state_path.with_name("provider-model-catalogs.json")
         ).stale_agents()

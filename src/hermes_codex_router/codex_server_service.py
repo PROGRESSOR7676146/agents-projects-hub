@@ -87,7 +87,7 @@ def refuse_existing_servers(proc: Path = Path("/proc")) -> None:
             argv = (path / "cmdline").read_bytes().split(b"\0")
             if b"app-server" in argv:
                 raise ValueError("existing app-server requires separate ownership reconciliation")
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             continue  # Proven process disappearance, not an unreadable live process.
         except OSError:
             raise ValueError("process custody unavailable") from None
@@ -165,6 +165,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         manifest = private_json(args.manifest)
+        if not CURRENT_RELEASE.clean_tree or CURRENT_RELEASE.git_sha != manifest["hub_git_sha"]:
+            raise ValueError("immutable Hub release pin mismatch")
         if args.action == "plan":
             print(
                 json.dumps(
@@ -175,8 +177,6 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.receipt is None:
             raise ValueError("start receipt required")
-        if not CURRENT_RELEASE.clean_tree or CURRENT_RELEASE.git_sha != manifest["hub_git_sha"]:
-            raise ValueError("immutable Hub release pin mismatch")
         check_receipt(manifest, private_json(args.receipt))
         prepare(manifest, clients_closed=True)
         os.environ["CODEX_HOME"] = manifest["codex_home"]

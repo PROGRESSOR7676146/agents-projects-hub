@@ -2,7 +2,7 @@
 
 ## Development loop and canonical acceptance
 
-During development, run cheap repository contracts and explicitly selected tests:
+During development, select the affected checks:
 
 ```bash
 python scripts/validate.py --profile focused tests.test_documentation_contract
@@ -21,8 +21,9 @@ python scripts/validate.py
 ```
 
 Both profiles check docs, release metadata/lock, configuration, format, lint and
-privacy. Canonical adds history, whole-project Pyright and full tests. Focused
-selectors import sibling fixtures as discovery does. Stages stop on failure:
+privacy. Canonical adds history, whole-project Pyright and full tests. The full privacy/history
+scan remains mandatory before every commit, even after focused checks pass.
+Focused selectors import sibling fixtures as discovery does. Stages stop on failure:
 exit 0 means the selected profile passed, 1 failed/unavailable, 2 invalid arguments.
 The full test stage runs every discovered module in its own process;
 [scheduling and completeness checks](VALIDATION_SCHEDULING.md) also apply

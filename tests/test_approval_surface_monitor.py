@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock, patch
 
 from hermes_codex_router import monitoring
@@ -36,7 +38,7 @@ class ApprovalSurfaceMonitorTests(unittest.TestCase):
                 now - timedelta(seconds=60),
             )
             ms = now.timestamp() * 1000
-            snapshot = dict(
+            snapshot: dict[str, Any] = dict(
                 kind="approval.snapshot",
                 version=1,
                 epoch="00000000-0000-4000-8000-000000000001",
@@ -59,7 +61,9 @@ class ApprovalSurfaceMonitorTests(unittest.TestCase):
             with (
                 f.monitor(alerts=()),
                 patch.object(monitoring, "_hermes_health", return_value=None),
-                patch.object(HubState, "pending_codex_approvals", return_value=((wait,), False)),
+                patch.object(
+                    HubState, "pending_codex_approvals", return_value=((wait,), False)
+                ) as pending,
                 patch.object(monitoring, "read_snapshot", return_value=None) as read,
                 patch.object(monitoring, "_operational_telegram", return_value=(sender, "hub")),
             ):
@@ -69,11 +73,40 @@ class ApprovalSurfaceMonitorTests(unittest.TestCase):
                 assert isinstance(counts, dict)
                 self.assertEqual(counts["unknown"], 1)
                 self.assertEqual(sender.send_html.call_count, 1)
+                fresh = replace(wait, observed_at=datetime.now(timezone.utc))
+                grace_snapshot = dict(
+                    snapshot,
+                    entries=[
+                        dict(snapshot["entries"][0], delivery="pending", graceUntil=ms + 10000)
+                    ],
+                )
+                for observation, evidence in (
+                    ((fresh,), None),
+                    ((), None),
+                    ((wait,), grace_snapshot),
+                ):
+                    pending.return_value = (observation, False)
+                    read.return_value = evidence
+                    monitoring.run_monitor_once(cfg, notify=True)
+                    pending.return_value = ((wait,), False)
+                    read.return_value = None
+                    monitoring.run_monitor_once(cfg, notify=True)
+                    self.assertEqual(sender.send_html.call_count, 1)
+                    journal = json.loads(
+                        cfg.state_path.with_name("incident-journal.json").read_text()
+                    )
+                    self.assertEqual(len(journal["episodes"]), 1)
+                    self.assertIsNone(journal["episodes"][0]["resolved_at"])
                 read.return_value = snapshot
+                pending.return_value = ((fresh,), False)
                 healthy = monitoring.run_monitor_once(cfg, notify=True)
                 counts = healthy["approval_surface"]
                 assert isinstance(counts, dict)
                 self.assertEqual(counts["sent"], 1)
-                read.return_value = None
+                journal = json.loads(cfg.state_path.with_name("incident-journal.json").read_text())
+                self.assertIsNotNone(journal["episodes"][0]["resolved_at"])
+                snapshot["entries"][0]["delivery"] = "failed"
                 monitoring.run_monitor_once(cfg, notify=True)
                 self.assertEqual(sender.send_html.call_count, 2)
+                journal = json.loads(cfg.state_path.with_name("incident-journal.json").read_text())
+                self.assertEqual(len(journal["episodes"]), 2)

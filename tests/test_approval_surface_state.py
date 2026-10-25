@@ -3,10 +3,20 @@ from __future__ import annotations
 import unittest
 from datetime import timedelta
 
+from hermes_codex_router.approval_observations import identity_digest
 from hermes_codex_router.approval_surface import assess_surface
 from hermes_codex_router.approval_surface_state import pending_approval_waits
 from hermes_codex_router.schema_preacceptance_approvals import PREACCEPTANCE_APPROVAL_SCHEMA
 from tests import test_task_activity as fixtures
+
+
+def clone_row(db, table, row, **changes):
+    values = dict(row)
+    values.update(changes)
+    db.execute(
+        f"INSERT INTO {table} ({','.join(values)}) VALUES ({','.join('?' for _ in values)})",
+        tuple(values.values()),
+    )
 
 
 class ApprovalSurfaceStateTests(unittest.TestCase):
@@ -15,6 +25,8 @@ class ApprovalSurfaceStateTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
         self.fixture.db.executescript(PREACCEPTANCE_APPROVAL_SCHEMA)
+        for table in ("provider_jobs", "agent_sessions", "provider_execution_checkpoints"):
+            self.fixture.db.execute(f"ALTER TABLE {table} ADD COLUMN codex_permission_profile TEXT")
         self.fixture.bind()
         self.fixture.event("approval_requested", request=7)
 
@@ -57,6 +69,38 @@ class ApprovalSurfaceStateTests(unittest.TestCase):
                 self.assertEqual(counts["unknown"], 1)
                 self.assertEqual(counts["grace"], 0)
 
+    def test_history_is_filtered_before_current_limit(self):
+        db = self.fixture.db
+        activity = db.execute("SELECT * FROM task_activity").fetchone()
+        job = db.execute("SELECT * FROM provider_jobs").fetchone()
+        checkpoint = db.execute("SELECT * FROM provider_execution_checkpoints").fetchone()
+        entry = db.execute("SELECT * FROM task_activity_entries").fetchone()
+        for i in range(260):
+            job_id = f"aaa-history-{i:03}"
+            clone_row(db, "provider_jobs", job, job_id=job_id)
+            clone_row(db, "provider_execution_checkpoints", checkpoint, job_id=job_id)
+            clone_row(db, "task_activity", activity, job_id=job_id)
+            clone_row(db, "task_activity_entries", entry, job_id=job_id)
+        for sql in (
+            "UPDATE provider_jobs SET status='completed' WHERE job_id LIKE 'aaa-%'",
+            "UPDATE provider_jobs SET status='executing',lease_token='replaced' WHERE job_id LIKE 'aaa-%'",
+            "UPDATE provider_jobs SET lease_token='lease',lease_expires_at='2025-01-01' WHERE job_id LIKE 'aaa-%'",
+            "UPDATE provider_jobs SET lease_expires_at='2026-01-02'; "
+            "UPDATE task_activity SET session_generation=2 WHERE job_id LIKE 'aaa-%'",
+        ):
+            with self.subTest(sql=sql):
+                db.executescript(sql)
+                waits, truncated = self.waits()
+                self.assertEqual(len(waits), 1)
+                self.assertFalse(truncated)
+
+    def test_current_requests_over_limit_remain_truncated(self):
+        for request in range(257):
+            self.fixture.event("approval_requested", request=request)
+        waits, truncated = self.waits()
+        self.assertEqual(len(waits), 256)
+        self.assertTrue(truncated)
+
 
 class PreparedApprovalSurfaceTests(unittest.TestCase):
     def setUp(self):
@@ -95,3 +139,93 @@ class PreparedApprovalSurfaceTests(unittest.TestCase):
         f.journal.record_turn(f.job.job_id, f.token, "example-turn")
         f.promote(scope)
         self.assertEqual(f.state.pending_codex_approvals(now=f.now)[0], before)
+
+    def test_conflicting_accepted_turn_excludes_open_scope(self):
+        f = self.f
+        scope = f.scope()
+        f.observe(scope)
+        f.journal.record_turn(f.job.job_id, f.token, "different-turn")
+        self.assertEqual(f.state.pending_codex_approvals(now=f.now), ((), False))
+
+    def test_early_writer_lease_and_profile_fences_survive_sql_filtering(self):
+        f = self.f
+        scope = f.scope()
+        f.observe(scope)
+        db = f.state._connection
+        for sql in (
+            "UPDATE agent_sessions SET writer_mode='local'",
+            "UPDATE provider_jobs SET lease_token='replaced'",
+            "UPDATE provider_jobs SET lease_expires_at='2000-01-01'",
+            "UPDATE preacceptance_scopes SET codex_permission_profile='other'",
+        ):
+            with self.subTest(sql=sql):
+                db.execute("SAVEPOINT fixture")
+                db.execute(sql)
+                self.assertEqual(
+                    pending_approval_waits(db, now=f.now, selected_profile=lambda: None),
+                    ((), False),
+                )
+                db.execute("ROLLBACK TO fixture")
+                db.execute("RELEASE fixture")
+
+    def test_current_early_result_limit_is_still_bounded(self):
+        f = self.f
+        scope = f.scope()
+        f.observe(scope)
+        db = f.state._connection
+        entry = db.execute("SELECT * FROM preacceptance_requests").fetchone()
+        for request in range(260):
+            clone_row(
+                db,
+                "preacceptance_requests",
+                entry,
+                identity=identity_digest(f"current-{request}"),
+                event_key=f"example-current-{request}",
+            )
+        db.commit()
+        waits, truncated = f.state.pending_codex_approvals(now=f.now)
+        self.assertEqual(len(waits), 256)
+        self.assertTrue(truncated)
+
+    def test_obsolete_runtime_history_does_not_starve_current_wait(self):
+        f = self.f
+        scope = f.scope()
+        f.observe(scope)
+        db = f.state._connection
+        old = db.execute("SELECT * FROM preacceptance_requests").fetchone()
+        for request in range(260):
+            clone_row(
+                db,
+                "preacceptance_requests",
+                old,
+                identity=identity_digest(f"history-{request}"),
+                event_key=f"example-history-{request}",
+            )
+        db.execute("UPDATE preacceptance_runtime_epochs SET epoch=epoch+1")
+        db.commit()
+        job, token, root = f.next_prepared_job()
+        runtime = f.early.register_runtime(
+            agent_id="codex", worker_slot=2, instance_token="example-current", now=f.now
+        )
+        current = f.early.open_scope(
+            job.job_id,
+            token,
+            runtime,
+            provider_thread_id="example-next-thread",
+            project_root=str(root),
+            now=f.now,
+        )
+        from hermes_codex_router.codex_activity import CodexActivityEvent
+
+        f.early.observe(
+            current,
+            runtime,
+            CodexActivityEvent(
+                "approval_requested", "command", "example-next-thread", "next-turn", "item", 7
+            ),
+            now=f.now,
+        )
+        waits, truncated = f.state.pending_codex_approvals(now=f.now)
+        self.assertFalse(truncated)
+        self.assertEqual(len(waits), 1)
+        self.assertEqual(waits[0].turn_id, "next-turn")

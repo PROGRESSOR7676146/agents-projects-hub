@@ -88,6 +88,15 @@ class ApprovalSurfaceTests(unittest.TestCase):
         self.assertEqual(counts["sent"], 0)
         self.assertEqual(surface_alerts(counts), ())
 
+    def test_exact_sent_and_failed_override_initial_grace(self):
+        wait = ApprovalWait("thread", "turn", identity_digest(7), identity_digest("item"), self.now)
+        for delivery, counter in (("sent", "sent"), ("failed", "unavailable")):
+            with self.subTest(delivery=delivery):
+                self.snapshot["entries"][0]["delivery"] = delivery
+                counts = assess_surface([wait], self.snapshot, now=self.now)
+                self.assertEqual(counts[counter], 1)
+                self.assertEqual(counts["grace"], 0)
+
     def test_pending_sending_failed_unknown_and_duplicate(self):
         e = self.snapshot["entries"][0]
         for state in ["pending", "sending", "failed", "unknown"]:

@@ -139,6 +139,10 @@ def regression_tests(source: Path, manifest: dict) -> None:
     verify_tree(source, manifest, patched=True)
     environment = os.environ.copy()
     environment["TLIVE_SOURCE"] = str(source)
+    environment["HUB_PYTHON"] = sys.executable
+    environment["PYTHONPATH"] = (
+        str(PACKAGE.parents[1] / "src") + os.pathsep + environment.get("PYTHONPATH", "")
+    )
     for name, loader in (
         ("codex-approval-identity.test.mjs", "ts-source-loader.mjs"),
         ("codex-subscription.test.mjs", "ts-source-loader.mjs"),

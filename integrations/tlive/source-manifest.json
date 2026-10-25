@@ -151,16 +151,16 @@
     "src/types/qrcode-terminal.d.ts": "1970491e4ebeed1b9949eacaf292d79ed81c5e7a0b62af1d7980971e6de12559"
   },
   "package": "tlive",
-  "patch_sha256": "57658624a98184ef4c70f4c06c827176b256c1dd155aa4325c7bbe777dcfbe4a",
+  "patch_sha256": "d509b90b2c425ac566e4c0d0a6b2fcdf603169d8bb1fb996aa05712334ec6f12",
   "patched_files": {
     "src/adapters/im/telegram.ts": "ef08ae311aec593bc5bcb157a736c60b30f2c0ea3ce408f7dcd0c322b363fd60",
-    "src/kernel/codex/__tests__/companion.test.ts": "76cf29a7f79ae406dc2442b8d062d91a39fa38f1127b56cd4d6d5f645c2f6be0",
-    "src/kernel/codex/companion.ts": "21f15fb042ba7fa22430eec953deab314867e2143d2fb3b25206781b1fb3ba56",
+    "src/kernel/codex/__tests__/companion.test.ts": "5a71602e27a41da062f4d642e92c2f65dfa3af29b236c2ab3e908fa9dc921173",
+    "src/kernel/codex/companion.ts": "09922e091bb4b7e324b29e13769bbeeea281458d266a30087a8aa48e280a0472",
     "src/kernel/codex/spawn.ts": "bf7184683bd61debcdc32d7d7f6141a5f275125dc1af832627ebe6c1c95bde28",
     "src/kernel/contracts/approval-snapshot.ts": "4876747a92847723844fb264c58b998b410d6f706f77812304590089cd31b9da",
     "src/kernel/contracts/protected-permission.ts": "7943c0120a9f56a3385f018bdcc166269ddfd78b9254c795529a3adb24f4020a",
     "src/kernel/daemon/bootstrap.ts": "0ea530c16904eeefffbb47d471167a2f5b2f1d33b01fedfeca166bd7361d1ab9",
-    "src/kernel/daemon/permission-router.ts": "48433a7af8a74afe8c6e6cd5c1ebd06eaaa0cc5a932ae24172d105d24f1a1370",
+    "src/kernel/daemon/permission-router.ts": "9d55b104eeb43cc97713f2e4194d10beb7b279b152860a4cb8186a20af5b4a68",
     "src/kernel/daemon/protected-permissions.ts": "0a24fd4709c8a9033403dc24940ba82cb427bbd5b0a37915b5cc9c6b872687fe",
     "src/kernel/ipc/protocol.ts": "31b02a3091814ac5062c4ed5313186b608f2826f8968ea453fab4f5973d5b47e"
   },
