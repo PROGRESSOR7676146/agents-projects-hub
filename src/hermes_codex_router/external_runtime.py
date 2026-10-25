@@ -741,6 +741,7 @@ class ExternalCliAdapter:
         deadline = time.monotonic() + timeout
         diagnostic_bytes = 0
         input_offset = 0
+        stop_draining = False
         try:
             if on_process_started is not None:
                 try:
@@ -759,8 +760,13 @@ class ExternalCliAdapter:
                     else:
                         process.stdin.close()
                 while selector.get_map():
-                    if self._interrupt_requested.is_set():
-                        raise ExternalTurnInterrupted("claude turn interrupted by user")
+                    if self._interrupt_requested.is_set() and not stop_draining:
+                        self._terminate_claude_process(process, graceful=False)
+                        stop_draining = True
+                        deadline = min(deadline, time.monotonic() + 5)
+                        if process.stdin is not None and not process.stdin.closed:
+                            selector.unregister(process.stdin)
+                            process.stdin.close()
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise subprocess.TimeoutExpired(argv, timeout)
@@ -777,9 +783,9 @@ class ExternalCliAdapter:
                                 continue
                             except BrokenPipeError:
                                 if self._interrupt_requested.is_set():
-                                    raise ExternalTurnInterrupted(
-                                        "claude turn interrupted by user"
-                                    ) from None
+                                    selector.unregister(process.stdin)
+                                    process.stdin.close()
+                                    continue
                                 raise ClaudeStreamError(
                                     "claude input transfer incomplete"
                                 ) from None
@@ -809,12 +815,17 @@ class ExternalCliAdapter:
                     raise subprocess.TimeoutExpired(argv, timeout)
                 while (exit_code := peek_exit_code(process)) is None:
                     if self._interrupt_requested.is_set():
-                        raise ExternalTurnInterrupted("claude turn interrupted by user")
+                        self._terminate_claude_process(process, graceful=False)
+                        exit_code = process.returncode
+                        assert exit_code is not None
+                        break
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise subprocess.TimeoutExpired(argv, timeout)
                     self._interrupt_requested.wait(min(0.05, remaining))
-            if self._interrupt_requested.is_set():
+            # A killed stream may end in a partial NDJSON line. A complete
+            # terminal or clean process exit must still pass final validation.
+            if self._interrupt_requested.is_set() and not reader.terminal_seen and exit_code != 0:
                 raise ExternalTurnInterrupted("claude turn interrupted by user")
             stdout = reader.finish()
             if time.monotonic() >= deadline:
@@ -822,7 +833,7 @@ class ExternalCliAdapter:
             return subprocess.CompletedProcess(argv, exit_code, stdout, "")
         except subprocess.TimeoutExpired:
             self._terminate_claude_process(process, graceful=True)
-            if self._interrupt_requested.is_set():
+            if self._interrupt_requested.is_set() and not reader.terminal_seen:
                 raise ExternalTurnInterrupted("claude turn interrupted by user") from None
             raise ExternalRuntimeError("claude timed out safely") from None
         finally:

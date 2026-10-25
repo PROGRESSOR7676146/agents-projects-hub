@@ -223,6 +223,7 @@ class ClaudeCliCapabilities:
         """Return the resolved CLI path if its current help advertises all controls."""
         if interrupted.is_set():
             raise ClaudeCliCapabilityError()
+        cleanup_failed = False
         try:
             search_path = os.pathsep.join(
                 entry
@@ -256,9 +257,13 @@ class ClaudeCliCapabilities:
                     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",
                     DISABLE_AUTOUPDATER="1",
                 )
-                output = _read_help(
-                    path, cwd=Path(directory), environment=isolated, interrupted=interrupted
-                )
+                try:
+                    output = _read_help(
+                        path, cwd=Path(directory), environment=isolated, interrupted=interrupted
+                    )
+                except ClaudeCliCleanupError:
+                    cleanup_failed = True
+                    raise
             if not _has_required_advertisement(
                 output, file_tools=file_tools, image_input=image_input
             ):
@@ -269,7 +274,9 @@ class ClaudeCliCapabilities:
             with self._lock:
                 self._success[(path, file_tools, image_input)] = after
             return path
-        except ClaudeCliCapabilityError:
-            raise
-        except Exception:
+        except Exception as error:
+            if cleanup_failed:
+                raise ClaudeCliCleanupError() from None
+            if isinstance(error, ClaudeCliCapabilityError):
+                raise
             raise ClaudeCliCapabilityError() from None

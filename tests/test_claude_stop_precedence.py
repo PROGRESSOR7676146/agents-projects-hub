@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 import unittest
 from pathlib import Path
 from typing import Any, cast
@@ -172,9 +173,10 @@ class ClaudeStopPrecedenceTests(unittest.TestCase):
         run = adapter._run_claude_process
 
         def late_stop(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
-            result = run(*args, **kwargs)
-            self.request_stop(worker, job_id, adapter)
-            return result
+            try:
+                return run(*args, **kwargs)
+            finally:
+                self.request_stop(worker, job_id, adapter)
 
         with patch.object(adapter, "_run_claude_process", side_effect=late_stop):
             self.assertTrue(worker.run_cycle())
@@ -191,9 +193,10 @@ class ClaudeStopPrecedenceTests(unittest.TestCase):
         run = adapter._run_claude_process
 
         def late_stop(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
-            result = run(*args, **kwargs)
-            self.request_stop(worker, job_id, adapter)
-            return result
+            try:
+                return run(*args, **kwargs)
+            finally:
+                self.request_stop(worker, job_id, adapter)
 
         with patch.object(adapter, "_run_claude_process", side_effect=late_stop):
             self.assertTrue(worker.run_cycle())
@@ -201,3 +204,103 @@ class ClaudeStopPrecedenceTests(unittest.TestCase):
         checkpoint = ExecutionJournal(worker.state).read(job_id)
         assert checkpoint is not None
         self.assertEqual(checkpoint["completed_text"], "Fictional final")
+
+    def test_killed_partial_terminal_line_is_not_completion_proof(self) -> None:
+        for established in (False, True):
+            with self.subTest(established=established):
+                fixture, job_id = self.fixture(established=established)
+                event = {
+                    "type": "assistant",
+                    "uuid": fixtures.OTHER_UUID,
+                    "parent_tool_use_id": None,
+                    "message": {"content": [{"type": "text", "text": "Fictional partial"}]},
+                }
+                partial = '{"type":"res'
+                adapter = self.adapter(
+                    fixture.root,
+                    f'event={event!r}\nevent["session_id"]=native\n'
+                    f'os.write(1,(json.dumps(event)+"\\n"+{partial!r}).encode())\n'
+                    "time.sleep(30)\n",
+                )
+                worker = fixture.worker(cast(Any, adapter))
+                original = ExecutionJournal.record_claude_item
+
+                def record(journal: Any, *args: Any, **kwargs: Any) -> None:
+                    original(journal, *args, **kwargs)
+                    self.request_stop(worker, job_id, adapter)
+
+                with patch.object(ExecutionJournal, "record_claude_item", new=record):
+                    self.assertTrue(worker.run_cycle())
+                self.assert_state(worker, job_id, uncertain=not established)
+                checkpoint = ExecutionJournal(worker.state).read(job_id)
+                assert checkpoint is not None
+                self.assertIsNone(checkpoint["completed_text"])
+
+    def test_stop_during_terminal_drain_preserves_completed_first_attempt(self) -> None:
+        for outcome in ("success", "no-newline"):
+            with self.subTest(outcome=outcome):
+                self._stop_while_draining_terminal(established=False, outcome=outcome)
+
+    def test_stop_during_terminal_drain_preserves_completed_session(self) -> None:
+        self._stop_while_draining_terminal(established=True, outcome="success")
+
+    def test_stop_during_terminal_drain_keeps_conflicts_uncertain(self) -> None:
+        for outcome in ("status", "unknown", "empty", "error-flag", "exit"):
+            with self.subTest(outcome=outcome):
+                self._stop_while_draining_terminal(established=True, outcome=outcome)
+
+    def _stop_while_draining_terminal(self, *, established: bool, outcome: str) -> None:
+        from hermes_codex_router.owned_process_exit import peek_exit_code
+
+        fixture, job_id = self.fixture(established=established)
+        event = {
+            "type": "assistant",
+            "uuid": fixtures.OTHER_UUID,
+            "parent_tool_use_id": None,
+            "message": {"content": [{"type": "text", "text": "Fictional partial"}]},
+        }
+        terminal: dict[str, Any] = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "Fictional final",
+        }
+        if outcome == "status":
+            terminal["api_error_status"] = "529"
+        elif outcome == "unknown":
+            terminal["subtype"] = "unknown"
+        elif outcome == "empty":
+            terminal["result"] = ""
+        elif outcome == "error-flag":
+            terminal.update(subtype="error_during_execution", is_error=False)
+        ending = "" if outcome == "no-newline" else "\n"
+        body = (
+            f'event={event!r}\nevent["session_id"]=native\n'
+            f'terminal={terminal!r}\nterminal["session_id"]=native\n'
+            f'os.write(1,(json.dumps(event)+"\\n"+json.dumps(terminal)+{ending!r}).encode())\n'
+            f"sys.exit({1 if outcome == 'exit' else 0})\n"
+        )
+        adapter = self.adapter(fixture.root, body)
+        worker = fixture.worker(cast(Any, adapter))
+        original = ExecutionJournal.record_claude_item
+        stopped = []
+
+        def record(journal: Any, *args: Any, **kwargs: Any) -> None:
+            original(journal, *args, **kwargs)
+            assert adapter._active_process is not None
+            deadline = time.monotonic() + 5
+            while peek_exit_code(adapter._active_process) is None:
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.001)
+            self.request_stop(worker, job_id, adapter)
+            stopped.append(True)
+
+        with patch.object(ExecutionJournal, "record_claude_item", new=record):
+            self.assertTrue(worker.run_cycle())
+        self.assertEqual(stopped, [True])
+        completed = outcome in {"success", "no-newline"}
+        self.assert_state(worker, job_id, uncertain=not completed)
+        self.assertIsNone(adapter._active_process)
+        checkpoint = ExecutionJournal(worker.state).read(job_id)
+        assert checkpoint is not None
+        self.assertEqual(checkpoint["completed_text"], "Fictional final" if completed else None)
