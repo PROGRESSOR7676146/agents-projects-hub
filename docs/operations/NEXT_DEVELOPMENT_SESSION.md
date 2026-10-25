@@ -490,3 +490,28 @@ deployment, then human Edit/Deny, stop and exact-session restart acceptance.
 Existing uncertain jobs are preserved; this candidate is not a retrospective
 resolution of their outcome. Inspect tracked, staged and untracked lane state
 after owner integration before cleanup. Live acceptance remains open.
+
+### Claude stop/error precedence follow-up
+
+Owner: Hub maintainer, sole writer; source lane
+`fix/claude-stop-timeout-certainty-20261025`, base `17c3040e`. Paired source review
+identified early stop and stream-error precedence races. Real owned-CLI/worker
+regressions reproduce retained root exclusion before native launch, discarded
+completed output, and contradictory stream or persistence failures masked by a
+covering stop. The candidate fixes these paths and preserves unconfirmed help
+process cleanup as uncertainty, even if temporary-directory cleanup also fails.
+A second paired review exposed the remaining drain/stop race: a stop must drain
+bounded final bytes after owned cleanup, validate complete terminal records and
+retain completion before the worker applies stop precedence. The same terminal
+validator serves incremental and final parsing. Contradictions and exit conflicts
+retain uncertainty; interrupted partial lines alone do not prove completion.
+First native attempts without a validated terminal outcome still retain exclusion
+and are never replayed. Drain or reap timeout is also uncertainty: a stop flag
+cannot establish EOF or validate unobserved buffered output. Regressions retain
+root exclusion for an escaped pipe holder and an interrupted reap before drain.
+
+State: local implementation under validation, not deployed or accepted. Next
+trigger: focused regressions, paired Opus/Argon review and exact publication
+gates, then a separately authorized installed acceptance scope. Existing live
+acceptance remains open; do not replay earlier calls to test the new source.
+Inspect the lane after owner integration before cleanup.
