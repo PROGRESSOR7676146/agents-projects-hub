@@ -270,15 +270,14 @@ owner defines state API, transaction ownership and invocation boundaries;
 parallel writing and recursive delegation are outside this goal. Sol checks
 supplement, but do not replace, independent review of Codex-authored
 lifecycle/security changes. The
-owner explicitly selected **Claude Opus 5.5, effort high** as the reviewer,
-invoked directly through CPA HTTP without Claude CLI. Follow the
-[source-review runbook](CLAUDE_SOURCE_REVIEW.md) for provider/model routing and
-availability evidence. Use **Gemini** as the owner-authorized fallback only
-after the intended CPA Claude route is unavailable. A CLI or other-provider
-route failure alone does not establish that. Never use synthetic inference/quota
-probes or silently substitute another Opus version.
-Record the actual reviewer/model, fallback reason, candidate revision, findings
-and fixes in the PR. An unavailable reviewer does not waive review. If both
+owner selected paired independent review by **Claude Opus 5.5, effort high**
+through CPA HTTP without Claude CLI, and **agy Gemini Argon High** for every
+review. Follow the owning [source-review runbook](CLAUDE_SOURCE_REVIEW.md) for
+exact model selection, availability evidence and comparison. Opus 4.8
+substitution is no longer authorized. Never use synthetic inference/quota probes.
+Record both actual reviewers/models, candidate revision, findings and fixes in
+the PR, and tell the owner who performed better after checking their answers.
+An unavailable reviewer does not waive review. If both
 review paths fail, keep the candidate review-ready and ask the owner for review;
 never invent approval. Review is read-only in a separate clean candidate checkout,
 and does not grant permission to run unrelated live tests or deployment.
