@@ -164,6 +164,7 @@ def _assert_validation_contract(workflows: Path) -> None:
         "archive_sha256",
         'filter="data"',
         "check-base",
+        "--package=npm@12.0.2",
         "--ignore-scripts",
         "tlive_extension.py build",
     ):
