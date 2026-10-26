@@ -17,7 +17,8 @@ a sandbox refusal is a failed/unavailable check, never a skip or passing E2E.
 Focused Python selectors are `tests.test_tlive_extension`,
 `tests.test_approval_surface`, `tests.test_approval_surface_state`,
 `tests.test_approval_surface_monitor`, `tests.test_approval_surface_ipc` and
-`tests.test_codex_server_service`.
+`tests.test_codex_server_service`, `tests.test_unix_listener_custody` and
+`tests.test_maintenance_window`.
 The published npm archive lacks tsconfig and plugin-lock tooling, so this is not
 a full upstream typecheck/test claim. Dependency resolution is separate from
 source-byte verification; CI installs dependencies with lifecycle scripts disabled.
@@ -122,6 +123,74 @@ private exact-source, backup and rollback receipts outside Git.
    reconnect does not establish pending approval recovery. Perform the separately
    authorized bounded human Allow/Deny and client-restart acceptance; preserve
    request/item identities, actual card receipts and denied effects privately.
+
+### Failure-safe maintenance wrapper
+
+For the next procedure, enclose **every service stop and subsequent diagnostic**
+in `maintenance_window.MaintenanceWindow`. Do not reuse a consumed activation
+script or put restoration only after the last successful check. The wrapper is
+for this explicit maintenance operation, never a monitor or automatic updater.
+
+Supply a fixed reviewed `Unit` list of consumers (attach-only tlive, workers,
+sender and previously active diagnostics as applicable), then admission units.
+Exclude the independent native server: its start is a separately guarded,
+single-use step of the main procedure. Snapshot all units before effects;
+initially inactive units remain inactive. Close admission before stopping
+consumers through `window.stop(name)`. Each callback has a finite deadline;
+its private receipt records effect intent before submission. No pending
+supervisor job, physical old-incarnation exit and empty cgroup are required
+before reporting `inactive`. Unavailable observations are `unknown`.
+
+The procedure uses this structure (deployment callbacks and identities stay
+private):
+
+```python
+from dataclasses import asdict
+from hermes_codex_router.maintenance_window import MaintenanceWindow
+
+
+def guarded_cutover(reviewed_units, cutover, persist_result):
+    window = MaintenanceWindow(reviewed_units)
+    try:
+        with window:
+            # cutover must use window.stop for every eligible unit.
+            # Preserve the separate fresh native-start/idle/backup gates.
+            cutover(window)
+    finally:
+        # Save original failure separately; this report cannot overwrite it.
+        persist_result(asdict(window.report))
+```
+
+Restoration verifies prerequisites and readiness, and starts only initially
+active units whose stop this operation attempted. It verifies an already
+running unit without another start. Consumers precede admission; any required
+consumer failure keeps admission closed, while independent safe restoration
+continues. Every consumer prerequisite must verify compatible current config,
+worker safety and (where applicable) unchanged native custody. For tlive it
+also proves effective attach-only mode. Never use general liveness as readiness.
+An uncertain start is observed, never retried. Preserve the primary error and
+separate restoration report; incomplete restoration is a failed maintenance
+result requiring explicit recovery, never success or silent waiting.
+
+Use `unix_listener_custody.verify_listener` for passive host socket evidence.
+Compare the expected PID, boot ID, start ticks, executable, UID and cgroup with
+reviewed pins before passing the identity. The helper selects exactly one Unix
+stream **listener** (listening flag and state), verifies its inode in that
+process's FDs and rechecks listener and incarnation. Accepted connections may
+share its pathname and are not additional listeners. Keep filesystem-path,
+artifact and effective-unit checks in the private wrapper; no socket removal,
+native restart, inference, database rollback or uncertain work replay follows
+from this diagnostic.
+
+Before arming a new procedure, inject an error after attach and before normal
+service return in an offline fixture using these production helpers. Require
+consumer return before admission, independent restoration after one failure,
+no duplicate start, unknown-custody refusal and an explicit incomplete result.
+`tests.test_maintenance_window` and the real local multi-connection Unix fixture
+are the reusable regression gate. They do not establish live deployment
+acceptance. Python finalization cannot survive SIGKILL, interpreter loss or a
+host crash: the private pre-effect receipt remains authoritative for inspection
+and explicit recovery; never auto-replay the procedure after such an exit.
 
 ## Stale socket after unclean shutdown
 
