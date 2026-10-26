@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
+
+from .unix_socket_diag import query_listener, require_vfs
 
 
 @dataclass(frozen=True)
@@ -32,18 +35,16 @@ def process_identity(pid: int, *, proc_root: Path = Path("/proc")) -> ProcessIde
     )
 
 
-def listener_inode(rows: str, path: Path) -> int:
-    """Accepted connections may share the path; only SO_ACCEPTCON rows qualify."""
-    matches = []
-    for row in rows.splitlines():
-        fields = row.split(maxsplit=7)
-        if len(fields) != 8 or fields[7] != str(path):
-            continue
-        if int(fields[3], 16) & 0x10000 and fields[4] == "0001" and fields[5] == "01":
-            matches.append(int(fields[6]))
-    if len(matches) != 1 or matches[0] <= 0:
-        raise ValueError("missing or ambiguous Unix stream listener")
-    return matches[0]
+def _socket_identity(path: Path, uid: int) -> os.stat_result:
+    info = path.lstat()
+    if not path.is_absolute() or not stat.S_ISSOCK(info.st_mode) or info.st_uid != uid:
+        raise ValueError("unowned or non-socket filesystem path")
+    return info
+
+
+def _same_network_namespace(proc_root: Path, pid: int) -> None:
+    if os.readlink(proc_root / "self/ns/net") != os.readlink(proc_root / str(pid) / "ns/net"):
+        raise ValueError("different or unknown network namespace")
 
 
 def verify_listener(
@@ -51,17 +52,32 @@ def verify_listener(
 ) -> int:
     """Verify exact listener FD and incarnation twice, without connecting or repair.
 
-    Use the kernel pathname (resolve any approved alias separately). Filesystem
-    custody, artifact hashes and service policy remain the wrapper's gates.
+    Use the kernel pathname (resolve any approved alias separately). Binary
+    SOCK_DIAG binds the listener to the current filesystem device/inode; text
+    /proc names cannot establish custody. Artifact pins and directory/service
+    policy remain the wrapper's gates. Different network namespaces refuse.
     Unavailable /proc evidence raises; it never establishes custody.
     """
     if process_identity(expected.pid, proc_root=proc_root) != expected:
         raise ValueError("process incarnation changed")
-    table = proc_root / "net/unix"
-    inode = listener_inode(table.read_text(), path)
+    _same_network_namespace(proc_root, expected.pid)
+    before = _socket_identity(path, expected.uid)
+    listener = query_listener(path)
+    require_vfs(listener, before)
+    inode = listener.kernel_inode
     _require_descriptor(proc_root, expected.pid, inode)
-    if listener_inode(table.read_text(), path) != inode:
+    if query_listener(path) != listener:
         raise ValueError("listener changed during observation")
+    after = _socket_identity(path, expected.uid)
+    require_vfs(listener, after)
+    if (before.st_dev, before.st_ino, before.st_uid, before.st_mode) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_uid,
+        after.st_mode,
+    ):
+        raise ValueError("filesystem socket changed during observation")
+    _same_network_namespace(proc_root, expected.pid)
     if process_identity(expected.pid, proc_root=proc_root) != expected:
         raise ValueError("process incarnation changed during observation")
     _require_descriptor(proc_root, expected.pid, inode)

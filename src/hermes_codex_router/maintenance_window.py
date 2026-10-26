@@ -7,7 +7,7 @@ The private procedure supplies fixed reviewed units and bounded callbacks.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import TracebackType
 from typing import Literal
 
@@ -35,10 +35,16 @@ class UnitResult:
 @dataclass(frozen=True)
 class RestorationReport:
     units: tuple[UnitResult, ...] = ()
+    phase: Literal["not_needed", "in_progress", "finished", "interrupted"] = "not_needed"
+    initial: tuple[tuple[str, Observation], ...] = ()
+    stop_attempts: tuple[str, ...] = ()
+    interruption: str | None = None
 
     @property
     def complete(self) -> bool:
-        return all(unit.outcome == "ready" for unit in self.units)
+        return self.phase == "not_needed" or (
+            self.phase == "finished" and all(unit.outcome == "ready" for unit in self.units)
+        )
 
 
 class RestorationError(RuntimeError):
@@ -82,7 +88,9 @@ class MaintenanceWindow:
     def stop(self, name: str) -> None:
         if not self._entered or self._finished or len(self.initial) != len(self.units):
             raise ValueError("maintenance window is not open")
-        unit = next(unit for unit in self.units if unit.name == name)
+        unit = next((unit for unit in self.units if unit.name == name), None)
+        if unit is None:
+            raise ValueError("unknown maintenance unit")
         if self.initial[name] != "active":
             return
         if name in self.stopped:
@@ -92,6 +100,12 @@ class MaintenanceWindow:
         ):
             raise ValueError("admission must be closed before stopping consumers")
         self.stopped.add(name)  # A stop may take effect even when its reply fails.
+        self.report = replace(
+            self.report,
+            phase="in_progress",
+            initial=tuple(self.initial.items()),
+            stop_attempts=tuple(sorted(self.stopped)),
+        )
         unit.stop()
 
     def _restore_unit(self, unit: Unit) -> UnitResult:
@@ -121,22 +135,36 @@ class MaintenanceWindow:
         self._finished = True  # No second effect even if finalization is called again.
         if not self.stopped:
             return self.report
-        results = []
+        eligible = [
+            unit
+            for unit in self.units
+            if self.initial.get(unit.name) == "active"
+            and (not unit.admission or unit.name in self.stopped)
+        ]
+        results = {unit.name: UnitResult(unit.name, "unknown", "not_observed") for unit in eligible}
+        self.report = replace(self.report, units=tuple(results.values()))
         consumers_ready = True
-        # Check ALL previously active consumers, even ones not stopped by us.
-        for unit in self.units:
-            if unit.admission or self.initial.get(unit.name) != "active":
-                continue
-            result = self._restore_unit(unit)
-            results.append(result)
-            consumers_ready &= result.outcome == "ready"
-        for unit in self.units:
-            if not unit.admission or unit.name not in self.stopped:
-                continue
-            results.append(
-                self._restore_unit(unit) if consumers_ready else UnitResult(unit.name, "blocked")
+        try:
+            # Check ALL previously active consumers, even ones not stopped by us.
+            for admission in (False, True):
+                for unit in eligible:
+                    if unit.admission != admission:
+                        continue
+                    result = (
+                        UnitResult(unit.name, "blocked", "consumers_not_ready")
+                        if admission and not consumers_ready
+                        else self._restore_unit(unit)
+                    )
+                    results[unit.name] = result
+                    self.report = replace(self.report, units=tuple(results.values()))
+                    if not admission:
+                        consumers_ready &= result.outcome == "ready"
+        except BaseException as error:
+            self.report = replace(
+                self.report, phase="interrupted", interruption=type(error).__name__
             )
-        self.report = RestorationReport(tuple(results))
+            raise
+        self.report = replace(self.report, phase="finished")
         return self.report
 
     def __exit__(
@@ -145,7 +173,13 @@ class MaintenanceWindow:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        report = self.restore()
+        try:
+            report = self.restore()
+        except BaseException as error:
+            if exc is None:
+                raise
+            exc.add_note("Maintenance restoration interrupted: " + type(error).__name__)
+            return  # Preserve the body's primary failure and the incomplete report.
         if not report.complete:
             if exc is None:
                 raise RestorationError(report)

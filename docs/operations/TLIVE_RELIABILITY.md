@@ -18,7 +18,7 @@ Focused Python selectors are `tests.test_tlive_extension`,
 `tests.test_approval_surface`, `tests.test_approval_surface_state`,
 `tests.test_approval_surface_monitor`, `tests.test_approval_surface_ipc` and
 `tests.test_codex_server_service`, `tests.test_unix_listener_custody` and
-`tests.test_maintenance_window`.
+`tests.test_maintenance_window`, plus `tests.test_unix_socket_diag`.
 The published npm archive lacks tsconfig and plugin-lock tooling, so this is not
 a full upstream typecheck/test claim. Dependency resolution is separate from
 source-byte verification; CI installs dependencies with lifecycle scripts disabled.
@@ -171,14 +171,23 @@ also proves effective attach-only mode. Never use general liveness as readiness.
 An uncertain start is observed, never retried. Preserve the primary error and
 separate restoration report; incomplete restoration is a failed maintenance
 result requiring explicit recovery, never success or silent waiting.
+The report retains initial states, stop attempts, per-unit outcomes and an
+explicit phase. Interruption during finalization leaves `interrupted` with
+`complete=False`, preserves any primary failure and never authorizes a retry.
 
 Use `unix_listener_custody.verify_listener` for passive host socket evidence.
 Compare the expected PID, boot ID, start ticks, executable, UID and cgroup with
 reviewed pins before passing the identity. The helper selects exactly one Unix
-stream **listener** (listening flag and state), verifies its inode in that
-process's FDs and rechecks listener and incarnation. Accepted connections may
-share its pathname and are not additional listeners. Keep filesystem-path,
-artifact and effective-unit checks in the private wrapper; no socket removal,
+stream **listener** using a bounded binary Linux `SOCK_DIAG` dump, binds its
+VFS device/inode to the current owned filesystem socket and verifies the kernel
+inode in that process's FDs twice, rechecking listener and incarnation. Text
+`/proc/net/unix` paths can contain unescaped newlines and are not custody
+authority. Accepted connections may share a pathname and are not additional
+listeners. The verifier requires the same network namespace as the server;
+missing binary evidence, a different namespace or a replaced path refuses.
+Resolve any approved socket alias separately; a symlink is not accepted as the
+kernel filesystem path. Keep directory, artifact and effective-unit checks in
+the private wrapper; no socket removal,
 native restart, inference, database rollback or uncertain work replay follows
 from this diagnostic.
 

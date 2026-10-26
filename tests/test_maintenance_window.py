@@ -178,6 +178,51 @@ class MaintenanceWindowTests(unittest.TestCase):
             raise KeyboardInterrupt()
         self.assertTrue(window.report.complete)
 
+    def test_interrupt_inside_finalization_leaves_incomplete_report_without_retry(self):
+        from dataclasses import replace
+
+        def interrupted_start():
+            self.events.append(("start", "worker"))
+            raise KeyboardInterrupt()
+
+        window = MaintenanceWindow(
+            (replace(self.units[0], start=interrupted_start), *self.units[1:])
+        )
+        with self.assertRaises(KeyboardInterrupt), window:
+            window.stop("admission")
+            window.stop("worker")
+        self.assertFalse(window.report.complete)
+        self.assertEqual(window.report.phase, "interrupted")
+        self.assertIn("worker", window.report.stop_attempts)
+        self.assertEqual(dict(window.report.initial)["worker"], "active")
+        before = list(self.events)
+        self.assertFalse(window.restore().complete)
+        self.assertEqual(self.events, before)
+
+    def test_interrupt_during_restore_does_not_replace_primary_error(self):
+        from dataclasses import replace
+
+        def interrupted_ready():
+            raise SystemExit(1)
+
+        window = MaintenanceWindow(
+            (replace(self.units[0], ready=interrupted_ready), *self.units[1:])
+        )
+        primary = ValueError("original diagnostic failure")
+        with self.assertRaises(ValueError) as caught, window:
+            window.stop("admission")
+            window.stop("worker")
+            raise primary
+        self.assertIs(caught.exception, primary)
+        self.assertFalse(window.report.complete)
+        self.assertEqual(window.report.interruption, "SystemExit")
+        self.assertIn("interrupted", primary.__notes__[0])
+
+    def test_unknown_unit_is_explicit_value_error_without_effect(self):
+        with MaintenanceWindow(self.units) as window, self.assertRaisesRegex(ValueError, "unknown"):
+            window.stop("not-configured")
+        self.assertEqual(self.events, [])
+
     def test_unknown_initial_snapshot_and_consumer_stop_before_fence_are_refused(self):
         self.states["worker"] = "unknown"
         with self.assertRaises(ValueError), MaintenanceWindow(self.units):
