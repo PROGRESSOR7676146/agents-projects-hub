@@ -21,8 +21,10 @@ sole source writer. Verified integration base: `eb33cac`.
    on one root.
 
 The developer contract is accepted in [ADR 0075](../decisions/0075-claude-personal-developer-profile.md).
-Its source candidate and native offline edit/test/Git fixture are under
-publication validation; independent approval and installed/human acceptance
+The stop/tlive integration was published at `a982ae9`, and the developer source
+and native offline edit/test/Git fixture at `1b997af`. The maintenance fix is
+included through `de2d325`; exact reviewed candidate and publication receipts
+are referenced by the private handoff. Installed convergence and human acceptance
 remain open. This plan itself grants no tools. Historical
 priorities below are evidence; the order above supersedes their next triggers.
 Do not reopen ancient sessions or make unrelated operations debt a prerequisite.
@@ -524,6 +526,11 @@ automatic scoring.
 
 ### Owned Claude stop certainty follow-up
 
+Historical source record: incorporated in the published `a982ae9` integration;
+its exact-candidate review/publication receipts are referenced by the private
+handoff. The old source-validation next triggers below are superseded by that
+checkpoint. Installed and human acceptance remain open under the current goal.
+
 Source lane `fix/claude-stop-certainty-20261024`, base `17e4d9b`; owner: Hub
 maintainer, sole writer. A local Claude interruption currently loses the owned
 process cleanup evidence and can retain an indeterminate job and pending stop,
@@ -544,6 +551,12 @@ resolution of their outcome. Inspect tracked, staged and untracked lane state
 after owner integration before cleanup. Live acceptance remains open.
 
 ### Claude stop/error precedence follow-up
+
+Historical source record: incorporated in the published `a982ae9` integration,
+including `74babf0`'s retained unterminated evidence/cleanup fix. Exact-candidate
+source receipts are referenced by the private handoff. The former local-validation
+state and source next trigger below are historical, not outstanding publication
+work. Installed and human acceptance remain open under the current goal.
 
 Owner: Hub maintainer, sole writer; source lane
 `fix/claude-stop-timeout-certainty-20261025`, base `17c3040e`. Paired source review

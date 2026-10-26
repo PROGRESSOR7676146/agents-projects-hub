@@ -4,6 +4,7 @@ import os
 import socket
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from hermes_codex_router import unix_listener_custody as custody
@@ -85,12 +86,22 @@ class MaintenanceWindowTests(unittest.TestCase):
                     companion.settimeout(2)
                     owner = custody.process_identity(os.getpid())
                     inode = custody.verify_listener(path, owner)
-                    window = MaintenanceWindow(self.units)
+
+                    def require_native_custody():
+                        if custody.verify_listener(path, owner) != inode:
+                            raise ValueError("listener changed")
+
+                    window = MaintenanceWindow(
+                        (
+                            replace(self.units[0], prerequisite=require_native_custody),
+                            *self.units[1:],
+                        )
+                    )
                     with (
                         self.assertRaisesRegex(
                             ValueError if lose_listener else RuntimeError,
                             "missing" if lose_listener else "fictional post-attach check failed",
-                        ),
+                        ) as caught,
                         window,
                     ):
                         for name in ("admission", "worker", "sender"):
@@ -103,11 +114,18 @@ class MaintenanceWindowTests(unittest.TestCase):
                                 custody.verify_listener(path, owner)
                                 self.fail("closed listener must refuse")
                             raise RuntimeError("fictional post-attach check failed")
-                    self.assertTrue(window.report.complete)
-                    self.assertEqual(
-                        [name for action, name in self.events if action == "start"],
-                        ["worker", "sender", "admission"],
-                    )
+                    if lose_listener:
+                        self.assertFalse(window.report.complete)
+                        self.assertNotIn(("start", "worker"), self.events)
+                        self.assertEqual(self.states["sender"], "active")
+                        self.assertEqual(self.states["admission"], "inactive")
+                        self.assertIn("restoration incomplete", caught.exception.__notes__[0])
+                    else:
+                        self.assertTrue(window.report.complete)
+                        self.assertEqual(
+                            [name for action, name in self.events if action == "start"],
+                            ["worker", "sender", "admission"],
+                        )
                     self.assertEqual(self.states["unused"], "inactive")
 
     def test_one_unknown_start_does_not_skip_sender_but_blocks_admission_without_retry(self):

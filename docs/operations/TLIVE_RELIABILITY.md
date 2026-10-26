@@ -225,6 +225,7 @@ and explicit recovery; never auto-replay the procedure after such an exit.
 ### Next-update preparation and closure
 
 The next private plan must close the following finite checklist **before arming**.
+This checklist grants no arming, deployment or live-test authority.
 The generic helpers above do not discover deployment units, perform peer
 authentication, publish a handoff or establish runtime convergence. Source tests
 alone cannot establish that the private plan wires these gates correctly.
@@ -237,6 +238,11 @@ alone cannot establish that the private plan wires these gates correctly.
    Keep the independent native server outside automatic restoration. Reject a
    missing, extra or unknown required unit before any stop; a short hand-written
    list of only tlive and one worker is insufficient.
+   Use fresh supervisor canonical IDs and resolved aliases, not display names;
+   exclude native custody by canonical unit/process/cgroup identity too. Compare
+   the reviewed inventory with the supervisor's full relevant readback, including
+   unexpected active units. Equality of two caller-supplied name lists alone does
+   not establish inventory completeness or native exclusion.
 2. **Rehearse the actual sequence offline.** Use disposable AF_UNIX sockets and
    fictional service callbacks, never production state or installed units.
    Verify custody before companion connect, after accept and with several
@@ -251,7 +257,12 @@ alone cannot establish that the private plan wires these gates correctly.
    evidence distinguishes a listener from accepted endpoints; an owned local
    fixture can also assert `SO_ACCEPTCONN`. The authorized private endpoint check
    separately compares `SO_PEERCRED` PID/UID to the pinned server incarnation,
-   then rechecks passive custody. Same UID alone is insufficient. Keep transport
+   then rechecks passive custody. Connecting changes transport state and requires
+   explicit scope; it is not a purely passive host observation. This direct-server
+   check does not support socket activation or passed listener FDs: peer credentials
+   can identify the socket creator instead of its current holder. Refuse an
+   unsupported custody model rather than relaxing the identity check.
+   Same UID alone is insufficient. Keep transport
    deadlines finite; no provider request is needed. Verify executable content
    hashes and effective units against the reviewed plan; an executable path alone
    is not a content pin. A replaced listener or peer mismatch blocks advancement,
@@ -280,7 +291,8 @@ on a happy-path list or an unconditional restart in `finally`:
 The monitor one-shot and timer are separate from the two-level consumer/admission
 ordering of `MaintenanceWindow`. The private procedure owns their bounded final
 phase after core return, including on a failed cutover when core restoration is
-safe. Verify the one-shot's actual result and status, timer state and next
+safe. Check the one-shot separately even when its timer was initially inactive;
+this does not enable that timer. Verify the one-shot's actual result and status, timer state and next
 scheduled run, and preserve their initial enablement policy. Do not make timer
 activation a consumer prerequisite or silently leave it stopped. A monitoring
 failure is recorded explicitly even if productive services recovered. Neither a
