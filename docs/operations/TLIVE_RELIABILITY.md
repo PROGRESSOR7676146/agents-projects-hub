@@ -151,14 +151,30 @@ from hermes_codex_router.maintenance_window import MaintenanceWindow
 
 def guarded_cutover(reviewed_units, cutover, persist_result):
     window = MaintenanceWindow(reviewed_units)
+    primary = None
     try:
         with window:
             # cutover must use window.stop for every eligible unit.
             # Preserve the separate fresh native-start/idle/backup gates.
             cutover(window)
+    except BaseException as error:
+        primary = error
+        raise
     finally:
-        # Save original failure separately; this report cannot overwrite it.
-        persist_result(asdict(window.report))
+        result = {
+            "primary_failure_type": None if primary is None else type(primary).__name__,
+            "restoration": asdict(window.report),
+            "restoration_complete": window.report.complete,
+            "status": (
+                "COMPLETED" if primary is None and window.report.complete else "INSPECT_NO_RETRY"
+            ),
+        }
+        try:
+            persist_result(result)
+        except BaseException as error:
+            if primary is None:
+                raise
+            primary.add_note("Failed saving maintenance report: " + type(error).__name__)
 ```
 
 Restoration verifies prerequisites and readiness, and starts only initially
@@ -174,6 +190,11 @@ result requiring explicit recovery, never success or silent waiting.
 The report retains initial states, stop attempts, per-unit outcomes and an
 explicit phase. Interruption during finalization leaves `interrupted` with
 `complete=False`, preserves any primary failure and never authorizes a retry.
+Persist `restoration_complete` explicitly: `asdict` does not include properties,
+and phase `finished` alone does not mean every unit became ready. If saving the
+report fails, preserve that failure alongside the primary error; neither failure
+permits replay. Durable pre-effect receipts remain authoritative for attempted
+starts, including an interrupted or unobserved outcome.
 
 Use `unix_listener_custody.verify_listener` for passive host socket evidence.
 Compare the expected PID, boot ID, start ticks, executable, UID and cgroup with
