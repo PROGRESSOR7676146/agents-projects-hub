@@ -147,7 +147,9 @@ print(json.dumps({'id':request['id'],'result':{'turn':{'id':'example-turn'}}}), 
 
         caller = threading.Thread(target=request, daemon=True)
         try:
-            self.assertTrue(full.wait(1))
+            # Child startup is fixture readiness, separate from the two-second
+            # deadlock bound below. Loaded hosts may take over a second to spawn.
+            self.assertTrue(full.wait(5), "fictional peer did not reach full stdout")
             caller.start()
             self.assertTrue(finished.wait(2), "full stdout and synchronous stdin formed a cycle")
             self.assertEqual(outcomes, ["example-turn"])

@@ -30,6 +30,25 @@ TLIVE_SOURCE=/tmp/example-tlive/package node --experimental-transform-types \
   ./integrations/tlive/host-smoke.mjs
 ```
 
+The Codex companion subscribes with `thread/resume` and `excludeTurns: true`.
+This preserves live approval events without transferring the thread's full
+history or overriding execution policy. A stalled history response is a
+regression fixture, not proof of the cause of a particular installation's
+disconnect. The supported field is documented in the
+[Codex app-server reference](https://developers.openai.com/codex/app-server/).
+Run its offline source regression with the selected tree's existing dependencies:
+
+```sh
+TLIVE_SOURCE=/tmp/example-tlive/package node --experimental-transform-types \
+  --loader ./integrations/tlive/ts-source-loader.mjs \
+  ./integrations/tlive/codex-subscription.test.mjs
+```
+
+It checks card delivery through the real companion and permission router,
+waiting for an explicit decision, one-shot resolution, stale-answer rejection,
+and disconnect cleanup. It neither starts a daemon nor proves installed
+Telegram delivery; that still requires a real human approval roundtrip.
+
 The separate `ipc-adversarial.mjs` suite uses the actual bootstrap, Unix IPC and
 Telegram adapter with fake Telegram/app-server custody. Run it against verified
 patched source using `ipc-test-loader.mjs`. It requires socket bind permission;

@@ -150,6 +150,10 @@ class ClaudeStreamReader:
         self._visible_characters = 0
         self._received_bytes = 0
 
+    @property
+    def terminal_seen(self) -> bool:
+        return self._terminal_seen
+
     def feed(self, chunk: bytes) -> None:
         self._received_bytes += len(chunk)
         byte_limit = (
@@ -184,6 +188,28 @@ class ClaudeStreamReader:
         except UnicodeDecodeError as exc:
             raise ClaudeStreamError("claude returned invalid structured encoding") from exc
 
+    def validate_interrupted_tail(self) -> None:
+        """Validate a complete final JSON event even without its line delimiter.
+
+        Only an incomplete JSON fragment may be discarded by a proven local
+        kill. A complete event still owns session, policy and terminal checks.
+        ``finish`` remains strict for every non-interrupted outcome.
+        """
+        if not self._pending:
+            return
+        try:
+            line = bytes(self._pending).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ClaudeStreamError("claude returned invalid structured encoding") from exc
+        try:
+            json.loads(line)
+        except json.JSONDecodeError as exc:
+            if exc.pos >= len(line.rstrip()) or exc.msg.startswith("Unterminated string"):
+                return
+            raise ClaudeStreamError("claude returned malformed structured output") from exc
+        self._line(bytes(self._pending))
+        self._pending.clear()
+
     def _line(self, raw: bytes) -> None:
         if self.image_receipt and len(raw) > MAX_IMAGE_EVENT_BYTES:
             raise ClaudeStreamError("claude structured event exceeded its limit")
@@ -212,6 +238,7 @@ class ClaudeStreamReader:
         ):
             raise ClaudeStreamError("claude returned events after its terminal outcome")
         if event.get("type") == "result":
+            _validate_terminal(event)
             self._terminal_seen = True
         if not retain:
             return
@@ -390,6 +417,50 @@ def _terminal_failure_message(code: str) -> str:
     return f"{reason} No completed result was returned. {action}"
 
 
+def _validate_terminal(terminal: dict[str, object]) -> bool:
+    """Check complete-event contradictions before a stop can discard the stream."""
+    _session_id(terminal.get("session_id"))
+    subtype = terminal.get("subtype")
+    is_error = terminal.get("is_error")
+    if (
+        type(is_error) is not bool
+        or not isinstance(subtype, str)
+        or subtype
+        not in {
+            "success",
+            "error_during_execution",
+            "error_max_turns",
+            "error_max_budget_usd",
+            "error_max_structured_output_retries",
+        }
+    ):
+        raise ClaudeStreamError("claude returned an unknown terminal outcome")
+    # Native CLI uses the success result variant for a completed API-error
+    # message too. Accept only its explicit HTTP error/status and result shape
+    # here, always as failure; an absent/ambiguous status stays indeterminate.
+    status = terminal.get("api_error_status")
+    http_error_status = type(status) is int and 400 <= status <= 599
+    native_http_failure = (
+        subtype == "success"
+        and is_error
+        and http_error_status
+        and isinstance(terminal.get("result"), str)
+    )
+    if (
+        (subtype == "success" and is_error and not native_http_failure)
+        or (subtype == "success" and not is_error and status is not None)
+        or (subtype != "success" and not is_error)
+    ):
+        raise ClaudeStreamError("claude returned a conflicting terminal outcome")
+    if not is_error:
+        text = terminal.get("result")
+        if not isinstance(text, str) or not text.strip():
+            raise ClaudeStreamError("claude completed without visible text")
+        if len(text) > MAX_CLAUDE_VISIBLE_CHARACTERS:
+            raise ClaudeStreamError("claude visible result exceeded its limit")
+    return is_error
+
+
 def parse_claude_stream(
     output: str,
     *,
@@ -444,48 +515,14 @@ def parse_claude_stream(
             model = message.get("model") if isinstance(message, dict) else None
             if isinstance(model, str) and model.strip():
                 answered_model = model.strip()[:200]
-    subtype = terminal.get("subtype")
-    is_error = terminal.get("is_error")
-    if (
-        type(is_error) is not bool
-        or not isinstance(subtype, str)
-        or subtype
-        not in {
-            "success",
-            "error_during_execution",
-            "error_max_turns",
-            "error_max_budget_usd",
-            "error_max_structured_output_retries",
-        }
-    ):
-        raise ClaudeStreamError("claude returned an unknown terminal outcome")
-    # Native CLI uses the success result variant for a completed API-error
-    # message too. Accept only its explicit HTTP error/status and result shape
-    # here, always as failure; an absent/ambiguous status stays indeterminate.
-    status = terminal.get("api_error_status")
-    http_error_status = type(status) is int and 400 <= status <= 599
-    native_http_failure = (
-        subtype == "success"
-        and is_error
-        and http_error_status
-        and isinstance(terminal.get("result"), str)
-    )
-    if (
-        (subtype == "success" and is_error and not native_http_failure)
-        or (subtype == "success" and not is_error and status is not None)
-        or (subtype != "success" and not is_error)
-    ):
-        raise ClaudeStreamError("claude returned a conflicting terminal outcome")
+    is_error = _validate_terminal(terminal)
     if is_error:
         code = _terminal_failure_code(terminal, assistant_error)
         raise ClaudeTerminalFailure(code, _terminal_failure_message(code), session_id)
     if returncode != 0:
         raise ClaudeStreamError("claude process exit conflicts with its successful result")
     text = terminal.get("result")
-    if not isinstance(text, str) or not text.strip():
-        raise ClaudeStreamError("claude completed without visible text")
-    if len(text) > MAX_CLAUDE_VISIBLE_CHARACTERS:
-        raise ClaudeStreamError("claude visible result exceeded its limit")
+    assert isinstance(text, str)
     return ClaudeParsedResult(
         text.strip(), session_id, answered_model or initialized_model or requested_model
     )

@@ -14,6 +14,7 @@ from unittest.mock import patch
 from hermes_codex_router.claude_cli_capabilities import (
     ClaudeCliCapabilities,
     ClaudeCliCapabilityError,
+    ClaudeCliCleanupError,
 )
 
 OPTIONS = (
@@ -92,6 +93,28 @@ class ClaudeCliCapabilitiesTests(unittest.TestCase):
             environment=self.environment,
             interrupted=threading.Event(),
         )
+
+    def test_help_cleanup_uncertainty_survives_directory_cleanup_failure(self) -> None:
+        self.help_cli()
+        temporary_directory = tempfile.TemporaryDirectory
+
+        class BrokenDirectory(temporary_directory):
+            def cleanup(self):
+                super().cleanup()
+                raise OSError("Fictional directory cleanup failure")
+
+        with (
+            patch(
+                "hermes_codex_router.claude_cli_capabilities.tempfile.TemporaryDirectory",
+                BrokenDirectory,
+            ),
+            patch(
+                "hermes_codex_router.claude_cli_capabilities._read_help",
+                side_effect=ClaudeCliCleanupError(),
+            ),
+            self.assertRaises(ClaudeCliCleanupError),
+        ):
+            self.require()
 
     def test_accepts_full_multiline_help_and_resolves_path_from_supplied_environment(self) -> None:
         self.help_cli()

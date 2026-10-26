@@ -66,6 +66,10 @@ class ClaudeCliUnavailableError(ClaudeCliCapabilityError):
     """The configured executable cannot be resolved before inspection."""
 
 
+class ClaudeCliCleanupError(ClaudeCliCapabilityError):
+    """The owned help process did not establish successful cleanup."""
+
+
 def _fingerprint(path: str) -> tuple[int, int, int, int, int]:
     info = os.stat(path)
     if not stat.S_ISREG(info.st_mode):
@@ -193,7 +197,10 @@ def _read_help(
             raise ClaudeCliCapabilityError()
         return bytes(output)
     finally:
-        _kill_and_reap(process)
+        try:
+            _kill_and_reap(process)
+        except Exception as exc:
+            raise ClaudeCliCleanupError() from exc
 
 
 class ClaudeCliCapabilities:
@@ -216,6 +223,7 @@ class ClaudeCliCapabilities:
         """Return the resolved CLI path if its current help advertises all controls."""
         if interrupted.is_set():
             raise ClaudeCliCapabilityError()
+        cleanup_failed = False
         try:
             search_path = os.pathsep.join(
                 entry
@@ -237,7 +245,9 @@ class ClaudeCliCapabilities:
                     if interrupted.is_set():
                         raise ClaudeCliCapabilityError()
                     return path
-            with tempfile.TemporaryDirectory(prefix="hub-claude-capability-") as directory:
+            temporary = tempfile.TemporaryDirectory(prefix="hub-claude-capability-")
+            try:
+                directory = temporary.name
                 isolated = {
                     key: value
                     for key, value in environment.items()
@@ -249,9 +259,18 @@ class ClaudeCliCapabilities:
                     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",
                     DISABLE_AUTOUPDATER="1",
                 )
-                output = _read_help(
-                    path, cwd=Path(directory), environment=isolated, interrupted=interrupted
-                )
+                try:
+                    output = _read_help(
+                        path, cwd=Path(directory), environment=isolated, interrupted=interrupted
+                    )
+                except ClaudeCliCleanupError:
+                    cleanup_failed = True
+                    raise
+            finally:
+                try:
+                    temporary.cleanup()
+                except Exception:
+                    raise ClaudeCliCleanupError() from None
             if not _has_required_advertisement(
                 output, file_tools=file_tools, image_input=image_input
             ):
@@ -262,7 +281,9 @@ class ClaudeCliCapabilities:
             with self._lock:
                 self._success[(path, file_tools, image_input)] = after
             return path
-        except ClaudeCliCapabilityError:
-            raise
-        except Exception:
+        except Exception as error:
+            if cleanup_failed:
+                raise ClaudeCliCleanupError() from None
+            if isinstance(error, ClaudeCliCapabilityError):
+                raise
             raise ClaudeCliCapabilityError() from None

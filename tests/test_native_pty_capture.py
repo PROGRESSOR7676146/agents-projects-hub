@@ -198,7 +198,8 @@ class NativePtyCaptureTests(unittest.TestCase):
         proof = self.root / "pid"
         code = (
             "import os,time; from pathlib import Path; "
-            f"Path({str(proof)!r}).write_text(str(os.getpid())); time.sleep(30)"
+            f"proof=Path({str(proof)!r}); pending=proof.with_suffix('.pending'); "
+            "pending.write_text(str(os.getpid())); pending.replace(proof); time.sleep(30)"
         )
 
         def faulty_gate() -> bool:

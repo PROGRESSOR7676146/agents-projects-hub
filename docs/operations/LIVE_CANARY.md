@@ -1,7 +1,7 @@
 # Live canary and rollback
 
 Status: owner-coordinated acceptance procedure
-Last updated: 2026-09-20
+Last updated: 2026-10-24
 
 This procedure is the final gate between the automated subprocess fault matrix
 and routine use of the external queue topology. It changes live Telegram and
@@ -35,6 +35,9 @@ delete a socket merely to make the canary continue.
 
 1. Record the exact commit and package version privately. Verify CI and CodeQL
    for that commit, then run `python scripts/validate.py` from the deployed tree.
+   Complete the [recovery checkout refresh](IMMUTABLE_RELEASES.md#refresh-the-recovery-checkout-before-release-or-deployment)
+   for the exact candidate and verify the owning recovery capsule before
+   declaring preparation complete. Preserve any active recovery worktree.
 2. Create an SQLite-consistent backup with `agents-projects-hub backup STATE
    [DESTINATION]`. Verify that the artifact can be opened. Preserve a rollback
    binary/configuration pair that is proven compatible with the current schema;
