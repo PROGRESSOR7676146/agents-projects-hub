@@ -117,7 +117,10 @@ revision and highest proven level.
 - A pull request that changes more than about 300 lines, or touches Controller,
   state, worker lifecycle, security, trust boundaries or release gates, needs an
   independent review by an agent that did not write it (Claude for Codex work
-  and the reverse) or by the owner. Record the findings in the pull request.
+  and the reverse), the authorized Astra fallback when ordinary reviewers are
+  unavailable, or the owner. Follow
+  `docs/operations/CLAUDE_SOURCE_REVIEW.md` and record the findings in the pull
+  request.
 - Invoke independent Claude source review directly through CPA HTTP, without
   Claude CLI, following [the review runbook](docs/operations/CLAUDE_SOURCE_REVIEW.md).
   Resolve the exact provider/model route before inferring reviewer availability.

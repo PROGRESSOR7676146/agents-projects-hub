@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .claude_tool_profiles import profile_tools
+
 
 @dataclass(frozen=True, slots=True)
 class ClaudeFilePermissionsConfig:
@@ -17,6 +19,7 @@ class ClaudeFilePermissionsConfig:
     hook_code_root: Path
     bwrap_executable: Path
     private_paths: tuple[Path, ...]
+    profile: str = "editor"
 
 
 def parse_claude_file_permissions(raw: Any) -> ClaudeFilePermissionsConfig | None:
@@ -32,8 +35,10 @@ def parse_claude_file_permissions(raw: Any) -> ClaudeFilePermissionsConfig | Non
         "bwrap_executable",
         "private_paths",
     }
-    if not isinstance(raw, dict) or set(raw) != keys:
+    if not isinstance(raw, dict) or not keys <= set(raw) or set(raw) - keys - {"profile"}:
         raise ValueError("claude_file_permissions requires exact explicit mount configuration")
+    profile = raw.get("profile", "editor")
+    profile_tools(profile)
 
     def path(value: Any) -> Path:
         if (
@@ -63,4 +68,5 @@ def parse_claude_file_permissions(raw: Any) -> ClaudeFilePermissionsConfig | Non
         path(raw["hook_code_root"]),
         path(raw["bwrap_executable"]),
         paths("private_paths"),
+        profile,
     )

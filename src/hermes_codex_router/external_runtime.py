@@ -22,7 +22,7 @@ from .claude_cli_capabilities import (
     ClaudeCliCleanupError,
     ClaudeCliUnavailableError,
 )
-from .claude_file_policy import file_tool_argv, require_file_tool_event, wrap_file_tool_argv
+from .claude_file_policy import file_tool_argv, file_tool_event_policy, wrap_file_tool_argv
 from .claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
 from .claude_image_input import (
     MAX_CLAUDE_INPUT_BYTES,
@@ -534,7 +534,9 @@ class ExternalCliAdapter:
             new_session_id=new_session_id,
             model=model,
             antigravity_log=antigravity_log,
-            event_policy=require_file_tool_event if claude_sandbox is not None else None,
+            event_policy=file_tool_event_policy(claude_sandbox.profile)
+            if claude_sandbox is not None
+            else None,
         )
 
     def _prepare_claude_input(
@@ -647,7 +649,7 @@ class ExternalCliAdapter:
                 expected_session_id=expected_session_id,
                 on_visible_assistant=on_visible_assistant,
                 on_process_started=on_process_started,
-                event_policy=require_file_tool_event,
+                event_policy=file_tool_event_policy(sandbox.profile),
                 pass_fds=launch.pass_fds,
             )
 

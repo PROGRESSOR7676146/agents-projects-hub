@@ -22,11 +22,11 @@ from .claude_permission_protocol import (
     parse_json_strict,
 )
 from .claude_permissions_journal import (
-    FILE_TOOLS,
     ClaudePermissionJournal,
     ClaudeSessionModeError,
     PermissionLaunch,
 )
+from .claude_tool_profiles import profile_tools
 from .external_runtime import ProviderUnavailableError
 from .hub_config import AgentDefinition, HubConfig
 from .state import HubState, ProviderJobRecord, StateError
@@ -125,7 +125,7 @@ class PermissionServer:
             event.get("hook_event_name") != "PermissionRequest"
             or event.get("session_id") != self.launch.session_id
             or event.get("cwd") != str(self.launch.root)
-            or event.get("tool_name") not in FILE_TOOLS
+            or event.get("tool_name") not in profile_tools(self.launch.profile)
             or not isinstance(event.get("tool_input"), dict)
         ):
             raise ValueError("native permission binding changed")
@@ -140,7 +140,9 @@ class PermissionServer:
             )
         ):
             raise ValueError("unsupported native permission authority")
-        validate_file_tool_input(event["tool_name"], event["tool_input"], self.launch.root)
+        validate_file_tool_input(
+            event["tool_name"], event["tool_input"], self.launch.root, profile=self.launch.profile
+        )
         job = state.get_provider_job(self.launch.job_id)
         target = revalidate_worker_execution_root(
             state, resolve_external_worker_target(self.config, state, job)
@@ -289,6 +291,7 @@ def hosted_claude_launch(
             if settings is None
             else settings.provider_home / session_id,
             is_new=is_new,
+            profile="editor" if settings is None else settings.profile,
         )
     except ClaudeSessionModeError:
         raise ProviderUnavailableError(
@@ -343,7 +346,9 @@ def hosted_claude_launch(
             ):
                 if (home / relative).exists() or (home / relative).is_symlink():
                     raise FileToolSandboxError("provider session home has customizations")
-            launch = journal.open_launch(job.job_id, token, session_id, root)
+            launch = journal.open_launch(
+                job.job_id, token, session_id, root, profile=settings.profile
+            )
             path = Path(directory) / "permission.sock"
             server = PermissionServer(path, config, launch, client, capability)
             sandbox = FileToolSandboxConfig(
@@ -371,6 +376,7 @@ def hosted_claude_launch(
                         *([config.hub_bot.token_file] if config.hub_bot else []),
                     }
                 ),
+                profile=settings.profile,
             )
             with sandbox.wrap((str(Path(executable).resolve()), "--help"), {}, root):
                 pass  # Validate and release source pins; invocation acquires its own set.

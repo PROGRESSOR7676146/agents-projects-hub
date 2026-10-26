@@ -12,14 +12,20 @@ Request independent reviews from **Claude Opus 5.5, effort high**, through
 native Claude CPA HTTP, and **agy Gemini Argon High**, exact catalog variant
 `gemini-4-argon-high`. Give both the same bounded public-source capsule,
 candidate revision and questions, without the other answer. Do not substitute
-Opus 4.8 or another model. Argon is a second reviewer, not only a fallback.
+Opus 4.8. Argon is a second reviewer, not only a fallback.
 
 If one reviewer gives PASS and the other is temporarily unavailable, publication
 may proceed on that independent PASS after the usual gates. Record the missing
 review and its actual failure; do not wait indefinitely or invent an answer.
 A negative review, unresolved finding, truncated answer or missing verdict is
 not temporary unavailability and cannot be ignored under this exception.
-If neither route provides a valid PASS, preserve the candidate for owner review.
+When the ordinary reviewers are unavailable, an independent **GPT-6 Astra**
+review MAY supply the required verdict. Record the ordinary routes' actual
+unavailability and give Astra the same exact clean candidate and bounded public
+source, without prior reviewer answers. This fallback does not override a
+negative review or unresolved finding, and Astra's own incomplete or missing
+verdict is not approval. If no eligible reviewer provides a valid PASS, preserve
+the candidate for owner review.
 
 ## Route and request
 

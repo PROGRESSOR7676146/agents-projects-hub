@@ -210,6 +210,44 @@ class ClaudePermissionJournalTests(unittest.TestCase):
         ).fetchone()
         self.assertNotIn(str(self.root), str(tuple(row)))
 
+    def test_developer_profile_is_pinned_on_resume_and_refused_by_editor_rollback(self) -> None:
+        def bind(profile: str) -> None:
+            self.journal.bind_session_mode(
+                self.job.job_id,
+                self.token,
+                self.launch.session_id,
+                self.root,
+                mode="file_tools",
+                home=self.root,
+                is_new=True,
+                profile=profile,
+            )
+
+        bind("developer")
+        bind("developer")
+        row = self.state._connection.execute(
+            "SELECT mode,home_digest FROM claude_permission_session_modes"
+        ).fetchone()
+        self.assertEqual(row[0], "file_tools")
+        self.assertNotEqual(row[1], hashlib.sha256(str(self.root.resolve()).encode()).hexdigest())
+        with self.assertRaises(StateError):
+            bind("editor")
+
+    def test_editor_session_cannot_silently_become_developer(self) -> None:
+        arguments = dict(mode="file_tools", home=self.root, is_new=True)
+        self.journal.bind_session_mode(
+            self.job.job_id, self.token, self.launch.session_id, self.root, **arguments
+        )
+        with self.assertRaises(StateError):
+            self.journal.bind_session_mode(
+                self.job.job_id,
+                self.token,
+                self.launch.session_id,
+                self.root,
+                **arguments,
+                profile="developer",
+            )
+
     def test_effective_text_store_is_pinned_and_lease_failure_does_not_suggest_reset(self) -> None:
         config = cast(HubConfig, SimpleNamespace(claude_file_permissions=None))
         agent = cast(AgentDefinition, SimpleNamespace(runtime="claude"))

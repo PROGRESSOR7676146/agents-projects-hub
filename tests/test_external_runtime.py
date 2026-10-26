@@ -48,7 +48,9 @@ class ExternalRuntimeTests(unittest.TestCase):
         sandbox = cast(
             FileToolSandboxConfig,
             SimpleNamespace(
-                python_executable=Path("/usr/bin/python3"), claude_executable=Path("/usr/bin/true")
+                profile="editor",
+                python_executable=Path("/usr/bin/python3"),
+                claude_executable=Path("/usr/bin/true"),
             ),
         )
         with patch.dict(
@@ -78,65 +80,82 @@ class ExternalRuntimeTests(unittest.TestCase):
             native.assert_not_called()
 
     def test_hosted_file_tools_wire_fixed_policy_to_owned_process(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        root = Path(directory.name)
-        native_id = str(uuid.uuid4())
-        terminal = (
-            json.dumps(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "is_error": False,
-                    "session_id": native_id,
-                    "result": "Example",
-                }
-            )
-            + "\n"
-        )
-        sandbox = cast(
-            FileToolSandboxConfig,
-            SimpleNamespace(
-                python_executable=Path("/usr/bin/python3"), claude_executable=Path("/usr/bin/true")
-            ),
-        )
-        adapter = ExternalCliAdapter("claude")
-        pins = MountPins()
-        descriptor = pins.open(root, directory=True)
-        launch = SandboxLaunch(("example-boundary",), {"EXAMPLE": "isolated"}, pins)
-        with (
-            patch.dict(
-                os.environ,
-                {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "ANTHROPIC_AUTH_TOKEN": "example"},
-                clear=True,
-            ),
-            patch.object(
-                adapter, "_verified_claude_argv", side_effect=lambda argv, **kwargs: argv
-            ) as verify,
-            patch(
-                "hermes_codex_router.external_runtime.wrap_file_tool_argv",
-                return_value=launch,
-            ) as wrap,
-            patch.object(
-                adapter,
-                "_run_claude_process",
-                return_value=subprocess.CompletedProcess([], 0, terminal, ""),
-            ) as native,
-        ):
-            adapter.run_turn(
-                cwd=root, prompt="Example", claude_sandbox=sandbox, new_session_id=native_id
-            )
-        self.assertTrue(verify.call_args.kwargs["file_tools"])
-        argv = wrap.call_args.args[0]
-        self.assertNotIn("--safe-mode", argv)
-        self.assertEqual(argv[argv.index("--tools") + 1], "Read,Glob,Grep,Write,Edit")
-        self.assertEqual(argv[argv.index("--setting-sources") + 1], "")
-        self.assertEqual(native.call_args.args[0], ("example-boundary",))
-        self.assertIs(native.call_args.kwargs["event_policy"], require_file_tool_event)
-        self.assertEqual(native.call_args.kwargs["pass_fds"], (descriptor,))
-        self.assertEqual(native.call_args.kwargs["cwd"], Path("/"))
-        with self.assertRaises(OSError):
-            os.fstat(descriptor)
+        for profile in ("editor", "developer"):
+            with self.subTest(profile=profile):
+                directory = tempfile.TemporaryDirectory()
+                self.addCleanup(directory.cleanup)
+                root = Path(directory.name)
+                native_id = str(uuid.uuid4())
+                terminal = (
+                    json.dumps(
+                        {
+                            "type": "result",
+                            "subtype": "success",
+                            "is_error": False,
+                            "session_id": native_id,
+                            "result": "Example",
+                        }
+                    )
+                    + "\n"
+                )
+                sandbox = cast(
+                    FileToolSandboxConfig,
+                    SimpleNamespace(
+                        profile=profile,
+                        python_executable=Path("/usr/bin/python3"),
+                        claude_executable=Path("/usr/bin/true"),
+                    ),
+                )
+                adapter = ExternalCliAdapter("claude")
+                pins = MountPins()
+                descriptor = pins.open(root, directory=True)
+                launch = SandboxLaunch(("example-boundary",), {"EXAMPLE": "isolated"}, pins)
+                with (
+                    patch.dict(
+                        os.environ,
+                        {
+                            "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                            "ANTHROPIC_AUTH_TOKEN": "example",
+                        },
+                        clear=True,
+                    ),
+                    patch.object(
+                        adapter, "_verified_claude_argv", side_effect=lambda argv, **kwargs: argv
+                    ) as verify,
+                    patch(
+                        "hermes_codex_router.external_runtime.wrap_file_tool_argv",
+                        return_value=launch,
+                    ) as wrap,
+                    patch.object(
+                        adapter,
+                        "_run_claude_process",
+                        return_value=subprocess.CompletedProcess([], 0, terminal, ""),
+                    ) as native,
+                ):
+                    adapter.run_turn(
+                        cwd=root, prompt="Example", claude_sandbox=sandbox, new_session_id=native_id
+                    )
+                self.assertTrue(verify.call_args.kwargs["file_tools"])
+                argv = wrap.call_args.args[0]
+                self.assertNotIn("--safe-mode", argv)
+                self.assertEqual(
+                    argv[argv.index("--tools") + 1],
+                    "Read,Glob,Grep,Write,Edit" + (",Bash" if profile == "developer" else ""),
+                )
+                self.assertEqual(argv[argv.index("--setting-sources") + 1], "")
+                self.assertEqual(native.call_args.args[0], ("example-boundary",))
+                policy = native.call_args.kwargs["event_policy"]
+                bash_event = {"type": "tool_progress", "tool_name": "Bash"}
+                if profile == "developer":
+                    policy(bash_event)
+                else:
+                    self.assertIs(policy, require_file_tool_event)
+                    with self.assertRaises(ClaudeStreamError):
+                        policy(bash_event)
+                self.assertEqual(native.call_args.kwargs["pass_fds"], (descriptor,))
+                self.assertEqual(native.call_args.kwargs["cwd"], Path("/"))
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
 
     def test_hosted_mount_descriptors_close_on_every_owned_runner_failure(self) -> None:
         with tempfile.TemporaryDirectory(prefix="example-native-pins-") as directory:
@@ -144,6 +163,7 @@ class ExternalRuntimeTests(unittest.TestCase):
             sandbox = cast(
                 FileToolSandboxConfig,
                 SimpleNamespace(
+                    profile="editor",
                     python_executable=Path("/usr/bin/python3"),
                     claude_executable=Path("/usr/bin/true"),
                 ),
@@ -190,6 +210,7 @@ class ExternalRuntimeTests(unittest.TestCase):
             sandbox = cast(
                 FileToolSandboxConfig,
                 SimpleNamespace(
+                    profile="editor",
                     python_executable=Path("/usr/bin/python3"),
                     claude_executable=Path("/usr/bin/true"),
                 ),
@@ -230,6 +251,7 @@ class ExternalRuntimeTests(unittest.TestCase):
             sandbox = cast(
                 FileToolSandboxConfig,
                 SimpleNamespace(
+                    profile="editor",
                     python_executable=Path("/usr/bin/python3"),
                     claude_executable=executable,
                 ),

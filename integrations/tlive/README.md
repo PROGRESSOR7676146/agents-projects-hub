@@ -64,8 +64,10 @@ The protected namespace does not enter the ordinary permission router, web,
 inbound text, or plugin continuation path. Hub must supply its own
 PermissionRequest-only shim and must validate and consume signed receipts
 against its live job, session, generation, root, lease, writer, and stop state.
-The card shows the complete input for the five bounded tools or denies without
-sending. This package does not enable Claude tools, alter an installation, or
+The card shows the complete input for the bounded file tools and Bash or denies
+without sending. The trusted Hub profile decides which tools are available;
+legacy policy and Always-Allow grants cannot approve this channel. This package
+does not enable Claude tools, alter an installation, or
 establish native/Telegram/live security acceptance.
 
 The combined patch also scopes native approval cancellation to exact item/request

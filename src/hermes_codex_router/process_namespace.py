@@ -378,10 +378,15 @@ class ProcessNamespaceConfig:
     project_access: str = "read-only"
     network: str = "private"
     permission_socket: Path | None = None
+    git_access: str = "read-only"
 
     def __post_init__(self) -> None:
         if self.project_access not in ("read-only", "read-write"):
             raise NamespaceError("unsupported project access mode")
+        if self.git_access not in ("read-only", "read-write"):
+            raise NamespaceError("unsupported Git access mode")
+        if self.git_access == "read-write" and self.project_access != "read-write":
+            raise NamespaceError("writable Git requires a writable project")
         if self.network not in ("private", "shared"):
             raise NamespaceError("unsupported network mode")
         if self.network == "private" and self.permission_socket is not None:
@@ -583,12 +588,13 @@ class ProcessNamespaceConfig:
         if code is not None and code_fd is not None:
             command.extend(("--ro-bind-fd", str(code_fd), str(code)))
         project_flag = "--ro-bind-fd" if self.project_access == "read-only" else "--bind-fd"
+        git_flag = "--ro-bind-fd" if self.git_access == "read-only" else "--bind-fd"
         command.extend(
             (
                 project_flag,
                 str(project_fd),
                 str(project),
-                "--ro-bind-fd",
+                git_flag,
                 str(git_fd),
                 str(project / ".git"),
                 "--bind-fd",

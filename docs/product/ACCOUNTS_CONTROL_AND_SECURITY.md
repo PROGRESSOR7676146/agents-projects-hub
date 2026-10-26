@@ -51,14 +51,14 @@ This normative module is part of the
   deployment and native/Telegram acceptance remain separate gates. It MUST NOT
   claim complete provider parity or authority-data custody on the strength of
   prompt instructions or this limited tool slice alone.
-  The current Claude delivery milestone is project reading/search and editing
-  under [ADR 0067](../decisions/0067-claude-editor-first.md). Shell, test/build
-  execution, Git commands, skills, MCP and child agents are excluded. Claude
-  native transfer, saved-session connect and image enablement are deferred;
-  their absence MUST NOT block acceptance of the bounded editor. Expansion
-  requires a new owner decision based on observed need. Text-only remains the
-  default. File tools require explicit local opt-in and the protected editor's
-  existing live gates to pass; passing those gates MUST NOT change the default.
+  The bounded editor of [ADR 0067](../decisions/0067-claude-editor-first.md)
+  retains its existing gates. The explicit personal developer increment is
+  accepted under [ADR 0075](../decisions/0075-claude-personal-developer-profile.md),
+  with implementation and native/live acceptance pending. Its file, command and
+  local Git authority MUST follow REQ-SEC-008. Text-only remains the default;
+  file tools require explicit local opt-in. Passing acceptance MUST NOT change
+  that default. Steer/extensions, native transfer/images and personal project
+  chat are later increments, not developer acceptance prerequisites.
 
 ### Compact control surface
 
@@ -358,8 +358,8 @@ single-writer checks remain mandatory. See
   topic, and agent allowlists MUST be enforced before provider invocation.
 - **REQ-SEC-007 (Accepted):** A provider failure MUST be visible, reversible,
   and isolated. Recovery MUST NOT weaken security policy to regain availability.
-- **REQ-SEC-008 (Implemented offline; live acceptance pending):** An explicitly
-  configured Claude file-tool turn MAY expose only Read, Glob, Grep, Write and
+- **REQ-SEC-008 (Editor implemented offline; developer accepted; live acceptance pending):** An explicitly
+  configured Claude editor turn MAY expose only Read, Glob, Grep, Write and
   Edit inside a fail-closed Linux filesystem/PID boundary. Private Hub state,
   bot/web credentials and permission signing keys MUST be absent from its
   mounts; trusted runtime and hook code MUST remain immutable to the provider.
@@ -377,8 +377,25 @@ single-writer checks remain mandatory. See
   suggestions MUST NOT become persistent grants or input changes. Restart,
   timeout, unavailable isolation/host and ambiguity MUST deny without replay.
   The per-turn hook MUST have no signing keys or Hub state access, and no Stop,
-  continuation, mirroring or second conversation writer. Shell, MCP, skills,
-  external plugins and children remain unavailable. This slice does not establish
+  continuation, mirroring or second conversation writer. The default `editor`
+  profile retains per-write human permission and read-only ordinary Git metadata.
+  An explicitly configured `developer` profile (accepted; implementation pending)
+  MAY preauthorize project file edits and expose native Bash plus writable
+  ordinary Git metadata. Every Bash invocation, including read-only commands,
+  MUST require a new exact human receipt; persistent rules, prior receipts and
+  native permission suggestions MUST NOT authorize another invocation or alter
+  its input. The decision covers the command/program and its descendants inside
+  the namespace, including tests and Git hooks; it MUST NOT be presented as
+  per-system-call review or hostile-project protection. Background or native
+  sandbox-bypass options, unknown command fields and incomplete or masked previews
+  MUST be denied. Profile and session-home identity MUST remain pinned on exact
+  resume and rollback; a profile change MUST require a fresh `/new` session.
+  MCP, skills, external plugins and agent children remain unavailable in both
+  profiles. Linked worktrees remain unsupported. Developer acceptance MUST prove
+  the production host/native edit-test-local-Git cycle, repeated fresh Bash
+  Allow/Deny, denied effects absent, exact resume, stop/cleanup and uncertainty
+  preservation, separately from scoped installed/human Telegram acceptance.
+  This slice does not establish
   subscription routing or local-transfer parity.
   The trusted worker and tlive host remain the receipt trust base; this slice
   MUST NOT claim isolation from an unconfined hostile process sharing their UID.
@@ -400,7 +417,7 @@ single-writer checks remain mandatory. See
   MUST grant no management or host-control capability. Unknown authority-bearing
   exposure MUST refuse activation. This is a scoped point-in-time check, not a
   host-wide guarantee against future trusted launches. Existing namespace, immutable runtime/hook, separate session HOME,
-  private-path exclusions and per-operation human checks MUST remain enforced
+  private-path exclusions and profile-specific human checks MUST remain enforced
   for the confined Claude launch; a failed boundary MUST NOT fall back to an
   unconfined launch. Other providers retain their supported tools and policies.
   Backups recover only their captured scope, not disclosures, external effects

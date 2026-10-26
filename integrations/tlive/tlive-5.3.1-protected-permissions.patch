@@ -470,7 +470,7 @@ new file mode 100644
 +  leaseId: string;
 +  launchEpoch: string;
 +  writer: 'telegram';
-+  toolName: 'Read' | 'Glob' | 'Grep' | 'Write' | 'Edit';
++  toolName: 'Read' | 'Glob' | 'Grep' | 'Write' | 'Edit' | 'Bash';
 +  input: Record<string, unknown>;
 +  expiresAt: number;
 +}
@@ -723,7 +723,7 @@ new file mode 100644
 +const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 +const DIGEST = /^[0-9a-f]{64}$/;
 +const DECIMAL = /^[1-9][0-9]*$/;
-+const TOOLS = new Set(['Read', 'Glob', 'Grep', 'Write', 'Edit']);
++const TOOLS = new Set(['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash']);
 +const MAX_PENDING = 128;
 +const MAX_REPLAY = 4096;
 +const MAX_TTL_MS = 600_000;

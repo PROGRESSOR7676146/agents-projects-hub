@@ -20,9 +20,10 @@ sole source writer. Verified integration base: `eb33cac`.
    existing worker/capacity configuration is the foundation, never five writers
    on one root.
 
-The next contract change must distinguish preauthorized project edits from
-fresh per-command human permissions before activation. This plan itself grants
-no tools. Existing editor contracts still govern current behavior. Historical
+The developer contract is accepted in [ADR 0075](../decisions/0075-claude-personal-developer-profile.md).
+Its source candidate and native offline edit/test/Git fixture are under
+publication validation; independent approval and installed/human acceptance
+remain open. This plan itself grants no tools. Historical
 priorities below are evidence; the order above supersedes their next triggers.
 Do not reopen ancient sessions or make unrelated operations debt a prerequisite.
 Current closure: open until exact-source gates and separately scoped live
@@ -302,9 +303,11 @@ owner selected independent **Opus 5.5/high and agy Argon High** reviews.
 The owning [source-review runbook](CLAUDE_SOURCE_REVIEW.md) defines exact routing,
 the temporary-unavailability exception and comparison after author verification.
 Never substitute Opus 4.8 or use synthetic availability probes. Record actual
-reviewers, candidate, findings/fixes and comparison in the PR. If neither
-review path provides a valid PASS, keep the candidate ready for owner review;
-never invent approval. Review is read-only in a separate clean candidate checkout,
+reviewers, candidate, findings/fixes and comparison in the PR. When ordinary
+reviewers are unavailable, an independent GPT-6 Astra review is authorized under
+that runbook. If no eligible reviewer provides a valid PASS, keep the candidate
+ready for owner review; never invent approval.
+Review is read-only in a separate clean candidate checkout,
 and does not grant permission to run unrelated live tests or deployment.
 
 ## Ordered packages
