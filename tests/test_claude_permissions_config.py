@@ -24,6 +24,17 @@ class ClaudePermissionsConfigTests(unittest.TestCase):
         assert settings is not None
         self.assertEqual(str(settings.python_executable), "/opt/example-runtime/bin/python")
 
+    def test_profile_is_editor_unless_developer_is_explicit(self) -> None:
+        settings = parse_claude_file_permissions(self.settings())
+        assert settings is not None
+        self.assertEqual(settings.profile, "editor")
+        developer = parse_claude_file_permissions(self.settings() | {"profile": "developer"})
+        assert developer is not None
+        self.assertEqual(developer.profile, "developer")
+        for profile in (None, True, "auto", "Developer", ""):
+            with self.subTest(profile=profile), self.assertRaises(ValueError):
+                parse_claude_file_permissions(self.settings() | {"profile": profile})
+
     def test_incomplete_config_and_unbounded_mounts_are_refused(self) -> None:
         for change in (
             {"provider_home": "relative"},

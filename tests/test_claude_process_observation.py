@@ -78,7 +78,7 @@ class ClaudeProcessObservationTests(unittest.TestCase):
     def test_file_tool_branch_observes_owned_wrapper_after_preflight(self) -> None:
         # Fictional wrapper proves callback propagation, not namespace isolation.
         launch = MagicMock(argv=self.argv, environment={}, pass_fds=())
-        sandbox = SimpleNamespace(claude_executable=Path(sys.executable))
+        sandbox = SimpleNamespace(claude_executable=Path(sys.executable), profile="editor")
         observations = []
 
         def preflight(argv, **kwargs):

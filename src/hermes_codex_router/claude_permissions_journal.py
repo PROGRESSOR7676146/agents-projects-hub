@@ -13,10 +13,9 @@ from uuid import uuid4
 
 from .claude_permission_binding import binding_digest, binding_snapshot
 from .claude_permission_protocol import ProtectedPayload, canonical_uuid
+from .claude_tool_profiles import profile_tools
 from .execution_journal import ExecutionJournal
 from .state import HubState, StateError
-
-FILE_TOOLS = frozenset({"Read", "Glob", "Grep", "Write", "Edit"})
 
 
 class ClaudeSessionModeError(StateError):
@@ -36,6 +35,7 @@ class PermissionLaunch:
     root: Path
     generation: int
     binding_digest: str
+    profile: str = "editor"
 
 
 class ClaudePermissionJournal:
@@ -62,7 +62,10 @@ class ClaudePermissionJournal:
             raise StateError("Claude permission launch was stopped")
         return binding_digest(job_id, token, session_id, str(root), row), int(row[4])
 
-    def open_launch(self, job_id: str, token: str, session_id: str, root: Path) -> PermissionLaunch:
+    def open_launch(
+        self, job_id: str, token: str, session_id: str, root: Path, *, profile: str = "editor"
+    ) -> PermissionLaunch:
+        profile_tools(profile)
         canonical_uuid(token)
         root = root.resolve(strict=True)
         with self.state._immediate_transaction():
@@ -75,7 +78,7 @@ class ClaudePermissionJournal:
                 )
             except sqlite3.IntegrityError:
                 raise StateError("Claude permission launch cannot be replayed") from None
-        return PermissionLaunch(epoch, job_id, token, session_id, root, generation, digest)
+        return PermissionLaunch(epoch, job_id, token, session_id, root, generation, digest, profile)
 
     def bind_session_mode(
         self,
@@ -87,10 +90,15 @@ class ClaudePermissionJournal:
         mode: str,
         home: Path,
         is_new: bool,
+        profile: str = "editor",
     ) -> None:
-        if mode not in {"text_only", "file_tools"}:
+        profile_tools(profile)
+        if mode not in {"text_only", "file_tools"} or mode == "text_only" and profile != "editor":
             raise StateError("unsupported Claude session mode")
-        home_digest = _digest(str(home.resolve()))
+        store = str(home.resolve())
+        home_digest = _digest(
+            store if profile == "editor" else "hub.claude.session/developer/v1\x00" + store
+        )
         with self.state._immediate_transaction():
             self._binding(job_id, token, native, root)
             row = self.connection.execute(
@@ -135,7 +143,7 @@ class ClaudePermissionJournal:
         lifetime_seconds: int = 120,
     ) -> str:
         if (
-            tool not in FILE_TOOLS
+            tool not in profile_tools(launch.profile)
             or type(lifetime_seconds) is not int
             or not 1 <= lifetime_seconds <= 120
         ):
@@ -178,7 +186,12 @@ class ClaudePermissionJournal:
                 job_id=job.job_id,
                 chat_id=topic.chat_id,
                 thread_id=topic.thread_id,
-                telegram_html="Claude ждёт разрешения на файловую операцию. Откройте запрос в Agent Session Remote и выберите Allow или Deny. /stop остановит задачу. Если решение не поступит, операция будет отклонена.",
+                telegram_html=(
+                    "Claude ждёт разрешения на выполнение команды. "
+                    if tool == "Bash"
+                    else "Claude ждёт разрешения на файловую операцию. "
+                )
+                + "Откройте запрос в Agent Session Remote и выберите Allow или Deny. /stop остановит задачу. Если решение не поступит, операция будет отклонена.",
                 now=datetime.now(timezone.utc),
             )
         return payload

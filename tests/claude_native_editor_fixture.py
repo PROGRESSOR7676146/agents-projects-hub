@@ -7,8 +7,10 @@ readonly test code is not an attestation of installed immutable runtime custody.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -25,10 +27,31 @@ from hermes_codex_router.claude_stream import ClaudeStreamReader, parse_claude_s
 
 MARKER = "example-editor-complete"
 TOOLS = {"Read", "Glob", "Grep", "Write", "Edit"}
+DEVELOPER_FILE = "def add(a, b):\n    return a + b\n"
 PHASE = "initialization"
 
 
-def script(root: Path) -> list[tuple[str, dict[str, Any]] | None]:
+def script(root: Path, profile: str = "editor") -> list[tuple[str, dict[str, Any]] | None]:
+    if profile == "developer":
+        test = {
+            "command": "python3 -m unittest test_calculator.py && printf 'passed\\n' >> tested.txt",
+            "timeout": 10000,
+        }
+        return [
+            ("Write", {"file_path": str(root / "calculator.py"), "content": DEVELOPER_FILE}),
+            ("Bash", test),
+            None,
+            ("Bash", test),
+            (
+                "Bash",
+                {
+                    "command": "git add calculator.py test_calculator.py && git -c user.name=Example -c user.email=author@example.com commit -m Example",
+                    "timeout": 10000,
+                },
+            ),
+            ("Bash", {"command": "pwd"}),
+            None,
+        ]
     return [
         ("Write", {"file_path": str(root / "allowed.txt"), "content": "example-allowed\n"}),
         None,
@@ -64,7 +87,9 @@ class _OneDecision(threading.Event):
         return released
 
 
-def run_native_editor(case: Any, executable: Path, digest: str, version: str) -> dict[str, Any]:
+def run_native_editor(
+    case: Any, executable: Path, digest: str, version: str, *, profile: str = "editor"
+) -> dict[str, Any]:
     from tests.claude_native_transport_fixture import (
         _copy_native_binary,
         build_native_fixture_argv,
@@ -83,8 +108,30 @@ def run_native_editor(case: Any, executable: Path, digest: str, version: str) ->
         raise
     fixture.peer.release = _OneDecision()
     root = fixture.root
+    if profile == "developer":
+        fixture.launch = dataclasses.replace(fixture.launch, profile="developer")
+        fixture.server.launch = fixture.launch
+        fixture.journal.bind_session_mode(
+            fixture.job.job_id,
+            fixture.token,
+            fixture.native_id,
+            root,
+            mode="file_tools",
+            home=root,
+            is_new=True,
+            profile=profile,
+        )
+        (root / "test_calculator.py").write_text(
+            "import unittest\nfrom calculator import add\n"
+            "class ExampleTest(unittest.TestCase):\n"
+            "    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n"
+        )
     (root / "seed.txt").write_bytes(b"example-before\n")
-    expected = [step for step in script(root) if step is not None and step[0] != "Read"]
+    expected = [
+        step
+        for step in script(root, profile)
+        if step is not None and (step[0] == "Bash" if profile == "developer" else step[0] != "Read")
+    ]
     responses = ("allow", "deny", "allow", "deny")
     outcome: dict[str, Any] = {}
     checked: list[bool] = []
@@ -99,7 +146,8 @@ def run_native_editor(case: Any, executable: Path, digest: str, version: str) ->
             from types import SimpleNamespace
 
             settings = cast(
-                FileToolSandboxConfig, SimpleNamespace(python_executable=Path("/usr/bin/python3"))
+                FileToolSandboxConfig,
+                SimpleNamespace(profile=profile, python_executable=Path("/usr/bin/python3")),
             )
             native_argv = list(file_tool_argv(build_native_fixture_argv(root), settings))
             native_argv.remove("--no-session-persistence")
@@ -121,7 +169,7 @@ def run_native_editor(case: Any, executable: Path, digest: str, version: str) ->
                 "--bind",
                 str(root),
                 str(root),
-                "--ro-bind",
+                "--bind" if profile == "developer" else "--ro-bind",
                 str(root / ".git"),
                 str(root / ".git"),
                 "--ro-bind",
@@ -156,7 +204,7 @@ def run_native_editor(case: Any, executable: Path, digest: str, version: str) ->
             with socket.socket() as listener:
                 listener.bind(("127.0.0.1", 0))
                 listener.listen(1)
-                argv.append(str(listener.getsockname()[1]))
+                argv.extend((str(listener.getsockname()[1]), profile))
 
                 def capture() -> None:
                     try:
@@ -184,12 +232,23 @@ def run_native_editor(case: Any, executable: Path, digest: str, version: str) ->
                         case.assertEqual(fixture._statuses()[-1], "pending")
                         seed = b"example-before\n" if index < 3 else b"example-after\n"
                         checked.append(
-                            (root / "seed.txt").read_bytes() == seed
-                            and not (root / "denied.txt").exists()
-                            and (
-                                not (root / "allowed.txt").exists()
-                                if index == 0
-                                else (root / "allowed.txt").read_bytes() == b"example-allowed\n"
+                            (
+                                (root / "seed.txt").read_bytes() == seed
+                                and not (root / "denied.txt").exists()
+                                and (
+                                    not (root / "allowed.txt").exists()
+                                    if index == 0
+                                    else (root / "allowed.txt").read_bytes() == b"example-allowed\n"
+                                )
+                            )
+                            if profile == "editor"
+                            else (
+                                (root / "calculator.py").read_text() == DEVELOPER_FILE
+                                and (
+                                    not (root / "tested.txt").exists()
+                                    if index == 0
+                                    else (root / "tested.txt").read_bytes() == b"passed\n"
+                                )
                             )
                         )
                         case.assertTrue(checked[-1])
@@ -207,10 +266,28 @@ def run_native_editor(case: Any, executable: Path, digest: str, version: str) ->
                 permission_decisions=fixture._statuses(),
                 distinct_requests=len(set(nonces)),
                 unchanged_before_each_decision=len(checked) == 4 and all(checked),
-                exact_final_bytes=(root / "allowed.txt").read_bytes() == b"example-allowed\n"
-                and (root / "seed.txt").read_bytes() == b"example-after\n"
-                and not (root / "denied.txt").exists(),
+                exact_final_bytes=(
+                    (root / "allowed.txt").read_bytes() == b"example-allowed\n"
+                    and (root / "seed.txt").read_bytes() == b"example-after\n"
+                    and not (root / "denied.txt").exists()
+                )
+                if profile == "editor"
+                else (
+                    (root / "calculator.py").read_text() == DEVELOPER_FILE
+                    and (root / "tested.txt").read_bytes() == b"passed\n"
+                ),
             )
+            if profile == "developer":
+                report["local_commit_count"] = int(
+                    subprocess.check_output(
+                        ["git", "-C", str(root), "rev-list", "--count", "HEAD"],
+                        text=True,
+                        timeout=3,
+                    )
+                )
+                report["local_commit_files"] = subprocess.check_output(
+                    ["git", "-C", str(root), "ls-tree", "--name-only", "HEAD"], text=True, timeout=3
+                ).splitlines()
             return report
     finally:
         fixture.peer.decision = "deny"
@@ -234,9 +311,10 @@ def actor() -> dict[str, Any]:
     sys.path.insert(0, "/opt/example")
     from native_process_capture import capture_owned_process
 
-    argv, sentinel, expected_version, host_port = sys.argv[1:]
+    argv, sentinel, expected_version, host_port, profile = sys.argv[1:]
     commands = json.loads(argv)
-    steps = script(Path.cwd())
+    steps = script(Path.cwd(), profile)
+    tools = TOOLS | {"Bash"} if profile == "developer" else TOOLS
     errors: list[bool] = []
     counts = {"posts": 0, "heads": 0, "violations": 0}
     lock = threading.Lock()
@@ -311,21 +389,21 @@ def actor() -> dict[str, Any]:
             if (
                 body.get("model") != "claude-opus-5-5"
                 or body.get("stream") is not True
-                or {tool["name"] for tool in body.get("tools", [])} != TOOLS
-                or len(body["tools"]) != len(TOOLS)
+                or {tool["name"] for tool in body.get("tools", [])} != tools
+                or len(body["tools"]) != len(tools)
             ):
                 with lock:
                     counts["violations"] += 1
                 self.respond(400, "application/json", b"{}")
                 return
-            if ordinal == 3:
+            if ordinal == (4 if profile == "developer" else 3):
                 blocks = [
                     (message["role"], block)
                     for message in body["messages"]
                     if isinstance(message.get("content"), list)
                     for block in message["content"]
                 ]
-                first = script(Path.cwd())[0]
+                first = script(Path.cwd(), profile)[0]
                 assert first is not None
                 restored_history = (
                     any(
@@ -443,7 +521,7 @@ def actor() -> dict[str, Any]:
             raise RuntimeError("native_identity_mismatch")
 
         def observe(event: dict[str, object]) -> None:
-            require_file_tool_event(event)
+            require_file_tool_event(event, profile=profile)
             message = event.get("message")
             if isinstance(message, dict):
                 for block in message.get("content", []):

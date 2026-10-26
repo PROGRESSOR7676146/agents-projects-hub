@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .claude_mount_pins import SandboxLaunch
+from .claude_tool_profiles import profile_tools
 from .process_namespace import SANDBOX_HOME, NamespaceRuntime, ProcessNamespaceConfig
 from .process_namespace import NamespaceError as FileToolSandboxError
 
@@ -45,9 +46,11 @@ class FileToolSandboxConfig:
     hook_code_root: Path
     permission_socket: Path
     private_paths: tuple[Path, ...]
+    profile: str = "editor"
     _namespace: ProcessNamespaceConfig = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        profile_tools(self.profile)
         runtime = NamespaceRuntime(
             bwrap_executable=self.bwrap_executable,
             executable=self.claude_executable,
@@ -66,6 +69,7 @@ class FileToolSandboxConfig:
                 project_access="read-write",
                 network="shared",
                 permission_socket=self.permission_socket,
+                git_access="read-write" if self.profile == "developer" else "read-only",
             ),
         )
 

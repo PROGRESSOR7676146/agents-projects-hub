@@ -101,6 +101,16 @@ consistency check. Worktree roots
 whose `.git` is a file are outside this initial slice. Local clones with
 hardlinked Git objects are refused too. Missing isolation or
 protected capability prevents productive invocation; it never selects a plain CLI.
+
+For the optional developer candidate, add `"profile": "developer"` to that
+object and start a new native session with `/new`. Omitting the field preserves
+editor behavior. Profile changes and rollback cannot resume a conversation
+under another profile. The selected immutable runtime must also contain the
+actual Bash executable, Git, test interpreter and their dependencies; missing
+tools must not trigger a host-side execution fallback. Follow
+[ADR 0075](../decisions/0075-claude-personal-developer-profile.md) for scope and
+acceptance. This configuration example grants no installation or live acceptance.
+
 All mounted sources must use ext4, xfs, btrfs or tmpfs. DrvFs/9p,
 NTFS, FUSE, vfat and unknown filesystem types are refused before invocation;
 their aliasing and ownership semantics do not establish this boundary.

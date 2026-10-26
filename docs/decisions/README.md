@@ -93,3 +93,5 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 - [0073: Passive card evidence and independent Codex custody](0073-tlive-approval-evidence-and-server-custody.md) — source candidate; live acceptance pending.
 
 - [0074: Owner-closed historical blockers](0074-owner-closed-history.md) — source candidate; preserves raw uncertainty and permanent send fences.
+
+- [0075: Personal Claude developer profile](0075-claude-personal-developer-profile.md) — accepted opt-in scope; implementation and acceptance pending.

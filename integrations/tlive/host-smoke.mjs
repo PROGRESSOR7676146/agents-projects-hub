@@ -69,7 +69,7 @@ assert.equal(result.tag,
 assert.equal((await send(first)).decision, 'deny');
 assert.equal((await send(binding({ password: 'example-secret' }))).decision, 'deny');
 assert.equal((await send(binding({ content: 'x'.repeat(2600) }))).decision, 'deny');
-assert.equal((await send({ ...binding(), toolName: 'Bash' })).decision, 'deny');
+assert.equal((await send({ ...binding(), toolName: 'Agent' })).decision, 'deny');
 const second = send(binding());
 await new Promise(done => setImmediate(done));
 disconnect();

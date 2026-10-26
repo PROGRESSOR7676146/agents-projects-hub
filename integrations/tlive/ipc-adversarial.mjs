@@ -119,6 +119,25 @@ try {
     await test(name+' refuses allow',async()=>{const t=launch();const c=await card(t);fire(c,mutate);let done=false;t.result.then(()=>done=true);await delay(15);assert.equal(done,false);fire(c);verifyReceipt(t,await t.result);});
   }
   await test('identical concurrent input remains two independent invocations',async()=>{const a=launch();const ca=await card(a);const b=launch();const cb=await card(b);assert.notEqual(ca.opts.reply_markup.inline_keyboard[0][0].callback_data,cb.opts.reply_markup.inline_keyboard[0][0].callback_data);fire(ca);verifyReceipt(a,await a.result);let done=false;b.result.then(()=>done=true);await delay(15);assert.equal(done,false);fire(cb);verifyReceipt(b,await b.result);});
+  await test('identical Bash invocations require fresh human Allow and Deny despite legacy grants',async()=>{
+    await ipc({kind:'daemon.set',key:'trust',enabled:false});
+    // The earlier dashboard case installed an ordinary always-tool Bash grant.
+    assert.deepEqual(await ipc({kind:'hook.permission.request',cwd:'/home/example/project',sessionId:state.sessionId,toolName:'Bash',input:{command:'pwd'}}),{kind:'hook.permission.result',decision:'allow'});
+    await ipc({kind:'daemon.set',key:'trust',enabled:true});
+    const input={command:'python3 -m unittest example_test.py && git status --short',timeout:10000};
+    const a=launch({toolName:'Bash',input});const ca=await card(a);
+    const b=launch({toolName:'Bash',input});const cb=await card(b);
+    const preview=input.command.replaceAll('&','&amp;');
+    assert.ok(ca.text.includes(preview));assert.ok(cb.text.includes(preview));
+    assert.notEqual(a.b.requestNonce,b.b.requestNonce);
+    assert.notEqual(ca.opts.reply_markup.inline_keyboard[0][0].callback_data,cb.opts.reply_markup.inline_keyboard[0][0].callback_data);
+    let done=false;b.result.then(()=>done=true);await delay(15);assert.equal(done,false);
+    fire(ca);verifyReceipt(a,await a.result);await delay(15);assert.equal(done,false);
+    fire(cb,x=>x.callbackQuery.data=cb.opts.reply_markup.inline_keyboard[0][1].callback_data);
+    const denied=await b.result;assert.equal(denied.decision,'deny');assert.equal(denied.payload,b.payload);
+    assert.equal(denied.tag,mac(resKey,'result',denied.epoch,b.payload,'deny',denied.actor));
+    assert.equal(denied.updatedInput,undefined);assert.equal(denied.updatedPermissions,undefined);
+  });
   await test('owner Deny has signed deny with no updated input or permissions',async()=>{const t=launch();const c=await card(t);fire(c,x=>x.callbackQuery.data=c.opts.reply_markup.inline_keyboard[0][1].callback_data);const r=await t.result;assert.equal(r.decision,'deny');assert.equal(r.tag,mac(resKey,'result',r.epoch,r.payload,'deny',r.actor));assert.equal(r.updatedInput,undefined);assert.equal(r.updatedPermissions,undefined);});
   await test('malformed/unauthenticated request cannot create card',async()=>{const start=bot.sent.length;assert.equal((await ipc({kind:'hub.permission.request',epoch,payload:'{}',tag:'0'.repeat(64)})).decision,'deny');assert.equal(bot.sent.length,start);});
   await test('modified input invalidates request MAC',async()=>{const b={...state,version:1,requestNonce:randomUUID(),toolName:'Read',input:{file_path:'/home/example/file'},expiresAt:Date.now()+10000};const original=JSON.stringify(b);const payload=JSON.stringify({...b,input:{command:'echo different'}});const r=await ipc({kind:'hub.permission.request',epoch,payload,tag:mac(reqKey,'request',epoch,original)});assert.equal(r.decision,'deny');});

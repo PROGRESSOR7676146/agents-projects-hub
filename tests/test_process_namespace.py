@@ -79,10 +79,27 @@ class ProcessNamespaceTests(unittest.TestCase):
         for field, values in (
             ("project_access", ("write", "", None)),
             ("network", ("host", "", None)),
+            ("git_access", ("write", "", None)),
         ):
             for value in values:
                 with self.subTest(field=field, value=value), self.assertRaises(NamespaceError):
                     dataclasses.replace(self.config, **{field: value})
+
+    def test_writable_git_is_explicit_pinned_and_requires_writable_project(self) -> None:
+        with self.assertRaisesRegex(NamespaceError, "writable Git requires"):
+            dataclasses.replace(self.config, git_access="read-write")
+        developer = dataclasses.replace(
+            self.config, project_access="read-write", git_access="read-write"
+        )
+        with (
+            patch.object(namespace, "_require_fd_bind_support"),
+            developer.wrap(["/usr/bin/true"], {}, self.project) as launch,
+        ):
+            destination = launch.argv.index(str(self.project / ".git"))
+            self.assertEqual(launch.argv[destination - 2], "--bind-fd")
+            descriptor = int(launch.argv[destination - 1])
+            self.assertIn(descriptor, launch.pass_fds)
+            self.assertEqual(os.fstat(descriptor).st_ino, (self.project / ".git").stat().st_ino)
 
     def test_private_network_profile_refuses_a_host_permission_endpoint(self) -> None:
         with self.assertRaisesRegex(NamespaceError, "private network.*permission socket"):

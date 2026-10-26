@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import hmac
 import io
@@ -32,7 +33,7 @@ from hermes_codex_router.hub_config import (
     TerminalSettings,
 )
 from hermes_codex_router.migrations import LATEST_SCHEMA_VERSION
-from hermes_codex_router.state import HubState
+from hermes_codex_router.state import HubState, StateError
 from hermes_codex_router.tlive_permissions import ProtectedTliveClient, TlivePermissionConfig
 from tests.namespace_fixture import (
     namespace_permission_refused,
@@ -209,7 +210,7 @@ class PermissionHostPeerGateTests(unittest.TestCase):
 
 
 class PermissionHostRoundtripTests(unittest.TestCase):
-    def setUp(self) -> None:
+    def setUp(self, *, start_host: bool = True) -> None:
         self.tmp = tempfile.TemporaryDirectory(prefix="example-permission-")
         self.addCleanup(self.tmp.cleanup)
         base = Path(self.tmp.name)
@@ -272,6 +273,9 @@ class PermissionHostRoundtripTests(unittest.TestCase):
         )
         self.native_id = binding.session_id
         self.journal = ClaudePermissionJournal(self.state)
+        self.hooks: list[threading.Thread] = []
+        if not start_host:
+            return
         self.launch = self.journal.open_launch(job.job_id, self.token, self.native_id, self.root)
         self.peer = FakeTlive(base / "tlive.sock")
         self.addCleanup(self.peer.close)
@@ -285,7 +289,6 @@ class PermissionHostRoundtripTests(unittest.TestCase):
         )
         self.addCleanup(self.server.close)
         self.server.thread.start()
-        self.hooks: list[threading.Thread] = []
 
     def tearDown(self) -> None:
         self.peer.release.set()
@@ -365,6 +368,35 @@ class PermissionHostRoundtripTests(unittest.TestCase):
             )
         ]
 
+    def test_editor_host_rejects_bash_before_transport(self) -> None:
+        hook, result = self._hook(self._event(tool_name="Bash", tool_input={"command": "pwd"}))
+        self._finish(hook, result, "deny")
+        self.assertEqual(self.peer.requests, [])
+        self.assertEqual(self._statuses(), [])
+
+    def test_developer_bash_repeats_need_distinct_exact_receipts(self) -> None:
+        self.launch = dataclasses.replace(self.launch, profile="developer")
+        self.server.launch = self.launch
+        nonces = []
+        for decision in ("allow", "deny"):
+            self.peer.received.clear()
+            self.peer.release.clear()
+            self.peer.decision = decision
+            hook, result = self._hook(
+                self._event(tool_name="Bash", tool_input={"command": "pwd", "timeout": 1000})
+            )
+            payload = self._await_request()
+            self.assertEqual(payload.tool_name, "Bash")
+            self.assertEqual(payload.tool_input, {"command": "pwd", "timeout": 1000})
+            self.assertEqual(payload.session_id, self.native_id)
+            nonces.append(payload.request_nonce)
+            self._finish(hook, result, decision)
+            assert self.server.inflight is not None
+            self.server.inflight.join(3)
+            self.assertFalse(self.server.inflight.is_alive())
+        self.assertNotEqual(nonces[0], nonces[1])
+        self.assertEqual(self._statuses(), ["allow", "deny"])
+
     def test_human_allow_commits_once_before_native_reply(self) -> None:
         hook, result = self._hook()
         payload = self._await_request()
@@ -374,6 +406,30 @@ class PermissionHostRoundtripTests(unittest.TestCase):
         self.assertEqual(payload.launch_epoch, self.launch.epoch)
         self.assertEqual(payload.session_id, self.native_id)
         self.assertEqual(payload.lease_id, self.token)
+
+    def test_developer_bash_stop_revokes_even_a_valid_late_allow(self) -> None:
+        self.launch = dataclasses.replace(self.launch, profile="developer")
+        self.server.launch = self.launch
+        hook, result = self._hook(self._event(tool_name="Bash", tool_input={"command": "pwd"}))
+        payload = self._await_request()
+        self.state._connection.execute(
+            "INSERT INTO provider_stop_requests VALUES (?,?,?,?,?,'pending',0,?,NULL)",
+            ("example-stop", self.job.topic_id, self.job.chat_id, 2, "claude", "9999"),
+        )
+        self.state._connection.commit()
+        self._finish(hook, result, "deny")
+        self.assertEqual(self._statuses(), ["revoked"])
+        with self.assertRaises(StateError):
+            self.journal.consume(self.launch, payload.to_json(), "allow")
+
+    def test_developer_bash_lost_transport_denies_and_revokes(self) -> None:
+        self.launch = dataclasses.replace(self.launch, profile="developer")
+        self.server.launch = self.launch
+        self.peer.drop = True
+        hook, result = self._hook(self._event(tool_name="Bash", tool_input={"command": "pwd"}))
+        self._await_request()
+        self._finish(hook, result, "deny")
+        self.assertEqual(self._statuses(), ["revoked"])
 
     def test_namespace_client_preserves_peer_gate_and_atomic_allow_deny(self) -> None:
         bwrap = shutil.which("bwrap")

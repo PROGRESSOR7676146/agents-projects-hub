@@ -5,15 +5,17 @@ from __future__ import annotations
 import json
 import shlex
 import unicodedata
+from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .claude_file_sandbox import FileToolSandboxConfig
 from .claude_mount_pins import SandboxLaunch
 from .claude_native_settings import disabled_builtin_plugins
 from .claude_stream import ClaudeStreamError
+from .claude_tool_profiles import FILE_TOOLS, profile_tools
 
-FILE_TOOL_NAMES = frozenset({"Read", "Glob", "Grep", "Write", "Edit"})
+FILE_TOOL_NAMES = FILE_TOOLS
 # Default_Ignorable_Code_Point ranges that are not already covered by the
 # category refusals below. Keep invisible letters/marks out of a rendered grant.
 _INVISIBLE_RANGES = (
@@ -39,20 +41,28 @@ PROVIDER_ENVIRONMENT = frozenset(
 )
 
 
-def file_tool_settings(python: Path) -> str:
+def file_tool_settings(python: Path, *, profile: str = "editor") -> str:
+    tools = profile_tools(profile)
     command = shlex.join([str(python), "-I", "-m", "hermes_codex_router.claude_permission_hook"])
+    permissions: dict[str, list[str]] = {
+        "allow": [],
+        "deny": ["Bash", "Agent", "Task", "WebFetch", "WebSearch"],
+    }
+    if profile == "developer":
+        permissions = {
+            "allow": sorted(FILE_TOOLS),
+            "ask": ["Bash"],
+            "deny": ["Agent", "Task", "WebFetch", "WebSearch"],
+        }
     return json.dumps(
         {
             "disableAllHooks": False,
             "enabledPlugins": disabled_builtin_plugins(),
-            "permissions": {
-                "allow": [],
-                "deny": ["Bash", "Agent", "Task", "WebFetch", "WebSearch"],
-            },
+            "permissions": permissions,
             "hooks": {
                 "PermissionRequest": [
                     {
-                        "matcher": "Read|Glob|Grep|Write|Edit",
+                        "matcher": "|".join(sorted(tools)),
                         "hooks": [{"type": "command", "command": command, "timeout": 130}],
                     }
                 ]
@@ -65,9 +75,13 @@ def file_tool_settings(python: Path) -> str:
 def file_tool_argv(argv: tuple[str, ...], sandbox: FileToolSandboxConfig) -> tuple[str, ...]:
     mutable = list(argv)
     mutable.remove("--safe-mode")
-    mutable[mutable.index("--settings") + 1] = file_tool_settings(sandbox.python_executable)
+    mutable[mutable.index("--settings") + 1] = file_tool_settings(
+        sandbox.python_executable, profile=sandbox.profile
+    )
     mutable[mutable.index("--permission-mode") + 1] = "manual"
-    mutable[mutable.index("--tools") + 1] = "Read,Glob,Grep,Write,Edit"
+    mutable[mutable.index("--tools") + 1] = "Read,Glob,Grep,Write,Edit" + (
+        ",Bash" if sandbox.profile == "developer" else ""
+    )
     mutable[1:1] = ["--setting-sources", ""]
     return tuple(mutable)
 
@@ -82,8 +96,15 @@ def wrap_file_tool_argv(
     return launch
 
 
-def validate_file_tool_input(tool: str, tool_input: dict[str, Any], root: Path) -> None:
+def validate_file_tool_input(
+    tool: str, tool_input: dict[str, Any], root: Path, *, profile: str = "editor"
+) -> None:
+    if tool not in profile_tools(profile):
+        raise ValueError("unsupported profile tool")
     validate_faithful_input(tool_input)
+    if tool == "Bash":
+        _validate_bash_input(tool_input)
+        return
     field = "file_path" if tool in {"Read", "Write", "Edit"} else "path"
     raw = tool_input.get(field, str(root) if field == "path" else None)
     if (
@@ -115,6 +136,31 @@ def validate_file_tool_input(tool: str, tool_input: dict[str, Any], root: Path) 
         pattern = tool_input.get("pattern")
         if not isinstance(pattern, str) or pattern.startswith("/") or ".." in Path(pattern).parts:
             raise ValueError("unsupported file-tool pattern")
+
+
+def _validate_bash_input(tool_input: dict[str, Any]) -> None:
+    if set(tool_input) - {
+        "command",
+        "description",
+        "timeout",
+        "run_in_background",
+        "dangerouslyDisableSandbox",
+    }:
+        raise ValueError("unsupported native command fields")
+    command = tool_input.get("command")
+    if not isinstance(command, str) or not command.strip() or len(command) > 2000:
+        raise ValueError("unsupported native command")
+    if "description" in tool_input and (
+        not isinstance(tool_input["description"], str) or len(tool_input["description"]) > 1024
+    ):
+        raise ValueError("unsupported native command description")
+    if "timeout" in tool_input and (
+        type(tool_input["timeout"]) is not int or not 1 <= tool_input["timeout"] <= 600000
+    ):
+        raise ValueError("unsupported native command timeout")
+    for flag in ("run_in_background", "dangerouslyDisableSandbox"):
+        if flag in tool_input and tool_input[flag] is not False:
+            raise ValueError("unsupported native command authority")
 
 
 def validate_faithful_input(tool_input: Any) -> None:
@@ -149,8 +195,18 @@ def validate_faithful_input(tool_input: Any) -> None:
             pending.extend(value)
 
 
-def require_file_tool_event(event: dict[str, object]) -> None:
+def file_tool_event_policy(profile: str) -> Callable[[dict[str, object]], None]:
+    profile_tools(profile)
+    return (
+        require_file_tool_event
+        if profile == "editor"
+        else partial(require_file_tool_event, profile=profile)
+    )
+
+
+def require_file_tool_event(event: dict[str, object], *, profile: str = "editor") -> None:
     """Never return tool payload or hidden reasoning to the visible callback."""
+    tools_allowed = profile_tools(profile)
     if event.get("parent_tool_use_id") is not None:
         raise ClaudeStreamError("Claude file-tool policy was violated")
     kind, subtype = event.get("type"), event.get("subtype")
@@ -164,7 +220,7 @@ def require_file_tool_event(event: dict[str, object]) -> None:
         raise ClaudeStreamError("Claude file-tool policy was violated")
     if kind == "system" and subtype == "init":
         tools = event.get("tools", [])
-        if not isinstance(tools, list) or any(tool not in FILE_TOOL_NAMES for tool in tools):
+        if not isinstance(tools, list) or any(tool not in tools_allowed for tool in tools):
             raise ClaudeStreamError("Claude file-tool policy was violated")
         for field in ("mcp_servers", "plugins", "skills"):
             if event.get(field, []) != []:
@@ -182,7 +238,7 @@ def require_file_tool_event(event: dict[str, object]) -> None:
     ):
         if event.get("hook_name") != "PermissionRequest":
             raise ClaudeStreamError("Claude file-tool hook policy was violated")
-    if kind == "tool_progress" and event.get("tool_name") not in FILE_TOOL_NAMES:
+    if kind == "tool_progress" and event.get("tool_name") not in tools_allowed:
         raise ClaudeStreamError("Claude file-tool policy was violated")
     message = event.get("message")
     content = message.get("content") if isinstance(message, dict) else None
@@ -192,7 +248,7 @@ def require_file_tool_event(event: dict[str, object]) -> None:
                 isinstance(block, dict)
                 and isinstance(block.get("type"), str)
                 and block["type"].endswith("tool_use")
-                and block.get("name") not in FILE_TOOL_NAMES
+                and block.get("name") not in tools_allowed
             ):
                 raise ClaudeStreamError("Claude file-tool policy was violated")
     if kind == "stream_event":

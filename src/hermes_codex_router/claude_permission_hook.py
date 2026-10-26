@@ -17,8 +17,9 @@ from .claude_permission_protocol import (
     event_digest,
     parse_json_strict,
 )
+from .claude_tool_profiles import profile_tools
 
-_TOOLS = frozenset({"Read", "Glob", "Grep", "Write", "Edit"})
+_TOOLS = profile_tools("developer")  # Trusted per-launch host enforces the selected profile.
 _DENY = {
     "hookSpecificOutput": {
         "hookEventName": "PermissionRequest",
