@@ -66,7 +66,7 @@ to the current state. The public plan stays in
 
 ## agy Gemini Flash helper delegation (Codex sessions)
 
-When `gemini-agent-mcp` is available, strongly prefer delegating ordinary and moderately complex subtasks to agy Gemini Flash helpers before spending Codex-side context and reasoning on them. This includes `git status`, `git diff`, `git log`, `rg`, file discovery, dependency inspection, log scanning, test-output triage, alternative hypotheses, summary passes and first-pass review.
+When `gemini-agent-mcp` is available, strongly prefer delegating ordinary and moderately complex subtasks to agy Gemini Flash helpers before spending Codex-side context and reasoning on them. This includes `git status`, `git diff`, `git log`, `rg`, file discovery, dependency inspection, log scanning, test-output triage, alternative hypotheses and summary passes. All source review, including first-pass review, follows the Opus-only rule below.
 
 Use this delegation bias only when it is expected to preserve or improve task quality. Do not delegate when direct Codex reading, synthesis, or decision-making over the source material is likely to produce a better result, such as when nuanced summarization, cross-document judgment, sensitive context handling, or final integration depends on Codex's own analysis.
 
@@ -116,9 +116,9 @@ revision and highest proven level.
 
 - A pull request that changes more than about 300 lines, or touches Controller,
   state, worker lifecycle, security, trust boundaries or release gates, needs an
-  independent review by an agent that did not write it (Claude for Codex work
-  and the reverse), the authorized Astra fallback when ordinary reviewers are
-  unavailable, or the owner. Follow
+  independent Claude Opus review by an agent that did not write it, or the
+  owner's own review. Agent reviews use only Opus 5.5/high; Argon and Astra
+  review fallback permissions are revoked. Follow
   `docs/operations/CLAUDE_SOURCE_REVIEW.md` and record the findings in the pull
   request.
 - Invoke independent Claude source review directly through CPA HTTP, without

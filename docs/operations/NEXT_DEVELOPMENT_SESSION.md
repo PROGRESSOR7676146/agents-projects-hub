@@ -9,7 +9,7 @@ are sequenced, not claimed implemented. Owner: primary development agent,
 sole source writer. Verified integration base: `eb33cac`.
 
 1. Integrate the retained Claude stop/namespace fixes with current tlive source;
-   exact-source gates and paired review precede rollout and bounded live checks.
+   exact-source gates and Opus review precede rollout and bounded live checks.
 2. Extend the owning contracts and deliver the explicit opt-in developer profile:
    project edits, native commands/tests and local Git. Reuse existing isolation,
    permission host, queue and one-writer boundaries. Acceptance must prove a
@@ -21,13 +21,41 @@ sole source writer. Verified integration base: `eb33cac`.
    on one root.
 
 The developer contract is accepted in [ADR 0075](../decisions/0075-claude-personal-developer-profile.md).
-Its source candidate and native offline edit/test/Git fixture are under
-publication validation; independent approval and installed/human acceptance
+The stop/tlive integration was published at `a982ae9`, and the developer source
+and native offline edit/test/Git fixture at `1b997af`. The maintenance fix is
+included through `de2d325`; exact reviewed candidate and publication receipts
+are referenced by the private handoff. Installed convergence and human acceptance
 remain open. This plan itself grants no tools. Historical
 priorities below are evidence; the order above supersedes their next triggers.
 Do not reopen ancient sessions or make unrelated operations debt a prerequisite.
 Current closure: open until exact-source gates and separately scoped live
 acceptance pass; offline/native fixtures alone do not complete this goal.
+
+### Fixed progress checkpoints for this goal
+
+Owner-requested reporting baseline, 2026-10-26: **40/100**. This is a new,
+bounded integration/developer execution denominator, replacing the earlier
+P1–P7 percentage for this goal; broader P1–P7 work remains separately open.
+The first two checkpoints are supported by the integrated developer source
+and the reviewed maintenance fix through `de2d325`. Installed and live results
+are deliberately uncredited. Deployment evidence stays in the private handoff.
+
+| Checkpoint | Weight | Baseline |
+| --- | --- | --- |
+| Integrated tlive/stop source, independent review and publication gates | 25 | Complete |
+| Opt-in developer source and offline edit/test/Git scenario | 15 | Complete |
+| Next-update recovery safeguards, rehearsal and reviewed procedure | 15 | In progress |
+| Safe installation and exact-revision convergence of every required component | 20 | Open |
+| Human Allow/Deny, stop, exact resume, queue and result-recovery acceptance | 20 | Open |
+| Final limitations, evidence summary and current handoff | 5 | Open |
+
+Credit a checkpoint only when its stated result is complete; preparation,
+elapsed time and repeated checks add no points. Reports show earned/100, delta,
+next incomplete checkpoint and its blocker. Reopen disproven results and subtract
+their weight. Any scope or weight change must be stated before using a new
+denominator. This is progress through this goal, not product readiness.
+The source-review policy below supersedes older reviewer clauses, including
+the persisted goal's historical paired-review wording.
 
 
 ## Current execution: trusted installation
@@ -299,14 +327,13 @@ owner defines state API, transaction ownership and invocation boundaries;
 parallel writing and recursive delegation are outside this goal. Sol checks
 supplement, but do not replace, independent review of Codex-authored
 lifecycle/security changes. The
-owner selected independent **Opus 5.5/high and agy Argon High** reviews.
-The owning [source-review runbook](CLAUDE_SOURCE_REVIEW.md) defines exact routing,
-the temporary-unavailability exception and comparison after author verification.
-Never substitute Opus 4.8 or use synthetic availability probes. Record actual
-reviewers, candidate, findings/fixes and comparison in the PR. When ordinary
-reviewers are unavailable, an independent GPT-6 Astra review is authorized under
-that runbook. If no eligible reviewer provides a valid PASS, keep the candidate
-ready for owner review; never invent approval.
+owner selected **Opus 5.5/high only** for every source review. The owning
+[source-review runbook](CLAUDE_SOURCE_REVIEW.md) defines exact routing and author
+verification. This supersedes all older paired-review and fallback next triggers
+in this chronology: do not invoke Argon or Astra for review. Never substitute
+Opus 4.8 or use synthetic availability probes. Record the actual reviewer,
+candidate and verified findings/fixes in the PR. An unavailable or incomplete
+Opus answer does not waive review; preserve the candidate and report the failure.
 Review is read-only in a separate clean candidate checkout,
 and does not grant permission to run unrelated live tests or deployment.
 
@@ -493,11 +520,16 @@ exact-revision evidence, independent review and separately authorized live
 acceptance. Other goal milestones retain their own criteria. Deferred Claude
 features must not become new editor gates without an owner decision.
 Update the matrix and next trigger as evidence changes. Owner-facing reports
-include an approximate overall-goal completion percentage with an uncertainty
-range, a stable reduced scope, and concrete completed/open milestones. Treat it
-as a planning estimate, separate from acceptance evidence and automatic scoring.
+use the [fixed current-goal checkpoints](#fixed-progress-checkpoints-for-this-goal)
+and concrete completed/open milestones, separate from acceptance evidence and
+automatic scoring.
 
 ### Owned Claude stop certainty follow-up
+
+Historical source record: incorporated in the published `a982ae9` integration;
+its exact-candidate review/publication receipts are referenced by the private
+handoff. The old source-validation next triggers below are superseded by that
+checkpoint. Installed and human acceptance remain open under the current goal.
 
 Source lane `fix/claude-stop-certainty-20261024`, base `17e4d9b`; owner: Hub
 maintainer, sole writer. A local Claude interruption currently loses the owned
@@ -519,6 +551,12 @@ resolution of their outcome. Inspect tracked, staged and untracked lane state
 after owner integration before cleanup. Live acceptance remains open.
 
 ### Claude stop/error precedence follow-up
+
+Historical source record: incorporated in the published `a982ae9` integration,
+including `74babf0`'s retained unterminated evidence/cleanup fix. Exact-candidate
+source receipts are referenced by the private handoff. The former local-validation
+state and source next trigger below are historical, not outstanding publication
+work. Installed and human acceptance remain open under the current goal.
 
 Owner: Hub maintainer, sole writer; source lane
 `fix/claude-stop-timeout-certainty-20261025`, base `17c3040e`. Paired source review
@@ -542,7 +580,7 @@ SIGKILL and that exact signal exit; a late stop cannot hide an earlier crash.
 Help-directory cleanup failure also remains uncertain independently of reap.
 
 State: local implementation under validation, not deployed or accepted. Next
-trigger: focused regressions, paired Opus/Argon review and exact publication
+trigger: focused regressions, Opus review and exact publication
 gates, then a separately authorized installed acceptance scope. Existing live
 acceptance remains open; do not replay earlier calls to test the new source.
 Inspect the lane after owner integration before cleanup.

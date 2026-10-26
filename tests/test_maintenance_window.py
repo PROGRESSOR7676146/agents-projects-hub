@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import os
+import socket
+import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 
+from hermes_codex_router import unix_listener_custody as custody
 from hermes_codex_router.maintenance_window import (
     MaintenanceWindow,
     Observation,
@@ -61,6 +67,66 @@ class MaintenanceWindowTests(unittest.TestCase):
             ["worker", "sender", "admission"],
         )
         self.assertEqual(self.states["unused"], "inactive")
+
+    def test_real_post_attach_sequence_failure_returns_consumers_and_input(self):
+        # Disposable sockets and fictional units exercise the combined sequence,
+        # including the connection state that the former pathname counter rejected.
+        for lose_listener in (False, True):
+            with self.subTest(lose_listener=lose_listener):
+                self.setUp()
+                with (
+                    tempfile.TemporaryDirectory() as temp,
+                    socket.socket(socket.AF_UNIX) as listener,
+                    socket.socket(socket.AF_UNIX) as companion,
+                ):
+                    path = Path(temp) / "native.sock"
+                    listener.bind(str(path))
+                    listener.listen(1)
+                    listener.settimeout(2)
+                    companion.settimeout(2)
+                    owner = custody.process_identity(os.getpid())
+                    inode = custody.verify_listener(path, owner)
+
+                    def require_native_custody():
+                        if custody.verify_listener(path, owner) != inode:
+                            raise ValueError("listener changed")
+
+                    window = MaintenanceWindow(
+                        (
+                            replace(self.units[0], prerequisite=require_native_custody),
+                            *self.units[1:],
+                        )
+                    )
+                    with (
+                        self.assertRaisesRegex(
+                            ValueError if lose_listener else RuntimeError,
+                            "missing" if lose_listener else "fictional post-attach check failed",
+                        ) as caught,
+                        window,
+                    ):
+                        for name in ("admission", "worker", "sender"):
+                            window.stop(name)
+                        companion.connect(str(path))
+                        with listener.accept()[0]:
+                            self.assertEqual(custody.verify_listener(path, owner), inode)
+                            if lose_listener:
+                                listener.close()
+                                custody.verify_listener(path, owner)
+                                self.fail("closed listener must refuse")
+                            raise RuntimeError("fictional post-attach check failed")
+                    if lose_listener:
+                        self.assertFalse(window.report.complete)
+                        self.assertNotIn(("start", "worker"), self.events)
+                        self.assertEqual(self.states["sender"], "active")
+                        self.assertEqual(self.states["admission"], "inactive")
+                        self.assertIn("restoration incomplete", caught.exception.__notes__[0])
+                    else:
+                        self.assertTrue(window.report.complete)
+                        self.assertEqual(
+                            [name for action, name in self.events if action == "start"],
+                            ["worker", "sender", "admission"],
+                        )
+                    self.assertEqual(self.states["unused"], "inactive")
 
     def test_one_unknown_start_does_not_skip_sender_but_blocks_admission_without_retry(self):
         window = MaintenanceWindow(self.units)

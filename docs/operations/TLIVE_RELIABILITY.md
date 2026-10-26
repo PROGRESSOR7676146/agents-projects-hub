@@ -222,6 +222,116 @@ acceptance. Python finalization cannot survive SIGKILL, interpreter loss or a
 host crash: the private pre-effect receipt remains authoritative for inspection
 and explicit recovery; never auto-replay the procedure after such an exit.
 
+### Next-update preparation and closure
+
+The next private plan must close the following finite checklist **before arming**.
+This checklist grants no arming, deployment or live-test authority.
+The generic helpers above do not discover deployment units, perform peer
+authentication, publish a handoff or establish runtime convergence. Source tests
+alone cannot establish that the private plan wires these gates correctly.
+
+1. **Freeze the complete inventory.** Bind each reviewed unit and configured
+   slot to its expected role, initial supervisor state, effective immutable
+   launch/configuration and readiness evidence. Include Controller, separate
+   ingress services, provisioner, every configured worker slot, sender and
+   monitoring. Record disabled/inactive units too; they must stay inactive.
+   Keep the independent native server outside automatic restoration. Reject a
+   missing, extra or unknown required unit before any stop; a short hand-written
+   list of only tlive and one worker is insufficient.
+   Use fresh supervisor canonical IDs and resolved aliases, not display names;
+   exclude native custody by canonical unit/process/cgroup identity too. Compare
+   the reviewed inventory with the supervisor's full relevant readback, including
+   unexpected active units. Equality of two caller-supplied name lists alone does
+   not establish inventory completeness or native exclusion.
+2. **Rehearse the actual sequence offline.** Use disposable AF_UNIX sockets and
+   fictional service callbacks, never production state or installed units.
+   Verify custody before companion connect, after accept and with several
+   clients; inject the post-attach diagnostic failure before ordinary service
+   return. Also exercise missing/replaced listeners, foreign PID, failed
+   consumer readiness, unknown start and interrupted receipt publication.
+   Check both service order and the terminal report. The new executor's reviewed
+   wiring must pass this rehearsal before closing production admission; inactive
+   staging and isolated unit tests are not substitutes.
+3. **Verify endpoint and artifact identity.** Pin the returned listener inode
+   across the before/after checks, not just its pathname. Binary stream LISTEN
+   evidence distinguishes a listener from accepted endpoints; an owned local
+   fixture can also assert `SO_ACCEPTCONN`. The authorized private endpoint check
+   separately compares `SO_PEERCRED` PID/UID to the pinned server incarnation,
+   then rechecks passive custody. Connecting changes transport state and requires
+   explicit scope; it is not a purely passive host observation. This direct-server
+   check does not support socket activation or passed listener FDs: peer credentials
+   can identify the socket creator instead of its current holder. Refuse an
+   unsupported custody model rather than relaxing the identity check.
+   Same UID alone is insufficient. Keep transport
+   deadlines finite; no provider request is needed. Verify executable content
+   hashes and effective units against the reviewed plan; an executable path alone
+   is not a content pin. A replaced listener or peer mismatch blocks advancement,
+   without restart, socket removal or retry.
+4. **Check access passively.** Record the configured productive inference route
+   separately from connector/OAuth status and cached limits, including age and
+   unknown values. A connector's HTTP 401 does not prove inference failure or
+   authorize logout, token/account replacement or another provider. Neither this
+   gate nor monitoring invokes a model. Recheck idle/control/writer guards after
+   admission closes and before stopping consumers, then take the consistent
+   backup and verify candidate/rollback compatibility under the existing gates.
+
+The plan must name a safe failure action for every phase, rather than relying
+on a happy-path list or an unconditional restart in `finally`:
+
+| Observed phase | Required disposition |
+| --- | --- |
+| Preparation failed before effects | Preserve the failed check; do not stop services or arm a consumed intent |
+| Admission closed, consumers not yet stopped | Recheck current prerequisites and return only input that is safe; failed prerequisites remain an explicit availability blocker |
+| Stops/configuration/attach attempted | Persist each intent before its effect; observe exact current process/configuration and retain effects already made |
+| Post-attach diagnostic failed | Use bounded compensating restoration of compatible initially active consumers, then admission; preserve the primary diagnostic failure even if restoration succeeds |
+| Start or restoration outcome unknown | Read back once within the plan's budget; keep unsafe admission closed, continue independent safe returns, and report incomplete without resubmission |
+| Core returned | Verify the complete expected unit set and readiness, then separately verify monitor one-shot and restore a previously active timer |
+| Executor/host lost or report publication interrupted | Inspect durable receipts and exact state; any recovery is a new narrow operation with a new receipt, never replay of the consumed plan |
+
+The monitor one-shot and timer are separate from the two-level consumer/admission
+ordering of `MaintenanceWindow`. The private procedure owns their bounded final
+phase after core return, including on a failed cutover when core restoration is
+safe. Check the one-shot separately even when its timer was initially inactive;
+this does not enable that timer. Verify the one-shot's actual result and status, timer state and next
+scheduled run, and preserve their initial enablement policy. Do not make timer
+activation a consumer prerequisite or silently leave it stopped. A monitoring
+failure is recorded explicitly even if productive services recovered. Neither a
+successful exit of an old process nor tlive liveness proves that these units
+are running now. Every unavailable or mismatched readback remains incomplete.
+
+Use one authoritative, versioned private phase receipt. Bind the operation ID,
+plan digest, observed phase, attempted effects, per-unit before/after evidence,
+safe next action and `restoration_complete`. Never overwrite the original
+consumed operation with recovery evidence. The handoff must reference the exact
+receipt generation/digest and observed phase, not retain an earlier armed label.
+Two independent file replacements are not an atomic multi-file commit: either
+publish immutable receipt and handoff snapshots behind one atomic current pointer,
+or make the receipt authoritative and require digest/phase agreement before any
+reader can treat the handoff as actionable. Persist with private modes and durable
+file/directory synchronization. A missing, stale or mismatched projection blocks
+rearming and requires inspection; it grants no replay. Interrupted publication
+must be one of the offline fault cases. Report success or failure to the owner
+from the saved outcome; retain notification delivery as unknown without blind
+resend when no positive delivery receipt exists.
+
+Close the maintenance report with three separate results:
+
+| Result | Required evidence |
+| --- | --- |
+| Installation/configuration | Exact artifact/configuration/unit readback and retained rollback compatibility |
+| Runtime convergence | Fresh exact clean revision from every required long-running component, including all worker slots; a private component-to-revision table for mixed or unknown state |
+| User-facing acceptance | Separately authorized real execution, exact human Allow/Deny and actual Telegram result-delivery receipts |
+
+One result cannot stand in for another. A restored mixed stack remains mixed;
+installation or a green doctor cannot close convergence or human acceptance.
+Carry auth, manual-after-reboot, convergence and acceptance limitations into the
+terminal receipt and handoff. Keep current state/history after external effects;
+do not restore an old database to make runtime rollback appear successful.
+Refresh and verify the private recovery directory/capsule against the prepared
+candidate and compatible rollback before release/deploy authorization; reference
+its digest in the plan. This is a standard preparation step, not permission to
+rewrite an existing signed capsule or run external host-backup infrastructure.
+
 ## Stale socket after unclean shutdown
 
 This is explicit local incident work by the installation owner (or an explicitly

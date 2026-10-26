@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 import socket
 import stat
+import struct
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import ExitStack
@@ -21,17 +24,27 @@ class UnixListenerCustodyTests(unittest.TestCase):
             with socket.socket(socket.AF_UNIX) as listener:
                 listener.bind(str(path))
                 listener.listen(4)
+                listener.settimeout(2)
                 clients, accepted = [], []
                 try:
+                    owner = custody.process_identity(os.getpid())
+                    inode = custody.verify_listener(path, owner)
+                    self.assertEqual(
+                        listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN), 1
+                    )
                     for _ in range(3):
                         client = socket.socket(socket.AF_UNIX)
+                        client.settimeout(2)
                         clients.append(client)
                         client.connect(str(path))
                         accepted.append(listener.accept()[0])
+                        peer_pid, peer_uid, _ = struct.unpack(
+                            "=iII", client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+                        )
+                        self.assertEqual((peer_pid, peer_uid), (owner.pid, owner.uid))
+                        self.assertEqual(custody.verify_listener(path, owner), inode)
                     rows = Path("/proc/net/unix").read_text()
                     self.assertGreaterEqual(sum(str(path) in row for row in rows.splitlines()), 4)
-                    owner = custody.process_identity(os.getpid())
-                    inode = custody.verify_listener(path, owner)
                     self.assertEqual(
                         os.readlink(f"/proc/self/fd/{listener.fileno()}"), f"socket:[{inode}]"
                     )
@@ -42,6 +55,47 @@ class UnixListenerCustodyTests(unittest.TestCase):
                 finally:
                     for connection in clients + accepted:
                         connection.close()
+
+    def test_real_listener_refuses_foreign_pid_even_with_matching_uid(self):
+        with (
+            tempfile.TemporaryDirectory() as temp,
+            subprocess.Popen(
+                [sys.executable, "-c", "import sys; sys.stdin.buffer.read(1)"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ) as child,
+            socket.socket(socket.AF_UNIX) as listener,
+        ):
+            path = Path(temp) / "native.sock"
+            listener.bind(str(path))
+            listener.listen(1)
+            try:
+                foreign = custody.process_identity(child.pid)
+                self.assertEqual(foreign.uid, os.getuid())
+                with self.assertRaisesRegex(ValueError, "descriptor"):
+                    custody.verify_listener(path, foreign)
+                custody.verify_listener(path, custody.process_identity(os.getpid()))
+            finally:
+                child.communicate(b"x", timeout=10)
+
+    def test_real_closed_listener_and_rebound_path_refuse(self):
+        with tempfile.TemporaryDirectory() as temp, socket.socket(socket.AF_UNIX) as original:
+            path = Path(temp) / "native.sock"
+            owner = custody.process_identity(os.getpid())
+            original.bind(str(path))
+            original.listen(1)
+            custody.verify_listener(path, owner)
+            path.unlink()
+            with socket.socket(socket.AF_UNIX) as replacement:
+                replacement.bind(str(path))
+                replacement.listen(1)
+                with self.assertRaisesRegex(ValueError, "ambiguous"):
+                    custody.verify_listener(path, owner)
+            original.close()
+            self.assertTrue(path.exists())  # A leftover pathname proves no listener.
+            with self.assertRaisesRegex(ValueError, "missing"):
+                custody.verify_listener(path, owner)
 
     def fixture(self, stack):
         temp = stack.enter_context(tempfile.TemporaryDirectory())
