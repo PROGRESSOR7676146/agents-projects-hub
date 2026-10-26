@@ -97,8 +97,12 @@ confidentiality boundary. Runtime distributions containing hardlinks require
 narrower compatible sources; immutability alone does not waive this check. Runtime and hook
 roots must also be free of submounts; choose narrower sources when a system
 runtime tree contains them. Nested btrfs subvolumes are refused by the device
-consistency check. Worktree roots
-whose `.git` is a file are outside this initial slice. Local clones with
+consistency check. Standard linked worktrees use the confined selected Git mounts
+of [ADR 0076](../decisions/0076-confined-linked-worktree-git.md); unrelated worktree
+metadata and the primary checkout are absent. Shared config is read-only and
+repository administration requiring common-directory writes remains unsupported.
+Operational `.hub/work` is hidden; keep backups and review authority there or
+outside the project, never elsewhere in the provider-visible checkout. Local clones with
 hardlinked Git objects are refused too. Missing isolation or
 protected capability prevents productive invocation; it never selects a plain CLI.
 
@@ -187,6 +191,10 @@ scripted metadata coverage; that is not a real-kernel invocation claim.
 `HUB_REQUIRE_NAMESPACE_TESTS=1` makes missing namespace support fail instead of
 skip, as in the required CI namespace profile. These are prelaunch source
 checks, not productive native/Telegram acceptance or whole-host custody.
+
+Select `tests.test_namespace_worktrees` for linked roots. Its real namespace
+witness performs an edit/add/commit using temporary Git worktrees without a
+provider or Telegram call, and checks primary/sibling and operational exclusions.
 
 The roundtrip tests require a local environment that permits Unix-socket bind.
 They use temporary Git roots, SQLite and signed fictional Telegram receipts.
