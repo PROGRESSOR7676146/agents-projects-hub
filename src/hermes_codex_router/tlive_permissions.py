@@ -247,7 +247,9 @@ class ProtectedTliveClient:
         if (
             set(result) != {"kind", "decision", "epoch", "payload", "actor", "tag"}
             or result["kind"] != "hub.permission.result"
-            or result["decision"] not in ("allow", "deny")
+            or result["decision"] not in ("allow", "deny", "allow_bash_until_restart")
+            or result["decision"] == "allow_bash_until_restart"
+            and binding.tool_name != "Bash"
             or result["epoch"] != epoch
             or result["payload"] != payload
         ):
@@ -263,10 +265,12 @@ class ProtectedTliveClient:
         ):
             raise TlivePermissionError("invalid protected result")
         actor = result["actor"]
-        if result["decision"] == "allow" and actor is None:
+        if result["decision"] != "deny" and actor is None:
             raise TlivePermissionError("missing human receipt")
         if actor is not None:
-            suffix = "a" if result["decision"] == "allow" else "d"
+            suffix = {"allow": "a", "deny": "d", "allow_bash_until_restart": "b"}[
+                result["decision"]
+            ]
             fields = {
                 "callbackId",
                 "userId",

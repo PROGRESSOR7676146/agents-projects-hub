@@ -5,6 +5,9 @@ and releases use semantic versioning while the public API is still evolving.
 
 ## [Unreleased]
 
+- Add explicit Claude Bash consent until worker/tlive restart and immediately
+  settle protected permission cards after a valid decision.
+
 - Explain unconfirmed saved-result delivery in its source topic through an
   independent Hub notice, with explicit owner recovery choices and no resend.
 - Update the locked aiohttp runtime to 3.14.4 and its yarl dependency to 1.25.1.

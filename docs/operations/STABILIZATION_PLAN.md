@@ -32,12 +32,20 @@ triggers below. Historical evidence is not current deployment acceptance.
 
 ## Revised delivery scope
 
+Current checkpoint, 2026-10-27: the bounded minimal developer goal is closed;
+its evidence, limitations and subsequent priorities are owned by the
+[continuation plan](NEXT_DEVELOPMENT_SESSION.md#current-goal-and-order).
+Source closure `2f6fa35`; linked-worktree follow-up `bfa08b6`. Broader
+stabilization remains open. The next selected increment is temporary Bash
+consent plus prompt card settlement; live acceptance of that change is pending.
+The older integration/editor-only next triggers below are historical.
+
 Current owner order (2026-10-26): integrate stop/tlive tails, minimal Claude
 developer in project groups, steer and extensions, local CLI and images,
 personal project chat, then five independent sessions. The
 [current goal](NEXT_DEVELOPMENT_SESSION.md#current-goal-and-order) owns execution
 criteria and supersedes the historical editor-only next triggers below.
-Developer contracts/implementation and all newly added live gates remain open;
+Later developer increments retain their own source and live gates;
 the plan does not enable tools. Existing safety and unrelated backlog remain.
 
 Owner decision under [ADR 0067](../decisions/0067-claude-editor-first.md): deliver
@@ -80,19 +88,12 @@ review. Scoring, judges and parallel writers stay excluded.
 
 ## Current source integration checkpoint
 
-Verified main base: `eb33cac`; source owner: Hub maintainer, sole writer.
-Retained Claude stop/namespace fixes are being combined with newer tlive source
-in `fix/claude-tail-integration-goal`. Publication/review and live installation
-are distinct gates. Preserve typed pre-submission retry, durable approvals and
-owner-closed history. Never downgrade stop certainty or replay uncertain work.
-Next: combined-source gates, independent review, compatible rollback and a fresh
-idle/control check before authorized rollout and live acceptance. Closure open.
-Inspect tracked, staged and untracked state before any post-merge cleanup.
-
-Custody, broader progress, Claude editor/route acceptance, outcome journal,
-three-project/restart acceptance, Hermes operations, off-machine restore and
-release 0.8 remain open. Claude native transfer/connect are deferred. Restart
-does not close the notification incident or payload recovery.
+The former stop/tlive integration and minimal developer rollout are closed
+under the [current checkpoint](NEXT_DEVELOPMENT_SESSION.md#current-goal-and-order).
+Do not replay historical installation executors or reopen ancient sessions.
+The temporary-Bash increment has separate publication and live gates.
+Broader control-loss, outcome-journal, three-project, Hermes, Hub application
+recovery and release milestones remain open; full-host infrastructure is external.
 
 ## Incident candidates
 

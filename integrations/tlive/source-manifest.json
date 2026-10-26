@@ -151,17 +151,17 @@
     "src/types/qrcode-terminal.d.ts": "1970491e4ebeed1b9949eacaf292d79ed81c5e7a0b62af1d7980971e6de12559"
   },
   "package": "tlive",
-  "patch_sha256": "099b60cb722e614f3541ae5eee99afec684ecfc8f5a6d798f9b83b52ee0d52b5",
+  "patch_sha256": "d902d8f63f0c657eaf1d27f1826b46376daa45918a2dde801de8d08849ae98bf",
   "patched_files": {
-    "src/adapters/im/telegram.ts": "ef08ae311aec593bc5bcb157a736c60b30f2c0ea3ce408f7dcd0c322b363fd60",
+    "src/adapters/im/telegram.ts": "a15f707aab9048d9e65df01750b8c339ffbc1bc57693df7b8e0a0d2334ce94bd",
     "src/kernel/codex/__tests__/companion.test.ts": "5a71602e27a41da062f4d642e92c2f65dfa3af29b236c2ab3e908fa9dc921173",
     "src/kernel/codex/companion.ts": "09922e091bb4b7e324b29e13769bbeeea281458d266a30087a8aa48e280a0472",
     "src/kernel/codex/spawn.ts": "bf7184683bd61debcdc32d7d7f6141a5f275125dc1af832627ebe6c1c95bde28",
     "src/kernel/contracts/approval-snapshot.ts": "4876747a92847723844fb264c58b998b410d6f706f77812304590089cd31b9da",
-    "src/kernel/contracts/protected-permission.ts": "6201387656ffe15375fb2f449b6c0d4e6a30f42c5e15b7e547539d6ed7e4fab4",
-    "src/kernel/daemon/bootstrap.ts": "0ea530c16904eeefffbb47d471167a2f5b2f1d33b01fedfeca166bd7361d1ab9",
+    "src/kernel/contracts/protected-permission.ts": "87c8c09c39f755dc1c942a930172ee454f348d70b73be91c837fa5da99e1a3b3",
+    "src/kernel/daemon/bootstrap.ts": "f9db33b037a1c2e44070b555bb12d924590b2392a4b794813452a4ba5208a216",
     "src/kernel/daemon/permission-router.ts": "9d55b104eeb43cc97713f2e4194d10beb7b279b152860a4cb8186a20af5b4a68",
-    "src/kernel/daemon/protected-permissions.ts": "e9a6e6c9cfa8c9ead9ea968329ae84fa0954bf6f09280708dc89250caf235253",
+    "src/kernel/daemon/protected-permissions.ts": "c9af34a5b6bd33925984f2f17d8a7583d5c1f22b7c55cabf47b7ec9d82a14f04",
     "src/kernel/ipc/protocol.ts": "31b02a3091814ac5062c4ed5313186b608f2826f8968ea453fab4f5973d5b47e"
   },
   "version": "5.3.1"

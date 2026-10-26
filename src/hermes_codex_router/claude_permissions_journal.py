@@ -141,6 +141,7 @@ class ClaudePermissionJournal:
         tool_input: Any,
         *,
         lifetime_seconds: int = 120,
+        notify_wait: bool = True,
     ) -> str:
         if (
             tool not in profile_tools(launch.profile)
@@ -178,6 +179,8 @@ class ClaudePermissionJournal:
                 )
             except sqlite3.IntegrityError:
                 raise StateError("Claude permission nonce was already used") from None
+            if not notify_wait:
+                return payload  # The invocation still has its own single-use journal row.
             job = self.state.get_provider_job(launch.job_id)
             topic = self.state.get_topic(job.topic_id)
             self.state.task_notices.prepare_notice_in_transaction(
@@ -191,7 +194,7 @@ class ClaudePermissionJournal:
                     if tool == "Bash"
                     else "Claude ждёт разрешения на файловую операцию. "
                 )
-                + "Откройте запрос в Agent Session Remote и выберите Allow или Deny. /stop остановит задачу. Если решение не поступит, операция будет отклонена.",
+                + "Откройте запрос в Agent Session Remote: Allow once, Deny или для Bash — разрешение до перезапуска. /stop остановит задачу. Без решения операция будет отклонена.",
                 now=datetime.now(timezone.utc),
             )
         return payload

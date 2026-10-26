@@ -4,6 +4,10 @@ Status: accepted scope; offline implementation candidate; publication and live a
 Date: 2026-10-26. Owner: repository owner. Implementation owner: Hub maintainer.
 Contract: [REQ-AUTH-009 and REQ-SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
 
+The per-invocation-only Bash rule below is amended by
+[ADR 0077](0077-temporary-claude-bash-consent.md). Earlier acceptance evidence
+remains scoped to the original profile; temporary grants need their own checks.
+
 ## Decision
 
 Add an optional `developer` profile to the existing protected Claude file-tool

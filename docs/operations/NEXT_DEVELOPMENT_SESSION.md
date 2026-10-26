@@ -2,60 +2,51 @@
 
 ## Current goal and order
 
-Owner decision, 2026-10-26: close the remaining integration/rollout tails, then
-deliver the shortened Claude path in project groups. The active development
-goal covers integration and the minimal developer increment; later milestones
-are sequenced, not claimed implemented. Owner: primary development agent,
-sole source writer. Verified integration base: `eb33cac`.
+The bounded minimal Claude developer goal is **complete (100/100)**. Verified
+source closure: `2f6fa35309dd76c840d3135c9eb7a84e6baed97b` (reviewed documentation
+publication), on the integrated developer/recovery source. The source follow-up
+`bfa08b66014e66683be115e8037c55f930f54e86` adds confined linked-worktree Git support.
+This is not completion of full Claude/Codex parity or every stabilization item.
+Owner and sole source writer: primary development agent / Hub maintainer.
 
-1. Integrate the retained Claude stop/namespace fixes with current tlive source;
-   exact-source gates and Opus review precede rollout and bounded live checks.
-2. Extend the owning contracts and deliver the explicit opt-in developer profile:
-   project edits, native commands/tests and local Git. Reuse existing isolation,
-   permission host, queue and one-writer boundaries. Acceptance must prove a
-   useful edit/test/Git cycle, exact human Bash Allow/Deny, stop and no replay.
-3. Same-turn steer and extensions; then local CLI transfer and images.
-4. Claude personal project chat after those capabilities.
-5. Five simultaneous independent execution scopes after the Claude increments;
-   existing worker/capacity configuration is the foundation, never five writers
-   on one root.
+Bounded ordinary-root acceptance established a useful edit/test/local-Git cycle,
+human Bash Allow and Deny, exact native resume/history, pending-permission stop,
+same-root queue release and delivered results. Saved-result recovery was an
+isolated installed-runtime drill, not an injected production crash. Exact
+runtime identities and live receipts remain private. The later linked-worktree
+patch passed source and isolated launch checks; a productive task on that layout
+remains separate acceptance. These limits survive the historical goal closure.
 
-The developer contract is accepted in [ADR 0075](../decisions/0075-claude-personal-developer-profile.md).
-The stop/tlive integration was published at `a982ae9`, and the developer source
-and native offline edit/test/Git fixture at `1b997af`. The maintenance fix is
-included through `de2d325`; exact reviewed candidate and publication receipts
-are referenced by the private handoff. Installed convergence and human acceptance
-remain open. This plan itself grants no tools. Historical
-priorities below are evidence; the order above supersedes their next triggers.
-Do not reopen ancient sessions or make unrelated operations debt a prerequisite.
-Current closure: open until exact-source gates and separately scoped live
-acceptance pass; offline/native fixtures alone do not complete this goal.
+Next owner-requested increment: explicit temporary Bash consent and immediate
+permission-card settlement, under [ADR 0077](../decisions/0077-temporary-claude-bash-consent.md).
+Source lane `feat/claude-bash-restart-grant`, base `bfa08b6`; primary agent owns
+implementation and integration. Publication needs focused/full gates and native
+Opus 5.5/high. Deployment and real callback acceptance remain separately scoped.
+After merge inspect tracked, staged and untracked lane state before any cleanup.
+
+Then follow the accepted order:
+
+1. Same-turn steer and extensions.
+2. Local CLI transfer and images.
+3. Claude personal project chat.
+4. Five simultaneous independent execution scopes, using the existing capacity
+   and worker foundation; never five writers on one root.
 
 ### Fixed progress checkpoints for this goal
 
-Owner-requested reporting baseline, 2026-10-26: **40/100**. This is a new,
-bounded integration/developer execution denominator, replacing the earlier
-P1–P7 percentage for this goal; broader P1–P7 work remains separately open.
-The first two checkpoints are supported by the integrated developer source
-and the reviewed maintenance fix through `de2d325`. Installed and live results
-are deliberately uncredited. Deployment evidence stays in the private handoff.
+Historical minimal-goal weights are closed: source/review 25, developer/offline
+15, recovery safeguards 15, installation/convergence 20, bounded acceptance 20,
+closure 5: **100/100**. This denominator measures that finite goal only.
+The current temporary-Bash increment has its own fixed weights: audit/plans 15,
+implementation/focused regressions 55, Opus/publication/hosted gates 30.
+Report earned points, next checkpoint and actual blocker. Preparation, elapsed
+time and repeated checks add no credit. Source publication is not live acceptance.
 
-| Checkpoint | Weight | Baseline |
-| --- | --- | --- |
-| Integrated tlive/stop source, independent review and publication gates | 25 | Complete |
-| Opt-in developer source and offline edit/test/Git scenario | 15 | Complete |
-| Next-update recovery safeguards, rehearsal and reviewed procedure | 15 | In progress |
-| Safe installation and exact-revision convergence of every required component | 20 | Open |
-| Human Allow/Deny, stop, exact resume, queue and result-recovery acceptance | 20 | Open |
-| Final limitations, evidence summary and current handoff | 5 | Open |
+### Closure
 
-Credit a checkpoint only when its stated result is complete; preparation,
-elapsed time and repeated checks add no points. Reports show earned/100, delta,
-next incomplete checkpoint and its blocker. Reopen disproven results and subtract
-their weight. Any scope or weight change must be stated before using a new
-denominator. This is progress through this goal, not product readiness.
-The source-review policy below supersedes older reviewer clauses, including
-the persisted goal's historical paired-review wording.
+The minimal developer goal is closed with the limitations above. Broader
+stabilization and later parity increments remain open. Historical next triggers
+below do not reopen the completed minimal goal or authorize live changes.
 
 
 ## Current execution: trusted installation

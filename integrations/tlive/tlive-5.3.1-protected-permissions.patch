@@ -57,7 +57,7 @@ diff --git a/src/adapters/im/telegram.ts b/src/adapters/im/telegram.ts
      if (!this.bot) { this.connected = 'idle'; return; }
      this.abortCtrl?.abort();
      await this.bot.stop();
-@@ -229,5 +251,29 @@
+@@ -229,5 +251,39 @@
      this.inboundHandler = handler;
    }
  
@@ -83,6 +83,16 @@ diff --git a/src/adapters/im/telegram.ts b/src/adapters/im/telegram.ts
 +      parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
 +    });
 +    return { messageId: String(sent.message_id) };
++  }
++
++  async settleProtectedCard(out: Extract<OutgoingMessage, { kind: 'card' }>, chatId: string, messageId: string): Promise<void> {
++    if (!this.bot || this.opts.allowedChatIds?.length !== 1 || this.opts.allowedChatIds[0] !== chatId
++      || !/^[1-9][0-9]*$/.test(messageId)) throw new Error('protected Telegram unavailable');
++    // One cosmetic edit; no retry, plain-text fallback or new message.
++    await this.bot.api.editMessageText(chatId, Number(messageId),
++      `<b>${escapeHtml(out.title ?? '')}</b>\n${out.body}`, {
++        parse_mode: 'HTML', reply_markup: { inline_keyboard: [] },
++      });
 +  }
 +
    isConnected(): 'connected' | 'idle' | 'failed' { return this.connected; }
@@ -440,7 +450,7 @@ diff --git a/src/kernel/contracts/protected-permission.ts b/src/kernel/contracts
 new file mode 100644
 --- /dev/null
 +++ b/src/kernel/contracts/protected-permission.ts
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,43 @@
 +// Additive, private Hub permission channel. The public IMAdapter is unchanged.
 +import type { IMAdapter, OutgoingMessage } from './im-adapter.js';
 +
@@ -458,6 +468,7 @@ new file mode 100644
 +  onProtectedCallback(handler: ((event: ProtectedCallback) => void) | null): void;
 +  onProtectedDisconnect(handler: (() => void) | null): void;
 +  sendProtectedCard(out: Extract<OutgoingMessage, { kind: 'card' }>, chatId: string): Promise<{ messageId: string }>;
++  settleProtectedCard(out: Extract<OutgoingMessage, { kind: 'card' }>, chatId: string, messageId: string): Promise<void>;
 +}
 +
 +export interface ProtectedBinding {
@@ -481,7 +492,7 @@ new file mode 100644
 +
 +export type ProtectedResponse =
 +  | { kind: 'hub.permission.capability'; version: 1; epoch: string; tag: string }
-+  | { kind: 'hub.permission.result'; decision: 'allow' | 'deny'; epoch?: string;
++  | { kind: 'hub.permission.result'; decision: 'allow' | 'deny' | 'allow_bash_until_restart'; epoch?: string;
 +      payload?: string; actor?: ProtectedCallback | null; tag?: string };
 diff --git a/src/kernel/daemon/bootstrap.ts b/src/kernel/daemon/bootstrap.ts
 --- a/src/kernel/daemon/bootstrap.ts
@@ -495,7 +506,7 @@ diff --git a/src/kernel/daemon/bootstrap.ts b/src/kernel/daemon/bootstrap.ts
  import { decide as policyDecide, type PolicyState } from '../permission/policy-engine.js';
  import { renderApprovalCard, summarizeToolCall } from '../permission/approval-renderer.js';
  import { parseAskBatch, renderAskBody, askButtons, extractAskAnswer, type AskBatch } from '../permission/ask-renderer.js';
-@@ -244,6 +246,16 @@
+@@ -244,6 +246,17 @@
  export async function bootstrapDaemon(opts: BootstrapOpts): Promise<DaemonHandle> {
    mkdirSync(opts.home, { recursive: true });
    const cfg = loadConfig(opts.home);
@@ -504,7 +515,8 @@ diff --git a/src/kernel/daemon/bootstrap.ts b/src/kernel/daemon/bootstrap.ts
 +  if (protectedCfg && (!protectedAdapter
 +    || typeof protectedAdapter.onProtectedCallback !== 'function'
 +    || typeof protectedAdapter.onProtectedDisconnect !== 'function'
-+    || typeof protectedAdapter.sendProtectedCard !== 'function')) {
++    || typeof protectedAdapter.sendProtectedCard !== 'function'
++    || typeof protectedAdapter.settleProtectedCard !== 'function')) {
 +    throw new Error('protected Telegram capability missing');
 +  }
 +  const protectedPermissions = protectedCfg
@@ -512,7 +524,7 @@ diff --git a/src/kernel/daemon/bootstrap.ts b/src/kernel/daemon/bootstrap.ts
    // Read once, here, for the toast alone — see detectLang's doc for why this
    // is a startup snapshot rather than a live read.
    const lang = detectLang(process.env);
-@@ -485,7 +497,7 @@
+@@ -485,7 +498,7 @@
    const sendToChat = async (
      target: PermChat,
      msg: { title?: string; body?: string; text?: string; requestId?: string; toolName?: string; cwd?: string; ask?: AskContext; agentId?: string; buttons?: Array<{ id: string; label: string }>; onSent?: (s: { channel: string; messageId: string }) => void },
@@ -521,7 +533,7 @@ diff --git a/src/kernel/daemon/bootstrap.ts b/src/kernel/daemon/bootstrap.ts
      const adapter = (opts.imAdapters ?? []).find((a) => a.channel === target.channel);
      if (!adapter) return;
      const tag = sessionTag(msg.cwd);
-@@ -554,9 +566,10 @@
+@@ -554,9 +567,10 @@
        }
      }
      if (msg.cwd) rememberMsg(target.channel, sent.messageId, msg.cwd);
@@ -534,7 +546,7 @@ diff --git a/src/kernel/daemon/bootstrap.ts b/src/kernel/daemon/bootstrap.ts
    };
  
    /** Sub-agent pass-through notices, so each can retire itself when that
-@@ -1306,6 +1319,14 @@
+@@ -1306,6 +1320,14 @@
        };
        logJson('ipc.request', { kind: req.kind, callerPid: ctx.callerPid ?? null, ...idOf(req) });
        switch (req.kind) {
@@ -549,7 +561,7 @@ diff --git a/src/kernel/daemon/bootstrap.ts b/src/kernel/daemon/bootstrap.ts
          case 'daemon.status':
            reply({ kind: 'daemon.status', uptimeMs: Date.now() - startedAt, pid: process.pid, codex: codexState });
            return;
-@@ -1757,6 +1778,7 @@
+@@ -1757,6 +1779,7 @@
        // an in-flight request and it rejects (IpcConnectionClosedError). Flush a
        // tick so the replies write out before we start closing.
        permissionRouter.settleAllPending();
@@ -700,7 +712,7 @@ diff --git a/src/kernel/daemon/protected-permissions.ts b/src/kernel/daemon/prot
 new file mode 100644
 --- /dev/null
 +++ b/src/kernel/daemon/protected-permissions.ts
-@@ -0,0 +1,225 @@
+@@ -0,0 +1,253 @@
 +// Protected decisions never enter the ordinary permission router or IM inbound path.
 +import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 +import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs';
@@ -774,6 +786,9 @@ new file mode 100644
 +  payload: string;
 +  binding: ProtectedBinding;
 +  messageId?: string;
++  title: string;
++  body: string;
++  settledLabel?: string;
 +  resolve: (result: ProtectedResponse) => void;
 +  timer: ReturnType<typeof setTimeout>;
 +}
@@ -867,6 +882,11 @@ new file mode 100644
 +      `Job: ${binding.jobId}`,
 +      `Session: ${binding.sessionId} · generation ${binding.generation}`,
 +      `Project root SHA-256: ${binding.rootDigest}`,
++      ...(binding.toolName === 'Bash' ? [
++        'Bash until restart allows ALL Bash commands in this Claude session/project,',
++        'including later turns on this worker, until Claude worker or tlive restarts.',
++        'It does not change the filesystem sandbox or grant other tools.',
++      ] : []),
 +      'Complete tool input:',
 +      `<pre>${escapeHtml(preview)}</pre>`,
 +    ].join('\n');
@@ -879,25 +899,30 @@ new file mode 100644
 +      const timer = setTimeout(() => this.settle(binding.requestNonce, 'deny', null),
 +        Math.max(0, binding.expiresAt - Date.now()));
 +      timer.unref();
-+      const entry: Pending = { payload: req.payload, binding, resolve, timer };
++      const entry: Pending = { payload: req.payload, binding, resolve, timer, title, body };
 +      this.#pending.set(binding.requestNonce, entry);
 +      onDisconnect?.(() => this.settle(binding.requestNonce, 'deny', null));
 +      void this.telegram.sendProtectedCard({ kind: 'card', title, body,
 +        buttons: [
 +          { id: `hp:${binding.requestNonce}:a`, label: 'Allow once' },
 +          { id: `hp:${binding.requestNonce}:d`, label: 'Deny' },
++          ...(binding.toolName === 'Bash'
++            ? [{ id: `hp:${binding.requestNonce}:b`, label: 'Bash until restart' }] : []),
 +        ] }, this.cfg.chatId).then(receipt => {
-+        if (this.#pending.get(binding.requestNonce) !== entry) return;
 +        if (!receipt || typeof receipt.messageId !== 'string'
 +          || !DECIMAL.test(receipt.messageId)) this.settle(binding.requestNonce, 'deny', null);
-+        else entry.messageId = receipt.messageId;
++        else {
++          entry.messageId = receipt.messageId;
++          // Timeout/disconnect can settle while Telegram send is in flight.
++          if (entry.settledLabel) this.retireCard(entry);
++        }
 +      }).catch(() => this.settle(binding.requestNonce, 'deny', null));
 +    });
 +  }
 +
 +  private onCallback(event: ProtectedCallback): void {
 +    if (this.#closed || !event || typeof event.data !== 'string') return;
-+    const match = /^hp:([0-9a-f-]{36}):([ad])$/.exec(event.data);
++    const match = /^hp:([0-9a-f-]{36}):([adb])$/.exec(event.data);
 +    if (!match || !UUID.test(match[1])) return;
 +    const entry = this.#pending.get(match[1]);
 +    if (!entry || entry.binding.expiresAt <= Date.now() || !entry.messageId
@@ -905,17 +930,32 @@ new file mode 100644
 +      || event.chatId !== this.cfg.chatId || event.chatType !== 'private'
 +      || event.messageId !== entry.messageId || typeof event.callbackId !== 'string'
 +      || event.callbackId.length < 1 || event.callbackId.length > 200) return;
-+    this.settle(match[1], match[2] === 'a' ? 'allow' : 'deny', event);
++    if (match[2] === 'b' && entry.binding.toolName !== 'Bash') return;
++    const decision = match[2] === 'b' ? 'allow_bash_until_restart'
++      : match[2] === 'a' ? 'allow' : 'deny';
++    this.settle(match[1], decision, event);
 +  }
 +
-+  private settle(nonce: string, decision: 'allow' | 'deny', actor: ProtectedCallback | null): void {
++  private settle(nonce: string, decision: 'allow' | 'deny' | 'allow_bash_until_restart', actor: ProtectedCallback | null): void {
 +    const entry = this.#pending.get(nonce);
 +    if (!entry) return;
 +    this.#pending.delete(nonce);
 +    clearTimeout(entry.timer);
++    entry.settledLabel = decision === 'allow_bash_until_restart' ? 'Bash allowed until restart'
++      : decision === 'allow' ? 'Allowed once' : actor ? 'Denied' : 'Closed without approval';
++    this.retireCard(entry);
 +    entry.resolve({ kind: 'hub.permission.result', decision, epoch: this.epoch,
 +      payload: entry.payload, actor,
 +      tag: this.mac(this.cfg.resultKey, 'result', this.epoch, entry.payload, decision, actor) });
++  }
++
++  private retireCard(entry: Pending): void {
++    if (!entry.messageId || !entry.settledLabel) return;
++    try {
++      void this.telegram.settleProtectedCard({ kind: 'card',
++        title: `${entry.settledLabel} · ${entry.title}`, body: entry.body,
++      }, this.cfg.chatId, entry.messageId).catch(() => undefined);
++    } catch { /* Cosmetic failure must not delay or change the permission receipt. */ }
 +  }
 +
 +  close(): void {
