@@ -12,6 +12,28 @@ The confined launch's private-path, immutable-runtime and human-permission check
 remain mandatory. The finite [installation checklist](CLAUDE_CUSTODY.md) replaces
 the former global inventory/UID/VM study. No new infrastructure is required here.
 
+## Bash decisions and card settlement
+
+In the developer profile, `Allow once` and `Deny` retain their exact request
+scope. `Bash until restart` explicitly permits later commands in that same
+Claude native session/generation and project on the accepting worker. It is
+cleared by restarting that Claude worker, or invalidated by restarting tlive;
+other worker slots can require another approval. `/stop` stops work but does
+not revoke this consent. No grant is persisted in native settings or loaded
+from history. Full boundaries: [REQ-SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
+
+The protected card begins its outcome edit immediately after validated
+settlement: buttons disappear and the original preview remains with the decision.
+This edit does not wait for the command or block its permission receipt.
+Telegram failures can leave an old-looking card; repeated clicks still cannot
+change an already consumed decision. Check callback and edit transport separately.
+Update the worker before the matching tlive patch; reverse that order for
+rollback. New tlive with an older worker can display consent that the worker
+safely rejects. With both updated, accept the new grant,
+run another command without another card, and verify new permission after each
+relevant restart. Keep ordinary Allow/Deny, stop and another-session checks.
+These are separately authorized live checks, not a claim from source tests.
+
 ## Prepare an isolated candidate
 
 1. Keep the existing text-only configuration as rollback behavior. Build an

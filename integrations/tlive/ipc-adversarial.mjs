@@ -97,7 +97,41 @@ try {
     assert.deepEqual(nativeReplies,[],'observation must send no native answer');
   });
   await test('mixed protocol version refuses capability',async()=>assert.equal((await ipc({kind:'hub.permission.hello',version:2,challenge:randomUUID()})).decision,'deny'));
+  await test('ordinary Codex callback retires buttons without waiting for tool completion',async()=>{
+    const start=bot.sent.length, before=bot.edits.length;
+    const pending=handle.permissionRouter.requestPermission({key:'codex:example-ui-thread',
+      cwd:'/home/example/project',sessionId:'example-ui-thread',toolName:'Bash',input:{command:'pwd'}});
+    await until(()=>bot.sent.length>start);
+    const c=bot.sent[start];fire(c);
+    assert.equal((await pending).decision,'allow');
+    await until(()=>bot.edits.length>before);
+    const edit=bot.edits.find(e=>e.messageId===c.message_id);
+    assert.ok(edit);assert.deepEqual(edit.opts.reply_markup.inline_keyboard,[]);
+    assert.ok(edit.text.includes('Allowed'));
+  });
   await test('first authenticated owner callback allows exact synchronous invocation once',async()=>{const t=launch();const c=await card(t);fire(c);const r=await t.result;assert.equal(verifyReceipt(t,r).decision,'allow');fire(c);});
+  await test('accepted callback immediately removes protected buttons and preserves preview',async()=>{
+    const t=launch({toolName:'Bash',input:{command:'git status --short'}});
+    const c=await card(t), before=bot.edits.length;
+    fire(c,x=>x.callbackQuery.data=c.opts.reply_markup.inline_keyboard[0][2].callback_data);
+    const r=await t.result;
+    assert.equal(r.decision,'allow_bash_until_restart');
+    assert.equal(r.tag,mac(resKey,'result',epoch,t.payload,r.decision,r.actor));
+    assert.equal(bot.edits.length,before+1);
+    const edit=bot.edits.at(-1);
+    assert.equal(edit.messageId,c.message_id);
+    assert.equal(edit.chatId,c.chatId);
+    assert.deepEqual(edit.opts.reply_markup.inline_keyboard,[]);
+    assert.ok(edit.text.includes('Bash allowed until restart'));
+    assert.ok(edit.text.includes('git status --short'));
+  });
+  await test('failed cosmetic edit never delays or changes authenticated decision',async()=>{
+    bot.editFailure='FICTIONAL_EDIT_FAILURE';
+    const t=launch(), c=await card(t), before=bot.edits.length;
+    fire(c);verifyReceipt(t,await t.result);
+    assert.equal(bot.edits.length,before+1);
+    bot.editFailure=null;
+  });
   await test('generic IPC answer cannot approve protected request',async()=>{const t=launch();const c=await card(t);const id=c.opts.reply_markup.inline_keyboard[0][0].callback_data.split(':')[1];await ipc({kind:'hook.permission.answer',requestId:id,approved:true,message:'human'});assert.equal(handle.permissionRouter.answer(id,true,undefined,{answers:{example:'yes'}}),false);fire(c);verifyReceipt(t,await t.result);});
   await test('authenticated dashboard approve/always-tool/ask/reply/inject cannot approve protected request',async()=>{
     const t=launch();const c=await card(t);const id=t.b.requestNonce;

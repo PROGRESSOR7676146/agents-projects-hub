@@ -70,6 +70,19 @@ legacy policy and Always-Allow grants cannot approve this channel. This package
 does not enable Claude tools, alter an installation, or
 establish native/Telegram/live security acceptance.
 
+The explicit protected `Bash until restart` callback is separate from legacy
+Always-Allow. A matching Hub worker authenticates and scopes its temporary
+consent under [REQ-SEC-008](../../docs/product/ACCOUNTS_CONTROL_AND_SECURITY.md);
+the daemon itself stores no reusable grant. Both sides must be updated for this
+option. Update the Hub worker before tlive: an old worker rejects the new signed
+decision safely, but a newer tlive would still display the human's temporary
+consent. During rollback, return tlive to the compatible version before the
+worker. A newer worker with older tlive retains Allow once/Deny.
+Settlement starts a single outcome edit immediately, retaining the
+preview and removing buttons without waiting for native command completion.
+Cosmetic failure cannot change the permission response. Source tests cover
+failed/hung edits and a send receipt arriving after timeout.
+
 The combined patch also scopes native approval cancellation to exact item/request
 identity and makes companion subscriptions metadata-only (`excludeTurns: true`).
 It includes the tlive subscription prerequisite from ADR 0073's source review;

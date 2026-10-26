@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
+from .claude_bash_grants import BASH_GRANTS
 from .claude_file_policy import validate_file_tool_input
 from .claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
 from .claude_permission_protocol import (
@@ -150,10 +151,37 @@ class PermissionServer:
         if Path(target.project.root) != self.launch.root:
             raise StateError("Claude permission registry root changed")
         journal = ClaudePermissionJournal(state)
+        capability = self.capability
+        scope = None
+        granted = False
+        if self.launch.profile == "developer" and event["tool_name"] == "Bash":
+            # A fresh authenticated handshake is mandatory even for cached consent.
+            # A restarted/unreachable tlive cannot inherit an earlier grant.
+            capability = self.client.hello()
+            scope = (
+                str(self.config.state_path),
+                self.client.config,
+                str(self.launch.root),
+                self.launch.session_id,
+                self.launch.generation,
+                job.lease_owner,
+            )
+            granted = BASH_GRANTS.allows(scope, capability.epoch)
+        options = {"notify_wait": False} if granted else {}
         payload = journal.prepare(
-            self.launch, nonce, request["eventDigest"], event["tool_name"], event["tool_input"]
+            self.launch,
+            nonce,
+            request["eventDigest"],
+            event["tool_name"],
+            event["tool_input"],
+            **options,
         )
-        receipt = self.client.request(payload, self.capability, cancellation)
+        receipt = None if granted else self.client.request(payload, capability, cancellation)
+        decision = (
+            "allow"
+            if receipt is None or receipt.decision == "allow_bash_until_restart"
+            else receipt.decision
+        )
         if cancellation.is_set():
             raise StateError("Claude permission host was stopped")
         # Registry is a filesystem source; recheck after the human wait too.
@@ -165,8 +193,14 @@ class PermissionServer:
         )
         if Path(target.project.root) != self.launch.root:
             raise StateError("Claude permission registry root changed")
-        journal.consume(self.launch, payload, receipt.decision)
-        return receipt.decision
+        journal.consume(self.launch, payload, decision)
+        if receipt is not None and receipt.decision == "allow_bash_until_restart":
+            if scope is None or cancellation.is_set():
+                raise StateError("Claude Bash grant binding changed")
+            # Publish process-memory authority only after the exact human decision
+            # passes the current binding checks and commits successfully.
+            BASH_GRANTS.remember(scope, capability.epoch)
+        return decision
 
     def _serve(self) -> None:
         while not self.stop.is_set():

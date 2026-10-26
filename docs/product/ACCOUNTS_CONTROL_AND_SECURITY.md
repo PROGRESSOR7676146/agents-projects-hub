@@ -54,7 +54,8 @@ This normative module is part of the
   The bounded editor of [ADR 0067](../decisions/0067-claude-editor-first.md)
   retains its existing gates. The explicit personal developer increment is
   accepted under [ADR 0075](../decisions/0075-claude-personal-developer-profile.md),
-  with implementation and native/live acceptance pending. Its file, command and
+  with the minimal ordinary-root developer implementation and scoped acceptance
+  complete. Later increments retain their separate gates. Its file, command and
   local Git authority MUST follow REQ-SEC-008. Text-only remains the default;
   file tools require explicit local opt-in. Passing acceptance MUST NOT change
   that default. Steer/extensions, native transfer/images and personal project
@@ -358,7 +359,7 @@ single-writer checks remain mandatory. See
   topic, and agent allowlists MUST be enforced before provider invocation.
 - **REQ-SEC-007 (Accepted):** A provider failure MUST be visible, reversible,
   and isolated. Recovery MUST NOT weaken security policy to regain availability.
-- **REQ-SEC-008 (Editor implemented offline; developer accepted; live acceptance pending):** An explicitly
+- **REQ-SEC-008 (Minimal developer accepted; temporary Bash consent live acceptance pending):** An explicitly
   configured Claude editor turn MAY expose only Read, Glob, Grep, Write and
   Edit inside a fail-closed Linux filesystem/PID boundary. Private Hub state,
   bot/web credentials and permission signing keys MUST be absent from its
@@ -369,22 +370,42 @@ single-writer checks remain mandatory. See
   prompt while confined to the project. This acceptance requirement is not a
   claim that the current offline candidate has proved native enforcement.
   Only a fresh allowlisted human callback in the protected tlive namespace MAY
-  authorize a prompted operation. The receipt MUST authenticate the exact
+  authorize a prompted operation or the explicit temporary Bash grant below.
+  The receipt MUST authenticate the exact
   payload, daemon epoch, nonce and original Telegram actor. Hub MUST recheck
   the live job, lease, writer, native session, generation, project/root and stop
-  state, then atomically consume the receipt once before native Allow. Inputs
+  state, then atomically consume the receipt once before native Allow. Individual human decisions
   requiring masking or an incomplete preview MUST be denied. Native permission
   suggestions MUST NOT become persistent grants or input changes. Restart,
   timeout, unavailable isolation/host and ambiguity MUST deny without replay.
   The per-turn hook MUST have no signing keys or Hub state access, and no Stop,
   continuation, mirroring or second conversation writer. The default `editor`
   profile retains per-write human permission and read-only ordinary Git metadata.
-  An explicitly configured `developer` profile (accepted; implementation pending)
+  An explicitly configured `developer` profile (implemented)
   MAY preauthorize project file edits and expose native Bash plus writable
-  ordinary Git metadata. Every Bash invocation, including read-only commands,
-  MUST require a new exact human receipt; persistent rules, prior receipts and
-  native permission suggestions MUST NOT authorize another invocation or alter
-  its input. The decision covers the command/program and its descendants inside
+  ordinary Git metadata. Bash MUST default to a new exact human receipt for
+  every invocation, including read-only commands. A separate owner-only
+  `Bash until restart` button MAY explicitly authorize all subsequent Bash
+  commands in the same canonical root, native session and generation on that
+  worker. The card MUST disclose that scope and its inclusion of later turns.
+  This grant MUST exist only in bounded worker memory, bound to the state and
+  protected transport identity; worker restart MUST erase it. Every reuse MUST
+  first authenticate tlive's current daemon epoch. A changed epoch MUST discard
+  the grant and require a new human decision; an unavailable host MUST deny.
+  Other worker slots, roots, sessions and generations MUST NOT inherit it.
+  The grant MUST be created only after exact callback authentication, current
+  binding/stop checks and successful receipt consumption. Each reused invocation
+  MUST retain a fresh single-use journal entry, current input validation and
+  job/lease/writer/session/root/stop checks before native Allow. Cached consent
+  MUST NOT produce a false human-wait notice. Allow once, Deny, native permission
+  suggestions, saved settings and historical receipts MUST NOT create a grant.
+  The grant MUST NOT change mounts, other tools, command fields or input.
+  Validated callback settlement MUST immediately initiate a cosmetic card edit
+  removing buttons and naming the recorded decision, without waiting for native
+  execution. Late send receipts after timeout/disconnect MUST also retire the
+  card. Cosmetic failure MUST NOT change, delay or replay the decision; successful
+  local dispatch is not confirmed Telegram display. The decision covers the
+  command/program and its descendants inside
   the namespace, including tests and Git hooks; it MUST NOT be presented as
   per-system-call review or hostile-project protection. Background or native
   sandbox-bypass options, unknown command fields and incomplete or masked previews
@@ -403,7 +424,7 @@ single-writer checks remain mandatory. See
   available. See [ADR 0076](../decisions/0076-confined-linked-worktree-git.md).
   Developer acceptance MUST prove
   the production host/native edit-test-local-Git cycle, repeated fresh Bash
-  Allow/Deny, denied effects absent, exact resume, stop/cleanup and uncertainty
+  Allow/Deny, explicit Bash-grant reuse/reset/refusal, denied effects absent, exact resume, stop/cleanup and uncertainty
   preservation, separately from scoped installed/human Telegram acceptance.
   This slice does not establish
   subscription routing or local-transfer parity.

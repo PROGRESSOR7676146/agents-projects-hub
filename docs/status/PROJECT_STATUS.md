@@ -16,7 +16,7 @@ Offline evidence only; live checks: [backlog](../operations/STABILIZATION_PLAN.m
 | Capability | Repository state | Live acceptance | Contract |
 | --- | --- | --- | --- |
 | Multiple Codex worker slots | Implemented | Pending (three projects) | [REQ-QUEUE-002](../product/DURABLE_QUEUE_AND_CONTROL.md), [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md) |
-| Claude Code CPA worker | Text-only default; protected files (schema 38); native editor source fixture | Pending: human Telegram approvals, scoped installation and subscription; global same-UID/admin isolation not claimed; parity deferred | [REQ-AUTH-009/SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0067](../decisions/0067-claude-editor-first.md) |
+| Claude Code CPA worker | Text-only default; opt-in developer implemented; confined linked worktrees | Bounded ordinary-root developer acceptance complete; linked-worktree productive acceptance and full parity remain separate | [REQ-AUTH-009/SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0067](../decisions/0067-claude-editor-first.md) |
 | Managed Codex permission-profile continuity | External queue slice and immutable schema-39 snapshots; native offline adapter coverage | Pending scoped live checks; global helper/admin isolation not claimed; unsupported local boundaries remain refused | [REQ-SEC-001](../product/ACCOUNTS_CONTROL_AND_SECURITY.md), [ADR 0055](../decisions/0055-managed-codex-profile-continuity.md) |
 | Claude/Codex lead and advisor | Retired from Hub scope; not implemented | Not required | [Retired IDs](../product/IDENTITY_AND_INTERACTION.md#explicit-claude-codecodex-collaboration), [ADR 0065](../decisions/0065-retire-hub-lead-advisor.md) |
 | Minimal outcome journal | Read-only projection and schema-45 owner assessments implemented offline | Assessment/correction canary pending | [REQ-EVAL-010](../product/EVALUATION_AND_ALLOCATION.md), [ADR 0062](../decisions/0062-owner-outcome-assessments.md) |
@@ -49,29 +49,26 @@ Offline evidence only; live checks: [backlog](../operations/STABILIZATION_PLAN.m
 
 ## Quality checkpoint
 
+Minimal Claude developer closure is recorded at source `2f6fa35`; linked-worktree
+follow-up `bfa08b6` passed canonical 3,434 tests and independent Opus review.
+The [continuation plan](../operations/NEXT_DEVELOPMENT_SESSION.md#current-goal-and-order)
+owns the bounded acceptance limits and next priorities. Temporary Bash consent
+and immediate protected-card settlement have source regression coverage under
+[ADR 0077](../decisions/0077-temporary-claude-bash-consent.md); their installation
+and live callbacks remain pending. Older editor-only entries below retain their
+historical evidence and do not override this checkpoint.
+
 External Codex slots have offline admission, root-exclusion, fairness and health
 coverage; deployment and live three-project acceptance remain pending. See
 [REQ-QUEUE-002](../product/DURABLE_QUEUE_AND_CONTROL.md#implemented-queue-compatibility-and-local-provider-worker-isolation)
 and [ADR 0038](../decisions/0038-multiple-codex-worker-slots.md).
 
-Claude's text-only default has offline identity, streaming and recovery coverage
-under [ADR 0050](../decisions/0050-claude-native-invocation-evidence.md).
-The source [native editor fixture](../testing/CLAUDE_NATIVE_EDITOR.md#recorded-offline-evidence)
-passes Write/Edit Allow/Deny and exact resume with four fresh fictional receipts
-on pinned CLI 2.1.285. Human approvals, scoped installation and subscription acceptance remain
-pending under [REQ-AUTH-009](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
-Schema-53 [image/notice source](../decisions/0066-verified-claude-image-input.md)
-is published at `25866e1`; images, native transfer and saved-session connect are
-deferred under ADR 0067.
-
-Schema37 queue snapshots and accepted Codex activity follow
-[ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md).
-Integrated `3750ccfb0f8eb98333f9219f3a697d6328890d04` passed canonical/hosted
-gates after independent candidate reviews. Wider visibility and live acceptance remain open;
-[notice-bound retry](../decisions/0054-notice-bound-work-retry-reports.md) has
-offline coverage. Remaining publication/review/live gates for retry and
-preacceptance are tracked in the [continuation plan](../operations/NEXT_DEVELOPMENT_SESSION.md).
-Claude remains text-only pending its protected editor gates.
+Claude's original editor and visibility source evidence remains in
+[ADR 0050](../decisions/0050-claude-native-invocation-evidence.md),
+[ADR 0051](../decisions/0051-accepted-turn-activity-and-queue-notices.md) and the
+[native editor fixture](../testing/CLAUDE_NATIVE_EDITOR.md#recorded-offline-evidence).
+The current developer/linked-worktree checkpoint above supersedes their older
+editor-only pending status; later parity and live increments retain their gates.
 
 Participant evaluation and resource-aware task allocation are an accepted
 product foundation; implementation and acceptance remain pending. See
@@ -83,10 +80,8 @@ Independent cross-provider project review remains outside Hub orchestration.
 The minimal outcome journal stays an independent milestone; source baseline
 `c55ef97eca700c6728e26ee3f82adb5ec8cba0e2` includes the bounded projection and
 schema45 owner assessments under ADR 0062. P6 retains provenance/live closure.
-Standalone
-[Claude editor](../operations/CLAUDE_LEAD_REVIEW_PLAN.ru.md), scoped installation and
-live acceptance remain open; full parity, scoring and parallel writers remain
-deferred. [ADR 0072](../decisions/0072-trusted-personal-installation.md) stops the
+The minimal developer goal is closed; full parity, scoring and parallel
+writers remain outside that completed scope. [ADR 0072](../decisions/0072-trusted-personal-installation.md) stops the
 global same-UID/admin custody study; that stronger claim is not pending.
 
 Schema35 root-blocker admission is implemented offline; deployment/live

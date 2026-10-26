@@ -94,4 +94,6 @@ introduces a durable trade-off whose rationale must outlive its implementation.
 
 - [0074: Owner-closed historical blockers](0074-owner-closed-history.md) — source candidate; preserves raw uncertainty and permanent send fences.
 
-- [0075: Personal Claude developer profile](0075-claude-personal-developer-profile.md) — accepted opt-in scope; implementation and acceptance pending.
+- [0075: Personal Claude developer profile](0075-claude-personal-developer-profile.md) — minimal ordinary-root goal closed; later increments retain separate acceptance.
+
+- [0077: Temporary Claude Bash consent](0077-temporary-claude-bash-consent.md) — explicit per-session consent until worker/tlive restart; prompt card settlement.

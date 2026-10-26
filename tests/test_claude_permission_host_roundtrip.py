@@ -124,7 +124,9 @@ class FakeTlive:
                         if not self.release.wait(3) or self.drop:
                             continue
                         binding = ProtectedPayload.parse(str(payload))
-                        suffix = "a" if self.decision == "allow" else "d"
+                        suffix = {"allow": "a", "deny": "d", "allow_bash_until_restart": "b"}[
+                            self.decision
+                        ]
                         actor: dict[str, object] | None = {
                             "callbackId": "example-callback",
                             "userId": "42",
