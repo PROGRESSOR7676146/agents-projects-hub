@@ -59,16 +59,23 @@ def verify_listener(
         raise ValueError("process incarnation changed")
     table = proc_root / "net/unix"
     inode = listener_inode(table.read_text(), path)
+    _require_descriptor(proc_root, expected.pid, inode)
+    if listener_inode(table.read_text(), path) != inode:
+        raise ValueError("listener changed during observation")
+    if process_identity(expected.pid, proc_root=proc_root) != expected:
+        raise ValueError("process incarnation changed during observation")
+    _require_descriptor(proc_root, expected.pid, inode)
+    if process_identity(expected.pid, proc_root=proc_root) != expected:
+        raise ValueError("process incarnation changed after descriptor observation")
+    return inode
+
+
+def _require_descriptor(proc_root: Path, pid: int, inode: int) -> None:
     owned = False
-    for descriptor in (proc_root / str(expected.pid) / "fd").iterdir():
+    for descriptor in (proc_root / str(pid) / "fd").iterdir():
         try:
             owned |= os.readlink(descriptor) == f"socket:[{inode}]"
         except FileNotFoundError:
             continue  # Unrelated descriptors may close while being observed.
     if not owned:
         raise ValueError("listener descriptor not owned by expected process")
-    if listener_inode(table.read_text(), path) != inode:
-        raise ValueError("listener changed during observation")
-    if process_identity(expected.pid, proc_root=proc_root) != expected:
-        raise ValueError("process incarnation changed during observation")
-    return inode

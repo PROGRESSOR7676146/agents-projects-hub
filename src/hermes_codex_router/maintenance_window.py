@@ -88,9 +88,7 @@ class MaintenanceWindow:
         if name in self.stopped:
             raise ValueError("stop already attempted; observe, never retry")
         if not unit.admission and any(
-            other.observe() != "inactive"
-            for other in self.units
-            if other.admission and self.initial[other.name] == "active"
+            other.observe() != "inactive" for other in self.units if other.admission
         ):
             raise ValueError("admission must be closed before stopping consumers")
         self.stopped.add(name)  # A stop may take effect even when its reply fails.

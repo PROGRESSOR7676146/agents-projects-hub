@@ -2,12 +2,22 @@ from __future__ import annotations
 
 import unittest
 
-from hermes_codex_router.maintenance_window import MaintenanceWindow, RestorationError, Unit
+from hermes_codex_router.maintenance_window import (
+    MaintenanceWindow,
+    Observation,
+    RestorationError,
+    Unit,
+)
 
 
 class MaintenanceWindowTests(unittest.TestCase):
     def setUp(self):
-        self.states = dict(worker="active", sender="active", admission="active", unused="inactive")
+        self.states: dict[str, Observation] = {
+            "worker": "active",
+            "sender": "active",
+            "admission": "active",
+            "unused": "inactive",
+        }
         self.events = []
         self.fail_start = set()
         self.unsafe = set()
@@ -177,3 +187,15 @@ class MaintenanceWindowTests(unittest.TestCase):
         with MaintenanceWindow(self.units) as window, self.assertRaises(ValueError):
             window.stop("worker")
         self.assertEqual(self.events, [])
+
+    def test_initially_inactive_admission_becomes_active_or_unknown_blocks_consumer_stop(self):
+        transitions: tuple[Observation, ...] = ("active", "unknown")
+        for state in transitions:
+            with self.subTest(state=state):
+                self.setUp()
+                self.states["admission"] = "inactive"
+                window = MaintenanceWindow(self.units)
+                with window, self.assertRaisesRegex(ValueError, "admission must be closed"):
+                    self.states["admission"] = state
+                    window.stop("worker")
+                self.assertEqual(self.events, [])
