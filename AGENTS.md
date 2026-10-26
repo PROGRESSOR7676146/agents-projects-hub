@@ -52,6 +52,8 @@ to the current state. The public plan stays in
   security risk, or maintenance cost. Explain the concrete failure mode and
   recommend a simpler alternative. Do not silently implement a weak idea out
   of deference.
+- Apply the [KISS, YAGNI and Pareto working approach](docs/operations/ENGINEERING_BASELINE.md#working-approach-kiss-yagni-and-pareto)
+  to scope, implementation and verification decisions.
 - Preserve the operator's control with outcome-first explanations, explicit
   boundaries, and honest acceptance evidence. Never report a backend proxy
   transition as end-to-end success for an unrelated interactive client.

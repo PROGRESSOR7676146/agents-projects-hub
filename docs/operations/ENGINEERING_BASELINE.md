@@ -8,6 +8,18 @@ session-transfer readiness audit. It contains no deployment identities or live
 transcripts. Items are ordered by the risk of continuing development without
 them.
 
+## Working approach: KISS, YAGNI and Pareto
+
+Choose the simplest solution that meets the current need (KISS). Do not build
+capabilities, abstractions or infrastructure for hypothetical future needs
+(YAGNI). Prioritize the small set of changes that delivers most of the practical
+value (Pareto); 80/20 is a prioritization heuristic, not a completion claim.
+
+Prefer existing mechanisms and a small working increment. Add complexity only
+for a concrete requirement or observed failure, and explain why the simpler
+option is insufficient. Keep required safety, recovery and acceptance checks;
+avoid duplicate checks that add no new evidence.
+
 ## P0: before the next live feature acceptance
 
 1. **Restore a reproducible green gate.** Define one canonical offline-capable
