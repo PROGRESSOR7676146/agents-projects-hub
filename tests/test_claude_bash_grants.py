@@ -76,8 +76,7 @@ class BashGrantTests(unittest.TestCase):
             self.assertEqual(self.command(), "deny")
         self.assertEqual(len(self.fixture.peer.requests), 2)
 
-    def test_next_launch_same_session_retains_grant(self):
-        self.grant()
+    def next_launch(self, worker_id="example-worker"):
         fixture = self.fixture
         fixture.journal.close_launch(fixture.server.launch)
         fixture.state.commit_provider_result(
@@ -111,7 +110,7 @@ class BashGrantTests(unittest.TestCase):
             effort="high",
             payload_text="Another example task",
         )
-        leased = fixture.state.lease_provider_job("claude", "example-worker")
+        leased = fixture.state.lease_provider_job("claude", worker_id)
         assert leased is not None and leased.lease_token is not None
         fixture.state.mark_provider_job_executing(job.job_id, leased.lease_token)
         native = ExecutionJournal(fixture.state).prepare_claude_session(
@@ -123,8 +122,19 @@ class BashGrantTests(unittest.TestCase):
         fixture.server.launch = fixture.journal.open_launch(
             job.job_id, leased.lease_token, fixture.native_id, fixture.root, profile="developer"
         )
+
+    def test_next_launch_same_session_retains_grant(self):
+        self.grant()
+        self.next_launch()
         self.assertEqual(self.command(), "allow")
-        self.assertEqual(len(fixture.peer.requests), 1)
+        self.assertEqual(len(self.fixture.peer.requests), 1)
+
+    def test_next_launch_other_worker_requires_new_human_card(self):
+        self.grant()
+        self.next_launch("example-other-worker")
+        self.fixture.peer.decision = "deny"
+        self.assertEqual(self.command(), "deny")
+        self.assertEqual(len(self.fixture.peer.requests), 2)
 
     def test_missing_tlive_denies_even_with_grant(self):
         self.grant()
@@ -160,7 +170,12 @@ class BashGrantTests(unittest.TestCase):
 
     def test_forged_actor_cannot_create_grant(self):
         self.fixture.peer.decision = "allow_bash_until_restart"
-        for change in ({"isBot": True}, {"userId": "99"}, {"data": "hp:wrong:b"}):
+        actor_changes: tuple[dict[str, object], ...] = (
+            {"isBot": True},
+            {"userId": "99"},
+            {"data": "hp:wrong:b"},
+        )
+        for change in actor_changes:
             self.fixture.peer.actor_change = change
             with self.assertRaises(TlivePermissionError):
                 self.command()

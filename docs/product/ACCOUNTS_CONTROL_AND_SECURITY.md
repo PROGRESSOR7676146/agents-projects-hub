@@ -54,7 +54,8 @@ This normative module is part of the
   The bounded editor of [ADR 0067](../decisions/0067-claude-editor-first.md)
   retains its existing gates. The explicit personal developer increment is
   accepted under [ADR 0075](../decisions/0075-claude-personal-developer-profile.md),
-  with implementation and native/live acceptance pending. Its file, command and
+  with the minimal ordinary-root developer implementation and scoped acceptance
+  complete. Later increments retain their separate gates. Its file, command and
   local Git authority MUST follow REQ-SEC-008. Text-only remains the default;
   file tools require explicit local opt-in. Passing acceptance MUST NOT change
   that default. Steer/extensions, native transfer/images and personal project
@@ -358,7 +359,7 @@ single-writer checks remain mandatory. See
   topic, and agent allowlists MUST be enforced before provider invocation.
 - **REQ-SEC-007 (Accepted):** A provider failure MUST be visible, reversible,
   and isolated. Recovery MUST NOT weaken security policy to regain availability.
-- **REQ-SEC-008 (Editor implemented offline; developer accepted; live acceptance pending):** An explicitly
+- **REQ-SEC-008 (Minimal developer accepted; temporary Bash consent live acceptance pending):** An explicitly
   configured Claude editor turn MAY expose only Read, Glob, Grep, Write and
   Edit inside a fail-closed Linux filesystem/PID boundary. Private Hub state,
   bot/web credentials and permission signing keys MUST be absent from its

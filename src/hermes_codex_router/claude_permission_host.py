@@ -164,6 +164,7 @@ class PermissionServer:
                 str(self.launch.root),
                 self.launch.session_id,
                 self.launch.generation,
+                job.lease_owner,
             )
             granted = BASH_GRANTS.allows(scope, capability.epoch)
         options = {"notify_wait": False} if granted else {}

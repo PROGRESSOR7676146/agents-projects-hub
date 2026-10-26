@@ -27,7 +27,9 @@ settlement: buttons disappear and the original preview remains with the decision
 This edit does not wait for the command or block its permission receipt.
 Telegram failures can leave an old-looking card; repeated clicks still cannot
 change an already consumed decision. Check callback and edit transport separately.
-After deploying both the worker and matching tlive patch, accept the new grant,
+Update the worker before the matching tlive patch; reverse that order for
+rollback. New tlive with an older worker can display consent that the worker
+safely rejects. With both updated, accept the new grant,
 run another command without another card, and verify new permission after each
 relevant restart. Keep ordinary Allow/Deny, stop and another-session checks.
 These are separately authorized live checks, not a claim from source tests.

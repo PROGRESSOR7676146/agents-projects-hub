@@ -1,12 +1,13 @@
 # ADR 0075: Explicit personal Claude developer profile
 
-Status: accepted scope; offline implementation candidate; publication and live acceptance pending.
+Status: accepted; minimal ordinary-root developer published and scoped acceptance complete.
 Date: 2026-10-26. Owner: repository owner. Implementation owner: Hub maintainer.
 Contract: [REQ-AUTH-009 and REQ-SEC-008](../product/ACCOUNTS_CONTROL_AND_SECURITY.md).
 
 The per-invocation-only Bash rule below is amended by
 [ADR 0077](0077-temporary-claude-bash-consent.md). Earlier acceptance evidence
 remains scoped to the original profile; temporary grants need their own checks.
+Linked-worktree support is amended by [ADR 0076](0076-confined-linked-worktree-git.md).
 
 ## Decision
 
@@ -56,12 +57,9 @@ Then require paired source review, exact-source canonical/CI gates, compatible
 rollback and separately scoped installed/human Telegram acceptance. A custom
 prototype hook or unit test alone cannot establish those live results.
 
-Current source checkpoint: integration base `74babf0` plus the developer candidate.
-Focused policy/host/session/namespace tests and the pinned native offline
-edit/test/Git and exact-resume fixture pass. The original editor fixture also
-passes. The protected tlive source build includes fresh Bash Allow/Deny despite
-legacy grants. Fictional worker/process tests cover developer stop and preserved
-uncertainty; they do not establish native CLI stop or installed custody.
-Next trigger: final source gates and independent review, followed by compatible
-installation and separately scoped native/human acceptance.
-Closure remains open until the bounded source/native/live criteria pass.
+The minimal ordinary-root goal is closed; the published source and bounded
+native/human acceptance are recorded in [project status](../status/PROJECT_STATUS.md).
+This does not close full provider parity. Linked-worktree behavior and temporary
+Bash consent have their own acceptance boundaries under ADRs 0076 and 0077.
+Next trigger: the next explicitly scoped capability increment, preserving
+single-writer ownership, stop, exact resume and unknown-result handling.
