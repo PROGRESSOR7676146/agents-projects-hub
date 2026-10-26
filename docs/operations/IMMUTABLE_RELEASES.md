@@ -25,6 +25,9 @@ migrated database and all accepted queue/outbox records.
 
 ## Create and verify
 
+For the service restart order, native Codex/tlive boundary and autonomous
+outcome delivery, follow the [Hub restart procedure](HUB_RESTART.ru.md).
+
 ### Refresh the recovery checkout before release or deployment
 
 Include this operation in every release/deployment preparation, before cutover.
