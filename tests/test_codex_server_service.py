@@ -69,56 +69,39 @@ class CodexServerServiceTests(unittest.TestCase):
             service.verify_pins(self.manifest)
 
     def test_active_uncertain_work_and_unsettled_controls_refuse_start(self):
-        scenarios = [
-            (f"INSERT INTO provider_jobs VALUES('codex','{status}','job');", True)
-            for status in ("queued", "leased", "executing", "result_ready", "indeterminate")
-        ]
-        scenarios += [
-            ("INSERT INTO codex_turn_controls VALUES(NULL,'attempt',NULL);", True),
-            ("INSERT INTO codex_turn_controls VALUES('reader',NULL,NULL);", True),
-            ("INSERT INTO codex_turn_controls VALUES(NULL,'attempt','quiesced');", False),
-            ("INSERT INTO agent_sessions VALUES('codex','local','active');", True),
-        ]
-        uncertain = "INSERT INTO provider_jobs VALUES('codex','indeterminate','job');"
-        checkpoint = (
-            "INSERT INTO provider_execution_checkpoints "
-            "VALUES('job','thread','turn','/home/example/project');"
-        )
-        for thread, turn, root in (
-            ("thread", "turn", "/home/example/project"),
-            ("other", "turn", "/home/example/project"),
-            ("thread", "other", "/home/example/project"),
-            ("thread", "turn", "/home/example/other"),
-        ):
-            terminal = (
-                "INSERT INTO provider_turn_terminal_evidence "
-                f"VALUES('job','{thread}','{turn}','{root}');"
-            )
-            scenarios.append(
-                (
-                    uncertain + checkpoint + terminal,
-                    (thread, turn, root) != ("thread", "turn", "/home/example/project"),
-                )
-            )
-        import sqlite3
+        from tests import test_codex_turn_controls as fixtures
 
-        for sql, refused in scenarios:
-            with self.subTest(sql=sql), patch.object(service, "connect_existing") as connect:
-                db = sqlite3.connect(":memory:")
-                self.addCleanup(db.close)
-                db.executescript(
-                    "CREATE TABLE provider_jobs(agent_id,status,job_id);"
-                    "CREATE TABLE provider_turn_terminal_evidence(job_id,provider_thread_id,provider_turn_id,project_root);"
-                    "CREATE TABLE provider_execution_checkpoints(job_id,provider_thread_id,provider_turn_id,project_root);"
-                    "CREATE TABLE codex_turn_controls(read_claim_token,send_started_at,owner_quiesced_at);"
-                    "CREATE TABLE agent_sessions(agent_id,writer_mode,status);" + sql
-                )
-                connect.return_value = (db, self.state)
-                if refused:
-                    with self.assertRaisesRegex(ValueError, "active or unknown"):
-                        service.require_idle_state(self.state)
+        for scenario in ("executing", "unknown", "terminal", "reader", "sender", "local"):
+            with self.subTest(scenario=scenario):
+                f = fixtures.CodexTurnControlJournalTests()
+                f.setUp()
+                self.addCleanup(f.doCleanups)
+                f.journal.record_turn(f.job_id, f.token, "example-turn")
+                if scenario != "executing":
+                    f.state.terminate_provider_job_with_notice(
+                        f.job_id,
+                        f.token,
+                        status="indeterminate",
+                        error_class="ambiguous_execution",
+                        error_code="example_unknown",
+                        sender_agent_id="codex",
+                        telegram_html="Unknown outcome",
+                        terminal_turn_status=None if scenario == "unknown" else "interrupted",
+                    )
+                with f.state._connection as db:
+                    if scenario == "reader":
+                        db.execute("""UPDATE codex_turn_controls SET read_claim_token='example-reader',
+                            read_claim_owner='example-worker',read_claim_expires_at='example-expiry'""")
+                    if scenario == "sender":
+                        db.execute("""UPDATE codex_turn_controls SET send_started_at='example-time',
+                            send_owner_token_hash='example-owner',interrupt_source='protective'""")
+                    if scenario == "local":
+                        db.execute("UPDATE agent_sessions SET writer_mode='local'")
+                if scenario == "terminal":
+                    service.require_idle_state(f.fixture.config.state_path)
                 else:
-                    service.require_idle_state(self.state)
+                    with self.assertRaisesRegex(ValueError, "active or unknown"):
+                        service.require_idle_state(f.fixture.config.state_path)
 
     def test_existing_process_custody_and_unreadable_inventory(self):
         root = Path(self.temp.name) / "proc"

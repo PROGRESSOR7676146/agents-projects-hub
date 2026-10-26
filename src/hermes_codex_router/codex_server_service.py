@@ -11,6 +11,8 @@ import sys
 import time
 from pathlib import Path
 
+from .codex_control_predicates import unsettled_control
+from .delivery_control_predicates import result_ready_control_reconciled
 from .release_identity import CURRENT_RELEASE
 from .state_connection import connect_existing
 from .state_errors import StateError
@@ -97,19 +99,24 @@ def require_idle_state(path: Path) -> None:
     db, _ = connect_existing(path, writable=False, state_error=StateError)
     try:
         db.execute("BEGIN")
-        # Owner resolution alone is not native terminality. Historical uncertainty
-        # may pass only with retained exact terminal evidence, never a green doctor.
+        # Archived, explicitly owner-resolved history is closed for admission;
+        # it remains uncertain evidence, never native terminality or replay proof.
         busy = db.execute(
-            "SELECT 1 FROM provider_jobs j WHERE j.agent_id='codex' AND "
-            "(j.status IN ('queued','leased','executing','result_ready') OR "
+            "SELECT 1 FROM provider_jobs j WHERE j.agent_id='codex' AND ("
+            "j.status IN ('queued','retry_wait','leased','executing') OR "
+            f"(j.status='result_ready' AND NOT {result_ready_control_reconciled('j')}) OR "
             "(j.status='indeterminate' AND NOT EXISTS "
             "(SELECT 1 FROM provider_turn_terminal_evidence e JOIN provider_execution_checkpoints c "
             "ON c.job_id=e.job_id AND c.provider_thread_id=e.provider_thread_id "
-            "AND c.provider_turn_id=e.provider_turn_id AND c.project_root=e.project_root WHERE e.job_id=j.job_id))) LIMIT 1"
+            "AND c.provider_turn_id=e.provider_turn_id AND c.project_root=e.project_root WHERE e.job_id=j.job_id) "
+            "AND NOT EXISTS (SELECT 1 FROM provider_job_resolutions r JOIN agent_sessions s "
+            "ON s.session_id=j.session_id WHERE r.job_id=j.job_id AND s.status='archived' "
+            "AND s.agent_id=j.agent_id AND s.generation=j.session_generation "
+            "AND r.resolution IN ('acknowledged','superseded','externally_completed')))) LIMIT 1"
         ).fetchone()
         controls = db.execute(
-            "SELECT 1 FROM codex_turn_controls WHERE read_claim_token IS NOT NULL OR "
-            "(send_started_at IS NOT NULL AND owner_quiesced_at IS NULL) LIMIT 1"
+            "SELECT 1 FROM codex_turn_controls control_owner WHERE read_claim_token IS NOT NULL OR "
+            f"{unsettled_control('control_owner')} LIMIT 1"
         ).fetchone()
         writers = db.execute(
             "SELECT 1 FROM agent_sessions WHERE agent_id='codex' AND writer_mode!='telegram' "

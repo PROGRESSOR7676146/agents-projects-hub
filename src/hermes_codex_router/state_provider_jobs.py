@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Mapping, Sequence
 
-from .codex_control_predicates import control_owner_for_topic, control_scope_is_clear
+from .codex_control_predicates import (
+    control_owner_for_topic,
+    control_scope_is_clear,
+    unsettled_control,
+)
 from .delivery_control_predicates import result_ready_control_reconciled
 from .delivery_hold_predicates import job_blocks_topic_fifo
 from .provider_queue_capacity import (
@@ -415,8 +419,7 @@ class ProviderJobsStateFacade:
                         AND NOT {result_ready_control_reconciled("jobs")})
                     OR EXISTS (SELECT 1 FROM codex_turn_controls control
                                WHERE control.job_id=jobs.job_id
-                                 AND control.send_started_at IS NOT NULL
-                                 AND control.owner_quiesced_at IS NULL))
+                                 AND {unsettled_control("control")}))
                 GROUP BY jobs.agent_id""",
             bounded_ids,
         ).fetchall()

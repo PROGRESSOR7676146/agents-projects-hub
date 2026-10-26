@@ -51,7 +51,14 @@ This normative module is part of the
   tlive operation that never spawns or stops the server. Migration/start tooling
   MUST refuse active or unknown work, unsettled controls, unowned existing
   socket/server and mismatched artifact pins; it MUST NOT kill processes, delete
-  sockets or infer native idle from general diagnostics. Operator-native custody,
+  sockets or infer native idle from general diagnostics. An archived session's
+  exact immutable owner resolution MAY close its historical indeterminate job
+  for this admission gate; an unarchived unresolved generation MUST remain
+  blocked without exact native terminal proof. The gate MUST honor effective
+  full-control final-delivery consent under REQ-QUEUE-005. Neither exception
+  confirms execution or Telegram delivery, changes historical evidence, or
+  releases an independently unsettled control sender or local writer.
+  Operator-native custody,
   exact source/rollback identities and separate live acceptance remain required.
 - **REQ-OPS-006 (Implemented):** General operational alerts are bounded,
   deduplicated, and delivered

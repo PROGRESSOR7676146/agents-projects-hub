@@ -7,6 +7,37 @@ import sqlite3
 from .state_errors import ControlScopeError, StateError
 
 
+def owner_closed_terminal_control(control: str) -> str:
+    """An explicit disposition of an exact terminal turn retires its blocker.
+
+    This never changes the send fence, unknown response or sender-quiescence
+    evidence. SQL expressions are internal aliases, never caller input.
+    """
+    return f"""({control}.read_claim_token IS NULL AND EXISTS (
+        SELECT 1 FROM provider_jobs closed_job
+        JOIN provider_job_resolutions closed_resolution ON closed_resolution.job_id=closed_job.job_id
+        JOIN provider_execution_checkpoints closed_checkpoint ON closed_checkpoint.job_id=closed_job.job_id
+        JOIN provider_turn_terminal_evidence closed_terminal ON closed_terminal.job_id=closed_job.job_id
+        WHERE closed_job.job_id={control}.job_id AND closed_job.status='indeterminate'
+          AND closed_job.session_id={control}.session_id
+          AND closed_job.session_generation={control}.session_generation
+          AND closed_resolution.resolution IN ('acknowledged','superseded','externally_completed')
+          AND closed_terminal.terminal_status IN ('completed','failed','interrupted')
+          AND closed_terminal.provider_thread_id={control}.provider_thread_id
+          AND closed_terminal.provider_turn_id={control}.provider_turn_id
+          AND closed_terminal.project_root={control}.project_root
+          AND closed_checkpoint.provider_thread_id=closed_terminal.provider_thread_id
+          AND closed_checkpoint.provider_turn_id=closed_terminal.provider_turn_id
+          AND closed_checkpoint.project_root=closed_terminal.project_root
+    ))"""
+
+
+def unsettled_control(control: str) -> str:
+    return f"""({control}.send_started_at IS NOT NULL
+        AND {control}.owner_quiesced_at IS NULL
+        AND NOT {owner_closed_terminal_control(control)})"""
+
+
 def control_owner_for_topic(connection: sqlite3.Connection, topic_id: int) -> sqlite3.Row | None:
     """Only the empty global owner set waives exact scope resolution.
 
@@ -14,8 +45,7 @@ def control_owner_for_topic(connection: sqlite3.Connection, topic_id: int) -> sq
     An unresolved alias cannot infer absence of an owner by project identity.
     """
     any_owner = connection.execute(
-        """SELECT 1 FROM codex_turn_controls
-           WHERE send_started_at IS NOT NULL AND owner_quiesced_at IS NULL LIMIT 1"""
+        f"SELECT 1 FROM codex_turn_controls global_control WHERE {unsettled_control('global_control')} LIMIT 1"
     ).fetchone()
     if any_owner is None:
         return None
@@ -65,8 +95,7 @@ def control_blocks_scope(scope_expression: str) -> str:
     """Only trusted internal SQL expressions; target root ignores mutable topic scope."""
     return f"""EXISTS (
         SELECT 1 FROM codex_turn_controls control_owner
-        WHERE control_owner.send_started_at IS NOT NULL
-          AND control_owner.owner_quiesced_at IS NULL
+        WHERE {unsettled_control("control_owner")}
           AND control_owner.project_root = substr({scope_expression},6)
     )"""
 
@@ -89,8 +118,7 @@ def control_scope_is_clear(scope_expression: str, *, topic_id_expression: str) -
         )) END"""
     return f"""(
         NOT EXISTS (SELECT 1 FROM codex_turn_controls global_control
-                    WHERE global_control.send_started_at IS NOT NULL
-                      AND global_control.owner_quiesced_at IS NULL)
+                    WHERE {unsettled_control("global_control")})
         OR (substr(({resolved}),1,6)='root:/' AND NOT {control_blocks_scope(resolved)})
     )"""
 
@@ -99,8 +127,8 @@ def unquiesced_control_owner(
     connection: sqlite3.Connection, execution_scope: str
 ) -> sqlite3.Row | None:
     return connection.execute(
-        """SELECT * FROM codex_turn_controls
-           WHERE send_started_at IS NOT NULL AND owner_quiesced_at IS NULL
+        f"""SELECT * FROM codex_turn_controls control_owner
+           WHERE {unsettled_control("control_owner")}
              AND project_root=? ORDER BY send_started_at,job_id LIMIT 1""",
         (execution_scope.removeprefix("root:"),),
     ).fetchone()
