@@ -20,6 +20,7 @@ from typing import Mapping, Sequence
 
 from .claude_mount_pins import MountPinError, MountPins, SandboxLaunch, mount_id
 from .claude_private_mounts import PrivateMountError, PrivateMountGuard, read_mount_table
+from .namespace_git import pin_git_sources
 
 
 class NamespaceError(ValueError):
@@ -409,8 +410,11 @@ class ProcessNamespaceConfig:
         if not all(stat.S_ISDIR(os.fstat(source_fds[path]).st_mode) for path in (project, home)):
             raise NamespaceError("project and session home must be directories")
         git = project / ".git"
-        if not stat.S_ISDIR(os.fstat(source_fds[git]).st_mode):
-            raise NamespaceError("project must have an ordinary .git directory")
+        if not (
+            stat.S_ISDIR(os.fstat(source_fds[git]).st_mode)
+            or stat.S_ISREG(os.fstat(source_fds[git]).st_mode)
+        ):
+            raise NamespaceError("project must have supported Git metadata")
         home_stat = os.fstat(source_fds[home])
         home_identity = (home_stat.st_dev, home_stat.st_ino)
         for protected in (project, git):
@@ -452,7 +456,7 @@ class ProcessNamespaceConfig:
         for raw in self.private_paths:
             private = _absolute_path(raw, "private authority path", exists=False)
             _not_broad(private, "private authority path")
-            exposed = (*sources, *((sock,) if sock is not None else ()))
+            exposed = tuple(source_fds)
             if any(_within(source, private) or _within(private, source) for source in exposed):
                 raise NamespaceError("mount overlaps private authority")
         if sock is not None and any(
@@ -497,7 +501,7 @@ class ProcessNamespaceConfig:
         private_guard: PrivateMountGuard,
     ) -> tuple[list[str], dict[str, str]]:
         project_fd = pins.open(Path(self.project_root), directory=True)
-        git_fd = pins.open_relative(project_fd, ".git", directory=True)
+        git_sources = pin_git_sources(pins, project_fd, Path(self.project_root))
         home_fd = pins.open(Path(self.session_home), directory=True)
         sock_fd = (
             pins.open(Path(self.permission_socket)) if self.permission_socket is not None else None
@@ -509,7 +513,7 @@ class ProcessNamespaceConfig:
             code_fd = pins.open(code, directory=True)
         source_fds = {
             Path(self.project_root): project_fd,
-            Path(self.project_root) / ".git": git_fd,
+            **git_sources.descriptors,
             Path(self.session_home): home_fd,
             **runtime_fds,
         }
@@ -517,9 +521,30 @@ class ProcessNamespaceConfig:
             source_fds[Path(self.permission_socket)] = sock_fd
         if code is not None and code_fd is not None:
             source_fds[code] = code_fd
+        external = tuple(
+            path for path in git_sources.descriptors if path != Path(self.project_root) / ".git"
+        )
+        if external:
+            _validate_destinations(Path(self.project_root), external, code)
+            for path in external:
+                _not_broad(path, "Git metadata")
+                for other in (
+                    Path(self.project_root),
+                    Path(self.session_home),
+                    *runtime_fds,
+                    *((code,) if code is not None else ()),
+                ):
+                    if _within(path, other) or _within(other, path):
+                        raise NamespaceError("external Git and other mounts overlap")
         bwrap, project, home, roots, sock = self._validate(
             {path: pins.mount_id(fd) for path, fd in source_fds.items()}, source_fds, private_guard
         )
+        for directory in git_sources.external_directories:
+            identities = _scan_writable_tree(directory, source_fds[directory])
+            home_info = os.fstat(home_fd)
+            if (home_info.st_dev, home_info.st_ino) in identities:
+                raise NamespaceError("Git and session-home mounts overlap")
+        git_sources.recheck()
         _require_fd_bind_support(bwrap)
         workdir = _absolute_path(cwd, "working directory")
         if not _within(workdir, project) or not workdir.is_dir():
@@ -588,20 +613,23 @@ class ProcessNamespaceConfig:
         if code is not None and code_fd is not None:
             command.extend(("--ro-bind-fd", str(code_fd), str(code)))
         project_flag = "--ro-bind-fd" if self.project_access == "read-only" else "--bind-fd"
-        git_flag = "--ro-bind-fd" if self.git_access == "read-only" else "--bind-fd"
         command.extend(
             (
                 project_flag,
                 str(project_fd),
                 str(project),
-                git_flag,
-                str(git_fd),
-                str(project / ".git"),
-                "--bind-fd",
-                str(home_fd),
-                SANDBOX_HOME,
             )
         )
+        command.extend(git_sources.arguments(self.git_access))
+        command.extend(("--bind-fd", str(home_fd), SANDBOX_HOME))
+        # Operational work products may contain private backups/review receipts.
+        # Keep materials and deliverable staging usable, but hide this subtree.
+        operational = project / ".hub" / "work"
+        if operational.exists() or operational.is_symlink():
+            _absolute_path(operational, "operational workspace")
+            if not operational.is_dir():
+                raise NamespaceError("operational workspace must be a directory")
+            command.extend(("--tmpfs", str(operational), "--remount-ro", str(operational)))
         if sock is not None and sock_fd is not None:
             command.extend(("--ro-bind-fd", str(sock_fd), _SANDBOX_SOCKET))
         # Freeze synthetic ancestor directories and aliases as well as runtime

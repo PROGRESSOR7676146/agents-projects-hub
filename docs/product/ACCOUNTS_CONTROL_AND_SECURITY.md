@@ -391,7 +391,17 @@ single-writer checks remain mandatory. See
   MUST be denied. Profile and session-home identity MUST remain pinned on exact
   resume and rollback; a profile change MUST require a fresh `/new` session.
   MCP, skills, external plugins and agent children remain unavailable in both
-  profiles. Linked worktrees remain unsupported. Developer acceptance MUST prove
+  profiles. Standard linked Git worktrees MAY expose this worktree's metadata
+  plus shared objects/refs and existing reference logs, with Git access following
+  the selected profile. Pointer files and shared configuration MUST be read-only;
+  the primary checkout/index/HEAD and sibling worktree metadata MUST remain absent.
+  The common Git directory MUST NOT be mounted wholesale. Exposed sources MUST
+  retain pinning, private-authority and bounded tree checks. Unsupported layouts
+  or repository administration requiring common-directory writes MUST fail
+  without an unconfined fallback. Project-contained `.hub/work` MUST be hidden
+  behind an empty read-only mount; incoming materials and artifact staging remain
+  available. See [ADR 0076](../decisions/0076-confined-linked-worktree-git.md).
+  Developer acceptance MUST prove
   the production host/native edit-test-local-Git cycle, repeated fresh Bash
   Allow/Deny, denied effects absent, exact resume, stop/cleanup and uncertainty
   preservation, separately from scoped installed/human Telegram acceptance.
