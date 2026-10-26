@@ -420,8 +420,15 @@ This normative module is part of the
   native terminality. Shutdown MUST protect a reserved send through bounded
   settlement; transient state contention MAY retry that write, never the RPC.
   Native terminality alone MUST NOT clear an unquiesced control
-  owner. Productive admission, control changes, writer transfer, adoption,
-  relocation, lane maintenance and drain MUST retain that root exclusion.
+  owner. An explicit immutable owner resolution of an indeterminate job,
+  combined with independently retained exact terminal proof matching both its
+  checkpoint and frozen control target, MAY retire the effective control blocker
+  after any read claim ends. This is administrative closure, never sender
+  quiescence: original unknown outcomes, send-start fence, interrupt budget and
+  no-replay policy MUST remain unchanged. Resolution alone, archival, elapsed
+  time, lease expiry or terminal proof alone MUST NOT retire it. Productive
+  admission, control changes, writer transfer, adoption, relocation, lane
+  maintenance, drain and independent-server admission MUST share this predicate.
   An unresolved retained scope MUST block and visibly dispose only its own
   input/queued work, without attributing an unrelated owner or aborting another
   topic's delivery cycle.
