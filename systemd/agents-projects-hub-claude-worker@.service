@@ -12,7 +12,10 @@ RestartSec=5
 TimeoutStopSec=20
 UMask=0077
 NoNewPrivileges=true
-PrivateTmp=true
+# Keep the trusted parent in the host UID namespace for immutable-runtime
+# ownership validation. The model itself is isolated by the bubblewrap launcher.
+PrivateTmp=false
+PrivateUsers=false
 
 [Install]
 WantedBy=default.target

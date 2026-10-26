@@ -1,4 +1,32 @@
-# Next session: Claude project editor and visible task states
+# Next session: integrate stop fixes, then Claude developer workflow
+
+## Current goal and order
+
+Owner decision, 2026-10-26: close the remaining integration/rollout tails, then
+deliver the shortened Claude path in project groups. The active development
+goal covers integration and the minimal developer increment; later milestones
+are sequenced, not claimed implemented. Owner: primary development agent,
+sole source writer. Verified integration base: `eb33cac`.
+
+1. Integrate the retained Claude stop/namespace fixes with current tlive source;
+   exact-source gates and paired review precede rollout and bounded live checks.
+2. Extend the owning contracts and deliver the explicit opt-in developer profile:
+   project edits, native commands/tests and local Git. Reuse existing isolation,
+   permission host, queue and one-writer boundaries. Acceptance must prove a
+   useful edit/test/Git cycle, exact human Bash Allow/Deny, stop and no replay.
+3. Same-turn steer and extensions; then local CLI transfer and images.
+4. Claude personal project chat after those capabilities.
+5. Five simultaneous independent execution scopes after the Claude increments;
+   existing worker/capacity configuration is the foundation, never five writers
+   on one root.
+
+The next contract change must distinguish preauthorized project edits from
+fresh per-command human permissions before activation. This plan itself grants
+no tools. Existing editor contracts still govern current behavior. Historical
+priorities below are evidence; the order above supersedes their next triggers.
+Do not reopen ancient sessions or make unrelated operations debt a prerequisite.
+Current closure: open until exact-source gates and separately scoped live
+acceptance pass; offline/native fixtures alone do not complete this goal.
 
 
 ## Current execution: trusted installation
@@ -270,16 +298,12 @@ owner defines state API, transaction ownership and invocation boundaries;
 parallel writing and recursive delegation are outside this goal. Sol checks
 supplement, but do not replace, independent review of Codex-authored
 lifecycle/security changes. The
-owner explicitly selected **Claude Opus 5.5, effort high** as the reviewer,
-invoked directly through CPA HTTP without Claude CLI. Follow the
-[source-review runbook](CLAUDE_SOURCE_REVIEW.md) for provider/model routing and
-availability evidence. Use **Gemini** as the owner-authorized fallback only
-after the intended CPA Claude route is unavailable. A CLI or other-provider
-route failure alone does not establish that. Never use synthetic inference/quota
-probes or silently substitute another Opus version.
-Record the actual reviewer/model, fallback reason, candidate revision, findings
-and fixes in the PR. An unavailable reviewer does not waive review. If both
-review paths fail, keep the candidate review-ready and ask the owner for review;
+owner selected independent **Opus 5.5/high and agy Argon High** reviews.
+The owning [source-review runbook](CLAUDE_SOURCE_REVIEW.md) defines exact routing,
+the temporary-unavailability exception and comparison after author verification.
+Never substitute Opus 4.8 or use synthetic availability probes. Record actual
+reviewers, candidate, findings/fixes and comparison in the PR. If neither
+review path provides a valid PASS, keep the candidate ready for owner review;
 never invent approval. Review is read-only in a separate clean candidate checkout,
 and does not grant permission to run unrelated live tests or deployment.
 
@@ -469,3 +493,49 @@ Update the matrix and next trigger as evidence changes. Owner-facing reports
 include an approximate overall-goal completion percentage with an uncertainty
 range, a stable reduced scope, and concrete completed/open milestones. Treat it
 as a planning estimate, separate from acceptance evidence and automatic scoring.
+
+### Owned Claude stop certainty follow-up
+
+Source lane `fix/claude-stop-certainty-20261024`, base `17e4d9b`; owner: Hub
+maintainer, sole writer. A local Claude interruption currently loses the owned
+process cleanup evidence and can retain an indeterminate job and pending stop,
+blocking later work. The candidate carries exact-session termination evidence
+only after process and sandbox cleanup, and consumes it only with a covering
+owner stop. State retains cancellation/stop transaction ownership; generic or
+unmatched interruption and failed cleanup remain uncertain, without replay.
+The first native attempt remains uncertain: process exit alone cannot prove
+that the CLI saved a resumable conversation. Existing-session stop tests must
+also execute the later job with the same resume binding.
+
+Focused regressions cover process cleanup, exact-session/stop matching, root
+release and failure preservation. Canonical publication and independent Claude
+review are pending. Next: those exact-source gates, separately authorized
+deployment, then human Edit/Deny, stop and exact-session restart acceptance.
+Existing uncertain jobs are preserved; this candidate is not a retrospective
+resolution of their outcome. Inspect tracked, staged and untracked lane state
+after owner integration before cleanup. Live acceptance remains open.
+
+### Claude stop/error precedence follow-up
+
+Owner: Hub maintainer, sole writer; source lane
+`fix/claude-stop-timeout-certainty-20261025`, base `17c3040e`. Paired source review
+identified early stop and stream-error precedence races. Real owned-CLI/worker
+regressions reproduce retained root exclusion before native launch, discarded
+completed output, and contradictory stream or persistence failures masked by a
+covering stop. The candidate fixes these paths and preserves unconfirmed help
+process cleanup as uncertainty, even if temporary-directory cleanup also fails.
+A second paired review exposed the remaining drain/stop race: a stop must drain
+bounded final bytes after owned cleanup, validate complete terminal records and
+retain completion before the worker applies stop precedence. The same terminal
+validator serves incremental and final parsing. Contradictions and exit conflicts
+retain uncertainty; interrupted partial lines alone do not prove completion.
+First native attempts without a validated terminal outcome still retain exclusion
+and are never replayed. Drain or reap timeout is also uncertainty: a stop flag
+cannot establish EOF or validate unobserved buffered output. Regressions retain
+root exclusion for an escaped pipe holder and an interrupted reap before drain.
+
+State: local implementation under validation, not deployed or accepted. Next
+trigger: focused regressions, paired Opus/Argon review and exact publication
+gates, then a separately authorized installed acceptance scope. Existing live
+acceptance remains open; do not replay earlier calls to test the new source.
+Inspect the lane after owner integration before cleanup.

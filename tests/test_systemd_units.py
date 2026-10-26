@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from configparser import ConfigParser
 from pathlib import Path
 
 
@@ -96,6 +97,36 @@ class SystemdTopologyTests(unittest.TestCase):
         self.assertIn("OnActiveSec=5min", timer)
         self.assertIn("OnUnitActiveSec=5min", timer)
         self.assertNotIn("OnBootSec=", timer)
+
+    def test_claude_worker_parent_preserves_host_uid_namespace(self) -> None:
+        # User-manager filesystem namespaces can map only the service UID,
+        # making immutable root-owned runtime code appear owned by overflow UID.
+        primary = ConfigParser(interpolation=None, strict=False)
+        primary.read_string(self.unit("agents-projects-hub-worker@.service"))
+        # An existing deployment may carry this later generic socket drop-in.
+        primary.read_string("[Service]\nBindPaths=-/tmp/codex-daemon-%U\n")
+        primary.read_string(
+            self.unit("agents-projects-hub-worker@claude.service.d/zz-claude-host-uid.conf")
+        )
+        slot = ConfigParser(interpolation=None, strict=False)
+        slot.read_string(self.unit("agents-projects-hub-claude-worker@.service"))
+        for name, config in (("primary", primary), ("slot", slot)):
+            with self.subTest(worker=name):
+                service = config["Service"]
+                self.assertFalse(service.getboolean("PrivateTmp"))
+                self.assertFalse(service.getboolean("PrivateUsers"))
+                # Reset the generic worker's Codex-only bind too: it otherwise
+                # still requests a mount/user namespace in a user service.
+                self.assertEqual(service.get("BindPaths", ""), "")
+                self.assertTrue(service.getboolean("NoNewPrivileges"))
+                self.assertEqual(int(service["UMask"], 8), 0o077)
+
+    def test_bootstrap_installs_claude_primary_namespace_override(self) -> None:
+        installer = (self.root / "scripts" / "install.sh").read_text(encoding="utf-8")
+        dropin = "agents-projects-hub-worker@claude.service.d/zz-claude-host-uid.conf"
+        self.assertIn('"$systemd_root/agents-projects-hub-worker@claude.service.d"', installer)
+        self.assertIn(f'install -m 644 "$repo_root/systemd/{dropin}"', installer)
+        self.assertIn(f'"$systemd_root/{dropin}"', installer)
 
 
 if __name__ == "__main__":

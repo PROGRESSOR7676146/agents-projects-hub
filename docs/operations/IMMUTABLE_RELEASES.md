@@ -1,7 +1,7 @@
 # Immutable release manifest and schema gate
 
 Status: repository tooling implemented; live activation not authorized
-Last updated: 2026-09-05
+Last updated: 2026-10-24
 
 The deployment manifest is private operational evidence. It binds two distinct
 clean-tree wheel artifacts—candidate and rollback—to the exact configuration,
@@ -24,6 +24,42 @@ also support that target schema, because ordinary runtime rollback retains the
 migrated database and all accepted queue/outbox records.
 
 ## Create and verify
+
+### Refresh the recovery checkout before release or deployment
+
+Include this operation in every release/deployment preparation, before cutover.
+The recovery checkout is a separate source working tree, not the running
+release, a database backup or a published recovery capsule. Record its private
+location and exact intended candidate revision in the local release checklist.
+
+1. Confirm that the selected recovery root is the intended Git worktree, that
+   no active session or local writer uses it, and that its origin matches the
+   reviewed source. Inspect tracked, staged and untracked files, including
+   ignored local state. Preserve private data outside version control.
+2. Require a clean source tree. If it is dirty, detached unexpectedly, divergent
+   or in use, stop the refresh and preserve it for investigation. Never use
+   `reset --hard`, `clean`, a forced checkout or an automatic stash to pass this
+   gate. Do not switch the working tree of an active recovery session.
+3. Fetch the intended source through the approved Git route and resolve the
+   exact reviewed candidate commit. On the recovery branch, update only with
+   `git merge --ff-only CANDIDATE_SHA`; never substitute an unpinned moving
+   branch. If fast-forward is impossible, stop and prepare a separate clean
+   recovery worktree rather than replacing existing work.
+4. Require clean status and exact `HEAD == CANDIDATE_SHA` after the update.
+   Check the checkout's package/schema declarations against the candidate
+   artifact and the separately retained compatible rollback artifact. This
+   operation must not import new code against live state or migrate a database.
+5. Verify the owning [recovery capsule](RECOVERY_CAPSULES.md) separately. When
+   the release changes its guide, topology, schema or recovery commands,
+   publish and verify a fresh capsule from the clean owner revision through
+   that procedure. Matching old hashes alone do not establish freshness.
+
+Keep the before/after revisions, clean-tree check and capsule verification
+privately with the release evidence. An outdated or unverified recovery
+checkout leaves release preparation incomplete; a successful refresh does not
+authorize deployment or establish live acceptance.
+
+### Bind the artifacts
 
 Prepare the two wheels, a mode-`0600` shadow configuration, and a
 SQLite-consistent mode-`0600` backup outside the repository. Then create the

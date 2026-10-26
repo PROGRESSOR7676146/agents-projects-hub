@@ -141,6 +141,18 @@ The host creates the endpoint in a fresh system temporary directory. That direct
 must be outside configured private authority paths; an overlapping temporary
 directory is refused rather than exempted from exclusion.
 
+The trusted Claude worker parent must retain the host UID namespace. In a user
+systemd manager, `PrivateTmp` or a `BindPaths` mount may implicitly enable a user
+namespace that maps only the service UID. Root-owned runtime files then appear
+owned by the overflow UID and correctly fail immutable-runtime validation. The
+primary Claude instance drop-in disables `PrivateTmp`/`PrivateUsers` and clears
+the generic template's Codex-only `BindPaths`; the dedicated Claude slot template
+uses the same host-UID policy. Bootstrap installs both. For an existing immutable
+deployment, stage and inspect the merged unit as a separately authorized service
+change, then restart only an idle Claude worker. Preserve `NoNewPrivileges`,
+private umask, runtime ownership checks and the model's bubblewrap boundary;
+never accept the overflow UID as trusted. Other providers retain their unit policy.
+
 ## Offline checks
 
 Run focused Python coverage through the normal validator:

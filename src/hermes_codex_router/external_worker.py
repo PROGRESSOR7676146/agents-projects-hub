@@ -1217,6 +1217,9 @@ class ExternalQueueWorker:
                     on_claude_process_started=on_claude_process_started,
                     claude_sandbox=hosted.sandbox if hosted else None,
                     claude_images=prepared.claude_images,
+                    pending_stop_request=lambda: self.state.pending_emergency_stop_for_job(
+                        job.job_id
+                    ),
                 )
             if claude_journal is not None and claude_session_binding is not None:
                 try:

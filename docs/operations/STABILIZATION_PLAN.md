@@ -32,6 +32,14 @@ triggers below. Historical evidence is not current deployment acceptance.
 
 ## Revised delivery scope
 
+Current owner order (2026-10-26): integrate stop/tlive tails, minimal Claude
+developer in project groups, steer and extensions, local CLI and images,
+personal project chat, then five independent sessions. The
+[current goal](NEXT_DEVELOPMENT_SESSION.md#current-goal-and-order) owns execution
+criteria and supersedes the historical editor-only next triggers below.
+Developer contracts/implementation and all newly added live gates remain open;
+the plan does not enable tools. Existing safety and unrelated backlog remain.
+
 Owner decision under [ADR 0067](../decisions/0067-claude-editor-first.md): deliver
 Claude project reading/editing first. This supersedes older Claude parity,
 native-transfer and image next triggers below. The finite
@@ -72,29 +80,14 @@ review. Scoring, judges and parallel writers stay excluded.
 
 ## Current source integration checkpoint
 
-Merged source `b2494bfb134d57571d5d54f1e16018dcc2a3d79e` includes Operations,
-drain, the aiohttp patch and source-topic delivery notices. PRs 212/214 own
-review and exact-head gates; merge CI is separate. Owner: Hub maintainer, sole
-writer. Next: authorized rollout, compatible rollback and live acceptance.
-Older evidence is historical; closure is open.
-
-The stacked provider-neutral namespace extraction at clean
-`fcc755fe4d70ddbff6b544c2a1a7b09d4b27e0ac` passed canonical validation
-(2,042 tests in 187 modules) and seven hosted checks. The bounded sealed-material
-primitive at clean `cd8b6047177b92296df78f2dc5c1ef80c2c83490` passed canonical
-validation (2,051 tests in 189 modules); required independent review and its
-hosted checks remain separate. Both are offline foundations, with no productive
-advisor, role workflow or installed custody claim. ADRs 0056 and 0057 belong to
-those independent candidate branches; they are not part of this integration base.
-
-The next bounded recovery follow-up gives a typed local response-budget expiry
-the existing saved-task retry only at the exact pre-submission preparation
-boundary. Generic/profile/post-submission errors and contradictory execution
-evidence remain excluded; no new replay, approval, schema or lifecycle ownership
-is introduced. Source owner: Hub maintainer, lane
-`fix/codex-preparation-deadline-retry`, base `98c78fc`. After publication/review,
-integrate and revalidate the combined revision before the two-worker canary.
-Inspect tracked, staged and untracked lane state before any post-merge cleanup.
+Verified main base: `eb33cac`; source owner: Hub maintainer, sole writer.
+Retained Claude stop/namespace fixes are being combined with newer tlive source
+in `fix/claude-tail-integration-goal`. Publication/review and live installation
+are distinct gates. Preserve typed pre-submission retry, durable approvals and
+owner-closed history. Never downgrade stop certainty or replay uncertain work.
+Next: combined-source gates, independent review, compatible rollback and a fresh
+idle/control check before authorized rollout and live acceptance. Closure open.
+Inspect tracked, staged and untracked state before any post-merge cleanup.
 
 Custody, broader progress, Claude editor/route acceptance, outcome journal,
 three-project/restart acceptance, Hermes operations, off-machine restore and
@@ -105,6 +98,13 @@ does not close the notification incident or payload recovery.
 
 Journal: [checkpoint](INCIDENT_JOURNAL.md#source-checkpoint).
 Hermes notices: [checkpoint](HERMES_INCIDENT_NOTICES.md); live/Analyze open.
+
+The [tlive subscription fix](../../integrations/tlive/README.md) has offline
+stalled-history, card and disconnect regressions. The
+[Claude parent UID policy](CLAUDE_FILE_PERMISSIONS.md) restores runtime validation.
+Source reviewed; [stop follow-up](NEXT_DEVELOPMENT_SESSION.md#owned-claude-stop-certainty-follow-up) and live gates remain open.
+Combine Claude editor acceptance with Hub queue, delivery, stop and exact-session
+recovery checks, preserving uncertain work and genuine human Write/Edit decisions.
 
 ## Read-only outcome projection candidate
 
