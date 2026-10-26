@@ -234,9 +234,14 @@ class ClaudePermissionJournalTests(unittest.TestCase):
             bind("editor")
 
     def test_editor_session_cannot_silently_become_developer(self) -> None:
-        arguments = dict(mode="file_tools", home=self.root, is_new=True)
         self.journal.bind_session_mode(
-            self.job.job_id, self.token, self.launch.session_id, self.root, **arguments
+            self.job.job_id,
+            self.token,
+            self.launch.session_id,
+            self.root,
+            mode="file_tools",
+            home=self.root,
+            is_new=True,
         )
         with self.assertRaises(StateError):
             self.journal.bind_session_mode(
@@ -244,7 +249,9 @@ class ClaudePermissionJournalTests(unittest.TestCase):
                 self.token,
                 self.launch.session_id,
                 self.root,
-                **arguments,
+                mode="file_tools",
+                home=self.root,
+                is_new=True,
                 profile="developer",
             )
 

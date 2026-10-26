@@ -71,7 +71,7 @@ class ClaudeDeveloperPolicyTests(unittest.TestCase):
                 )
 
     def test_stream_policy_exposes_only_the_requested_profile_tools(self) -> None:
-        event = {"type": "system", "subtype": "init", "tools": ["Read", "Bash"]}
+        event: dict[str, object] = {"type": "system", "subtype": "init", "tools": ["Read", "Bash"]}
         require_file_tool_event(event, profile="developer")
         with self.assertRaises(ClaudeStreamError):
             require_file_tool_event(event)
