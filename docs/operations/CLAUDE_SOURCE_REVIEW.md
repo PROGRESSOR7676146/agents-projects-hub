@@ -1,4 +1,4 @@
-# Independent source review with Opus and Argon
+# Independent source review with Opus
 
 This runbook owns the development-review invocation procedure referenced by
 [AGENTS.md](../../AGENTS.md) and the
@@ -8,24 +8,16 @@ It does not change the Hub-owned native Claude editor worker or its separate
 
 ## Required reviewers
 
-Request independent reviews from **Claude Opus 5.5, effort high**, through
-native Claude CPA HTTP, and **agy Gemini Argon High**, exact catalog variant
-`gemini-4-argon-high`. Give both the same bounded public-source capsule,
-candidate revision and questions, without the other answer. Do not substitute
-Opus 4.8. Argon is a second reviewer, not only a fallback.
+Owner decision, 2026-10-26: request every independent source review from
+**Claude Opus 5.5, effort high**, through native Claude CPA HTTP. This supersedes
+the paired-review policy and the Gemini/Argon and Astra fallback permissions.
+Do not invoke those models for review or substitute Opus 4.8.
 
-If one reviewer gives PASS and the other is temporarily unavailable, publication
-may proceed on that independent PASS after the usual gates. Record the missing
-review and its actual failure; do not wait indefinitely or invent an answer.
-A negative review, unresolved finding, truncated answer or missing verdict is
-not temporary unavailability and cannot be ignored under this exception.
-When the ordinary reviewers are unavailable, an independent **GPT-6 Astra**
-review MAY supply the required verdict. Record the ordinary routes' actual
-unavailability and give Astra the same exact clean candidate and bounded public
-source, without prior reviewer answers. This fallback does not override a
-negative review or unresolved finding, and Astra's own incomplete or missing
-verdict is not approval. If no eligible reviewer provides a valid PASS, preserve
-the candidate for owner review.
+An Opus PASS permits publication only after author verification of the findings
+and the usual exact-candidate gates. An unavailable reviewer, negative review,
+unresolved finding, truncated answer or missing verdict is not approval. If Opus
+cannot supply a valid verdict, preserve the candidate and report the actual
+failure; do not select a replacement reviewer automatically.
 
 ## Route and request
 
@@ -53,14 +45,8 @@ the candidate for owner review.
    `output_config: {"effort": "high"}`. Keep tools absent, output/time bounded
    and automatic retries disabled. Verify support before applying these fields
    to a different CPA version. There is no synthetic availability prompt.
-6. Resolve Argon from the passive catalog and use the exact High variant above,
-   without a separate unsupported effort flag. Use a separate read-only
-   sandbox/plan directory containing only the public capsule; no private state,
-   editing, delegation, probes or deployment. Bound time and output. Retrieve
-   the visible answer, not just the helper's completed job record. Retain the
-   requested model separately from any independently reported served identity.
 
-## Evidence and comparison
+## Evidence and author verification
 
 Retain a private receipt binding the clean candidate, capsule digest, requested
 model/effort, transport, returned model, completion status and visible findings.
@@ -79,13 +65,10 @@ not prove that every Claude account or route has exhausted quota; cached unused
 quota likewise does not prove current request availability. Preserve the original
 failure receipt when correcting an overbroad earlier interpretation.
 
-Check each answer against source and tests, then tell the owner who did better
-on this review: confirmed defects, missed issues, false positives and useful
-recommendations matter more than length or confidence. A tie is valid. If one
-answer is unavailable or evidence cannot separate them, comparison is
-inconclusive. Record actual reviewers, findings, fixes and the comparison in
-the PR. One review does not establish general model superiority.
+Check the answer against source and tests, then report confirmed defects, false
+positives, fixes and remaining limitations to the owner and in the PR. Historical
+paired-review receipts and comparisons remain evidence for their named revisions;
+they do not authorize another Argon request or imply a current comparison.
 
 Do not change routing cooldowns, credentials or services to obtain a verdict.
-Neither a review nor the availability exception grants deployment or approval
-authority.
+Source review grants no deployment or action-approval authority.
