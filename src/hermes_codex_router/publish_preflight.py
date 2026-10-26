@@ -577,7 +577,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             [sys.executable, str(ROOT / "scripts" / "validate.py")],
             cwd=ROOT,
             env=environment,
-            timeout=900,
+            # Full history, typing and tests must finish even on a busy host;
+            # retain a finite budget without omitting any canonical stage.
+            timeout=1800,
         )
         sys.stdout.write(validator.stdout)
         sys.stderr.write(validator.stderr)
