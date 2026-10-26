@@ -233,7 +233,9 @@ class StdioFailureDrainTests(unittest.TestCase):
             self.assertTrue(entered.wait(5))
             release.set()
             transport._writer_thread.join(5)
-            self.assertTrue(finished.wait(2), "quiet stdout hid the asynchronous writer fault")
+            # Leave scheduling margin under the canonical parallel suite while
+            # still rejecting a quiet reader stuck on the ordinary 20s budget.
+            self.assertTrue(finished.wait(5), "quiet stdout hid the asynchronous writer fault")
         self.assertEqual(len(outcomes), 1)
         self.assertIsInstance(outcomes[0], CodexTurnError)
         self.assertIn("drain deadline", str(outcomes[0]))

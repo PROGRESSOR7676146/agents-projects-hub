@@ -180,6 +180,7 @@ class ExternalCliAdapter:
         self._uses_default_runner = run is subprocess.run
         self._process_lock = threading.Lock()
         self._active_process: subprocess.Popen[str] | None = None
+        self._claude_stop_process: subprocess.Popen[str] | None = None
         self._interrupt_requested = threading.Event()
         self._claude_capabilities = ClaudeCliCapabilities()
 
@@ -199,6 +200,8 @@ class ExternalCliAdapter:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 return False
+            if self.runtime == "claude":
+                self._claude_stop_process = process
             return True
 
     def prepare_interruptible_turn(self) -> None:
@@ -210,6 +213,7 @@ class ExternalCliAdapter:
                 if exit_code is None:
                     raise ExternalRuntimeError("provider process is already active")
             self._interrupt_requested.clear()
+            self._claude_stop_process = None
 
     def build_argv(
         self,
@@ -825,8 +829,14 @@ class ExternalCliAdapter:
                     self._interrupt_requested.wait(min(0.05, remaining))
             # A killed stream may end in a partial NDJSON line. A complete
             # terminal or clean process exit must still pass final validation.
-            if self._interrupt_requested.is_set() and not reader.terminal_seen and exit_code != 0:
-                raise ExternalTurnInterrupted("claude turn interrupted by user")
+            if (
+                self._interrupt_requested.is_set()
+                and self._claude_stop_process is process
+                and exit_code == -signal.SIGKILL
+            ):
+                reader.validate_interrupted_tail()
+                if not reader.terminal_seen:
+                    raise ExternalTurnInterrupted("claude turn interrupted by user")
             stdout = reader.finish()
             if time.monotonic() >= deadline:
                 raise subprocess.TimeoutExpired(argv, timeout)
@@ -855,10 +865,14 @@ class ExternalCliAdapter:
         with self._process_lock:
             if process.returncode is not None:
                 return
+            running = peek_exit_code(process) is None
             try:
                 os.killpg(process.pid, signal.SIGTERM if graceful else signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            else:
+                if not graceful and running and self._interrupt_requested.is_set():
+                    self._claude_stop_process = process
             if graceful:
                 # Reserve the leader PID until the last group signal. The
                 # stop event can shorten this wait without acquiring the lock.

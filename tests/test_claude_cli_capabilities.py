@@ -7,7 +7,6 @@ import tempfile
 import threading
 import time
 import unittest
-from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -99,18 +98,15 @@ class ClaudeCliCapabilitiesTests(unittest.TestCase):
         self.help_cli()
         temporary_directory = tempfile.TemporaryDirectory
 
-        @contextmanager
-        def broken_directory(**kwargs):
-            with temporary_directory(**kwargs) as directory:
-                try:
-                    yield directory
-                finally:
-                    raise OSError("Fictional directory cleanup failure")
+        class BrokenDirectory(temporary_directory):
+            def cleanup(self):
+                super().cleanup()
+                raise OSError("Fictional directory cleanup failure")
 
         with (
             patch(
                 "hermes_codex_router.claude_cli_capabilities.tempfile.TemporaryDirectory",
-                broken_directory,
+                BrokenDirectory,
             ),
             patch(
                 "hermes_codex_router.claude_cli_capabilities._read_help",

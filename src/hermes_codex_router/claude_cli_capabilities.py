@@ -245,7 +245,9 @@ class ClaudeCliCapabilities:
                     if interrupted.is_set():
                         raise ClaudeCliCapabilityError()
                     return path
-            with tempfile.TemporaryDirectory(prefix="hub-claude-capability-") as directory:
+            temporary = tempfile.TemporaryDirectory(prefix="hub-claude-capability-")
+            try:
+                directory = temporary.name
                 isolated = {
                     key: value
                     for key, value in environment.items()
@@ -264,6 +266,11 @@ class ClaudeCliCapabilities:
                 except ClaudeCliCleanupError:
                     cleanup_failed = True
                     raise
+            finally:
+                try:
+                    temporary.cleanup()
+                except Exception:
+                    raise ClaudeCliCleanupError() from None
             if not _has_required_advertisement(
                 output, file_tools=file_tools, image_input=image_input
             ):

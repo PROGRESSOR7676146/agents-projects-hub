@@ -188,6 +188,28 @@ class ClaudeStreamReader:
         except UnicodeDecodeError as exc:
             raise ClaudeStreamError("claude returned invalid structured encoding") from exc
 
+    def validate_interrupted_tail(self) -> None:
+        """Validate a complete final JSON event even without its line delimiter.
+
+        Only an incomplete JSON fragment may be discarded by a proven local
+        kill. A complete event still owns session, policy and terminal checks.
+        ``finish`` remains strict for every non-interrupted outcome.
+        """
+        if not self._pending:
+            return
+        try:
+            line = bytes(self._pending).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ClaudeStreamError("claude returned invalid structured encoding") from exc
+        try:
+            json.loads(line)
+        except json.JSONDecodeError as exc:
+            if exc.pos >= len(line.rstrip()) or exc.msg.startswith("Unterminated string"):
+                return
+            raise ClaudeStreamError("claude returned malformed structured output") from exc
+        self._line(bytes(self._pending))
+        self._pending.clear()
+
     def _line(self, raw: bytes) -> None:
         if self.image_receipt and len(raw) > MAX_IMAGE_EVENT_BYTES:
             raise ClaudeStreamError("claude structured event exceeded its limit")

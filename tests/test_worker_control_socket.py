@@ -399,18 +399,28 @@ class WorkerControlSocketTests(unittest.TestCase):
     def test_server_independently_rejects_wrong_uid_and_binding(self) -> None:
         self.endpoint()
 
-        def raw(request: dict[str, object]) -> dict[str, object]:
+        def raw(request: dict[str, object], *, peer_may_close: bool = False) -> dict[str, object]:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
                 client.settimeout(2)
                 client.connect(str(self.path))
-                client.sendall(encode_frame(request))
-                return json.loads(client.recv(4096))
+                try:
+                    client.sendall(encode_frame(request))
+                    response = client.recv(4096)
+                except (BrokenPipeError, ConnectionResetError):
+                    if not peer_may_close:
+                        raise
+                    return {"ok": False}
+                if not response and peer_may_close:
+                    return {"ok": False}
+                return json.loads(response)
 
         with patch(
             "hermes_codex_router.worker_control_socket._peer_credentials",
             return_value=(os.getpid(), os.geteuid() + 1, 1),
         ):
-            self.assertFalse(raw(self.request())["ok"])
+            # Peer authentication precedes reading any frame. Rejection may
+            # therefore close the socket before this client sends its request.
+            self.assertFalse(raw(self.request(), peer_may_close=True)["ok"])
         request = self.request()
         request["binding"] = replace(self.binding, pid=os.getpid() + 1).as_dict()
         self.assertFalse(raw(request)["ok"])

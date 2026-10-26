@@ -126,6 +126,27 @@ class ClaudeStopPrecedenceTests(unittest.TestCase):
         self.assert_state(worker, job_id, uncertain=True)
         self.assertEqual(worker.state.get_provider_job(job_id).error_code, "ClaudeCliCleanupError")
 
+    def test_directory_cleanup_failure_alone_cannot_establish_stop_proof(self) -> None:
+        fixture, job_id = self.fixture()
+        adapter = self.adapter(fixture.root, "raise AssertionError('must not launch')\n")
+        worker = fixture.worker(cast(Any, adapter))
+        temporary_directory = claude_cli_capabilities.tempfile.TemporaryDirectory
+
+        class FailingDirectory(temporary_directory):
+            def cleanup(inner) -> None:
+                super().cleanup()
+                self.request_stop(worker, job_id, adapter)
+                raise OSError("Fictional directory cleanup failure")
+
+        with (
+            patch.object(claude_cli_capabilities.tempfile, "TemporaryDirectory", FailingDirectory),
+            patch.object(adapter, "_run_claude_process") as run,
+        ):
+            self.assertTrue(worker.run_cycle())
+        run.assert_not_called()
+        self.assert_state(worker, job_id, uncertain=True)
+        self.assertEqual(worker.state.get_provider_job(job_id).error_code, "ClaudeCliCleanupError")
+
     def test_stop_does_not_erase_stream_or_persistence_failure(self) -> None:
         for failure in ("wrong-session", "policy", "persistence"):
             with self.subTest(failure=failure):
@@ -253,7 +274,29 @@ class ClaudeStopPrecedenceTests(unittest.TestCase):
             with self.subTest(outcome=outcome):
                 self._stop_while_draining_terminal(established=True, outcome=outcome)
 
-    def _stop_while_draining_terminal(self, *, established: bool, outcome: str) -> None:
+    def test_late_stop_cannot_hide_crash_or_unterminated_final_event(self) -> None:
+        for outcome in ("crash", "success", "status", "unknown", "foreign", "policy"):
+            with self.subTest(outcome=outcome):
+                self._stop_while_draining_terminal(
+                    established=True, outcome=outcome, ending="", exit_code=1
+                )
+
+    def test_killed_stream_still_validates_complete_unterminated_final_event(self) -> None:
+        for outcome in ("success", "status", "foreign", "policy", "malformed"):
+            with self.subTest(outcome=outcome):
+                self._stop_while_draining_terminal(
+                    established=True, outcome=outcome, ending="", running=True
+                )
+
+    def _stop_while_draining_terminal(
+        self,
+        *,
+        established: bool,
+        outcome: str,
+        ending: str | None = None,
+        exit_code: int | None = None,
+        running: bool = False,
+    ) -> None:
         fixture, job_id = self.fixture(established=established)
         event = {
             "type": "assistant",
@@ -275,12 +318,26 @@ class ClaudeStopPrecedenceTests(unittest.TestCase):
             terminal["result"] = ""
         elif outcome == "error-flag":
             terminal.update(subtype="error_during_execution", is_error=False)
-        ending = "" if outcome == "no-newline" else "\n"
+        elif outcome == "policy":
+            terminal = {"type": "control_request"}
+        if ending is None:
+            ending = "" if outcome == "no-newline" else "\n"
+        if exit_code is None:
+            exit_code = 1 if outcome == "exit" else 0
+        written = fixture.root / "fictional-output-written"
         body = (
             f'event={event!r}\nevent["session_id"]=native\n'
             f'terminal={terminal!r}\nterminal["session_id"]=native\n'
-            f'os.write(1,(json.dumps(event)+"\\n"+json.dumps(terminal)+{ending!r}).encode())\n'
-            f"sys.exit({1 if outcome == 'exit' else 0})\n"
+            + (f'terminal["session_id"]={fixtures.OTHER_UUID!r}\n' if outcome == "foreign" else "")
+            + (
+                'os.write(1,(json.dumps(event)+"\\n").encode())\n'
+                if outcome == "crash"
+                else 'os.write(1,(json.dumps(event)+"\\n{bad}").encode())\n'
+                if outcome == "malformed"
+                else f'os.write(1,(json.dumps(event)+"\\n"+json.dumps(terminal)+{ending!r}).encode())\n'
+            )
+            + f"open({str(written)!r},'w').close()\n"
+            + ("time.sleep(30)\n" if running else f"sys.exit({exit_code})\n")
         )
         adapter = self.adapter(fixture.root, body)
         worker = fixture.worker(cast(Any, adapter))
@@ -291,7 +348,9 @@ class ClaudeStopPrecedenceTests(unittest.TestCase):
             original(journal, *args, **kwargs)
             assert adapter._active_process is not None
             deadline = time.monotonic() + 5
-            while peek_exit_code(adapter._active_process) is None:
+            while not written.exists() or (
+                not running and peek_exit_code(adapter._active_process) is None
+            ):
                 self.assertLess(time.monotonic(), deadline)
                 time.sleep(0.001)
             self.request_stop(worker, job_id, adapter)
@@ -300,7 +359,7 @@ class ClaudeStopPrecedenceTests(unittest.TestCase):
         with patch.object(ExecutionJournal, "record_claude_item", new=record):
             self.assertTrue(worker.run_cycle())
         self.assertEqual(stopped, [True])
-        completed = outcome in {"success", "no-newline"}
+        completed = outcome in {"success", "no-newline"} and exit_code == 0 and not running
         self.assert_state(worker, job_id, uncertain=not completed)
         self.assertIsNone(adapter._active_process)
         checkpoint = ExecutionJournal(worker.state).read(job_id)
@@ -358,7 +417,7 @@ class ClaudeStopPrecedenceTests(unittest.TestCase):
         self.assert_state(worker, job_id, uncertain=True)
         self.assertIsNone(adapter._active_process)
 
-    def test_stop_reap_timeout_does_not_skip_buffered_stream_validation(self) -> None:
+    def test_stop_reap_timeout_preserves_uncertainty_with_buffered_output(self) -> None:
         fixture, job_id = self.fixture()
         marker = fixture.root / "fictional-buffered"
         adapter = self.adapter(

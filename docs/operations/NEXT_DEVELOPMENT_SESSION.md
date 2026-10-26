@@ -533,6 +533,10 @@ First native attempts without a validated terminal outcome still retain exclusio
 and are never replayed. Drain or reap timeout is also uncertainty: a stop flag
 cannot establish EOF or validate unobserved buffered output. Regressions retain
 root exclusion for an escaped pipe holder and an interrupted reap before drain.
+Complete JSON tails without a final newline still undergo session/policy/terminal
+validation. Discarding an incomplete fragment requires this adapter's actual
+SIGKILL and that exact signal exit; a late stop cannot hide an earlier crash.
+Help-directory cleanup failure also remains uncertain independently of reap.
 
 State: local implementation under validation, not deployed or accepted. Next
 trigger: focused regressions, paired Opus/Argon review and exact publication
