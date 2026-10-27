@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import shlex
 import unicodedata
-from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 
@@ -204,11 +203,73 @@ def validate_faithful_input(tool_input: Any) -> None:
 
 def file_tool_event_policy(profile: str) -> Callable[[dict[str, object]], None]:
     profile_tools(profile)
-    return (
-        require_file_tool_event
-        if profile == "editor"
-        else partial(require_file_tool_event, profile=profile)
-    )
+    if profile == "editor":
+        return require_file_tool_event
+    active_bash: set[str] = set()
+
+    def check(event: dict[str, object]) -> None:
+        checked = event
+        if _foreground_bash_heartbeat(event, active_bash):
+            # This native progress parent is the executing Bash itself. It is
+            # not the assistant/user parent identifying an agent child.
+            checked = event | {"parent_tool_use_id": None}
+        require_file_tool_event(checked, profile=profile)
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            return
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            identity = block.get("id")
+            if (
+                event.get("type") == "assistant"
+                and block.get("type") == "tool_use"
+                and block.get("name") == "Bash"
+                and isinstance(identity, str)
+                and 0 < len(identity) <= 128
+            ):
+                active_bash.add(identity)
+            if event.get("type") == "user" and block.get("type") == "tool_result":
+                identity = block.get("tool_use_id")
+                if isinstance(identity, str):
+                    active_bash.discard(identity)
+
+    return check
+
+
+def _foreground_bash_heartbeat(event: dict[str, object], active: set[str]) -> bool:
+    fields = {
+        "type",
+        "tool_use_id",
+        "tool_name",
+        "parent_tool_use_id",
+        "elapsed_time_seconds",
+        "heartbeat",
+        "session_id",
+        "uuid",
+    }
+    parent, progress = event.get("parent_tool_use_id"), event.get("tool_use_id")
+    elapsed = event.get("elapsed_time_seconds")
+    if not (
+        set(event) == fields
+        and event.get("type") == "tool_progress"
+        and event.get("tool_name") == "Bash"
+        and event.get("heartbeat") is True
+        and isinstance(parent, str)
+        and parent in active
+        and isinstance(progress, str)
+        and progress.startswith(parent + "-heartbeat-")
+        and type(elapsed) is int
+        and elapsed >= 0
+        and all(
+            isinstance(value, str) and 0 < len(value) <= 128
+            for value in (event["session_id"], event["uuid"])
+        )
+    ):
+        return False
+    suffix = progress[len(parent + "-heartbeat-") :]
+    return 0 < len(suffix) <= 16 and suffix.isascii() and suffix.isdecimal()
 
 
 def require_file_tool_event(event: dict[str, object], *, profile: str = "editor") -> None:

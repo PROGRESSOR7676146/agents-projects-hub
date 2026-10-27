@@ -55,7 +55,9 @@ The [continuation plan](../operations/NEXT_DEVELOPMENT_SESSION.md#current-goal-a
 owns the bounded acceptance limits and next priorities. Temporary Bash consent
 and immediate protected-card settlement have source regression coverage under
 [ADR 0077](../decisions/0077-temporary-claude-bash-consent.md); their installation
-and live callbacks remain pending. Older editor-only entries below retain their
+and live callbacks remain pending. The current foreground-heartbeat follow-up
+adds reader-local regression coverage; installed long-command acceptance remains
+open in the continuation plan. Older editor-only entries below retain their
 historical evidence and do not override this checkpoint.
 
 External Codex slots have offline admission, root-exclusion, fairness and health
