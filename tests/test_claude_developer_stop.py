@@ -73,6 +73,8 @@ class DeveloperStopTests(unittest.TestCase):
                     FileToolSandboxConfig,
                     SimpleNamespace(
                         profile="developer",
+                        project_root=fixture.root,
+                        toolchain=None,
                         python_executable=Path(sys.executable),
                         claude_executable=Path(adapter.executable),
                     ),

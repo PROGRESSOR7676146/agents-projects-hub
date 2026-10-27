@@ -49,6 +49,8 @@ class ExternalRuntimeTests(unittest.TestCase):
             FileToolSandboxConfig,
             SimpleNamespace(
                 profile="editor",
+                project_root=root,
+                toolchain=None,
                 python_executable=Path("/usr/bin/python3"),
                 claude_executable=Path("/usr/bin/true"),
             ),
@@ -102,6 +104,8 @@ class ExternalRuntimeTests(unittest.TestCase):
                     FileToolSandboxConfig,
                     SimpleNamespace(
                         profile=profile,
+                        project_root=root,
+                        toolchain=None,
                         python_executable=Path("/usr/bin/python3"),
                         claude_executable=Path("/usr/bin/true"),
                     ),
@@ -164,6 +168,8 @@ class ExternalRuntimeTests(unittest.TestCase):
                 FileToolSandboxConfig,
                 SimpleNamespace(
                     profile="editor",
+                    project_root=root,
+                    toolchain=None,
                     python_executable=Path("/usr/bin/python3"),
                     claude_executable=Path("/usr/bin/true"),
                 ),
@@ -211,6 +217,8 @@ class ExternalRuntimeTests(unittest.TestCase):
                 FileToolSandboxConfig,
                 SimpleNamespace(
                     profile="editor",
+                    project_root=root,
+                    toolchain=None,
                     python_executable=Path("/usr/bin/python3"),
                     claude_executable=Path("/usr/bin/true"),
                 ),
@@ -252,6 +260,8 @@ class ExternalRuntimeTests(unittest.TestCase):
                 FileToolSandboxConfig,
                 SimpleNamespace(
                     profile="editor",
+                    project_root=root,
+                    toolchain=None,
                     python_executable=Path("/usr/bin/python3"),
                     claude_executable=executable,
                 ),

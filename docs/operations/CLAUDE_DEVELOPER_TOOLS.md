@@ -37,6 +37,19 @@ Node/npm prefix read-only. Keep the control Python/hook immutable. Use copy mode
 for uv/venv dependencies and avoid pnpm hardlinks. The bounded tree scan remains;
 measure real dependency trees instead of disabling it. Required project tests
 that cannot run under a nested namespace must be reported and run in CI/host.
+Place the venv's own `bin` before generic tool aliases in PATH. A symlink to a
+venv Python from another `bin` can select the system prefix and lose its
+dependencies; check `sys.prefix` and a required dependency import, not just
+`python3 --version`.
+
+Each confined Claude turn receives a compact environment note from its actual prepared
+profile/toolchain: available native tools, project instructions, configured
+Git/hook Python, Git/hook limits, human command decisions, consultations and unknown
+outcomes. It contains no host credentials or session HOME. Confined launches
+set `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, intended to prevent native Bash from
+moving a long test/build/hook into an unsupported background task. Confirm the
+native effect in the installed canary. Keep explicit
+command timeouts; task/child stream guards remain enforced.
 
 PATH, validation Python and author policy must resolve inside readonly tools or
 runtime mounts, never the writable project. Git hooks may live in the project.

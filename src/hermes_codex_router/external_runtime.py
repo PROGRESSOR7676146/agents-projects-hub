@@ -22,6 +22,7 @@ from .claude_cli_capabilities import (
     ClaudeCliCleanupError,
     ClaudeCliUnavailableError,
 )
+from .claude_environment import claude_environment_prompt
 from .claude_file_policy import file_tool_argv, file_tool_event_policy, wrap_file_tool_argv
 from .claude_file_sandbox import FileToolSandboxConfig, FileToolSandboxError
 from .claude_image_input import (
@@ -354,6 +355,8 @@ class ExternalCliAdapter:
         claude_sandbox: FileToolSandboxConfig | None = None,
         claude_images: tuple[VerifiedClaudeImage, ...] = (),
     ) -> ExternalTurnResult:
+        if self.runtime == "claude" and claude_sandbox is not None and prompt.strip():
+            prompt = claude_environment_prompt(claude_sandbox) + "\n\n" + prompt
         argv = self.build_argv(
             cwd=cwd,
             prompt=prompt,

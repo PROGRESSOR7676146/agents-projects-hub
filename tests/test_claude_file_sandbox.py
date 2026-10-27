@@ -114,8 +114,24 @@ class ClaudeFileSandboxTests(unittest.TestCase):
         self.assertNotIn(str(self.private), argv)
         self.assertEqual(env["HOME"], "/home/example")
         self.assertEqual(env["CLAUDE_CONFIG_DIR"], "/home/example/.claude")
+        self.assertEqual(env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1")
         self.assertNotIn("USER", env)
         self.assertEqual(argv[-3:], [str(self.executable), "-c", "pass"])
+
+    def test_real_permission_wrapper_keeps_background_tasks_disabled(self) -> None:
+        from hermes_codex_router.claude_file_policy import wrap_file_tool_argv
+
+        with (
+            patch.object(sandbox_module, "_require_fd_bind_support"),
+            wrap_file_tool_argv(
+                (str(self.executable), "-c", "pass"),
+                {"LANG": "C.UTF-8", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "0"},
+                self.project,
+                dataclasses.replace(self.config, profile="developer"),
+            ) as launch,
+        ):
+            self.assertEqual(launch.environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1")
+            self.assertEqual(launch.environment["HOME"], "/home/example")
 
     def test_project_cannot_also_be_the_writable_session_home(self) -> None:
         # A second writable alias at HOME would expose .git without the

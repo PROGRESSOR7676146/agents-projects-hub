@@ -213,11 +213,12 @@ def require_file_tool_event(event: dict[str, object], *, profile: str = "editor"
     if kind in {
         "control_request",
         "control_response",
-        "task_started",
-        "task_progress",
-        "task_notification",
     }:
         raise ClaudeStreamError("Claude file-tool policy was violated")
+    if kind in {"task_started", "task_progress", "task_notification"} or (
+        kind == "system" and isinstance(subtype, str) and subtype.startswith("task_")
+    ):
+        raise ClaudeStreamError("Claude background or child task events are unsupported")
     if kind == "system" and subtype == "init":
         tools = event.get("tools", [])
         if not isinstance(tools, list) or any(tool not in tools_allowed for tool in tools):
@@ -227,8 +228,6 @@ def require_file_tool_event(event: dict[str, object], *, profile: str = "editor"
                 raise ClaudeStreamError("Claude file-tool policy was violated")
         if event.get("permissionMode", "manual") not in {"manual", "default"}:
             raise ClaudeStreamError("Claude file-tool policy was violated")
-    if kind == "system" and isinstance(subtype, str) and subtype.startswith("task_"):
-        raise ClaudeStreamError("Claude file-tool policy was violated")
     if (
         isinstance(kind, str)
         and kind.startswith("hook_")
