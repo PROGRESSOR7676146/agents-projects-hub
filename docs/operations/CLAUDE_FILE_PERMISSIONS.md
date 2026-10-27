@@ -134,7 +134,14 @@ metadata and the primary checkout are absent. Shared config is read-only and
 repository administration requiring common-directory writes remains unsupported.
 Operational `.hub/work` is hidden; keep backups and review authority there or
 outside the project, never elsewhere in the provider-visible checkout. Local clones with
-hardlinked Git objects are refused too. Missing isolation or
+hardlinked Git objects are refused too: `git clone /path/to/repo` hardlinks
+`.git/objects` by default, so clone a local repository with `--no-hardlinks` or from
+its remote URL. To repair an existing clone, replace each multiply linked file under
+`.git/objects` with a copy of itself (copy to a temporary name in the same directory,
+keep its mode, then rename it over the original) and rerun `git fsck`. The writable-tree
+scan also refuses a tree with more than 100,000 entries, hidden `.hub/work` included;
+keep dependency, build and tool caches such as uv caches or `__pycache__` trees
+outside the project. Missing isolation or
 protected capability prevents productive invocation; it never selects a plain CLI.
 
 For the optional developer candidate, add `"profile": "developer"` to that
