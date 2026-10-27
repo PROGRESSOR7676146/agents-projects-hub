@@ -29,8 +29,10 @@ from .claude_permissions_journal import (
     PermissionLaunch,
 )
 from .claude_tool_profiles import profile_tools
+from .diagnostic_log import survived
 from .external_runtime import ProviderUnavailableError
 from .hub_config import AgentDefinition, HubConfig
+from .process_namespace import TrustScanLimitError
 from .state import HubState, ProviderJobRecord, StateError
 from .tlive_permissions import ProtectedTliveClient, TliveCapability, load_tlive_permission_config
 from .unix_peer import PeerCredentialError, require_same_uid_peer
@@ -348,6 +350,7 @@ def hosted_claude_launch(
     if settings is None:
         yield None
         return
+    refusal: str | None = None
     with tempfile.TemporaryDirectory(prefix="hub-claude-permission-") as directory:
         try:
             if session_id is None:
@@ -423,20 +426,30 @@ def hosted_claude_launch(
             )
             with sandbox.wrap((str(Path(executable).resolve()), "--help"), {}, root):
                 pass  # Validate and release source pins; invocation acquires its own set.
-        except Exception:
+        except Exception as error:
             if server is not None:
                 server.close()
             if launch is not None:
                 journal.close_launch(launch)
-            raise ProviderUnavailableError(
-                "claude_permission_host_unverified",
-                "Claude file-tool permission boundary could not be verified. The productive turn was not started.",
-            ) from None
-        server.thread.start()
-        try:
-            yield HostedClaudeLaunch(sandbox, server.permission_wait)
-        finally:
+            # Only the step's class reaches the process log; its text can hold paths.
+            survived("claude_permission_host.boundary_unverified", error)
+            if isinstance(error, TrustScanLimitError):
+                refusal = (
+                    "A directory tree the Claude file-tool boundary must inspect has more "
+                    "entries than the trust scan allows, for example a project or its Git "
+                    "metadata holding large caches. The productive turn was not started."
+                )
+            else:
+                refusal = "Claude file-tool permission boundary could not be verified. The productive turn was not started."
+        else:
+            server.thread.start()
             try:
-                server.close()
+                yield HostedClaudeLaunch(sandbox, server.permission_wait)
             finally:
-                journal.close_launch(launch)
+                try:
+                    server.close()
+                finally:
+                    journal.close_launch(launch)
+    if refusal is not None:
+        # Raised outside the handler so the refusal carries no original exception.
+        raise ProviderUnavailableError("claude_permission_host_unverified", refusal)

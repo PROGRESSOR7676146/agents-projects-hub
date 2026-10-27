@@ -28,6 +28,10 @@ class NamespaceError(ValueError):
     """A confined process cannot safely start."""
 
 
+class TrustScanLimitError(NamespaceError):
+    """A tree has more entries than the trust scan will inspect."""
+
+
 SANDBOX_HOME = "/home/example"
 _SANDBOX_SOCKET = "/run/hub-permission.sock"
 _SYSTEM_ALIASES = {"/bin": "/usr/bin", "/lib": "/usr/lib", "/lib64": "/usr/lib64"}
@@ -138,7 +142,7 @@ def _immutable_tree(path: Path) -> None:
         for entry in directory.iterdir():
             count += 1
             if count > _MAX_RUNTIME_ENTRIES:
-                raise NamespaceError("runtime root exceeds trust scan limit")
+                raise TrustScanLimitError("runtime root exceeds trust scan limit")
             info = entry.lstat()
             if stat.S_ISLNK(info.st_mode):
                 try:
@@ -208,7 +212,7 @@ def _scan_pinned_tree(source_fd: int, *, toolchain: bool = False) -> set[tuple[i
                 continue
             count += 1
             if count > _MAX_WRITABLE_ENTRIES:
-                raise NamespaceError("writable tree exceeds trust scan limit")
+                raise TrustScanLimitError("writable tree exceeds trust scan limit")
             fd = os.open(entry.name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=current)
             try:
                 info = os.fstat(fd)
