@@ -20,8 +20,7 @@ class ConsultTransportTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(runner.cleanup)
         site = web.TCPSite(runner, "127.0.0.1", 0)
         await site.start()
-        assert site._server is not None
-        port = site._server.sockets[0].getsockname()[1]
+        port = runner.addresses[0][1]
         return f"http://127.0.0.1:{port}/v1/responses"
 
     async def test_explicit_post_ignores_environment_proxies(self) -> None:

@@ -23,12 +23,18 @@ class NamespaceToolchain:
             # Shared linked-worktree config is readonly. Do not switch files
             # and only then fail while implicitly installing upstream tracking.
             "branch.autoSetupMerge": "false",
+            "push.autoSetupRemote": "false",
         }
         if self.git_hooks_path is not None:
             settings["core.hooksPath"] = str(self.git_hooks_path)
         if self.git_identity is not None:
             settings.update(zip(("user.name", "user.email"), self.git_identity))
         result = git_environment(settings)
+        if self.git_identity is not None:
+            # Hooks clear repository-routing GIT_CONFIG_* before nested Git.
+            # Preserve explicit identity without leaking the outer index/config.
+            for role in ("AUTHOR", "COMMITTER"):
+                result[f"GIT_{role}_NAME"], result[f"GIT_{role}_EMAIL"] = self.git_identity
         if self.git_python is not None:
             result["HUB_PUBLISH_PYTHON"] = str(self.git_python)
         if self.author_policy is not None:

@@ -40,7 +40,7 @@ def _private_bytes(path: Path, limit: int) -> bytes:
         info = os.fstat(stream.fileno())
         if (
             not stat.S_ISREG(info.st_mode)
-            or info.st_uid not in {0, os.geteuid()}
+            or info.st_uid != os.geteuid()
             or info.st_mode & 0o077
             or info.st_nlink != 1
         ):
@@ -59,6 +59,7 @@ def _config(path: Path, selected: str) -> tuple[dict[str, Any], dict[str, str], 
         or not required <= raw.keys()
         or raw.keys() - required - {"timeout_seconds", "max_output_tokens"}
         or raw["subscription_route_verified"] is not True
+        or not isinstance(raw["endpoint"], str)
     ):
         raise ConsultError("explicit verified consultation configuration required")
     endpoint = urlsplit(raw["endpoint"])
@@ -173,7 +174,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         prompt = sys.stdin.read(_INPUT_LIMIT + 1)
         if not prompt.strip() or len(prompt.encode("utf-8")) > _INPUT_LIMIT:
             raise ConsultError("consultation input must be nonempty bounded visible text")
-    except (OSError, ValueError, TypeError, KeyError, UnicodeError):
+    except (OSError, ValueError, TypeError, KeyError, UnicodeError, RecursionError):
         print(
             "Consultation refused: invalid local configuration, credential or input.",
             file=sys.stderr,
@@ -192,13 +193,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         raw = asyncio.run(_request(config, payload, key))
         visible = _visible(raw, route["response_model"])
-    except (OSError, aiohttp.ClientError, ValueError, TypeError, KeyError):
+        print(visible, flush=True)
+    except Exception:
+        # Once submitted, parsing/output failures must never look like a local
+        # refusal or expose upstream data through a traceback.
         print(
             "Consultation outcome unknown or incomplete; do not retry automatically.",
             file=sys.stderr,
         )
         return 2
-    print(visible)
     return 0
 
 

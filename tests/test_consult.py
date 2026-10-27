@@ -97,6 +97,8 @@ class ConsultTests(unittest.TestCase):
 
     def test_invalid_config_or_credential_prevents_network(self) -> None:
         for change in (
+            {"endpoint": None},
+            {"endpoint": ["invalid"]},
             {"endpoint": "https://example.com/v1/responses"},
             {"endpoint": "http://localhost:19001/v1/responses"},
             {"endpoint": "http://127.0.0.1:19001/management"},
@@ -118,3 +120,28 @@ class ConsultTests(unittest.TestCase):
         opener = AsyncMock()
         self.assertEqual(self.invoke(opener)[0], 1)
         opener.assert_not_called()
+
+    def test_consumed_request_parse_and_output_failures_return_unknown_without_traceback(
+        self,
+    ) -> None:
+        opener = AsyncMock(return_value=b"[" * 2000 + b"]" * 2000)
+        status, visible, error = self.invoke(opener)
+        self.assertEqual((status, visible), (2, ""))
+        self.assertNotIn("Traceback", error)
+        self.assertEqual(opener.await_count, 1)
+        for failure in (
+            BrokenPipeError("raw-secret"),
+            UnicodeEncodeError("ascii", "я", 0, 1, "raw-secret"),
+        ):
+            opener = AsyncMock(return_value=json.dumps(self.good).encode())
+            error = io.StringIO()
+            with (
+                patch.object(consult, "_request", opener),
+                patch("sys.stdin", io.StringIO("question")),
+                patch("sys.stdout.write", side_effect=failure),
+                patch("sys.stderr", error),
+            ):
+                status = consult.main(["--config", str(self.path), "astra"])
+            self.assertEqual(status, 2)
+            self.assertEqual(opener.await_count, 1)
+            self.assertNotIn("raw-secret", error.getvalue())

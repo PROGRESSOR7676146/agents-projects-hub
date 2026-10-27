@@ -492,21 +492,24 @@ class ProcessNamespaceConfig:
             raise NamespaceError("permission socket overlaps a broad mount")
         _validate_destinations(project, (*roots, *tools), code)
         if self.toolchain is not None:
-            for path in (
-                *self.toolchain.path,
-                self.toolchain.git_hooks_path,
-                self.toolchain.git_python,
-                self.toolchain.author_policy,
+            for path, project_hook in (
+                *((path, False) for path in self.toolchain.path),
+                (self.toolchain.git_hooks_path, True),
+                (self.toolchain.git_python, False),
+                (self.toolchain.author_policy, False),
             ):
                 if path is None:
                     continue
-                if not any(_within(path, root) for root in (project, *roots, *tools)):
+                visible = (*roots, *tools)
+                if project_hook:
+                    visible = (project, *visible)
+                if not any(_within(path, root) for root in visible):
                     raise NamespaceError("toolchain setting is outside visible mounts")
                 try:
                     target = path.resolve(strict=True)
                 except (OSError, RuntimeError):
                     raise NamespaceError("toolchain setting is unavailable") from None
-                if not any(_within(target, root) for root in (project, *roots, *tools)) or _within(
+                if not any(_within(target, root) for root in visible) or _within(
                     target, project / ".hub/work"
                 ):
                     raise NamespaceError("toolchain setting resolves outside visible mounts")

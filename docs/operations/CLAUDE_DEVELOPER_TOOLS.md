@@ -35,14 +35,18 @@ for uv/venv dependencies and avoid pnpm hardlinks. The bounded tree scan remains
 measure real dependency trees instead of disabling it. Required project tests
 that cannot run under a nested namespace must be reported and run in CI/host.
 
-Git hooks run from the explicitly selected visible path. The shipped hooks accept
+PATH, validation Python and author policy must resolve inside readonly tools or
+runtime mounts, never the writable project. Git hooks may live in the project.
+The shipped hooks accept
 `HUB_PUBLISH_PYTHON` and `HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE` from trusted launch
 configuration before falling back to host local settings. They retain the staged
 tree, privacy/history and canonical gates. Refresh installed hook sets through
 the existing installer after a hook-source change; never use `--no-verify`.
 Launch-local Git settings do not edit shared/sibling configuration. Explicit
 upstream/config writes remain unavailable in linked worktrees; create a local
-branch without implicit tracking. An independent registered clone is the simple
+branch without implicit tracking. Explicit `--track` or `push -u` can change files
+or remote state before failing on readonly config: inspect status, diff and HEAD,
+preserve changes and do not repeat/reset blindly. An independent registered clone is the simple
 fallback when repository administration is required.
 
 ## Text-only consultation
@@ -66,7 +70,7 @@ declaration true. Examples deliberately use nonexistent model IDs.
 }
 ```
 
-Config and key must be private regular files, owned by root/worker, with no
+Config and key must be private regular files, owned and readable by the worker, with no
 symlinks/hardlinks or group/other permissions. Route names/models are explicit;
 the CLI does not discover them or substitute another route. `response_model`
 must match the real response identity, which can differ from the requested alias.

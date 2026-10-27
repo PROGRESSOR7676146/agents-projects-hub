@@ -117,6 +117,101 @@ class NamespaceToolchainTests(unittest.TestCase):
         with self.assertRaises(namespace.NamespaceError):
             configured.wrap(["/usr/bin/true"], {}, self.fixture.project)
 
+    def test_project_cannot_supply_path_python_or_author_policy_even_through_symlink(self) -> None:
+        project_bin = self.fixture.project / "bin"
+        project_bin.mkdir()
+        script = project_bin / "python"
+        script.write_text("#!/usr/bin/true\n")
+        script.chmod(0o700)
+        alias = self.bin / "project-python"
+        alias.symlink_to(script)
+        for replacement in (
+            {"path": (project_bin,)},
+            {"path": (project_bin,), "git_hooks_path": project_bin},
+            {"git_python": script},
+            {"author_policy": script},
+            {"git_python": alias},
+        ):
+            configured = dataclasses.replace(
+                self.config, toolchain=dataclasses.replace(self.toolchain, **replacement)
+            )
+            with (
+                self.subTest(replacement=replacement),
+                self.assertRaises(namespace.NamespaceError),
+            ):
+                configured.wrap(["/usr/bin/true"], {}, self.fixture.project)
+
+    def test_real_stock_hook_clears_git_routing_but_keeps_explicit_identity(self) -> None:
+        f = self.fixture
+        bwrap = Path(shutil.which("bwrap") or "/usr/bin/bwrap")
+        require_namespace_runtime(self, bwrap)
+        python = Path("/usr/bin/python3.12")
+        roots = tuple(
+            map(
+                Path,
+                (
+                    str(python),
+                    "/usr/bin/git",
+                    "/usr/lib/python3.12",
+                    "/usr/lib/x86_64-linux-gnu",
+                    "/usr/lib64",
+                    "/usr/bin/dash",
+                    "/usr/bin/env",
+                    "/usr/bin/grep",
+                ),
+            )
+        )
+        if not all(p.exists() for p in roots):
+            namespace_unavailable(self, "stock hook system fixture unavailable")
+        hook = f.project / ".githooks/pre-commit"
+        shutil.copyfile(Path(__file__).resolve().parents[1] / ".githooks/pre-commit", hook)
+        hook.chmod(0o700)
+        validator = self.bin / "publish-python"
+        validator.write_text(
+            "#!/usr/bin/python3.12\n"
+            "import os, pathlib, subprocess, sys\n"
+            "if '--help' in sys.argv:\n print('commit'); raise SystemExit(0)\n"
+            "assert 'GIT_CONFIG_COUNT' not in os.environ\n"
+            "assert sys.argv[-2:] == ['--profile', 'commit']\n"
+            "for role in ('AUTHOR', 'COMMITTER'):\n"
+            " ident = subprocess.check_output(['git','var','GIT_'+role+'_IDENT'], text=True)\n"
+            " assert ident.startswith('Example <author@example.com>'), ident\n"
+            "raise SystemExit(1 if pathlib.Path('work.txt').read_text() == 'reject' else 0)\n"
+        )
+        validator.chmod(0o700)
+        f.git("-C", str(f.main), "config", "--unset", "user.name")
+        f.git("-C", str(f.main), "config", "--unset", "user.email")
+        toolchain = dataclasses.replace(self.toolchain, git_python=validator)
+        configured = dataclasses.replace(
+            self.config,
+            runtime=namespace.NamespaceRuntime(bwrap, python, roots),
+            toolchain=toolchain,
+        )
+        source = r"""
+import pathlib, subprocess
+def run(*argv):
+    return subprocess.run(argv, capture_output=True, text=True)
+pathlib.Path('work.txt').write_text('reject')
+assert run('git','add','work.txt','.githooks').returncode == 0
+assert run('git','commit','-m','Rejected').returncode != 0
+pathlib.Path('work.txt').write_text('accept')
+assert run('git','add','work.txt').returncode == 0
+result=run('git','commit','-m','Accepted')
+assert result.returncode == 0, result.stdout+result.stderr
+"""
+        with configured.wrap([str(python), "-I", "-c", source], {}, f.project) as launch:
+            result = subprocess.run(
+                launch.argv,
+                env=launch.environment,
+                pass_fds=launch.pass_fds,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        if result.returncode and namespace_permission_refused(result.stderr):
+            namespace_unavailable(self, "kernel namespace permission refused")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_config_is_explicit_bounded_and_rejects_unknown_or_unsafe_values(self) -> None:
         raw = {"roots": [str(self.tools)], "path": [str(self.bin)]}
         self.assertEqual(parse_toolchain(raw).roots, (self.tools,))
