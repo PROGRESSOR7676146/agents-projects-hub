@@ -339,13 +339,15 @@ owner defines state API, transaction ownership and invocation boundaries;
 parallel writing and recursive delegation are outside this goal. Sol checks
 supplement, but do not replace, independent review of Codex-authored
 lifecycle/security changes. The
-owner selected **Opus 5.5/high only** for every source review. The owning
+owner selects the reviewer by the author's active model: **Opus 5.5/high** for
+Codex or other non-Claude authors, **GPT-6.1 Sol/high** for Claude authors and
+**GPT Astra/high** for exceptionally important Claude-authored changes. The owning
 [source-review runbook](CLAUDE_SOURCE_REVIEW.md) defines exact routing and author
 verification. This supersedes all older paired-review and fallback next triggers
-in this chronology: do not invoke Argon or Astra for review. Never substitute
-Opus 4.8 or use synthetic availability probes. Record the actual reviewer,
+in this chronology: do not invoke Argon for review. Never substitute another
+model version or use synthetic availability probes. Record the actual reviewer,
 candidate and verified findings/fixes in the PR. An unavailable or incomplete
-Opus answer does not waive review; preserve the candidate and report the failure.
+answer does not waive review; preserve the candidate and report the failure.
 Review is read-only in a separate clean candidate checkout,
 and does not grant permission to run unrelated live tests or deployment.
 

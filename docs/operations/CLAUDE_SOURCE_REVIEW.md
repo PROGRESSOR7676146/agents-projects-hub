@@ -1,4 +1,4 @@
-# Independent source review with Opus
+# Independent source review through CPA
 
 This runbook owns the development-review invocation procedure referenced by
 [AGENTS.md](../../AGENTS.md) and the
@@ -8,16 +8,30 @@ It does not change the Hub-owned native Claude editor worker or its separate
 
 ## Required reviewers
 
-Owner decision, 2026-10-26: request every independent source review from
-**Claude Opus 5.5, effort high**, through native Claude CPA HTTP. This supersedes
-the paired-review policy and the Gemini/Argon and Astra fallback permissions.
-Do not invoke those models for review or substitute Opus 4.8.
+Owner decision, 2026-10-27: the reviewer is chosen by the model family that is
+active in the authoring session, so the review stays independent of the author.
+It amends the 2026-10-26 Opus-only decision.
 
-An Opus PASS permits publication only after author verification of the findings
-and the usual exact-candidate gates. An unavailable reviewer, negative review,
-unresolved finding, truncated answer or missing verdict is not approval. If Opus
-cannot supply a valid verdict, preserve the candidate and report the actual
-failure; do not select a replacement reviewer automatically.
+| Author's active model | Reviewer, effort `high` |
+| --- | --- |
+| Codex or another non-Claude model | **Claude Opus 5.5** through native Claude CPA HTTP |
+| Claude | **GPT-6.1 Sol** (`gpt-6.1-sol`) through CPA HTTP |
+| Claude, exceptionally important change | **GPT Astra** (`gpt-6-astra`) through CPA HTTP |
+
+Exceptionally important means a change to security or trust boundaries,
+authority, state migrations, release or deployment contracts, or a new or
+amended ADR, or any change the owner marks as such. A Claude-led session also
+consults Astra on architectural and other important decisions before committing
+to them; a consultation is advice, not review approval, and the owner decides.
+
+Argon is not a reviewer, and the paired-review policy stays superseded. Do not
+substitute a different model version for the one in the table.
+
+A PASS permits publication only after author verification of the findings and
+the usual exact-candidate gates. An unavailable reviewer, negative review,
+unresolved finding, truncated answer or missing verdict is not approval. If the
+required reviewer cannot supply a valid verdict, preserve the candidate and
+report the actual failure; do not select a replacement reviewer automatically.
 
 ## Route and request
 
@@ -29,22 +43,24 @@ failure; do not select a replacement reviewer automatically.
    Use its explicit authenticated loopback endpoint and one client credential;
    disable environment HTTP proxies and reject redirects. Do not extract native
    OAuth tokens, change credentials, or invoke Claude CLI for this review.
-3. Resolve the exact owner-selected **Claude Opus 5.5** in CPA's passive
+3. Resolve the exact required reviewer from the table above in CPA's passive
    `/v1/models` metadata and supported route configuration. A similar model name
    or `-high` suffix does not identify its provider: an alias can select
-   Antigravity instead of Claude. Select the native Claude route and request
-   **high** separately through the supported request field. Do not silently
-   substitute a different Opus version or infer effective effort from the label.
+   Antigravity instead of Claude or OpenAI. Select the reviewer's native route
+   and request **high** separately through the supported request field. Do not
+   silently substitute a different version or infer effective effort from the label.
 4. Confirm that the selected route excludes paid/API and extra-usage fallback
    before sending source. Loopback, a client key and catalog ownership alone do
    not prove upstream account identity or billing. If the existing configuration
    cannot establish this boundary, stop and report the concrete uncertainty.
-5. Send the actual source review directly to CPA's supported HTTP API. For a
-   compatible native Messages route, use `POST /v1/messages` with `model` set to
-   the resolved ID, `thinking: {"type": "adaptive"}` and
-   `output_config: {"effort": "high"}`. Keep tools absent, output/time bounded
-   and automatic retries disabled. Verify support before applying these fields
-   to a different CPA version. There is no synthetic availability prompt.
+5. Send the actual source review directly to CPA's supported HTTP API. For
+   Opus on a compatible native Messages route, use `POST /v1/messages` with
+   `model` set to the resolved ID, `thinking: {"type": "adaptive"}` and
+   `output_config: {"effort": "high"}`. For Sol or Astra, use the endpoint and
+   reasoning-effort field that CPA documents for that OpenAI route. Keep tools
+   absent, output/time bounded and automatic retries disabled. Verify support
+   before applying these fields to a different CPA version. There is no
+   synthetic availability prompt.
 
 ## Evidence and author verification
 
@@ -59,9 +75,9 @@ adjust the bounded review if needed. Requested effort is not proof of effective
 effort unless supported response evidence establishes it.
 
 Determine availability from supported passive metadata or a failure of the
-actual review on the intended CPA Claude route. A CLI error or a rejection from
+actual review on the intended CPA route. A CLI error or a rejection from
 an Antigravity alias establishes only that request's failure. HTTP 429 alone does
-not prove that every Claude account or route has exhausted quota; cached unused
+not prove that every account or route of that provider has exhausted quota; cached unused
 quota likewise does not prove current request availability. Preserve the original
 failure receipt when correcting an overbroad earlier interpretation.
 
