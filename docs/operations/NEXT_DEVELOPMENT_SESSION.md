@@ -29,15 +29,15 @@ and the [toolchain runbook](CLAUDE_DEVELOPER_TOOLS.md). Published source `8e43d1
 merged as `801385a`; canonical checks, hosted CI and Opus 5.5/high review passed.
 Sole writer/owner: primary development agent / Hub maintainer. Source lane
 `feat/claude-developer-toolchain`; source publication is complete, installed
-functional acceptance is open (**80/100**). Acceptance follow-up
-`fix/claude-foreground-final` is intended to keep long commands in the foreground and
-adds profile-specific environment orientation. Next trigger: its exact-head
-Opus/canonical/hosted gates, then finish the authorized installed canary.
-The next bounded acceptance fix is long human permission waiting under
-[ADR 0079](../decisions/0079-long-human-permission-waits.md): update the full
-timeout chain and cap total host-wait credit at seven days per launch, then validate the matching
-worker/tlive candidate before sending the next human test card. Owner: primary
-development agent. Base: integrated `3fb8439`; lane `fix/claude-approval-wait`.
+functional acceptance is open (**80/100**). Published foreground follow-up
+`3fb8439` keeps commands in the foreground and adds environment orientation;
+published long-wait follow-up `c7fdc92` caps total human-wait credit under
+[ADR 0079](../decisions/0079-long-human-permission-waits.md).
+The next bounded fix recognizes native foreground Bash heartbeats without
+treating their own tool reference as an agent child. Owner: primary development
+agent. Base: integrated `c7fdc92`; lane `fix/claude-foreground-heartbeat`.
+Next trigger: exact-head Opus/canonical/hosted gates, then scoped installation
+and the remaining actual hooked-commit/consultation/permission acceptance.
 Inspect tracked/staged/untracked state after merge and installed acceptance.
 Source, installation and live evidence remain distinct. Do not close the goal
 until the actual edit-test-build-commit-consult cycle is observed. Review the

@@ -50,6 +50,10 @@ set `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, intended to prevent native Bash fr
 moving a long test/build/hook into an unsupported background task. Confirm the
 native effect in the installed canary. Keep explicit
 command timeouts; task/child stream guards remain enforced.
+Native foreground Bash heartbeats refer to the executing tool as their parent.
+The developer stream policy recognizes only their exact shape and an active Bash
+ID observed in the same reader; tool completion retires that binding. These
+progress records do not grant tools or forward command output.
 
 PATH, validation Python and author policy must resolve inside readonly tools or
 runtime mounts, never the writable project. Git hooks may live in the project.

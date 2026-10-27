@@ -73,14 +73,17 @@ class ConsultTransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_trickled_bytes_cannot_extend_total_deadline(self) -> None:
         seen = []
+        writes = 0
 
         async def handler(request):
+            nonlocal writes
             seen.append(request.path)
             response = web.StreamResponse()
             await response.prepare(request)
             try:
                 for _ in range(100):
                     await response.write(b" ")
+                    writes += 1
                     await asyncio.sleep(0.02)
             except ConnectionResetError:
                 pass
@@ -88,8 +91,11 @@ class ConsultTransportTests(unittest.IsolatedAsyncioTestCase):
 
         endpoint = await self.server(handler)
         with self.assertRaises(TimeoutError):
-            await consult._request({"endpoint": endpoint, "timeout_seconds": 0.05}, {}, "fictional")
+            # Use the supported minimum: 50ms can expire before a local request
+            # is even dispatched under parallel load, testing no trickle at all.
+            await consult._request({"endpoint": endpoint, "timeout_seconds": 1}, {}, "fictional")
         self.assertEqual(seen, ["/v1/responses"])
+        self.assertGreaterEqual(writes, 2)
 
     async def test_response_limit_closes_without_retry(self) -> None:
         seen = []
