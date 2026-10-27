@@ -21,7 +21,7 @@ from typing import Mapping, Sequence
 from .claude_mount_pins import MountPinError, MountPins, SandboxLaunch, mount_id
 from .claude_private_mounts import PrivateMountError, PrivateMountGuard, read_mount_table
 from .namespace_git import pin_git_sources
-from .namespace_toolchain import NamespaceToolchain, git_environment
+from .namespace_toolchain import NamespaceToolchain, git_environment, validate_control_interpreters
 
 
 class NamespaceError(ValueError):
@@ -492,6 +492,12 @@ class ProcessNamespaceConfig:
             raise NamespaceError("permission socket overlaps a broad mount")
         _validate_destinations(project, (*roots, *tools), code)
         if self.toolchain is not None:
+            try:
+                validate_control_interpreters(
+                    (self.runtime.executable, *self.runtime.auxiliary_executables), roots
+                )
+            except (OSError, ValueError) as exc:
+                raise NamespaceError("toolchain cannot select a control interpreter") from exc
             for path, project_hook in (
                 *((path, False) for path in self.toolchain.path),
                 (self.toolchain.git_hooks_path, True),
@@ -515,6 +521,15 @@ class ProcessNamespaceConfig:
                     raise NamespaceError("toolchain setting resolves outside visible mounts")
                 if path in self.toolchain.path and not path.is_dir():
                     raise NamespaceError("toolchain PATH entry must be a directory")
+                if path in self.toolchain.path:
+                    for entry in path.iterdir():
+                        if entry.is_symlink():
+                            try:
+                                target = entry.resolve(strict=False)
+                            except (OSError, RuntimeError) as exc:
+                                raise NamespaceError("unsafe toolchain PATH link") from exc
+                            if not any(_within(target, root) for root in (*roots, *tools)):
+                                raise NamespaceError("toolchain PATH link leaves readonly mounts")
                 if path == self.toolchain.git_hooks_path and not path.is_dir():
                     raise NamespaceError("Git hooks path must be a directory")
                 if path == self.toolchain.git_python and (

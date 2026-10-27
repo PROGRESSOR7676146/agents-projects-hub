@@ -107,11 +107,13 @@ async def _request(config: dict[str, Any], payload: dict[str, Any], key: str) ->
     # Total deadline includes connecting, headers and every body chunk, even
     # when a peer keeps a socket alive by trickling bytes. No automatic retries.
     timeout = aiohttp.ClientTimeout(total=config["timeout_seconds"])
-    async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
+    async with aiohttp.ClientSession(
+        timeout=timeout, trust_env=False, auto_decompress=False
+    ) as session:
         async with session.post(
             config["endpoint"],
             json=payload,
-            headers={"Authorization": f"Bearer {key}"},
+            headers={"Authorization": f"Bearer {key}", "Accept-Encoding": "identity"},
             allow_redirects=False,
         ) as response:
             if response.status != 200:
@@ -168,7 +170,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("consultant", help="exact locally configured consultant name")
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as error:
+        return 0 if error.code == 0 else 1
     try:
         config, route, key = _config(args.config, args.consultant)
         prompt = sys.stdin.read(_INPUT_LIMIT + 1)

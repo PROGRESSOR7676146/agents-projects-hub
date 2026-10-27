@@ -50,6 +50,27 @@ def git_environment(settings: dict[str, str]) -> dict[str, str]:
     return result
 
 
+def validate_control_interpreters(executables: tuple[Path, ...], roots: tuple[Path, ...]) -> None:
+    """Tool PATH must never select a control/hook interpreter."""
+    for executable in executables:
+        for _ in range(8):
+            with executable.open("rb") as stream:
+                prefix = stream.read(4096)
+            if not prefix.startswith(b"#!"):
+                break
+            fields = prefix.split(b"\n", 1)[0][2:].split()
+            interpreter = Path(fields[0].decode("utf-8")) if fields else Path("env")
+            if interpreter.name == "env" or not interpreter.is_absolute():
+                raise ValueError("toolchain requires an absolute immutable control interpreter")
+            if not any(interpreter == root or root in interpreter.parents for root in roots):
+                raise ValueError("control interpreter path is outside immutable runtime mounts")
+            executable = interpreter.resolve(strict=True)
+            if not any(executable == root or root in executable.parents for root in roots):
+                raise ValueError("control interpreter is outside immutable runtime mounts")
+        else:
+            raise ValueError("control interpreter chain exceeds bound")
+
+
 def parse_toolchain(raw: Any) -> NamespaceToolchain:
     required = {"roots", "path"}
     optional = {"git_hooks_path", "git_python", "author_policy", "git_identity"}

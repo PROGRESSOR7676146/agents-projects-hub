@@ -25,10 +25,22 @@ def _isolated_git_environment() -> dict[str, str]:
     for name in names:
         environment.pop(name, None)
     environment.pop("HUB_PUBLISH_PYTHON", None)
+    environment.pop("HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE", None)
+    for role in ("AUTHOR", "COMMITTER"):
+        for field in ("NAME", "EMAIL"):
+            environment.pop(f"GIT_{role}_{field}", None)
     return environment
 
 
 class PublishPreflightTests(unittest.TestCase):
+    def test_nested_fixture_drops_outer_identity_and_policy(self) -> None:
+        names = ["HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE"] + [
+            f"GIT_{role}_{field}" for role in ("AUTHOR", "COMMITTER") for field in ("NAME", "EMAIL")
+        ]
+        with patch.dict(os.environ, {name: "fictional" for name in names}):
+            clean = _isolated_git_environment()
+        self.assertTrue(all(name not in clean for name in names))
+
     def test_push_refs_require_the_checked_out_head_and_a_named_local_ref(self) -> None:
         head = "a" * 40
         publish_preflight._validate_push_refs(

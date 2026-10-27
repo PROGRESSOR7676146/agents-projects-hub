@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import unittest
 from unittest.mock import patch
 
@@ -29,6 +30,7 @@ class ConsultTransportTests(unittest.IsolatedAsyncioTestCase):
         async def handler(request):
             seen.append((request.method, request.path, await request.json()))
             self.assertEqual(request.headers["Authorization"], "Bearer fictional")
+            self.assertEqual(request.headers["Accept-Encoding"], "identity")
             return web.json_response({"visible": "fixture"})
 
         endpoint = await self.server(handler)
@@ -58,6 +60,16 @@ class ConsultTransportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(consult.ConsultError):
             await consult._request({"endpoint": endpoint, "timeout_seconds": 5}, {}, "fictional")
         self.assertEqual(seen, ["/v1/responses"])
+
+    async def test_compressed_body_is_never_automatically_inflated(self) -> None:
+        compressed = gzip.compress(b"x" * 100_000)
+
+        async def handler(request):
+            return web.Response(body=compressed, headers={"Content-Encoding": "gzip"})
+
+        endpoint = await self.server(handler)
+        raw = await consult._request({"endpoint": endpoint, "timeout_seconds": 5}, {}, "fictional")
+        self.assertEqual(raw, compressed)
 
     async def test_trickled_bytes_cannot_extend_total_deadline(self) -> None:
         seen = []

@@ -13,6 +13,11 @@ from hermes_codex_router import consult
 
 
 class ConsultTests(unittest.TestCase):
+    def test_usage_error_is_a_local_refusal_without_request(self) -> None:
+        with patch.object(consult, "_request") as request, patch("sys.stderr", io.StringIO()):
+            self.assertEqual(consult.main([]), 1)
+        request.assert_not_called()
+
     def setUp(self) -> None:
         temp = tempfile.TemporaryDirectory(prefix="example-consult-")
         self.addCleanup(temp.cleanup)

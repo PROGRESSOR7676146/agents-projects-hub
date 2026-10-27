@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import hermes_codex_router.process_namespace as namespace
+from hermes_codex_router import namespace_toolchain as toolchain_checks
 from hermes_codex_router.namespace_toolchain import NamespaceToolchain, parse_toolchain
 from tests import test_namespace_worktrees as fixtures
 from tests.fd_fixture import assert_descriptor_cleanup
@@ -31,7 +32,7 @@ class NamespaceToolchainTests(unittest.TestCase):
         self.tools = fixture.base / "tools"
         self.bin = self.tools / "bin"
         self.bin.mkdir(parents=True)
-        (self.bin / "python3").symlink_to("/usr/bin/python3.12")
+        (self.bin / "python3").symlink_to("/usr/bin/true")
         self.toolchain = NamespaceToolchain(
             roots=(self.tools,),
             path=(self.bin,),
@@ -141,8 +142,62 @@ class NamespaceToolchainTests(unittest.TestCase):
             ):
                 configured.wrap(["/usr/bin/true"], {}, self.fixture.project)
 
+    def test_control_interpreter_cannot_be_selected_from_tool_path(self) -> None:
+        script = self.tools / "control"
+        roots = (Path("/usr/bin/python3.12"), Path("/usr/bin/true"))
+        for shebang in (
+            "#!/usr/bin/env node\n",
+            "#!/usr/bin/env -S python3 -I\n",
+            f"#!{self.bin}/python3\n",
+        ):
+            script.write_text(shebang)
+            with self.subTest(shebang=shebang), self.assertRaises(ValueError):
+                toolchain_checks.validate_control_interpreters((script,), roots)
+        script.write_text("#!/usr/bin/python3.12\n")
+        toolchain_checks.validate_control_interpreters((script, Path("/usr/bin/true")), roots)
+        nested = self.tools / "nested-control"
+        nested.write_text("#!/usr/bin/env node\n")
+        script.write_text(f"#!{nested}\n")
+        with self.assertRaises(ValueError):
+            toolchain_checks.validate_control_interpreters((script,), (*roots, self.tools))
+
+    def test_wrap_rejects_env_interpreters_for_control_and_auxiliary_executables(self) -> None:
+        script = self.fixture.base / "control-script"
+        script.write_text("#!/usr/bin/env node\n")
+        (self.bin / "node").symlink_to("/usr/bin/true")
+        roots = (script, Path("/usr/bin/true"))
+        for executable, auxiliary in ((script, ()), (Path("/usr/bin/true"), (script,))):
+            runtime = namespace.NamespaceRuntime(
+                Path("/usr/bin/true"), executable, roots, auxiliary_executables=auxiliary
+            )
+            configured = dataclasses.replace(self.config, runtime=runtime)
+            # Simulate the already-validated immutable script without writing
+            # a privileged host runtime; the actual wrap guard remains real.
+            with (
+                self.subTest(executable=executable),
+                patch.object(
+                    namespace.NamespaceRuntime,
+                    "validate",
+                    return_value=(Path("/usr/bin/true"), roots),
+                ),
+                self.assertRaisesRegex(namespace.NamespaceError, "control interpreter"),
+            ):
+                configured.wrap([str(executable)], {}, self.fixture.project)
+
+    def test_path_entry_symlinks_cannot_target_writable_project_or_home(self) -> None:
+        alias = self.bin / "mutable-command"
+        for target in (self.fixture.project / "command", self.fixture.home / "command"):
+            alias.symlink_to(target)
+            try:
+                with self.subTest(target=target), self.assertRaises(namespace.NamespaceError):
+                    self.config.wrap(["/usr/bin/true"], {}, self.fixture.project)
+            finally:
+                alias.unlink()
+
     def test_real_stock_hook_clears_git_routing_but_keeps_explicit_identity(self) -> None:
         f = self.fixture
+        (self.bin / "python3").unlink()
+        (self.bin / "python3").symlink_to("/usr/bin/python3.12")
         bwrap = Path(shutil.which("bwrap") or "/usr/bin/bwrap")
         require_namespace_runtime(self, bwrap)
         python = Path("/usr/bin/python3.12")
@@ -230,6 +285,8 @@ assert result.returncode == 0, result.stdout+result.stderr
 
     def test_real_branch_python_node_build_and_failing_then_passing_hook(self) -> None:
         f = self.fixture
+        (self.bin / "python3").unlink()
+        (self.bin / "python3").symlink_to("/usr/bin/python3.12")
         bwrap = Path(shutil.which("bwrap") or "/usr/bin/bwrap")
         require_namespace_runtime(self, bwrap)
         python = Path("/usr/bin/python3.12")

@@ -9,6 +9,9 @@ Source candidate; installed acceptance pending. Contract and rationale:
 Optional `claude_file_permissions.toolchain` requires `profile: "developer"`.
 Omission preserves existing mounts/PATH; editor and text-only do not gain tools.
 Paths below are fictional; prepare the bundle and dependencies before activation.
+With a toolchain, control executables must be native binaries or use an absolute
+interpreter inside immutable runtime mounts. An `env` shebang is refused before
+launch; do not let project Node select the Claude/control interpreter.
 
 ```json
 {
@@ -37,6 +40,7 @@ that cannot run under a nested namespace must be reported and run in CI/host.
 
 PATH, validation Python and author policy must resolve inside readonly tools or
 runtime mounts, never the writable project. Git hooks may live in the project.
+PATH command symlinks must also resolve inside readonly tool/runtime mounts.
 The shipped hooks accept
 `HUB_PUBLISH_PYTHON` and `HUB_PUBLIC_GIT_AUTHOR_EMAIL_FILE` from trusted launch
 configuration before falling back to host local settings. They retain the staged
@@ -103,13 +107,16 @@ Focused source checks:
 
 ```bash
 PYTHONPATH=src:. python scripts/validate.py --profile focused \
-  tests.test_namespace_toolchain tests.test_consult \
+  tests.test_namespace_toolchain tests.test_consult tests.test_consult_transport \
   tests.test_claude_permissions_config tests.test_claude_developer_hosted_launch \
   tests.test_publish_preflight tests.test_namespace_worktrees
 ```
 
-The required namespace CI runs the real toolchain fixture with Node 22. Offline
-results are separate from productive Claude/native/Telegram evidence. For the
+The required namespace CI runs the real toolchain fixture with Node 22.
+The full canonical suite includes `tests.test_consult_transport`. Nested temporary
+Git fixtures must clear outer `GIT_AUTHOR_*`/`GIT_COMMITTER_*` identity and author
+policy before testing their own configuration.
+Offline results are separate from productive Claude/native/Telegram evidence. For the
 installed canary, have Claude create a branch, edit, run real project tests/build,
 commit with the actual required hook, request one configured consultation and
 resume the exact session. Check Deny, stop, grant reset, private-path absence and
