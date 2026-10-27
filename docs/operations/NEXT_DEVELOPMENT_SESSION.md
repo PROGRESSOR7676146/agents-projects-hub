@@ -316,7 +316,7 @@ configurable. They trigger notices only; they never approve, stop, unlock or rep
 
 Primary: `gpt-6-astra`, effort `high`. It owns architecture, normative contracts,
 security decisions, integration, exact-revision evidence and owner communication.
-Helpers: at most `gpt-6-sol`, effort `high`, with standard service and no priority, under the current owner instruction.
+Helpers: at most `gpt-6.1-sol`, effort `high`, with standard service and no priority, under the current owner instruction.
 Supply self-contained bounded tasks and required sources. Use an interface that
 can enforce the service tier; the CLI supports explicit `service_tier=default`
 and disabled fast mode. Verify model availability; never silently substitute. Official reference:
